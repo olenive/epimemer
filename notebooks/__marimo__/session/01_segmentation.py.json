@@ -1,0 +1,107 @@
+{
+  "version": "1",
+  "metadata": {
+    "marimo_version": "0.21.1",
+    "script_metadata_hash": null
+  },
+  "cells": [
+    {
+      "id": "Hbol",
+      "code_hash": "decbf9089a4ba0bbdd373377a525a928",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h1 id=\"segmentation-pipeline\">Segmentation Pipeline</h1>\n<span class=\"paragraph\">Step through the paragraph-split segmentation Petri net. Use the slider to control how many transitions fire.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "MJUe",
+      "code_hash": "8090f26e83537c8a86f8778351417ef4",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "vblA",
+      "code_hash": "921690c04686da7d6441f6c869359b4f",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<marimo-ui-element object-id='vblA-0' random-id='dae41f96-f37c-2695-2cd9-0644c52abea7'><marimo-text-area data-initial-value='&quot;Machine learning models learn from data.&#92;n&#92;nNeural networks are inspired by the brain.&#92;n&#92;nDeep learning uses multiple layers.&quot;' data-label='&quot;&lt;span class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&gt;&lt;span class=&#92;&quot;paragraph&#92;&quot;&gt;Document content&lt;/span&gt;&lt;/span&gt;&quot;' data-placeholder='&quot;&quot;' data-disabled='false' data-debounce='true' data-full-width='true'></marimo-text-area></marimo-ui-element>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "bkHC",
+      "code_hash": "95cb6b35861e802f733fe4e5403afbb8",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<marimo-ui-element object-id='bkHC-0' random-id='9f6a2fd4-2f4b-e028-5841-708265ad0642'><marimo-slider data-initial-value='0' data-label='&quot;&lt;span class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&gt;&lt;span class=&#92;&quot;paragraph&#92;&quot;&gt;Execution step&lt;/span&gt;&lt;/span&gt;&quot;' data-start='0' data-stop='1' data-steps='[]' data-debounce='false' data-disabled='false' data-orientation='&quot;horizontal&quot;' data-show-value='false' data-include-input='false' data-full-width='true'></marimo-slider></marimo-ui-element>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "lEQa",
+      "code_hash": "1579ebdf04a40073c8e6cf74e45c9a31",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><span class=\"paragraph\"><strong>Transitions fired:</strong> 1</span></span>"
+          }
+        }
+      ],
+      "console": [
+        {
+          "type": "stream",
+          "name": "stdout",
+          "text": "argument_type: <class 'epimemer.core.types.RawDocument'> place_type: <class 'epimemer.core.types.RawDocument'> place.tokens: [RawDocument(id='98fbe6c6-67ee-4b3d-83e5-3c519a9506c0', content='Machine learning models learn from data.\\n\\nNeural networks are inspired by the brain.\\n\\nDeep learning uses multiple layers.', metadata={}, created_at=datetime.datetime(2026, 3, 28, 17, 50, 19, 139477, tzinfo=datetime.timezone.utc))]\nargument_origin is list: False\ntoken to pass as single: id='98fbe6c6-67ee-4b3d-83e5-3c519a9506c0' content='Machine learning models learn from data.\\n\\nNeural networks are inspired by the brain.\\n\\nDeep learning uses multiple layers.' metadata={} created_at=datetime.datetime(2026, 3, 28, 17, 50, 19, 139477, tzinfo=datetime.timezone.utc)\n",
+          "mimetype": "text/plain"
+        }
+      ]
+    },
+    {
+      "id": "PKri",
+      "code_hash": "ac9fdce24a2a9b80a341e94123971fc2",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<img src='./@file/70828-81603204-AuHMEuIv.png' />"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "Xref",
+      "code_hash": "18c070c530b5ed7c7ef2b1c8ed7800c1",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    }
+  ]
+}

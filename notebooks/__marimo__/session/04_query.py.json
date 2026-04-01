@@ -1,0 +1,120 @@
+{
+  "version": "1",
+  "metadata": {
+    "marimo_version": "0.21.1",
+    "script_metadata_hash": null
+  },
+  "cells": [
+    {
+      "id": "Hbol",
+      "code_hash": "1e79f79a94b6a15871ccb0b9187fd4b0",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h1 id=\"query-pipeline\">Query Pipeline</h1>\n<span class=\"paragraph\">Step through hybrid retrieval: vector search \u2192 graph expansion \u2192 result assembly. Pre-populates a small graph with nodes and embeddings.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "MJUe",
+      "code_hash": "d2d229b698caa43c41c8352c7dca3774",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "vblA",
+      "code_hash": "af5e81342bf85c25ac37779ed9c30e71",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<pre class='text-xs'>&#x27;ffbd13b7-65a6-4ff1-a0de-aea760ea9bd9&#x27;</pre>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "bkHC",
+      "code_hash": "3f27fbb122e30a89587cfe1d226622fc",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<marimo-ui-element object-id='bkHC-0' random-id='6034c844-229b-9eed-1b51-5215bd95c283'><marimo-text data-initial-value='&quot;Neural networks require training data&quot;' data-label='&quot;&lt;span class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&gt;&lt;span class=&#92;&quot;paragraph&#92;&quot;&gt;Search query&lt;/span&gt;&lt;/span&gt;&quot;' data-placeholder='&quot;&quot;' data-kind='&quot;text&quot;' data-full-width='true' data-disabled='false' data-debounce='true'></marimo-text></marimo-ui-element>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "lEQa",
+      "code_hash": "2b008766879c90fc5b689e8671093dd5",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<marimo-ui-element object-id='lEQa-0' random-id='8c807cc9-87de-9066-b4ea-fe500d87d834'><marimo-slider data-initial-value='0' data-label='&quot;&lt;span class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&gt;&lt;span class=&#92;&quot;paragraph&#92;&quot;&gt;Execution step (3 transitions total)&lt;/span&gt;&lt;/span&gt;&quot;' data-start='0' data-stop='3' data-steps='[]' data-debounce='false' data-disabled='false' data-orientation='&quot;horizontal&quot;' data-show-value='false' data-include-input='false' data-full-width='true'></marimo-slider></marimo-ui-element>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "PKri",
+      "code_hash": "535bb2cb7b495fdc446077189be7c7f9",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><span class=\"paragraph\"><strong>Transitions fired:</strong> 3 / 3</span></span>"
+          }
+        }
+      ],
+      "console": [
+        {
+          "type": "stream",
+          "name": "stdout",
+          "text": "argument_type: <class 'epimemer.pipelines.query.types.QueryRequest'> place_type: <class 'epimemer.pipelines.query.types.QueryRequest'> place.tokens: [QueryRequest(query_text='Neural networks require training data', k=5, node_types=None, at_time=None, graph_hops=1, model_id='mock')]\nargument_origin is list: False\ntoken to pass as single: query_text='Neural networks require training data' k=5 node_types=None at_time=None graph_hops=1 model_id='mock'\nargument_type: <class 'epimemer.pipelines.query.hybrid_retrieval.VectorResults'> place_type: <class 'epimemer.pipelines.query.hybrid_retrieval.VectorResults'> place.tokens: [VectorResults(request=QueryRequest(query_text='Neural networks require training data', k=5, node_types=None, at_time=None, graph_hops=1, model_id='mock'), scored_nodes=[('f9cf15ee-5828-45eb-ac7e-d13546d9f435', 1.0000000000000002), ('5bf1abe9-3714-4c5e-b6e8-fc59b0846b28', 0.6786773883431304), ('4cd21e69-8107-40f8-9da5-68ab10b78f99', 0.47462291634545994)], nodes=[Fact(id='f9cf15ee-5828-45eb-ac7e-d13546d9f435', content='Neural networks require training data', source_id='seg-1', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 19, 30, 26, 90586, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 19, 30, 26, 90587, tzinfo=datetime.timezone.utc)), Topic(id='5bf1abe9-3714-4c5e-b6e8-fc59b0846b28', content='Machine learning and neural networks', source_id='seg-1', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 19, 30, 26, 90388, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 19, 30, 26, 90575, tzinfo=datetime.timezone.utc)), Inference(id='4cd21e69-8107-40f8-9da5-68ab10b78f99', content='ML will improve with more data', source_id='seg-1', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 19, 30, 26, 90593, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 19, 30, 26, 90594, tzinfo=datetime.timezone.utc))], nodes_searched=3, vector_search_time_ms=0.07804203778505325)]\nargument_origin is list: False\ntoken to pass as single: request=QueryRequest(query_text='Neural networks require training data', k=5, node_types=None, at_time=None, graph_hops=1, model_id='mock') scored_nodes=[('f9cf15ee-5828-45eb-ac7e-d13546d9f435', 1.0000000000000002), ('5bf1abe9-3714-4c5e-b6e8-fc59b0846b28', 0.6786773883431304), ('4cd21e69-8107-40f8-9da5-68ab10b78f99', 0.47462291634545994)] nodes=[Fact(id='f9cf15ee-5828-45eb-ac7e-d13546d9f435', content='Neural networks require training data', source_id='seg-1', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 19, 30, 26, 90586, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 19, 30, 26, 90587, tzinfo=datetime.timezone.utc)), Topic(id='5bf1abe9-3714-4c5e-b6e8-fc59b0846b28', content='Machine learning and neural networks', source_id='seg-1', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 19, 30, 26, 90388, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 19, 30, 26, 90575, tzinfo=datetime.timezone.utc)), Inference(id='4cd21e69-8107-40f8-9da5-68ab10b78f99', content='ML will improve with more data', source_id='seg-1', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 19, 30, 26, 90593, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 19, 30, 26, 90594, tzinfo=datetime.timezone.utc))] nodes_searched=3 vector_search_time_ms=0.07804203778505325\nargument_type: <class 'epimemer.pipelines.query.hybrid_retrieval.ExpandedResults'> place_type: <class 'epimemer.pipelines.query.hybrid_retrieval.ExpandedResults'> place.tokens: [ExpandedResults(request=QueryRequest(query_text='Neural networks require training data', k=5, node_types=None, at_time=None, graph_hops=1, model_id='mock'), nodes=[Fact(id='f9cf15ee-5828-45eb-ac7e-d13546d9f435', content='Neural networks require training data', source_id='seg-1', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 19, 30, 26, 90586, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 19, 30, 26, 90587, tzinfo=datetime.timezone.utc)), Topic(id='5bf1abe9-3714-4c5e-b6e8-fc59b0846b28', content='Machine learning and neural networks', source_id='seg-1', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 19, 30, 26, 90388, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 19, 30, 26, 90575, tzinfo=datetime.timezone.utc)), Inference(id='4cd21e69-8107-40f8-9da5-68ab10b78f99', content='ML will improve with more data', source_id='seg-1', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 19, 30, 26, 90593, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 19, 30, 26, 90594, tzinfo=datetime.timezone.utc))], edges=[NodeEdge(id='ffbd13b7-65a6-4ff1-a0de-aea760ea9bd9', src_id='4cd21e69-8107-40f8-9da5-68ab10b78f99', dst_id='5bf1abe9-3714-4c5e-b6e8-fc59b0846b28', type=<EdgeType.ABSTRACTS: 'abstracts'>, weight=1.0, metadata={}, created_at=datetime.datetime(2026, 3, 28, 19, 30, 26, 90670, tzinfo=datetime.timezone.utc)), NodeEdge(id='b3b3ecb6-b708-49d8-851f-c6ee67bb43c9', src_id='f9cf15ee-5828-45eb-ac7e-d13546d9f435', dst_id='5bf1abe9-3714-4c5e-b6e8-fc59b0846b28', type=<EdgeType.SUPPORTS: 'supports'>, weight=1.0, metadata={}, created_at=datetime.datetime(2026, 3, 28, 19, 30, 26, 90664, tzinfo=datetime.timezone.utc))], nodes_searched=3, vector_search_time_ms=0.07804203778505325, graph_expansion_time_ms=0.046040862798690796)]\nargument_origin is list: False\ntoken to pass as single: request=QueryRequest(query_text='Neural networks require training data', k=5, node_types=None, at_time=None, graph_hops=1, model_id='mock') nodes=[Fact(id='f9cf15ee-5828-45eb-ac7e-d13546d9f435', content='Neural networks require training data', source_id='seg-1', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 19, 30, 26, 90586, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 19, 30, 26, 90587, tzinfo=datetime.timezone.utc)), Topic(id='5bf1abe9-3714-4c5e-b6e8-fc59b0846b28', content='Machine learning and neural networks', source_id='seg-1', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 19, 30, 26, 90388, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 19, 30, 26, 90575, tzinfo=datetime.timezone.utc)), Inference(id='4cd21e69-8107-40f8-9da5-68ab10b78f99', content='ML will improve with more data', source_id='seg-1', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 19, 30, 26, 90593, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 19, 30, 26, 90594, tzinfo=datetime.timezone.utc))] edges=[NodeEdge(id='ffbd13b7-65a6-4ff1-a0de-aea760ea9bd9', src_id='4cd21e69-8107-40f8-9da5-68ab10b78f99', dst_id='5bf1abe9-3714-4c5e-b6e8-fc59b0846b28', type=<EdgeType.ABSTRACTS: 'abstracts'>, weight=1.0, metadata={}, created_at=datetime.datetime(2026, 3, 28, 19, 30, 26, 90670, tzinfo=datetime.timezone.utc)), NodeEdge(id='b3b3ecb6-b708-49d8-851f-c6ee67bb43c9', src_id='f9cf15ee-5828-45eb-ac7e-d13546d9f435', dst_id='5bf1abe9-3714-4c5e-b6e8-fc59b0846b28', type=<EdgeType.SUPPORTS: 'supports'>, weight=1.0, metadata={}, created_at=datetime.datetime(2026, 3, 28, 19, 30, 26, 90664, tzinfo=datetime.timezone.utc))] nodes_searched=3 vector_search_time_ms=0.07804203778505325 graph_expansion_time_ms=0.046040862798690796\n",
+          "mimetype": "text/plain"
+        }
+      ]
+    },
+    {
+      "id": "Xref",
+      "code_hash": "ac9fdce24a2a9b80a341e94123971fc2",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<img src='./@file/196111-81718101-lKxASzKE.png' />"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "SFPL",
+      "code_hash": "aaec794c171ebccf3cb1dec2d30dcb3d",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h3 id=\"query-result\">Query Result</h3>\n<ul>\n<li><strong>Nodes returned:</strong> 3</li>\n<li><strong>Edges returned:</strong> 2</li>\n<li><strong>Source types:</strong> {'fact': 1, 'topic': 1, 'inference': 1}</li>\n<li><strong>Vector search time:</strong> 0.08ms</li>\n<li><strong>Graph expansion time:</strong> 0.05ms</li>\n</ul>\n<h4 id=\"nodes\">Nodes</h4>\n<ul>\n<li><strong>Fact</strong> <code>f9cf15ee...</code>: Neural networks require training data</li>\n<li><strong>Topic</strong> <code>5bf1abe9...</code>: Machine learning and neural networks</li>\n<li><strong>Inference</strong> <code>4cd21e69...</code>: ML will improve with more data</li>\n</ul>\n<h4 id=\"edges\">Edges</h4>\n<ul>\n<li><code>4cd21e69...</code> <strong>abstracts</strong> <code>5bf1abe9...</code></li>\n<li><code>f9cf15ee...</code> <strong>supports</strong> <code>5bf1abe9...</code></li>\n</ul></span>"
+          }
+        }
+      ],
+      "console": []
+    }
+  ]
+}

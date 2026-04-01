@@ -1,0 +1,717 @@
+"""Tests for Phase 3: Graph Construction & Value Marking.
+
+Covers:
+- Edge creation: correct edge types for each node pair
+- Edge creation: edges carry correct src_id and dst_id
+- Edge creation: Petri net tokens flow correctly
+- Value updates: confidence increases on supporting evidence
+- Value updates: novelty increases on contradiction
+- Value updates: reinforcement updates last_reinforced timestamp
+- Persist: all nodes and edges stored in storage after persist call
+- Versioning: supersede creates new node, marks old as superseded, creates edge
+- Versioning: merge marks all sources as merged, creates merged_into edges
+- Storage round-trip: store and retrieve complete graph
+"""
+
+from datetime import datetime, timezone
+
+import pytest
+
+from petritype.core.executable_graph_components import ExecutableGraphOperations
+
+from epimemer.core.types import (
+    EdgeType,
+    Fact,
+    Inference,
+    NodeEdge,
+    NodeStatus,
+    Segment,
+    Topic,
+    ValueSignal,
+)
+from epimemer.pipelines.graph_construction.edge_creation import (
+    DecomposedSegment,
+    create_edges,
+    edge_creation_net,
+)
+from epimemer.pipelines.graph_construction.value_updates import (
+    reinforce_node,
+    update_value_on_contradiction,
+    update_value_on_supporting_evidence,
+)
+from epimemer.pipelines.graph_construction.persist import persist_decomposed_segment
+from epimemer.pipelines.graph_construction.versioning import (
+    merge_nodes,
+    supersede_node,
+)
+from epimemer.storage.memory import InMemoryStorage
+
+
+# --- Fixtures ---
+
+
+@pytest.fixture
+def segment() -> Segment:
+    return Segment(
+        id="seg-1",
+        source_id="doc-1",
+        text="Machine learning models require large datasets for training.",
+        span_start=0,
+        span_end=60,
+    )
+
+
+@pytest.fixture
+def topic(segment: Segment) -> Topic:
+    return Topic(
+        id="topic-1",
+        content="Machine learning and data requirements",
+        source_id=segment.id,
+    )
+
+
+@pytest.fixture
+def fact(segment: Segment) -> Fact:
+    return Fact(
+        id="fact-1",
+        content="ML models require large datasets for training.",
+        source_id=segment.id,
+    )
+
+
+@pytest.fixture
+def inference(segment: Segment) -> Inference:
+    return Inference(
+        id="inf-1",
+        content="Data quality and quantity are key bottlenecks in ML development.",
+        source_id=segment.id,
+    )
+
+
+@pytest.fixture
+def decomposed(
+    segment: Segment,
+    topic: Topic,
+    fact: Fact,
+    inference: Inference,
+) -> DecomposedSegment:
+    return DecomposedSegment(
+        segment=segment,
+        topics=[topic],
+        facts=[fact],
+        inferences=[inference],
+    )
+
+
+@pytest.fixture
+def storage() -> InMemoryStorage:
+    return InMemoryStorage()
+
+
+# --- Edge Creation Tests ---
+
+
+class TestEdgeCreation:
+    """Test the create_edges function and edge types."""
+
+    def test_segment_to_topic_about_edge(self, decomposed: DecomposedSegment) -> None:
+        edges = create_edges(decomposed)
+        about_edges = [e for e in edges if e.type == EdgeType.ABOUT]
+        assert len(about_edges) == 1
+        assert about_edges[0].src_id == decomposed.segment.id
+        assert about_edges[0].dst_id == decomposed.topics[0].id
+
+    def test_segment_to_fact_contains_edge(self, decomposed: DecomposedSegment) -> None:
+        edges = create_edges(decomposed)
+        contains_edges = [e for e in edges if e.type == EdgeType.CONTAINS]
+        assert len(contains_edges) == 1
+        assert contains_edges[0].src_id == decomposed.segment.id
+        assert contains_edges[0].dst_id == decomposed.facts[0].id
+
+    def test_segment_to_inference_implies_edge(self, decomposed: DecomposedSegment) -> None:
+        edges = create_edges(decomposed)
+        implies_edges = [e for e in edges if e.type == EdgeType.IMPLIES]
+        assert len(implies_edges) == 1
+        assert implies_edges[0].src_id == decomposed.segment.id
+        assert implies_edges[0].dst_id == decomposed.inferences[0].id
+
+    def test_fact_to_topic_supports_edge(self, decomposed: DecomposedSegment) -> None:
+        edges = create_edges(decomposed)
+        supports_edges = [
+            e for e in edges
+            if e.type == EdgeType.SUPPORTS and e.src_id == decomposed.facts[0].id and e.dst_id == decomposed.topics[0].id
+        ]
+        assert len(supports_edges) == 1
+
+    def test_inference_to_topic_abstracts_edge(self, decomposed: DecomposedSegment) -> None:
+        edges = create_edges(decomposed)
+        abstracts_edges = [e for e in edges if e.type == EdgeType.ABSTRACTS]
+        assert len(abstracts_edges) == 1
+        assert abstracts_edges[0].src_id == decomposed.inferences[0].id
+        assert abstracts_edges[0].dst_id == decomposed.topics[0].id
+
+    def test_fact_to_inference_supports_edge(self, decomposed: DecomposedSegment) -> None:
+        edges = create_edges(decomposed)
+        supports_edges = [
+            e for e in edges
+            if e.type == EdgeType.SUPPORTS and e.src_id == decomposed.facts[0].id and e.dst_id == decomposed.inferences[0].id
+        ]
+        assert len(supports_edges) == 1
+
+    def test_total_edge_count_single_of_each(self, decomposed: DecomposedSegment) -> None:
+        """With 1 topic, 1 fact, 1 inference, we expect exactly 6 edges."""
+        edges = create_edges(decomposed)
+        # segment->topic (1) + segment->fact (1) + segment->inference (1)
+        # + fact->topic (1) + inference->topic (1) + fact->inference (1)
+        assert len(edges) == 6
+
+    def test_edge_count_multiple_nodes(self, segment: Segment) -> None:
+        """With 2 topics, 2 facts, 1 inference, verify combinatorial edge count."""
+        topics = [
+            Topic(id="t1", content="Topic A", source_id=segment.id),
+            Topic(id="t2", content="Topic B", source_id=segment.id),
+        ]
+        facts = [
+            Fact(id="f1", content="Fact A", source_id=segment.id),
+            Fact(id="f2", content="Fact B", source_id=segment.id),
+        ]
+        inferences = [
+            Inference(id="i1", content="Inference A", source_id=segment.id),
+        ]
+        decomposed = DecomposedSegment(
+            segment=segment,
+            topics=topics,
+            facts=facts,
+            inferences=inferences,
+        )
+        edges = create_edges(decomposed)
+
+        # segment->topic: 2, segment->fact: 2, segment->inference: 1
+        # fact->topic: 2*2=4, inference->topic: 1*2=2, fact->inference: 2*1=2
+        # Total = 2 + 2 + 1 + 4 + 2 + 2 = 13
+        assert len(edges) == 13
+
+    def test_edges_with_empty_nodes(self, segment: Segment) -> None:
+        """Decomposed segment with no extracted nodes produces no edges."""
+        decomposed = DecomposedSegment(segment=segment)
+        edges = create_edges(decomposed)
+        assert len(edges) == 0
+
+    def test_all_edges_have_unique_ids(self, decomposed: DecomposedSegment) -> None:
+        edges = create_edges(decomposed)
+        ids = [e.id for e in edges]
+        assert len(ids) == len(set(ids))
+
+    def test_all_edges_are_node_edge_type(self, decomposed: DecomposedSegment) -> None:
+        edges = create_edges(decomposed)
+        for edge in edges:
+            assert isinstance(edge, NodeEdge)
+
+
+class TestEdgeCreationPetriNet:
+    """Test the edge creation Petri net flow."""
+
+    @pytest.mark.asyncio
+    async def test_petri_net_produces_edges(self, decomposed: DecomposedSegment) -> None:
+        graph = edge_creation_net(decomposed)
+        graph, transitions_fired = await ExecutableGraphOperations.execute_graph(
+            graph, max_transitions=10,
+        )
+        assert transitions_fired == 1
+
+        edges_place = graph.place_named("Edges")
+        assert edges_place is not None
+        assert len(edges_place.tokens) == 6
+
+    @pytest.mark.asyncio
+    async def test_petri_net_input_consumed(self, decomposed: DecomposedSegment) -> None:
+        graph = edge_creation_net(decomposed)
+        graph, _ = await ExecutableGraphOperations.execute_graph(
+            graph, max_transitions=10,
+        )
+
+        input_place = graph.place_named("DecomposedSegments")
+        assert input_place is not None
+        assert len(input_place.tokens) == 0
+
+    @pytest.mark.asyncio
+    async def test_petri_net_edge_types_correct(self, decomposed: DecomposedSegment) -> None:
+        graph = edge_creation_net(decomposed)
+        graph, _ = await ExecutableGraphOperations.execute_graph(
+            graph, max_transitions=10,
+        )
+
+        edges_place = graph.place_named("Edges")
+        edges = edges_place.tokens
+        edge_types = {e.type for e in edges}
+        assert EdgeType.ABOUT in edge_types
+        assert EdgeType.CONTAINS in edge_types
+        assert EdgeType.IMPLIES in edge_types
+        assert EdgeType.SUPPORTS in edge_types
+        assert EdgeType.ABSTRACTS in edge_types
+
+
+# --- Value Update Tests ---
+
+
+class TestValueUpdates:
+    """Test value signal update functions."""
+
+    @pytest.mark.asyncio
+    async def test_supporting_evidence_increases_confidence(self, storage: InMemoryStorage) -> None:
+        fact = Fact(
+            id="f-val-1",
+            content="Test fact",
+            source_id="seg-1",
+            value=ValueSignal(confidence=0.5),
+        )
+        await storage.store_node(fact)
+        original_confidence = fact.value.confidence
+
+        await update_value_on_supporting_evidence(fact, storage)
+
+        stored = await storage.get_node("f-val-1")
+        assert stored is not None
+        assert stored.value.confidence == original_confidence + 0.1
+
+    @pytest.mark.asyncio
+    async def test_supporting_evidence_updates_recency(self, storage: InMemoryStorage) -> None:
+        old_time = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        fact = Fact(
+            id="f-val-2",
+            content="Test fact",
+            source_id="seg-1",
+            value=ValueSignal(last_reinforced=old_time),
+        )
+        await storage.store_node(fact)
+
+        await update_value_on_supporting_evidence(fact, storage)
+
+        stored = await storage.get_node("f-val-2")
+        assert stored is not None
+        assert stored.value.last_reinforced > old_time
+
+    @pytest.mark.asyncio
+    async def test_supporting_evidence_confidence_clamps_at_one(self, storage: InMemoryStorage) -> None:
+        fact = Fact(
+            id="f-val-3",
+            content="Test fact",
+            source_id="seg-1",
+            value=ValueSignal(confidence=0.95),
+        )
+        await storage.store_node(fact)
+
+        await update_value_on_supporting_evidence(fact, storage)
+
+        stored = await storage.get_node("f-val-3")
+        assert stored is not None
+        assert stored.value.confidence == 1.0
+
+    @pytest.mark.asyncio
+    async def test_contradiction_increases_novelty_on_both(self, storage: InMemoryStorage) -> None:
+        fact_a = Fact(
+            id="f-contra-1",
+            content="The earth is flat.",
+            source_id="seg-1",
+            value=ValueSignal(novelty=0.3),
+        )
+        fact_b = Fact(
+            id="f-contra-2",
+            content="The earth is round.",
+            source_id="seg-2",
+            value=ValueSignal(novelty=0.4),
+        )
+        await storage.store_node(fact_a)
+        await storage.store_node(fact_b)
+
+        await update_value_on_contradiction(fact_a, fact_b, storage)
+
+        stored_a = await storage.get_node("f-contra-1")
+        stored_b = await storage.get_node("f-contra-2")
+        assert stored_a is not None
+        assert stored_b is not None
+        assert stored_a.value.novelty == pytest.approx(0.5)  # 0.3 + 0.2
+        assert stored_b.value.novelty == pytest.approx(0.6)  # 0.4 + 0.2
+
+    @pytest.mark.asyncio
+    async def test_contradiction_novelty_clamps_at_one(self, storage: InMemoryStorage) -> None:
+        fact_a = Fact(
+            id="f-clamp-1",
+            content="Fact A",
+            source_id="seg-1",
+            value=ValueSignal(novelty=0.9),
+        )
+        fact_b = Fact(
+            id="f-clamp-2",
+            content="Fact B",
+            source_id="seg-2",
+            value=ValueSignal(novelty=0.95),
+        )
+        await storage.store_node(fact_a)
+        await storage.store_node(fact_b)
+
+        await update_value_on_contradiction(fact_a, fact_b, storage)
+
+        stored_a = await storage.get_node("f-clamp-1")
+        stored_b = await storage.get_node("f-clamp-2")
+        assert stored_a is not None
+        assert stored_b is not None
+        assert stored_a.value.novelty == 1.0
+        assert stored_b.value.novelty == 1.0
+
+    @pytest.mark.asyncio
+    async def test_reinforce_updates_last_reinforced(self, storage: InMemoryStorage) -> None:
+        old_time = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        topic = Topic(
+            id="t-reinforce-1",
+            content="Test topic",
+            source_id="seg-1",
+            value=ValueSignal(last_reinforced=old_time),
+        )
+        await storage.store_node(topic)
+
+        await reinforce_node(topic, storage)
+
+        stored = await storage.get_node("t-reinforce-1")
+        assert stored is not None
+        assert stored.value.last_reinforced > old_time
+
+    @pytest.mark.asyncio
+    async def test_reinforce_boosts_relevance(self, storage: InMemoryStorage) -> None:
+        topic = Topic(
+            id="t-reinforce-2",
+            content="Test topic",
+            source_id="seg-1",
+            value=ValueSignal(relevance=0.5),
+        )
+        await storage.store_node(topic)
+
+        await reinforce_node(topic, storage)
+
+        stored = await storage.get_node("t-reinforce-2")
+        assert stored is not None
+        assert stored.value.relevance == 0.6
+
+
+# --- Persistence Tests ---
+
+
+class TestPersistence:
+    """Test the persist_decomposed_segment function."""
+
+    @pytest.mark.asyncio
+    async def test_persist_stores_segment(
+        self,
+        decomposed: DecomposedSegment,
+        storage: InMemoryStorage,
+    ) -> None:
+        edges = create_edges(decomposed)
+        await persist_decomposed_segment(decomposed, edges, storage)
+
+        segments = await storage.get_segments_for_document("doc-1")
+        assert len(segments) == 1
+        assert segments[0].id == decomposed.segment.id
+
+    @pytest.mark.asyncio
+    async def test_persist_stores_all_nodes(
+        self,
+        decomposed: DecomposedSegment,
+        storage: InMemoryStorage,
+    ) -> None:
+        edges = create_edges(decomposed)
+        await persist_decomposed_segment(decomposed, edges, storage)
+
+        # Check topic
+        topic = await storage.get_node("topic-1")
+        assert topic is not None
+        assert isinstance(topic, Topic)
+
+        # Check fact
+        fact = await storage.get_node("fact-1")
+        assert fact is not None
+        assert isinstance(fact, Fact)
+
+        # Check inference
+        inference = await storage.get_node("inf-1")
+        assert inference is not None
+        assert isinstance(inference, Inference)
+
+    @pytest.mark.asyncio
+    async def test_persist_stores_all_edges(
+        self,
+        decomposed: DecomposedSegment,
+        storage: InMemoryStorage,
+    ) -> None:
+        edges = create_edges(decomposed)
+        await persist_decomposed_segment(decomposed, edges, storage)
+
+        assert len(storage.edges) == 6
+
+    @pytest.mark.asyncio
+    async def test_persist_edges_retrievable_by_node(
+        self,
+        decomposed: DecomposedSegment,
+        storage: InMemoryStorage,
+    ) -> None:
+        edges = create_edges(decomposed)
+        await persist_decomposed_segment(decomposed, edges, storage)
+
+        # Segment should have outgoing edges
+        seg_edges = await storage.get_edges_from(decomposed.segment.id)
+        assert len(seg_edges) == 3  # ABOUT, CONTAINS, IMPLIES
+
+    @pytest.mark.asyncio
+    async def test_persist_empty_decomposition(
+        self,
+        segment: Segment,
+        storage: InMemoryStorage,
+    ) -> None:
+        """Persisting a decomposed segment with no nodes stores only the segment."""
+        decomposed = DecomposedSegment(segment=segment)
+        edges = create_edges(decomposed)
+        await persist_decomposed_segment(decomposed, edges, storage)
+
+        assert len(storage.segments) == 1
+        assert len(storage.nodes) == 0
+        assert len(storage.edges) == 0
+
+
+# --- Versioning Tests ---
+
+
+class TestVersioning:
+    """Test node supersession and merging."""
+
+    @pytest.mark.asyncio
+    async def test_supersede_marks_old_as_superseded(self, storage: InMemoryStorage) -> None:
+        old_topic = Topic(
+            id="old-topic",
+            content="Original topic",
+            source_id="seg-1",
+        )
+        new_topic = Topic(
+            id="new-topic",
+            content="Updated topic",
+            source_id="seg-2",
+        )
+        await storage.store_node(old_topic)
+
+        await supersede_node(old_topic, new_topic, storage)
+
+        stored_old = await storage.get_node("old-topic")
+        assert stored_old is not None
+        assert stored_old.status == NodeStatus.SUPERSEDED
+        assert stored_old.superseded_at is not None
+
+    @pytest.mark.asyncio
+    async def test_supersede_stores_new_node(self, storage: InMemoryStorage) -> None:
+        old_topic = Topic(
+            id="old-topic-2",
+            content="Original topic",
+            source_id="seg-1",
+        )
+        new_topic = Topic(
+            id="new-topic-2",
+            content="Updated topic",
+            source_id="seg-2",
+        )
+        await storage.store_node(old_topic)
+
+        await supersede_node(old_topic, new_topic, storage)
+
+        stored_new = await storage.get_node("new-topic-2")
+        assert stored_new is not None
+        assert stored_new.status == NodeStatus.ACTIVE
+
+    @pytest.mark.asyncio
+    async def test_supersede_creates_edge(self, storage: InMemoryStorage) -> None:
+        old_topic = Topic(
+            id="old-topic-3",
+            content="Original topic",
+            source_id="seg-1",
+        )
+        new_topic = Topic(
+            id="new-topic-3",
+            content="Updated topic",
+            source_id="seg-2",
+        )
+        await storage.store_node(old_topic)
+
+        edge = await supersede_node(old_topic, new_topic, storage)
+
+        assert edge.src_id == "old-topic-3"
+        assert edge.dst_id == "new-topic-3"
+        assert edge.type == EdgeType.SUPERSEDED_BY
+
+    @pytest.mark.asyncio
+    async def test_supersede_edge_stored_in_storage(self, storage: InMemoryStorage) -> None:
+        old_topic = Topic(
+            id="old-topic-4",
+            content="Original",
+            source_id="seg-1",
+        )
+        new_topic = Topic(
+            id="new-topic-4",
+            content="Updated",
+            source_id="seg-2",
+        )
+        await storage.store_node(old_topic)
+
+        await supersede_node(old_topic, new_topic, storage)
+
+        edges = await storage.get_edges_from("old-topic-4")
+        assert len(edges) == 1
+        assert edges[0].type == EdgeType.SUPERSEDED_BY
+
+    @pytest.mark.asyncio
+    async def test_merge_marks_all_sources_as_merged(self, storage: InMemoryStorage) -> None:
+        t1 = Topic(id="merge-src-1", content="Topic A", source_id="seg-1")
+        t2 = Topic(id="merge-src-2", content="Topic B", source_id="seg-2")
+        merged = Topic(id="merge-dst", content="Merged topic", source_id="seg-1")
+        await storage.store_node(t1)
+        await storage.store_node(t2)
+
+        await merge_nodes([t1, t2], merged, storage)
+
+        stored_1 = await storage.get_node("merge-src-1")
+        stored_2 = await storage.get_node("merge-src-2")
+        assert stored_1 is not None
+        assert stored_2 is not None
+        assert stored_1.status == NodeStatus.MERGED
+        assert stored_2.status == NodeStatus.MERGED
+        assert stored_1.superseded_at is not None
+        assert stored_2.superseded_at is not None
+
+    @pytest.mark.asyncio
+    async def test_merge_stores_merged_node(self, storage: InMemoryStorage) -> None:
+        t1 = Topic(id="merge-src-3", content="Topic A", source_id="seg-1")
+        t2 = Topic(id="merge-src-4", content="Topic B", source_id="seg-2")
+        merged = Topic(id="merge-dst-2", content="Merged topic", source_id="seg-1")
+        await storage.store_node(t1)
+        await storage.store_node(t2)
+
+        await merge_nodes([t1, t2], merged, storage)
+
+        stored = await storage.get_node("merge-dst-2")
+        assert stored is not None
+        assert stored.status == NodeStatus.ACTIVE
+
+    @pytest.mark.asyncio
+    async def test_merge_creates_edges(self, storage: InMemoryStorage) -> None:
+        t1 = Topic(id="merge-src-5", content="Topic A", source_id="seg-1")
+        t2 = Topic(id="merge-src-6", content="Topic B", source_id="seg-2")
+        merged = Topic(id="merge-dst-3", content="Merged topic", source_id="seg-1")
+        await storage.store_node(t1)
+        await storage.store_node(t2)
+
+        edges = await merge_nodes([t1, t2], merged, storage)
+
+        assert len(edges) == 2
+        for edge in edges:
+            assert edge.type == EdgeType.MERGED_INTO
+            assert edge.dst_id == "merge-dst-3"
+
+        src_ids = {e.src_id for e in edges}
+        assert src_ids == {"merge-src-5", "merge-src-6"}
+
+    @pytest.mark.asyncio
+    async def test_merge_edges_stored_in_storage(self, storage: InMemoryStorage) -> None:
+        t1 = Topic(id="merge-src-7", content="Topic A", source_id="seg-1")
+        t2 = Topic(id="merge-src-8", content="Topic B", source_id="seg-2")
+        merged = Topic(id="merge-dst-4", content="Merged topic", source_id="seg-1")
+        await storage.store_node(t1)
+        await storage.store_node(t2)
+
+        await merge_nodes([t1, t2], merged, storage)
+
+        edges_1 = await storage.get_edges_from("merge-src-7")
+        edges_2 = await storage.get_edges_from("merge-src-8")
+        assert len(edges_1) == 1
+        assert len(edges_2) == 1
+        assert edges_1[0].type == EdgeType.MERGED_INTO
+        assert edges_2[0].type == EdgeType.MERGED_INTO
+
+
+# --- Storage Round-Trip Tests ---
+
+
+class TestStorageRoundTrip:
+    """Test complete graph storage and retrieval."""
+
+    @pytest.mark.asyncio
+    async def test_full_graph_round_trip(self, storage: InMemoryStorage) -> None:
+        """Store a complete decomposed segment with edges, then verify retrieval."""
+        segment = Segment(
+            id="rt-seg",
+            source_id="doc-rt",
+            text="Round trip test text.",
+            span_start=0,
+            span_end=21,
+        )
+        topic = Topic(id="rt-topic", content="Test topic", source_id=segment.id)
+        fact = Fact(id="rt-fact", content="Test fact", source_id=segment.id)
+        inference = Inference(id="rt-inf", content="Test inference", source_id=segment.id)
+
+        decomposed = DecomposedSegment(
+            segment=segment,
+            topics=[topic],
+            facts=[fact],
+            inferences=[inference],
+        )
+        edges = create_edges(decomposed)
+        await persist_decomposed_segment(decomposed, edges, storage)
+
+        # Verify segment
+        stored_segments = await storage.get_segments_for_document("doc-rt")
+        assert len(stored_segments) == 1
+
+        # Verify all nodes
+        stored_topic = await storage.get_node("rt-topic")
+        stored_fact = await storage.get_node("rt-fact")
+        stored_inf = await storage.get_node("rt-inf")
+        assert stored_topic is not None
+        assert stored_fact is not None
+        assert stored_inf is not None
+
+        # Verify edges
+        seg_edges = await storage.get_edges_from("rt-seg")
+        assert len(seg_edges) == 3
+
+        fact_edges = await storage.get_edges_from("rt-fact")
+        # fact -> topic (SUPPORTS) + fact -> inference (SUPPORTS)
+        assert len(fact_edges) == 2
+
+        inf_edges = await storage.get_edges_from("rt-inf")
+        # inference -> topic (ABSTRACTS)
+        assert len(inf_edges) == 1
+
+    @pytest.mark.asyncio
+    async def test_round_trip_with_versioning(self, storage: InMemoryStorage) -> None:
+        """Store nodes, supersede one, verify the full history is retrievable."""
+        original = Topic(
+            id="rt-v-orig",
+            content="Original topic",
+            source_id="seg-1",
+        )
+        await storage.store_node(original)
+
+        updated = Topic(
+            id="rt-v-new",
+            content="Updated topic",
+            source_id="seg-1",
+        )
+        edge = await supersede_node(original, updated, storage)
+
+        # Original is superseded
+        stored_orig = await storage.get_node("rt-v-orig")
+        assert stored_orig.status == NodeStatus.SUPERSEDED
+
+        # New is active
+        stored_new = await storage.get_node("rt-v-new")
+        assert stored_new.status == NodeStatus.ACTIVE
+
+        # Edge links them
+        stored_edge = await storage.get_edges_from("rt-v-orig")
+        assert len(stored_edge) == 1
+        assert stored_edge[0].dst_id == "rt-v-new"
+        assert stored_edge[0].type == EdgeType.SUPERSEDED_BY

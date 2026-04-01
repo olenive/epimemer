@@ -1,0 +1,9 @@
+README.md
+SUMMARY.md
+pyproject.toml
+epimemer/__init__.py
+epimemer.egg-info/PKG-INFO
+epimemer.egg-info/SOURCES.txt
+epimemer.egg-info/dependency_links.txt
+epimemer.egg-info/requires.txt
+epimemer.egg-info/top_level.txt

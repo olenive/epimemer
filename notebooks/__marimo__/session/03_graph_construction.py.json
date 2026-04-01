@@ -1,0 +1,120 @@
+{
+  "version": "1",
+  "metadata": {
+    "marimo_version": "0.21.1",
+    "script_metadata_hash": null
+  },
+  "cells": [
+    {
+      "id": "Hbol",
+      "code_hash": "9df8d2292d9c51072207b570ad5ca09b",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h1 id=\"graph-construction-pipeline\">Graph Construction Pipeline</h1>\n<span class=\"paragraph\">Step through edge creation from a decomposed segment. Shows how typed edges are produced between Topics, Facts, and Inferences.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "MJUe",
+      "code_hash": "f0504773c1671416ac8e1129f0c320bf",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "vblA",
+      "code_hash": "95cb6b35861e802f733fe4e5403afbb8",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<marimo-ui-element object-id='vblA-0' random-id='d8f08a5d-9fec-3831-d53e-3ad96cf4c373'><marimo-slider data-initial-value='0' data-label='&quot;&lt;span class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&gt;&lt;span class=&#92;&quot;paragraph&#92;&quot;&gt;Execution step&lt;/span&gt;&lt;/span&gt;&quot;' data-start='0' data-stop='1' data-steps='[]' data-debounce='false' data-disabled='false' data-orientation='&quot;horizontal&quot;' data-show-value='false' data-include-input='false' data-full-width='true'></marimo-slider></marimo-ui-element>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "bkHC",
+      "code_hash": "b701cf1e82a9425b643fcfd6f40a2d79",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><span class=\"paragraph\"><strong>Transitions fired:</strong> 1</span></span>"
+          }
+        }
+      ],
+      "console": [
+        {
+          "type": "stream",
+          "name": "stdout",
+          "text": "argument_type: <class 'epimemer.pipelines.graph_construction.edge_creation.DecomposedSegment'> place_type: <class 'epimemer.pipelines.graph_construction.edge_creation.DecomposedSegment'> place.tokens: [DecomposedSegment(segment=Segment(id='8ea4ed79-4e1b-4a04-9cf3-ededc93ef2e3', source_id='demo', text='AI uses neural networks.', span_start=0, span_end=24, metadata={}, created_at=datetime.datetime(2026, 3, 28, 18, 56, 53, 567867, tzinfo=datetime.timezone.utc)), topics=[Topic(id='43fc8d01-8695-489b-8802-289f62064775', content='Artificial intelligence', source_id='8ea4ed79-4e1b-4a04-9cf3-ededc93ef2e3', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 18, 56, 53, 567911, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 18, 56, 53, 567915, tzinfo=datetime.timezone.utc))], facts=[Fact(id='01be47a3-fc3c-4a3c-8daf-f81d6960a81c', content='AI uses neural networks', source_id='8ea4ed79-4e1b-4a04-9cf3-ededc93ef2e3', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 18, 56, 53, 567935, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 18, 56, 53, 567938, tzinfo=datetime.timezone.utc))], inferences=[Inference(id='00566363-6412-4eab-98ba-0f3434196040', content='AI will continue advancing', source_id='8ea4ed79-4e1b-4a04-9cf3-ededc93ef2e3', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 18, 56, 53, 567955, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 18, 56, 53, 567957, tzinfo=datetime.timezone.utc))])]\nargument_origin is list: False\ntoken to pass as single: segment=Segment(id='8ea4ed79-4e1b-4a04-9cf3-ededc93ef2e3', source_id='demo', text='AI uses neural networks.', span_start=0, span_end=24, metadata={}, created_at=datetime.datetime(2026, 3, 28, 18, 56, 53, 567867, tzinfo=datetime.timezone.utc)) topics=[Topic(id='43fc8d01-8695-489b-8802-289f62064775', content='Artificial intelligence', source_id='8ea4ed79-4e1b-4a04-9cf3-ededc93ef2e3', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 18, 56, 53, 567911, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 18, 56, 53, 567915, tzinfo=datetime.timezone.utc))] facts=[Fact(id='01be47a3-fc3c-4a3c-8daf-f81d6960a81c', content='AI uses neural networks', source_id='8ea4ed79-4e1b-4a04-9cf3-ededc93ef2e3', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 18, 56, 53, 567935, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 18, 56, 53, 567938, tzinfo=datetime.timezone.utc))] inferences=[Inference(id='00566363-6412-4eab-98ba-0f3434196040', content='AI will continue advancing', source_id='8ea4ed79-4e1b-4a04-9cf3-ededc93ef2e3', status=<NodeStatus.ACTIVE: 'active'>, superseded_at=None, value=ValueSignal(novelty=1.0, confidence=0.5, relevance=0.5, last_reinforced=datetime.datetime(2026, 3, 28, 18, 56, 53, 567955, tzinfo=datetime.timezone.utc)), extraction_method='llm', metadata={}, created_at=datetime.datetime(2026, 3, 28, 18, 56, 53, 567957, tzinfo=datetime.timezone.utc))]\n",
+          "mimetype": "text/plain"
+        }
+      ]
+    },
+    {
+      "id": "lEQa",
+      "code_hash": "ac9fdce24a2a9b80a341e94123971fc2",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<img src='./@file/124455-81679820-WvfBjT8z.png' />"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "PKri",
+      "code_hash": "c22a37d6153c53ee7892cc8d43c4c086",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h3 id=\"edges-6-tokens\">Edges (6 tokens)</h3>\n<ul>\n<li><strong>id:</strong> <code>502a08b4...</code>\n  <strong>type:</strong> about\n  <strong>src:</strong> <code>8ea4ed79...</code> <strong>dst:</strong> <code>43fc8d01...</code>\n  <strong>weight:</strong> 1.0</li>\n<li><strong>id:</strong> <code>52f78c76...</code>\n  <strong>type:</strong> contains\n  <strong>src:</strong> <code>8ea4ed79...</code> <strong>dst:</strong> <code>01be47a3...</code>\n  <strong>weight:</strong> 1.0</li>\n<li><strong>id:</strong> <code>252a08bc...</code>\n  <strong>type:</strong> implies\n  <strong>src:</strong> <code>8ea4ed79...</code> <strong>dst:</strong> <code>00566363...</code>\n  <strong>weight:</strong> 1.0</li>\n<li><strong>id:</strong> <code>1fb3fcf7...</code>\n  <strong>type:</strong> supports\n  <strong>src:</strong> <code>01be47a3...</code> <strong>dst:</strong> <code>43fc8d01...</code>\n  <strong>weight:</strong> 1.0</li>\n<li><strong>id:</strong> <code>4d6ac266...</code>\n  <strong>type:</strong> abstracts\n  <strong>src:</strong> <code>00566363...</code> <strong>dst:</strong> <code>43fc8d01...</code>\n  <strong>weight:</strong> 1.0</li>\n<li><strong>id:</strong> <code>a27b1b83...</code>\n  <strong>type:</strong> supports\n  <strong>src:</strong> <code>01be47a3...</code> <strong>dst:</strong> <code>00566363...</code>\n  <strong>weight:</strong> 1.0</li>\n</ul></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "Xref",
+      "code_hash": "50aa1b8dc7108401a58c5273a9ec254d",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<div style='display: flex;flex: 1;flex-direction: column;justify-content: flex-start;align-items: normal;flex-wrap: nowrap;gap: 0.5rem'><span class=\"markdown prose dark:prose-invert contents\"><h3 id=\"knowledge-graph\">Knowledge Graph</h3></span><img src='./@file/40595-81679820-R5uf0z1a.png' /></div>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "SFPL",
+      "code_hash": null,
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    }
+  ]
+}

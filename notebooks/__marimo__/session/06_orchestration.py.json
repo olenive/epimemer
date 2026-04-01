@@ -1,0 +1,120 @@
+{
+  "version": "1",
+  "metadata": {
+    "marimo_version": "0.21.1",
+    "script_metadata_hash": null
+  },
+  "cells": [
+    {
+      "id": "Hbol",
+      "code_hash": "9f09ee6eeeaf9d88344c2f139efa6c6c",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h1 id=\"orchestration-pipeline\">Orchestration Pipeline</h1>\n<span class=\"paragraph\">Step through the top-level orchestration net that routes requests to sub-pipelines. Select an action and watch it route through the Petri net.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "MJUe",
+      "code_hash": "ae624236e0281e599bf759084129e5e8",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "vblA",
+      "code_hash": "78bbd6bb4b8f3f25d6bec0b2cfa878ec",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<marimo-ui-element object-id='vblA-0' random-id='21ec682d-7b73-8654-f120-c9aaa9c5c90e'><marimo-dropdown data-initial-value='[&quot;ingest&quot;]' data-label='&quot;&lt;span class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&gt;&lt;span class=&#92;&quot;paragraph&#92;&quot;&gt;Action&lt;/span&gt;&lt;/span&gt;&quot;' data-options='[&quot;ingest&quot;,&quot;search&quot;,&quot;reflect&quot;]' data-allow-select-none='false' data-searchable='false' data-full-width='false'></marimo-dropdown></marimo-ui-element>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "bkHC",
+      "code_hash": "d1280b635d788d9d9d8ec05c6793511a",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<marimo-ui-element object-id='bkHC-0' random-id='cb4effb4-322f-4c3e-467f-65df2531a91f'><marimo-text-area data-initial-value='&quot;Neural networks learn from large datasets.&quot;' data-label='&quot;&lt;span class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&gt;&lt;span class=&#92;&quot;paragraph&#92;&quot;&gt;Content (for ingest) / Query (for search)&lt;/span&gt;&lt;/span&gt;&quot;' data-placeholder='&quot;&quot;' data-disabled='false' data-debounce='true' data-full-width='true'></marimo-text-area></marimo-ui-element>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "lEQa",
+      "code_hash": "85d6e9f5d5e511666f96a3be03fa1db5",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<marimo-ui-element object-id='lEQa-0' random-id='7b0c11b1-ae34-d260-1fc2-b979b816dfa4'><marimo-slider data-initial-value='0' data-label='&quot;&lt;span class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&gt;&lt;span class=&#92;&quot;paragraph&#92;&quot;&gt;Execution step (route + execute)&lt;/span&gt;&lt;/span&gt;&quot;' data-start='0' data-stop='2' data-steps='[]' data-debounce='false' data-disabled='false' data-orientation='&quot;horizontal&quot;' data-show-value='false' data-include-input='false' data-full-width='true'></marimo-slider></marimo-ui-element>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "PKri",
+      "code_hash": "9df73299d4a73f8953e7b720e18b0146",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><span class=\"paragraph\"><strong>Action:</strong> ingest | <strong>Transitions fired:</strong> 1</span></span>"
+          }
+        }
+      ],
+      "console": [
+        {
+          "type": "stream",
+          "name": "stdout",
+          "text": "argument_type: <class 'epimemer.pipelines.orchestration.orchestration_net.MemoryRequest'> place_type: <class 'epimemer.pipelines.orchestration.orchestration_net.MemoryRequest'> place.tokens: [MemoryRequest(action='ingest', payload={'content': 'Neural networks learn from large datasets.'})]\nargument_origin is list: False\ntoken to pass as single: action='ingest' payload={'content': 'Neural networks learn from large datasets.'}\n",
+          "mimetype": "text/plain"
+        }
+      ]
+    },
+    {
+      "id": "Xref",
+      "code_hash": "ac9fdce24a2a9b80a341e94123971fc2",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<img src='./@file/70388-85008714-g2G7a5xL.png' />"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "SFPL",
+      "code_hash": "5d18c84e6d5583ffde20c16f85f30873",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><span class=\"paragraph\"><em>Routed to: IngestInput \u2014 advance slider to execute</em></span></span>"
+          }
+        }
+      ],
+      "console": []
+    }
+  ]
+}

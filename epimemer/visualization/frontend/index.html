@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Epimemer — Live Visualization</title>
+  </head>
+  <body class="h-full bg-gray-950 text-gray-200 overflow-hidden">
+    <div id="app" class="flex flex-col h-full">
+      <!-- Header -->
+      <header class="flex items-center justify-between px-4 py-2 border-b border-gray-800 bg-gray-900 shrink-0">
+        <h1 class="text-sm font-semibold tracking-wide text-gray-300">Epimemer</h1>
+        <div class="flex gap-2">
+          <button id="btn-toggle-pipeline" class="px-2 py-1 text-xs rounded bg-gray-800 hover:bg-gray-700 text-gray-400 transition-colors" title="Toggle pipeline panel">Pipeline</button>
+          <button id="btn-toggle-graph" class="px-2 py-1 text-xs rounded bg-gray-800 hover:bg-gray-700 text-gray-400 transition-colors" title="Toggle graph panel">Graph</button>
+          <span id="ws-status" class="px-2 py-1 text-xs rounded bg-red-900/50 text-red-400">Disconnected</span>
+        </div>
+      </header>
+
+      <!-- Split pane -->
+      <div class="flex flex-1 min-h-0">
+        <!-- Pipeline panel -->
+        <div id="panel-pipeline" class="flex flex-col border-r border-gray-800 min-w-0" style="flex: 1 1 50%">
+          <div class="flex items-center justify-between px-3 py-1.5 bg-gray-900/50 border-b border-gray-800 shrink-0">
+            <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">Pipeline</span>
+            <span id="pipeline-status" class="text-xs text-gray-600">Idle</span>
+          </div>
+          <div id="pipeline-container" class="flex-1 min-h-0 overflow-auto p-2"></div>
+        </div>
+
+        <!-- Resize handle -->
+        <div id="resize-handle" class="w-1 cursor-col-resize bg-gray-800 hover:bg-blue-600 transition-colors shrink-0"></div>
+
+        <!-- Graph panel -->
+        <div id="panel-graph" class="flex flex-col min-w-0" style="flex: 1 1 50%">
+          <div class="flex items-center justify-between px-3 py-1.5 bg-gray-900/50 border-b border-gray-800 shrink-0">
+            <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">Knowledge Graph</span>
+            <div class="flex gap-1.5">
+              <select id="graph-layout" class="text-xs bg-gray-800 text-gray-400 rounded px-1.5 py-0.5 border border-gray-700">
+                <option value="dagre">Hierarchy</option>
+                <option value="fcose">Force</option>
+              </select>
+              <select id="graph-filter" class="text-xs bg-gray-800 text-gray-400 rounded px-1.5 py-0.5 border border-gray-700">
+                <option value="all">All types</option>
+                <option value="topic">Topics</option>
+                <option value="fact">Facts</option>
+                <option value="inference">Inferences</option>
+              </select>
+            </div>
+          </div>
+          <div id="graph-container" class="flex-1 min-h-0"></div>
+        </div>
+      </div>
+
+      <!-- Detail drawer -->
+      <div id="detail-drawer" class="hidden border-t border-gray-800 bg-gray-900 shrink-0 max-h-48 overflow-auto">
+        <div class="flex items-center justify-between px-3 py-1.5 border-b border-gray-800">
+          <span id="detail-title" class="text-xs font-medium text-gray-400"></span>
+          <button id="btn-close-detail" class="text-xs text-gray-600 hover:text-gray-400">&times;</button>
+        </div>
+        <pre id="detail-content" class="px-3 py-2 text-xs text-gray-400 whitespace-pre-wrap"></pre>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
