@@ -19,7 +19,6 @@ from epimemer.core.types import (
     Topic,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
-from epimemer.llm.mock import MockDecompositionProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.tools import (
     add_timeline_timepoint,
@@ -28,13 +27,14 @@ from epimemer.mcp.tools import (
     create_timelink,
     create_timeline,
     get_metacontexts_for_node,
-    ingest,
     link,
     query_graph,
     query_timeline,
     reflect,
     restore,
     search,
+    segment_text,
+    store_decomposition,
     update,
 )
 from epimemer.storage.memory import InMemoryStorage
@@ -54,110 +54,145 @@ def embedding_provider() -> MockEmbeddingProvider:
 
 
 @pytest.fixture
-def decomposition_provider() -> MockDecompositionProvider:
-    return MockDecompositionProvider()
-
-
-@pytest.fixture
 def config() -> ServerConfig:
     return ServerConfig(
         storage_backend="memory",
         embedding_provider="mock",
-        decomposition_provider="mock",
         segmentation_strategy="paragraph",
     )
 
 
-# --- Ingest tests ---
+# --- Helpers ---
 
 
-class TestIngest:
+async def _two_step_ingest(
+    content: str,
+    storage: InMemoryStorage,
+    embedding_provider: MockEmbeddingProvider,
+    config: ServerConfig,
+    *,
+    metacontext_id: str | None = None,
+) -> tuple[dict, dict]:
+    """Run the two-step ingest: segment then store decomposition with dummy extraction."""
+    seg_result, seg_meta = await segment_text(
+        content, storage, embedding_provider, config,
+    )
+    segments = [
+        {
+            "segment_id": s["segment_id"],
+            "topics": [f"Topic about: {s['text'][:50]}"],
+            "facts": [f"Fact from: {s['text'][:50]}"],
+            "inferences": [f"Inference from: {s['text'][:50]}"],
+        }
+        for s in seg_result["segments"]
+    ]
+    store_result, store_meta = await store_decomposition(
+        document_id=seg_result["document_id"],
+        segments=segments,
+        storage=storage,
+        embedding_provider=embedding_provider,
+        metacontext_id=metacontext_id,
+    )
+    return seg_result, store_result
 
-    async def test_creates_document_segments_nodes(
-        self, storage, embedding_provider, decomposition_provider, config
+
+# --- Segment tests ---
+
+
+class TestSegment:
+
+    async def test_segments_text_and_stores_document(
+        self, storage, embedding_provider, config
     ):
-        result, meta = await ingest(
+        result, meta = await segment_text(
             "Paragraph one about ML.\n\nParagraph two about climate.",
-            storage,
-            embedding_provider,
-            decomposition_provider,
-            config,
+            storage, embedding_provider, config,
         )
-        assert result["segments_created"] == 2
-        assert result["nodes_created"]["topics"] > 0
-        assert result["nodes_created"]["facts"] > 0
-        assert result["nodes_created"]["inferences"] > 0
+        assert len(result["segments"]) == 2
         assert result["document_id"]
+        # Document should be stored
+        doc = await storage.get_document(result["document_id"])
+        assert doc is not None
 
-    async def test_creates_edges(
-        self, storage, embedding_provider, decomposition_provider, config
+    async def test_segments_stored_in_storage(
+        self, storage, embedding_provider, config
     ):
-        result, _ = await ingest(
-            "Some text about neural networks.",
-            storage,
-            embedding_provider,
-            decomposition_provider,
-            config,
+        result, _ = await segment_text(
+            "First.\n\nSecond.",
+            storage, embedding_provider, config,
         )
-        assert result["edges_created"] > 0
+        stored = await storage.get_segments_for_document(result["document_id"])
+        assert len(stored) == 2
 
-    async def test_response_counts_accurate(
-        self, storage, embedding_provider, decomposition_provider, config
+    async def test_single_paragraph(
+        self, storage, embedding_provider, config
     ):
-        result, meta = await ingest(
-            "A single paragraph.",
-            storage,
-            embedding_provider,
-            decomposition_provider,
-            config,
+        result, _ = await segment_text(
+            "Just one paragraph here.",
+            storage, embedding_provider, config,
         )
-        total_nodes = sum(result["nodes_created"].values())
-        assert meta.nodes_returned == total_nodes
-        assert meta.source_types
+        assert len(result["segments"]) == 1
 
-    async def test_meta_has_llm_calls(
-        self, storage, embedding_provider, decomposition_provider, config
+
+# --- Store Decomposition tests ---
+
+
+class TestStoreDecomposition:
+
+    async def test_creates_nodes_and_edges(
+        self, storage, embedding_provider, config
     ):
-        _, meta = await ingest(
-            "Some content.",
-            storage,
-            embedding_provider,
-            decomposition_provider,
-            config,
+        _, store_result = await _two_step_ingest(
+            "Paragraph one about ML.\n\nParagraph two about climate.",
+            storage, embedding_provider, config,
         )
-        # 1 segment * 3 extraction calls
-        assert meta.llm_calls == 3
+        assert store_result["nodes_created"]["topics"] == 2
+        assert store_result["nodes_created"]["facts"] == 2
+        assert store_result["nodes_created"]["inferences"] == 2
+        assert store_result["edges_created"] > 0
 
     async def test_embeddings_stored(
-        self, storage, embedding_provider, decomposition_provider, config
+        self, storage, embedding_provider, config
     ):
-        result, _ = await ingest(
+        await _two_step_ingest(
             "Text about embeddings.",
-            storage,
-            embedding_provider,
-            decomposition_provider,
-            config,
+            storage, embedding_provider, config,
         )
-        # Every node should have an embedding
-        total_nodes = sum(result["nodes_created"].values())
-        # Check by querying a node's embeddings
         from epimemer.core.types import NodeType
-        nodes = await storage.query_nodes(node_type=NodeType.TOPIC)
-        for node in nodes:
-            embs = await storage.get_embeddings_for_item(node.id)
+        topics = await storage.query_nodes(node_type=NodeType.TOPIC)
+        for topic in topics:
+            embs = await storage.get_embeddings_for_item(topic.id)
             assert len(embs) >= 1
 
-    async def test_single_paragraph_single_segment(
-        self, storage, embedding_provider, decomposition_provider, config
+    async def test_response_counts_accurate(
+        self, storage, embedding_provider, config
     ):
-        result, _ = await ingest(
-            "Just one paragraph here.",
-            storage,
-            embedding_provider,
-            decomposition_provider,
-            config,
+        _, store_result = await _two_step_ingest(
+            "A single paragraph.",
+            storage, embedding_provider, config,
         )
-        assert result["segments_created"] == 1
+        total_nodes = sum(store_result["nodes_created"].values())
+        assert total_nodes == 3  # 1 topic + 1 fact + 1 inference
+
+    async def test_with_metacontext(
+        self, storage, embedding_provider, config
+    ):
+        mc = Metacontext(content="Science fiction")
+        await storage.store_metacontext(mc)
+
+        await _two_step_ingest(
+            "The Culture ships are sentient AIs.",
+            storage, embedding_provider, config,
+            metacontext_id=mc.id,
+        )
+
+        from epimemer.core.types import NodeType
+        topics = await storage.query_nodes(node_type=NodeType.TOPIC)
+        for topic in topics:
+            edges = await storage.get_edges_from(topic.id)
+            mc_edges = [e for e in edges if e.type == EdgeType.HAS_METACONTEXT]
+            assert len(mc_edges) == 1
+            assert mc_edges[0].dst_id == mc.id
 
 
 # --- Search tests ---
@@ -165,20 +200,16 @@ class TestIngest:
 
 class TestSearch:
 
-    async def _ingest_content(self, storage, embedding_provider, decomposition_provider, config):
-        """Helper to ingest some content for search tests."""
-        await ingest(
+    async def _ingest_content(self, storage, embedding_provider, config):
+        await _two_step_ingest(
             "Machine learning models require large datasets for training.",
-            storage,
-            embedding_provider,
-            decomposition_provider,
-            config,
+            storage, embedding_provider, config,
         )
 
     async def test_returns_relevant_nodes(
-        self, storage, embedding_provider, decomposition_provider, config
+        self, storage, embedding_provider, config
     ):
-        await self._ingest_content(storage, embedding_provider, decomposition_provider, config)
+        await self._ingest_content(storage, embedding_provider, config)
         result, meta = await search(
             "Machine learning models require large datasets for training.",
             storage,
@@ -190,24 +221,24 @@ class TestSearch:
         assert meta.nodes_returned > 0
 
     async def test_respects_node_type_filter(
-        self, storage, embedding_provider, decomposition_provider, config
+        self, storage, embedding_provider, config
     ):
-        await self._ingest_content(storage, embedding_provider, decomposition_provider, config)
+        await self._ingest_content(storage, embedding_provider, config)
         result, _ = await search(
             "Machine learning",
             storage,
             embedding_provider,
             k=5,
             node_types=["topic"],
-            graph_hops=0,  # No expansion, pure vector search
+            graph_hops=0,
         )
         for node in result["nodes"]:
             assert node["node_type"] == "topic"
 
     async def test_meta_has_source_types(
-        self, storage, embedding_provider, decomposition_provider, config
+        self, storage, embedding_provider, config
     ):
-        await self._ingest_content(storage, embedding_provider, decomposition_provider, config)
+        await self._ingest_content(storage, embedding_provider, config)
         _, meta = await search(
             "Machine learning",
             storage,
@@ -270,11 +301,9 @@ class TestUpdate:
         assert result["old_node_id"] == t.id
         assert result["new_node_id"] != t.id
 
-        # Old node should be superseded
         old = await storage.get_node(t.id)
         assert old.status == NodeStatus.SUPERSEDED
 
-        # New node should exist with new content
         new = await storage.get_node(result["new_node_id"])
         assert new.content == "new content"
         assert isinstance(new, Topic)
@@ -298,13 +327,11 @@ class TestUpdate:
 class TestReflect:
 
     async def test_runs_all_operations(self, storage, embedding_provider):
-        # Add some topics to give reflection something to work with
         t1 = Topic(content="machine learning", source_id="s1")
         t2 = Topic(content="deep learning", source_id="s2")
         await storage.store_node(t1)
         await storage.store_node(t2)
 
-        # Add embeddings for them
         for t in [t1, t2]:
             vecs = await embedding_provider.embed([t.content])
             await storage.store_embedding(
@@ -312,10 +339,9 @@ class TestReflect:
             )
 
         result, _ = await reflect(storage, embedding_provider)
-        # These fields should be present even if zero
-        assert "topics_merged" in result
+        assert "similar_pairs" in result
         assert "nodes_decayed" in result
-        assert "contradictions_found" in result
+        assert "contradictions" in result
 
 
 # --- Query Graph tests ---
@@ -353,7 +379,6 @@ class TestQueryGraph:
             NodeEdge(src_id=f.id, dst_id=t2.id, type=EdgeType.SUPPORTS)
         )
 
-        # From t1, 0 hops: only t1 itself
         result, _ = await query_graph(t1.id, storage, hops=0)
         assert len(result["nodes"]) == 1
 
@@ -368,11 +393,10 @@ class TestQueryGraph:
 class TestArchive:
 
     async def test_finds_old_superseded_nodes(self, storage):
-        from datetime import datetime, timedelta, timezone
+        from datetime import timedelta
 
         t = Topic(content="old topic", source_id="s1")
         await storage.store_node(t)
-        # Mark as superseded long ago
         old_time = datetime.now(timezone.utc) - timedelta(days=200)
         await storage.update_node_status(t.id, NodeStatus.SUPERSEDED, superseded_at=old_time)
 
@@ -494,7 +518,6 @@ class TestTimelineTools:
         assert len(result["timepoints"]) == 1  # Only 2022
 
     async def test_create_timelink(self, storage):
-        # Create a node and a timeline with a timepoint
         t = Topic(content="AI topic", source_id="s1")
         await storage.store_node(t)
 
@@ -507,12 +530,10 @@ class TestTimelineTools:
         )
         tp_id = tp_result["timepoint_id"]
 
-        # Create timelink
         result, _ = await create_timelink(t.id, tl_id, tp_id, storage)
         assert result["edge_id"]
         assert result["timepoint_id"] == tp_id
 
-        # Verify edge exists
         edges = await storage.get_edges_from(t.id)
         tl_edges = [e for e in edges if e.type == EdgeType.TIMELINK]
         assert len(tl_edges) == 1
@@ -545,14 +566,12 @@ class TestMetacontextTools:
         assert mc is not None
 
     async def test_get_metacontexts_for_node(self, storage):
-        # Create metacontext and node
         mc = Metacontext(content="Fictional")
         await storage.store_metacontext(mc)
 
         t = Topic(content="Vampires", source_id="s1")
         await storage.store_node(t)
 
-        # Link them
         await storage.store_edge(NodeEdge(
             src_id=t.id, dst_id=mc.id, type=EdgeType.HAS_METACONTEXT,
         ))
@@ -569,61 +588,30 @@ class TestMetacontextTools:
         assert result["metacontexts"] == []
 
 
-# --- Ingest with metacontext ---
-
-
-class TestIngestWithMetacontext:
-
-    async def test_ingest_assigns_metacontext(
-        self, storage, embedding_provider, decomposition_provider, config
-    ):
-        # Create a metacontext first
-        mc = Metacontext(content="Science fiction")
-        await storage.store_metacontext(mc)
-
-        result, _ = await ingest(
-            "The Culture ships are sentient AIs.",
-            storage, embedding_provider, decomposition_provider, config,
-            metacontext_id=mc.id,
-        )
-
-        # All created nodes should have HAS_METACONTEXT edges
-        from epimemer.core.types import NodeType
-        topics = await storage.query_nodes(node_type=NodeType.TOPIC)
-        for topic in topics:
-            edges = await storage.get_edges_from(topic.id)
-            mc_edges = [e for e in edges if e.type == EdgeType.HAS_METACONTEXT]
-            assert len(mc_edges) == 1
-            assert mc_edges[0].dst_id == mc.id
-
-
 # --- Search with metacontext ---
 
 
 class TestSearchWithMetacontext:
 
     async def test_search_filtered_by_metacontext(
-        self, storage, embedding_provider, decomposition_provider, config
+        self, storage, embedding_provider, config
     ):
-        # Create two metacontexts
         mc_real = Metacontext(content="Real world")
         mc_fiction = Metacontext(content="Fiction")
         await storage.store_metacontext(mc_real)
         await storage.store_metacontext(mc_fiction)
 
-        # Ingest with different metacontexts
-        await ingest(
+        await _two_step_ingest(
             "Neural networks are used in image recognition.",
-            storage, embedding_provider, decomposition_provider, config,
+            storage, embedding_provider, config,
             metacontext_id=mc_real.id,
         )
-        await ingest(
+        await _two_step_ingest(
             "The neural lace allows direct brain-computer interface.",
-            storage, embedding_provider, decomposition_provider, config,
+            storage, embedding_provider, config,
             metacontext_id=mc_fiction.id,
         )
 
-        # Search filtered to real world only
         result, meta = await search(
             "Neural networks",
             storage, embedding_provider,
@@ -631,7 +619,6 @@ class TestSearchWithMetacontext:
             metacontext_id=mc_real.id,
         )
 
-        # All returned nodes should have "Real world" metacontext
         for node in result["nodes"]:
             assert "metacontexts" in node
             assert "Real world" in node["metacontexts"]

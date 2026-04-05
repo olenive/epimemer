@@ -1,11 +1,12 @@
 """Top-level orchestration Petri net.
 
 Routes incoming memory requests to the appropriate sub-pipeline.
-Supports auto-reflect: after N ingestions, automatically triggers reflection.
+Supports auto-reflect: after N store_decomposition calls, automatically triggers reflection.
 
 Petri net flow:
-    [MemoryRequest] → route_request → [IngestInput | SearchInput | ReflectInput | ...]
-    [IngestInput] → run_ingest → [MemoryResult]
+    [MemoryRequest] → route_request → [SegmentInput | StoreInput | SearchInput | ReflectInput | ...]
+    [SegmentInput] → run_segment → [MemoryResult]
+    [StoreInput] → run_store_decomposition → [MemoryResult]
     [SearchInput] → run_search → [MemoryResult]
     [ReflectInput] → run_reflect → [MemoryResult]
 
@@ -28,10 +29,10 @@ from petritype.core.executable_graph_components import (
 )
 
 from epimemer.embeddings.protocol import EmbeddingProvider
-from epimemer.llm.protocol import DecompositionProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.tools import (
-    ingest as ingest_tool,
+    segment_text as segment_tool,
+    store_decomposition as store_decomposition_tool,
     search as search_tool,
     reflect as reflect_tool,
 )
@@ -44,15 +45,21 @@ from epimemer.storage.protocol import StorageBackend
 
 class MemoryRequest(BaseModel):
     """A request to the memory system."""
-    action: Literal["ingest", "search", "reflect"]
+    action: Literal["segment", "store_decomposition", "search", "reflect"]
     payload: dict = Field(default_factory=dict)
 
 
-class IngestInput(BaseModel):
-    """Routed input for the ingest pipeline."""
+class SegmentInput(BaseModel):
+    """Routed input for the segmentation pipeline (step 1 of ingest)."""
     content: str
     metadata: dict = Field(default_factory=dict)
     segmentation_strategy: str | None = None
+
+
+class StoreDecompositionInput(BaseModel):
+    """Routed input for storing agent-provided decomposition (step 2 of ingest)."""
+    document_id: str
+    segments: list[dict] = Field(default_factory=list)
     metacontext_id: str | None = None
 
 
@@ -69,7 +76,6 @@ class ReflectInput(BaseModel):
     """Routed input for the reflection pipeline."""
     similarity_threshold: float = 0.85
     decay_rate: float = 0.05
-    auto_merge: bool = True
 
 
 class MemoryResult(BaseModel):
@@ -81,7 +87,7 @@ class MemoryResult(BaseModel):
 
 class OrchestrationState(BaseModel):
     """Tracks orchestration state for auto-reflect."""
-    ingestions_since_reflect: int = 0
+    stores_since_reflect: int = 0
     auto_reflect_threshold: int = 10
 
 
@@ -90,15 +96,18 @@ class OrchestrationState(BaseModel):
 
 class RouteResult(BaseModel):
     """Holds the routed input for fan-out to the correct pipeline."""
-    ingest_input: IngestInput | None = None
+    segment_input: SegmentInput | None = None
+    store_input: StoreDecompositionInput | None = None
     search_input: SearchInput | None = None
     reflect_input: ReflectInput | None = None
 
 
 def route_request(request: MemoryRequest) -> RouteResult:
     """Route a MemoryRequest to the appropriate typed input."""
-    if request.action == "ingest":
-        return RouteResult(ingest_input=IngestInput(**request.payload))
+    if request.action == "segment":
+        return RouteResult(segment_input=SegmentInput(**request.payload))
+    elif request.action == "store_decomposition":
+        return RouteResult(store_input=StoreDecompositionInput(**request.payload))
     elif request.action == "search":
         return RouteResult(search_input=SearchInput(**request.payload))
     elif request.action == "reflect":
@@ -110,8 +119,10 @@ def route_request(request: MemoryRequest) -> RouteResult:
 def distribute_route(result: RouteResult) -> dict[str, Any]:
     """Route the result to the correct input place."""
     output = {}
-    if result.ingest_input is not None:
-        output["IngestInput"] = result.ingest_input
+    if result.segment_input is not None:
+        output["SegmentInput"] = result.segment_input
+    if result.store_input is not None:
+        output["StoreInput"] = result.store_input
     if result.search_input is not None:
         output["SearchInput"] = result.search_input
     if result.reflect_input is not None:
@@ -122,26 +133,43 @@ def distribute_route(result: RouteResult) -> dict[str, Any]:
 # --- Transition functions ---
 
 
-async def run_ingest(
-    input: IngestInput,
+async def run_segment(
+    input: SegmentInput,
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
-    decomposition_provider: DecompositionProvider,
     config: ServerConfig,
 ) -> MemoryResult:
-    """Execute the full ingestion pipeline."""
-    result, meta = await ingest_tool(
+    """Execute the segmentation pipeline (step 1 of ingest)."""
+    result, meta = await segment_tool(
         content=input.content,
         storage=storage,
         embedding_provider=embedding_provider,
-        decomposition_provider=decomposition_provider,
         config=config,
         metadata=input.metadata,
         segmentation_strategy=input.segmentation_strategy,
+    )
+    return MemoryResult(
+        action="segment",
+        result=result,
+        meta=meta.model_dump(),
+    )
+
+
+async def run_store_decomposition(
+    input: StoreDecompositionInput,
+    storage: StorageBackend,
+    embedding_provider: EmbeddingProvider,
+) -> MemoryResult:
+    """Store agent-provided decomposition (step 2 of ingest)."""
+    result, meta = await store_decomposition_tool(
+        document_id=input.document_id,
+        segments=input.segments,
+        storage=storage,
+        embedding_provider=embedding_provider,
         metacontext_id=input.metacontext_id,
     )
     return MemoryResult(
-        action="ingest",
+        action="store_decomposition",
         result=result,
         meta=meta.model_dump(),
     )
@@ -180,7 +208,6 @@ async def run_reflect(
         embedding_provider=embedding_provider,
         similarity_threshold=input.similarity_threshold,
         decay_rate=input.decay_rate,
-        auto_merge=input.auto_merge,
     )
     return MemoryResult(
         action="reflect",
@@ -201,20 +228,20 @@ def orchestration_net(
     request: MemoryRequest,
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
-    decomposition_provider: DecompositionProvider,
     config: ServerConfig,
 ) -> ExecutableGraph:
     """Build the orchestration Petri net.
 
-    Routes a MemoryRequest to the correct sub-pipeline (ingest, search,
-    or reflect) and produces a MemoryResult.
+    Routes a MemoryRequest to the correct sub-pipeline (segment,
+    store_decomposition, search, or reflect) and produces a MemoryResult.
     """
     return ExecutableGraphOperations.construct_graph([
         # Input place
         ListPlaceNode("MemoryRequest", MemoryRequest, [request]),
 
         # Routed input places (one per pipeline)
-        ListPlaceNode("IngestInput", IngestInput),
+        ListPlaceNode("SegmentInput", SegmentInput),
+        ListPlaceNode("StoreInput", StoreDecompositionInput),
         ListPlaceNode("SearchInput", SearchInput),
         ListPlaceNode("ReflectInput", ReflectInput),
 
@@ -228,25 +255,37 @@ def orchestration_net(
             output_distribution_function=distribute_route,
         ),
         ArgumentEdgeToTransition("MemoryRequest", "route_request", "request"),
-        ReturnedEdgeFromTransition("route_request", "IngestInput"),
+        ReturnedEdgeFromTransition("route_request", "SegmentInput"),
+        ReturnedEdgeFromTransition("route_request", "StoreInput"),
         ReturnedEdgeFromTransition("route_request", "SearchInput"),
         ReturnedEdgeFromTransition("route_request", "ReflectInput"),
 
-        # Transition 1: run ingest
+        # Transition 1: run segment
         FunctionTransitionNode(
-            "run_ingest",
-            run_ingest,
+            "run_segment",
+            run_segment,
             kwargs={
                 "storage": storage,
                 "embedding_provider": embedding_provider,
-                "decomposition_provider": decomposition_provider,
                 "config": config,
             },
         ),
-        ArgumentEdgeToTransition("IngestInput", "run_ingest", "input"),
-        ReturnedEdgeFromTransition("run_ingest", "MemoryResult"),
+        ArgumentEdgeToTransition("SegmentInput", "run_segment", "input"),
+        ReturnedEdgeFromTransition("run_segment", "MemoryResult"),
 
-        # Transition 2: run search
+        # Transition 2: run store_decomposition
+        FunctionTransitionNode(
+            "run_store_decomposition",
+            run_store_decomposition,
+            kwargs={
+                "storage": storage,
+                "embedding_provider": embedding_provider,
+            },
+        ),
+        ArgumentEdgeToTransition("StoreInput", "run_store_decomposition", "input"),
+        ReturnedEdgeFromTransition("run_store_decomposition", "MemoryResult"),
+
+        # Transition 3: run search
         FunctionTransitionNode(
             "run_search",
             run_search,
@@ -258,7 +297,7 @@ def orchestration_net(
         ArgumentEdgeToTransition("SearchInput", "run_search", "input"),
         ReturnedEdgeFromTransition("run_search", "MemoryResult"),
 
-        # Transition 3: run reflect
+        # Transition 4: run reflect
         FunctionTransitionNode(
             "run_reflect",
             run_reflect,
@@ -277,7 +316,7 @@ def orchestration_net(
 
 def should_auto_reflect(state: OrchestrationState) -> bool:
     """Check if automatic reflection should be triggered."""
-    return state.ingestions_since_reflect >= state.auto_reflect_threshold
+    return state.stores_since_reflect >= state.auto_reflect_threshold
 
 
 async def execute_with_auto_reflect(
@@ -285,7 +324,6 @@ async def execute_with_auto_reflect(
     state: OrchestrationState,
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
-    decomposition_provider: DecompositionProvider,
     config: ServerConfig,
 ) -> tuple[MemoryResult, OrchestrationState, MemoryResult | None]:
     """Execute a request and optionally trigger auto-reflect.
@@ -293,26 +331,23 @@ async def execute_with_auto_reflect(
     Returns:
         (result, updated_state, reflect_result_or_none)
     """
-    # Execute the main request
-    graph = orchestration_net(request, storage, embedding_provider, decomposition_provider, config)
+    graph = orchestration_net(request, storage, embedding_provider, config)
     graph, _ = await ExecutableGraphOperations.execute_graph(graph, max_transitions=10)
     result: MemoryResult = graph.place_named("MemoryResult").tokens[0]
 
-    # Update state
     reflect_result = None
-    if request.action == "ingest":
+    if request.action == "store_decomposition":
         state = state.model_copy(update={
-            "ingestions_since_reflect": state.ingestions_since_reflect + 1,
+            "stores_since_reflect": state.stores_since_reflect + 1,
         })
 
-        # Check if auto-reflect should fire
         if should_auto_reflect(state):
             reflect_request = MemoryRequest(action="reflect", payload={})
             reflect_graph = orchestration_net(
-                reflect_request, storage, embedding_provider, decomposition_provider, config,
+                reflect_request, storage, embedding_provider, config,
             )
             reflect_graph, _ = await ExecutableGraphOperations.execute_graph(reflect_graph, max_transitions=10)
             reflect_result = reflect_graph.place_named("MemoryResult").tokens[0]
-            state = state.model_copy(update={"ingestions_since_reflect": 0})
+            state = state.model_copy(update={"stores_since_reflect": 0})
 
     return result, state, reflect_result

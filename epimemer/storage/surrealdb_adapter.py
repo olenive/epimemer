@@ -18,11 +18,13 @@ from epimemer.core.types import (
     EpistemicNode,
     Fact,
     Inference,
+    Metacontext,
     NodeEdge,
     NodeStatus,
     NodeType,
     RawDocument,
     Segment,
+    Timeline,
     Topic,
 )
 
@@ -131,6 +133,17 @@ class SurrealDBStorage:
             DEFINE INDEX IF NOT EXISTS idx_emb_uid ON embedding FIELDS uid UNIQUE;
             DEFINE INDEX IF NOT EXISTS idx_emb_item ON embedding FIELDS item_id;
             DEFINE INDEX IF NOT EXISTS idx_emb_model ON embedding FIELDS model_id;
+        """)
+
+        await self.db.query("""
+            DEFINE TABLE IF NOT EXISTS timeline SCHEMALESS;
+            DEFINE INDEX IF NOT EXISTS idx_timeline_uid ON timeline FIELDS uid UNIQUE;
+        """)
+
+        await self.db.query("""
+            DEFINE TABLE IF NOT EXISTS metacontext SCHEMALESS;
+            DEFINE INDEX IF NOT EXISTS idx_mc_uid ON metacontext FIELDS uid UNIQUE;
+            DEFINE INDEX IF NOT EXISTS idx_mc_status ON metacontext FIELDS status;
         """)
 
     @property
@@ -323,3 +336,50 @@ class SurrealDBStorage:
             {"query_vector": query_vector, "model_id": model_id, "k": k},
         )
         return [(r["item_id"], r["score"]) for r in rows]
+
+    # --- Timelines ---
+
+    async def store_timeline(self, timeline: Timeline) -> str:
+        data = _serialize(timeline)
+        await self.db.query("INSERT INTO timeline $data", {"data": data})
+        return timeline.id
+
+    async def get_timeline(self, timeline_id: str) -> Timeline | None:
+        rows = await self.db.query(
+            "SELECT * FROM timeline WHERE uid = $uid LIMIT 1",
+            {"uid": timeline_id},
+        )
+        if not rows:
+            return None
+        return Timeline.model_validate(_clean_record(rows[0]))
+
+    async def query_timelines(self) -> Sequence[Timeline]:
+        rows = await self.db.query("SELECT * FROM timeline")
+        return [Timeline.model_validate(_clean_record(r)) for r in rows]
+
+    # --- Metacontexts ---
+
+    async def store_metacontext(self, mc: Metacontext) -> str:
+        data = _serialize(mc)
+        await self.db.query("INSERT INTO metacontext $data", {"data": data})
+        return mc.id
+
+    async def get_metacontext(self, mc_id: str) -> Metacontext | None:
+        rows = await self.db.query(
+            "SELECT * FROM metacontext WHERE uid = $uid LIMIT 1",
+            {"uid": mc_id},
+        )
+        if not rows:
+            return None
+        return Metacontext.model_validate(_clean_record(rows[0]))
+
+    async def query_metacontexts(
+        self,
+        *,
+        status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> Sequence[Metacontext]:
+        rows = await self.db.query(
+            "SELECT * FROM metacontext WHERE status = $status",
+            {"status": status.value},
+        )
+        return [Metacontext.model_validate(_clean_record(r)) for r in rows]

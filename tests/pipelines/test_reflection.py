@@ -12,38 +12,24 @@ Covers:
 - Archival: finds old superseded nodes
 - Archival: exports nodes and edges correctly
 - Archival: active nodes never included
-- Reflection Petri net: all operations run, tokens flow correctly
 """
 
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from petritype.core.executable_graph_components import ExecutableGraphOperations
-
 from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
     Fact,
-    Inference,
     NodeEdge,
     NodeStatus,
-    NodeType,
     Topic,
     ValueSignal,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.pipelines.reflection.archival import archive_nodes, find_archival_candidates
 from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
-from epimemer.pipelines.reflection.reflection_net import (
-    ConsolidationResult,
-    ContradictionResult,
-    DecayResult,
-    EnrichmentResult,
-    ReflectionRequest,
-    SplitResult,
-    reflection_net,
-)
 from epimemer.pipelines.reflection.topic_consolidation import (
     find_similar_topic_pairs,
     merge_similar_topics,
@@ -465,132 +451,3 @@ async def test_archive_nodes_exports_correctly(storage_with_archival_candidates)
         assert "content" in node_dict
         assert "status" in node_dict
 
-
-# --- Reflection Petri net tests ---
-
-# The new pipeline has 6 transitions:
-# 1. run_topic_split
-# 2. run_topic_consolidation
-# 3. broadcast_parallel_ops
-# 4. run_value_decay
-# 5. run_topic_enrichment
-# 6. run_contradiction_detection
-
-
-async def test_reflection_net_all_operations_run(
-    storage_with_similar_topics, embedding_provider
-):
-    """The reflection Petri net runs all operations to completion."""
-    storage = storage_with_similar_topics
-
-    # Add some facts for contradiction detection
-    fact = Fact(id="fact-net-1", content="Test fact for net", source_id="seg-10")
-    await storage.store_node(fact)
-    vectors = await embedding_provider.embed([fact.content])
-    emb = EmbeddingRecord(
-        item_id=fact.id,
-        model_id=embedding_provider.model_id,
-        vector=vectors[0],
-    )
-    await storage.store_embedding(emb)
-
-    request = ReflectionRequest(
-        similarity_threshold=0.99,  # high threshold to avoid merging in this test
-        auto_merge=False,
-        hierarchical=False,
-        decay_rate=0.05,
-    )
-    graph = reflection_net(request, storage, embedding_provider)
-
-    # Execute all 6 transitions: split → consolidation → broadcast → 3 parallel ops
-    graph, fired = await ExecutableGraphOperations.execute_graph(
-        graph, max_transitions=6
-    )
-
-    assert fired == 6
-
-    # Check all output places have tokens
-    split_place = graph.place_named("SplitResult")
-    assert split_place is not None
-    assert len(split_place.tokens) == 1
-    assert isinstance(split_place.tokens[0], SplitResult)
-
-    consolidation_place = graph.place_named("ConsolidationResult")
-    assert consolidation_place is not None
-    assert len(consolidation_place.tokens) == 1
-    assert isinstance(consolidation_place.tokens[0], ConsolidationResult)
-
-    decay_place = graph.place_named("DecayResult")
-    assert decay_place is not None
-    assert len(decay_place.tokens) == 1
-    assert isinstance(decay_place.tokens[0], DecayResult)
-
-    enrichment_place = graph.place_named("EnrichmentResult")
-    assert enrichment_place is not None
-    assert len(enrichment_place.tokens) == 1
-    assert isinstance(enrichment_place.tokens[0], EnrichmentResult)
-
-    contradiction_place = graph.place_named("ContradictionResult")
-    assert contradiction_place is not None
-    assert len(contradiction_place.tokens) == 1
-    assert isinstance(contradiction_place.tokens[0], ContradictionResult)
-
-
-async def test_reflection_net_sequential_phases(
-    storage_with_similar_topics, embedding_provider
-):
-    """Split runs before consolidation, which runs before parallel ops."""
-    storage = storage_with_similar_topics
-
-    request = ReflectionRequest(
-        similarity_threshold=0.99,
-        auto_merge=False,
-        hierarchical=False,
-    )
-    graph = reflection_net(request, storage, embedding_provider)
-
-    # Before execution: only input place has tokens
-    assert len(graph.place_named("ReflectionRequest").tokens) == 1
-    assert len(graph.place_named("SplitResult").tokens) == 0
-    assert len(graph.place_named("PostSplitRequest").tokens) == 0
-
-    # Step 1: Split fires
-    graph, fired = await ExecutableGraphOperations.execute_graph(
-        graph, max_transitions=1
-    )
-    assert fired == 1
-    assert len(graph.place_named("ReflectionRequest").tokens) == 0
-    assert len(graph.place_named("SplitResult").tokens) == 1
-    assert len(graph.place_named("PostSplitRequest").tokens) == 1
-    # Consolidation hasn't run yet
-    assert len(graph.place_named("ConsolidationResult").tokens) == 0
-
-    # Step 2: Consolidation fires
-    graph, fired = await ExecutableGraphOperations.execute_graph(
-        graph, max_transitions=1
-    )
-    assert fired == 1
-    assert len(graph.place_named("PostSplitRequest").tokens) == 0
-    assert len(graph.place_named("ConsolidationResult").tokens) == 1
-    assert len(graph.place_named("PostConsolidationRequest").tokens) == 1
-    # Parallel ops haven't run yet
-    assert len(graph.place_named("DecayInput").tokens) == 0
-
-    # Step 3: Broadcast fires
-    graph, fired = await ExecutableGraphOperations.execute_graph(
-        graph, max_transitions=1
-    )
-    assert fired == 1
-    assert len(graph.place_named("PostConsolidationRequest").tokens) == 0
-    assert len(graph.place_named("DecayInput").tokens) == 1
-    assert len(graph.place_named("EnrichmentInput").tokens) == 1
-    assert len(graph.place_named("ContradictionInput").tokens) == 1
-
-    # Steps 4-6: Three parallel ops fire
-    graph, fired = await ExecutableGraphOperations.execute_graph(
-        graph, max_transitions=3
-    )
-    assert fired == 3
-    assert len(graph.place_named("DecayResult").tokens) == 1
-    assert len(graph.place_named("EnrichmentResult").tokens) == 1
-    assert len(graph.place_named("ContradictionResult").tokens) == 1

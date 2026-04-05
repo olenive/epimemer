@@ -22,7 +22,6 @@ from epimemer.core.types import (
     Topic,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
-from epimemer.llm.protocol import DecompositionProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.types import ResponseMeta
 from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment
@@ -49,40 +48,33 @@ async def _run_net(
     return await ExecutableGraphOperations.execute_graph(graph, max_transitions=max_transitions)
 
 
-# --- Ingest ---
+# --- Segment (step 1 of agent-driven ingest) ---
 
 
-async def ingest(
+async def segment_text(
     content: str,
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
-    decomposition_provider: DecompositionProvider,
     config: ServerConfig,
     *,
     metadata: dict | None = None,
     segmentation_strategy: str | None = None,
-    metacontext_id: str | None = None,
     event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
-    """Ingest text: segment, decompose, construct graph, persist, embed.
+    """Segment text and store the document and segments. Returns segments for the agent to decompose.
 
-    If metacontext_id is provided, all extracted nodes get HAS_METACONTEXT edges.
-
-    Returns a result dict and response metadata.
+    This is step 1 of the two-step agent-driven ingest flow. The agent
+    receives the segments, extracts topics/facts/inferences itself, then
+    calls store_decomposition (step 2).
     """
-    from epimemer.pipelines.decomposition.llm_decomposition import llm_decomposition_net
-    from epimemer.pipelines.graph_construction.edge_creation import edge_creation_net
-    from epimemer.pipelines.graph_construction.persist import persist_decomposed_segment
     from epimemer.pipelines.segmentation.paragraph_split import paragraph_split_segmentation_net
     from epimemer.pipelines.segmentation.semantic_similarity import semantic_similarity_segmentation_net
 
     strategy = segmentation_strategy or config.segmentation_strategy
 
-    # 1. Create and store the document
     doc = RawDocument(content=content, metadata=metadata or {})
     await storage.store_document(doc)
 
-    # 2. Segment
     if strategy == "semantic":
         seg_graph = semantic_similarity_segmentation_net(doc, embedding_provider)
         seg_graph, _ = await _run_net(seg_graph, "segmentation:semantic", event_bus)
@@ -92,35 +84,79 @@ async def ingest(
 
     segments: list[Segment] = list(seg_graph.place_named("Segments").tokens)
 
-    # 3. Decompose each segment and construct graph
+    for segment in segments:
+        await storage.store_segment(segment)
+
+    result = {
+        "document_id": doc.id,
+        "segments": [
+            {"segment_id": s.id, "text": s.text}
+            for s in segments
+        ],
+    }
+    meta = ResponseMeta(nodes_returned=len(segments))
+    return result, meta
+
+
+# --- Store Decomposition (step 2 of agent-driven ingest) ---
+
+
+async def store_decomposition(
+    document_id: str,
+    segments: list[dict],
+    storage: StorageBackend,
+    embedding_provider: EmbeddingProvider,
+    *,
+    metacontext_id: str | None = None,
+    event_bus: InProcessEventBus | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Store agent-provided decomposition: topics, facts, inferences per segment.
+
+    Each entry in segments should have:
+        segment_id: str
+        topics: list[str]
+        facts: list[str]
+        inferences: list[str]
+
+    Creates typed nodes, edges, and embeddings for everything.
+    """
+    from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment, edge_creation_net
+    from epimemer.pipelines.graph_construction.persist import persist_decomposed_segment
+
     total_topics = 0
     total_facts = 0
     total_inferences = 0
     total_edges = 0
-    llm_calls = 0
 
-    for segment in segments:
-        # Run decomposition
-        decomp_graph = llm_decomposition_net(segment, decomposition_provider)
-        decomp_graph, _ = await _run_net(decomp_graph, "decomposition", event_bus)
+    for seg_data in segments:
+        segment_id = seg_data["segment_id"]
+        raw_topics: list[str] = seg_data.get("topics", [])
+        raw_facts: list[str] = seg_data.get("facts", [])
+        raw_inferences: list[str] = seg_data.get("inferences", [])
 
-        topics: list[Topic] = list(decomp_graph.place_named("Topics").tokens)
-        facts: list[Fact] = list(decomp_graph.place_named("Facts").tokens)
-        inferences: list[Inference] = list(decomp_graph.place_named("Inferences").tokens)
-        llm_calls += 3  # extract_topics + extract_facts + extract_inferences
+        topics = [Topic(content=t, source_id=segment_id, extraction_method="agent") for t in raw_topics]
+        facts = [Fact(content=f, source_id=segment_id, extraction_method="agent") for f in raw_facts]
+        inferences = [Inference(content=i, source_id=segment_id, extraction_method="agent") for i in raw_inferences]
 
-        # Create edges
+        # Reconstruct the segment from storage for edge creation
+        stored_segments = await storage.get_segments_for_document(document_id)
+        segment = next((s for s in stored_segments if s.id == segment_id), None)
+        if segment is None:
+            raise ValueError(f"Segment '{segment_id}' not found for document '{document_id}'")
+
         decomposed = DecomposedSegment(
             segment=segment,
             topics=topics,
             facts=facts,
             inferences=inferences,
         )
+
+        # Create edges via Petri net
         edge_graph = edge_creation_net(decomposed)
         edge_graph, _ = await _run_net(edge_graph, "edge_creation", event_bus)
         edges: list[NodeEdge] = list(edge_graph.place_named("Edges").tokens)
 
-        # Persist
+        # Persist nodes and edges
         await persist_decomposed_segment(decomposed, edges, storage)
 
         # Embed all nodes
@@ -158,17 +194,16 @@ async def ingest(
         "inferences": total_inferences,
     }
     result = {
-        "document_id": doc.id,
-        "segments_created": len(segments),
+        "document_id": document_id,
         "nodes_created": nodes_created,
         "edges_created": total_edges,
     }
     meta = ResponseMeta(
         nodes_returned=total_topics + total_facts + total_inferences,
-        llm_calls=llm_calls,
         source_types={k: v for k, v in nodes_created.items() if v > 0},
     )
     return result, meta
+
 
 
 # --- Search ---
@@ -332,59 +367,211 @@ async def update(
     return result, meta
 
 
-# --- Reflect ---
+# --- Reflect (analysis — no LLM) ---
 
 
 async def reflect(
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
-    decomposition_provider=None,
     *,
     similarity_threshold: float = 0.85,
     decay_rate: float = 0.05,
-    auto_merge: bool = True,
-    hierarchical: bool = True,
     event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
-    """Run the reflection pipeline: split, consolidation, decay, enrichment, contradiction detection."""
-    from epimemer.pipelines.reflection.reflection_net import (
-        ConsolidationResult,
-        ContradictionResult,
-        DecayResult,
-        EnrichmentResult,
-        ReflectionRequest,
-        SplitResult,
-        reflection_net,
-    )
+    """Analyse the memory graph and return candidates for the agent to act on.
 
-    request = ReflectionRequest(
+    Runs embedding-based analysis and value decay (applied immediately).
+    Returns split candidates, similar topic pairs, enrichment candidates,
+    and contradiction pairs for the agent to review and act on via
+    memory.apply_reflection.
+    """
+    from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
+    from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
+    from epimemer.pipelines.reflection.topic_enrichment import gather_associated_material, _should_enrich
+    from epimemer.pipelines.reflection.topic_splitting import should_split
+    from epimemer.pipelines.reflection.value_decay import apply_decay
+
+    model_id = embedding_provider.model_id
+
+    # 1. Decay (applied immediately — no agent input needed)
+    nodes_decayed = await apply_decay(storage, decay_rate=decay_rate)
+
+    # 2. Find similar topic pairs for consolidation
+    pairs = await find_similar_topic_pairs(
+        storage, embedding_provider,
         similarity_threshold=similarity_threshold,
-        decay_rate=decay_rate,
-        auto_merge=auto_merge,
-        hierarchical=hierarchical,
-        model_id=embedding_provider.model_id,
+        model_id=model_id,
     )
-    graph = reflection_net(request, storage, embedding_provider, decomposition_provider)
-    graph, _ = await _run_net(graph, "reflection", event_bus)
+    similar_pairs = [
+        {
+            "topic_a": {"id": a.id, "content": a.content},
+            "topic_b": {"id": b.id, "content": b.content},
+            "similarity": round(score, 4),
+        }
+        for a, b, score in pairs
+    ]
 
-    split: SplitResult = graph.place_named("SplitResult").tokens[0]
-    consolidation: ConsolidationResult = graph.place_named("ConsolidationResult").tokens[0]
-    decay: DecayResult = graph.place_named("DecayResult").tokens[0]
-    enrichment: EnrichmentResult = graph.place_named("EnrichmentResult").tokens[0]
-    contradiction: ContradictionResult = graph.place_named("ContradictionResult").tokens[0]
+    # 3. Find split candidates (topics with high internal variance)
+    all_topics = await storage.query_nodes(node_type=NodeType.TOPIC)
+    topics = [t for t in all_topics if isinstance(t, Topic)]
+
+    split_candidates = []
+    for topic in topics:
+        material = await gather_associated_material(topic, storage)
+        if len(material) < 4:
+            continue
+        material_vectors = await embedding_provider.embed(material)
+        if should_split(material_vectors):
+            split_candidates.append({
+                "topic_id": topic.id,
+                "topic_content": topic.content,
+                "material": material,
+            })
+
+    # 4. Find enrichment candidates (thin descriptions with rich material)
+    enrichment_candidates = []
+    for topic in topics:
+        material = await gather_associated_material(topic, storage)
+        if _should_enrich(topic, material, material_ratio=3.0):
+            enrichment_candidates.append({
+                "topic_id": topic.id,
+                "current_content": topic.content,
+                "associated_material": material,
+            })
+
+    # 5. Detect contradictions
+    contradiction_pairs_raw = await detect_contradictions(
+        storage, embedding_provider,
+        similarity_threshold=0.80,
+        model_id=model_id,
+    )
+    contradictions = [
+        {
+            "fact_a": {"id": a.id, "content": a.content},
+            "fact_b": {"id": b.id, "content": b.content},
+            "similarity": round(score, 4),
+        }
+        for a, b, score in contradiction_pairs_raw
+    ]
 
     result = {
-        "topics_split": split.topics_split,
-        "topics_merged": consolidation.topics_merged,
-        "parent_topics_created": len(consolidation.parent_topics_created),
-        "pairs_found": consolidation.pairs_found,
-        "nodes_decayed": decay.nodes_decayed,
-        "topics_enriched": enrichment.topics_enriched,
-        "contradictions_found": contradiction.pairs_found,
-        "contradiction_pairs": contradiction.contradiction_pairs,
+        "nodes_decayed": nodes_decayed,
+        "similar_pairs": similar_pairs,
+        "split_candidates": split_candidates,
+        "enrichment_candidates": enrichment_candidates,
+        "contradictions": contradictions,
     }
     meta = ResponseMeta(
-        nodes_returned=consolidation.topics_merged + contradiction.pairs_found,
+        nodes_returned=len(similar_pairs) + len(split_candidates) + len(enrichment_candidates) + len(contradictions),
+    )
+    return result, meta
+
+
+# --- Apply Reflection (stores agent decisions) ---
+
+
+async def apply_reflection(
+    storage: StorageBackend,
+    embedding_provider: EmbeddingProvider,
+    *,
+    parents: list[dict] | None = None,
+    splits: list[dict] | None = None,
+    enrichments: list[dict] | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Apply agent-provided reflection decisions to the graph.
+
+    parents: [{children_ids: [str], content: str}] — synthesized parent topics
+    splits: [{topic_id: str, subtopics: [str]}] — split a broad topic
+    enrichments: [{topic_id: str, new_content: str}] — improved descriptions
+    """
+    from epimemer.pipelines.graph_construction.versioning import group_into_parent, supersede_node
+
+    parents_created = 0
+    topics_split = 0
+    topics_enriched = 0
+    model_id = embedding_provider.model_id
+
+    # 1. Create parent topics for similar groups
+    for parent_spec in (parents or []):
+        children_ids: list[str] = parent_spec["children_ids"]
+        content: str = parent_spec["content"]
+
+        children: list[EpistemicNode] = []
+        for cid in children_ids:
+            node = await storage.get_node(cid)
+            if node is not None:
+                children.append(node)
+
+        if len(children) < 2:
+            continue
+
+        parent_topic = Topic(
+            content=content,
+            source_id=children[0].source_id if hasattr(children[0], "source_id") else "",
+            extraction_method="agent:parent_synthesis",
+            metadata={"synthesized_from": children_ids},
+        )
+        await group_into_parent(children, parent_topic, storage)
+
+        vectors = await embedding_provider.embed([parent_topic.content])
+        await storage.store_embedding(
+            EmbeddingRecord(item_id=parent_topic.id, model_id=model_id, vector=vectors[0])
+        )
+        parents_created += 1
+
+    # 2. Split broad topics into subtopics
+    for split_spec in (splits or []):
+        topic_id: str = split_spec["topic_id"]
+        subtopic_contents: list[str] = split_spec["subtopics"]
+
+        parent = await storage.get_node(topic_id)
+        if parent is None or not isinstance(parent, Topic):
+            continue
+
+        subtopics = [
+            Topic(content=sc, source_id=parent.source_id, extraction_method="agent:split", metadata={"split_from": topic_id})
+            for sc in subtopic_contents
+        ]
+        for st in subtopics:
+            await storage.store_node(st)
+            vecs = await embedding_provider.embed([st.content])
+            await storage.store_embedding(
+                EmbeddingRecord(item_id=st.id, model_id=model_id, vector=vecs[0])
+            )
+        await group_into_parent(subtopics, parent, storage)
+        topics_split += 1
+
+    # 3. Enrich topic descriptions
+    for enrich_spec in (enrichments or []):
+        topic_id = enrich_spec["topic_id"]
+        new_content: str = enrich_spec["new_content"]
+
+        old_topic = await storage.get_node(topic_id)
+        if old_topic is None or not isinstance(old_topic, Topic):
+            continue
+
+        enriched = Topic(
+            content=new_content,
+            source_id=old_topic.source_id,
+            value=old_topic.value,
+            extraction_method=f"{old_topic.extraction_method}:enriched",
+            metadata={**old_topic.metadata, "enriched_from": topic_id},
+        )
+        await supersede_node(old_topic, enriched, storage)
+
+        vecs = await embedding_provider.embed([enriched.content])
+        await storage.store_embedding(
+            EmbeddingRecord(item_id=enriched.id, model_id=model_id, vector=vecs[0])
+        )
+        topics_enriched += 1
+
+    result = {
+        "parents_created": parents_created,
+        "topics_split": topics_split,
+        "topics_enriched": topics_enriched,
+    }
+    meta = ResponseMeta(
+        nodes_returned=parents_created + topics_split + topics_enriched,
     )
     return result, meta
 

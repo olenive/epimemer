@@ -14,8 +14,7 @@ from epimemer.core.types import (
     ValueSignal,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
-from epimemer.llm.protocol import DecompositionProvider
-from epimemer.pipelines.graph_construction.versioning import group_into_parent, merge_nodes
+from epimemer.pipelines.graph_construction.versioning import merge_nodes
 from epimemer.storage.protocol import StorageBackend
 
 
@@ -148,91 +147,3 @@ async def merge_similar_topics(
     return merged_topic
 
 
-async def consolidate_as_hierarchy(
-    storage: StorageBackend,
-    embedding_provider: EmbeddingProvider,
-    decomposition_provider: DecompositionProvider,
-    *,
-    similarity_threshold: float = 0.85,
-    model_id: str | None = None,
-    min_group_size: int = 2,
-) -> list[Topic]:
-    """Find clusters of similar topics and group them under synthesized parents.
-
-    Unlike merge_similar_topics, children remain active — they become
-    subtopics of a new parent via SUBTOPIC_OF edges.
-
-    Groups are formed by collecting connected components from the pairwise
-    similarity graph (pairs above threshold). Each group of min_group_size
-    or more gets a parent synthesized by the LLM.
-
-    Args:
-        storage: The storage backend.
-        embedding_provider: Provider for embedding lookups.
-        decomposition_provider: LLM provider for parent synthesis.
-        similarity_threshold: Minimum cosine similarity for grouping.
-        model_id: Override the model_id for embedding lookup.
-        min_group_size: Minimum cluster size to create a parent.
-
-    Returns:
-        A list of newly created parent topics.
-    """
-    pairs = await find_similar_topic_pairs(
-        storage, embedding_provider,
-        similarity_threshold=similarity_threshold,
-        model_id=model_id,
-    )
-
-    if not pairs:
-        return []
-
-    # Build connected components from similar pairs (union-find)
-    parent_map: dict[str, str] = {}
-
-    def find(x: str) -> str:
-        while parent_map.get(x, x) != x:
-            parent_map[x] = parent_map.get(parent_map[x], parent_map[x])
-            x = parent_map[x]
-        return x
-
-    def union(a: str, b: str) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent_map[ra] = rb
-
-    topic_by_id: dict[str, Topic] = {}
-    for topic_a, topic_b, _score in pairs:
-        topic_by_id[topic_a.id] = topic_a
-        topic_by_id[topic_b.id] = topic_b
-        union(topic_a.id, topic_b.id)
-
-    # Collect groups
-    groups: dict[str, list[Topic]] = {}
-    for topic_id, topic in topic_by_id.items():
-        root = find(topic_id)
-        groups.setdefault(root, []).append(topic)
-
-    # For each group, synthesize a parent and create hierarchy
-    effective_model_id = model_id or embedding_provider.model_id
-    created_parents: list[Topic] = []
-
-    for group in groups.values():
-        if len(group) < min_group_size:
-            continue
-
-        parent_topic = await decomposition_provider.synthesize_parent_topic(group)
-        await group_into_parent(group, parent_topic, storage)
-
-        # Embed the parent for future similarity searches
-        parent_vectors = await embedding_provider.embed([parent_topic.content])
-        await storage.store_embedding(
-            EmbeddingRecord(
-                item_id=parent_topic.id,
-                model_id=effective_model_id,
-                vector=parent_vectors[0],
-            )
-        )
-
-        created_parents.append(parent_topic)
-
-    return created_parents

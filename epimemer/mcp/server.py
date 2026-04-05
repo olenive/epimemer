@@ -15,8 +15,6 @@ from fastmcp import Context, FastMCP
 from epimemer.logging.structured import ToolInvocationLog, log_tool_call, setup_logging
 from epimemer.mcp import tools
 from epimemer.mcp.config import (
-    ServerConfig,
-    create_decomposition_provider,
     create_embedding_provider,
     create_storage,
     load_config,
@@ -37,7 +35,6 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         await storage.connect()
 
     embedding_provider = create_embedding_provider(config)
-    decomposition_provider = create_decomposition_provider(config)
 
     # Optional: visualization server with instrumented storage
     viz_server = None
@@ -59,11 +56,25 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             host=config.viz_host,
             port=config.viz_port,
             log_level="warning",
+            lifespan="off",
         )
         viz_server = uvicorn.Server(viz_config)
-        asyncio.create_task(viz_server.serve())
-        logging.getLogger(__name__).info(
-            "Visualization server started at http://%s:%d",
+        logger = logging.getLogger(__name__)
+
+        async def _run_viz():
+            try:
+                await viz_server.serve()
+            except SystemExit:
+                logger.warning(
+                    "Visualization server failed to start on %s:%d (port in use?). "
+                    "Continuing without visualization.",
+                    config.viz_host,
+                    config.viz_port,
+                )
+
+        asyncio.create_task(_run_viz())
+        logger.info(
+            "Visualization server starting at http://%s:%d",
             config.viz_host,
             config.viz_port,
         )
@@ -72,9 +83,9 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         yield {
             "storage": storage,
             "embedding_provider": embedding_provider,
-            "decomposition_provider": decomposition_provider,
             "config": config,
             "event_bus": event_bus,
+            "stores_since_reflect": 0,
         }
     finally:
         if viz_server is not None:
@@ -85,8 +96,9 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
 mcp = FastMCP(
     "epimemer",
-    instructions="Epimemer is a layered epistemic memory system. Use memory.ingest to store text, "
-    "memory.search to find relevant knowledge, memory.reflect to consolidate the graph, "
+    instructions="Epimemer is a layered epistemic memory system. Use memory.segment to segment text, "
+    "then memory.store_decomposition to store your extracted topics/facts/inferences. "
+    "Use memory.search to find relevant knowledge, memory.reflect to consolidate the graph, "
     "and memory.query_graph to explore relationships.",
     lifespan=app_lifespan,
 )
@@ -128,44 +140,101 @@ def _error_response(error: str) -> str:
 # --- Tools ---
 
 
-@mcp.tool(name="memory.ingest")
-async def memory_ingest(
+@mcp.tool(name="memory.segment")
+async def memory_segment(
     content: str,
     ctx: Context,
     metadata: dict | None = None,
     segmentation_strategy: str | None = None,
-    metacontext_id: str | None = None,
 ) -> str:
-    """Ingest text into the epistemic memory graph.
+    """Segment text and store the document. Returns segments for you to decompose.
 
-    Segments the text, extracts topics/facts/inferences via LLM,
-    creates typed edges, and stores everything with embeddings.
+    This is step 1 of the two-step ingest flow. After receiving the segments,
+    extract topics, facts, and inferences from each segment, then call
+    memory.store_decomposition with the results.
+
+    Topics: distinct themes discussed (1-5 sentence descriptions).
+    Facts: atomic, verifiable, grounded statements.
+    Inferences: higher-level interpretive derivations (explicitly provisional).
 
     Args:
-        content: The text to ingest.
+        content: The text to segment and store.
         metadata: Optional metadata to attach to the document.
         segmentation_strategy: "paragraph" or "semantic". Uses server default if omitted.
-        metacontext_id: Optional metacontext ID — all extracted nodes will inherit this metacontext.
     """
     deps = ctx.lifespan_context
     start = time.monotonic()
     try:
-        result, meta = await tools.ingest(
+        result, meta = await tools.segment_text(
             content=content,
             storage=deps["storage"],
             embedding_provider=deps["embedding_provider"],
-            decomposition_provider=deps["decomposition_provider"],
             config=deps["config"],
             metadata=metadata,
             segmentation_strategy=segmentation_strategy,
-            metacontext_id=metacontext_id,
             event_bus=deps.get("event_bus"),
         )
         latency = (time.monotonic() - start) * 1000
-        _log("memory.ingest", f"content_length={len(content)}", f"segments={result['segments_created']}", meta)
+        _log("memory.segment", f"content_length={len(content)}", f"segments={len(result['segments'])}", meta)
         return _build_response(result, meta, latency)
     except Exception as e:
         return _error_response(str(e))
+
+
+@mcp.tool(name="memory.store_decomposition")
+async def memory_store_decomposition(
+    document_id: str,
+    segments: list[dict],
+    ctx: Context,
+    metacontext_id: str | None = None,
+) -> str:
+    """Store your decomposition of segments into topics, facts, and inferences.
+
+    This is step 2 of the two-step ingest flow. Call this after memory.segment
+    with your extracted nodes.
+
+    The response includes stores_since_reflect and reflect_threshold. When
+    reflect_suggested is true, suggest running memory.reflect to the user.
+
+    Args:
+        document_id: The document ID returned by memory.segment.
+        segments: List of decomposed segments. Each entry:
+            segment_id: str — from memory.segment result
+            topics: list[str] — distinct themes (1-5 sentence descriptions)
+            facts: list[str] — atomic, verifiable statements
+            inferences: list[str] — provisional higher-level derivations
+        metacontext_id: Optional metacontext ID — all nodes will inherit this.
+    """
+    deps = ctx.lifespan_context
+    start = time.monotonic()
+    try:
+        result, meta = await tools.store_decomposition(
+            document_id=document_id,
+            segments=segments,
+            storage=deps["storage"],
+            embedding_provider=deps["embedding_provider"],
+            metacontext_id=metacontext_id,
+            event_bus=deps.get("event_bus"),
+        )
+        deps["stores_since_reflect"] = deps.get("stores_since_reflect", 0) + 1
+        threshold = deps["config"].reflect_threshold
+        count = deps["stores_since_reflect"]
+        result["stores_since_reflect"] = count
+        result["reflect_threshold"] = threshold
+        if count >= threshold:
+            result["reflect_suggested"] = True
+
+        latency = (time.monotonic() - start) * 1000
+        _log(
+            "memory.store_decomposition",
+            f"doc={document_id} segments={len(segments)}",
+            f"nodes={meta.nodes_returned} edges={result['edges_created']} reflect={count}/{threshold}",
+            meta,
+        )
+        return _build_response(result, meta, latency)
+    except Exception as e:
+        return _error_response(str(e))
+
 
 
 @mcp.tool(name="memory.search")
@@ -281,35 +350,86 @@ async def memory_reflect(
     ctx: Context,
     similarity_threshold: float = 0.85,
     decay_rate: float = 0.05,
-    auto_merge: bool = True,
 ) -> str:
-    """Run the reflection pipeline on the memory graph.
+    """Analyse the memory graph and return candidates for you to act on.
 
-    Performs topic consolidation (merge similar topics), value decay
-    (reduce relevance of stale nodes), and contradiction detection.
+    Applies value decay immediately, then identifies:
+    - Similar topic pairs that could be consolidated under a parent
+    - Topics with high internal variance that could be split
+    - Topics with thin descriptions but rich associated material
+    - Potential contradictions between facts
+
+    Review the candidates and call memory.apply_reflection with your decisions.
+
+    For large graphs, consider delegating this to a subagent so analysis
+    and decision-making don't consume your main conversation context.
 
     Args:
-        similarity_threshold: Cosine similarity threshold for topic merging.
+        similarity_threshold: Cosine similarity threshold for finding similar pairs.
         decay_rate: Multiplicative decay factor for relevance.
-        auto_merge: Whether to automatically merge similar topics.
     """
     deps = ctx.lifespan_context
     start = time.monotonic()
     try:
+        stores_before = deps.get("stores_since_reflect", 0)
         result, meta = await tools.reflect(
             storage=deps["storage"],
             embedding_provider=deps["embedding_provider"],
-            decomposition_provider=deps["decomposition_provider"],
             similarity_threshold=similarity_threshold,
             decay_rate=decay_rate,
-            auto_merge=auto_merge,
             event_bus=deps.get("event_bus"),
         )
+        deps["stores_since_reflect"] = 0
+        result["stores_since_last_reflect"] = stores_before
+
         latency = (time.monotonic() - start) * 1000
         _log(
             "memory.reflect",
-            f"threshold={similarity_threshold}",
-            f"merged={result['topics_merged']} decayed={result['nodes_decayed']}",
+            f"threshold={similarity_threshold} stores_since={stores_before}",
+            f"decayed={result['nodes_decayed']} pairs={len(result['similar_pairs'])}",
+            meta,
+        )
+        return _build_response(result, meta, latency)
+    except Exception as e:
+        return _error_response(str(e))
+
+
+@mcp.tool(name="memory.apply_reflection")
+async def memory_apply_reflection(
+    ctx: Context,
+    parents: list[dict] | None = None,
+    splits: list[dict] | None = None,
+    enrichments: list[dict] | None = None,
+) -> str:
+    """Apply your reflection decisions to the memory graph.
+
+    Call this after reviewing memory.reflect results. All arguments optional.
+
+    Args:
+        parents: Consolidate similar topics under a new parent.
+            Each: {children_ids: [str], content: str}
+            content = your synthesized parent description.
+        splits: Split a broad topic into subtopics.
+            Each: {topic_id: str, subtopics: [str]}
+            subtopics = list of subtopic description strings.
+        enrichments: Improve a topic's description using its associated material.
+            Each: {topic_id: str, new_content: str}
+    """
+    deps = ctx.lifespan_context
+    start = time.monotonic()
+    try:
+        result, meta = await tools.apply_reflection(
+            storage=deps["storage"],
+            embedding_provider=deps["embedding_provider"],
+            parents=parents,
+            splits=splits,
+            enrichments=enrichments,
+        )
+        latency = (time.monotonic() - start) * 1000
+        _log(
+            "memory.apply_reflection",
+            f"parents={len(parents or [])} splits={len(splits or [])} enrichments={len(enrichments or [])}",
+            f"applied={meta.nodes_returned}",
             meta,
         )
         return _build_response(result, meta, latency)

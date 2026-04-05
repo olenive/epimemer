@@ -1,8 +1,7 @@
 """Server configuration and provider factory functions.
 
 ServerConfig reads from environment variables (EPIMEMER_ prefix).
-Factory functions create storage, embedding, and decomposition providers
-based on the config.
+Factory functions create storage and embedding providers based on the config.
 """
 
 import os
@@ -11,7 +10,6 @@ from typing import Literal
 from pydantic import BaseModel
 
 from epimemer.embeddings.protocol import EmbeddingProvider
-from epimemer.llm.protocol import DecompositionProvider
 from epimemer.storage.protocol import StorageBackend
 
 
@@ -27,16 +25,15 @@ class ServerConfig(BaseModel):
     embedding_model_id: str = "all-MiniLM-L6-v2"
     embedding_dimension: int = 384
 
-    decomposition_provider: Literal["pydantic-ai", "mock"] = "pydantic-ai"
-    decomposition_model: str = "claude-sonnet-4-20250514"
-
     segmentation_strategy: Literal["paragraph", "semantic"] = "paragraph"
     similarity_threshold: float = 0.75
+
+    reflect_threshold: int = 10
 
     log_level: str = "INFO"
     log_file: str | None = None
 
-    viz_enabled: bool = False
+    viz_enabled: bool = True
     viz_host: str = "127.0.0.1"
     viz_port: int = 8765
 
@@ -51,10 +48,9 @@ def load_config() -> ServerConfig:
         "embedding_provider": "EPIMEMER_EMBEDDING_PROVIDER",
         "embedding_model_id": "EPIMEMER_EMBEDDING_MODEL_ID",
         "embedding_dimension": "EPIMEMER_EMBEDDING_DIMENSION",
-        "decomposition_provider": "EPIMEMER_DECOMPOSITION_PROVIDER",
-        "decomposition_model": "EPIMEMER_DECOMPOSITION_MODEL",
         "segmentation_strategy": "EPIMEMER_SEGMENTATION_STRATEGY",
         "similarity_threshold": "EPIMEMER_SIMILARITY_THRESHOLD",
+        "reflect_threshold": "EPIMEMER_REFLECT_THRESHOLD",
         "log_level": "EPIMEMER_LOG_LEVEL",
         "log_file": "EPIMEMER_LOG_FILE",
         "viz_enabled": "EPIMEMER_VIZ_ENABLED",
@@ -96,13 +92,3 @@ def create_embedding_provider(config: ServerConfig) -> EmbeddingProvider:
             model_id=config.embedding_model_id,
             dimension=config.embedding_dimension,
         )
-
-
-def create_decomposition_provider(config: ServerConfig) -> DecompositionProvider:
-    """Create a decomposition provider from config."""
-    if config.decomposition_provider == "pydantic-ai":
-        from epimemer.llm.pydantic_ai_provider import PydanticAIDecompositionProvider
-        return PydanticAIDecompositionProvider(model=config.decomposition_model)
-    else:
-        from epimemer.llm.mock import MockDecompositionProvider
-        return MockDecompositionProvider()

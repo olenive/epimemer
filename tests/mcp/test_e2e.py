@@ -13,7 +13,6 @@ import pytest
 from fastmcp import FastMCP
 
 from epimemer.embeddings.mock import MockEmbeddingProvider
-from epimemer.llm.mock import MockDecompositionProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.storage.memory import InMemoryStorage
@@ -25,11 +24,9 @@ async def _test_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     yield {
         "storage": InMemoryStorage(),
         "embedding_provider": MockEmbeddingProvider(model_id="mock-embed", dimension=8),
-        "decomposition_provider": MockDecompositionProvider(),
         "config": ServerConfig(
             storage_backend="memory",
             embedding_provider="mock",
-            decomposition_provider="mock",
         ),
     }
 
@@ -55,25 +52,62 @@ def _parse_response(result) -> dict:
     return json.loads(text)
 
 
+async def _segment_and_store(server: FastMCP, content: str, metacontext_id: str | None = None) -> dict:
+    """Helper: run the two-step ingest flow (segment + store_decomposition)."""
+    seg_result = await server.call_tool(
+        "memory.segment",
+        {"content": content},
+    )
+    seg_data = _parse_response(seg_result)
+    doc_id = seg_data["result"]["document_id"]
+    segments = seg_data["result"]["segments"]
+
+    decomposition = [
+        {
+            "segment_id": s["segment_id"],
+            "topics": [f"Topic about: {s['text'][:50]}"],
+            "facts": [f"Fact from: {s['text'][:50]}"],
+            "inferences": [f"Inference from: {s['text'][:50]}"],
+        }
+        for s in segments
+    ]
+
+    store_args: dict = {
+        "document_id": doc_id,
+        "segments": decomposition,
+    }
+    if metacontext_id:
+        store_args["metacontext_id"] = metacontext_id
+
+    store_result = await server.call_tool(
+        "memory.store_decomposition",
+        store_args,
+    )
+    return _parse_response(store_result)
+
+
 class TestMCPProtocol:
 
-    async def test_ingest_returns_valid_json(self, server):
+    async def test_segment_returns_valid_json(self, server):
         result = await server.call_tool(
-            "memory.ingest",
+            "memory.segment",
             {"content": "Machine learning is a branch of AI."},
         )
         data = _parse_response(result)
         assert "result" in data
-        assert data["result"]["segments_created"] >= 1
+        assert len(data["result"]["segments"]) >= 1
+        assert data["result"]["document_id"]
 
-    async def test_ingest_then_search(self, server):
-        # Ingest
-        await server.call_tool(
-            "memory.ingest",
-            {"content": "Neural networks learn from large datasets."},
-        )
+    async def test_store_decomposition_returns_valid_json(self, server):
+        data = await _segment_and_store(server, "Machine learning is a branch of AI.")
+        assert "result" in data
+        assert data["result"]["nodes_created"]["topics"] >= 1
+        assert data["result"]["nodes_created"]["facts"] >= 1
+        assert data["result"]["edges_created"] >= 1
 
-        # Search
+    async def test_two_step_ingest_then_search(self, server):
+        await _segment_and_store(server, "Neural networks learn from large datasets.")
+
         result = await server.call_tool(
             "memory.search",
             {"query": "Neural networks learn from large datasets."},
@@ -83,23 +117,16 @@ class TestMCPProtocol:
 
     async def test_meta_present_on_response(self, server):
         result = await server.call_tool(
-            "memory.ingest",
-            {"content": "Some text to ingest."},
+            "memory.segment",
+            {"content": "Some text to segment."},
         )
         data = _parse_response(result)
         assert "_meta" in data
-        assert data["_meta"]["llm_calls"] >= 3
         assert data["_meta"]["latency_ms"] > 0
 
     async def test_link_via_protocol(self, server):
-        # Ingest to create some nodes
-        ingest_result = await server.call_tool(
-            "memory.ingest",
-            {"content": "First paragraph.\n\nSecond paragraph."},
-        )
-        ingest_data = _parse_response(ingest_result)
+        await _segment_and_store(server, "First paragraph.\n\nSecond paragraph.")
 
-        # Search for nodes to get their IDs
         search_result = await server.call_tool(
             "memory.search",
             {"query": "First paragraph", "k": 2, "graph_hops": 0},
@@ -108,7 +135,6 @@ class TestMCPProtocol:
         nodes = search_data["result"]["nodes"]
 
         if len(nodes) >= 2:
-            # Try linking two nodes
             link_result = await server.call_tool(
                 "memory.link",
                 {
@@ -128,7 +154,8 @@ class TestMCPProtocol:
         )
         data = _parse_response(result)
         assert "result" in data
-        assert "topics_merged" in data["result"]
+        assert "similar_pairs" in data["result"]
+        assert "nodes_decayed" in data["result"]
 
     async def test_archive_via_protocol(self, server):
         result = await server.call_tool(
@@ -139,7 +166,6 @@ class TestMCPProtocol:
         assert data["result"]["nodes_archived"] == 0  # Nothing old enough
 
     async def test_error_returns_structured_json(self, server):
-        # Try to update a nonexistent node
         result = await server.call_tool(
             "memory.update",
             {"node_id": "nonexistent", "new_content": "test"},
@@ -150,11 +176,13 @@ class TestMCPProtocol:
     async def test_all_tools_registered(self, server):
         tool_names = {t.name for t in await server.list_tools()}
         expected = {
-            "memory.ingest",
+            "memory.segment",
+            "memory.store_decomposition",
             "memory.search",
             "memory.link",
             "memory.update",
             "memory.reflect",
+            "memory.apply_reflection",
             "memory.query_graph",
             "memory.archive",
             "memory.restore",
@@ -185,7 +213,6 @@ class TestMCPProtocol:
         assert data["result"]["content"] == "Real historical events"
 
     async def test_ingest_with_metacontext_via_protocol(self, server):
-        # Create metacontext first
         mc_result = await server.call_tool(
             "memory.create_metacontext",
             {"content": "Science fiction"},
@@ -193,10 +220,5 @@ class TestMCPProtocol:
         mc_data = _parse_response(mc_result)
         mc_id = mc_data["result"]["metacontext_id"]
 
-        # Ingest with metacontext
-        result = await server.call_tool(
-            "memory.ingest",
-            {"content": "The ships are alive.", "metacontext_id": mc_id},
-        )
-        data = _parse_response(result)
-        assert data["result"]["segments_created"] >= 1
+        data = await _segment_and_store(server, "The ships are alive.", metacontext_id=mc_id)
+        assert data["result"]["nodes_created"]["topics"] >= 1

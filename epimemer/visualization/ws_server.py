@@ -99,9 +99,9 @@ def create_app(bus: InProcessEventBus) -> Starlette:
         WebSocketRoute("/ws", relay.handle_websocket),
     ]
 
-    # Only mount static files if the directory exists
+    # Mount static files at root so /assets/... resolves from the static dir
     if STATIC_DIR.exists():
-        routes.append(Mount("/static", app=StaticFiles(directory=STATIC_DIR), name="static"))
+        routes.append(Mount("/", app=StaticFiles(directory=STATIC_DIR), name="static"))
 
     app = Starlette(routes=routes)
     return app

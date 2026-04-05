@@ -18,14 +18,8 @@ internal diversity, not on every topic.
 import math
 
 from epimemer.core.types import (
-    EmbeddingRecord,
-    NodeType,
     Topic,
 )
-from epimemer.embeddings.protocol import EmbeddingProvider
-from epimemer.llm.protocol import DecompositionProvider
-from epimemer.pipelines.graph_construction.versioning import group_into_parent
-from epimemer.pipelines.reflection.topic_enrichment import gather_associated_material
 from epimemer.storage.protocol import StorageBackend
 
 
@@ -143,75 +137,3 @@ def should_split(
 
     return inter_distance / mean_intra >= split_ratio
 
-
-# --- Main split function ---
-
-
-async def split_broad_topics(
-    storage: StorageBackend,
-    embedding_provider: EmbeddingProvider,
-    decomposition_provider: DecompositionProvider,
-    *,
-    split_ratio: float = 1.5,
-    min_items: int = 4,
-    model_id: str | None = None,
-) -> list[tuple[Topic, list[Topic]]]:
-    """Find topics with high internal variance and split them into subtopics.
-
-    For each active topic:
-        1. Gather associated material (facts, inferences)
-        2. Embed all material items
-        3. Check if internal variance warrants a split (bisection + ratio check)
-        4. If yes, ask the LLM to decompose into subtopics
-        5. The original topic becomes the parent; subtopics get SUBTOPIC_OF edges
-
-    Args:
-        storage: The storage backend.
-        embedding_provider: Provider for embedding material.
-        decomposition_provider: LLM provider for topic decomposition.
-        split_ratio: Minimum inter/intra cluster distance ratio to trigger split.
-        min_items: Minimum associated material items before considering a split.
-        model_id: Override model_id for embedding lookup/storage.
-
-    Returns:
-        A list of (parent_topic, subtopics) pairs that were split.
-    """
-    effective_model_id = model_id or embedding_provider.model_id
-    all_topics = await storage.query_nodes(node_type=NodeType.TOPIC)
-    topics = [t for t in all_topics if isinstance(t, Topic)]
-
-    split_results: list[tuple[Topic, list[Topic]]] = []
-
-    for topic in topics:
-        material = await gather_associated_material(topic, storage)
-        if len(material) < min_items:
-            continue
-
-        # Embed the material items
-        material_vectors = await embedding_provider.embed(material)
-
-        if not should_split(material_vectors, split_ratio=split_ratio, min_items=min_items):
-            continue
-
-        # LLM decomposition
-        subtopics = await decomposition_provider.split_topic(topic, material)
-        if len(subtopics) < 2:
-            continue
-
-        # Store subtopics, embed them, create SUBTOPIC_OF edges
-        # Original topic becomes the parent — stays active
-        for subtopic in subtopics:
-            await storage.store_node(subtopic)
-            vecs = await embedding_provider.embed([subtopic.content])
-            await storage.store_embedding(
-                EmbeddingRecord(
-                    item_id=subtopic.id,
-                    model_id=effective_model_id,
-                    vector=vecs[0],
-                )
-            )
-
-        await group_into_parent(subtopics, topic, storage)
-        split_results.append((topic, subtopics))
-
-    return split_results
