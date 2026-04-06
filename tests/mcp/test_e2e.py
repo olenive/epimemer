@@ -65,9 +65,9 @@ async def _segment_and_store(server: FastMCP, content: str, metacontext_id: str 
     decomposition = [
         {
             "segment_id": s["segment_id"],
-            "topics": [f"Topic about: {s['text'][:50]}"],
-            "facts": [f"Fact from: {s['text'][:50]}"],
-            "inferences": [f"Inference from: {s['text'][:50]}"],
+            "topics": [f"Topic about: {s['segment_id']}"],
+            "facts": [f"Fact from: {s['segment_id']}"],
+            "inferences": [f"Inference from: {s['segment_id']}"],
         }
         for s in segments
     ]

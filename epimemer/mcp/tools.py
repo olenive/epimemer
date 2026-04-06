@@ -39,13 +39,24 @@ async def _run_net(
     *,
     max_transitions: int = 10,
 ) -> tuple[ExecutableGraph, int]:
-    """Execute a Petri net, optionally emitting visualization events."""
-    if event_bus is not None:
-        from epimemer.visualization.instrumented_executor import execute_with_events
-        return await execute_with_events(
-            graph, event_bus, pipeline_name, max_iterations=max_transitions,
-        )
-    return await ExecutableGraphOperations.execute_graph(graph, max_transitions=max_transitions)
+    """Execute a Petri net, optionally emitting visualization events.
+
+    Redirects stdout to stderr during execution because Petritype has
+    debug print() statements that would corrupt MCP's stdio transport.
+    """
+    import sys
+
+    original_stdout = sys.stdout
+    sys.stdout = sys.stderr
+    try:
+        if event_bus is not None:
+            from epimemer.visualization.instrumented_executor import execute_with_events
+            return await execute_with_events(
+                graph, event_bus, pipeline_name, max_iterations=max_transitions,
+            )
+        return await ExecutableGraphOperations.execute_graph(graph, max_transitions=max_transitions)
+    finally:
+        sys.stdout = original_stdout
 
 
 # --- Segment (step 1 of agent-driven ingest) ---
@@ -87,10 +98,11 @@ async def segment_text(
     for segment in segments:
         await storage.store_segment(segment)
 
+    # Only return IDs and boundaries — the agent already has the original text.
     result = {
         "document_id": doc.id,
         "segments": [
-            {"segment_id": s.id, "text": s.text}
+            {"segment_id": s.id, "char_count": len(s.text)}
             for s in segments
         ],
     }

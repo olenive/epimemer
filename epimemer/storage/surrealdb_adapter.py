@@ -83,8 +83,17 @@ def _clean_record(record: dict) -> dict:
 class SurrealDBStorage:
     """SurrealDB implementation of StorageBackend."""
 
-    def __init__(self, url: str = "mem://", namespace: str = "epimemer", database: str = "main"):
+    def __init__(
+        self,
+        url: str = "mem://",
+        user: str = "root",
+        password: str = "root",
+        namespace: str = "epimemer",
+        database: str = "main",
+    ):
         self._url = url
+        self._user = user
+        self._password = password
         self._namespace = namespace
         self._database = database
         self._db: AsyncSurreal | None = None
@@ -92,6 +101,8 @@ class SurrealDBStorage:
     async def connect(self) -> None:
         self._db = AsyncSurreal(self._url)
         await self._db.connect(self._url)
+        if not self._url.startswith("mem://"):
+            await self._db.signin({"username": self._user, "password": self._password})
         await self._db.use(self._namespace, self._database)
         await self._setup_schema()
 

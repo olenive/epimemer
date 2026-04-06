@@ -45,9 +45,9 @@ async def _prepare_store_payload(storage, embedding_provider, config, content="T
         "segments": [
             {
                 "segment_id": s["segment_id"],
-                "topics": [f"Topic: {s['text'][:40]}"],
-                "facts": [f"Fact: {s['text'][:40]}"],
-                "inferences": [f"Inference: {s['text'][:40]}"],
+                "topics": [f"Topic: {s['segment_id']}"],
+                "facts": [f"Fact: {s['segment_id']}"],
+                "inferences": [f"Inference: {s['segment_id']}"],
             }
             for s in seg_result["segments"]
         ],

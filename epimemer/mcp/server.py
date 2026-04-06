@@ -4,9 +4,11 @@ Exposes memory tools (ingest, search, link, update, reflect,
 query_graph, archive, restore) via the Model Context Protocol.
 """
 
+import asyncio
 import json
+import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -137,6 +139,41 @@ def _error_response(error: str) -> str:
     return json.dumps({"error": error, "_meta": meta.model_dump()})
 
 
+_tool_logger = logging.getLogger("epimemer.mcp.tools")
+
+
+async def _run_with_timeout(
+    tool_name: str,
+    coro: Callable[[], Awaitable[tuple[dict, ResponseMeta]]],
+    ctx: Context,
+    input_summary: str,
+    output_summary_fn: Callable[[dict, ResponseMeta], str],
+) -> str:
+    """Run a tool coroutine with timeout, logging, and error handling."""
+    deps = ctx.lifespan_context
+    timeout = deps["config"].tool_timeout_seconds
+    start = time.monotonic()
+    try:
+        result, meta = await asyncio.wait_for(coro(), timeout=timeout)
+        latency = (time.monotonic() - start) * 1000
+        _log(tool_name, input_summary, output_summary_fn(result, meta), meta)
+        return _build_response(result, meta, latency)
+    except asyncio.TimeoutError:
+        latency = (time.monotonic() - start) * 1000
+        error_msg = f"{tool_name} timed out after {timeout}s"
+        _tool_logger.error(error_msg)
+        meta = ResponseMeta(latency_ms=latency)
+        _log(tool_name, input_summary, "TIMEOUT", meta, error=error_msg)
+        return _error_response(error_msg)
+    except Exception as e:
+        latency = (time.monotonic() - start) * 1000
+        error_msg = f"{tool_name} failed: {e}"
+        _tool_logger.exception(error_msg)
+        meta = ResponseMeta(latency_ms=latency)
+        _log(tool_name, input_summary, "ERROR", meta, error=str(e))
+        return _error_response(str(e))
+
+
 # --- Tools ---
 
 
@@ -147,11 +184,11 @@ async def memory_segment(
     metadata: dict | None = None,
     segmentation_strategy: str | None = None,
 ) -> str:
-    """Segment text and store the document. Returns segments for you to decompose.
+    """Segment text and store the document. Returns segment IDs for you to decompose.
 
-    This is step 1 of the two-step ingest flow. After receiving the segments,
-    extract topics, facts, and inferences from each segment, then call
-    memory.store_decomposition with the results.
+    This is step 1 of the two-step ingest flow. Each segment includes an ID and
+    char_count. Use your copy of the original text to extract topics, facts,
+    and inferences for each segment, then call memory.store_decomposition.
 
     Topics: distinct themes discussed (1-5 sentence descriptions).
     Facts: atomic, verifiable, grounded statements.
@@ -163,9 +200,9 @@ async def memory_segment(
         segmentation_strategy: "paragraph" or "semantic". Uses server default if omitted.
     """
     deps = ctx.lifespan_context
-    start = time.monotonic()
-    try:
-        result, meta = await tools.segment_text(
+    return await _run_with_timeout(
+        "memory.segment",
+        lambda: tools.segment_text(
             content=content,
             storage=deps["storage"],
             embedding_provider=deps["embedding_provider"],
@@ -173,12 +210,11 @@ async def memory_segment(
             metadata=metadata,
             segmentation_strategy=segmentation_strategy,
             event_bus=deps.get("event_bus"),
-        )
-        latency = (time.monotonic() - start) * 1000
-        _log("memory.segment", f"content_length={len(content)}", f"segments={len(result['segments'])}", meta)
-        return _build_response(result, meta, latency)
-    except Exception as e:
-        return _error_response(str(e))
+        ),
+        ctx,
+        f"content_length={len(content)}",
+        lambda r, m: f"segments={len(r['segments'])}",
+    )
 
 
 @mcp.tool(name="memory.store_decomposition")
@@ -206,8 +242,8 @@ async def memory_store_decomposition(
         metacontext_id: Optional metacontext ID — all nodes will inherit this.
     """
     deps = ctx.lifespan_context
-    start = time.monotonic()
-    try:
+
+    async def _do() -> tuple[dict, ResponseMeta]:
         result, meta = await tools.store_decomposition(
             document_id=document_id,
             segments=segments,
@@ -223,17 +259,15 @@ async def memory_store_decomposition(
         result["reflect_threshold"] = threshold
         if count >= threshold:
             result["reflect_suggested"] = True
+        return result, meta
 
-        latency = (time.monotonic() - start) * 1000
-        _log(
-            "memory.store_decomposition",
-            f"doc={document_id} segments={len(segments)}",
-            f"nodes={meta.nodes_returned} edges={result['edges_created']} reflect={count}/{threshold}",
-            meta,
-        )
-        return _build_response(result, meta, latency)
-    except Exception as e:
-        return _error_response(str(e))
+    return await _run_with_timeout(
+        "memory.store_decomposition",
+        _do,
+        ctx,
+        f"doc={document_id} segments={len(segments)}",
+        lambda r, m: f"nodes={m.nodes_returned} edges={r['edges_created']} reflect={r['stores_since_reflect']}/{r['reflect_threshold']}",
+    )
 
 
 
@@ -260,9 +294,9 @@ async def memory_search(
         metacontext_id: Optional — filter results to nodes with this metacontext.
     """
     deps = ctx.lifespan_context
-    start = time.monotonic()
-    try:
-        result, meta = await tools.search(
+    return await _run_with_timeout(
+        "memory.search",
+        lambda: tools.search(
             query=query,
             storage=deps["storage"],
             embedding_provider=deps["embedding_provider"],
@@ -271,12 +305,11 @@ async def memory_search(
             graph_hops=graph_hops,
             metacontext_id=metacontext_id,
             event_bus=deps.get("event_bus"),
-        )
-        latency = (time.monotonic() - start) * 1000
-        _log("memory.search", f"query={query[:50]}", f"nodes={meta.nodes_returned}", meta)
-        return _build_response(result, meta, latency)
-    except Exception as e:
-        return _error_response(str(e))
+        ),
+        ctx,
+        f"query={query[:50]}",
+        lambda r, m: f"nodes={m.nodes_returned}",
+    )
 
 
 @mcp.tool(name="memory.link")
@@ -298,21 +331,20 @@ async def memory_link(
         metadata: Optional metadata for the edge.
     """
     deps = ctx.lifespan_context
-    start = time.monotonic()
-    try:
-        result, meta = await tools.link(
+    return await _run_with_timeout(
+        "memory.link",
+        lambda: tools.link(
             src_id=src_id,
             dst_id=dst_id,
             edge_type=edge_type,
             storage=deps["storage"],
             weight=weight,
             metadata=metadata,
-        )
-        latency = (time.monotonic() - start) * 1000
-        _log("memory.link", f"{src_id}->{dst_id}:{edge_type}", f"edge={result['edge_id']}", meta)
-        return _build_response(result, meta, latency)
-    except Exception as e:
-        return _error_response(str(e))
+        ),
+        ctx,
+        f"{src_id}->{dst_id}:{edge_type}",
+        lambda r, m: f"edge={r['edge_id']}",
+    )
 
 
 @mcp.tool(name="memory.update")
@@ -331,18 +363,17 @@ async def memory_update(
         new_content: The updated content.
     """
     deps = ctx.lifespan_context
-    start = time.monotonic()
-    try:
-        result, meta = await tools.update(
+    return await _run_with_timeout(
+        "memory.update",
+        lambda: tools.update(
             node_id=node_id,
             new_content=new_content,
             storage=deps["storage"],
-        )
-        latency = (time.monotonic() - start) * 1000
-        _log("memory.update", f"node={node_id}", f"new={result['new_node_id']}", meta)
-        return _build_response(result, meta, latency)
-    except Exception as e:
-        return _error_response(str(e))
+        ),
+        ctx,
+        f"node={node_id}",
+        lambda r, m: f"new={r['new_node_id']}",
+    )
 
 
 @mcp.tool(name="memory.reflect")
@@ -369,9 +400,9 @@ async def memory_reflect(
         decay_rate: Multiplicative decay factor for relevance.
     """
     deps = ctx.lifespan_context
-    start = time.monotonic()
-    try:
-        stores_before = deps.get("stores_since_reflect", 0)
+    stores_before = deps.get("stores_since_reflect", 0)
+
+    async def _do() -> tuple[dict, ResponseMeta]:
         result, meta = await tools.reflect(
             storage=deps["storage"],
             embedding_provider=deps["embedding_provider"],
@@ -381,17 +412,15 @@ async def memory_reflect(
         )
         deps["stores_since_reflect"] = 0
         result["stores_since_last_reflect"] = stores_before
+        return result, meta
 
-        latency = (time.monotonic() - start) * 1000
-        _log(
-            "memory.reflect",
-            f"threshold={similarity_threshold} stores_since={stores_before}",
-            f"decayed={result['nodes_decayed']} pairs={len(result['similar_pairs'])}",
-            meta,
-        )
-        return _build_response(result, meta, latency)
-    except Exception as e:
-        return _error_response(str(e))
+    return await _run_with_timeout(
+        "memory.reflect",
+        _do,
+        ctx,
+        f"threshold={similarity_threshold} stores_since={stores_before}",
+        lambda r, m: f"decayed={r['nodes_decayed']} pairs={len(r['similar_pairs'])}",
+    )
 
 
 @mcp.tool(name="memory.apply_reflection")
@@ -416,25 +445,19 @@ async def memory_apply_reflection(
             Each: {topic_id: str, new_content: str}
     """
     deps = ctx.lifespan_context
-    start = time.monotonic()
-    try:
-        result, meta = await tools.apply_reflection(
+    return await _run_with_timeout(
+        "memory.apply_reflection",
+        lambda: tools.apply_reflection(
             storage=deps["storage"],
             embedding_provider=deps["embedding_provider"],
             parents=parents,
             splits=splits,
             enrichments=enrichments,
-        )
-        latency = (time.monotonic() - start) * 1000
-        _log(
-            "memory.apply_reflection",
-            f"parents={len(parents or [])} splits={len(splits or [])} enrichments={len(enrichments or [])}",
-            f"applied={meta.nodes_returned}",
-            meta,
-        )
-        return _build_response(result, meta, latency)
-    except Exception as e:
-        return _error_response(str(e))
+        ),
+        ctx,
+        f"parents={len(parents or [])} splits={len(splits or [])} enrichments={len(enrichments or [])}",
+        lambda r, m: f"applied={m.nodes_returned}",
+    )
 
 
 @mcp.tool(name="memory.query_graph")
@@ -452,19 +475,18 @@ async def memory_query_graph(
         edge_types: If provided, only traverse these edge types.
     """
     deps = ctx.lifespan_context
-    start = time.monotonic()
-    try:
-        result, meta = await tools.query_graph(
+    return await _run_with_timeout(
+        "memory.query_graph",
+        lambda: tools.query_graph(
             node_id=node_id,
             storage=deps["storage"],
             hops=hops,
             edge_types=edge_types,
-        )
-        latency = (time.monotonic() - start) * 1000
-        _log("memory.query_graph", f"node={node_id} hops={hops}", f"nodes={meta.nodes_returned}", meta)
-        return _build_response(result, meta, latency)
-    except Exception as e:
-        return _error_response(str(e))
+        ),
+        ctx,
+        f"node={node_id} hops={hops}",
+        lambda r, m: f"nodes={m.nodes_returned}",
+    )
 
 
 @mcp.tool(name="memory.archive")
@@ -480,17 +502,16 @@ async def memory_archive(
         max_age_days: Minimum days since supersession/merge for archival.
     """
     deps = ctx.lifespan_context
-    start = time.monotonic()
-    try:
-        result, meta = await tools.archive(
+    return await _run_with_timeout(
+        "memory.archive",
+        lambda: tools.archive(
             storage=deps["storage"],
             max_age_days=max_age_days,
-        )
-        latency = (time.monotonic() - start) * 1000
-        _log("memory.archive", f"max_age={max_age_days}d", f"archived={result['nodes_archived']}", meta)
-        return _build_response(result, meta, latency)
-    except Exception as e:
-        return _error_response(str(e))
+        ),
+        ctx,
+        f"max_age={max_age_days}d",
+        lambda r, m: f"archived={r['nodes_archived']}",
+    )
 
 
 @mcp.tool(name="memory.restore")
@@ -504,17 +525,16 @@ async def memory_restore(
         archive_data: The archive dict (as returned by memory.archive).
     """
     deps = ctx.lifespan_context
-    start = time.monotonic()
-    try:
-        result, meta = await tools.restore(
+    return await _run_with_timeout(
+        "memory.restore",
+        lambda: tools.restore(
             archive_data=archive_data,
             storage=deps["storage"],
-        )
-        latency = (time.monotonic() - start) * 1000
-        _log("memory.restore", f"nodes={len(archive_data.get('nodes', []))}", f"restored={result['nodes_restored']}", meta)
-        return _build_response(result, meta, latency)
-    except Exception as e:
-        return _error_response(str(e))
+        ),
+        ctx,
+        f"nodes={len(archive_data.get('nodes', []))}",
+        lambda r, m: f"restored={r['nodes_restored']}",
+    )
 
 
 # --- Timeline tools ---
@@ -533,18 +553,17 @@ async def memory_create_timeline(
         description: Optional description.
     """
     deps = ctx.lifespan_context
-    start = time.monotonic()
-    try:
-        result, meta = await tools.create_timeline(
+    return await _run_with_timeout(
+        "memory.create_timeline",
+        lambda: tools.create_timeline(
             name=name,
             storage=deps["storage"],
             description=description,
-        )
-        latency = (time.monotonic() - start) * 1000
-        _log("memory.create_timeline", f"name={name}", f"id={result['timeline_id']}", meta)
-        return _build_response(result, meta, latency)
-    except Exception as e:
-        return _error_response(str(e))
+        ),
+        ctx,
+        f"name={name}",
+        lambda r, m: f"id={r['timeline_id']}",
+    )
 
 
 @mcp.tool(name="memory.add_timepoint")
@@ -568,24 +587,21 @@ async def memory_add_timepoint(
     """
     from datetime import datetime as dt, timezone
     deps = ctx.lifespan_context
-    start_time = time.monotonic()
-    try:
-        # Parse ISO strings to datetimes
-        parsed_start = dt.fromisoformat(start).replace(tzinfo=timezone.utc) if start else None
-        parsed_end = dt.fromisoformat(end).replace(tzinfo=timezone.utc) if end else None
-
-        result, meta = await tools.add_timeline_timepoint(
+    parsed_start = dt.fromisoformat(start).replace(tzinfo=timezone.utc) if start else None
+    parsed_end = dt.fromisoformat(end).replace(tzinfo=timezone.utc) if end else None
+    return await _run_with_timeout(
+        "memory.add_timepoint",
+        lambda: tools.add_timeline_timepoint(
             timeline_id=timeline_id,
             storage=deps["storage"],
             start=parsed_start,
             end=parsed_end,
             label=label,
-        )
-        latency = (time.monotonic() - start_time) * 1000
-        _log("memory.add_timepoint", f"timeline={timeline_id}", f"tp={result['timepoint_id']}", meta)
-        return _build_response(result, meta, latency)
-    except Exception as e:
-        return _error_response(str(e))
+        ),
+        ctx,
+        f"timeline={timeline_id}",
+        lambda r, m: f"tp={r['timepoint_id']}",
+    )
 
 
 @mcp.tool(name="memory.query_timeline")
@@ -610,25 +626,23 @@ async def memory_query_timeline(
     """
     from datetime import datetime as dt, timezone
     deps = ctx.lifespan_context
-    start_time = time.monotonic()
-    try:
-        parsed_target = dt.fromisoformat(target).replace(tzinfo=timezone.utc) if target else None
-        parsed_start = dt.fromisoformat(range_start).replace(tzinfo=timezone.utc) if range_start else None
-        parsed_end = dt.fromisoformat(range_end).replace(tzinfo=timezone.utc) if range_end else None
-
-        result, meta = await tools.query_timeline(
+    parsed_target = dt.fromisoformat(target).replace(tzinfo=timezone.utc) if target else None
+    parsed_start = dt.fromisoformat(range_start).replace(tzinfo=timezone.utc) if range_start else None
+    parsed_end = dt.fromisoformat(range_end).replace(tzinfo=timezone.utc) if range_end else None
+    return await _run_with_timeout(
+        "memory.query_timeline",
+        lambda: tools.query_timeline(
             timeline_id=timeline_id,
             storage=deps["storage"],
             target=parsed_target,
             range_start=parsed_start,
             range_end=parsed_end,
             k=k,
-        )
-        latency = (time.monotonic() - start_time) * 1000
-        _log("memory.query_timeline", f"timeline={timeline_id}", f"timepoints={meta.nodes_returned}", meta)
-        return _build_response(result, meta, latency)
-    except Exception as e:
-        return _error_response(str(e))
+        ),
+        ctx,
+        f"timeline={timeline_id}",
+        lambda r, m: f"timepoints={m.nodes_returned}",
+    )
 
 
 @mcp.tool(name="memory.create_timelink")
@@ -646,19 +660,18 @@ async def memory_create_timelink(
         timepoint_id: The specific timepoint within the timeline.
     """
     deps = ctx.lifespan_context
-    start = time.monotonic()
-    try:
-        result, meta = await tools.create_timelink(
+    return await _run_with_timeout(
+        "memory.create_timelink",
+        lambda: tools.create_timelink(
             node_id=node_id,
             timeline_id=timeline_id,
             timepoint_id=timepoint_id,
             storage=deps["storage"],
-        )
-        latency = (time.monotonic() - start) * 1000
-        _log("memory.create_timelink", f"{node_id}->{timeline_id}:{timepoint_id}", f"edge={result['edge_id']}", meta)
-        return _build_response(result, meta, latency)
-    except Exception as e:
-        return _error_response(str(e))
+        ),
+        ctx,
+        f"{node_id}->{timeline_id}:{timepoint_id}",
+        lambda r, m: f"edge={r['edge_id']}",
+    )
 
 
 # --- Metacontext tools ---
@@ -681,18 +694,17 @@ async def memory_create_metacontext(
         description: Optional longer explanation.
     """
     deps = ctx.lifespan_context
-    start = time.monotonic()
-    try:
-        result, meta = await tools.create_metacontext(
+    return await _run_with_timeout(
+        "memory.create_metacontext",
+        lambda: tools.create_metacontext(
             content=content,
             storage=deps["storage"],
             description=description,
-        )
-        latency = (time.monotonic() - start) * 1000
-        _log("memory.create_metacontext", f"content={content[:50]}", f"id={result['metacontext_id']}", meta)
-        return _build_response(result, meta, latency)
-    except Exception as e:
-        return _error_response(str(e))
+        ),
+        ctx,
+        f"content={content[:50]}",
+        lambda r, m: f"id={r['metacontext_id']}",
+    )
 
 
 @mcp.tool(name="memory.get_metacontexts")
@@ -706,17 +718,16 @@ async def memory_get_metacontexts(
         node_id: The node to get metacontexts for.
     """
     deps = ctx.lifespan_context
-    start = time.monotonic()
-    try:
-        result, meta = await tools.get_metacontexts_for_node(
+    return await _run_with_timeout(
+        "memory.get_metacontexts",
+        lambda: tools.get_metacontexts_for_node(
             node_id=node_id,
             storage=deps["storage"],
-        )
-        latency = (time.monotonic() - start) * 1000
-        _log("memory.get_metacontexts", f"node={node_id}", f"metacontexts={meta.nodes_returned}", meta)
-        return _build_response(result, meta, latency)
-    except Exception as e:
-        return _error_response(str(e))
+        ),
+        ctx,
+        f"node={node_id}",
+        lambda r, m: f"metacontexts={m.nodes_returned}",
+    )
 
 
 if __name__ == "__main__":

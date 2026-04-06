@@ -80,9 +80,9 @@ async def _two_step_ingest(
     segments = [
         {
             "segment_id": s["segment_id"],
-            "topics": [f"Topic about: {s['text'][:50]}"],
-            "facts": [f"Fact from: {s['text'][:50]}"],
-            "inferences": [f"Inference from: {s['text'][:50]}"],
+            "topics": [f"Topic about: {s['segment_id']}"],
+            "facts": [f"Fact from: {s['segment_id']}"],
+            "inferences": [f"Inference from: {s['segment_id']}"],
         }
         for s in seg_result["segments"]
     ]
