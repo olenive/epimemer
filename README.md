@@ -26,16 +26,13 @@ uv sync
 uv run python -m pytest tests/ -q
 ```
 
-### Start the MCP server (in-memory, mock providers)
+### Start the MCP server (in-memory, no persistence)
 
 ```bash
-EPIMEMER_STORAGE_BACKEND=memory \
-EPIMEMER_EMBEDDING_PROVIDER=mock \
-EPIMEMER_DECOMPOSITION_PROVIDER=mock \
 uv run python -m epimemer.mcp.server
 ```
 
-This starts on stdio — designed to be called by Claude Code or another MCP client.
+This starts on stdio — designed to be called by Claude Code or another MCP client. Data is stored in memory and lost when the server exits.
 
 ### Connect to Claude Code
 
@@ -45,34 +42,59 @@ claude mcp add epimemer -- uv run --directory /path/to/epimemer python -m epimem
 
 Then verify with `/mcp` in Claude Code. See [INTEGRATION.md](INTEGRATION.md) for full configuration options and system prompt guidance.
 
-## Production Setup (SurrealDB)
+## Persistent Setup (SurrealDB via Colima)
 
-### With Docker Compose
+For persistent storage across sessions, run SurrealDB in a container via [Colima](https://github.com/abiosoft/colima).
+
+### Prerequisites
+
+- [Colima](https://github.com/abiosoft/colima): `brew install colima`
+- [Docker CLI](https://docs.docker.com/engine/install/): `brew install docker`
+
+### Start SurrealDB
 
 ```bash
-docker compose up -d
+# Start the container runtime (1GB is plenty for SurrealDB)
+colima start --memory 1
+
+# Run SurrealDB
+docker run -d --name surrealdb -p 8000:8000 \
+  surrealdb/surrealdb:latest start --user root --pass root
 ```
 
-This starts:
-- **SurrealDB** on port 8000
-- **Epimemer MCP server** connected to SurrealDB, using sentence-transformers for embeddings and Pydantic AI for LLM decomposition
+### Register Epimemer with SurrealDB
 
-### Without Docker
+```bash
+claude mcp add epimemer \
+  -e EPIMEMER_STORAGE_BACKEND=surrealdb \
+  -e EPIMEMER_SURREALDB_URL=ws://localhost:8000/rpc \
+  -e EPIMEMER_LOG_FILE=/tmp/epimemer.log \
+  -- uv run --directory /path/to/epimemer python -m epimemer.mcp.server
+```
 
-1. Install and start [SurrealDB](https://surrealdb.com/install):
-   ```bash
-   surreal start --user root --pass root memory
-   ```
+### Managing the container runtime
 
-2. Start the MCP server:
-   ```bash
-   EPIMEMER_STORAGE_BACKEND=surrealdb \
-   EPIMEMER_SURREALDB_URL=ws://localhost:8000/rpc \
-   EPIMEMER_EMBEDDING_PROVIDER=sentence-transformers \
-   EPIMEMER_DECOMPOSITION_PROVIDER=pydantic-ai \
-   EPIMEMER_DECOMPOSITION_MODEL=claude-sonnet-4-20250514 \
-   uv run python -m epimemer.mcp.server
-   ```
+```bash
+# Stop colima when not needed (frees RAM)
+colima stop
+
+# Restart later — the SurrealDB container and its data persist
+colima start --memory 1
+docker start surrealdb
+```
+
+### SurrealDB without Colima
+
+If you have Docker Desktop or a native SurrealDB install:
+
+```bash
+# Native install
+surreal start --user root --pass root file:epimemer.db
+
+# Or Docker Desktop
+docker run -d --name surrealdb -p 8000:8000 \
+  surrealdb/surrealdb:latest start --user root --pass root
+```
 
 ## Configuration
 
@@ -82,25 +104,33 @@ All configuration is via `EPIMEMER_` environment variables:
 |----------|---------|-------------|
 | `EPIMEMER_STORAGE_BACKEND` | `memory` | `memory` or `surrealdb` |
 | `EPIMEMER_SURREALDB_URL` | `ws://localhost:8000/rpc` | SurrealDB connection URL |
+| `EPIMEMER_SURREALDB_NAMESPACE` | `epimemer` | SurrealDB namespace |
+| `EPIMEMER_SURREALDB_DATABASE` | `memory` | SurrealDB database name |
 | `EPIMEMER_EMBEDDING_PROVIDER` | `sentence-transformers` | `sentence-transformers` or `mock` |
 | `EPIMEMER_EMBEDDING_MODEL_ID` | `all-MiniLM-L6-v2` | Embedding model name |
-| `EPIMEMER_DECOMPOSITION_PROVIDER` | `pydantic-ai` | `pydantic-ai` or `mock` |
-| `EPIMEMER_DECOMPOSITION_MODEL` | `claude-sonnet-4-20250514` | LLM model for decomposition |
+| `EPIMEMER_EMBEDDING_DIMENSION` | `384` | Embedding vector dimension |
 | `EPIMEMER_SEGMENTATION_STRATEGY` | `paragraph` | `paragraph` or `semantic` |
+| `EPIMEMER_SIMILARITY_THRESHOLD` | `0.75` | Similarity threshold for search |
+| `EPIMEMER_REFLECT_THRESHOLD` | `10` | Stores before suggesting reflection |
+| `EPIMEMER_VIZ_ENABLED` | `true` | Enable visualization server |
+| `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Visualization server host |
+| `EPIMEMER_VIZ_PORT` | `8765` | Visualization server port |
 | `EPIMEMER_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `EPIMEMER_LOG_FILE` | (stdout) | Path to log file |
+| `EPIMEMER_LOG_FILE` | (stderr) | Path to log file |
 
 ## MCP Tools
 
-14 tools exposed via the Model Context Protocol:
+Tools exposed via the Model Context Protocol:
 
 | Tool | Purpose |
 |------|---------|
-| `memory.ingest` | Ingest text — segment, decompose, build graph, embed |
+| `memory.segment` | Segment text into chunks (step 1 of ingest) |
+| `memory.store_decomposition` | Store agent-extracted topics/facts/inferences (step 2 of ingest) |
 | `memory.search` | Hybrid retrieval (vector + graph), metacontext-aware |
 | `memory.link` | Create typed edges between nodes |
 | `memory.update` | Create new node version (immutable history) |
-| `memory.reflect` | Consolidate topics, decay stale nodes, detect contradictions |
+| `memory.reflect` | Analyse graph for consolidation opportunities (embedding-based) |
+| `memory.apply_reflection` | Apply agent decisions from reflection analysis |
 | `memory.query_graph` | Traverse the graph from a node |
 | `memory.archive` | Export old superseded nodes to cold storage |
 | `memory.restore` | Reimport archived nodes |
@@ -129,10 +159,8 @@ epimemer/
   core/           — Pydantic models (node types, edges, timelines, metacontexts)
   storage/        — Storage protocol + InMemory + SurrealDB adapters
   embeddings/     — Embedding protocol + sentence-transformers + mock
-  llm/            — LLM protocol + Pydantic AI + mock
   pipelines/
     segmentation/     — Paragraph split, semantic similarity
-    decomposition/    — LLM extraction, topic assignment
     graph_construction/ — Edge creation, value updates, versioning, persistence
     query/            — Vector search, graph expansion, hybrid retrieval
     reflection/       — Topic consolidation, value decay, contradiction detection, archival
@@ -140,7 +168,8 @@ epimemer/
     orchestration/    — Top-level request routing Petri net
   mcp/            — FastMCP server, tool implementations, config
   logging/        — Structured JSON logging
-tests/            — 283 tests (unit, pipeline, MCP, integration)
+  visualization/ — Real-time WebSocket visualization server and frontend
+tests/            — 269 tests (unit, pipeline, MCP, integration)
 ```
 
 ## Documentation
