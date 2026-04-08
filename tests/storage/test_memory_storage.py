@@ -227,3 +227,24 @@ class TestMetacontextStorage:
 
         superseded = await store.query_metacontexts(status=NodeStatus.SUPERSEDED)
         assert len(superseded) == 1
+
+
+class TestMultiGraphContract:
+
+    async def test_does_not_support_multi_graph(self, store):
+        assert store.supports_multi_graph is False
+
+    async def test_current_database_is_ephemeral(self, store):
+        assert store.current_database == "ephemeral"
+
+    async def test_list_databases_returns_ephemeral(self, store):
+        databases = await store.list_databases()
+        assert databases == ["ephemeral"]
+
+    async def test_switch_database_raises(self, store):
+        with pytest.raises(NotImplementedError):
+            await store.switch_database("other")
+
+    async def test_delete_database_raises(self, store):
+        with pytest.raises(NotImplementedError):
+            await store.delete_database("ephemeral")

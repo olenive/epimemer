@@ -251,21 +251,20 @@ Test tool functions directly:
 ```python
 import asyncio
 from epimemer.embeddings.mock import MockEmbeddingProvider
-from epimemer.llm.mock import MockDecompositionProvider
 from epimemer.mcp.config import ServerConfig
-from epimemer.mcp.tools import ingest, search
+from epimemer.mcp.tools import segment_text, search
 from epimemer.storage.memory import InMemoryStorage
 
 async def main():
     storage = InMemoryStorage()
     emb = MockEmbeddingProvider(model_id="mock", dimension=8)
-    decomp = MockDecompositionProvider()
-    config = ServerConfig(storage_backend="memory", embedding_provider="mock", decomposition_provider="mock")
+    config = ServerConfig(storage_backend="memory", embedding_provider="mock")
 
-    result, meta = await ingest("Some text to ingest.", storage, emb, decomp, config)
-    print(f"Ingested: {result}")
-    print(f"Meta: {meta}")
+    # Step 1: segment
+    result, meta = await segment_text("Some text to segment.", storage, config)
+    print(f"Segments: {result}")
 
+    # Step 2: search (after store_decomposition populates nodes)
     result, meta = await search("Some text", storage, emb, k=5)
     print(f"Search: {result}")
 
@@ -310,6 +309,9 @@ tests/
 
 ## Adding a New Storage Backend
 
-1. Implement all methods from `epimemer/storage/protocol.py`
+1. Implement all methods from `epimemer/storage/protocol.py`, including:
+   - Core storage operations (documents, segments, nodes, edges, embeddings, timelines, metacontexts)
+   - Multi-graph interface: `supports_multi_graph` property, `current_database`, `list_databases()`, `switch_database()`, `delete_database()`
+   - Set `supports_multi_graph = False` if the backend only supports a single graph (see `InMemoryStorage` for reference)
 2. Add tests in `tests/storage/test_your_backend.py`
 3. Add a factory branch in `epimemer/mcp/config.py`

@@ -150,3 +150,27 @@ class StorageBackend(Protocol):
     ) -> Sequence[Metacontext]:
         """Query metacontexts by status."""
         ...
+
+    # --- Multi-graph management ---
+
+    @property
+    def supports_multi_graph(self) -> bool:
+        """Whether this backend supports multiple named graphs (databases)."""
+        ...
+
+    @property
+    def current_database(self) -> str:
+        """The name of the currently active database/graph."""
+        ...
+
+    async def list_databases(self) -> list[str]:
+        """List available databases/graphs."""
+        ...
+
+    async def switch_database(self, database: str) -> None:
+        """Switch to a different database/graph."""
+        ...
+
+    async def delete_database(self, database: str) -> None:
+        """Delete a database/graph permanently."""
+        ...

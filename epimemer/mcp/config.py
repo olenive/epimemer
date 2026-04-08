@@ -22,6 +22,7 @@ class ServerConfig(BaseModel):
     surrealdb_pass: str = "root"
     surrealdb_namespace: str = "epimemer"
     surrealdb_database: str = "memory"
+    graph: str = ""
 
     embedding_provider: Literal["sentence-transformers", "mock"] = "sentence-transformers"
     embedding_model_id: str = "all-MiniLM-L6-v2"
@@ -50,6 +51,7 @@ def load_config() -> ServerConfig:
         "surrealdb_pass": "EPIMEMER_SURREALDB_PASS",
         "surrealdb_namespace": "EPIMEMER_SURREALDB_NAMESPACE",
         "surrealdb_database": "EPIMEMER_SURREALDB_DATABASE",
+        "graph": "EPIMEMER_GRAPH",
         "embedding_provider": "EPIMEMER_EMBEDDING_PROVIDER",
         "embedding_model_id": "EPIMEMER_EMBEDDING_MODEL_ID",
         "embedding_dimension": "EPIMEMER_EMBEDDING_DIMENSION",
@@ -77,12 +79,14 @@ def create_storage(config: ServerConfig) -> StorageBackend:
     """Create a storage backend from config."""
     if config.storage_backend == "surrealdb":
         from epimemer.storage.surrealdb_adapter import SurrealDBStorage
+        # EPIMEMER_GRAPH overrides the database name if set to non-default
+        database = config.graph if config.graph != "" else config.surrealdb_database
         return SurrealDBStorage(
             url=config.surrealdb_url,
             user=config.surrealdb_user,
             password=config.surrealdb_pass,
             namespace=config.surrealdb_namespace,
-            database=config.surrealdb_database,
+            database=database,
         )
     else:
         from epimemer.storage.memory import InMemoryStorage

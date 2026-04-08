@@ -116,11 +116,12 @@ The end state is:
 3. **Claude Code** (or another agent harness) configured to use the MCP server
 4. **Visualization server** (optional) showing the knowledge graph and pipeline execution in real time
 5. The agent can:
-   - `memory.ingest` new information (triggers the full pipeline via orchestration net), optionally with a metacontext
-   - `memory.search` to find relevant context (vector + graph hybrid retrieval), optionally filtered by metacontext
-   - `memory.query_graph` for structured traversal
-   - `memory.reflect` to trigger consolidation (or this fires automatically via activation functions)
-   - `memory.create_timeline` / `memory.add_timepoint` / `memory.query_timeline` / `memory.create_timelink` for temporal relationships
+   - `segment` + `store_decomposition` to ingest new information (two-step: segment text, then store extracted nodes), optionally with a metacontext
+   - `search` to find relevant context (vector + graph hybrid retrieval), optionally filtered by metacontext
+   - `query_graph` for structured traversal
+   - `reflect` to trigger consolidation (or this fires automatically via activation functions)
+   - `create_timeline` / `add_timepoint` / `query_timeline` / `create_timelink` for temporal relationships
+   - `list_graphs` / `use_graph` / `delete_graph` to manage multiple knowledge graphs (SurrealDB backends)
 6. Every tool call produces:
    - Structured JSON logs (for the user to monitor)
    - Response metadata (for the agent to report what it found/did)

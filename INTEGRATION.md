@@ -37,51 +37,67 @@ the knowledge graph and pipeline execution in real time.
 |----------|---------|---------|
 | `EPIMEMER_STORAGE_BACKEND` | `memory` | `memory`, `surrealdb` |
 | `EPIMEMER_SURREALDB_URL` | `ws://localhost:8000/rpc` | Any SurrealDB URL |
+| `EPIMEMER_SURREALDB_USER` | `root` | SurrealDB username |
+| `EPIMEMER_SURREALDB_PASS` | `root` | SurrealDB password |
+| `EPIMEMER_SURREALDB_NAMESPACE` | `epimemer` | SurrealDB namespace |
+| `EPIMEMER_SURREALDB_DATABASE` | `memory` | SurrealDB database name |
+| `EPIMEMER_GRAPH` | (empty) | Override database name for multi-graph |
 | `EPIMEMER_EMBEDDING_PROVIDER` | `sentence-transformers` | `sentence-transformers`, `mock` |
 | `EPIMEMER_EMBEDDING_MODEL_ID` | `all-MiniLM-L6-v2` | Any sentence-transformers model |
-| `EPIMEMER_DECOMPOSITION_PROVIDER` | `pydantic-ai` | `pydantic-ai`, `mock` |
-| `EPIMEMER_DECOMPOSITION_MODEL` | `claude-sonnet-4-20250514` | Any Pydantic AI model |
 | `EPIMEMER_SEGMENTATION_STRATEGY` | `paragraph` | `paragraph`, `semantic` |
-| `EPIMEMER_VIZ_ENABLED` | `false` | `true`, `false` |
+| `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
+| `EPIMEMER_VIZ_ENABLED` | `true` | `true`, `false` |
 | `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Any bind address |
 | `EPIMEMER_VIZ_PORT` | `8765` | Any port |
 | `EPIMEMER_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `EPIMEMER_LOG_FILE` | (stdout) | File path |
+| `EPIMEMER_LOG_FILE` | (stderr) | File path |
 
 ### Verify Connection
 
-In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 14 tools.
+In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 19 tools.
 
 ## Available Tools
+
+Tools are auto-prefixed as `mcp__epimemer__<name>` by Claude Code.
 
 ### Core Memory Operations
 
 | Tool | Purpose |
 |------|---------|
-| `memory.ingest` | Ingest text — segments, extracts nodes, constructs graph, embeds |
-| `memory.search` | Hybrid retrieval — vector similarity + graph expansion |
-| `memory.link` | Create typed edges between nodes |
-| `memory.update` | Create new node version (immutable history) |
-| `memory.reflect` | Consolidate — merge similar topics, decay stale nodes, detect contradictions |
-| `memory.query_graph` | Traverse the graph from a starting node |
-| `memory.archive` | Export old superseded nodes for cold storage |
-| `memory.restore` | Reimport archived nodes |
+| `segment` | Segment text into chunks (step 1 of ingest) |
+| `store_decomposition` | Store agent-extracted topics/facts/inferences (step 2 of ingest) |
+| `search` | Hybrid retrieval — vector similarity + graph expansion |
+| `link` | Create typed edges between nodes |
+| `update` | Create new node version (immutable history) |
+| `reflect` | Analyse graph for consolidation opportunities |
+| `apply_reflection` | Apply agent decisions from reflection analysis |
+| `query_graph` | Traverse the graph from a starting node |
+| `archive` | Export old superseded nodes for cold storage |
+| `restore` | Reimport archived nodes |
 
 ### Timeline Operations
 
 | Tool | Purpose |
 |------|---------|
-| `memory.create_timeline` | Create a named timeline |
-| `memory.add_timepoint` | Add a timepoint (concrete or vague) to a timeline |
-| `memory.query_timeline` | Find nearest timepoints or query a time range |
-| `memory.create_timelink` | Link a node to a specific timepoint on a timeline |
+| `create_timeline` | Create a named timeline |
+| `add_timepoint` | Add a timepoint (concrete or vague) to a timeline |
+| `query_timeline` | Find nearest timepoints or query a time range |
+| `create_timelink` | Link a node to a specific timepoint on a timeline |
 
 ### Metacontext Operations
 
 | Tool | Purpose |
 |------|---------|
-| `memory.create_metacontext` | Create an epistemic frame (e.g., "Real world", "Fiction") |
-| `memory.get_metacontexts` | Get metacontexts associated with a node |
+| `create_metacontext` | Create an epistemic frame (e.g., "Real world", "Fiction") |
+| `get_metacontexts` | Get metacontexts associated with a node |
+
+### Graph Management (SurrealDB backends)
+
+| Tool | Purpose |
+|------|---------|
+| `list_graphs` | List available knowledge graphs and show active graph |
+| `use_graph` | Switch to or create a knowledge graph |
+| `delete_graph` | Delete a knowledge graph permanently |
 
 ## System Prompt Guidance
 

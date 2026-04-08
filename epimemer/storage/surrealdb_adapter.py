@@ -106,6 +106,35 @@ class SurrealDBStorage:
         await self._db.use(self._namespace, self._database)
         await self._setup_schema()
 
+    @property
+    def supports_multi_graph(self) -> bool:
+        return True
+
+    @property
+    def current_database(self) -> str:
+        return self._database
+
+    @property
+    def namespace(self) -> str:
+        return self._namespace
+
+    async def list_databases(self) -> list[str]:
+        """List all databases in the current namespace."""
+        result = await self.db.query("INFO FOR NS;")
+        # SurrealDB returns a dict with "databases" key
+        databases = result.get("databases", {}) if isinstance(result, dict) else {}
+        return sorted(databases.keys())
+
+    async def switch_database(self, database: str) -> None:
+        """Switch to a different database and set up its schema."""
+        await self.db.use(self._namespace, database)
+        self._database = database
+        await self._setup_schema()
+
+    async def delete_database(self, database: str) -> None:
+        """Delete a database from the current namespace."""
+        await self.db.query(f"REMOVE DATABASE IF EXISTS `{database}`;")
+
     async def close(self) -> None:
         if self._db is not None:
             await self._db.close()

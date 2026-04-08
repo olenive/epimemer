@@ -881,3 +881,132 @@ async def get_metacontexts_for_node(
     result = {"node_id": node_id, "metacontexts": metacontexts}
     meta = ResponseMeta(nodes_returned=len(metacontexts))
     return result, meta
+
+
+# --- Graph management ---
+
+
+def _similar_names(target: str, candidates: list[str], max_results: int = 3) -> list[str]:
+    """Find candidate names similar to target using edit distance."""
+    from difflib import SequenceMatcher
+
+    scored = [
+        (name, SequenceMatcher(None, target.lower(), name.lower()).ratio())
+        for name in candidates
+        if name != target
+    ]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [name for name, score in scored[:max_results] if score > 0.4]
+
+
+async def list_graphs(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
+    """List available knowledge graphs."""
+    databases = await storage.list_databases()
+    current = storage.current_database
+
+    result = {
+        "graphs": databases,
+        "active_graph": current,
+    }
+    meta = ResponseMeta(nodes_returned=len(databases))
+    return result, meta
+
+
+async def use_graph(
+    name: str,
+    storage: StorageBackend,
+    *,
+    confirm: bool = False,
+) -> tuple[dict, ResponseMeta]:
+    """Switch to a different knowledge graph.
+
+    If the graph doesn't exist and confirm is False, returns a confirmation
+    prompt with similar graph names. If confirm is True, creates the graph.
+    """
+    if not storage.supports_multi_graph:
+        return {
+            "error": "Graph switching requires a persistent backend (e.g. SurrealDB). "
+            "Current backend only supports a single ephemeral graph.",
+        }, ResponseMeta()
+
+    existing = await storage.list_databases()
+
+    if name in existing:
+        await storage.switch_database(name)
+        return {
+            "status": "switched",
+            "active_graph": name,
+            "message": f"Switched to graph '{name}'.",
+        }, ResponseMeta()
+
+    # Graph doesn't exist
+    if not confirm:
+        similar = _similar_names(name, existing)
+        result: dict = {
+            "status": "confirm_create",
+            "message": f"Graph '{name}' does not exist.",
+            "existing_graphs": existing,
+        }
+        if similar:
+            result["similar_graphs"] = similar
+            result["message"] += f" Did you mean one of: {', '.join(similar)}?"
+        result["message"] += " Call again with confirm=true to create it."
+        return result, ResponseMeta()
+
+    # Create by switching (SurrealDB creates databases on use)
+    await storage.switch_database(name)
+    return {
+        "status": "created",
+        "active_graph": name,
+        "message": f"Created and switched to new graph '{name}'.",
+    }, ResponseMeta()
+
+
+async def delete_graph(
+    name: str,
+    storage: StorageBackend,
+    *,
+    confirm: bool = False,
+) -> tuple[dict, ResponseMeta]:
+    """Delete a knowledge graph permanently.
+
+    Requires confirm=True. Refuses to delete the currently active graph.
+    """
+    if not storage.supports_multi_graph:
+        return {
+            "error": "Graph deletion requires a persistent backend (e.g. SurrealDB). "
+            "Current backend only supports a single ephemeral graph.",
+        }, ResponseMeta()
+
+    existing = await storage.list_databases()
+
+    if name not in existing:
+        similar = _similar_names(name, existing)
+        result: dict = {
+            "status": "not_found",
+            "message": f"Graph '{name}' does not exist.",
+            "existing_graphs": existing,
+        }
+        if similar:
+            result["similar_graphs"] = similar
+        return result, ResponseMeta()
+
+    if name == storage.current_database:
+        return {
+            "status": "refused",
+            "message": f"Cannot delete the active graph '{name}'. Switch to a different graph first.",
+            "active_graph": name,
+        }, ResponseMeta()
+
+    if not confirm:
+        return {
+            "status": "confirm_delete",
+            "message": f"This will permanently delete graph '{name}' and all its data. "
+            "Call again with confirm=true to proceed.",
+        }, ResponseMeta()
+
+    await storage.delete_database(name)
+    return {
+        "status": "deleted",
+        "message": f"Graph '{name}' has been permanently deleted.",
+    }, ResponseMeta()

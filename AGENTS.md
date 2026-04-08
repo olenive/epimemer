@@ -18,17 +18,17 @@ Our goal is to build a robust and secure system, not simply a prototype. We don'
 # Memory System (Epimemer)
 You have access to an epistemic memory system via MCP tools. Use it to:
 
-### When to ingest (memory.ingest)
+### When to ingest (segment + store_decomposition)
 - After learning new information from the user or external sources
 - When the user shares documents, articles, or knowledge you should remember
 - Include a metacontext_id when the information has a specific framing (fiction, source, perspective)
 
-### When to search (memory.search)
+### When to search (search)
 - Before answering questions that might benefit from prior context
 - When the user asks "do you remember..." or references past conversations
 - Use metacontext_id to filter results when the context is clear (e.g., discussing a specific fictional universe)
 
-### When to reflect (memory.reflect)
+### When to reflect (reflect)
 - After ingesting several documents (the system auto-reflects after 10 ingestions)
 - When explicitly asked to consolidate or organize knowledge
 - Periodically during long sessions
@@ -41,6 +41,12 @@ Every tool response includes a _meta field with:
 - source_types: breakdown by node type (topic, fact, inference)
 
 Surface this information naturally: "Found 5 relevant nodes (2 topics, 2 facts, 1 inference)."
+
+### Multi-graph management (list_graphs, use_graph, delete_graph)
+- Use `list_graphs` to see available knowledge graphs and which is active
+- Use `use_graph` to switch between graphs or create new ones (requires confirmation)
+- With in-memory storage, only a single "ephemeral" graph is available
+- With SurrealDB, each graph is a separate database within the namespace
 
 ### Metacontext awareness
 - Always check the metacontexts field on returned nodes

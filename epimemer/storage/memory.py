@@ -218,3 +218,22 @@ class InMemoryStorage:
         status: NodeStatus = NodeStatus.ACTIVE,
     ) -> Sequence[Metacontext]:
         return [mc for mc in self.metacontexts.values() if mc.status == status]
+
+    # --- Multi-graph management ---
+
+    @property
+    def supports_multi_graph(self) -> bool:
+        return False
+
+    @property
+    def current_database(self) -> str:
+        return "ephemeral"
+
+    async def list_databases(self) -> list[str]:
+        return ["ephemeral"]
+
+    async def switch_database(self, database: str) -> None:
+        raise NotImplementedError("In-memory storage does not support graph switching")
+
+    async def delete_database(self, database: str) -> None:
+        raise NotImplementedError("In-memory storage does not support graph deletion")

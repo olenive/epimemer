@@ -55,7 +55,7 @@ def _parse_response(result) -> dict:
 async def _segment_and_store(server: FastMCP, content: str, metacontext_id: str | None = None) -> dict:
     """Helper: run the two-step ingest flow (segment + store_decomposition)."""
     seg_result = await server.call_tool(
-        "memory.segment",
+        "segment",
         {"content": content},
     )
     seg_data = _parse_response(seg_result)
@@ -80,7 +80,7 @@ async def _segment_and_store(server: FastMCP, content: str, metacontext_id: str 
         store_args["metacontext_id"] = metacontext_id
 
     store_result = await server.call_tool(
-        "memory.store_decomposition",
+        "store_decomposition",
         store_args,
     )
     return _parse_response(store_result)
@@ -90,7 +90,7 @@ class TestMCPProtocol:
 
     async def test_segment_returns_valid_json(self, server):
         result = await server.call_tool(
-            "memory.segment",
+            "segment",
             {"content": "Machine learning is a branch of AI."},
         )
         data = _parse_response(result)
@@ -109,7 +109,7 @@ class TestMCPProtocol:
         await _segment_and_store(server, "Neural networks learn from large datasets.")
 
         result = await server.call_tool(
-            "memory.search",
+            "search",
             {"query": "Neural networks learn from large datasets."},
         )
         data = _parse_response(result)
@@ -117,7 +117,7 @@ class TestMCPProtocol:
 
     async def test_meta_present_on_response(self, server):
         result = await server.call_tool(
-            "memory.segment",
+            "segment",
             {"content": "Some text to segment."},
         )
         data = _parse_response(result)
@@ -128,7 +128,7 @@ class TestMCPProtocol:
         await _segment_and_store(server, "First paragraph.\n\nSecond paragraph.")
 
         search_result = await server.call_tool(
-            "memory.search",
+            "search",
             {"query": "First paragraph", "k": 2, "graph_hops": 0},
         )
         search_data = _parse_response(search_result)
@@ -136,7 +136,7 @@ class TestMCPProtocol:
 
         if len(nodes) >= 2:
             link_result = await server.call_tool(
-                "memory.link",
+                "link",
                 {
                     "src_id": nodes[0]["id"],
                     "dst_id": nodes[1]["id"],
@@ -149,7 +149,7 @@ class TestMCPProtocol:
 
     async def test_reflect_via_protocol(self, server):
         result = await server.call_tool(
-            "memory.reflect",
+            "reflect",
             {},
         )
         data = _parse_response(result)
@@ -159,7 +159,7 @@ class TestMCPProtocol:
 
     async def test_archive_via_protocol(self, server):
         result = await server.call_tool(
-            "memory.archive",
+            "archive",
             {"max_age_days": 90},
         )
         data = _parse_response(result)
@@ -167,7 +167,7 @@ class TestMCPProtocol:
 
     async def test_error_returns_structured_json(self, server):
         result = await server.call_tool(
-            "memory.update",
+            "update",
             {"node_id": "nonexistent", "new_content": "test"},
         )
         data = _parse_response(result)
@@ -176,28 +176,30 @@ class TestMCPProtocol:
     async def test_all_tools_registered(self, server):
         tool_names = {t.name for t in await server.list_tools()}
         expected = {
-            "memory.segment",
-            "memory.store_decomposition",
-            "memory.search",
-            "memory.link",
-            "memory.update",
-            "memory.reflect",
-            "memory.apply_reflection",
-            "memory.query_graph",
-            "memory.archive",
-            "memory.restore",
-            "memory.create_timeline",
-            "memory.add_timepoint",
-            "memory.query_timeline",
-            "memory.create_timelink",
-            "memory.create_metacontext",
-            "memory.get_metacontexts",
+            "segment",
+            "store_decomposition",
+            "search",
+            "link",
+            "update",
+            "reflect",
+            "apply_reflection",
+            "query_graph",
+            "archive",
+            "restore",
+            "create_timeline",
+            "add_timepoint",
+            "query_timeline",
+            "create_timelink",
+            "create_metacontext",
+            "get_metacontexts",
+            "list_graphs",
+            "use_graph",
         }
         assert expected.issubset(tool_names)
 
     async def test_create_timeline_via_protocol(self, server):
         result = await server.call_tool(
-            "memory.create_timeline",
+            "create_timeline",
             {"name": "AI History", "description": "Key events"},
         )
         data = _parse_response(result)
@@ -206,7 +208,7 @@ class TestMCPProtocol:
 
     async def test_create_metacontext_via_protocol(self, server):
         result = await server.call_tool(
-            "memory.create_metacontext",
+            "create_metacontext",
             {"content": "Real historical events"},
         )
         data = _parse_response(result)
@@ -214,7 +216,7 @@ class TestMCPProtocol:
 
     async def test_ingest_with_metacontext_via_protocol(self, server):
         mc_result = await server.call_tool(
-            "memory.create_metacontext",
+            "create_metacontext",
             {"content": "Science fiction"},
         )
         mc_data = _parse_response(mc_result)
@@ -222,3 +224,32 @@ class TestMCPProtocol:
 
         data = await _segment_and_store(server, "The ships are alive.", metacontext_id=mc_id)
         assert data["result"]["nodes_created"]["topics"] >= 1
+
+    async def test_list_graphs_via_protocol(self, server):
+        result = await server.call_tool("list_graphs", {})
+        data = _parse_response(result)
+        assert "graphs" in data["result"]
+        assert "active_graph" in data["result"]
+
+    async def test_list_graphs_returns_ephemeral_for_memory(self, server):
+        result = await server.call_tool("list_graphs", {})
+        data = _parse_response(result)
+        assert data["result"]["graphs"] == ["ephemeral"]
+        assert data["result"]["active_graph"] == "ephemeral"
+
+    async def test_use_graph_in_memory_returns_error(self, server):
+        result = await server.call_tool(
+            "use_graph",
+            {"name": "test_graph"},
+        )
+        data = _parse_response(result)
+        # In-memory backend doesn't support graph switching
+        assert "error" in data["result"]
+
+    async def test_delete_graph_in_memory_returns_error(self, server):
+        result = await server.call_tool(
+            "delete_graph",
+            {"name": "test_graph"},
+        )
+        data = _parse_response(result)
+        assert "error" in data["result"]

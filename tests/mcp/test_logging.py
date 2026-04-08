@@ -41,10 +41,10 @@ class TestJSONFormatter:
             args=(),
             exc_info=None,
         )
-        record.structured_data = {"tool": "memory.ingest", "latency_ms": 42.5}
+        record.structured_data = {"tool": "epimemer.ingest", "latency_ms": 42.5}
         output = formatter.format(record)
         parsed = json.loads(output)
-        assert parsed["data"]["tool"] == "memory.ingest"
+        assert parsed["data"]["tool"] == "epimemer.ingest"
         assert parsed["data"]["latency_ms"] == 42.5
 
 
@@ -52,14 +52,14 @@ class TestToolInvocationLog:
 
     def test_model_validates(self):
         entry = ToolInvocationLog(
-            tool_name="memory.search",
+            tool_name="epimemer.search",
             input_summary="query=hello",
             output_summary="nodes=3",
             latency_ms=15.2,
             nodes_touched=3,
             llm_calls=0,
         )
-        assert entry.tool_name == "memory.search"
+        assert entry.tool_name == "epimemer.search"
         assert entry.latency_ms == 15.2
         assert entry.error is None
 
@@ -89,7 +89,7 @@ class TestLogToolCall:
 
         try:
             entry = ToolInvocationLog(
-                tool_name="memory.ingest",
+                tool_name="epimemer.ingest",
                 input_summary="content_length=100",
                 output_summary="segments=2",
                 latency_ms=50.0,
@@ -101,7 +101,7 @@ class TestLogToolCall:
             assert len(captured) >= 1
             record = captured[-1]
             assert hasattr(record, "structured_data")
-            assert record.structured_data["tool_name"] == "memory.ingest"
+            assert record.structured_data["tool_name"] == "epimemer.ingest"
             assert record.structured_data["llm_calls"] == 3
         finally:
             logger.removeHandler(handler)

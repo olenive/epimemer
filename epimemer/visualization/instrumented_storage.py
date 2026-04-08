@@ -229,6 +229,26 @@ class InstrumentedStorage:
         return await self._inner.query_metacontexts(status=status)
 
 
+    # --- Multi-graph management (pass-through) ---
+
+    @property
+    def supports_multi_graph(self) -> bool:
+        return self._inner.supports_multi_graph
+
+    @property
+    def current_database(self) -> str:
+        return self._inner.current_database
+
+    async def list_databases(self) -> list[str]:
+        return await self._inner.list_databases()
+
+    async def switch_database(self, database: str) -> None:
+        await self._inner.switch_database(database)
+
+    async def delete_database(self, database: str) -> None:
+        await self._inner.delete_database(database)
+
+
 def instrument_storage(inner: object, bus: InProcessEventBus) -> InstrumentedStorage:
     """Wrap a storage backend with event instrumentation.
 

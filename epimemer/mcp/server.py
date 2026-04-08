@@ -98,10 +98,11 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
 mcp = FastMCP(
     "epimemer",
-    instructions="Epimemer is a layered epistemic memory system. Use memory.segment to segment text, "
-    "then memory.store_decomposition to store your extracted topics/facts/inferences. "
-    "Use memory.search to find relevant knowledge, memory.reflect to consolidate the graph, "
-    "and memory.query_graph to explore relationships.",
+    instructions="Epimemer is a layered epistemic memory system. Use segment to segment text, "
+    "then store_decomposition to store your extracted topics/facts/inferences. "
+    "Use search to find relevant knowledge, reflect to consolidate the graph, "
+    "and query_graph to explore relationships. "
+    "Use list_graphs and use_graph to manage knowledge graphs.",
     lifespan=app_lifespan,
 )
 
@@ -177,7 +178,7 @@ async def _run_with_timeout(
 # --- Tools ---
 
 
-@mcp.tool(name="memory.segment")
+@mcp.tool(name="segment")
 async def memory_segment(
     content: str,
     ctx: Context,
@@ -188,7 +189,7 @@ async def memory_segment(
 
     This is step 1 of the two-step ingest flow. Each segment includes an ID and
     char_count. Use your copy of the original text to extract topics, facts,
-    and inferences for each segment, then call memory.store_decomposition.
+    and inferences for each segment, then call store_decomposition.
 
     Topics: distinct themes discussed (1-5 sentence descriptions).
     Facts: atomic, verifiable, grounded statements.
@@ -201,7 +202,7 @@ async def memory_segment(
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
-        "memory.segment",
+        "epimemer.segment",
         lambda: tools.segment_text(
             content=content,
             storage=deps["storage"],
@@ -217,7 +218,7 @@ async def memory_segment(
     )
 
 
-@mcp.tool(name="memory.store_decomposition")
+@mcp.tool(name="store_decomposition")
 async def memory_store_decomposition(
     document_id: str,
     segments: list[dict],
@@ -226,16 +227,16 @@ async def memory_store_decomposition(
 ) -> str:
     """Store your decomposition of segments into topics, facts, and inferences.
 
-    This is step 2 of the two-step ingest flow. Call this after memory.segment
+    This is step 2 of the two-step ingest flow. Call this after segment
     with your extracted nodes.
 
     The response includes stores_since_reflect and reflect_threshold. When
-    reflect_suggested is true, suggest running memory.reflect to the user.
+    reflect_suggested is true, suggest running reflect to the user.
 
     Args:
-        document_id: The document ID returned by memory.segment.
+        document_id: The document ID returned by segment.
         segments: List of decomposed segments. Each entry:
-            segment_id: str — from memory.segment result
+            segment_id: str — from segment result
             topics: list[str] — distinct themes (1-5 sentence descriptions)
             facts: list[str] — atomic, verifiable statements
             inferences: list[str] — provisional higher-level derivations
@@ -262,7 +263,7 @@ async def memory_store_decomposition(
         return result, meta
 
     return await _run_with_timeout(
-        "memory.store_decomposition",
+        "epimemer.store_decomposition",
         _do,
         ctx,
         f"doc={document_id} segments={len(segments)}",
@@ -271,7 +272,7 @@ async def memory_store_decomposition(
 
 
 
-@mcp.tool(name="memory.search")
+@mcp.tool(name="search")
 async def memory_search(
     query: str,
     ctx: Context,
@@ -295,7 +296,7 @@ async def memory_search(
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
-        "memory.search",
+        "epimemer.search",
         lambda: tools.search(
             query=query,
             storage=deps["storage"],
@@ -312,7 +313,7 @@ async def memory_search(
     )
 
 
-@mcp.tool(name="memory.link")
+@mcp.tool(name="link")
 async def memory_link(
     src_id: str,
     dst_id: str,
@@ -332,7 +333,7 @@ async def memory_link(
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
-        "memory.link",
+        "epimemer.link",
         lambda: tools.link(
             src_id=src_id,
             dst_id=dst_id,
@@ -347,7 +348,7 @@ async def memory_link(
     )
 
 
-@mcp.tool(name="memory.update")
+@mcp.tool(name="update")
 async def memory_update(
     node_id: str,
     new_content: str,
@@ -364,7 +365,7 @@ async def memory_update(
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
-        "memory.update",
+        "epimemer.update",
         lambda: tools.update(
             node_id=node_id,
             new_content=new_content,
@@ -376,7 +377,7 @@ async def memory_update(
     )
 
 
-@mcp.tool(name="memory.reflect")
+@mcp.tool(name="reflect")
 async def memory_reflect(
     ctx: Context,
     similarity_threshold: float = 0.85,
@@ -390,7 +391,7 @@ async def memory_reflect(
     - Topics with thin descriptions but rich associated material
     - Potential contradictions between facts
 
-    Review the candidates and call memory.apply_reflection with your decisions.
+    Review the candidates and call apply_reflection with your decisions.
 
     For large graphs, consider delegating this to a subagent so analysis
     and decision-making don't consume your main conversation context.
@@ -415,7 +416,7 @@ async def memory_reflect(
         return result, meta
 
     return await _run_with_timeout(
-        "memory.reflect",
+        "epimemer.reflect",
         _do,
         ctx,
         f"threshold={similarity_threshold} stores_since={stores_before}",
@@ -423,7 +424,7 @@ async def memory_reflect(
     )
 
 
-@mcp.tool(name="memory.apply_reflection")
+@mcp.tool(name="apply_reflection")
 async def memory_apply_reflection(
     ctx: Context,
     parents: list[dict] | None = None,
@@ -432,7 +433,7 @@ async def memory_apply_reflection(
 ) -> str:
     """Apply your reflection decisions to the memory graph.
 
-    Call this after reviewing memory.reflect results. All arguments optional.
+    Call this after reviewing reflect results. All arguments optional.
 
     Args:
         parents: Consolidate similar topics under a new parent.
@@ -446,7 +447,7 @@ async def memory_apply_reflection(
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
-        "memory.apply_reflection",
+        "epimemer.apply_reflection",
         lambda: tools.apply_reflection(
             storage=deps["storage"],
             embedding_provider=deps["embedding_provider"],
@@ -460,7 +461,7 @@ async def memory_apply_reflection(
     )
 
 
-@mcp.tool(name="memory.query_graph")
+@mcp.tool(name="query_graph")
 async def memory_query_graph(
     node_id: str,
     ctx: Context,
@@ -476,7 +477,7 @@ async def memory_query_graph(
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
-        "memory.query_graph",
+        "epimemer.query_graph",
         lambda: tools.query_graph(
             node_id=node_id,
             storage=deps["storage"],
@@ -489,7 +490,7 @@ async def memory_query_graph(
     )
 
 
-@mcp.tool(name="memory.archive")
+@mcp.tool(name="archive")
 async def memory_archive(
     ctx: Context,
     max_age_days: int = 90,
@@ -503,7 +504,7 @@ async def memory_archive(
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
-        "memory.archive",
+        "epimemer.archive",
         lambda: tools.archive(
             storage=deps["storage"],
             max_age_days=max_age_days,
@@ -514,7 +515,7 @@ async def memory_archive(
     )
 
 
-@mcp.tool(name="memory.restore")
+@mcp.tool(name="restore")
 async def memory_restore(
     archive_data: dict,
     ctx: Context,
@@ -522,11 +523,11 @@ async def memory_restore(
     """Restore previously archived nodes and edges into the graph.
 
     Args:
-        archive_data: The archive dict (as returned by memory.archive).
+        archive_data: The archive dict (as returned by archive).
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
-        "memory.restore",
+        "epimemer.restore",
         lambda: tools.restore(
             archive_data=archive_data,
             storage=deps["storage"],
@@ -540,7 +541,7 @@ async def memory_restore(
 # --- Timeline tools ---
 
 
-@mcp.tool(name="memory.create_timeline")
+@mcp.tool(name="create_timeline")
 async def memory_create_timeline(
     name: str,
     ctx: Context,
@@ -554,7 +555,7 @@ async def memory_create_timeline(
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
-        "memory.create_timeline",
+        "epimemer.create_timeline",
         lambda: tools.create_timeline(
             name=name,
             storage=deps["storage"],
@@ -566,7 +567,7 @@ async def memory_create_timeline(
     )
 
 
-@mcp.tool(name="memory.add_timepoint")
+@mcp.tool(name="add_timepoint")
 async def memory_add_timepoint(
     timeline_id: str,
     ctx: Context,
@@ -590,7 +591,7 @@ async def memory_add_timepoint(
     parsed_start = dt.fromisoformat(start).replace(tzinfo=timezone.utc) if start else None
     parsed_end = dt.fromisoformat(end).replace(tzinfo=timezone.utc) if end else None
     return await _run_with_timeout(
-        "memory.add_timepoint",
+        "epimemer.add_timepoint",
         lambda: tools.add_timeline_timepoint(
             timeline_id=timeline_id,
             storage=deps["storage"],
@@ -604,7 +605,7 @@ async def memory_add_timepoint(
     )
 
 
-@mcp.tool(name="memory.query_timeline")
+@mcp.tool(name="query_timeline")
 async def memory_query_timeline(
     timeline_id: str,
     ctx: Context,
@@ -630,7 +631,7 @@ async def memory_query_timeline(
     parsed_start = dt.fromisoformat(range_start).replace(tzinfo=timezone.utc) if range_start else None
     parsed_end = dt.fromisoformat(range_end).replace(tzinfo=timezone.utc) if range_end else None
     return await _run_with_timeout(
-        "memory.query_timeline",
+        "epimemer.query_timeline",
         lambda: tools.query_timeline(
             timeline_id=timeline_id,
             storage=deps["storage"],
@@ -645,7 +646,7 @@ async def memory_query_timeline(
     )
 
 
-@mcp.tool(name="memory.create_timelink")
+@mcp.tool(name="create_timelink")
 async def memory_create_timelink(
     node_id: str,
     timeline_id: str,
@@ -661,7 +662,7 @@ async def memory_create_timelink(
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
-        "memory.create_timelink",
+        "epimemer.create_timelink",
         lambda: tools.create_timelink(
             node_id=node_id,
             timeline_id=timeline_id,
@@ -677,7 +678,7 @@ async def memory_create_timelink(
 # --- Metacontext tools ---
 
 
-@mcp.tool(name="memory.create_metacontext")
+@mcp.tool(name="create_metacontext")
 async def memory_create_metacontext(
     content: str,
     ctx: Context,
@@ -695,7 +696,7 @@ async def memory_create_metacontext(
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
-        "memory.create_metacontext",
+        "epimemer.create_metacontext",
         lambda: tools.create_metacontext(
             content=content,
             storage=deps["storage"],
@@ -707,7 +708,7 @@ async def memory_create_metacontext(
     )
 
 
-@mcp.tool(name="memory.get_metacontexts")
+@mcp.tool(name="get_metacontexts")
 async def memory_get_metacontexts(
     node_id: str,
     ctx: Context,
@@ -719,7 +720,7 @@ async def memory_get_metacontexts(
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
-        "memory.get_metacontexts",
+        "epimemer.get_metacontexts",
         lambda: tools.get_metacontexts_for_node(
             node_id=node_id,
             storage=deps["storage"],
@@ -727,6 +728,85 @@ async def memory_get_metacontexts(
         ctx,
         f"node={node_id}",
         lambda r, m: f"metacontexts={m.nodes_returned}",
+    )
+
+
+# --- Graph management tools ---
+
+
+@mcp.tool(name="list_graphs")
+async def epimemer_list_graphs(
+    ctx: Context,
+) -> str:
+    """List available knowledge graphs and show which is active.
+
+    Each graph is an isolated knowledge base. Use use_graph to switch.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.list_graphs",
+        lambda: tools.list_graphs(storage=deps["storage"]),
+        ctx,
+        "",
+        lambda r, m: f"graphs={len(r['graphs'])} active={r['active_graph']}",
+    )
+
+
+@mcp.tool(name="use_graph")
+async def epimemer_use_graph(
+    name: str,
+    ctx: Context,
+    confirm: bool = False,
+) -> str:
+    """Switch to a different knowledge graph, or create a new one.
+
+    If the graph doesn't exist, returns a confirmation prompt with similar
+    graph names in case of typos. Call again with confirm=true to create it.
+
+    Args:
+        name: Name of the graph to switch to (or create).
+        confirm: Set to true to confirm creation of a new graph.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.use_graph",
+        lambda: tools.use_graph(
+            name=name,
+            storage=deps["storage"],
+            confirm=confirm,
+        ),
+        ctx,
+        f"name={name} confirm={confirm}",
+        lambda r, m: f"status={r.get('status', 'error')}",
+    )
+
+
+@mcp.tool(name="delete_graph")
+async def epimemer_delete_graph(
+    name: str,
+    ctx: Context,
+    confirm: bool = False,
+) -> str:
+    """Permanently delete a knowledge graph and all its data.
+
+    Cannot delete the currently active graph — switch away first.
+    Requires confirm=true to proceed.
+
+    Args:
+        name: Name of the graph to delete.
+        confirm: Must be true to actually delete. False returns a confirmation prompt.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.delete_graph",
+        lambda: tools.delete_graph(
+            name=name,
+            storage=deps["storage"],
+            confirm=confirm,
+        ),
+        ctx,
+        f"name={name} confirm={confirm}",
+        lambda r, m: f"status={r.get('status', 'error')}",
     )
 
 

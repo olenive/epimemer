@@ -98,36 +98,20 @@ The memory system's correctness is hard to assess during normal use, so developm
 - **Benchmarking hooks** built into each module from the start — not necessarily measured upfront, but with placeholders and instrumentation so benchmarks can be added incrementally
 - See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the phased plan
 
-## Value Marking
+## Node Value Signals
 
-Inspired by the DIME architecture's observation that AI systems lack a value-marking layer (see [rundatarun.io/p/every-ai-agent-is-missing-its-dopamine](https://rundatarun.io/p/every-ai-agent-is-missing-its-dopamine)), every node carries a multi-dimensional value signal that is continuously updated and drives memory consolidation.
+Every node carries four value signals that are updated during ingestion and used by `reflect` to drive consolidation:
 
-### Value Dimensions
+- **Novelty** (0.0–1.0) — how unexpected relative to existing graph state. Contradictions and new topic clusters score high.
+- **Confidence** (0.0–1.0) — how well-supported by evidence. Multiple independent sources increase confidence.
+- **Relevance** (0.0–1.0) — how connected to frequently-queried topics. Nodes that are regularly retrieved or linked score higher.
+- **Recency** (`last_reinforced` timestamp) — when last reinforced by new evidence. Nodes that haven't been touched decay.
 
-Each node maintains:
-- **Novelty** — how unexpected is this relative to existing graph state? Information that contradicts existing inferences or doesn't fit established topic clusters scores high. Analogous to dopamine's role as an unexpectedness signal, not a reward signal.
-- **Confidence** — how well-supported by evidence? A fact with multiple independent sources scores higher than one with a single source.
-- **Relevance** — how connected to frequently-queried or actively-referenced topics? Nodes that are regularly retrieved or linked to score higher.
-- **Recency** — when was this node last reinforced by new evidence? Nodes that haven't been touched decay.
+These signals are updated at ingestion time (e.g., a new supporting fact increases an inference's confidence and recency). The `reflect` operation uses them to decide what to merge, decay, or flag:
 
-### Continuous, Not Periodic
-
-Value signals are updated at **ingestion time**, not only during `reflect`:
-- When a new fact arrives that supports an existing inference, that inference's confidence and recency increase
-- When new information contradicts an existing fact, the contradiction's novelty is high — surfacing it for attention
-- When a topic cluster receives new members, its relevance increases
-
-The `reflect` operation then uses these signals to make consolidation decisions:
-- High novelty + low confidence → flag for attention or further evidence gathering
-- Low relevance + low recency → candidate for decay or archival
-- High confidence + contradicted by high-novelty new evidence → surface the conflict
-
-### Implications for Open Questions
-
-Value marking turns several open questions into signal-processing problems:
-- **Topic evolution** — topics with declining relevance and recency naturally decay; topics with increasing novelty are splitting
-- **Contradiction handling** — contradictions generate high novelty signals, surfacing them automatically
-- **Merge/split decisions** — value signals inform thresholds rather than relying on purely structural heuristics
+- Low relevance + stale recency → candidate for decay or archival
+- High confidence + contradicted by new evidence → surface the conflict
+- High novelty + low confidence → flag for attention
 
 ## Timelines
 
@@ -269,24 +253,41 @@ The active graph is unaffected — every `active` node's content, provenance, an
 
 ## Agent Interface (MCP)
 
-Memory is exposed as tools, not as a raw database:
+Memory is exposed as tools, not as a raw database. Claude Code auto-prefixes these as `mcp__epimemer__<name>`.
 
-| Tool              | Purpose                                      |
-|-------------------|----------------------------------------------|
-| `memory.ingest`   | Add new content, triggers decomposition       |
-| `memory.search`   | Semantic + graph retrieval, filtered by type   |
-| `memory.link`     | Create explicit edges between nodes            |
-| `memory.update`   | Create new node version, supersede the old one |
-| `memory.reflect`  | Trigger async consolidation (cluster, merge)   |
-| `memory.query_graph` | Structured traversal from a starting node  |
-| `memory.archive`  | Move superseded nodes older than cutoff to cold storage |
-| `memory.restore`  | Reimport archived nodes for a time range     |
+Ingestion is a two-step process: `segment` breaks text into chunks, then the agent extracts topics/facts/inferences and passes them to `store_decomposition`.
 
-Both `memory.search` and `memory.query_graph` accept an optional `at_time` parameter to query historical graph state.
+| Tool                  | Purpose                                        |
+|-----------------------|------------------------------------------------|
+| `segment`             | Segment text into chunks (step 1 of ingest)    |
+| `store_decomposition` | Store extracted nodes and edges (step 2)       |
+| `search`              | Semantic + graph retrieval, metacontext-aware   |
+| `link`                | Create explicit edges between nodes             |
+| `update`              | Create new node version, supersede the old one  |
+| `reflect`             | Analyse graph for consolidation opportunities   |
+| `apply_reflection`    | Apply agent decisions from reflection analysis  |
+| `query_graph`         | Structured traversal from a starting node       |
+| `archive`             | Move superseded nodes older than cutoff to cold storage |
+| `restore`             | Reimport archived nodes for a time range        |
+| `create_timeline`     | Create a named timeline                         |
+| `add_timepoint`       | Add a concrete or vague timepoint to a timeline |
+| `query_timeline`      | Find nearest timepoints or query a time range   |
+| `create_timelink`     | Link a node to a timepoint on a timeline        |
+| `create_metacontext`  | Create an epistemic frame for disambiguation    |
+| `get_metacontexts`    | Get metacontexts for a node                     |
+| `list_graphs`         | List available knowledge graphs                 |
+| `use_graph`           | Switch to or create a knowledge graph           |
+| `delete_graph`        | Delete a knowledge graph permanently            |
+
+Both `search` and `query_graph` accept an optional `at_time` parameter to query historical graph state.
 
 ## Storage
 
 **SurrealDB** is the primary candidate for prototyping — unified documents, vectors, and graph in one system with a single query language (SurrealQL). **Postgres + pgvector** is the pragmatic production fallback. The architecture is storage-agnostic by design.
+
+### Multi-Graph Support
+
+SurrealDB backends support multiple knowledge graphs via separate databases within the same namespace. The `StorageBackend` protocol includes a `supports_multi_graph` flag — backends that support it implement `list_databases`, `switch_database`, and `delete_database`. In-memory storage reports a single `"ephemeral"` graph. Agents can manage graphs at runtime via the `list_graphs`, `use_graph`, and `delete_graph` tools.
 
 ## Update Behaviours
 
@@ -377,7 +378,7 @@ The data model types (Topics, Facts, Inferences, Segments, Embeddings) should be
 - **Value signal computation**: precise algorithms for computing novelty (relative to what baseline?), relevance decay curves, confidence aggregation from multiple sources
 - **Value-driven consolidation thresholds**: how do value signals translate into concrete merge/split/decay decisions?
 - **Topic evolution**: value signals provide the inputs (declining relevance = decay, rising novelty = splitting), but the structural mechanisms need design
-- **Contradiction handling**: high-novelty contradictions surface automatically via value marking, but the resolution or coexistence strategy needs design
+- **Contradiction handling**: high-novelty contradictions surface automatically via value signals, but the resolution or coexistence strategy needs design
 - **Timeline implementation details**: efficient storage and querying of precise timelines (DataFrame-backed), vague timeline ordering heuristics, cyclical timeline template-to-instance mapping
 - **Metacontext inheritance scope**: how deep does inheritance go? If a metacontext is inherited from a document, do inferences derived from those facts also inherit it? Probably yes, but edge cases need thought.
 - **Metacontext-aware value signals**: does "confidence" mean the same thing in a fictional metacontext (canonicity) vs. factual (likelihood of truth)? May need metacontext-specific interpretation of value signals.

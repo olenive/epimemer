@@ -104,14 +104,18 @@ All configuration is via `EPIMEMER_` environment variables:
 |----------|---------|-------------|
 | `EPIMEMER_STORAGE_BACKEND` | `memory` | `memory` or `surrealdb` |
 | `EPIMEMER_SURREALDB_URL` | `ws://localhost:8000/rpc` | SurrealDB connection URL |
+| `EPIMEMER_SURREALDB_USER` | `root` | SurrealDB username |
+| `EPIMEMER_SURREALDB_PASS` | `root` | SurrealDB password |
 | `EPIMEMER_SURREALDB_NAMESPACE` | `epimemer` | SurrealDB namespace |
 | `EPIMEMER_SURREALDB_DATABASE` | `memory` | SurrealDB database name |
+| `EPIMEMER_GRAPH` | (empty) | Override database name for multi-graph |
 | `EPIMEMER_EMBEDDING_PROVIDER` | `sentence-transformers` | `sentence-transformers` or `mock` |
 | `EPIMEMER_EMBEDDING_MODEL_ID` | `all-MiniLM-L6-v2` | Embedding model name |
 | `EPIMEMER_EMBEDDING_DIMENSION` | `384` | Embedding vector dimension |
 | `EPIMEMER_SEGMENTATION_STRATEGY` | `paragraph` | `paragraph` or `semantic` |
 | `EPIMEMER_SIMILARITY_THRESHOLD` | `0.75` | Similarity threshold for search |
 | `EPIMEMER_REFLECT_THRESHOLD` | `10` | Stores before suggesting reflection |
+| `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
 | `EPIMEMER_VIZ_ENABLED` | `true` | Enable visualization server |
 | `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Visualization server host |
 | `EPIMEMER_VIZ_PORT` | `8765` | Visualization server port |
@@ -120,26 +124,29 @@ All configuration is via `EPIMEMER_` environment variables:
 
 ## MCP Tools
 
-Tools exposed via the Model Context Protocol:
+Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<name>` by Claude Code):
 
 | Tool | Purpose |
 |------|---------|
-| `memory.segment` | Segment text into chunks (step 1 of ingest) |
-| `memory.store_decomposition` | Store agent-extracted topics/facts/inferences (step 2 of ingest) |
-| `memory.search` | Hybrid retrieval (vector + graph), metacontext-aware |
-| `memory.link` | Create typed edges between nodes |
-| `memory.update` | Create new node version (immutable history) |
-| `memory.reflect` | Analyse graph for consolidation opportunities (embedding-based) |
-| `memory.apply_reflection` | Apply agent decisions from reflection analysis |
-| `memory.query_graph` | Traverse the graph from a node |
-| `memory.archive` | Export old superseded nodes to cold storage |
-| `memory.restore` | Reimport archived nodes |
-| `memory.create_timeline` | Create a named timeline |
-| `memory.add_timepoint` | Add a concrete or vague timepoint to a timeline |
-| `memory.query_timeline` | Find nearest timepoints or query a time range |
-| `memory.create_timelink` | Link a node to a timepoint on a timeline |
-| `memory.create_metacontext` | Create an epistemic frame for disambiguation |
-| `memory.get_metacontexts` | Get metacontexts for a node |
+| `segment` | Segment text into chunks (step 1 of ingest) |
+| `store_decomposition` | Store agent-extracted topics/facts/inferences (step 2 of ingest) |
+| `search` | Hybrid retrieval (vector + graph), metacontext-aware |
+| `link` | Create typed edges between nodes |
+| `update` | Create new node version (immutable history) |
+| `reflect` | Analyse graph for consolidation opportunities (embedding-based) |
+| `apply_reflection` | Apply agent decisions from reflection analysis |
+| `query_graph` | Traverse the graph from a node |
+| `archive` | Export old superseded nodes to cold storage |
+| `restore` | Reimport archived nodes |
+| `create_timeline` | Create a named timeline |
+| `add_timepoint` | Add a concrete or vague timepoint to a timeline |
+| `query_timeline` | Find nearest timepoints or query a time range |
+| `create_timelink` | Link a node to a timepoint on a timeline |
+| `create_metacontext` | Create an epistemic frame for disambiguation |
+| `get_metacontexts` | Get metacontexts for a node |
+| `list_graphs` | List available knowledge graphs |
+| `use_graph` | Switch to or create a knowledge graph |
+| `delete_graph` | Delete a knowledge graph permanently |
 
 ## Architecture
 
@@ -169,7 +176,7 @@ epimemer/
   mcp/            — FastMCP server, tool implementations, config
   logging/        — Structured JSON logging
   visualization/ — Real-time WebSocket visualization server and frontend
-tests/            — 269 tests (unit, pipeline, MCP, integration)
+tests/            — 283 tests (unit, pipeline, MCP, integration)
 ```
 
 ## Documentation
