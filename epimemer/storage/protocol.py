@@ -154,11 +154,6 @@ class StorageBackend(Protocol):
     # --- Multi-graph management ---
 
     @property
-    def supports_multi_graph(self) -> bool:
-        """Whether this backend supports multiple named graphs (databases)."""
-        ...
-
-    @property
     def current_database(self) -> str:
         """The name of the currently active database/graph."""
         ...
@@ -173,4 +168,32 @@ class StorageBackend(Protocol):
 
     async def delete_database(self, database: str) -> None:
         """Delete a database/graph permanently."""
+        ...
+
+    # ----------------------------------------------------------------
+    # VIZ / ADMIN READS — these methods MUST NEVER be registered as
+    # MCP tools or imported in epimemer/mcp/. They return potentially
+    # large result sets intended for the visualization dashboard only.
+    # ----------------------------------------------------------------
+
+    async def viz_list_nodes(
+        self,
+        database: str,
+        *,
+        historical_status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> Sequence[EpistemicNode]:
+        """List all nodes in a graph, for visualization snapshot.
+
+        Reads from the specified database without switching the active connection.
+        """
+        ...
+
+    async def viz_list_edges(
+        self,
+        database: str,
+    ) -> Sequence[NodeEdge]:
+        """List all edges in a graph, for visualization snapshot.
+
+        Reads from the specified database without switching the active connection.
+        """
         ...

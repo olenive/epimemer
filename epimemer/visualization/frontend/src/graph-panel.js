@@ -35,7 +35,7 @@ const STATUS_OPACITY = {
 const LAYOUT_CONFIGS = {
     dagre: {
         name: "dagre",
-        rankDir: "TB",
+        rankDir: "LR",
         rankSep: 60,
         nodeSep: 30,
         animate: true,
@@ -102,9 +102,9 @@ const truncate = (text, maxLen) => text.length > maxLen ? text.slice(0, maxLen -
 /**
  * Initialize the knowledge graph panel.
  *
- * Returns a cleanup function that removes event subscriptions.
+ * Returns a handle with cleanup, clearGraph, and loadSnapshot methods.
  */
-export const initGraphPanel = (container, router, onNodeSelect) => {
+export const initGraphPanel = (container, router, onNodeSelect, controls) => {
     const state = {
         cy: cytoscape({
             container,
@@ -118,6 +118,9 @@ export const initGraphPanel = (container, router, onNodeSelect) => {
         currentFilter: "all",
         pendingLayout: null,
     };
+    if (controls) {
+        bindGraphControls(controls.layoutSelect, controls.filterSelect, state.cy, state);
+    }
     // --- Event handlers ---
     const scheduleLayout = () => {
         if (state.pendingLayout)
@@ -128,24 +131,25 @@ export const initGraphPanel = (container, router, onNodeSelect) => {
         }, 200);
     };
     const handleNodeStored = (event) => {
-        const existing = state.cy.getElementById(event.node_id);
+        const n = event.node;
+        const existing = state.cy.getElementById(n.node_id);
         if (existing.length > 0) {
-            existing.data("label", truncate(event.content, 40));
-            existing.data("content", event.content);
-            existing.data("status", event.status);
-            existing.data("opacity", STATUS_OPACITY[event.status] ?? 1.0);
+            existing.data("label", truncate(n.content, 40));
+            existing.data("content", n.content);
+            existing.data("status", n.status);
+            existing.data("opacity", STATUS_OPACITY[n.status] ?? 1.0);
             return;
         }
         state.cy.add({
             group: "nodes",
             data: {
-                id: event.node_id,
-                label: truncate(event.content, 40),
-                content: event.content,
-                nodeType: event.node_type,
-                status: event.status,
-                color: NODE_COLORS[event.node_type] ?? "#9ca3af",
-                opacity: STATUS_OPACITY[event.status] ?? 1.0,
+                id: n.node_id,
+                label: truncate(n.content, 40),
+                content: n.content,
+                nodeType: n.node_type,
+                status: n.status,
+                color: NODE_COLORS[n.node_type] ?? "#9ca3af",
+                opacity: STATUS_OPACITY[n.status] ?? 1.0,
             },
         });
         scheduleLayout();
@@ -158,23 +162,23 @@ export const initGraphPanel = (container, router, onNodeSelect) => {
         }
     };
     const handleEdgeStored = (event) => {
-        const edgeId = event.edge_id;
-        if (state.cy.getElementById(edgeId).length > 0)
+        const e = event.edge;
+        if (state.cy.getElementById(e.edge_id).length > 0)
             return;
         // Only add edge if both endpoints exist
-        if (state.cy.getElementById(event.src_id).length === 0 ||
-            state.cy.getElementById(event.dst_id).length === 0) {
+        if (state.cy.getElementById(e.src_id).length === 0 ||
+            state.cy.getElementById(e.dst_id).length === 0) {
             return;
         }
         state.cy.add({
             group: "edges",
             data: {
-                id: edgeId,
-                source: event.src_id,
-                target: event.dst_id,
-                edgeType: event.edge_type,
-                color: EDGE_COLORS[event.edge_type] ?? "#6b7280",
-                weight: event.weight,
+                id: e.edge_id,
+                source: e.src_id,
+                target: e.dst_id,
+                edgeType: e.edge_type,
+                color: EDGE_COLORS[e.edge_type] ?? "#6b7280",
+                weight: e.weight,
             },
         });
         scheduleLayout();
@@ -197,16 +201,59 @@ export const initGraphPanel = (container, router, onNodeSelect) => {
         const node = evt.target;
         onNodeSelect(node.data("id"), node.data("content") ?? "", node.data("nodeType") ?? "");
     });
+    // --- Clear and snapshot ---
+    const clearGraph = () => {
+        state.cy.elements().remove();
+    };
+    const loadSnapshot = (nodes, edges) => {
+        clearGraph();
+        for (const n of nodes) {
+            state.cy.add({
+                group: "nodes",
+                data: {
+                    id: n.node_id,
+                    label: truncate(n.content, 40),
+                    content: n.content,
+                    nodeType: n.node_type,
+                    status: n.status,
+                    color: NODE_COLORS[n.node_type] ?? "#9ca3af",
+                    opacity: STATUS_OPACITY[n.status] ?? 1.0,
+                },
+            });
+        }
+        for (const e of edges) {
+            // Only add edge if both endpoints exist
+            if (state.cy.getElementById(e.src_id).length === 0 ||
+                state.cy.getElementById(e.dst_id).length === 0) {
+                continue;
+            }
+            state.cy.add({
+                group: "edges",
+                data: {
+                    id: e.edge_id,
+                    source: e.src_id,
+                    target: e.dst_id,
+                    edgeType: e.edge_type,
+                    color: EDGE_COLORS[e.edge_type] ?? "#6b7280",
+                    weight: e.weight,
+                },
+            });
+        }
+        if (nodes.length > 0) {
+            runLayout(state);
+        }
+    };
     // --- Subscribe to events ---
     const unsubs = [
         router.subscribe("node_stored", handleEvent),
         router.subscribe("node_status_changed", handleEvent),
         router.subscribe("edge_stored", handleEvent),
     ];
-    return () => {
+    const cleanup = () => {
         unsubs.forEach((u) => u());
         state.cy.destroy();
     };
+    return { cleanup, clearGraph, loadSnapshot };
 };
 // --- Layout ---
 const runLayout = (state) => {

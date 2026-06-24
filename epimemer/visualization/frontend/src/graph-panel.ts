@@ -11,8 +11,10 @@ import dagre from "cytoscape-dagre";
 import type { EventRouter } from "./events";
 import type {
   EdgeStored,
+  EdgeView,
   NodeStatusChanged,
   NodeStored,
+  NodeView,
   AnyEvent,
 } from "./types";
 
@@ -50,7 +52,7 @@ const STATUS_OPACITY: Record<string, number> = {
 const LAYOUT_CONFIGS: Record<string, object> = {
   dagre: {
     name: "dagre",
-    rankDir: "TB",
+    rankDir: "LR",
     rankSep: 60,
     nodeSep: 30,
     animate: true,
@@ -128,16 +130,23 @@ interface GraphPanelState {
 const truncate = (text: string, maxLen: number): string =>
   text.length > maxLen ? text.slice(0, maxLen - 1) + "\u2026" : text;
 
+export interface GraphPanelHandle {
+  cleanup: () => void;
+  clearGraph: () => void;
+  loadSnapshot: (nodes: NodeView[], edges: EdgeView[]) => void;
+}
+
 /**
  * Initialize the knowledge graph panel.
  *
- * Returns a cleanup function that removes event subscriptions.
+ * Returns a handle with cleanup, clearGraph, and loadSnapshot methods.
  */
 export const initGraphPanel = (
   container: HTMLElement,
   router: EventRouter,
   onNodeSelect: (nodeId: string, content: string, nodeType: string) => void,
-): (() => void) => {
+  controls?: { layoutSelect: HTMLSelectElement; filterSelect: HTMLSelectElement },
+): GraphPanelHandle => {
   const state: GraphPanelState = {
     cy: cytoscape({
       container,
@@ -152,6 +161,10 @@ export const initGraphPanel = (
     pendingLayout: null,
   };
 
+  if (controls) {
+    bindGraphControls(controls.layoutSelect, controls.filterSelect, state.cy, state);
+  }
+
   // --- Event handlers ---
 
   const scheduleLayout = (): void => {
@@ -163,25 +176,26 @@ export const initGraphPanel = (
   };
 
   const handleNodeStored = (event: NodeStored): void => {
-    const existing = state.cy.getElementById(event.node_id);
+    const n = event.node;
+    const existing = state.cy.getElementById(n.node_id);
     if (existing.length > 0) {
-      existing.data("label", truncate(event.content, 40));
-      existing.data("content", event.content);
-      existing.data("status", event.status);
-      existing.data("opacity", STATUS_OPACITY[event.status] ?? 1.0);
+      existing.data("label", truncate(n.content, 40));
+      existing.data("content", n.content);
+      existing.data("status", n.status);
+      existing.data("opacity", STATUS_OPACITY[n.status] ?? 1.0);
       return;
     }
 
     state.cy.add({
       group: "nodes",
       data: {
-        id: event.node_id,
-        label: truncate(event.content, 40),
-        content: event.content,
-        nodeType: event.node_type,
-        status: event.status,
-        color: NODE_COLORS[event.node_type] ?? "#9ca3af",
-        opacity: STATUS_OPACITY[event.status] ?? 1.0,
+        id: n.node_id,
+        label: truncate(n.content, 40),
+        content: n.content,
+        nodeType: n.node_type,
+        status: n.status,
+        color: NODE_COLORS[n.node_type] ?? "#9ca3af",
+        opacity: STATUS_OPACITY[n.status] ?? 1.0,
       },
     });
 
@@ -197,13 +211,13 @@ export const initGraphPanel = (
   };
 
   const handleEdgeStored = (event: EdgeStored): void => {
-    const edgeId = event.edge_id;
-    if (state.cy.getElementById(edgeId).length > 0) return;
+    const e = event.edge;
+    if (state.cy.getElementById(e.edge_id).length > 0) return;
 
     // Only add edge if both endpoints exist
     if (
-      state.cy.getElementById(event.src_id).length === 0 ||
-      state.cy.getElementById(event.dst_id).length === 0
+      state.cy.getElementById(e.src_id).length === 0 ||
+      state.cy.getElementById(e.dst_id).length === 0
     ) {
       return;
     }
@@ -211,12 +225,12 @@ export const initGraphPanel = (
     state.cy.add({
       group: "edges",
       data: {
-        id: edgeId,
-        source: event.src_id,
-        target: event.dst_id,
-        edgeType: event.edge_type,
-        color: EDGE_COLORS[event.edge_type] ?? "#6b7280",
-        weight: event.weight,
+        id: e.edge_id,
+        source: e.src_id,
+        target: e.dst_id,
+        edgeType: e.edge_type,
+        color: EDGE_COLORS[e.edge_type] ?? "#6b7280",
+        weight: e.weight,
       },
     });
 
@@ -248,6 +262,57 @@ export const initGraphPanel = (
     );
   });
 
+  // --- Clear and snapshot ---
+
+  const clearGraph = (): void => {
+    state.cy.elements().remove();
+  };
+
+  const loadSnapshot = (nodes: NodeView[], edges: EdgeView[]): void => {
+    clearGraph();
+
+    for (const n of nodes) {
+      state.cy.add({
+        group: "nodes",
+        data: {
+          id: n.node_id,
+          label: truncate(n.content, 40),
+          content: n.content,
+          nodeType: n.node_type,
+          status: n.status,
+          color: NODE_COLORS[n.node_type] ?? "#9ca3af",
+          opacity: STATUS_OPACITY[n.status] ?? 1.0,
+        },
+      });
+    }
+
+    for (const e of edges) {
+      // Only add edge if both endpoints exist
+      if (
+        state.cy.getElementById(e.src_id).length === 0 ||
+        state.cy.getElementById(e.dst_id).length === 0
+      ) {
+        continue;
+      }
+
+      state.cy.add({
+        group: "edges",
+        data: {
+          id: e.edge_id,
+          source: e.src_id,
+          target: e.dst_id,
+          edgeType: e.edge_type,
+          color: EDGE_COLORS[e.edge_type] ?? "#6b7280",
+          weight: e.weight,
+        },
+      });
+    }
+
+    if (nodes.length > 0) {
+      runLayout(state);
+    }
+  };
+
   // --- Subscribe to events ---
 
   const unsubs = [
@@ -256,10 +321,12 @@ export const initGraphPanel = (
     router.subscribe("edge_stored", handleEvent),
   ];
 
-  return () => {
+  const cleanup = (): void => {
     unsubs.forEach((u) => u());
     state.cy.destroy();
   };
+
+  return { cleanup, clearGraph, loadSnapshot };
 };
 
 // --- Layout ---

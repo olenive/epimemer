@@ -2,16 +2,21 @@
  * WebSocket client and event router.
  *
  * Connects to the visualization server and routes incoming events
- * to registered handlers by event_type. Handles reconnection.
+ * to registered handlers by event_type. Handles reconnection,
+ * per-connection sequence tracking, gap detection, and graph subscriptions.
  */
 
-import type { AnyEvent } from "./types";
+import type { AnyEvent, WireEvent } from "./types";
 
 export type EventHandler = (event: AnyEvent) => void;
 
 export interface EventRouter {
   subscribe: (eventType: string, handler: EventHandler) => () => void;
   subscribeAll: (handler: EventHandler) => () => void;
+  /** Update the graph subscription filter. Pass null to receive all graphs. */
+  setGraphSubscription: (graphs: string[] | null) => void;
+  /** Register a callback for when a sequence gap is detected. */
+  onGapDetected: (callback: () => void) => void;
 }
 
 interface Subscription {
@@ -36,6 +41,13 @@ export const createEventRouter = (
   let reconnectDelay = 1000;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Sequence tracking
+  let lastSeq = 0;
+  let gapCallback: (() => void) | null = null;
+
+  // Graph subscription state (sent to server after connect)
+  let pendingGraphSubscription: string[] | null = null;
+
   const dispatch = (event: AnyEvent): void => {
     for (const sub of subscriptions.values()) {
       if (sub.eventType === null || sub.eventType === event.event_type) {
@@ -48,6 +60,12 @@ export const createEventRouter = (
     }
   };
 
+  const sendSubscription = (): void => {
+    if (ws && ws.readyState === WebSocket.OPEN && pendingGraphSubscription !== undefined) {
+      ws.send(JSON.stringify({ subscribe: pendingGraphSubscription }));
+    }
+  };
+
   const connect = (): void => {
     if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
       return;
@@ -57,13 +75,24 @@ export const createEventRouter = (
 
     ws.onopen = () => {
       reconnectDelay = 1000;
+      lastSeq = 0; // Reset sequence on new connection
       onStatusChange(true);
+      sendSubscription();
     };
 
     ws.onmessage = (msg) => {
       try {
-        const event = JSON.parse(msg.data) as AnyEvent;
-        dispatch(event);
+        const wire = JSON.parse(msg.data) as WireEvent;
+
+        // Sequence gap detection
+        if (wire.seq !== undefined) {
+          if (lastSeq > 0 && wire.seq !== lastSeq + 1) {
+            gapCallback?.();
+          }
+          lastSeq = wire.seq;
+        }
+
+        dispatch(wire);
       } catch (err) {
         console.error("Failed to parse event:", err);
       }
@@ -100,8 +129,17 @@ export const createEventRouter = (
     return () => { subscriptions.delete(id); };
   };
 
+  const setGraphSubscription = (graphs: string[] | null): void => {
+    pendingGraphSubscription = graphs;
+    sendSubscription();
+  };
+
+  const onGapDetected = (callback: () => void): void => {
+    gapCallback = callback;
+  };
+
   // Start connection
   connect();
 
-  return { subscribe, subscribeAll };
+  return { subscribe, subscribeAll, setGraphSubscription, onGapDetected };
 };

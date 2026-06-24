@@ -50,9 +50,10 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         from epimemer.visualization.ws_server import create_app
 
         event_bus = create_event_bus()
+        raw_storage = storage  # Keep reference for viz snapshot reads
         storage = instrument_storage(storage, event_bus)
 
-        viz_app = create_app(event_bus)
+        viz_app = create_app(event_bus, raw_storage)
         viz_config = uvicorn.Config(
             viz_app,
             host=config.viz_host,

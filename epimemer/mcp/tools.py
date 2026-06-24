@@ -923,12 +923,6 @@ async def use_graph(
     If the graph doesn't exist and confirm is False, returns a confirmation
     prompt with similar graph names. If confirm is True, creates the graph.
     """
-    if not storage.supports_multi_graph:
-        return {
-            "error": "Graph switching requires a persistent backend (e.g. SurrealDB). "
-            "Current backend only supports a single ephemeral graph.",
-        }, ResponseMeta()
-
     existing = await storage.list_databases()
 
     if name in existing:
@@ -972,12 +966,6 @@ async def delete_graph(
 
     Requires confirm=True. Refuses to delete the currently active graph.
     """
-    if not storage.supports_multi_graph:
-        return {
-            "error": "Graph deletion requires a persistent backend (e.g. SurrealDB). "
-            "Current backend only supports a single ephemeral graph.",
-        }, ResponseMeta()
-
     existing = await storage.list_databases()
 
     if name not in existing:

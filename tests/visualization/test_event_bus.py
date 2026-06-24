@@ -1,5 +1,7 @@
 """Tests for the event bus and instrumented storage."""
 
+from datetime import datetime, timezone
+
 import pytest
 
 from epimemer.core.types import (
@@ -16,14 +18,40 @@ from epimemer.visualization.event_bus import create_event_bus
 from epimemer.visualization.events import (
     DocumentStored,
     EdgeStored,
+    EdgeView,
     EmbeddingStored,
     Event,
     EventCategory,
+    GraphSwitched,
     NodeStatusChanged,
     NodeStored,
+    NodeView,
     SegmentStored,
 )
 from epimemer.visualization.instrumented_storage import instrument_storage
+
+
+def _make_node_view(**overrides) -> NodeView:
+    """Helper to create a NodeView with sensible defaults."""
+    now = datetime.now(timezone.utc)
+    defaults = dict(
+        node_id="n1", node_type="topic", content="test", status="active",
+        source_id="seg1", extraction_method="llm", novelty=1.0, confidence=0.5,
+        relevance=0.5, last_reinforced=now, created_at=now, graph="default",
+    )
+    defaults.update(overrides)
+    return NodeView(**defaults)
+
+
+def _make_edge_view(**overrides) -> EdgeView:
+    """Helper to create an EdgeView with sensible defaults."""
+    now = datetime.now(timezone.utc)
+    defaults = dict(
+        edge_id="e1", src_id="a", dst_id="b", edge_type="supports",
+        weight=1.0, created_at=now, graph="default",
+    )
+    defaults.update(overrides)
+    return EdgeView(**defaults)
 
 
 @pytest.fixture
@@ -44,11 +72,11 @@ async def test_publish_and_subscribe(bus):
     received: list[Event] = []
     bus.subscribe(handler=lambda e: received.append(e))
 
-    event = NodeStored(node_id="n1", node_type="topic", content="test")
+    event = NodeStored(node=_make_node_view())
     await bus.publish(event)
 
     assert len(received) == 1
-    assert received[0].node_id == "n1"
+    assert received[0].node.node_id == "n1"
 
 
 @pytest.mark.asyncio
@@ -59,10 +87,8 @@ async def test_filter_by_event_type(bus):
     bus.subscribe(NodeStored, handler=lambda e: nodes.append(e))
     bus.subscribe(EdgeStored, handler=lambda e: edges.append(e))
 
-    await bus.publish(NodeStored(node_id="n1", node_type="topic", content="test"))
-    await bus.publish(EdgeStored(
-        edge_id="e1", src_id="a", dst_id="b", edge_type="supports",
-    ))
+    await bus.publish(NodeStored(node=_make_node_view()))
+    await bus.publish(EdgeStored(edge=_make_edge_view()))
 
     assert len(nodes) == 1
     assert len(edges) == 1
@@ -73,7 +99,7 @@ async def test_filter_by_category(bus):
     graph_events: list[Event] = []
     bus.subscribe(category=EventCategory.GRAPH, handler=lambda e: graph_events.append(e))
 
-    await bus.publish(NodeStored(node_id="n1", node_type="topic", content="test"))
+    await bus.publish(NodeStored(node=_make_node_view()))
 
     assert len(graph_events) == 1
 
@@ -83,9 +109,9 @@ async def test_unsubscribe(bus):
     received: list[Event] = []
     unsub = bus.subscribe(handler=lambda e: received.append(e))
 
-    await bus.publish(NodeStored(node_id="n1", node_type="topic", content="a"))
+    await bus.publish(NodeStored(node=_make_node_view(node_id="n1", content="a")))
     unsub()
-    await bus.publish(NodeStored(node_id="n2", node_type="topic", content="b"))
+    await bus.publish(NodeStored(node=_make_node_view(node_id="n2", content="b")))
 
     assert len(received) == 1
 
@@ -102,7 +128,7 @@ async def test_handler_error_does_not_propagate(bus):
     bus.subscribe(handler=lambda e: received.append(e))
 
     # Should not raise
-    await bus.publish(NodeStored(node_id="n1", node_type="topic", content="test"))
+    await bus.publish(NodeStored(node=_make_node_view()))
 
     assert len(received) == 1
 
@@ -119,9 +145,9 @@ async def test_store_node_emits_event(bus, storage):
     await storage.store_node(topic)
 
     assert len(received) == 1
-    assert received[0].node_id == topic.id
-    assert received[0].node_type == "topic"
-    assert received[0].content == "Machine learning"
+    assert received[0].node.node_id == topic.id
+    assert received[0].node.node_type == "topic"
+    assert received[0].node.content == "Machine learning"
 
 
 @pytest.mark.asyncio
@@ -133,9 +159,9 @@ async def test_store_edge_emits_event(bus, storage):
     await storage.store_edge(edge)
 
     assert len(received) == 1
-    assert received[0].src_id == "a"
-    assert received[0].dst_id == "b"
-    assert received[0].edge_type == "supports"
+    assert received[0].edge.src_id == "a"
+    assert received[0].edge.dst_id == "b"
+    assert received[0].edge.edge_type == "supports"
 
 
 @pytest.mark.asyncio
@@ -216,3 +242,16 @@ async def test_instrumented_storage_passthrough(bus, storage):
     fetched = await storage.get_node(topic.id)
     assert fetched is not None
     assert fetched.content == "Passthrough test"
+
+
+@pytest.mark.asyncio
+async def test_switch_database_emits_graph_switched(bus, storage):
+    received: list[GraphSwitched] = []
+    bus.subscribe(GraphSwitched, handler=lambda e: received.append(e))
+
+    await storage.switch_database("new-graph")
+
+    assert len(received) == 1
+    assert received[0].previous_graph == "default"
+    assert received[0].new_graph == "new-graph"
+    assert received[0].graph == "new-graph"

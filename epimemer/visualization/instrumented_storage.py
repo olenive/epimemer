@@ -20,8 +20,6 @@ from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
-    Fact,
-    Inference,
     Metacontext,
     NodeEdge,
     NodeStatus,
@@ -29,29 +27,19 @@ from epimemer.core.types import (
     RawDocument,
     Segment,
     Timeline,
-    Topic,
 )
 from epimemer.visualization.event_bus import InProcessEventBus
 from epimemer.visualization.events import (
     DocumentStored,
     EdgeStored,
     EmbeddingStored,
+    GraphSwitched,
     NodeStatusChanged,
     NodeStored,
     SegmentStored,
+    edge_to_view,
+    node_to_view,
 )
-
-
-def _node_type_label(node: EpistemicNode) -> str:
-    match node:
-        case Topic():
-            return "topic"
-        case Fact():
-            return "fact"
-        case Inference():
-            return "inference"
-        case _:
-            return "unknown"
 
 
 class InstrumentedStorage:
@@ -103,12 +91,10 @@ class InstrumentedStorage:
 
     async def store_node(self, node: EpistemicNode) -> str:
         result = await self._inner.store_node(node)
+        graph = self._inner.current_database
         await self._bus.publish(NodeStored(
-            node_id=node.id,
-            node_type=_node_type_label(node),
-            content=node.content,
-            status=node.status.value,
-            metadata=node.metadata,
+            graph=graph,
+            node=node_to_view(node, graph),
         ))
         return result
 
@@ -125,6 +111,7 @@ class InstrumentedStorage:
         await self._inner.update_node_status(node_id, status, superseded_at)
 
         await self._bus.publish(NodeStatusChanged(
+            graph=self._inner.current_database,
             node_id=node_id,
             old_status=old_status,
             new_status=status.value,
@@ -150,13 +137,10 @@ class InstrumentedStorage:
 
     async def store_edge(self, edge: NodeEdge) -> str:
         result = await self._inner.store_edge(edge)
+        graph = self._inner.current_database
         await self._bus.publish(EdgeStored(
-            edge_id=edge.id,
-            src_id=edge.src_id,
-            dst_id=edge.dst_id,
-            edge_type=edge.type.value,
-            weight=edge.weight,
-            metadata=edge.metadata,
+            graph=graph,
+            edge=edge_to_view(edge, graph),
         ))
         return result
 
@@ -232,10 +216,6 @@ class InstrumentedStorage:
     # --- Multi-graph management (pass-through) ---
 
     @property
-    def supports_multi_graph(self) -> bool:
-        return self._inner.supports_multi_graph
-
-    @property
     def current_database(self) -> str:
         return self._inner.current_database
 
@@ -243,10 +223,34 @@ class InstrumentedStorage:
         return await self._inner.list_databases()
 
     async def switch_database(self, database: str) -> None:
+        previous = self._inner.current_database
         await self._inner.switch_database(database)
+        await self._bus.publish(GraphSwitched(
+            graph=database,
+            previous_graph=previous,
+            new_graph=database,
+        ))
 
     async def delete_database(self, database: str) -> None:
         await self._inner.delete_database(database)
+
+    # --- Viz reads (pass-through, no events emitted) ---
+
+    async def viz_list_nodes(
+        self,
+        database: str,
+        *,
+        historical_status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> Sequence[EpistemicNode]:
+        return await self._inner.viz_list_nodes(
+            database, historical_status=historical_status,
+        )
+
+    async def viz_list_edges(
+        self,
+        database: str,
+    ) -> Sequence[NodeEdge]:
+        return await self._inner.viz_list_edges(database)
 
 
 def instrument_storage(inner: object, bus: InProcessEventBus) -> InstrumentedStorage:

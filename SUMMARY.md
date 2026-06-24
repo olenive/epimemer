@@ -287,7 +287,7 @@ Both `search` and `query_graph` accept an optional `at_time` parameter to query 
 
 ### Multi-Graph Support
 
-SurrealDB backends support multiple knowledge graphs via separate databases within the same namespace. The `StorageBackend` protocol includes a `supports_multi_graph` flag — backends that support it implement `list_databases`, `switch_database`, and `delete_database`. In-memory storage reports a single `"ephemeral"` graph. Agents can manage graphs at runtime via the `list_graphs`, `use_graph`, and `delete_graph` tools.
+All backends support multiple named graphs. The `StorageBackend` protocol requires `list_databases`, `switch_database`, and `delete_database`. SurrealDB uses separate databases within a namespace; InMemoryStorage uses a dict-of-dicts pattern. The default graph is `"default"`. Agents manage graphs at runtime via the `list_graphs`, `use_graph`, and `delete_graph` tools.
 
 ## Update Behaviours
 

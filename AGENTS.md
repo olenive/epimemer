@@ -45,7 +45,7 @@ Surface this information naturally: "Found 5 relevant nodes (2 topics, 2 facts, 
 ### Multi-graph management (list_graphs, use_graph, delete_graph)
 - Use `list_graphs` to see available knowledge graphs and which is active
 - Use `use_graph` to switch between graphs or create new ones (requires confirmation)
-- With in-memory storage, only a single "ephemeral" graph is available
+- All backends support multiple named graphs (default graph is "default")
 - With SurrealDB, each graph is a separate database within the namespace
 
 ### Metacontext awareness

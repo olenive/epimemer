@@ -16,9 +16,99 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from epimemer.core.types import (
+    EpistemicNode,
+    Fact,
+    Inference,
+    NodeEdge,
+    Topic,
+)
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# --- Shared view models ---
+# Used by both events and HTTP snapshot endpoints. These are the canonical
+# shape that the frontend receives — a single contract for all node/edge data.
+
+
+class NodeView(BaseModel):
+    """Unified node representation for events and snapshots."""
+    node_id: str
+    node_type: str            # "topic" | "fact" | "inference"
+    content: str
+    status: str               # "active" | "superseded" | "merged"
+    source_id: str
+    extraction_method: str
+    novelty: float
+    confidence: float
+    relevance: float
+    last_reinforced: datetime
+    created_at: datetime
+    graph: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class EdgeView(BaseModel):
+    """Unified edge representation for events and snapshots."""
+    edge_id: str
+    src_id: str
+    dst_id: str
+    edge_type: str
+    weight: float = 1.0
+    created_at: datetime
+    graph: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+# --- Conversion helpers ---
+
+
+def _node_type_label(node: EpistemicNode) -> str:
+    match node:
+        case Topic():
+            return "topic"
+        case Fact():
+            return "fact"
+        case Inference():
+            return "inference"
+        case _:
+            return "unknown"
+
+
+def node_to_view(node: EpistemicNode, graph: str) -> NodeView:
+    """Convert a storage EpistemicNode to a NodeView for the frontend."""
+    return NodeView(
+        node_id=node.id,
+        node_type=_node_type_label(node),
+        content=node.content,
+        status=node.status.value,
+        source_id=node.source_id,
+        extraction_method=node.extraction_method,
+        novelty=node.value.novelty,
+        confidence=node.value.confidence,
+        relevance=node.value.relevance,
+        last_reinforced=node.value.last_reinforced,
+        created_at=node.created_at,
+        graph=graph,
+        metadata=node.metadata,
+    )
+
+
+def edge_to_view(edge: NodeEdge, graph: str) -> EdgeView:
+    """Convert a storage NodeEdge to an EdgeView for the frontend."""
+    return EdgeView(
+        edge_id=edge.id,
+        src_id=edge.src_id,
+        dst_id=edge.dst_id,
+        edge_type=edge.type.value,
+        weight=edge.weight,
+        created_at=edge.created_at,
+        graph=graph,
+        metadata=edge.metadata,
+    )
 
 
 # --- Base ---
@@ -30,9 +120,10 @@ class EventCategory(str, Enum):
 
 
 class Event(BaseModel):
-    """Base event. All events carry a timestamp and category for routing."""
+    """Base event. All events carry a timestamp, category, and graph for routing."""
     timestamp: datetime = Field(default_factory=_now)
     category: EventCategory
+    graph: str = ""
 
 
 # --- Graph events ---
@@ -43,11 +134,7 @@ class NodeStored(Event):
     """A node was created or updated in storage."""
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
     event_type: Literal["node_stored"] = "node_stored"
-    node_id: str
-    node_type: str          # "topic", "fact", "inference", "metacontext"
-    content: str
-    status: str = "active"
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    node: NodeView
 
 
 class NodeStatusChanged(Event):
@@ -63,12 +150,7 @@ class EdgeStored(Event):
     """An edge was created between two nodes."""
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
     event_type: Literal["edge_stored"] = "edge_stored"
-    edge_id: str
-    src_id: str
-    dst_id: str
-    edge_type: str          # EdgeType value
-    weight: float = 1.0
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    edge: EdgeView
 
 
 class EmbeddingStored(Event):
@@ -165,9 +247,21 @@ class PipelineCompleted(Event):
     duration_ms: float
 
 
+# --- System events ---
+# Emitted on graph management operations.
+
+
+class GraphSwitched(Event):
+    """The MCP active graph was changed."""
+    category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
+    event_type: Literal["graph_switched"] = "graph_switched"
+    previous_graph: str
+    new_graph: str
+
+
 # --- Union of all concrete event types ---
 
-GraphEvent = NodeStored | NodeStatusChanged | EdgeStored | EmbeddingStored | DocumentStored | SegmentStored
+GraphEvent = NodeStored | NodeStatusChanged | EdgeStored | EmbeddingStored | DocumentStored | SegmentStored | GraphSwitched
 PipelineEvent = PipelineStarted | TransitionEnabled | TransitionFired | TransitionCompleted | TokensUpdated | PipelineCompleted
 
 AnyEvent = GraphEvent | PipelineEvent

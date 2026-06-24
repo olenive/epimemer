@@ -1,10 +1,12 @@
-"""In-memory storage backend for testing.
+"""In-memory storage backend.
 
 Implements the StorageBackend protocol using plain dictionaries.
+Supports multiple named graphs via a dict-of-dicts pattern.
 Vector search uses brute-force cosine similarity.
 """
 
 import math
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Sequence
 
@@ -43,44 +45,93 @@ _NODE_TYPE_TO_CLASS: dict[NodeType, type] = {
 _CLASS_TO_NODE_TYPE: dict[type, NodeType] = {v: k for k, v in _NODE_TYPE_TO_CLASS.items()}
 
 
+@dataclass
+class _GraphStore:
+    """All per-graph data bundled together."""
+    documents: dict[str, RawDocument] = field(default_factory=dict)
+    segments: dict[str, Segment] = field(default_factory=dict)
+    nodes: dict[str, EpistemicNode] = field(default_factory=dict)
+    edges: dict[str, NodeEdge] = field(default_factory=dict)
+    embeddings: dict[str, EmbeddingRecord] = field(default_factory=dict)
+    timelines: dict[str, Timeline] = field(default_factory=dict)
+    metacontexts: dict[str, Metacontext] = field(default_factory=dict)
+
+
+_DEFAULT_DB = "default"
+
+
 class InMemoryStorage:
-    """In-memory implementation of StorageBackend for testing."""
+    """In-memory implementation of StorageBackend.
+
+    Supports multiple named graphs. Each graph is an isolated _GraphStore.
+    """
 
     def __init__(self):
-        self.documents: dict[str, RawDocument] = {}
-        self.segments: dict[str, Segment] = {}
-        self.nodes: dict[str, EpistemicNode] = {}
-        self.edges: dict[str, NodeEdge] = {}
-        self.embeddings: dict[str, EmbeddingRecord] = {}
-        self.timelines: dict[str, Timeline] = {}
-        self.metacontexts: dict[str, Metacontext] = {}
+        self._database: str = _DEFAULT_DB
+        self._graphs: dict[str, _GraphStore] = {_DEFAULT_DB: _GraphStore()}
+
+    @property
+    def _g(self) -> _GraphStore:
+        """The active graph's data store."""
+        return self._graphs[self._database]
+
+    # Convenience accessors for the active graph's collections.
+    # Useful for tests and introspection.
+
+    @property
+    def documents(self) -> dict[str, RawDocument]:
+        return self._g.documents
+
+    @property
+    def segments(self) -> dict[str, Segment]:
+        return self._g.segments
+
+    @property
+    def nodes(self) -> dict[str, EpistemicNode]:
+        return self._g.nodes
+
+    @property
+    def edges(self) -> dict[str, NodeEdge]:
+        return self._g.edges
+
+    @property
+    def embeddings(self) -> dict[str, EmbeddingRecord]:
+        return self._g.embeddings
+
+    @property
+    def timelines(self) -> dict[str, Timeline]:
+        return self._g.timelines
+
+    @property
+    def metacontexts(self) -> dict[str, Metacontext]:
+        return self._g.metacontexts
 
     # --- Documents ---
 
     async def store_document(self, doc: RawDocument) -> str:
-        self.documents[doc.id] = doc
+        self._g.documents[doc.id] = doc
         return doc.id
 
     async def get_document(self, doc_id: str) -> RawDocument | None:
-        return self.documents.get(doc_id)
+        return self._g.documents.get(doc_id)
 
     # --- Segments ---
 
     async def store_segment(self, segment: Segment) -> str:
-        self.segments[segment.id] = segment
+        self._g.segments[segment.id] = segment
         return segment.id
 
     async def get_segments_for_document(self, doc_id: str) -> Sequence[Segment]:
-        return [s for s in self.segments.values() if s.source_id == doc_id]
+        return [s for s in self._g.segments.values() if s.source_id == doc_id]
 
     # --- Epistemic Nodes ---
 
     async def store_node(self, node: EpistemicNode) -> str:
-        self.nodes[node.id] = node
+        self._g.nodes[node.id] = node
         return node.id
 
     async def get_node(self, node_id: str) -> EpistemicNode | None:
-        return self.nodes.get(node_id)
+        return self._g.nodes.get(node_id)
 
     async def query_nodes(
         self,
@@ -90,7 +141,7 @@ class InMemoryStorage:
         at_time: datetime | None = None,
     ) -> Sequence[EpistemicNode]:
         results = []
-        for node in self.nodes.values():
+        for node in self._g.nodes.values():
             # Filter by type
             if node_type is not None:
                 expected_class = _NODE_TYPE_TO_CLASS[node_type]
@@ -117,7 +168,7 @@ class InMemoryStorage:
         status: NodeStatus,
         superseded_at: datetime | None = None,
     ) -> None:
-        node = self.nodes.get(node_id)
+        node = self._g.nodes.get(node_id)
         if node is None:
             raise KeyError(f"Node {node_id} not found")
         node.status = status
@@ -126,14 +177,14 @@ class InMemoryStorage:
     # --- Edges ---
 
     async def store_edge(self, edge: NodeEdge) -> str:
-        self.edges[edge.id] = edge
+        self._g.edges[edge.id] = edge
         return edge.id
 
     async def get_edges_from(
         self, node_id: str, *, edge_type: EdgeType | None = None
     ) -> Sequence[NodeEdge]:
         return [
-            e for e in self.edges.values()
+            e for e in self._g.edges.values()
             if e.src_id == node_id and (edge_type is None or e.type == edge_type)
         ]
 
@@ -141,21 +192,21 @@ class InMemoryStorage:
         self, node_id: str, *, edge_type: EdgeType | None = None
     ) -> Sequence[NodeEdge]:
         return [
-            e for e in self.edges.values()
+            e for e in self._g.edges.values()
             if e.dst_id == node_id and (edge_type is None or e.type == edge_type)
         ]
 
     # --- Embeddings ---
 
     async def store_embedding(self, embedding: EmbeddingRecord) -> str:
-        self.embeddings[embedding.id] = embedding
+        self._g.embeddings[embedding.id] = embedding
         return embedding.id
 
     async def get_embeddings_for_item(
         self, item_id: str, model_id: str | None = None
     ) -> Sequence[EmbeddingRecord]:
         results = []
-        for emb in self.embeddings.values():
+        for emb in self._g.embeddings.values():
             if emb.item_id != item_id:
                 continue
             if model_id is not None and emb.model_id != model_id:
@@ -171,14 +222,12 @@ class InMemoryStorage:
         k: int = 10,
         node_type: NodeType | None = None,
     ) -> Sequence[tuple[str, float]]:
-        # Collect all embeddings for the given model
         candidates: list[tuple[str, float]] = []
-        for emb in self.embeddings.values():
+        for emb in self._g.embeddings.values():
             if emb.model_id != model_id:
                 continue
-            # Optionally filter by node type
             if node_type is not None:
-                node = self.nodes.get(emb.item_id)
+                node = self._g.nodes.get(emb.item_id)
                 if node is None:
                     continue
                 expected_class = _NODE_TYPE_TO_CLASS[node_type]
@@ -187,53 +236,76 @@ class InMemoryStorage:
             similarity = _cosine_similarity(query_vector, emb.vector)
             candidates.append((emb.item_id, similarity))
 
-        # Sort by similarity descending, return top k
         candidates.sort(key=lambda x: x[1], reverse=True)
         return candidates[:k]
 
     # --- Timelines ---
 
     async def store_timeline(self, timeline: Timeline) -> str:
-        self.timelines[timeline.id] = timeline
+        self._g.timelines[timeline.id] = timeline
         return timeline.id
 
     async def get_timeline(self, timeline_id: str) -> Timeline | None:
-        return self.timelines.get(timeline_id)
+        return self._g.timelines.get(timeline_id)
 
     async def query_timelines(self) -> Sequence[Timeline]:
-        return list(self.timelines.values())
+        return list(self._g.timelines.values())
 
     # --- Metacontexts ---
 
     async def store_metacontext(self, mc: Metacontext) -> str:
-        self.metacontexts[mc.id] = mc
+        self._g.metacontexts[mc.id] = mc
         return mc.id
 
     async def get_metacontext(self, mc_id: str) -> Metacontext | None:
-        return self.metacontexts.get(mc_id)
+        return self._g.metacontexts.get(mc_id)
 
     async def query_metacontexts(
         self,
         *,
         status: NodeStatus = NodeStatus.ACTIVE,
     ) -> Sequence[Metacontext]:
-        return [mc for mc in self.metacontexts.values() if mc.status == status]
+        return [mc for mc in self._g.metacontexts.values() if mc.status == status]
 
     # --- Multi-graph management ---
 
     @property
-    def supports_multi_graph(self) -> bool:
-        return False
-
-    @property
     def current_database(self) -> str:
-        return "ephemeral"
+        return self._database
 
     async def list_databases(self) -> list[str]:
-        return ["ephemeral"]
+        return sorted(self._graphs.keys())
 
     async def switch_database(self, database: str) -> None:
-        raise NotImplementedError("In-memory storage does not support graph switching")
+        if database not in self._graphs:
+            self._graphs[database] = _GraphStore()
+        self._database = database
 
     async def delete_database(self, database: str) -> None:
-        raise NotImplementedError("In-memory storage does not support graph deletion")
+        if database == self._database:
+            raise ValueError(f"Cannot delete the currently active graph '{database}'")
+        if database not in self._graphs:
+            raise KeyError(f"Graph '{database}' does not exist")
+        del self._graphs[database]
+
+    # --- Viz reads (cross-graph, no switching) ---
+
+    async def viz_list_nodes(
+        self,
+        database: str,
+        *,
+        historical_status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> Sequence[EpistemicNode]:
+        graph = self._graphs.get(database)
+        if graph is None:
+            return []
+        return [n for n in graph.nodes.values() if n.status == historical_status]
+
+    async def viz_list_edges(
+        self,
+        database: str,
+    ) -> Sequence[NodeEdge]:
+        graph = self._graphs.get(database)
+        if graph is None:
+            return []
+        return list(graph.edges.values())

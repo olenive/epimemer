@@ -2,7 +2,8 @@
  * WebSocket client and event router.
  *
  * Connects to the visualization server and routes incoming events
- * to registered handlers by event_type. Handles reconnection.
+ * to registered handlers by event_type. Handles reconnection,
+ * per-connection sequence tracking, gap detection, and graph subscriptions.
  */
 /**
  * Create a WebSocket connection and event router.
@@ -16,6 +17,11 @@ export const createEventRouter = (wsUrl, onStatusChange) => {
     let ws = null;
     let reconnectDelay = 1000;
     let reconnectTimer = null;
+    // Sequence tracking
+    let lastSeq = 0;
+    let gapCallback = null;
+    // Graph subscription state (sent to server after connect)
+    let pendingGraphSubscription = null;
     const dispatch = (event) => {
         for (const sub of subscriptions.values()) {
             if (sub.eventType === null || sub.eventType === event.event_type) {
@@ -28,6 +34,11 @@ export const createEventRouter = (wsUrl, onStatusChange) => {
             }
         }
     };
+    const sendSubscription = () => {
+        if (ws && ws.readyState === WebSocket.OPEN && pendingGraphSubscription !== undefined) {
+            ws.send(JSON.stringify({ subscribe: pendingGraphSubscription }));
+        }
+    };
     const connect = () => {
         if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
             return;
@@ -35,12 +46,21 @@ export const createEventRouter = (wsUrl, onStatusChange) => {
         ws = new WebSocket(wsUrl);
         ws.onopen = () => {
             reconnectDelay = 1000;
+            lastSeq = 0; // Reset sequence on new connection
             onStatusChange(true);
+            sendSubscription();
         };
         ws.onmessage = (msg) => {
             try {
-                const event = JSON.parse(msg.data);
-                dispatch(event);
+                const wire = JSON.parse(msg.data);
+                // Sequence gap detection
+                if (wire.seq !== undefined) {
+                    if (lastSeq > 0 && wire.seq !== lastSeq + 1) {
+                        gapCallback?.();
+                    }
+                    lastSeq = wire.seq;
+                }
+                dispatch(wire);
             }
             catch (err) {
                 console.error("Failed to parse event:", err);
@@ -73,7 +93,14 @@ export const createEventRouter = (wsUrl, onStatusChange) => {
         subscriptions.set(id, { id, eventType: null, handler });
         return () => { subscriptions.delete(id); };
     };
+    const setGraphSubscription = (graphs) => {
+        pendingGraphSubscription = graphs;
+        sendSubscription();
+    };
+    const onGapDetected = (callback) => {
+        gapCallback = callback;
+    };
     // Start connection
     connect();
-    return { subscribe, subscribeAll };
+    return { subscribe, subscribeAll, setGraphSubscription, onGapDetected };
 };

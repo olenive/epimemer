@@ -231,25 +231,35 @@ class TestMCPProtocol:
         assert "graphs" in data["result"]
         assert "active_graph" in data["result"]
 
-    async def test_list_graphs_returns_ephemeral_for_memory(self, server):
+    async def test_list_graphs_returns_default_for_memory(self, server):
         result = await server.call_tool("list_graphs", {})
         data = _parse_response(result)
-        assert data["result"]["graphs"] == ["ephemeral"]
-        assert data["result"]["active_graph"] == "ephemeral"
+        assert data["result"]["graphs"] == ["default"]
+        assert data["result"]["active_graph"] == "default"
 
-    async def test_use_graph_in_memory_returns_error(self, server):
+    async def test_use_graph_creates_new_graph(self, server):
         result = await server.call_tool(
             "use_graph",
-            {"name": "test_graph"},
+            {"name": "test_graph", "confirm": True},
         )
         data = _parse_response(result)
-        # In-memory backend doesn't support graph switching
-        assert "error" in data["result"]
+        assert data["result"]["status"] == "created"
+        assert data["result"]["active_graph"] == "test_graph"
 
-    async def test_delete_graph_in_memory_returns_error(self, server):
+    async def test_delete_graph_works(self, server):
+        # Create a graph first
+        await server.call_tool(
+            "use_graph",
+            {"name": "to_delete", "confirm": True},
+        )
+        # Switch back to default before deleting
+        await server.call_tool(
+            "use_graph",
+            {"name": "default"},
+        )
         result = await server.call_tool(
             "delete_graph",
-            {"name": "test_graph"},
+            {"name": "to_delete", "confirm": True},
         )
         data = _parse_response(result)
-        assert "error" in data["result"]
+        assert data["result"]["status"] == "deleted"

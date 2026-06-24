@@ -156,16 +156,21 @@ interface PipelineState {
   activeTransition: string | null;
 }
 
+export interface PipelinePanelHandle {
+  cleanup: () => void;
+  clearPipeline: () => void;
+}
+
 /**
  * Initialize the pipeline visualization panel.
  *
- * Returns a cleanup function and a status update callback.
+ * Returns a handle with cleanup and clearPipeline methods.
  */
 export const initPipelinePanel = (
   container: HTMLElement,
   router: EventRouter,
   onStatusChange: (status: string) => void,
-): (() => void) => {
+): PipelinePanelHandle => {
   const state: PipelineState = {
     svgRoot: null,
     graphviz: null,
@@ -283,7 +288,16 @@ export const initPipelinePanel = (
     router.subscribe("pipeline_completed", handleEvent),
   ];
 
-  return () => {
+  const clearPipeline = (): void => {
+    container.innerHTML = "";
+    state.svgRoot = null;
+    state.activeTransition = null;
+    onStatusChange("Idle");
+  };
+
+  const cleanup = (): void => {
     unsubs.forEach((u) => u());
   };
+
+  return { cleanup, clearPipeline };
 };

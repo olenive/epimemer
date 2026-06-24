@@ -23,7 +23,9 @@ Phases 0-6 and 8 are complete. Phase 7 is partially complete. The visualization 
 - **Phase 6 (MCP Server)**: 14 tools, structured logging, response metadata
 - **Phase 7 (Timelines & Metacontext)**: Base Timeline/Timepoint types, Metacontext with propagation, MCP tools for both
 - **Phase 8 (Orchestration)**: Orchestration net with auto-reflect activation
-- **Visualization**: Event bus, instrumented storage/executor, WebSocket server, Cytoscape.js graph panel, Graphviz SVG pipeline panel
+- **Visualization**: Event bus, instrumented storage/executor, WebSocket server, Cytoscape.js graph panel, Graphviz SVG pipeline panel, graph browser with snapshot loading
+- **Multi-graph for InMemoryStorage**: All backends support multiple named graphs, `supports_multi_graph` flag removed from protocol
+- **Visualization Data Model**: NodeView/EdgeView shared models for events and snapshots, HTTP endpoints for graph listing and snapshot retrieval, WebSocket sequence numbers and subscription filtering
 
 ---
 
@@ -67,6 +69,33 @@ Each implementation must support:
 - Find timepoints near a given time (temporal proximity search)
 - Detect overlapping intervals
 - Serialize/deserialize for storage
+
+---
+
+### Multi-graph for InMemoryStorage (done)
+
+All backends now support multiple named graphs. InMemoryStorage uses a dict-of-dicts pattern (`_GraphStore` dataclass per graph). The `supports_multi_graph` flag has been removed from the protocol — all backends implement `list_databases`, `switch_database`, and `delete_database`. Default graph name is `"default"` (was `"ephemeral"`).
+
+---
+
+### Visualization — Data Model & Graph Browser (done)
+
+- **NodeView/EdgeView shared models**: Events and HTTP snapshots use the same Pydantic models (`events.py`). `NodeStored` wraps `NodeView`, `EdgeStored` wraps `EdgeView`. Value signals (`novelty`, `confidence`, `relevance`), `source_id`, `extraction_method`, and `created_at` are now included.
+- **HTTP endpoints**: `GET /api/graphs` (list + active), `GET /api/snapshot?graph=X` (full node/edge dump). Storage methods `viz_list_nodes`/`viz_list_edges` read cross-graph without switching the active connection. These must never be MCP tools (`grep -r "viz_list_" epimemer/mcp/` enforced).
+- **WebSocket protocol**: Per-connection sequence numbers, `GraphSwitched` event, subscription-based graph filtering (`{"subscribe": ["graph-a"]}`).
+- **Frontend graph selector**: Dropdown to pick viewed graph, "MCP Graph" label (read-only), "Live"/"Snapshot" mode badge, Refresh button (amber ring on sequence gap). Both panels clear on graph switch. Auto-snapshot on WebSocket reconnect.
+- **View-only**: The frontend never modifies MCP state or stored data.
+
+---
+
+### Future — Multi-agent Visualization
+
+Not yet implemented. When multiple MCP servers need to share events:
+
+- Replace `InProcessEventBus` with Redis Pub/Sub or NATS
+- Each MCP server publishes events with `graph` tag to shared channel
+- Centralized viz server subscribes and routes to frontend connections by subscription
+- The WebSocket subscription mechanism already provides the frontend protocol
 
 ---
 
@@ -121,7 +150,7 @@ The end state is:
    - `query_graph` for structured traversal
    - `reflect` to trigger consolidation (or this fires automatically via activation functions)
    - `create_timeline` / `add_timepoint` / `query_timeline` / `create_timelink` for temporal relationships
-   - `list_graphs` / `use_graph` / `delete_graph` to manage multiple knowledge graphs (SurrealDB backends)
+   - `list_graphs` / `use_graph` / `delete_graph` to manage multiple knowledge graphs (all backends)
 6. Every tool call produces:
    - Structured JSON logs (for the user to monitor)
    - Response metadata (for the agent to report what it found/did)
@@ -129,6 +158,6 @@ The end state is:
    - Real-time visualization events (when viz is enabled)
 7. The user can:
    - Open any Marimo notebook to inspect the current graph state
-   - Open the visualization dashboard (http://127.0.0.1:8765) to watch the graph and pipelines live
+   - Open the visualization dashboard (http://127.0.0.1:8765) to browse knowledge graphs, watch live events, and view pipeline execution
    - View logs to see when and how memory was used
    - Query historical graph state via `at_time` parameters

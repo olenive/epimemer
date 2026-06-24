@@ -106,7 +106,7 @@ const setTokenCount = (svgRoot, container, placeName, count) => {
 /**
  * Initialize the pipeline visualization panel.
  *
- * Returns a cleanup function and a status update callback.
+ * Returns a handle with cleanup and clearPipeline methods.
  */
 export const initPipelinePanel = (container, router, onStatusChange) => {
     const state = {
@@ -207,7 +207,14 @@ export const initPipelinePanel = (container, router, onStatusChange) => {
         router.subscribe("tokens_updated", handleEvent),
         router.subscribe("pipeline_completed", handleEvent),
     ];
-    return () => {
+    const clearPipeline = () => {
+        container.innerHTML = "";
+        state.svgRoot = null;
+        state.activeTransition = null;
+        onStatusChange("Idle");
+    };
+    const cleanup = () => {
         unsubs.forEach((u) => u());
     };
+    return { cleanup, clearPipeline };
 };

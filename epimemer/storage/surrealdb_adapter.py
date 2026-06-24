@@ -107,10 +107,6 @@ class SurrealDBStorage:
         await self._setup_schema()
 
     @property
-    def supports_multi_graph(self) -> bool:
-        return True
-
-    @property
     def current_database(self) -> str:
         return self._database
 
@@ -134,6 +130,48 @@ class SurrealDBStorage:
     async def delete_database(self, database: str) -> None:
         """Delete a database from the current namespace."""
         await self.db.query(f"REMOVE DATABASE IF EXISTS `{database}`;")
+
+    # --- Viz reads (cross-graph, no switching of active state) ---
+
+    async def viz_list_nodes(
+        self,
+        database: str,
+        *,
+        historical_status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> Sequence[EpistemicNode]:
+        """List all nodes in a graph for visualization snapshot.
+
+        Temporarily switches the SurrealDB connection to the target database,
+        queries, then switches back. Not safe for concurrent MCP calls — the
+        viz server should serialize snapshot reads or use a separate connection
+        for production deployments.
+        """
+        original_db = self._database
+        try:
+            await self.db.use(self._namespace, database)
+            results = []
+            for table in ("topic", "fact", "inference"):
+                rows = await self.db.query(
+                    f"SELECT * FROM {table} WHERE status = $status",
+                    {"status": historical_status.value},
+                )
+                results.extend(_record_to_node(table, r) for r in rows)
+            return results
+        finally:
+            await self.db.use(self._namespace, original_db)
+
+    async def viz_list_edges(
+        self,
+        database: str,
+    ) -> Sequence[NodeEdge]:
+        """List all edges in a graph for visualization snapshot."""
+        original_db = self._database
+        try:
+            await self.db.use(self._namespace, database)
+            rows = await self.db.query("SELECT * FROM node_edge")
+            return [NodeEdge.model_validate(_clean_record(r)) for r in rows]
+        finally:
+            await self.db.use(self._namespace, original_db)
 
     async def close(self) -> None:
         if self._db is not None:

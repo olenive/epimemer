@@ -231,20 +231,47 @@ class TestMetacontextStorage:
 
 class TestMultiGraphContract:
 
-    async def test_does_not_support_multi_graph(self, store):
-        assert store.supports_multi_graph is False
+    async def test_current_database_is_default(self, store):
+        assert store.current_database == "default"
 
-    async def test_current_database_is_ephemeral(self, store):
-        assert store.current_database == "ephemeral"
-
-    async def test_list_databases_returns_ephemeral(self, store):
+    async def test_list_databases_returns_default(self, store):
         databases = await store.list_databases()
-        assert databases == ["ephemeral"]
+        assert databases == ["default"]
 
-    async def test_switch_database_raises(self, store):
-        with pytest.raises(NotImplementedError):
-            await store.switch_database("other")
+    async def test_switch_creates_new_graph(self, store):
+        await store.switch_database("second")
+        assert store.current_database == "second"
+        assert "second" in await store.list_databases()
 
-    async def test_delete_database_raises(self, store):
-        with pytest.raises(NotImplementedError):
-            await store.delete_database("ephemeral")
+    async def test_switch_to_existing_graph(self, store):
+        await store.switch_database("second")
+        await store.switch_database("default")
+        assert store.current_database == "default"
+
+    async def test_graph_isolation(self, store):
+        """Data stored in one graph is not visible from another."""
+        topic = Topic(content="Graph A topic", source_id="seg1")
+        await store.store_node(topic)
+
+        await store.switch_database("graph-b")
+        assert await store.get_node(topic.id) is None
+        nodes = await store.query_nodes()
+        assert len(nodes) == 0
+
+        # Switch back and verify data is still there
+        await store.switch_database("default")
+        assert await store.get_node(topic.id) is not None
+
+    async def test_delete_database(self, store):
+        await store.switch_database("to-delete")
+        await store.switch_database("default")
+        await store.delete_database("to-delete")
+        assert "to-delete" not in await store.list_databases()
+
+    async def test_delete_active_database_raises(self, store):
+        with pytest.raises(ValueError):
+            await store.delete_database("default")
+
+    async def test_delete_nonexistent_database_raises(self, store):
+        with pytest.raises(KeyError):
+            await store.delete_database("no-such-graph")

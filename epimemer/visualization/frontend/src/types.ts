@@ -13,6 +13,36 @@ export interface BaseEvent {
   timestamp: string;
   category: EventCategory;
   event_type: string;
+  graph: string;
+}
+
+// --- Shared view models ---
+
+export interface NodeView {
+  node_id: string;
+  node_type: string;
+  content: string;
+  status: string;
+  source_id: string;
+  extraction_method: string;
+  novelty: number;
+  confidence: number;
+  relevance: number;
+  last_reinforced: string;
+  created_at: string;
+  graph: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface EdgeView {
+  edge_id: string;
+  src_id: string;
+  dst_id: string;
+  edge_type: string;
+  weight: number;
+  created_at: string;
+  graph: string;
+  metadata: Record<string, unknown>;
 }
 
 // --- Graph events ---
@@ -20,11 +50,7 @@ export interface BaseEvent {
 export interface NodeStored extends BaseEvent {
   category: "graph";
   event_type: "node_stored";
-  node_id: string;
-  node_type: string;
-  content: string;
-  status: string;
-  metadata: Record<string, unknown>;
+  node: NodeView;
 }
 
 export interface NodeStatusChanged extends BaseEvent {
@@ -38,12 +64,7 @@ export interface NodeStatusChanged extends BaseEvent {
 export interface EdgeStored extends BaseEvent {
   category: "graph";
   event_type: "edge_stored";
-  edge_id: string;
-  src_id: string;
-  dst_id: string;
-  edge_type: string;
-  weight: number;
-  metadata: Record<string, unknown>;
+  edge: EdgeView;
 }
 
 export interface EmbeddingStored extends BaseEvent {
@@ -72,13 +93,21 @@ export interface SegmentStored extends BaseEvent {
   span_end: number;
 }
 
+export interface GraphSwitched extends BaseEvent {
+  category: "graph";
+  event_type: "graph_switched";
+  previous_graph: string;
+  new_graph: string;
+}
+
 export type GraphEvent =
   | NodeStored
   | NodeStatusChanged
   | EdgeStored
   | EmbeddingStored
   | DocumentStored
-  | SegmentStored;
+  | SegmentStored
+  | GraphSwitched;
 
 // --- Pipeline events ---
 
@@ -145,3 +174,6 @@ export type PipelineEvent =
   | PipelineCompleted;
 
 export type AnyEvent = GraphEvent | PipelineEvent;
+
+/** Wire message shape — AnyEvent + per-connection sequence number. */
+export type WireEvent = AnyEvent & { seq: number };
