@@ -5,12 +5,14 @@ Supports multiple named graphs via a dict-of-dicts pattern.
 Vector search uses brute-force cosine similarity.
 """
 
+import copy
 import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Sequence
 
 from epimemer.core.types import (
+    HISTORY_EDGE_TYPES,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
@@ -216,6 +218,85 @@ class InMemoryStorage:
         for edge in self._g.edges.values():
             counts[edge.type] += 1
         return counts
+
+    # --- Atomic compound operations ---
+
+    def _migrate_edges_inplace(self, old_ids: set[str], new_id: str) -> None:
+        """Re-point non-history edges touching old_ids onto new_id, in place.
+
+        Drops self-loops (where two merged sources were connected) and collapses
+        duplicate (src, dst, type) edges, keeping one per group. The new node is
+        assumed to start with no edges, so dedup only tracks edges migrated here.
+        """
+        seen_signatures: set[tuple[str, str, str]] = set()
+        for edge in list(self._g.edges.values()):
+            if edge.type in HISTORY_EDGE_TYPES:
+                continue
+            if edge.src_id not in old_ids and edge.dst_id not in old_ids:
+                continue
+            new_src = new_id if edge.src_id in old_ids else edge.src_id
+            new_dst = new_id if edge.dst_id in old_ids else edge.dst_id
+            if new_src == edge.src_id and new_dst == edge.dst_id:
+                continue
+            signature = (new_src, new_dst, edge.type.value)
+            if new_src == new_dst or signature in seen_signatures:
+                del self._g.edges[edge.id]
+                continue
+            seen_signatures.add(signature)
+            edge.src_id = new_src
+            edge.dst_id = new_dst
+
+    async def supersede_node_tx(
+        self,
+        old_node: EpistemicNode,
+        new_node: EpistemicNode,
+        new_embedding: EmbeddingRecord,
+        lineage_edge: NodeEdge,
+        *,
+        superseded_at: datetime,
+    ) -> None:
+        # Snapshot the active graph so any failure leaves it untouched.
+        snapshot = copy.deepcopy(self._g)
+        try:
+            node = self._g.nodes.get(old_node.id)
+            if node is None:
+                raise KeyError(f"Node {old_node.id} not found")
+            node.status = NodeStatus.SUPERSEDED
+            node.superseded_at = superseded_at
+            self._g.nodes[new_node.id] = new_node
+            self._g.embeddings[new_embedding.id] = new_embedding
+            self._migrate_edges_inplace({old_node.id}, new_node.id)
+            self._g.edges[lineage_edge.id] = lineage_edge
+        except Exception:
+            self._graphs[self._database] = snapshot
+            raise
+
+    async def merge_nodes_tx(
+        self,
+        source_nodes: Sequence[EpistemicNode],
+        merged_node: EpistemicNode,
+        merged_embedding: EmbeddingRecord,
+        lineage_edges: Sequence[NodeEdge],
+        *,
+        merged_at: datetime,
+    ) -> None:
+        snapshot = copy.deepcopy(self._g)
+        try:
+            self._g.nodes[merged_node.id] = merged_node
+            self._g.embeddings[merged_embedding.id] = merged_embedding
+            # Migrate before writing lineage edges so they are not re-pointed.
+            self._migrate_edges_inplace({s.id for s in source_nodes}, merged_node.id)
+            for source in source_nodes:
+                node = self._g.nodes.get(source.id)
+                if node is None:
+                    raise KeyError(f"Node {source.id} not found")
+                node.status = NodeStatus.MERGED
+                node.superseded_at = merged_at
+            for edge in lineage_edges:
+                self._g.edges[edge.id] = edge
+        except Exception:
+            self._graphs[self._database] = snapshot
+            raise
 
     # --- Embeddings ---
 

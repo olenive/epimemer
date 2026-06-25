@@ -116,6 +116,51 @@ class StorageBackend(Protocol):
         """
         ...
 
+    # --- Atomic compound operations ---
+    #
+    # Supersession and merge each perform several writes (status change, node +
+    # embedding store, edge migration, lineage edge). They are exposed as single
+    # protocol methods so each backend can make them atomic — all-or-nothing —
+    # rather than leaving a half-applied graph if a step fails midway.
+
+    async def supersede_node_tx(
+        self,
+        old_node: EpistemicNode,
+        new_node: EpistemicNode,
+        new_embedding: EmbeddingRecord,
+        lineage_edge: NodeEdge,
+        *,
+        superseded_at: datetime,
+    ) -> None:
+        """Atomically supersede ``old_node`` with ``new_node``.
+
+        Marks the old node superseded, stores and embeds the new node, migrates
+        the old node's non-history edges onto the new node, and persists
+        ``lineage_edge`` (the superseded_by edge). If any step fails, the whole
+        operation is rolled back.
+        """
+        ...
+
+    async def merge_nodes_tx(
+        self,
+        source_nodes: Sequence[EpistemicNode],
+        merged_node: EpistemicNode,
+        merged_embedding: EmbeddingRecord,
+        lineage_edges: Sequence[NodeEdge],
+        *,
+        merged_at: datetime,
+    ) -> None:
+        """Atomically merge ``source_nodes`` into ``merged_node``.
+
+        Stores and embeds the merged node, migrates the sources' non-history
+        edges onto it (dropping self-loops where two merged sources were
+        connected, and collapsing duplicate edges to one per src/dst/type),
+        marks each source merged, and persists ``lineage_edges`` (the
+        merged_into edges). If any step fails, the whole operation is rolled
+        back.
+        """
+        ...
+
     # --- Embeddings ---
 
     async def store_embedding(self, embedding: EmbeddingRecord) -> str:

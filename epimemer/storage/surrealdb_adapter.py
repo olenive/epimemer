@@ -13,6 +13,7 @@ from typing import Sequence
 from surrealdb import AsyncSurreal
 
 from epimemer.core.types import (
+    HISTORY_EDGE_TYPES,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
@@ -392,6 +393,146 @@ class SurrealDBStorage:
                 continue
             counts[EdgeType(raw_type)] = row["c"]
         return counts
+
+    # --- Atomic compound operations ---
+
+    async def _run_transaction(
+        self, statements: list[str], params: dict
+    ) -> None:
+        """Execute statements as one atomic BEGIN…COMMIT batch.
+
+        SurrealDB only treats a single multi-statement query as a transaction;
+        BEGIN/COMMIT issued across separate calls is not reliable. A runtime
+        error in any statement rolls the whole batch back. `query_raw` raises on
+        parse errors and reports runtime errors per statement, so we check both.
+        """
+        sql = "BEGIN TRANSACTION;\n" + ";\n".join(statements) + ";\nCOMMIT TRANSACTION;"
+        resp = await self.db.query_raw(sql, params)
+
+        if isinstance(resp, dict) and resp.get("error") is not None:
+            raise RuntimeError(f"Transaction failed: {resp['error']}")
+        for result in (resp.get("result", []) if isinstance(resp, dict) else []):
+            if isinstance(result, dict) and result.get("status") not in (None, "OK"):
+                raise RuntimeError(f"Transaction failed: {result.get('result')}")
+
+    async def supersede_node_tx(
+        self,
+        old_node: EpistemicNode,
+        new_node: EpistemicNode,
+        new_embedding: EmbeddingRecord,
+        lineage_edge: NodeEdge,
+        *,
+        superseded_at: datetime,
+    ) -> None:
+        history = [t.value for t in HISTORY_EDGE_TYPES]
+        lineage_data = _serialize(lineage_edge)
+        lineage_data["type"] = lineage_edge.type.value
+
+        statements = [
+            f"UPDATE {_node_to_table(old_node)} SET status = $status, "
+            f"superseded_at = $sup_at WHERE uid = $old_uid",
+            f"INSERT INTO {_node_to_table(new_node)} $new_data",
+            "INSERT INTO embedding $emb_data",
+            "UPDATE node_edge SET src_id = $new_uid "
+            "WHERE src_id = $old_uid AND type NOT IN $history",
+            "UPDATE node_edge SET dst_id = $new_uid "
+            "WHERE dst_id = $old_uid AND type NOT IN $history",
+            "DELETE node_edge WHERE src_id = $new_uid AND dst_id = $new_uid",
+            "INSERT INTO node_edge $lineage_data",
+        ]
+        await self._run_transaction(
+            statements,
+            {
+                "status": NodeStatus.SUPERSEDED.value,
+                "sup_at": superseded_at.isoformat(),
+                "old_uid": old_node.id,
+                "new_uid": new_node.id,
+                "new_data": _serialize(new_node),
+                "emb_data": _serialize(new_embedding),
+                "history": history,
+                "lineage_data": lineage_data,
+            },
+        )
+
+    async def merge_nodes_tx(
+        self,
+        source_nodes: Sequence[EpistemicNode],
+        merged_node: EpistemicNode,
+        merged_embedding: EmbeddingRecord,
+        lineage_edges: Sequence[NodeEdge],
+        *,
+        merged_at: datetime,
+    ) -> None:
+        source_ids = {s.id for s in source_nodes}
+
+        # Plan the edge migration in Python: read the sources' non-history edges,
+        # re-point them onto the merged node, and drop self-loops and duplicate
+        # (src, dst, type) edges, keeping one per group. Planning here keeps it
+        # deterministic — in-transaction GROUP BY dedup proved unreliable. The
+        # reads are pre-transaction; the adapter is single-connection (already
+        # documented as not safe for concurrent callers), so nothing interleaves.
+        incident: dict[str, NodeEdge] = {}
+        for sid in source_ids:
+            for edge in await self.get_edges_from(sid):
+                incident[edge.id] = edge
+            for edge in await self.get_edges_to(sid):
+                incident[edge.id] = edge
+
+        old_edge_ids: list[str] = []
+        repointed_data: list[dict] = []
+        seen: set[tuple[str, str, str]] = set()
+        for edge in incident.values():
+            if edge.type in HISTORY_EDGE_TYPES:
+                continue
+            old_edge_ids.append(edge.id)  # every incident edge is deleted...
+            new_src = merged_node.id if edge.src_id in source_ids else edge.src_id
+            new_dst = merged_node.id if edge.dst_id in source_ids else edge.dst_id
+            signature = (new_src, new_dst, edge.type.value)
+            if new_src == new_dst or signature in seen:
+                continue  # ...self-loops and duplicates are not recreated
+            seen.add(signature)
+            row = _serialize(edge.model_copy(update={"src_id": new_src, "dst_id": new_dst}))
+            row["type"] = edge.type.value
+            repointed_data.append(row)
+
+        lineage_data = []
+        for edge in lineage_edges:
+            row = _serialize(edge)
+            row["type"] = edge.type.value
+            lineage_data.append(row)
+
+        statements = [
+            f"INSERT INTO {_node_to_table(merged_node)} $merged_data",
+            "INSERT INTO embedding $emb_data",
+        ]
+        if old_edge_ids:
+            statements.append("DELETE node_edge WHERE uid IN $old_edge_ids")
+        if repointed_data:
+            statements.append("INSERT INTO node_edge $repointed_data")
+        statements += [
+            "UPDATE topic SET status = $status, superseded_at = $merged_at "
+            "WHERE uid IN $sources",
+            "UPDATE fact SET status = $status, superseded_at = $merged_at "
+            "WHERE uid IN $sources",
+            "UPDATE inference SET status = $status, superseded_at = $merged_at "
+            "WHERE uid IN $sources",
+        ]
+        if lineage_data:
+            statements.append("INSERT INTO node_edge $lineage_data")
+
+        await self._run_transaction(
+            statements,
+            {
+                "merged_data": _serialize(merged_node),
+                "emb_data": _serialize(merged_embedding),
+                "old_edge_ids": old_edge_ids,
+                "repointed_data": repointed_data,
+                "sources": list(source_ids),
+                "status": NodeStatus.MERGED.value,
+                "merged_at": merged_at.isoformat(),
+                "lineage_data": lineage_data,
+            },
+        )
 
     # --- Embeddings ---
 

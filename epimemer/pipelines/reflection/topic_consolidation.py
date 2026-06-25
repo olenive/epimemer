@@ -9,6 +9,7 @@ import math
 
 from epimemer.core.types import (
     EmbeddingRecord,
+    EpistemicNode,
     NodeType,
     Topic,
     ValueSignal,
@@ -26,6 +27,32 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     if norm_a == 0 or norm_b == 0:
         return 0.0
     return dot / (norm_a * norm_b)
+
+
+async def all_pairs_above_threshold(
+    nodes: list[EpistemicNode],
+    storage: StorageBackend,
+    model_id: str,
+    threshold: float,
+) -> bool:
+    """True iff every pair of nodes has stored-embedding cosine >= threshold.
+
+    Used as a safety bar before a (consolidating) merge so that only genuine
+    near-duplicates are collapsed. Returns False if any node lacks a stored
+    embedding — if similarity cannot be verified, the merge is refused.
+    """
+    vectors: list[list[float]] = []
+    for node in nodes:
+        embeddings = await storage.get_embeddings_for_item(node.id, model_id=model_id)
+        if not embeddings:
+            return False
+        vectors.append(embeddings[0].vector)
+
+    for i in range(len(vectors)):
+        for j in range(i + 1, len(vectors)):
+            if _cosine_similarity(vectors[i], vectors[j]) < threshold:
+                return False
+    return True
 
 
 async def find_similar_topic_pairs(
@@ -91,6 +118,7 @@ async def merge_similar_topics(
     topic_a: Topic,
     topic_b: Topic,
     storage: StorageBackend,
+    embedding_provider: EmbeddingProvider,
 ) -> Topic:
     """Merge two similar topics into one.
 
@@ -99,13 +127,15 @@ async def merge_similar_topics(
     appended. Value signals are combined (max confidence, max relevance,
     average novelty).
 
-    Uses merge_nodes from the versioning module to mark originals as merged
-    and create merged_into edges.
+    Uses merge_nodes from the versioning module to embed the merged topic,
+    migrate the originals' edges onto it, mark originals as merged, and create
+    merged_into edges.
 
     Args:
         topic_a: First topic to merge.
         topic_b: Second topic to merge.
         storage: The storage backend.
+        embedding_provider: Used to embed the merged topic.
 
     Returns:
         The newly created merged Topic.
@@ -137,11 +167,13 @@ async def merge_similar_topics(
         },
     )
 
-    # Use merge_nodes to handle status updates, storage, and edge creation
+    # Use merge_nodes to handle embedding, edge migration, status updates,
+    # storage, and merged_into edge creation.
     await merge_nodes(
         source_nodes=[topic_a, topic_b],
         merged_node=merged_topic,
         storage=storage,
+        embedding_provider=embedding_provider,
     )
 
     return merged_topic

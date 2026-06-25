@@ -154,6 +154,57 @@ class InstrumentedStorage:
     async def delete_edge(self, edge_id: str) -> None:
         await self._inner.delete_edge(edge_id)
 
+    # --- Atomic compound operations (write) ---
+
+    async def supersede_node_tx(
+        self,
+        old_node: EpistemicNode,
+        new_node: EpistemicNode,
+        new_embedding: EmbeddingRecord,
+        lineage_edge: NodeEdge,
+        *,
+        superseded_at: datetime,
+    ) -> None:
+        await self._inner.supersede_node_tx(
+            old_node, new_node, new_embedding, lineage_edge,
+            superseded_at=superseded_at,
+        )
+        # Publish only after the atomic operation succeeds.
+        graph = self._inner.current_database
+        await self._bus.publish(NodeStatusChanged(
+            graph=graph,
+            node_id=old_node.id,
+            old_status=old_node.status.value,
+            new_status=NodeStatus.SUPERSEDED.value,
+        ))
+        await self._bus.publish(NodeStored(graph=graph, node=node_to_view(new_node, graph)))
+        await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(lineage_edge, graph)))
+
+    async def merge_nodes_tx(
+        self,
+        source_nodes: Sequence[EpistemicNode],
+        merged_node: EpistemicNode,
+        merged_embedding: EmbeddingRecord,
+        lineage_edges: Sequence[NodeEdge],
+        *,
+        merged_at: datetime,
+    ) -> None:
+        await self._inner.merge_nodes_tx(
+            source_nodes, merged_node, merged_embedding, lineage_edges,
+            merged_at=merged_at,
+        )
+        graph = self._inner.current_database
+        await self._bus.publish(NodeStored(graph=graph, node=node_to_view(merged_node, graph)))
+        for source in source_nodes:
+            await self._bus.publish(NodeStatusChanged(
+                graph=graph,
+                node_id=source.id,
+                old_status=source.status.value,
+                new_status=NodeStatus.MERGED.value,
+            ))
+        for edge in lineage_edges:
+            await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
+
     # --- Edges (read) ---
 
     async def get_edges_from(

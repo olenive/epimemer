@@ -578,14 +578,16 @@ class TestVersioning:
         assert edges[0].type == EdgeType.SUPERSEDED_BY
 
     @pytest.mark.asyncio
-    async def test_merge_marks_all_sources_as_merged(self, storage: InMemoryStorage) -> None:
+    async def test_merge_marks_all_sources_as_merged(
+        self, storage: InMemoryStorage, embedding_provider: MockEmbeddingProvider
+    ) -> None:
         t1 = Topic(id="merge-src-1", content="Topic A", source_id="seg-1")
         t2 = Topic(id="merge-src-2", content="Topic B", source_id="seg-2")
         merged = Topic(id="merge-dst", content="Merged topic", source_id="seg-1")
         await storage.store_node(t1)
         await storage.store_node(t2)
 
-        await merge_nodes([t1, t2], merged, storage)
+        await merge_nodes([t1, t2], merged, storage, embedding_provider)
 
         stored_1 = await storage.get_node("merge-src-1")
         stored_2 = await storage.get_node("merge-src-2")
@@ -597,28 +599,32 @@ class TestVersioning:
         assert stored_2.superseded_at is not None
 
     @pytest.mark.asyncio
-    async def test_merge_stores_merged_node(self, storage: InMemoryStorage) -> None:
+    async def test_merge_stores_merged_node(
+        self, storage: InMemoryStorage, embedding_provider: MockEmbeddingProvider
+    ) -> None:
         t1 = Topic(id="merge-src-3", content="Topic A", source_id="seg-1")
         t2 = Topic(id="merge-src-4", content="Topic B", source_id="seg-2")
         merged = Topic(id="merge-dst-2", content="Merged topic", source_id="seg-1")
         await storage.store_node(t1)
         await storage.store_node(t2)
 
-        await merge_nodes([t1, t2], merged, storage)
+        await merge_nodes([t1, t2], merged, storage, embedding_provider)
 
         stored = await storage.get_node("merge-dst-2")
         assert stored is not None
         assert stored.status == NodeStatus.ACTIVE
 
     @pytest.mark.asyncio
-    async def test_merge_creates_edges(self, storage: InMemoryStorage) -> None:
+    async def test_merge_creates_edges(
+        self, storage: InMemoryStorage, embedding_provider: MockEmbeddingProvider
+    ) -> None:
         t1 = Topic(id="merge-src-5", content="Topic A", source_id="seg-1")
         t2 = Topic(id="merge-src-6", content="Topic B", source_id="seg-2")
         merged = Topic(id="merge-dst-3", content="Merged topic", source_id="seg-1")
         await storage.store_node(t1)
         await storage.store_node(t2)
 
-        edges = await merge_nodes([t1, t2], merged, storage)
+        edges = await merge_nodes([t1, t2], merged, storage, embedding_provider)
 
         assert len(edges) == 2
         for edge in edges:
@@ -629,14 +635,16 @@ class TestVersioning:
         assert src_ids == {"merge-src-5", "merge-src-6"}
 
     @pytest.mark.asyncio
-    async def test_merge_edges_stored_in_storage(self, storage: InMemoryStorage) -> None:
+    async def test_merge_edges_stored_in_storage(
+        self, storage: InMemoryStorage, embedding_provider: MockEmbeddingProvider
+    ) -> None:
         t1 = Topic(id="merge-src-7", content="Topic A", source_id="seg-1")
         t2 = Topic(id="merge-src-8", content="Topic B", source_id="seg-2")
         merged = Topic(id="merge-dst-4", content="Merged topic", source_id="seg-1")
         await storage.store_node(t1)
         await storage.store_node(t2)
 
-        await merge_nodes([t1, t2], merged, storage)
+        await merge_nodes([t1, t2], merged, storage, embedding_provider)
 
         edges_1 = await storage.get_edges_from("merge-src-7")
         edges_2 = await storage.get_edges_from("merge-src-8")
@@ -644,6 +652,60 @@ class TestVersioning:
         assert len(edges_2) == 1
         assert edges_1[0].type == EdgeType.MERGED_INTO
         assert edges_2[0].type == EdgeType.MERGED_INTO
+
+    @pytest.mark.asyncio
+    async def test_merge_embeds_merged_node(
+        self, storage: InMemoryStorage, embedding_provider: MockEmbeddingProvider
+    ) -> None:
+        """The merged node must be embedded so search can return it."""
+        t1 = Topic(id="merge-emb-1", content="Topic A", source_id="seg-1")
+        t2 = Topic(id="merge-emb-2", content="Topic B", source_id="seg-2")
+        merged = Topic(id="merge-emb-dst", content="Topic A and B", source_id="seg-1")
+        await storage.store_node(t1)
+        await storage.store_node(t2)
+
+        await merge_nodes([t1, t2], merged, storage, embedding_provider)
+
+        embeddings = await storage.get_embeddings_for_item("merge-emb-dst")
+        assert len(embeddings) >= 1
+
+    @pytest.mark.asyncio
+    async def test_merge_migrates_edges_dedupes_and_drops_self_loops(
+        self, storage: InMemoryStorage, embedding_provider: MockEmbeddingProvider
+    ) -> None:
+        """Sources' edges move onto the merged node; duplicates and self-loops go."""
+        t1 = Topic(id="merge-mig-1", content="Topic A", source_id="seg-1")
+        t2 = Topic(id="merge-mig-2", content="Topic B", source_id="seg-2")
+        fact = Fact(id="merge-mig-fact", content="shared evidence", source_id="seg-1")
+        merged = Topic(id="merge-mig-dst", content="Topic A and B", source_id="seg-1")
+        for node in (t1, t2, fact):
+            await storage.store_node(node)
+        # The same fact supports both sources → collapses to one edge after merge.
+        await storage.store_edge(
+            NodeEdge(src_id=fact.id, dst_id=t1.id, type=EdgeType.SUPPORTS)
+        )
+        await storage.store_edge(
+            NodeEdge(src_id=fact.id, dst_id=t2.id, type=EdgeType.SUPPORTS)
+        )
+        # An edge between the two sources becomes a self-loop after the merge.
+        await storage.store_edge(
+            NodeEdge(src_id=t1.id, dst_id=t2.id, type=EdgeType.SUPPORTS)
+        )
+
+        await merge_nodes([t1, t2], merged, storage, embedding_provider)
+
+        # The two shared supports edges collapse into a single edge.
+        supports_into_merged = await storage.get_edges_to(
+            "merge-mig-dst", edge_type=EdgeType.SUPPORTS
+        )
+        assert len(supports_into_merged) == 1
+        assert supports_into_merged[0].src_id == fact.id
+        assert await storage.get_edges_to("merge-mig-1", edge_type=EdgeType.SUPPORTS) == []
+        assert await storage.get_edges_to("merge-mig-2", edge_type=EdgeType.SUPPORTS) == []
+
+        # The source-to-source edge did not survive as a self-loop.
+        out = await storage.get_edges_from("merge-mig-dst")
+        assert [e for e in out if e.dst_id == "merge-mig-dst"] == []
 
 
 # --- Storage Round-Trip Tests ---

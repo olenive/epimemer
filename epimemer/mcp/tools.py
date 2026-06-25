@@ -20,6 +20,7 @@ from epimemer.core.types import (
     Segment,
     Timeline,
     Topic,
+    ValueSignal,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.mcp.config import ServerConfig
@@ -363,13 +364,23 @@ async def update(
     if old_node is None:
         raise ValueError(f"Node '{node_id}' not found")
 
-    # Create new node of the same type
+    # Create new node of the same type, carrying over the value signal so a
+    # content correction does not reset reinforcement history. The signal is
+    # copied (not shared) so later reinforcement of the new node cannot mutate
+    # the superseded original's recorded value.
+    carried_value = old_node.value.model_copy()
     if isinstance(old_node, Topic):
-        new_node: EpistemicNode = Topic(content=new_content, source_id=old_node.source_id)
+        new_node: EpistemicNode = Topic(
+            content=new_content, source_id=old_node.source_id, value=carried_value
+        )
     elif isinstance(old_node, Fact):
-        new_node = Fact(content=new_content, source_id=old_node.source_id)
+        new_node = Fact(
+            content=new_content, source_id=old_node.source_id, value=carried_value
+        )
     elif isinstance(old_node, Inference):
-        new_node = Inference(content=new_content, source_id=old_node.source_id)
+        new_node = Inference(
+            content=new_content, source_id=old_node.source_id, value=carried_value
+        )
     else:
         raise ValueError(f"Unknown node type for node '{node_id}'")
 
@@ -494,18 +505,33 @@ async def apply_reflection(
     parents: list[dict] | None = None,
     splits: list[dict] | None = None,
     enrichments: list[dict] | None = None,
+    merges: list[dict] | None = None,
+    merge_similarity_threshold: float = 0.92,
 ) -> tuple[dict, ResponseMeta]:
     """Apply agent-provided reflection decisions to the graph.
 
     parents: [{children_ids: [str], content: str}] — synthesized parent topics
     splits: [{topic_id: str, subtopics: [str]}] — split a broad topic
     enrichments: [{topic_id: str, new_content: str}] — improved descriptions
+    merges: [{source_ids: [str], content: str}] — fuse near-duplicate topics
+        into one combined topic (sources retained as MERGED history). Each merge
+        is applied only if *every* pair of sources clears
+        merge_similarity_threshold; otherwise it is rejected. This is the one
+        consolidation that retires nodes from the active graph, so the bar is
+        high by design — use parents for merely related (not duplicate) topics.
     """
-    from epimemer.pipelines.graph_construction.versioning import group_into_parent, supersede_node
+    from epimemer.pipelines.graph_construction.versioning import (
+        group_into_parent,
+        merge_nodes,
+        supersede_node,
+    )
+    from epimemer.pipelines.reflection.topic_consolidation import all_pairs_above_threshold
 
     parents_created = 0
     topics_split = 0
     topics_enriched = 0
+    topics_merged = 0
+    merges_rejected = 0
     model_id = embedding_provider.model_id
 
     # 1. Create parent topics for similar groups
@@ -578,13 +604,52 @@ async def apply_reflection(
         await supersede_node(old_topic, enriched, storage, embedding_provider)
         topics_enriched += 1
 
+    # 4. Merge near-duplicate topics into one (guarded by a high similarity bar)
+    for merge_spec in (merges or []):
+        source_ids: list[str] = merge_spec["source_ids"]
+        content = merge_spec["content"]
+
+        sources: list[EpistemicNode] = []
+        for sid in source_ids:
+            node = await storage.get_node(sid)
+            if isinstance(node, Topic):
+                sources.append(node)
+
+        if len(sources) < 2:
+            continue
+
+        # Only collapse genuine duplicates: every pair must clear the bar, or
+        # the merge is refused (distinct-but-related topics are left untouched).
+        if not await all_pairs_above_threshold(
+            sources, storage, model_id, merge_similarity_threshold
+        ):
+            merges_rejected += 1
+            continue
+
+        merged_value = ValueSignal(
+            confidence=max(s.value.confidence for s in sources),
+            relevance=max(s.value.relevance for s in sources),
+            novelty=sum(s.value.novelty for s in sources) / len(sources),
+        )
+        merged_topic = Topic(
+            content=content,
+            source_id=sources[0].source_id,
+            value=merged_value,
+            extraction_method="agent:merge",
+            metadata={"merged_from": source_ids},
+        )
+        await merge_nodes(sources, merged_topic, storage, embedding_provider)
+        topics_merged += 1
+
     result = {
         "parents_created": parents_created,
         "topics_split": topics_split,
         "topics_enriched": topics_enriched,
+        "topics_merged": topics_merged,
+        "merges_rejected": merges_rejected,
     }
     meta = ResponseMeta(
-        nodes_returned=parents_created + topics_split + topics_enriched,
+        nodes_returned=parents_created + topics_split + topics_enriched + topics_merged,
     )
     return result, meta
 

@@ -272,7 +272,7 @@ async def test_merge_creates_new_topic_marks_originals(
     topic_a = await storage.get_node("topic-a")
     topic_b = await storage.get_node("topic-b")
 
-    merged = await merge_similar_topics(topic_a, topic_b, storage)
+    merged = await merge_similar_topics(topic_a, topic_b, storage, embedding_provider)
 
     # Merged topic is stored
     stored_merged = await storage.get_node(merged.id)

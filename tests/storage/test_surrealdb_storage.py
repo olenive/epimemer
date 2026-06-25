@@ -3,6 +3,8 @@
 Uses mem:// (embedded) mode so no external SurrealDB instance is needed.
 """
 
+from datetime import datetime, timezone
+
 import pytest
 
 from epimemer.core.types import (
@@ -219,3 +221,92 @@ class TestEmbeddingStorage:
         # Exact-match query, but the node is superseded → must be filtered out.
         results = await store.vector_search([1.0, 0.0, 0.0], "test", k=5)
         assert all(item_id != t.id for item_id, _ in results)
+
+
+class TestAtomicOperations:
+    """Backend-native atomic supersede/merge via single-query transactions."""
+
+    async def test_supersede_tx_migrates_embeds_and_supersedes(self, store):
+        old = Topic(content="old topic", source_id="s1")
+        fact = Fact(content="supporting fact", source_id="s1")
+        await store.store_node(old)
+        await store.store_node(fact)
+        await store.store_edge(
+            NodeEdge(src_id=fact.id, dst_id=old.id, type=EdgeType.SUPPORTS)
+        )
+
+        new = Topic(content="new topic", source_id="s1")
+        new_emb = EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.1, 0.2, 0.3])
+        lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
+        await store.supersede_node_tx(
+            old, new, new_emb, lineage, superseded_at=datetime.now(timezone.utc)
+        )
+
+        assert (await store.get_node(old.id)).status == NodeStatus.SUPERSEDED
+        assert (await store.get_node(new.id)).content == "new topic"
+        assert len(await store.get_embeddings_for_item(new.id)) == 1
+        into_new = await store.get_edges_to(new.id, edge_type=EdgeType.SUPPORTS)
+        assert len(into_new) == 1 and into_new[0].src_id == fact.id
+        assert len(await store.get_edges_to(old.id, edge_type=EdgeType.SUPPORTS)) == 0
+        lin = await store.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)
+        assert len(lin) == 1 and lin[0].dst_id == new.id
+
+    async def test_supersede_tx_rolls_back_on_failure(self, store):
+        old = Topic(content="old", source_id="s1")
+        await store.store_node(old)
+
+        new = Topic(content="new", source_id="s1")
+        # Squat the new node's uid so the in-transaction INSERT collides and
+        # aborts the whole transaction.
+        await store.store_node(Topic(id=new.id, content="squatter", source_id="s1"))
+
+        new_emb = EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.1, 0.2])
+        lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
+        with pytest.raises(Exception):
+            await store.supersede_node_tx(
+                old, new, new_emb, lineage, superseded_at=datetime.now(timezone.utc)
+            )
+
+        # Rolled back: the old node was never marked superseded.
+        assert (await store.get_node(old.id)).status == NodeStatus.ACTIVE
+        assert len(await store.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)) == 0
+
+    async def test_merge_tx_migrates_dedupes_and_drops_self_loops(self, store):
+        a = Topic(content="a", source_id="s1")
+        b = Topic(content="b", source_id="s1")
+        fact = Fact(content="shared evidence", source_id="s1")
+        for node in (a, b, fact):
+            await store.store_node(node)
+        await store.store_edge(
+            NodeEdge(src_id=fact.id, dst_id=a.id, type=EdgeType.SUPPORTS)
+        )
+        await store.store_edge(
+            NodeEdge(src_id=fact.id, dst_id=b.id, type=EdgeType.SUPPORTS)
+        )
+        # Edge between the sources → becomes a self-loop on merge, must be dropped.
+        await store.store_edge(
+            NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.SUPPORTS)
+        )
+
+        merged = Topic(content="merged", source_id="s1")
+        merged_emb = EmbeddingRecord(item_id=merged.id, model_id="m", vector=[0.1, 0.2])
+        lineage = [
+            NodeEdge(src_id=a.id, dst_id=merged.id, type=EdgeType.MERGED_INTO),
+            NodeEdge(src_id=b.id, dst_id=merged.id, type=EdgeType.MERGED_INTO),
+        ]
+        await store.merge_nodes_tx(
+            [a, b], merged, merged_emb, lineage, merged_at=datetime.now(timezone.utc)
+        )
+
+        # The two shared supports edges collapse to one; the self-loop is gone.
+        into_merged = await store.get_edges_to(merged.id, edge_type=EdgeType.SUPPORTS)
+        assert len(into_merged) == 1 and into_merged[0].src_id == fact.id
+        self_loops = [
+            e for e in await store.get_edges_from(merged.id)
+            if e.dst_id == merged.id
+        ]
+        assert self_loops == []
+        assert (await store.get_node(a.id)).status == NodeStatus.MERGED
+        assert (await store.get_node(b.id)).status == NodeStatus.MERGED
+        assert len(await store.get_embeddings_for_item(merged.id)) == 1
+        assert len(await store.get_edges_to(merged.id, edge_type=EdgeType.MERGED_INTO)) == 2

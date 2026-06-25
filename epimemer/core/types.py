@@ -65,6 +65,14 @@ class EdgeType(str, Enum):
     HAS_METACONTEXT = "has_metacontext"          # node → metacontext
 
 
+# Edges that record version history rather than knowledge. They are anchored to
+# a specific node version and are excluded from edge migration on supersession /
+# merge, and from default graph traversal.
+HISTORY_EDGE_TYPES: frozenset[EdgeType] = frozenset(
+    {EdgeType.SUPERSEDED_BY, EdgeType.MERGED_INTO}
+)
+
+
 # --- Value Signal ---
 
 

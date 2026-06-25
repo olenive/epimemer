@@ -1,5 +1,7 @@
 """Tests for in-memory storage backend."""
 
+from datetime import datetime, timezone
+
 import pytest
 
 from epimemer.core.types import (
@@ -333,3 +335,59 @@ class TestMultiGraphContract:
     async def test_delete_nonexistent_database_raises(self, store):
         with pytest.raises(KeyError):
             await store.delete_database("no-such-graph")
+
+
+class TestAtomicOperations:
+    """supersede_node_tx / merge_nodes_tx must be all-or-nothing."""
+
+    async def test_supersede_tx_applies_all_writes(self, store):
+        old = Topic(content="old topic", source_id="s1")
+        fact = Fact(content="supporting fact", source_id="s1")
+        await store.store_node(old)
+        await store.store_node(fact)
+        await store.store_edge(
+            NodeEdge(src_id=fact.id, dst_id=old.id, type=EdgeType.SUPPORTS)
+        )
+
+        new = Topic(content="new topic", source_id="s1")
+        new_emb = EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.0, 1.0, 0.0])
+        lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
+        await store.supersede_node_tx(
+            old, new, new_emb, lineage, superseded_at=datetime.now(timezone.utc)
+        )
+
+        assert (await store.get_node(old.id)).status == NodeStatus.SUPERSEDED
+        assert (await store.get_node(new.id)).content == "new topic"
+        assert len(await store.get_embeddings_for_item(new.id)) == 1
+        migrated = await store.get_edges_to(new.id, edge_type=EdgeType.SUPPORTS)
+        assert len(migrated) == 1 and migrated[0].src_id == fact.id
+        lin = await store.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)
+        assert len(lin) == 1 and lin[0].dst_id == new.id
+
+    async def test_supersede_tx_rolls_back_on_failure(self, store, monkeypatch):
+        old = Topic(content="old", source_id="s1")
+        await store.store_node(old)
+        await store.store_embedding(
+            EmbeddingRecord(item_id=old.id, model_id="m", vector=[1.0, 0.0, 0.0])
+        )
+
+        new = Topic(content="new", source_id="s1")
+        new_emb = EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.0, 1.0, 0.0])
+        lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
+
+        # Inject a failure after the node/embedding writes, during migration.
+        def boom(*args, **kwargs):
+            raise RuntimeError("injected failure")
+
+        monkeypatch.setattr(store, "_migrate_edges_inplace", boom)
+
+        with pytest.raises(RuntimeError, match="injected failure"):
+            await store.supersede_node_tx(
+                old, new, new_emb, lineage, superseded_at=datetime.now(timezone.utc)
+            )
+
+        # Nothing applied: old still active, new node/embedding/edge absent.
+        assert (await store.get_node(old.id)).status == NodeStatus.ACTIVE
+        assert await store.get_node(new.id) is None
+        assert await store.get_embeddings_for_item(new.id) == []
+        assert await store.get_edges_from(old.id) == []

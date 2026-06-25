@@ -8,9 +8,15 @@ unfindable.
 
 Discovered 2026-06-25.
 
+**Status update (2026-06-25, commit `22fc874`).** Issues 1–3 — and the compound
+"`update` degrades retrieval" failure — are **resolved**. Issues 4 and 5 are kept
+as documented, intended behaviour. Per-issue resolution notes are inline below;
+the original analysis is retained for context. Regression coverage lives in
+`tests/mcp/test_issues_reproduction.py` (plus storage/versioning parity tests).
+
 ---
 
-## Issue 1 — `update` creates a node with no embedding (unindexed, unsearchable)
+## Issue 1 — `update` creates a node with no embedding (unindexed, unsearchable) ✅ RESOLVED
 
 **Severity: high.** The whole point of `update` is to correct a node's content,
 but the corrected node never enters the vector index, so `search` cannot return it.
@@ -42,9 +48,16 @@ threading an `EmbeddingProvider` into `update` (it currently takes only
 `storage`). Alternatively, fold the embed step into `supersede_node` itself so
 every supersession path is correct by construction.
 
+**Resolution.** Took the second option: `supersede_node` (and `merge_nodes`) now
+embed the replacement and `store_embedding` it, so every supersession/merge path
+is correct by construction. `EmbeddingProvider` is threaded through `update` and
+`apply_reflection` (whose now-redundant separate embed was removed). Verified by
+`test_update_embeds_the_replacement_node` and
+`test_corrected_node_is_retrievable_by_search`.
+
 ---
 
-## Issue 2 — `vector_search` / `search` does not filter superseded nodes
+## Issue 2 — `vector_search` / `search` does not filter superseded nodes ✅ RESOLVED
 
 **Severity: high.** Stale, superseded content is returned by retrieval and can
 outrank — or entirely displace — its active replacement.
@@ -63,9 +76,17 @@ flag defaulting to `False`. Note this is a real fix only in combination with
 Issue 1: filtering out the superseded node without indexing the replacement would
 leave the topic returning *nothing*.
 
+**Resolution.** `vector_search` now restricts results to **active** nodes in both
+backends — `storage/memory.py` skips any embedding whose node is missing or
+`status != ACTIVE`; `storage/surrealdb_adapter.py` scopes both the typed and
+untyped paths to active nodes. No flag was added (kept the signature stable).
+Verified by `test_vector_search_excludes_superseded_nodes` /
+`test_search_does_not_return_superseded_node` (and storage-level parity tests on
+both backends).
+
 ---
 
-## Issue 3 — `update` / `supersede_node` orphans the node's edges
+## Issue 3 — `update` / `supersede_node` orphans the node's edges ✅ RESOLVED
 
 **Severity: medium.** The replacement node inherits none of the original's
 relationships; supporting facts continue to point at the dead version.
@@ -82,6 +103,16 @@ edges onto the replacement.
 **Suggested fix.** On supersession, migrate the old node's edges to the new node
 (re-point `dst`/`src` as appropriate), excluding version-lineage edges. Decide
 explicitly whether to rewrite in place or copy-and-leave on the superseded node.
+
+**Resolution.** Chose **rewrite in place**: `supersede_node` re-points every
+non-lineage edge from the old node onto the replacement via a shared
+`_migrate_edges` helper (delete + re-store, preserving edge identity), leaving
+only `superseded_by`/`merged_into` on the dead node. This required a new
+`delete_edge` primitive, added to the storage protocol and both backends (and the
+instrumented wrapper). The same helper backs `merge_nodes`, where it also
+collapses self-loops and duplicate edges from combining multiple sources.
+Verified by `test_supporting_edge_follows_to_replacement` and
+`test_merge_migrates_and_dedupes_edges`.
 
 ---
 
@@ -106,9 +137,25 @@ only epistemic nodes (topic/fact/inference); `about` provenance edges are
 ingest-only and cannot be hand-rebuilt. Consequence: after Issue 3's manual edge
 repair, provenance to the original document cannot be restored on the new node.
 
+**Note (post Issue 3 fix).** The motivating scenario no longer arises: supersession
+now migrates the `about` provenance edge onto the replacement automatically, so no
+manual rebuild is needed. The `link` restriction itself is unchanged and kept.
+
 ---
 
 ## Combined effect & guidance
+
+**Resolved (2026-06-25, commit `22fc874`).** All three fixes landed together, so
+the compound failure no longer occurs: after `update`, the correction is embedded
+and searchable (1), the superseded original no longer ranks (2), and the
+replacement inherits its predecessor's edges (3). `update` is now safe for topics
+with children and for content that must stay searchable, and `apply_reflection
+enrichments` — which routes through the same `supersede_node` — is correct on all
+three counts as well. End-to-end check:
+`test_update_makes_correction_findable_and_hides_stale`.
+
+<details>
+<summary>Original guidance (pre-fix, retained for context)</summary>
 
 Issues 1–3 together mean **`update` should not be used to revise a topic that has
 children or that needs to remain searchable.** `update` is, at best, safe only
@@ -123,3 +170,5 @@ searchable). In other words, enrichment fixes findability of the new node but no
 the orphaned-edges or stale-still-ranks problems. A complete fix needs all three:
 embed on supersession (1), filter superseded from `vector_search` (2), and
 migrate edges on supersession (3).
+
+</details>

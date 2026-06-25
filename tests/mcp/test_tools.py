@@ -16,12 +16,14 @@ from epimemer.core.types import (
     Metacontext,
     NodeEdge,
     NodeStatus,
+    NodeType,
     Topic,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.tools import (
     add_timeline_timepoint,
+    apply_reflection,
     archive,
     create_metacontext,
     create_timelink,
@@ -321,6 +323,27 @@ class TestUpdate:
         new = await storage.get_node(result["new_node_id"])
         assert isinstance(new, Fact)
 
+    async def test_preserves_value_signal(self, storage, embedding_provider):
+        t = Topic(content="old content", source_id="s1")
+        t.value.confidence = 0.9
+        t.value.relevance = 0.8
+        t.value.novelty = 0.3
+        await storage.store_node(t)
+
+        result, _ = await update(t.id, "new content", storage, embedding_provider)
+        new = await storage.get_node(result["new_node_id"])
+
+        # A content correction must not reset reinforcement history.
+        assert new.value.confidence == 0.9
+        assert new.value.relevance == 0.8
+        assert new.value.novelty == 0.3
+
+        # The signal is copied, not shared: reinforcing the correction must not
+        # rewrite the superseded original's recorded value.
+        new.value.confidence = 0.1
+        old = await storage.get_node(t.id)
+        assert old.value.confidence == 0.9
+
 
 # --- Reflect tests ---
 
@@ -343,6 +366,76 @@ class TestReflect:
         assert "similar_pairs" in result
         assert "nodes_decayed" in result
         assert "contradictions" in result
+
+
+# --- Apply Reflection (merge) tests ---
+
+
+class TestApplyReflectionMerge:
+
+    async def _store_topic(self, storage, embedding_provider, content, vector):
+        t = Topic(content=content, source_id="s1")
+        await storage.store_node(t)
+        await storage.store_embedding(
+            EmbeddingRecord(
+                item_id=t.id, model_id=embedding_provider.model_id, vector=vector
+            )
+        )
+        return t
+
+    async def test_merge_collapses_near_duplicates(self, storage, embedding_provider):
+        a = await self._store_topic(storage, embedding_provider, "ML basics", [1.0, 0.0])
+        b = await self._store_topic(
+            storage, embedding_provider, "Machine learning basics", [1.0, 0.0]
+        )
+
+        result, _ = await apply_reflection(
+            storage, embedding_provider,
+            merges=[{"source_ids": [a.id, b.id], "content": "Machine learning basics"}],
+            merge_similarity_threshold=0.9,
+        )
+
+        assert result["topics_merged"] == 1
+        assert result["merges_rejected"] == 0
+        assert (await storage.get_node(a.id)).status == NodeStatus.MERGED
+        assert (await storage.get_node(b.id)).status == NodeStatus.MERGED
+        # Exactly one active topic remains — the merged node — and it is embedded.
+        actives = await storage.query_nodes(node_type=NodeType.TOPIC)
+        assert len(actives) == 1
+        assert actives[0].content == "Machine learning basics"
+        assert len(await storage.get_embeddings_for_item(actives[0].id)) == 1
+
+    async def test_merge_rejected_below_threshold(self, storage, embedding_provider):
+        a = await self._store_topic(storage, embedding_provider, "ML", [1.0, 0.0])
+        b = await self._store_topic(storage, embedding_provider, "Cooking", [0.0, 1.0])
+
+        result, _ = await apply_reflection(
+            storage, embedding_provider,
+            merges=[{"source_ids": [a.id, b.id], "content": "X"}],
+            merge_similarity_threshold=0.9,
+        )
+
+        assert result["topics_merged"] == 0
+        assert result["merges_rejected"] == 1
+        # Distinct topics are left untouched and active.
+        assert (await storage.get_node(a.id)).status == NodeStatus.ACTIVE
+        assert (await storage.get_node(b.id)).status == NodeStatus.ACTIVE
+
+    async def test_merge_refused_without_embeddings(self, storage, embedding_provider):
+        # Similarity cannot be verified without embeddings → refuse.
+        a = Topic(content="A", source_id="s1")
+        b = Topic(content="B", source_id="s2")
+        await storage.store_node(a)
+        await storage.store_node(b)
+
+        result, _ = await apply_reflection(
+            storage, embedding_provider,
+            merges=[{"source_ids": [a.id, b.id], "content": "AB"}],
+        )
+
+        assert result["topics_merged"] == 0
+        assert result["merges_rejected"] == 1
+        assert (await storage.get_node(a.id)).status == NodeStatus.ACTIVE
 
 
 # --- Query Graph tests ---

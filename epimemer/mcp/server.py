@@ -432,20 +432,29 @@ async def memory_apply_reflection(
     parents: list[dict] | None = None,
     splits: list[dict] | None = None,
     enrichments: list[dict] | None = None,
+    merges: list[dict] | None = None,
+    merge_similarity_threshold: float = 0.92,
 ) -> str:
     """Apply your reflection decisions to the memory graph.
 
     Call this after reviewing reflect results. All arguments optional.
 
     Args:
-        parents: Consolidate similar topics under a new parent.
-            Each: {children_ids: [str], content: str}
+        parents: Consolidate similar topics under a new parent (non-destructive;
+            children stay active). Each: {children_ids: [str], content: str}
             content = your synthesized parent description.
         splits: Split a broad topic into subtopics.
             Each: {topic_id: str, subtopics: [str]}
             subtopics = list of subtopic description strings.
         enrichments: Improve a topic's description using its associated material.
             Each: {topic_id: str, new_content: str}
+        merges: Fuse near-duplicate topics into one combined topic; the sources
+            are retired as MERGED history. Each: {source_ids: [str], content: str}.
+            A merge is applied only if every pair of sources is at least
+            merge_similarity_threshold similar, else it is rejected — use this
+            only for true duplicates, and `parents` for merely related topics.
+        merge_similarity_threshold: Minimum pairwise cosine similarity required
+            to allow a merge (default 0.92, deliberately high).
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -456,9 +465,12 @@ async def memory_apply_reflection(
             parents=parents,
             splits=splits,
             enrichments=enrichments,
+            merges=merges,
+            merge_similarity_threshold=merge_similarity_threshold,
         ),
         ctx,
-        f"parents={len(parents or [])} splits={len(splits or [])} enrichments={len(enrichments or [])}",
+        f"parents={len(parents or [])} splits={len(splits or [])} "
+        f"enrichments={len(enrichments or [])} merges={len(merges or [])}",
         lambda r, m: f"applied={m.nodes_returned}",
     )
 
