@@ -350,8 +350,13 @@ async def update(
     node_id: str,
     new_content: str,
     storage: StorageBackend,
+    embedding_provider: EmbeddingProvider,
 ) -> tuple[dict, ResponseMeta]:
-    """Update a node by creating a new version (supersession)."""
+    """Update a node by creating a new version (supersession).
+
+    The replacement is embedded and inherits the original's edges so it remains
+    searchable and connected (see supersede_node).
+    """
     from epimemer.pipelines.graph_construction.versioning import supersede_node
 
     old_node = await storage.get_node(node_id)
@@ -368,7 +373,7 @@ async def update(
     else:
         raise ValueError(f"Unknown node type for node '{node_id}'")
 
-    edge = await supersede_node(old_node, new_node, storage)
+    edge = await supersede_node(old_node, new_node, storage, embedding_provider)
 
     result = {
         "old_node_id": old_node.id,
@@ -569,12 +574,8 @@ async def apply_reflection(
             extraction_method=f"{old_topic.extraction_method}:enriched",
             metadata={**old_topic.metadata, "enriched_from": topic_id},
         )
-        await supersede_node(old_topic, enriched, storage)
-
-        vecs = await embedding_provider.embed([enriched.content])
-        await storage.store_embedding(
-            EmbeddingRecord(item_id=enriched.id, model_id=model_id, vector=vecs[0])
-        )
+        # supersede_node embeds the replacement and migrates edges.
+        await supersede_node(old_topic, enriched, storage, embedding_provider)
         topics_enriched += 1
 
     result = {
@@ -897,6 +898,37 @@ def _similar_names(target: str, candidates: list[str], max_results: int = 3) -> 
     ]
     scored.sort(key=lambda x: x[1], reverse=True)
     return [name for name, score in scored[:max_results] if score > 0.4]
+
+
+async def graph_stats(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
+    """Summarize the active graph: node counts by type, edge counts by type, totals.
+
+    Aggregate-only — does not materialize node or edge bodies.
+    """
+    node_counts = await storage.count_nodes_by_type()
+    edge_counts = await storage.count_edges_by_type()
+    metacontexts = await storage.query_metacontexts()
+    timelines = await storage.query_timelines()
+
+    nodes_by_type = {nt.value: node_counts.get(nt, 0) for nt in NodeType}
+    edges_by_type = {et.value: edge_counts.get(et, 0) for et in EdgeType}
+    total_nodes = sum(nodes_by_type.values())
+    total_edges = sum(edges_by_type.values())
+
+    result = {
+        "graph": storage.current_database,
+        "total_nodes": total_nodes,
+        "total_edges": total_edges,
+        "nodes_by_type": nodes_by_type,
+        # Only surface edge types that are actually present, to keep the
+        # response readable; the full zero-filled map is available above logic.
+        "edges_by_type": {k: v for k, v in edges_by_type.items() if v > 0},
+        "metacontexts": len(metacontexts),
+        "timelines": len(timelines),
+        "empty": total_nodes == 0 and total_edges == 0,
+    }
+    meta = ResponseMeta(nodes_returned=total_nodes, source_types=nodes_by_type)
+    return result, meta
 
 
 async def list_graphs(storage: StorageBackend) -> tuple[dict, ResponseMeta]:

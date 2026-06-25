@@ -27,6 +27,7 @@ from epimemer.mcp.tools import (
     create_timelink,
     create_timeline,
     get_metacontexts_for_node,
+    graph_stats,
     link,
     query_graph,
     query_timeline,
@@ -293,11 +294,11 @@ class TestLink:
 
 class TestUpdate:
 
-    async def test_supersedes_node(self, storage):
+    async def test_supersedes_node(self, storage, embedding_provider):
         t = Topic(content="old content", source_id="s1")
         await storage.store_node(t)
 
-        result, _ = await update(t.id, "new content", storage)
+        result, _ = await update(t.id, "new content", storage, embedding_provider)
         assert result["old_node_id"] == t.id
         assert result["new_node_id"] != t.id
 
@@ -308,15 +309,15 @@ class TestUpdate:
         assert new.content == "new content"
         assert isinstance(new, Topic)
 
-    async def test_rejects_nonexistent_node(self, storage):
+    async def test_rejects_nonexistent_node(self, storage, embedding_provider):
         with pytest.raises(ValueError, match="not found"):
-            await update("nonexistent", "content", storage)
+            await update("nonexistent", "content", storage, embedding_provider)
 
-    async def test_preserves_node_type(self, storage):
+    async def test_preserves_node_type(self, storage, embedding_provider):
         f = Fact(content="old fact", source_id="s1")
         await storage.store_node(f)
 
-        result, _ = await update(f.id, "new fact", storage)
+        result, _ = await update(f.id, "new fact", storage, embedding_provider)
         new = await storage.get_node(result["new_node_id"])
         assert isinstance(new, Fact)
 
@@ -622,3 +623,57 @@ class TestSearchWithMetacontext:
         for node in result["nodes"]:
             assert "metacontexts" in node
             assert "Real world" in node["metacontexts"]
+
+
+class TestGraphStats:
+
+    async def test_empty_graph(self, storage):
+        result, meta = await graph_stats(storage)
+        assert result["total_nodes"] == 0
+        assert result["total_edges"] == 0
+        assert result["empty"] is True
+        assert result["nodes_by_type"] == {"topic": 0, "fact": 0, "inference": 0}
+        assert result["edges_by_type"] == {}
+        assert result["metacontexts"] == 0
+        assert meta.nodes_returned == 0
+
+    async def test_counts_nodes_and_edges_by_type(self, storage):
+        topic = Topic(content="t", source_id="s1")
+        fact_a = Fact(content="f1", source_id="s1")
+        fact_b = Fact(content="f2", source_id="s1")
+        inference = Inference(content="i", source_id="s1")
+        for node in (topic, fact_a, fact_b, inference):
+            await storage.store_node(node)
+        await storage.store_edge(
+            NodeEdge(src_id=fact_a.id, dst_id=topic.id, type=EdgeType.SUPPORTS)
+        )
+        await storage.store_edge(
+            NodeEdge(src_id=fact_b.id, dst_id=topic.id, type=EdgeType.SUPPORTS)
+        )
+        await storage.store_edge(
+            NodeEdge(src_id=inference.id, dst_id=fact_a.id, type=EdgeType.DERIVED_FROM)
+        )
+
+        result, meta = await graph_stats(storage)
+        assert result["total_nodes"] == 4
+        assert result["nodes_by_type"] == {"topic": 1, "fact": 2, "inference": 1}
+        assert result["total_edges"] == 3
+        assert result["edges_by_type"] == {"supports": 2, "derived_from": 1}
+        assert result["empty"] is False
+        assert meta.nodes_returned == 4
+
+    async def test_excludes_superseded_nodes(self, storage):
+        topic = Topic(content="t", source_id="s1")
+        await storage.store_node(topic)
+        await storage.update_node_status(topic.id, NodeStatus.SUPERSEDED)
+
+        result, _ = await graph_stats(storage)
+        assert result["nodes_by_type"]["topic"] == 0
+        assert result["total_nodes"] == 0
+
+    async def test_counts_metacontexts(self, storage):
+        await storage.store_metacontext(Metacontext(content="Real world"))
+        await storage.store_metacontext(Metacontext(content="Fiction"))
+
+        result, _ = await graph_stats(storage)
+        assert result["metacontexts"] == 2

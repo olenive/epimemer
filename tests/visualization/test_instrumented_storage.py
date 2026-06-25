@@ -79,3 +79,47 @@ class TestMultiGraphPassThrough:
         nodes = await wrapped.viz_list_nodes("other")
         assert len(nodes) == 1
         assert wrapped.current_database == "default"
+
+
+class TestAggregatePassThrough:
+    """Read-only aggregate queries must pass through the instrumentation wrapper."""
+
+    async def test_count_nodes_by_type(self, bus):
+        from epimemer.core.types import Fact, NodeType
+
+        inner = InMemoryStorage()
+        wrapped = instrument_storage(inner, bus)
+        await wrapped.store_node(Topic(content="t", source_id="s1"))
+        await wrapped.store_node(Fact(content="f", source_id="s1"))
+
+        counts = await wrapped.count_nodes_by_type()
+        assert counts[NodeType.TOPIC] == 1
+        assert counts[NodeType.FACT] == 1
+
+    async def test_count_edges_by_type(self, bus):
+        from epimemer.core.types import EdgeType, NodeEdge
+
+        inner = InMemoryStorage()
+        wrapped = instrument_storage(inner, bus)
+        await wrapped.store_edge(
+            NodeEdge(src_id="a", dst_id="b", type=EdgeType.SUPPORTS)
+        )
+
+        counts = await wrapped.count_edges_by_type()
+        assert counts[EdgeType.SUPPORTS] == 1
+
+
+def test_wrapper_implements_full_storage_protocol(bus):
+    """Guard: the instrumentation wrapper must expose every StorageBackend method.
+
+    InstrumentedStorage delegates explicitly (no __getattr__ fallback), so a new
+    protocol method that isn't wrapped silently breaks at runtime. This fails fast.
+    """
+    from epimemer.storage.protocol import StorageBackend
+
+    wrapped = instrument_storage(InMemoryStorage(), bus)
+    protocol_members = [
+        name for name in dir(StorageBackend) if not name.startswith("_")
+    ]
+    missing = [name for name in protocol_members if not hasattr(wrapped, name)]
+    assert missing == [], f"InstrumentedStorage missing protocol members: {missing}"

@@ -44,6 +44,7 @@ from epimemer.pipelines.graph_construction.versioning import (
     merge_nodes,
     supersede_node,
 )
+from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.storage.memory import InMemoryStorage
 
 
@@ -106,6 +107,11 @@ def decomposed(
 @pytest.fixture
 def storage() -> InMemoryStorage:
     return InMemoryStorage()
+
+
+@pytest.fixture
+def embedding_provider() -> MockEmbeddingProvider:
+    return MockEmbeddingProvider(model_id="mock-embed", dimension=8)
 
 
 # --- Edge Creation Tests ---
@@ -483,7 +489,9 @@ class TestVersioning:
     """Test node supersession and merging."""
 
     @pytest.mark.asyncio
-    async def test_supersede_marks_old_as_superseded(self, storage: InMemoryStorage) -> None:
+    async def test_supersede_marks_old_as_superseded(
+        self, storage: InMemoryStorage, embedding_provider: MockEmbeddingProvider
+    ) -> None:
         old_topic = Topic(
             id="old-topic",
             content="Original topic",
@@ -496,7 +504,7 @@ class TestVersioning:
         )
         await storage.store_node(old_topic)
 
-        await supersede_node(old_topic, new_topic, storage)
+        await supersede_node(old_topic, new_topic, storage, embedding_provider)
 
         stored_old = await storage.get_node("old-topic")
         assert stored_old is not None
@@ -504,7 +512,9 @@ class TestVersioning:
         assert stored_old.superseded_at is not None
 
     @pytest.mark.asyncio
-    async def test_supersede_stores_new_node(self, storage: InMemoryStorage) -> None:
+    async def test_supersede_stores_new_node(
+        self, storage: InMemoryStorage, embedding_provider: MockEmbeddingProvider
+    ) -> None:
         old_topic = Topic(
             id="old-topic-2",
             content="Original topic",
@@ -517,14 +527,16 @@ class TestVersioning:
         )
         await storage.store_node(old_topic)
 
-        await supersede_node(old_topic, new_topic, storage)
+        await supersede_node(old_topic, new_topic, storage, embedding_provider)
 
         stored_new = await storage.get_node("new-topic-2")
         assert stored_new is not None
         assert stored_new.status == NodeStatus.ACTIVE
 
     @pytest.mark.asyncio
-    async def test_supersede_creates_edge(self, storage: InMemoryStorage) -> None:
+    async def test_supersede_creates_edge(
+        self, storage: InMemoryStorage, embedding_provider: MockEmbeddingProvider
+    ) -> None:
         old_topic = Topic(
             id="old-topic-3",
             content="Original topic",
@@ -537,14 +549,16 @@ class TestVersioning:
         )
         await storage.store_node(old_topic)
 
-        edge = await supersede_node(old_topic, new_topic, storage)
+        edge = await supersede_node(old_topic, new_topic, storage, embedding_provider)
 
         assert edge.src_id == "old-topic-3"
         assert edge.dst_id == "new-topic-3"
         assert edge.type == EdgeType.SUPERSEDED_BY
 
     @pytest.mark.asyncio
-    async def test_supersede_edge_stored_in_storage(self, storage: InMemoryStorage) -> None:
+    async def test_supersede_edge_stored_in_storage(
+        self, storage: InMemoryStorage, embedding_provider: MockEmbeddingProvider
+    ) -> None:
         old_topic = Topic(
             id="old-topic-4",
             content="Original",
@@ -557,7 +571,7 @@ class TestVersioning:
         )
         await storage.store_node(old_topic)
 
-        await supersede_node(old_topic, new_topic, storage)
+        await supersede_node(old_topic, new_topic, storage, embedding_provider)
 
         edges = await storage.get_edges_from("old-topic-4")
         assert len(edges) == 1
@@ -686,7 +700,9 @@ class TestStorageRoundTrip:
         assert len(inf_edges) == 1
 
     @pytest.mark.asyncio
-    async def test_round_trip_with_versioning(self, storage: InMemoryStorage) -> None:
+    async def test_round_trip_with_versioning(
+        self, storage: InMemoryStorage, embedding_provider: MockEmbeddingProvider
+    ) -> None:
         """Store nodes, supersede one, verify the full history is retrievable."""
         original = Topic(
             id="rt-v-orig",
@@ -700,7 +716,7 @@ class TestStorageRoundTrip:
             content="Updated topic",
             source_id="seg-1",
         )
-        edge = await supersede_node(original, updated, storage)
+        edge = await supersede_node(original, updated, storage, embedding_provider)
 
         # Original is superseded
         stored_orig = await storage.get_node("rt-v-orig")

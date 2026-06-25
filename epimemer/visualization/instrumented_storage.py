@@ -133,6 +133,13 @@ class InstrumentedStorage:
             node_type=node_type, status=status, at_time=at_time,
         )
 
+    async def count_nodes_by_type(
+        self,
+        *,
+        status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> dict[NodeType, int]:
+        return await self._inner.count_nodes_by_type(status=status)
+
     # --- Edges (write) ---
 
     async def store_edge(self, edge: NodeEdge) -> str:
@@ -143,6 +150,9 @@ class InstrumentedStorage:
             edge=edge_to_view(edge, graph),
         ))
         return result
+
+    async def delete_edge(self, edge_id: str) -> None:
+        await self._inner.delete_edge(edge_id)
 
     # --- Edges (read) ---
 
@@ -155,6 +165,9 @@ class InstrumentedStorage:
         self, node_id: str, *, edge_type: EdgeType | None = None
     ) -> Sequence[NodeEdge]:
         return await self._inner.get_edges_to(node_id, edge_type=edge_type)
+
+    async def count_edges_by_type(self) -> dict[EdgeType, int]:
+        return await self._inner.count_edges_by_type()
 
     # --- Embeddings (write) ---
 

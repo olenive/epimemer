@@ -174,11 +174,26 @@ class InMemoryStorage:
         node.status = status
         node.superseded_at = superseded_at
 
+    async def count_nodes_by_type(
+        self,
+        *,
+        status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> dict[NodeType, int]:
+        counts = {nt: 0 for nt in NodeType}
+        for node in self._g.nodes.values():
+            if node.status != status:
+                continue
+            counts[_CLASS_TO_NODE_TYPE[type(node)]] += 1
+        return counts
+
     # --- Edges ---
 
     async def store_edge(self, edge: NodeEdge) -> str:
         self._g.edges[edge.id] = edge
         return edge.id
+
+    async def delete_edge(self, edge_id: str) -> None:
+        self._g.edges.pop(edge_id, None)
 
     async def get_edges_from(
         self, node_id: str, *, edge_type: EdgeType | None = None
@@ -195,6 +210,12 @@ class InMemoryStorage:
             e for e in self._g.edges.values()
             if e.dst_id == node_id and (edge_type is None or e.type == edge_type)
         ]
+
+    async def count_edges_by_type(self) -> dict[EdgeType, int]:
+        counts = {et: 0 for et in EdgeType}
+        for edge in self._g.edges.values():
+            counts[edge.type] += 1
+        return counts
 
     # --- Embeddings ---
 
@@ -226,10 +247,13 @@ class InMemoryStorage:
         for emb in self._g.embeddings.values():
             if emb.model_id != model_id:
                 continue
+            node = self._g.nodes.get(emb.item_id)
+            # Only active epistemic nodes are retrievable. Superseded/merged
+            # nodes must never resurface via vector search, mirroring the
+            # status guard in query_nodes.
+            if node is None or node.status != NodeStatus.ACTIVE:
+                continue
             if node_type is not None:
-                node = self._g.nodes.get(emb.item_id)
-                if node is None:
-                    continue
                 expected_class = _NODE_TYPE_TO_CLASS[node_type]
                 if not isinstance(node, expected_class):
                     continue

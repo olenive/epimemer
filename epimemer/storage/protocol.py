@@ -74,10 +74,26 @@ class StorageBackend(Protocol):
         """Update a node's status (e.g., mark as superseded or merged)."""
         ...
 
+    async def count_nodes_by_type(
+        self,
+        *,
+        status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> dict[NodeType, int]:
+        """Count nodes grouped by type, filtered by status.
+
+        Backends should implement this as an aggregate query rather than
+        materializing nodes, so it stays cheap on large graphs.
+        """
+        ...
+
     # --- Edges ---
 
     async def store_edge(self, edge: NodeEdge) -> str:
         """Store an edge. Returns the edge id."""
+        ...
+
+    async def delete_edge(self, edge_id: str) -> None:
+        """Delete an edge by id. A no-op if the edge does not exist."""
         ...
 
     async def get_edges_from(
@@ -90,6 +106,14 @@ class StorageBackend(Protocol):
         self, node_id: str, *, edge_type: EdgeType | None = None
     ) -> Sequence[NodeEdge]:
         """Get incoming edges to a node, optionally filtered by type."""
+        ...
+
+    async def count_edges_by_type(self) -> dict[EdgeType, int]:
+        """Count edges grouped by edge type.
+
+        Backends should implement this as an aggregate query rather than
+        materializing edges, so it stays cheap on large graphs.
+        """
         ...
 
     # --- Embeddings ---

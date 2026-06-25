@@ -371,6 +371,7 @@ async def memory_update(
             node_id=node_id,
             new_content=new_content,
             storage=deps["storage"],
+            embedding_provider=deps["embedding_provider"],
         ),
         ctx,
         f"node={node_id}",
@@ -733,6 +734,29 @@ async def memory_get_metacontexts(
 
 
 # --- Graph management tools ---
+
+
+@mcp.tool(name="graph_stats")
+async def epimemer_graph_stats(
+    ctx: Context,
+) -> str:
+    """Summary statistics for the active knowledge graph.
+
+    Returns total node and edge counts, a breakdown by node type
+    (topic/fact/inference) and edge type, and metacontext/timeline totals.
+    Use this to gauge how much is stored before searching or reflecting.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.graph_stats",
+        lambda: tools.graph_stats(storage=deps["storage"]),
+        ctx,
+        "",
+        lambda r, m: (
+            f"nodes={r['total_nodes']} edges={r['total_edges']} "
+            f"mc={r['metacontexts']} graph={r['graph']}"
+        ),
+    )
 
 
 @mcp.tool(name="list_graphs")

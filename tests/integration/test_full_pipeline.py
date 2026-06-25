@@ -136,7 +136,9 @@ class TestFullPipeline:
         assert len(topics) > 0
         topic = topics[0]
 
-        update_result, _ = await update(topic.id, "Python is a versatile language", storage)
+        update_result, _ = await update(
+            topic.id, "Python is a versatile language", storage, embedding_provider
+        )
         assert update_result["old_node_id"] == topic.id
         assert update_result["new_node_id"] != topic.id
 

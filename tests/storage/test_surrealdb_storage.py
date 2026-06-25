@@ -132,6 +132,54 @@ class TestEdgeStorage:
         assert len(await store.get_edges_from("x")) == 0
         assert len(await store.get_edges_to("x")) == 0
 
+    async def test_delete_edge(self, store):
+        e = NodeEdge(src_id="a", dst_id="b", type=EdgeType.SUPPORTS)
+        await store.store_edge(e)
+        assert len(await store.get_edges_from("a")) == 1
+        await store.delete_edge(e.id)
+        assert len(await store.get_edges_from("a")) == 0
+        assert len(await store.get_edges_to("b")) == 0
+
+    async def test_delete_missing_edge_is_noop(self, store):
+        await store.delete_edge("nonexistent")  # must not raise
+
+
+class TestCounts:
+
+    async def test_count_nodes_empty(self, store):
+        counts = await store.count_nodes_by_type()
+        assert counts == {NodeType.TOPIC: 0, NodeType.FACT: 0, NodeType.INFERENCE: 0}
+
+    async def test_count_nodes_by_type(self, store):
+        await store.store_node(Topic(content="t", source_id="s1"))
+        await store.store_node(Fact(content="f1", source_id="s1"))
+        await store.store_node(Fact(content="f2", source_id="s1"))
+        await store.store_node(Inference(content="i", source_id="s1"))
+        counts = await store.count_nodes_by_type()
+        assert counts[NodeType.TOPIC] == 1
+        assert counts[NodeType.FACT] == 2
+        assert counts[NodeType.INFERENCE] == 1
+
+    async def test_count_nodes_respects_status(self, store):
+        topic = Topic(content="t", source_id="s1")
+        await store.store_node(topic)
+        await store.update_node_status(topic.id, NodeStatus.SUPERSEDED)
+        active = await store.count_nodes_by_type(status=NodeStatus.ACTIVE)
+        superseded = await store.count_nodes_by_type(status=NodeStatus.SUPERSEDED)
+        assert active[NodeType.TOPIC] == 0
+        assert superseded[NodeType.TOPIC] == 1
+
+    async def test_count_edges_by_type(self, store):
+        await store.store_edge(NodeEdge(src_id="a", dst_id="b", type=EdgeType.SUPPORTS))
+        await store.store_edge(NodeEdge(src_id="c", dst_id="b", type=EdgeType.SUPPORTS))
+        await store.store_edge(
+            NodeEdge(src_id="d", dst_id="a", type=EdgeType.DERIVED_FROM)
+        )
+        counts = await store.count_edges_by_type()
+        assert counts[EdgeType.SUPPORTS] == 2
+        assert counts[EdgeType.DERIVED_FROM] == 1
+        assert counts[EdgeType.ABOUT] == 0
+
 
 class TestEmbeddingStorage:
 
@@ -160,3 +208,14 @@ class TestEmbeddingStorage:
         assert len(results) == 1
         assert results[0][0] == t.id
         assert results[0][1] > 0.9
+
+    async def test_vector_search_excludes_superseded(self, store):
+        t = Topic(content="ML", source_id="s1")
+        await store.store_node(t)
+        emb = EmbeddingRecord(item_id=t.id, model_id="test", vector=[1.0, 0.0, 0.0])
+        await store.store_embedding(emb)
+        await store.update_node_status(t.id, NodeStatus.SUPERSEDED)
+
+        # Exact-match query, but the node is superseded → must be filtered out.
+        results = await store.vector_search([1.0, 0.0, 0.0], "test", k=5)
+        assert all(item_id != t.id for item_id, _ in results)

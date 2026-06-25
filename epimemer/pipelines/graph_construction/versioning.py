@@ -8,28 +8,79 @@ from datetime import datetime, timezone
 
 from epimemer.core.types import (
     EdgeType,
+    EmbeddingRecord,
     EpistemicNode,
     NodeEdge,
     NodeStatus,
     Topic,
 )
+from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.storage.protocol import StorageBackend
+
+
+# Version-lineage edges describe history, not knowledge. They are anchored to a
+# specific node version and must NOT be migrated when a node is superseded.
+_LINEAGE_EDGE_TYPES: set[EdgeType] = {EdgeType.SUPERSEDED_BY, EdgeType.MERGED_INTO}
+
+
+async def _migrate_edges(
+    old_id: str,
+    new_id: str,
+    storage: StorageBackend,
+) -> int:
+    """Re-point every non-lineage edge from an old node onto its replacement.
+
+    The endpoint referencing ``old_id`` is rewritten to ``new_id`` while the
+    edge's identity, type, weight, and metadata are preserved. Version-lineage
+    edges are left on the old node. Returns the number of edges migrated.
+    """
+    outgoing = await storage.get_edges_from(old_id)
+    incoming = await storage.get_edges_to(old_id)
+
+    migrated = 0
+    seen: set[str] = set()
+    for edge in [*outgoing, *incoming]:
+        if edge.id in seen:
+            continue
+        seen.add(edge.id)
+        if edge.type in _LINEAGE_EDGE_TYPES:
+            continue
+
+        new_src = new_id if edge.src_id == old_id else edge.src_id
+        new_dst = new_id if edge.dst_id == old_id else edge.dst_id
+        if new_src == edge.src_id and new_dst == edge.dst_id:
+            continue
+
+        repointed = edge.model_copy(update={"src_id": new_src, "dst_id": new_dst})
+        await storage.delete_edge(edge.id)
+        await storage.store_edge(repointed)
+        migrated += 1
+
+    return migrated
 
 
 async def supersede_node(
     old_node: EpistemicNode,
     new_node: EpistemicNode,
     storage: StorageBackend,
+    embedding_provider: EmbeddingProvider,
 ) -> NodeEdge:
     """Create a new version of a node.
 
-    Marks the old node as superseded, stores the new node, and creates
-    a superseded_by edge from old to new.
+    Marks the old node as superseded, stores and embeds the new node, migrates
+    the old node's relationships onto the replacement, and creates a
+    superseded_by edge from old to new.
+
+    Embedding and edge migration are done here so that *every* supersession path
+    is correct by construction: a replacement that is not embedded is invisible
+    to vector search, and one that does not inherit its predecessor's edges is
+    orphaned from its supporting evidence.
 
     Args:
         old_node: The node being superseded.
         new_node: The replacement node.
         storage: The storage backend.
+        embedding_provider: Used to embed the replacement node's content.
 
     Returns:
         The superseded_by edge linking old to new.
@@ -43,8 +94,20 @@ async def supersede_node(
         superseded_at=now,
     )
 
-    # Store the new node
+    # Store the new node and index it so search can return the correction
     await storage.store_node(new_node)
+    vectors = await embedding_provider.embed([new_node.content])
+    await storage.store_embedding(
+        EmbeddingRecord(
+            item_id=new_node.id,
+            model_id=embedding_provider.model_id,
+            vector=vectors[0],
+        )
+    )
+
+    # Inherit the old node's relationships (supporting facts, provenance,
+    # metacontexts, ...) — but not its version lineage.
+    await _migrate_edges(old_node.id, new_node.id, storage)
 
     # Create superseded_by edge
     edge = NodeEdge(

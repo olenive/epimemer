@@ -323,6 +323,20 @@ class SurrealDBStorage:
                 return
         raise KeyError(f"Node {node_id} not found")
 
+    async def count_nodes_by_type(
+        self,
+        *,
+        status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> dict[NodeType, int]:
+        counts = {nt: 0 for nt in NodeType}
+        for node_type, table in _NODE_TYPE_TO_TABLE.items():
+            rows = await self.db.query(
+                f"SELECT count() AS c FROM {table} WHERE status = $status GROUP ALL",
+                {"status": status.value},
+            )
+            counts[node_type] = rows[0]["c"] if rows else 0
+        return counts
+
     # --- Edges ---
 
     async def store_edge(self, edge: NodeEdge) -> str:
@@ -330,6 +344,12 @@ class SurrealDBStorage:
         data["type"] = edge.type.value
         await self.db.query("INSERT INTO node_edge $data", {"data": data})
         return edge.id
+
+    async def delete_edge(self, edge_id: str) -> None:
+        await self.db.query(
+            "DELETE node_edge WHERE uid = $uid",
+            {"uid": edge_id},
+        )
 
     async def get_edges_from(
         self, node_id: str, *, edge_type: EdgeType | None = None
@@ -360,6 +380,18 @@ class SurrealDBStorage:
                 {"dst_id": node_id, "type": edge_type.value},
             )
         return [NodeEdge.model_validate(_clean_record(r)) for r in rows]
+
+    async def count_edges_by_type(self) -> dict[EdgeType, int]:
+        counts = {et: 0 for et in EdgeType}
+        rows = await self.db.query(
+            "SELECT type, count() AS c FROM node_edge GROUP BY type"
+        )
+        for row in rows or []:
+            raw_type = row.get("type")
+            if raw_type is None:
+                continue
+            counts[EdgeType(raw_type)] = row["c"]
+        return counts
 
     # --- Embeddings ---
 
@@ -393,13 +425,20 @@ class SurrealDBStorage:
     ) -> Sequence[tuple[str, float]]:
         # TODO: When SurrealDB adds native HNSW vector indexes, switch to those.
         # For now, brute-force via SurrealQL vector::similarity::cosine().
+        #
+        # Both paths restrict results to *active* nodes: superseded/merged nodes
+        # must never resurface via vector search. The typed path scopes to one
+        # node table; the untyped path spans all three.
         if node_type is not None:
             table = _NODE_TYPE_TO_TABLE[node_type]
-            type_filter = (
+            active_filter = (
                 f"AND item_id IN (SELECT VALUE uid FROM {table} WHERE status = 'active')"
             )
         else:
-            type_filter = ""
+            active_filter = (
+                "AND item_id IN "
+                "(SELECT VALUE uid FROM topic, fact, inference WHERE status = 'active')"
+            )
 
         rows = await self.db.query(
             f"""
@@ -407,7 +446,7 @@ class SurrealDBStorage:
                 item_id,
                 vector::similarity::cosine(vector, $query_vector) AS score
             FROM embedding
-            WHERE model_id = $model_id {type_filter}
+            WHERE model_id = $model_id {active_filter}
             ORDER BY score DESC
             LIMIT $k
             """,
