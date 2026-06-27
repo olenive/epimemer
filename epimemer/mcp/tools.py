@@ -405,6 +405,35 @@ async def update(
     return result, meta
 
 
+async def supersede_by(
+    old_id: str,
+    existing_id: str,
+    storage: StorageBackend,
+) -> tuple[dict, ResponseMeta]:
+    """Supersede a node by an already-existing node.
+
+    Use this to resolve an outdated fact or a same-frame contradiction where the
+    current truth already exists in the graph (rather than new content). The old
+    node is marked superseded (superseded_by → existing); inferences that
+    depended on it are flagged evidence_stale; the existing node keeps its own
+    edges. Unlike `update`, no new node is created.
+    """
+    from epimemer.pipelines.graph_construction.versioning import supersede_by_existing
+
+    if old_id == existing_id:
+        raise ValueError("A node cannot supersede itself")
+    old = await storage.get_node(old_id)
+    if old is None:
+        raise ValueError(f"Node '{old_id}' not found")
+    if await storage.get_node(existing_id) is None:
+        raise ValueError(f"Node '{existing_id}' not found")
+
+    edge = await supersede_by_existing(old, existing_id, storage)
+    result = {"superseded_id": old_id, "by_id": existing_id, "edge_id": edge.id}
+    meta = ResponseMeta(nodes_returned=2)
+    return result, meta
+
+
 # --- Reflect (analysis — no LLM) ---
 
 

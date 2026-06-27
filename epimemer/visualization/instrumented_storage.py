@@ -164,10 +164,14 @@ class InstrumentedStorage:
         lineage_edge: NodeEdge,
         *,
         superseded_at: datetime,
+        evidence_edges: Sequence[NodeEdge] = (),
+        clear_edge_ids: Sequence[str] = (),
     ) -> None:
         await self._inner.supersede_node_tx(
             old_node, new_node, new_embedding, lineage_edge,
             superseded_at=superseded_at,
+            evidence_edges=evidence_edges,
+            clear_edge_ids=clear_edge_ids,
         )
         # Publish only after the atomic operation succeeds.
         graph = self._inner.current_database
@@ -179,6 +183,35 @@ class InstrumentedStorage:
         ))
         await self._bus.publish(NodeStored(graph=graph, node=node_to_view(new_node, graph)))
         await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(lineage_edge, graph)))
+        for edge in evidence_edges:
+            await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
+
+    async def supersede_by_existing_tx(
+        self,
+        old_node: EpistemicNode,
+        existing_id: str,
+        lineage_edge: NodeEdge,
+        *,
+        superseded_at: datetime,
+        evidence_edges: Sequence[NodeEdge] = (),
+        clear_edge_ids: Sequence[str] = (),
+    ) -> None:
+        await self._inner.supersede_by_existing_tx(
+            old_node, existing_id, lineage_edge,
+            superseded_at=superseded_at,
+            evidence_edges=evidence_edges,
+            clear_edge_ids=clear_edge_ids,
+        )
+        graph = self._inner.current_database
+        await self._bus.publish(NodeStatusChanged(
+            graph=graph,
+            node_id=old_node.id,
+            old_status=old_node.status.value,
+            new_status=NodeStatus.SUPERSEDED.value,
+        ))
+        await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(lineage_edge, graph)))
+        for edge in evidence_edges:
+            await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
 
     async def merge_nodes_tx(
         self,

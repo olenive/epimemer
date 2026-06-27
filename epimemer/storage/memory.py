@@ -254,6 +254,8 @@ class InMemoryStorage:
         lineage_edge: NodeEdge,
         *,
         superseded_at: datetime,
+        evidence_edges: Sequence[NodeEdge] = (),
+        clear_edge_ids: Sequence[str] = (),
     ) -> None:
         # Snapshot the active graph so any failure leaves it untouched.
         snapshot = copy.deepcopy(self._g)
@@ -267,6 +269,37 @@ class InMemoryStorage:
             self._g.embeddings[new_embedding.id] = new_embedding
             self._migrate_edges_inplace({old_node.id}, new_node.id)
             self._g.edges[lineage_edge.id] = lineage_edge
+            for edge in evidence_edges:
+                self._g.edges[edge.id] = edge
+            for edge_id in clear_edge_ids:
+                self._g.edges.pop(edge_id, None)
+        except Exception:
+            self._graphs[self._database] = snapshot
+            raise
+
+    async def supersede_by_existing_tx(
+        self,
+        old_node: EpistemicNode,
+        existing_id: str,
+        lineage_edge: NodeEdge,
+        *,
+        superseded_at: datetime,
+        evidence_edges: Sequence[NodeEdge] = (),
+        clear_edge_ids: Sequence[str] = (),
+    ) -> None:
+        snapshot = copy.deepcopy(self._g)
+        try:
+            node = self._g.nodes.get(old_node.id)
+            if node is None:
+                raise KeyError(f"Node {old_node.id} not found")
+            node.status = NodeStatus.SUPERSEDED
+            node.superseded_at = superseded_at
+            # No new node, no embedding, no migration — the existing node stands.
+            self._g.edges[lineage_edge.id] = lineage_edge
+            for edge in evidence_edges:
+                self._g.edges[edge.id] = edge
+            for edge_id in clear_edge_ids:
+                self._g.edges.pop(edge_id, None)
         except Exception:
             self._graphs[self._database] = snapshot
             raise

@@ -1,7 +1,14 @@
 # Epimemer — Epistemic Review Loop (design)
 
-**Status:** Phase 1 (atomicity) ✅ done; Phase 2a (vocabulary) ✅ done;
-Phase 2b–2e pending (as of 2026-06-27).
+**Status (2026-06-27):** Phase 1 (atomicity) ✅; Phase 2a (vocabulary) ✅;
+Phase 2b in progress — supersede-by-existing + Case B propagation ✅, detection
+& recording tools (`check_conflicts`, `record_contradiction`, `record_variant`)
+pending; Phase 2c–2e pending.
+
+Decisions settled for 2b: separate `check_conflicts` tool (opt-in); pre-compute
+frame + scores; dedicated verdict tools; agent authority per §7; build
+`supersede(old, by=existing)` (done, **does not migrate edges**); Case B
+direct-only auto-flag (no inference-on-inference yet).
 **Purpose:** single spec for how Epimemer reviews and reconciles knowledge over
 time — outdated facts, stale inferences, contradictions, and frame-relative
 ("metacontext") truth — and how that work is split between the agent and the

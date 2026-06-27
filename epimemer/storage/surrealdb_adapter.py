@@ -70,6 +70,13 @@ def _serialize(model) -> dict:
     return data
 
 
+def _edge_row(edge: NodeEdge) -> dict:
+    """Serialize an edge for SurrealDB (uid-renamed, enum type as its value)."""
+    row = _serialize(edge)
+    row["type"] = edge.type.value
+    return row
+
+
 def _clean_record(record: dict) -> dict:
     """Clean a SurrealDB record for Pydantic deserialization.
 
@@ -423,10 +430,10 @@ class SurrealDBStorage:
         lineage_edge: NodeEdge,
         *,
         superseded_at: datetime,
+        evidence_edges: Sequence[NodeEdge] = (),
+        clear_edge_ids: Sequence[str] = (),
     ) -> None:
         excluded = [t.value for t in NON_KNOWLEDGE_EDGE_TYPES]
-        lineage_data = _serialize(lineage_edge)
-        lineage_data["type"] = lineage_edge.type.value
 
         statements = [
             f"UPDATE {_node_to_table(old_node)} SET status = $status, "
@@ -440,19 +447,58 @@ class SurrealDBStorage:
             "DELETE node_edge WHERE src_id = $new_uid AND dst_id = $new_uid",
             "INSERT INTO node_edge $lineage_data",
         ]
-        await self._run_transaction(
-            statements,
-            {
-                "status": NodeStatus.SUPERSEDED.value,
-                "sup_at": superseded_at.isoformat(),
-                "old_uid": old_node.id,
-                "new_uid": new_node.id,
-                "new_data": _serialize(new_node),
-                "emb_data": _serialize(new_embedding),
-                "excluded": excluded,
-                "lineage_data": lineage_data,
-            },
-        )
+        params: dict = {
+            "status": NodeStatus.SUPERSEDED.value,
+            "sup_at": superseded_at.isoformat(),
+            "old_uid": old_node.id,
+            "new_uid": new_node.id,
+            "new_data": _serialize(new_node),
+            "emb_data": _serialize(new_embedding),
+            "excluded": excluded,
+            "lineage_data": _edge_row(lineage_edge),
+        }
+        self._append_review_writes(statements, params, evidence_edges, clear_edge_ids)
+        await self._run_transaction(statements, params)
+
+    async def supersede_by_existing_tx(
+        self,
+        old_node: EpistemicNode,
+        existing_id: str,
+        lineage_edge: NodeEdge,
+        *,
+        superseded_at: datetime,
+        evidence_edges: Sequence[NodeEdge] = (),
+        clear_edge_ids: Sequence[str] = (),
+    ) -> None:
+        statements = [
+            f"UPDATE {_node_to_table(old_node)} SET status = $status, "
+            f"superseded_at = $sup_at WHERE uid = $old_uid",
+            "INSERT INTO node_edge $lineage_data",
+        ]
+        params: dict = {
+            "status": NodeStatus.SUPERSEDED.value,
+            "sup_at": superseded_at.isoformat(),
+            "old_uid": old_node.id,
+            "lineage_data": _edge_row(lineage_edge),
+        }
+        self._append_review_writes(statements, params, evidence_edges, clear_edge_ids)
+        await self._run_transaction(statements, params)
+
+    @staticmethod
+    def _append_review_writes(
+        statements: list[str],
+        params: dict,
+        evidence_edges: Sequence[NodeEdge],
+        clear_edge_ids: Sequence[str],
+    ) -> None:
+        """Append optional evidence-edge inserts and candidate-edge deletes."""
+        evidence_rows = [_edge_row(edge) for edge in evidence_edges]
+        if evidence_rows:
+            statements.append("INSERT INTO node_edge $evidence_rows")
+            params["evidence_rows"] = evidence_rows
+        if clear_edge_ids:
+            statements.append("DELETE node_edge WHERE uid IN $clear_ids")
+            params["clear_ids"] = list(clear_edge_ids)
 
     async def merge_nodes_tx(
         self,

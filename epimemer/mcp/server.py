@@ -379,6 +379,37 @@ async def memory_update(
     )
 
 
+@mcp.tool(name="supersede_by")
+async def memory_supersede_by(
+    old_id: str,
+    existing_id: str,
+    ctx: Context,
+) -> str:
+    """Supersede a node by an already-existing node (resolve outdated/contradiction).
+
+    Marks old_id superseded by existing_id (superseded_by edge), flags inferences
+    that depended on old_id as evidence_stale, and clears any supersession
+    candidacy on it. The existing node is unchanged. Use when the current truth
+    is already in the graph; use `update` when you have new content.
+
+    Args:
+        old_id: The node being retired.
+        existing_id: The existing node that supersedes it.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.supersede_by",
+        lambda: tools.supersede_by(
+            old_id=old_id,
+            existing_id=existing_id,
+            storage=deps["storage"],
+        ),
+        ctx,
+        f"old={old_id} by={existing_id}",
+        lambda r, m: f"superseded={r['superseded_id']}",
+    )
+
+
 @mcp.tool(name="reflect")
 async def memory_reflect(
     ctx: Context,

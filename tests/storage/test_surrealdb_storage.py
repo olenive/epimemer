@@ -296,6 +296,45 @@ class TestAtomicOperations:
         # The fresh node never landed.
         assert await store.get_node(fresh.id) is None
 
+    async def test_supersede_by_existing_tx_flags_and_clears(self, store):
+        fact = Fact(content="old", source_id="s1")
+        existing = Fact(content="new", source_id="s1")
+        inf = Inference(content="inference", source_id="s1")
+        for node in (fact, existing, inf):
+            await store.store_node(node)
+        await store.store_edge(
+            NodeEdge(src_id=inf.id, dst_id=fact.id, type=EdgeType.DERIVED_FROM)
+        )
+        candidate = NodeEdge(
+            src_id=existing.id, dst_id=fact.id, type=EdgeType.SUPERSESSION_CANDIDATE
+        )
+        await store.store_edge(candidate)
+
+        lineage = NodeEdge(
+            src_id=fact.id, dst_id=existing.id, type=EdgeType.SUPERSEDED_BY
+        )
+        evidence = [
+            NodeEdge(src_id=fact.id, dst_id=inf.id, type=EdgeType.EVIDENCE_SUPERSEDED)
+        ]
+        await store.supersede_by_existing_tx(
+            fact, existing.id, lineage,
+            superseded_at=datetime.now(timezone.utc),
+            evidence_edges=evidence,
+            clear_edge_ids=[candidate.id],
+        )
+
+        assert (await store.get_node(fact.id)).status == NodeStatus.SUPERSEDED
+        assert (await store.get_node(existing.id)).status == NodeStatus.ACTIVE
+        assert len(
+            await store.get_edges_from(fact.id, edge_type=EdgeType.SUPERSEDED_BY)
+        ) == 1
+        assert len(
+            await store.get_edges_to(inf.id, edge_type=EdgeType.EVIDENCE_SUPERSEDED)
+        ) == 1
+        assert await store.get_edges_to(
+            fact.id, edge_type=EdgeType.SUPERSESSION_CANDIDATE
+        ) == []
+
     async def test_merge_tx_migrates_dedupes_and_drops_self_loops(self, store):
         a = Topic(content="a", source_id="s1")
         b = Topic(content="b", source_id="s1")

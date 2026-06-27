@@ -38,6 +38,7 @@ from epimemer.mcp.tools import (
     search,
     segment_text,
     store_decomposition,
+    supersede_by,
     update,
 )
 from epimemer.storage.memory import InMemoryStorage
@@ -343,6 +344,103 @@ class TestUpdate:
         new.value.confidence = 0.1
         old = await storage.get_node(t.id)
         assert old.value.confidence == 0.9
+
+
+# --- Supersede-by-existing + Case B tests ---
+
+
+class TestSupersedeBy:
+
+    async def test_supersedes_old_by_existing(self, storage):
+        old = Fact(content="CEO is X", source_id="s1")
+        new = Fact(content="CEO is Y", source_id="s1")
+        await storage.store_node(old)
+        await storage.store_node(new)
+
+        result, _ = await supersede_by(old.id, new.id, storage)
+
+        assert result["superseded_id"] == old.id and result["by_id"] == new.id
+        assert (await storage.get_node(old.id)).status == NodeStatus.SUPERSEDED
+        assert (await storage.get_node(new.id)).status == NodeStatus.ACTIVE
+        lineage = await storage.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)
+        assert len(lineage) == 1 and lineage[0].dst_id == new.id
+
+    async def test_does_not_migrate_edges(self, storage):
+        # The existing node carries its own evidence — old's support must not move.
+        old = Fact(content="old", source_id="s1")
+        new = Fact(content="new", source_id="s1")
+        support = Fact(content="2020 report", source_id="s1")
+        for node in (old, new, support):
+            await storage.store_node(node)
+        await storage.store_edge(
+            NodeEdge(src_id=support.id, dst_id=old.id, type=EdgeType.SUPPORTS)
+        )
+
+        await supersede_by(old.id, new.id, storage)
+
+        assert await storage.get_edges_to(new.id, edge_type=EdgeType.SUPPORTS) == []
+        assert len(await storage.get_edges_to(old.id, edge_type=EdgeType.SUPPORTS)) == 1
+
+    async def test_rejects_self_supersede(self, storage):
+        t = Topic(content="t", source_id="s1")
+        await storage.store_node(t)
+        with pytest.raises(ValueError, match="cannot supersede itself"):
+            await supersede_by(t.id, t.id, storage)
+
+    async def test_rejects_missing_nodes(self, storage):
+        t = Topic(content="t", source_id="s1")
+        await storage.store_node(t)
+        with pytest.raises(ValueError, match="not found"):
+            await supersede_by("nope", t.id, storage)
+        with pytest.raises(ValueError, match="not found"):
+            await supersede_by(t.id, "nope", storage)
+
+
+class TestCaseBEvidenceStaleness:
+
+    async def test_supersede_by_flags_inference_via_derived_from(self, storage):
+        fact = Fact(content="80% effective", source_id="s1")
+        newer = Fact(content="30% effective", source_id="s1")
+        inf = Inference(content="drug is highly effective", source_id="s1")
+        for node in (fact, newer, inf):
+            await storage.store_node(node)
+        await storage.store_edge(
+            NodeEdge(src_id=inf.id, dst_id=fact.id, type=EdgeType.DERIVED_FROM)
+        )
+
+        await supersede_by(fact.id, newer.id, storage)
+
+        flags = await storage.get_edges_to(inf.id, edge_type=EdgeType.EVIDENCE_SUPERSEDED)
+        assert len(flags) == 1 and flags[0].src_id == fact.id
+
+    async def test_update_flags_inference_via_supports(self, storage, embedding_provider):
+        fact = Fact(content="fact", source_id="s1")
+        inf = Inference(content="inference", source_id="s1")
+        await storage.store_node(fact)
+        await storage.store_node(inf)
+        await storage.store_edge(
+            NodeEdge(src_id=fact.id, dst_id=inf.id, type=EdgeType.SUPPORTS)
+        )
+
+        await update(fact.id, "corrected fact", storage, embedding_provider)
+
+        flags = await storage.get_edges_to(inf.id, edge_type=EdgeType.EVIDENCE_SUPERSEDED)
+        assert len(flags) == 1
+
+    async def test_supersede_clears_candidate_edges(self, storage):
+        fact = Fact(content="old", source_id="s1")
+        newer = Fact(content="new", source_id="s1")
+        await storage.store_node(fact)
+        await storage.store_node(newer)
+        await storage.store_edge(
+            NodeEdge(src_id=newer.id, dst_id=fact.id, type=EdgeType.SUPERSESSION_CANDIDATE)
+        )
+
+        await supersede_by(fact.id, newer.id, storage)
+
+        assert await storage.get_edges_to(
+            fact.id, edge_type=EdgeType.SUPERSESSION_CANDIDATE
+        ) == []
 
 
 # --- Reflect tests ---

@@ -44,6 +44,11 @@ async def supersede_node(
     Returns:
         The superseded_by edge linking old to new.
     """
+    from epimemer.pipelines.reflection.review import (
+        find_candidate_edge_ids_into,
+        plan_evidence_stale_edges,
+    )
+
     now = datetime.now(timezone.utc)
 
     vectors = await embedding_provider.embed([new_node.content])
@@ -57,9 +62,50 @@ async def supersede_node(
         dst_id=new_node.id,
         type=EdgeType.SUPERSEDED_BY,
     )
+    # Flag dependent inferences (Case B) and clear any candidacy on the old node.
+    evidence_edges = await plan_evidence_stale_edges(old_node.id, storage)
+    clear_edge_ids = await find_candidate_edge_ids_into(old_node.id, storage)
 
     await storage.supersede_node_tx(
         old_node, new_node, new_embedding, lineage_edge, superseded_at=now,
+        evidence_edges=evidence_edges, clear_edge_ids=clear_edge_ids,
+    )
+    return lineage_edge
+
+
+async def supersede_by_existing(
+    old_node: EpistemicNode,
+    existing_id: str,
+    storage: StorageBackend,
+) -> NodeEdge:
+    """Supersede ``old_node`` by an already-existing node.
+
+    Used to resolve a contradiction/staleness where the current truth is a node
+    that already exists (rather than freshly-written content). Marks the old node
+    superseded with a superseded_by edge (old → existing), flags dependent
+    inferences (Case B), and clears any supersession_candidate edges on the old
+    node — atomically. The existing node is unchanged: its evidence is its own,
+    so the old node's edges are deliberately NOT migrated onto it.
+
+    Returns the superseded_by edge.
+    """
+    from epimemer.pipelines.reflection.review import (
+        find_candidate_edge_ids_into,
+        plan_evidence_stale_edges,
+    )
+
+    now = datetime.now(timezone.utc)
+    lineage_edge = NodeEdge(
+        src_id=old_node.id,
+        dst_id=existing_id,
+        type=EdgeType.SUPERSEDED_BY,
+    )
+    evidence_edges = await plan_evidence_stale_edges(old_node.id, storage)
+    clear_edge_ids = await find_candidate_edge_ids_into(old_node.id, storage)
+
+    await storage.supersede_by_existing_tx(
+        old_node, existing_id, lineage_edge, superseded_at=now,
+        evidence_edges=evidence_edges, clear_edge_ids=clear_edge_ids,
     )
     return lineage_edge
 

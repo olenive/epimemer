@@ -131,13 +131,37 @@ class StorageBackend(Protocol):
         lineage_edge: NodeEdge,
         *,
         superseded_at: datetime,
+        evidence_edges: Sequence[NodeEdge] = (),
+        clear_edge_ids: Sequence[str] = (),
     ) -> None:
         """Atomically supersede ``old_node`` with ``new_node``.
 
         Marks the old node superseded, stores and embeds the new node, migrates
         the old node's non-history edges onto the new node, and persists
-        ``lineage_edge`` (the superseded_by edge). If any step fails, the whole
-        operation is rolled back.
+        ``lineage_edge`` (the superseded_by edge). Also inserts ``evidence_edges``
+        (e.g. evidence_superseded flags on dependent inferences) and deletes
+        ``clear_edge_ids`` (e.g. resolved supersession_candidate edges). If any
+        step fails, the whole operation is rolled back.
+        """
+        ...
+
+    async def supersede_by_existing_tx(
+        self,
+        old_node: EpistemicNode,
+        existing_id: str,
+        lineage_edge: NodeEdge,
+        *,
+        superseded_at: datetime,
+        evidence_edges: Sequence[NodeEdge] = (),
+        clear_edge_ids: Sequence[str] = (),
+    ) -> None:
+        """Atomically supersede ``old_node`` by an already-existing node.
+
+        Marks the old node superseded and persists ``lineage_edge`` (superseded_by,
+        old → existing). Unlike ``supersede_node_tx`` it does **not** create a new
+        node, embed, or migrate edges — the existing node carries its own
+        evidence. Inserts ``evidence_edges`` and deletes ``clear_edge_ids`` as
+        above. All-or-nothing.
         """
         ...
 
