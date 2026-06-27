@@ -281,19 +281,25 @@ async def memory_search(
     node_types: list[str] | None = None,
     graph_hops: int = 1,
     metacontext_id: str | None = None,
+    cross_frame: bool = False,
 ) -> str:
     """Search the epistemic memory graph.
 
     Performs hybrid retrieval: vector similarity search followed by
     graph expansion to discover related nodes. Results always include
-    metacontext labels for epistemic clarity.
+    metacontext labels and computed review labels (superseded_candidate /
+    evidence_stale / contested) so you can see when a node may be outdated,
+    have stale evidence, or be contested before relying on it.
 
     Args:
         query: Natural language search query.
         k: Maximum number of vector search results.
         node_types: Filter to specific types: "topic", "fact", "inference".
         graph_hops: Number of graph traversal hops from vector results.
-        metacontext_id: Optional — filter results to nodes with this metacontext.
+        metacontext_id: Optional — frame-scope results to this metacontext plus
+            untagged base-reality nodes (other frames are excluded).
+        cross_frame: Set true to ignore frame scoping and search across all
+            metacontexts (opt-in; otherwise frames don't bleed together).
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -306,6 +312,7 @@ async def memory_search(
             node_types=node_types,
             graph_hops=graph_hops,
             metacontext_id=metacontext_id,
+            cross_frame=cross_frame,
             event_bus=deps.get("event_bus"),
         ),
         ctx,
@@ -521,7 +528,10 @@ async def memory_reflect(
     - Similar topic pairs that could be consolidated under a parent
     - Topics with high internal variance that could be split
     - Topics with thin descriptions but rich associated material
-    - Potential contradictions between facts
+    - Potential contradictions between facts (same-frame only)
+    - pending_review: active nodes already flagged for resolution
+      (superseded_candidate / evidence_stale / contested), with the related
+      ids to act on via apply_reflection supersessions / supersede_by
 
     Review the candidates and call apply_reflection with your decisions.
 
@@ -552,7 +562,10 @@ async def memory_reflect(
         _do,
         ctx,
         f"threshold={similarity_threshold} stores_since={stores_before}",
-        lambda r, m: f"decayed={r['nodes_decayed']} pairs={len(r['similar_pairs'])}",
+        lambda r, m: (
+            f"decayed={r['nodes_decayed']} pairs={len(r['similar_pairs'])} "
+            f"pending={len(r['pending_review'])}"
+        ),
     )
 
 
@@ -563,6 +576,7 @@ async def memory_apply_reflection(
     splits: list[dict] | None = None,
     enrichments: list[dict] | None = None,
     merges: list[dict] | None = None,
+    supersessions: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
 ) -> str:
     """Apply your reflection decisions to the memory graph.
@@ -583,6 +597,10 @@ async def memory_apply_reflection(
             A merge is applied only if every pair of sources is at least
             merge_similarity_threshold similar, else it is rejected — use this
             only for true duplicates, and `parents` for merely related topics.
+        supersessions: Resolve flagged/contested nodes from reflect's
+            pending_review by superseding the outdated/losing node with an
+            existing one. Each: {old_id: str, by_id: str}. Atomic; the winner is
+            unchanged and dependent inferences are flagged evidence_stale.
         merge_similarity_threshold: Minimum pairwise cosine similarity required
             to allow a merge (default 0.92, deliberately high).
     """
@@ -596,11 +614,13 @@ async def memory_apply_reflection(
             splits=splits,
             enrichments=enrichments,
             merges=merges,
+            supersessions=supersessions,
             merge_similarity_threshold=merge_similarity_threshold,
         ),
         ctx,
         f"parents={len(parents or [])} splits={len(splits or [])} "
-        f"enrichments={len(enrichments or [])} merges={len(merges or [])}",
+        f"enrichments={len(enrichments or [])} merges={len(merges or [])} "
+        f"supersessions={len(supersessions or [])}",
         lambda r, m: f"applied={m.nodes_returned}",
     )
 

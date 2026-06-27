@@ -241,15 +241,19 @@ async def search(
     node_types: list[str] | None = None,
     graph_hops: int = 1,
     metacontext_id: str | None = None,
+    cross_frame: bool = False,
     event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Search the memory graph via hybrid retrieval (vector + graph expansion).
 
-    If metacontext_id is provided, results are filtered to nodes with that metacontext.
-    Metacontext labels are always included in returned nodes.
+    If metacontext_id is provided, results are frame-scoped to that metacontext
+    plus untagged base-reality nodes (set cross_frame=True to ignore frames).
+    Metacontext labels and computed review labels (superseded_candidate /
+    evidence_stale / contested) are always included on returned nodes.
     """
     from epimemer.pipelines.query.hybrid_retrieval import hybrid_retrieval_net
     from epimemer.pipelines.query.types import QueryRequest, QueryResult
+    from epimemer.pipelines.reflection.review import frames_of, review_labels
 
     # Map string node types to enums
     nt_enums = None
@@ -271,25 +275,27 @@ async def search(
     nodes = query_result.nodes
     edges_data = [e.model_dump(mode="json") for e in query_result.edges]
 
-    # Filter by metacontext if specified
-    if metacontext_id:
-        matching_node_ids = set()
+    # Frame-scoping: when scoped to a metacontext, return that frame plus untagged
+    # base-reality nodes (knowledge in The Real applies everywhere); sibling frames
+    # are excluded unless cross_frame is set. (REVIEW_EPISTEMIC.md §4.3)
+    if metacontext_id and not cross_frame:
+        in_frame = []
         for node in nodes:
-            node_edges = await storage.get_edges_from(node.id)
-            for edge in node_edges:
-                if edge.type == EdgeType.HAS_METACONTEXT and edge.dst_id == metacontext_id:
-                    matching_node_ids.add(node.id)
-                    break
-        nodes = [n for n in nodes if n.id in matching_node_ids]
+            node_frames = await frames_of(node.id, storage)
+            if metacontext_id in node_frames or BASE_METACONTEXT_ID in node_frames:
+                in_frame.append(node)
+        nodes = in_frame
 
-    # Build node dicts with metacontext labels
+    # Build node dicts with metacontext labels and computed review labels.
     nodes_data = []
     for node in nodes:
         node_dict = _node_to_dict(node)
-        # Always include metacontext labels
         mc_labels = await _metacontext_labels(node.id, storage)
         if mc_labels:
             node_dict["metacontexts"] = mc_labels
+        review = await review_labels(node, storage)
+        if review:
+            node_dict["review"] = review
         nodes_data.append(node_dict)
 
     result = {
@@ -650,7 +656,7 @@ async def reflect(
     # 5. Detect contradictions (safety net for anything ingest-time check missed).
     #    Similarity nominates; keep only same-frame pairs — a high-similarity pair
     #    across disjoint metacontext frames is coexistence, not a contradiction.
-    from epimemer.pipelines.reflection.review import same_frame
+    from epimemer.pipelines.reflection.review import gather_pending_review, same_frame
 
     contradiction_pairs_raw = await detect_contradictions(
         storage, embedding_provider,
@@ -667,15 +673,32 @@ async def reflect(
             "similarity": round(score, 4),
         })
 
+    # 6. Surface the pending-review worklist: active nodes already carrying review
+    #    state (a candidate to supersede, stale evidence, or an unresolved
+    #    contest), with the related ids to act on via apply_reflection /
+    #    supersede_by / record_variant.
+    pending_review = [
+        {
+            "node": {"id": n.id, "content": n.content, "node_type": _node_type_key(n)},
+            "review": labels,
+        }
+        for n, labels in await gather_pending_review(storage)
+    ]
+
     result = {
         "nodes_decayed": nodes_decayed,
         "similar_pairs": similar_pairs,
         "split_candidates": split_candidates,
         "enrichment_candidates": enrichment_candidates,
         "contradictions": contradictions,
+        "pending_review": pending_review,
     }
     meta = ResponseMeta(
-        nodes_returned=len(similar_pairs) + len(split_candidates) + len(enrichment_candidates) + len(contradictions),
+        nodes_returned=(
+            len(similar_pairs) + len(split_candidates)
+            + len(enrichment_candidates) + len(contradictions)
+            + len(pending_review)
+        ),
     )
     return result, meta
 
@@ -691,6 +714,7 @@ async def apply_reflection(
     splits: list[dict] | None = None,
     enrichments: list[dict] | None = None,
     merges: list[dict] | None = None,
+    supersessions: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
 ) -> tuple[dict, ResponseMeta]:
     """Apply agent-provided reflection decisions to the graph.
@@ -704,10 +728,16 @@ async def apply_reflection(
         merge_similarity_threshold; otherwise it is rejected. This is the one
         consolidation that retires nodes from the active graph, so the bar is
         high by design — use parents for merely related (not duplicate) topics.
+    supersessions: [{old_id: str, by_id: str}] — resolve a flagged/contested node
+        (from reflect's pending_review) by superseding ``old_id`` with an existing
+        node ``by_id``. Atomic: marks old superseded (lineage old → by), flags
+        inferences that depended on old as evidence_stale, and clears any
+        supersession candidacy on it. The winner is unchanged; no new node.
     """
     from epimemer.pipelines.graph_construction.versioning import (
         merge_nodes,
         plan_subtopic_edges,
+        supersede_by_existing,
         supersede_node,
     )
     from epimemer.pipelines.reflection.topic_consolidation import all_pairs_above_threshold
@@ -717,6 +747,7 @@ async def apply_reflection(
     topics_enriched = 0
     topics_merged = 0
     merges_rejected = 0
+    supersessions_applied = 0
     model_id = embedding_provider.model_id
 
     # 1. Create parent topics for similar groups
@@ -831,15 +862,33 @@ async def apply_reflection(
         await merge_nodes(sources, merged_topic, storage, embedding_provider)
         topics_merged += 1
 
+    # 5. Resolve flagged/contested nodes by superseding the loser with an existing
+    #    winner (the resolution action of the review loop). Missing or self-pairs
+    #    are skipped rather than raised so a batch partially applies cleanly.
+    for supersede_spec in (supersessions or []):
+        old_id = supersede_spec["old_id"]
+        by_id = supersede_spec["by_id"]
+        if old_id == by_id:
+            continue
+        old_node = await storage.get_node(old_id)
+        if old_node is None or await storage.get_node(by_id) is None:
+            continue
+        await supersede_by_existing(old_node, by_id, storage)
+        supersessions_applied += 1
+
     result = {
         "parents_created": parents_created,
         "topics_split": topics_split,
         "topics_enriched": topics_enriched,
         "topics_merged": topics_merged,
         "merges_rejected": merges_rejected,
+        "supersessions_applied": supersessions_applied,
     }
     meta = ResponseMeta(
-        nodes_returned=parents_created + topics_split + topics_enriched + topics_merged,
+        nodes_returned=(
+            parents_created + topics_split + topics_enriched
+            + topics_merged + supersessions_applied
+        ),
     )
     return result, meta
 
@@ -856,6 +905,7 @@ async def query_graph(
 ) -> tuple[dict, ResponseMeta]:
     """Traverse the graph from a node, returning the local subgraph."""
     from epimemer.pipelines.query.graph_expansion import expand_via_graph
+    from epimemer.pipelines.reflection.review import review_labels
 
     seed_node = await storage.get_node(node_id)
     if seed_node is None:
@@ -875,7 +925,13 @@ async def query_graph(
         exclude_edge_types=exclude_edge_types,
     )
 
-    nodes_data = [_node_to_dict(n) for n in nodes]
+    nodes_data = []
+    for node in nodes:
+        node_dict = _node_to_dict(node)
+        review = await review_labels(node, storage)
+        if review:
+            node_dict["review"] = review
+        nodes_data.append(node_dict)
     edges_data = [e.model_dump(mode="json") for e in edges]
 
     source_types: dict[str, int] = {}

@@ -467,6 +467,23 @@ class TestReflect:
         assert "similar_pairs" in result
         assert "nodes_decayed" in result
         assert "contradictions" in result
+        assert "pending_review" in result
+
+    async def test_surfaces_pending_review(self, storage, embedding_provider):
+        old = Fact(content="old", source_id="s1")
+        newer = Fact(content="new", source_id="s1")
+        await storage.store_node(old)
+        await storage.store_node(newer)
+        await storage.store_edge(
+            NodeEdge(src_id=newer.id, dst_id=old.id, type=EdgeType.SUPERSESSION_CANDIDATE)
+        )
+
+        result, _ = await reflect(storage, embedding_provider)
+        flagged_ids = {e["node"]["id"] for e in result["pending_review"]}
+        assert old.id in flagged_ids
+        entry = next(e for e in result["pending_review"] if e["node"]["id"] == old.id)
+        assert entry["review"]["superseded_candidate"] == [newer.id]
+        assert entry["node"]["node_type"] == "fact"
 
 
 # --- Apply Reflection (merge) tests ---
@@ -536,6 +553,56 @@ class TestApplyReflectionMerge:
 
         assert result["topics_merged"] == 0
         assert result["merges_rejected"] == 1
+        assert (await storage.get_node(a.id)).status == NodeStatus.ACTIVE
+
+
+class TestApplyReflectionSupersessions:
+
+    async def test_resolves_flagged_node(self, storage, embedding_provider):
+        old = Fact(content="CEO is X", source_id="s1")
+        winner = Fact(content="CEO is Y", source_id="s1")
+        inf = Inference(content="X leads strategy", source_id="s1")
+        for node in (old, winner, inf):
+            await storage.store_node(node)
+        # old is flagged as a supersession candidate by winner, and supports inf.
+        await storage.store_edge(
+            NodeEdge(src_id=winner.id, dst_id=old.id, type=EdgeType.SUPERSESSION_CANDIDATE)
+        )
+        await storage.store_edge(
+            NodeEdge(src_id=old.id, dst_id=inf.id, type=EdgeType.SUPPORTS)
+        )
+
+        result, _ = await apply_reflection(
+            storage, embedding_provider,
+            supersessions=[{"old_id": old.id, "by_id": winner.id}],
+        )
+
+        assert result["supersessions_applied"] == 1
+        assert (await storage.get_node(old.id)).status == NodeStatus.SUPERSEDED
+        assert (await storage.get_node(winner.id)).status == NodeStatus.ACTIVE
+        lineage = await storage.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)
+        assert len(lineage) == 1 and lineage[0].dst_id == winner.id
+        # Candidacy is cleared and the dependent inference is flagged evidence_stale.
+        assert await storage.get_edges_to(
+            old.id, edge_type=EdgeType.SUPERSESSION_CANDIDATE
+        ) == []
+        assert len(await storage.get_edges_to(
+            inf.id, edge_type=EdgeType.EVIDENCE_SUPERSEDED
+        )) == 1
+
+    async def test_skips_self_and_missing(self, storage, embedding_provider):
+        a = Fact(content="a", source_id="s1")
+        await storage.store_node(a)
+
+        result, _ = await apply_reflection(
+            storage, embedding_provider,
+            supersessions=[
+                {"old_id": a.id, "by_id": a.id},        # self-supersede
+                {"old_id": a.id, "by_id": "missing"},   # missing winner
+                {"old_id": "missing", "by_id": a.id},   # missing loser
+            ],
+        )
+        assert result["supersessions_applied"] == 0
         assert (await storage.get_node(a.id)).status == NodeStatus.ACTIVE
 
 
@@ -1029,6 +1096,120 @@ class TestReflectFrameAware:
         # The same-frame pair is surfaced; the cross-frame pair is filtered out.
         assert frozenset({"real A", "real B"}) in contents
         assert frozenset({"story A", "story B"}) not in contents
+
+
+# --- Retrieval visibility: frame-scoping + review labels (Phase 2c) ---
+
+
+class TestSearchFrameScoping:
+
+    async def test_includes_base_excludes_sibling_frames(
+        self, storage, embedding_provider
+    ):
+        mc_real = Metacontext(content="Real world")
+        mc_fiction = Metacontext(content="Fiction")
+        await storage.store_metacontext(mc_real)
+        await storage.store_metacontext(mc_fiction)
+
+        # All facts share the query's embedding so vector search returns them all;
+        # only the frame filter decides what comes back.
+        query = "anything"
+        qvec = (await embedding_provider.embed([query]))[0]
+        real = await _store_fact_with_embedding(
+            storage, embedding_provider.model_id, "real fact", qvec,
+            metacontext_id=mc_real.id,
+        )
+        fic = await _store_fact_with_embedding(
+            storage, embedding_provider.model_id, "fiction fact", qvec,
+            metacontext_id=mc_fiction.id,
+        )
+        base = await _store_fact_with_embedding(
+            storage, embedding_provider.model_id, "base fact", qvec,
+        )
+
+        result, _ = await search(
+            query, storage, embedding_provider,
+            k=20, graph_hops=0, metacontext_id=mc_real.id,
+        )
+        ids = {n["id"] for n in result["nodes"]}
+        assert real.id in ids       # in-frame
+        assert base.id in ids       # untagged base reality is always in scope
+        assert fic.id not in ids    # sibling frame excluded
+
+    async def test_cross_frame_returns_all_frames(self, storage, embedding_provider):
+        mc_real = Metacontext(content="Real world")
+        mc_fiction = Metacontext(content="Fiction")
+        await storage.store_metacontext(mc_real)
+        await storage.store_metacontext(mc_fiction)
+
+        query = "anything"
+        qvec = (await embedding_provider.embed([query]))[0]
+        real = await _store_fact_with_embedding(
+            storage, embedding_provider.model_id, "real fact", qvec,
+            metacontext_id=mc_real.id,
+        )
+        fic = await _store_fact_with_embedding(
+            storage, embedding_provider.model_id, "fiction fact", qvec,
+            metacontext_id=mc_fiction.id,
+        )
+
+        result, _ = await search(
+            query, storage, embedding_provider,
+            k=20, graph_hops=0, metacontext_id=mc_real.id, cross_frame=True,
+        )
+        ids = {n["id"] for n in result["nodes"]}
+        assert {real.id, fic.id} <= ids
+
+
+class TestReviewLabelsInRetrieval:
+
+    async def test_query_graph_flags_superseded_candidate(self, storage):
+        old = Fact(content="old", source_id="s1")
+        newer = Fact(content="new", source_id="s1")
+        await storage.store_node(old)
+        await storage.store_node(newer)
+        await storage.store_edge(
+            NodeEdge(src_id=newer.id, dst_id=old.id, type=EdgeType.SUPERSESSION_CANDIDATE)
+        )
+
+        result, _ = await query_graph(old.id, storage, hops=0)
+        node = result["nodes"][0]
+        assert node["id"] == old.id
+        assert node["review"]["superseded_candidate"] == [newer.id]
+
+    async def test_query_graph_flags_contested(self, storage):
+        a = Fact(content="X true", source_id="s1")
+        b = Fact(content="X false", source_id="s1")
+        await storage.store_node(a)
+        await storage.store_node(b)
+        await storage.store_edge(
+            NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.CONTRADICTION)
+        )
+
+        result, _ = await query_graph(a.id, storage, hops=0)
+        assert result["nodes"][0]["review"]["contested"] == [b.id]
+
+    async def test_clean_node_has_no_review_field(self, storage):
+        t = Topic(content="fine", source_id="s1")
+        await storage.store_node(t)
+        result, _ = await query_graph(t.id, storage, hops=0)
+        assert "review" not in result["nodes"][0]
+
+    async def test_search_surfaces_review_labels(self, storage, embedding_provider):
+        query = "anything"
+        qvec = (await embedding_provider.embed([query]))[0]
+        old = await _store_fact_with_embedding(
+            storage, embedding_provider.model_id, "old fact", qvec
+        )
+        newer = Fact(content="new fact", source_id="s1")
+        await storage.store_node(newer)
+        await storage.store_edge(
+            NodeEdge(src_id=newer.id, dst_id=old.id, type=EdgeType.SUPERSESSION_CANDIDATE)
+        )
+
+        result, _ = await search(query, storage, embedding_provider, k=20, graph_hops=0)
+        flagged = next(n for n in result["nodes"] if n["id"] == old.id)
+        assert flagged["review"]["superseded_candidate"] == [newer.id]
 
 
 # --- Search with metacontext ---

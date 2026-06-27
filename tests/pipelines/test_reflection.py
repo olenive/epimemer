@@ -23,6 +23,7 @@ from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
     Fact,
+    Inference,
     Metacontext,
     NodeEdge,
     NodeStatus,
@@ -510,3 +511,146 @@ async def test_same_frame_disjoint_frames_not_same():
         NodeEdge(src_id=fic.id, dst_id=mc.id, type=EdgeType.HAS_METACONTEXT)
     )
     assert await same_frame(real.id, fic.id, storage) is False
+
+
+# --- Review labels (computed retrieval visibility, REVIEW_EPISTEMIC.md §4.1) ---
+
+
+async def test_review_labels_superseded_candidate():
+    """An incoming supersession_candidate edge labels the older node."""
+    from epimemer.pipelines.reflection.review import review_labels
+
+    storage = InMemoryStorage()
+    old = Fact(content="old", source_id="s1")
+    newer = Fact(content="new", source_id="s1")
+    await storage.store_node(old)
+    await storage.store_node(newer)
+    await storage.store_edge(
+        NodeEdge(src_id=newer.id, dst_id=old.id, type=EdgeType.SUPERSESSION_CANDIDATE)
+    )
+
+    labels = await review_labels(old, storage)
+    assert labels["superseded_candidate"] == [newer.id]
+    # The newer fact itself is not flagged.
+    assert await review_labels(newer, storage) == {}
+
+
+async def test_review_labels_evidence_stale_via_flag():
+    """An explicit evidence_superseded flag marks the inference stale."""
+    from epimemer.pipelines.reflection.review import review_labels
+
+    storage = InMemoryStorage()
+    fact = Fact(content="evidence", source_id="s1")
+    inf = Inference(content="conclusion", source_id="s1")
+    await storage.store_node(fact)
+    await storage.store_node(inf)
+    await storage.store_edge(
+        NodeEdge(src_id=fact.id, dst_id=inf.id, type=EdgeType.EVIDENCE_SUPERSEDED)
+    )
+
+    labels = await review_labels(inf, storage)
+    assert labels["evidence_stale"] == [fact.id]
+
+
+async def test_review_labels_evidence_stale_via_superseded_evidence():
+    """An inference derived_from a now-superseded fact is stale even without a flag."""
+    from epimemer.pipelines.reflection.review import review_labels
+
+    storage = InMemoryStorage()
+    fact = Fact(content="evidence", source_id="s1", status=NodeStatus.SUPERSEDED)
+    inf = Inference(content="conclusion", source_id="s1")
+    await storage.store_node(fact)
+    await storage.store_node(inf)
+    await storage.store_edge(
+        NodeEdge(src_id=inf.id, dst_id=fact.id, type=EdgeType.DERIVED_FROM)
+    )
+
+    labels = await review_labels(inf, storage)
+    assert labels["evidence_stale"] == [fact.id]
+
+
+async def test_review_labels_contested_same_frame():
+    """A contradiction to an active same-frame node marks both contested."""
+    from epimemer.pipelines.reflection.review import review_labels
+
+    storage = InMemoryStorage()
+    a = Fact(content="X true", source_id="s1")
+    b = Fact(content="X false", source_id="s1")
+    await storage.store_node(a)
+    await storage.store_node(b)
+    await storage.store_edge(
+        NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.CONTRADICTION)
+    )
+
+    assert (await review_labels(a, storage))["contested"] == [b.id]
+    # Symmetric: the partner is contested too (edge followed either direction).
+    assert (await review_labels(b, storage))["contested"] == [a.id]
+
+
+async def test_review_labels_contested_cleared_when_partner_retired():
+    """Once the contradicting partner is superseded, the node is no longer contested."""
+    from epimemer.pipelines.reflection.review import review_labels
+
+    storage = InMemoryStorage()
+    a = Fact(content="a", source_id="s1")
+    b = Fact(content="b", source_id="s1", status=NodeStatus.SUPERSEDED)
+    await storage.store_node(a)
+    await storage.store_node(b)
+    await storage.store_edge(
+        NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.CONTRADICTION)
+    )
+
+    assert "contested" not in await review_labels(a, storage)
+
+
+async def test_review_labels_contested_excludes_cross_frame():
+    """A cross-frame contradiction is coexistence, not a contest — no label."""
+    from epimemer.pipelines.reflection.review import review_labels
+
+    storage = InMemoryStorage()
+    mc = Metacontext(content="Fiction")
+    await storage.store_metacontext(mc)
+    a = Fact(content="a", source_id="s1")
+    b = Fact(content="b", source_id="s1")
+    await storage.store_node(a)
+    await storage.store_node(b)
+    await storage.store_edge(
+        NodeEdge(src_id=b.id, dst_id=mc.id, type=EdgeType.HAS_METACONTEXT)
+    )
+    await storage.store_edge(
+        NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.CONTRADICTION)
+    )
+
+    assert "contested" not in await review_labels(a, storage)
+
+
+async def test_review_labels_clean_node_empty():
+    """A node with no review-edges has no labels."""
+    from epimemer.pipelines.reflection.review import review_labels
+
+    storage = InMemoryStorage()
+    t = Topic(content="fine", source_id="s1")
+    await storage.store_node(t)
+    assert await review_labels(t, storage) == {}
+
+
+async def test_gather_pending_review_collects_flagged_only():
+    """gather_pending_review returns active nodes with review labels, not clean ones."""
+    from epimemer.pipelines.reflection.review import gather_pending_review
+
+    storage = InMemoryStorage()
+    old = Fact(content="old", source_id="s1")
+    newer = Fact(content="new", source_id="s1")
+    clean = Topic(content="unrelated", source_id="s1")
+    for node in (old, newer, clean):
+        await storage.store_node(node)
+    await storage.store_edge(
+        NodeEdge(src_id=newer.id, dst_id=old.id, type=EdgeType.SUPERSESSION_CANDIDATE)
+    )
+
+    flagged = {n.id: labels for n, labels in await gather_pending_review(storage)}
+    assert old.id in flagged
+    assert flagged[old.id]["superseded_candidate"] == [newer.id]
+    # The newer fact and the unrelated topic are not flagged.
+    assert newer.id not in flagged
+    assert clean.id not in flagged

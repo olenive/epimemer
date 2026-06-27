@@ -3,7 +3,13 @@
 **Status (2026-06-27):** Phase 1 (atomicity) ✅; Phase 2a (vocabulary) ✅;
 Phase 2b ✅ — supersede-by-existing + Case B propagation (2b.1) and detection &
 recording tools `check_conflicts` / `record_contradiction` / `record_variant`
-plus frame helpers and a frame-aware `reflect` sweep (2b.2); Phase 2c–2e pending.
+plus frame helpers and a frame-aware `reflect` sweep (2b.2); Phase 2c ✅ —
+computed review labels on `search`/`query_graph` results + frame-scoped search;
+Phase 2d ✅ — `reflect` surfaces the `pending_review` worklist and
+`apply_reflection supersessions=[...]` resolves flagged nodes; Phase 2e ✅ —
+agent guidance in `epimemer_prompts/DEFAULT.md`. **Phase 2 complete.** Phase 3 ✅
+— opt-in `ws://` SurrealDB integration test (skipped unless reachable; verified
+green against Dockerised SurrealDB). Phase 4 (re-ingest docs) remains.
 
 Decisions settled for 2b: separate `check_conflicts` tool (opt-in); pre-compute
 frame + scores; dedicated verdict tools; agent authority per §7; build
@@ -300,15 +306,40 @@ human-in-the-loop; no metacontext association; inferences never revisited.
   - Edge dedup helper `_ensure_symmetric_edge`; `_metacontext_labels` factored out
     of `search`. Tests: frame helpers + `check_conflicts` + both record tools +
     frame-aware `reflect` (382 passing).
-- 2c. Retrieval visibility: computed `review` labels + provenance; frame-scoping.
-- 2d. Resolution: `supersede(old_id, by=existing_id)`; contradiction recording;
-  `reflect` surfaces flagged/pending set; resolution action in `apply_reflection`.
-- 2e. Agent guidance (`epimemer_prompts/DEFAULT.md`): human-in-the-loop for
-  same-frame contradictions and frame-crossing.
+- 2c. ✅ **Done.** Retrieval visibility: `review_labels(node, storage)` in
+  `review.py` derives `superseded_candidate` (incoming `supersession_candidate`),
+  `evidence_stale` (inference with `evidence_superseded` flag and/or `derived_from`
+  a SUPERSEDED fact), and `contested` (a `contradiction` to an ACTIVE same-frame
+  node — cleared once the partner is retired or if cross-frame), each mapped to
+  the related node ids. Surfaced as a `review` field on `search` and `query_graph`
+  results, alongside `metacontexts`. `search` is now frame-scoped: a
+  `metacontext_id` returns that frame **plus** untagged base-reality nodes, with
+  `cross_frame=True` to opt out (MCP exposes it). `_metacontext_labels` reused.
+- 2d. ✅ **Done.** Resolution: `supersede_by`/`record_contradiction` (2b) plus
+  `gather_pending_review(storage)` in `review.py` (active nodes carrying review
+  labels) surfaced as `reflect`'s `pending_review` worklist, and a batch
+  resolution action `apply_reflection(supersessions=[{old_id, by_id}])` that calls
+  `supersede_by_existing` per pair (atomic; Case-B flagging + candidate clearing;
+  missing/self pairs skipped). Resolving the loser auto-clears the winner's
+  `contested`/`superseded_candidate` labels (computed from active partners). MCP
+  exposes both.
+- 2e. ✅ **Done.** Agent guidance rewritten in `epimemer_prompts/DEFAULT.md`:
+  current ingest flow (`segment`→`store_decomposition`), the detect→classify→record
+  loop (`check_conflicts` + verdict→tool table), review labels at retrieval,
+  `reflect`'s `pending_review` + `apply_reflection supersessions`, frame-scoped
+  search/`cross_frame`, and human-in-the-loop (notify on same-frame contradictions,
+  propose-and-approve on frame-crossing). Prose only; the file is not loaded by
+  code or tests.
 
-**Phase 3 — Integration tests (opt-in, low priority)**
-- Docker-based `ws://` SurrealDB run, skipped unless a server is reachable;
-  connection/auth + a concurrency probe. Not a CI gate.
+**Phase 3 — Integration tests (opt-in, low priority) ✅**
+- `tests/storage/test_surrealdb_integration.py`: real `ws://` SurrealDB run,
+  skipped unless `EPIMEMER_SURREAL_WS_URL` points at a reachable server (no
+  connection attempted by default — not a CI gate). Covers connection/auth and
+  transaction atomicity under genuine concurrency (separate ws connections):
+  concurrent write-batches all commit, a colliding batch rolls back fully while
+  good ones commit, concurrent supersedes on distinct nodes apply cleanly. Each
+  test uses a unique throwaway database, dropped on teardown. Verified green
+  against `surrealdb/surrealdb:latest` in Docker.
 
 **Phase 4 — Refresh `epimemer-docs` graph**
 - Re-ingest changed docs so the design memory reflects reality.
