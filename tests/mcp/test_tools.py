@@ -681,6 +681,41 @@ class TestMetacontextTools:
         result, _ = await get_metacontexts_for_node(t.id, storage)
         assert result["metacontexts"] == []
 
+    async def test_ensure_base_metacontext_reserved_and_idempotent(self, storage):
+        from epimemer.core.types import BASE_METACONTEXT_ID
+        from epimemer.mcp.tools import ensure_base_metacontext
+
+        mc1 = await ensure_base_metacontext(storage)
+        assert mc1.id == BASE_METACONTEXT_ID
+        assert mc1.content == "The Real"
+
+        mc2 = await ensure_base_metacontext(storage)
+        assert mc2.id == mc1.id
+        all_mcs = await storage.query_metacontexts()
+        assert sum(1 for m in all_mcs if m.id == BASE_METACONTEXT_ID) == 1
+
+
+class TestReviewEdgeTraversal:
+
+    async def test_review_edges_hidden_from_default_traversal(self, storage):
+        a = Fact(content="a", source_id="s1")
+        b = Fact(content="b", source_id="s1")
+        await storage.store_node(a)
+        await storage.store_node(b)
+        await storage.store_edge(
+            NodeEdge(src_id=b.id, dst_id=a.id, type=EdgeType.SUPERSESSION_CANDIDATE)
+        )
+
+        # Default traversal treats the review edge as metadata — not followed.
+        result, _ = await query_graph(a.id, storage, hops=1)
+        assert b.id not in {n["id"] for n in result["nodes"]}
+
+        # ...but it is reachable with an explicit edge_types filter.
+        result2, _ = await query_graph(
+            a.id, storage, hops=1, edge_types=["supersession_candidate"]
+        )
+        assert b.id in {n["id"] for n in result2["nodes"]}
+
 
 # --- Search with metacontext ---
 

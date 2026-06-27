@@ -64,6 +64,12 @@ class EdgeType(str, Enum):
     # Epistemic framing
     HAS_METACONTEXT = "has_metacontext"          # node → metacontext
 
+    # Epistemic review (see REVIEW_EPISTEMIC.md)
+    SUPERSESSION_CANDIDATE = "supersession_candidate"  # newer fact → older fact
+    EVIDENCE_SUPERSEDED = "evidence_superseded"        # superseded fact → dependent inference
+    VARIANT_OF = "variant_of"                          # fact ↔ fact, across frames
+    BASED_ON = "based_on"                              # metacontext → metacontext (association)
+
 
 # Edges that record version history rather than knowledge. They are anchored to
 # a specific node version and are excluded from edge migration on supersession /
@@ -71,6 +77,24 @@ class EdgeType(str, Enum):
 HISTORY_EDGE_TYPES: frozenset[EdgeType] = frozenset(
     {EdgeType.SUPERSEDED_BY, EdgeType.MERGED_INTO}
 )
+
+# Edges that flag a node for epistemic review. They are computed into retrieval
+# labels (superseded_candidate / evidence_stale) rather than traversed as
+# knowledge, and are anchored to a node version (not migrated on supersession).
+REVIEW_EDGE_TYPES: frozenset[EdgeType] = frozenset(
+    {EdgeType.SUPERSESSION_CANDIDATE, EdgeType.EVIDENCE_SUPERSEDED}
+)
+
+# Metadata / signal edges (history + review): excluded from edge migration on
+# supersession/merge and from default graph traversal. Knowledge relationships
+# such as `contradiction` and `variant_of` are NOT in this set — they are real
+# edges to follow.
+NON_KNOWLEDGE_EDGE_TYPES: frozenset[EdgeType] = HISTORY_EDGE_TYPES | REVIEW_EDGE_TYPES
+
+# Reserved id for the canonical base-reality frame ("The Real"). Matched by id,
+# never by content, so a fiction frame that internally mentions "reality" is
+# never confused with it. Untagged nodes are implicitly in this frame.
+BASE_METACONTEXT_ID = "the-real"
 
 
 # --- Value Signal ---

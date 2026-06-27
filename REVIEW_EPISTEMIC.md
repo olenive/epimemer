@@ -1,6 +1,7 @@
 # Epimemer — Epistemic Review Loop (design)
 
-**Status:** design agreed, not yet built (as of 2026-06-27).
+**Status:** Phase 1 (atomicity) ✅ done; Phase 2a (vocabulary) ✅ done;
+Phase 2b–2e pending (as of 2026-06-27).
 **Purpose:** single spec for how Epimemer reviews and reconciles knowledge over
 time — outdated facts, stale inferences, contradictions, and frame-relative
 ("metacontext") truth — and how that work is split between the agent and the
@@ -260,9 +261,12 @@ human-in-the-loop; no metacontext association; inferences never revisited.
 - `apply_reflection parents`/`splits` → plan then batch-write atomically.
 
 **Phase 2 — Unified review loop**
-- 2a. Vocabulary: reserved base metacontext; association edges; `supersession_candidate`,
-  `evidence_superseded`, `variant_of`; wire `contradiction`. Exclude the
-  review/history edges from default traversal & migration.
+- 2a. ✅ **Done.** Vocabulary: edge types `supersession_candidate`,
+  `evidence_superseded`, `variant_of`, `based_on` added; edge categories
+  `REVIEW_EDGE_TYPES` / `NON_KNOWLEDGE_EDGE_TYPES` defined and wired into edge
+  migration (both backends) + default traversal exclusion; reserved base
+  metacontext (`BASE_METACONTEXT_ID` + `ensure_base_metacontext`). (`contradiction`
+  edge type already existed; it gets *created* in 2b.)
 - 2b. Detection: ingest candidate generation + agent judgment + recording;
   `reflect` safety-net sweep; Case B propagation folded into atomic supersede.
 - 2c. Retrieval visibility: computed `review` labels + provenance; frame-scoping.

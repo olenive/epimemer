@@ -4,11 +4,13 @@ Performs breadth-first traversal from seed nodes to discover related
 nodes and edges in the epistemic graph. Skips history edges by default.
 """
 
-from epimemer.core.types import HISTORY_EDGE_TYPES, EdgeType, EpistemicNode, NodeEdge
+from epimemer.core.types import NON_KNOWLEDGE_EDGE_TYPES, EdgeType, EpistemicNode, NodeEdge
 from epimemer.storage.protocol import StorageBackend
 
 
-_HISTORY_EDGE_TYPES = HISTORY_EDGE_TYPES
+# History and review edges are metadata/signals, not knowledge — skipped by
+# default traversal (still reachable via an explicit edge_types filter).
+_HISTORY_EDGE_TYPES = NON_KNOWLEDGE_EDGE_TYPES
 
 
 async def expand_via_graph(

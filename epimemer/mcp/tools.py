@@ -8,6 +8,7 @@ calls these and wraps the results.
 from datetime import datetime
 
 from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
@@ -938,6 +939,25 @@ async def create_metacontext(
     result = {"metacontext_id": mc.id, "content": mc.content}
     meta = ResponseMeta(nodes_returned=1)
     return result, meta
+
+
+async def ensure_base_metacontext(storage: StorageBackend) -> Metacontext:
+    """Return the reserved base-reality frame ("The Real"), creating it if absent.
+
+    Identified by a fixed reserved id (BASE_METACONTEXT_ID), never by content, so
+    it is never confused with a user metacontext whose text happens to mention
+    reality. Untagged knowledge is treated as belonging to this frame.
+    """
+    existing = await storage.get_metacontext(BASE_METACONTEXT_ID)
+    if existing is not None:
+        return existing
+    mc = Metacontext(
+        id=BASE_METACONTEXT_ID,
+        content="The Real",
+        description="Base reality — the default frame for untagged knowledge.",
+    )
+    await storage.store_metacontext(mc)
+    return mc
 
 
 async def get_metacontexts_for_node(

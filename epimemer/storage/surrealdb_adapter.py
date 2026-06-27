@@ -13,7 +13,7 @@ from typing import Sequence
 from surrealdb import AsyncSurreal
 
 from epimemer.core.types import (
-    HISTORY_EDGE_TYPES,
+    NON_KNOWLEDGE_EDGE_TYPES,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
@@ -424,7 +424,7 @@ class SurrealDBStorage:
         *,
         superseded_at: datetime,
     ) -> None:
-        history = [t.value for t in HISTORY_EDGE_TYPES]
+        excluded = [t.value for t in NON_KNOWLEDGE_EDGE_TYPES]
         lineage_data = _serialize(lineage_edge)
         lineage_data["type"] = lineage_edge.type.value
 
@@ -434,9 +434,9 @@ class SurrealDBStorage:
             f"INSERT INTO {_node_to_table(new_node)} $new_data",
             "INSERT INTO embedding $emb_data",
             "UPDATE node_edge SET src_id = $new_uid "
-            "WHERE src_id = $old_uid AND type NOT IN $history",
+            "WHERE src_id = $old_uid AND type NOT IN $excluded",
             "UPDATE node_edge SET dst_id = $new_uid "
-            "WHERE dst_id = $old_uid AND type NOT IN $history",
+            "WHERE dst_id = $old_uid AND type NOT IN $excluded",
             "DELETE node_edge WHERE src_id = $new_uid AND dst_id = $new_uid",
             "INSERT INTO node_edge $lineage_data",
         ]
@@ -449,7 +449,7 @@ class SurrealDBStorage:
                 "new_uid": new_node.id,
                 "new_data": _serialize(new_node),
                 "emb_data": _serialize(new_embedding),
-                "history": history,
+                "excluded": excluded,
                 "lineage_data": lineage_data,
             },
         )
@@ -482,7 +482,7 @@ class SurrealDBStorage:
         repointed_data: list[dict] = []
         seen: set[tuple[str, str, str]] = set()
         for edge in incident.values():
-            if edge.type in HISTORY_EDGE_TYPES:
+            if edge.type in NON_KNOWLEDGE_EDGE_TYPES:
                 continue
             old_edge_ids.append(edge.id)  # every incident edge is deleted...
             new_src = merged_node.id if edge.src_id in source_ids else edge.src_id

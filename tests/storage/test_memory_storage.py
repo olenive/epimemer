@@ -423,3 +423,33 @@ class TestAtomicOperations:
         assert await store.get_node(t.id) is None
         assert await store.get_edges_to(t.id) == []
         assert await store.get_embeddings_for_item(t.id) == []
+
+    async def test_supersede_tx_skips_review_edges(self, store):
+        """Review edges (metadata) are not migrated onto the replacement."""
+        old = Topic(content="old", source_id="s1")
+        newer = Fact(content="newer claim", source_id="s1")
+        support = Fact(content="supporting", source_id="s1")
+        for node in (old, newer, support):
+            await store.store_node(node)
+        # A review edge flagging `old`, plus a normal supporting edge.
+        await store.store_edge(
+            NodeEdge(src_id=newer.id, dst_id=old.id, type=EdgeType.SUPERSESSION_CANDIDATE)
+        )
+        await store.store_edge(
+            NodeEdge(src_id=support.id, dst_id=old.id, type=EdgeType.SUPPORTS)
+        )
+
+        new = Topic(content="new", source_id="s1")
+        new_emb = EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.0, 1.0])
+        lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
+        await store.supersede_node_tx(
+            old, new, new_emb, lineage, superseded_at=datetime.now(timezone.utc)
+        )
+
+        # Knowledge edge migrated; review edge did not.
+        assert len(await store.get_edges_to(new.id, edge_type=EdgeType.SUPPORTS)) == 1
+        assert await store.get_edges_to(new.id, edge_type=EdgeType.SUPERSESSION_CANDIDATE) == []
+        # The review edge still points at the old (now superseded) node.
+        assert len(
+            await store.get_edges_to(old.id, edge_type=EdgeType.SUPERSESSION_CANDIDATE)
+        ) == 1

@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Sequence
 
 from epimemer.core.types import (
-    HISTORY_EDGE_TYPES,
+    NON_KNOWLEDGE_EDGE_TYPES,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
@@ -230,7 +230,7 @@ class InMemoryStorage:
         """
         seen_signatures: set[tuple[str, str, str]] = set()
         for edge in list(self._g.edges.values()):
-            if edge.type in HISTORY_EDGE_TYPES:
+            if edge.type in NON_KNOWLEDGE_EDGE_TYPES:
                 continue
             if edge.src_id not in old_ids and edge.dst_id not in old_ids:
                 continue
