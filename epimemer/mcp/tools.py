@@ -134,12 +134,20 @@ async def store_decomposition(
     Creates typed nodes, edges, and embeddings for everything.
     """
     from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment, edge_creation_net
-    from epimemer.pipelines.graph_construction.persist import persist_decomposed_segment
 
     total_topics = 0
     total_facts = 0
     total_inferences = 0
     total_edges = 0
+
+    # Accumulate the whole document's writes, then persist them atomically so a
+    # mid-document failure cannot leave a partial graph.
+    batch_nodes: list[EpistemicNode] = []
+    batch_edges: list[NodeEdge] = []
+    batch_embeddings: list[EmbeddingRecord] = []
+
+    stored_segments = await storage.get_segments_for_document(document_id)
+    segments_by_id = {s.id: s for s in stored_segments}
 
     for seg_data in segments:
         segment_id = seg_data["segment_id"]
@@ -151,9 +159,7 @@ async def store_decomposition(
         facts = [Fact(content=f, source_id=segment_id, extraction_method="agent") for f in raw_facts]
         inferences = [Inference(content=i, source_id=segment_id, extraction_method="agent") for i in raw_inferences]
 
-        # Reconstruct the segment from storage for edge creation
-        stored_segments = await storage.get_segments_for_document(document_id)
-        segment = next((s for s in stored_segments if s.id == segment_id), None)
+        segment = segments_by_id.get(segment_id)
         if segment is None:
             raise ValueError(f"Segment '{segment_id}' not found for document '{document_id}'")
 
@@ -169,37 +175,40 @@ async def store_decomposition(
         edge_graph, _ = await _run_net(edge_graph, "edge_creation", event_bus)
         edges: list[NodeEdge] = list(edge_graph.place_named("Edges").tokens)
 
-        # Persist nodes and edges
-        await persist_decomposed_segment(decomposed, edges, storage)
+        seg_nodes: list[EpistemicNode] = [*topics, *facts, *inferences]
+        batch_nodes.extend(seg_nodes)
+        batch_edges.extend(edges)
 
         # Embed all nodes
-        all_nodes: list[EpistemicNode] = [*topics, *facts, *inferences]
-        if all_nodes:
-            texts = [n.content for n in all_nodes]
+        if seg_nodes:
+            texts = [n.content for n in seg_nodes]
             vectors = await embedding_provider.embed(texts)
-            for node, vector in zip(all_nodes, vectors):
-                emb = EmbeddingRecord(
+            for node, vector in zip(seg_nodes, vectors):
+                batch_embeddings.append(EmbeddingRecord(
                     item_id=node.id,
                     model_id=embedding_provider.model_id,
                     vector=vector,
-                )
-                await storage.store_embedding(emb)
+                ))
 
         # Add metacontext edges if specified
-        if metacontext_id and all_nodes:
-            for node in all_nodes:
-                mc_edge = NodeEdge(
+        if metacontext_id and seg_nodes:
+            for node in seg_nodes:
+                batch_edges.append(NodeEdge(
                     src_id=node.id,
                     dst_id=metacontext_id,
                     type=EdgeType.HAS_METACONTEXT,
-                )
-                await storage.store_edge(mc_edge)
-            total_edges += len(all_nodes)
+                ))
+            total_edges += len(seg_nodes)
 
         total_topics += len(topics)
         total_facts += len(facts)
         total_inferences += len(inferences)
         total_edges += len(edges)
+
+    # One atomic write for the entire document.
+    await storage.write_batch_tx(
+        nodes=batch_nodes, edges=batch_edges, embeddings=batch_embeddings,
+    )
 
     nodes_created = {
         "topics": total_topics,
@@ -521,8 +530,8 @@ async def apply_reflection(
         high by design — use parents for merely related (not duplicate) topics.
     """
     from epimemer.pipelines.graph_construction.versioning import (
-        group_into_parent,
         merge_nodes,
+        plan_subtopic_edges,
         supersede_node,
     )
     from epimemer.pipelines.reflection.topic_consolidation import all_pairs_above_threshold
@@ -554,11 +563,14 @@ async def apply_reflection(
             extraction_method="agent:parent_synthesis",
             metadata={"synthesized_from": children_ids},
         )
-        await group_into_parent(children, parent_topic, storage)
-
+        edges = await plan_subtopic_edges(children, parent_topic.id, storage)
         vectors = await embedding_provider.embed([parent_topic.content])
-        await storage.store_embedding(
-            EmbeddingRecord(item_id=parent_topic.id, model_id=model_id, vector=vectors[0])
+        await storage.write_batch_tx(
+            nodes=[parent_topic],
+            edges=edges,
+            embeddings=[EmbeddingRecord(
+                item_id=parent_topic.id, model_id=model_id, vector=vectors[0]
+            )],
         )
         parents_created += 1
 
@@ -575,13 +587,15 @@ async def apply_reflection(
             Topic(content=sc, source_id=parent.source_id, extraction_method="agent:split", metadata={"split_from": topic_id})
             for sc in subtopic_contents
         ]
-        for st in subtopics:
-            await storage.store_node(st)
-            vecs = await embedding_provider.embed([st.content])
-            await storage.store_embedding(
-                EmbeddingRecord(item_id=st.id, model_id=model_id, vector=vecs[0])
-            )
-        await group_into_parent(subtopics, parent, storage)
+        edges = await plan_subtopic_edges(subtopics, parent.id, storage)
+        vectors = await embedding_provider.embed([st.content for st in subtopics])
+        embeddings = [
+            EmbeddingRecord(item_id=st.id, model_id=model_id, vector=vec)
+            for st, vec in zip(subtopics, vectors)
+        ]
+        await storage.write_batch_tx(
+            nodes=subtopics, edges=edges, embeddings=embeddings,
+        )
         topics_split += 1
 
     # 3. Enrich topic descriptions

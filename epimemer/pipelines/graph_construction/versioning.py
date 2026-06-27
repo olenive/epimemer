@@ -109,39 +109,35 @@ async def merge_nodes(
     return lineage_edges
 
 
-async def group_into_parent(
+async def plan_subtopic_edges(
     children: list[Topic],
-    parent: Topic,
+    parent_id: str,
     storage: StorageBackend,
 ) -> list[NodeEdge]:
-    """Group child topics under a parent topic via SUBTOPIC_OF edges.
+    """Plan SUBTOPIC_OF edges from children to a parent, skipping cycles.
 
-    Unlike merge_nodes, children remain active — they are not superseded.
-    The parent is stored and SUBTOPIC_OF edges are created from each child
-    to the parent.
+    Pure planning — performs reads (cycle detection) only, no writes. The caller
+    persists the parent, edges, and any embeddings together via
+    ``write_batch_tx`` so the grouping is atomic. Unlike merge_nodes, children
+    remain active (they are not superseded).
 
     Args:
         children: The child topics to group.
-        parent: The parent topic (will be stored).
+        parent_id: The id of the parent topic the children attach to.
         storage: The storage backend.
 
     Returns:
-        A list of SUBTOPIC_OF edges, one per child.
+        A list of SUBTOPIC_OF edges (child → parent), one per non-cyclic child.
     """
     from epimemer.pipelines.reflection.topic_hierarchy import would_create_cycle
 
-    await storage.store_node(parent)
-
     edges: list[NodeEdge] = []
     for child in children:
-        if await would_create_cycle(storage, child.id, parent.id):
+        if await would_create_cycle(storage, child.id, parent_id):
             continue
-        edge = NodeEdge(
+        edges.append(NodeEdge(
             src_id=child.id,
-            dst_id=parent.id,
+            dst_id=parent_id,
             type=EdgeType.SUBTOPIC_OF,
-        )
-        await storage.store_edge(edge)
-        edges.append(edge)
-
+        ))
     return edges

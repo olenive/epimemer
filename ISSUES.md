@@ -14,6 +14,13 @@ as documented, intended behaviour. Per-issue resolution notes are inline below;
 the original analysis is retained for context. Regression coverage lives in
 `tests/mcp/test_issues_reproduction.py` (plus storage/versioning parity tests).
 
+**Follow-up hardening (2026-06-26).** Since the original fixes: `update` now
+carries the node's value signal onto the replacement (no longer resets it);
+`supersede`/`merge` are **atomic** (backend-native single-transaction);
+`merge_nodes` is exposed via `apply_reflection merges=[...]` behind a high
+similarity bar. Remaining/known items are tracked in **Open items** at the
+bottom of this file.
+
 ---
 
 ## Issue 1 — `update` creates a node with no embedding (unindexed, unsearchable) ✅ RESOLVED
@@ -172,3 +179,29 @@ embed on supersession (1), filter superseded from `vector_search` (2), and
 migrate edges on supersession (3).
 
 </details>
+
+---
+
+## Open items (living list, 2026-06-26)
+
+Tracked here so this file stays the single place to re-visit. Not all are bugs.
+
+1. ~~**Partial atomicity.**~~ **RESOLVED (2026-06-27).** A `write_batch_tx`
+   primitive (pure-insert, all-or-nothing) now backs `store_decomposition`
+   (one atomic write per document) and `apply_reflection parents`/`splits`
+   (plan cycle-checks, then atomic batch). With `supersede`/`merge` already
+   atomic, all multi-write paths are now all-or-nothing. (`archive`/`restore`
+   remain bulk-admin and out of scope; `restore` is a trivial follow-up.)
+2. **SurrealDB verified on embedded `mem://` only.** Transactions and the
+   `vector_search` status filter run against the real engine via `mem://`, but not
+   against a networked `ws://` server (connection/auth/concurrency unproven). The
+   adapter is documented single-connection / not concurrency-safe.
+3. **Merge is Topic-only (wired path).** `merge_nodes` is type-agnostic, but
+   `apply_reflection merges` only accepts Topics. Whether to extend to
+   Facts/Inferences is under discussion (Inferences are meant to let competing
+   derivations coexist, so merging them should be rare).
+4. **Issue 4 / Issue 5 kept by design** (see above): history edges hidden from
+   default traversal; `link` resolves epistemic nodes only.
+5. **No retroactive repair of existing graphs.** Fixes apply to new operations;
+   pre-existing graphs (e.g. `petri-app`) keep any old orphaned/stale state until
+   rebuilt or cleaned. (Accepted for now — graph will be rebuilt.)

@@ -534,6 +534,42 @@ class SurrealDBStorage:
             },
         )
 
+    async def write_batch_tx(
+        self,
+        *,
+        nodes: Sequence[EpistemicNode] = (),
+        edges: Sequence[NodeEdge] = (),
+        embeddings: Sequence[EmbeddingRecord] = (),
+    ) -> None:
+        statements: list[str] = []
+        params: dict = {}
+
+        # Nodes, grouped by their table (topic/fact/inference).
+        nodes_by_table: dict[str, list[dict]] = {}
+        for node in nodes:
+            nodes_by_table.setdefault(_node_to_table(node), []).append(_serialize(node))
+        for i, (table, rows) in enumerate(nodes_by_table.items()):
+            key = f"nodes_{i}"
+            statements.append(f"INSERT INTO {table} ${key}")
+            params[key] = rows
+
+        if edges:
+            edge_rows = []
+            for edge in edges:
+                row = _serialize(edge)
+                row["type"] = edge.type.value
+                edge_rows.append(row)
+            statements.append("INSERT INTO node_edge $edge_rows")
+            params["edge_rows"] = edge_rows
+
+        if embeddings:
+            statements.append("INSERT INTO embedding $embedding_rows")
+            params["embedding_rows"] = [_serialize(e) for e in embeddings]
+
+        if not statements:
+            return
+        await self._run_transaction(statements, params)
+
     # --- Embeddings ---
 
     async def store_embedding(self, embedding: EmbeddingRecord) -> str:

@@ -205,6 +205,26 @@ class InstrumentedStorage:
         for edge in lineage_edges:
             await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
 
+    async def write_batch_tx(
+        self,
+        *,
+        nodes: Sequence[EpistemicNode] = (),
+        edges: Sequence[NodeEdge] = (),
+        embeddings: Sequence[EmbeddingRecord] = (),
+    ) -> None:
+        await self._inner.write_batch_tx(nodes=nodes, edges=edges, embeddings=embeddings)
+        graph = self._inner.current_database
+        for node in nodes:
+            await self._bus.publish(NodeStored(graph=graph, node=node_to_view(node, graph)))
+        for edge in edges:
+            await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
+        for embedding in embeddings:
+            await self._bus.publish(EmbeddingStored(
+                item_id=embedding.item_id,
+                model_id=embedding.model_id,
+                dimensions=len(embedding.vector),
+            ))
+
     # --- Edges (read) ---
 
     async def get_edges_from(

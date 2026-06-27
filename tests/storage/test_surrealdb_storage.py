@@ -271,6 +271,31 @@ class TestAtomicOperations:
         assert (await store.get_node(old.id)).status == NodeStatus.ACTIVE
         assert len(await store.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)) == 0
 
+    async def test_write_batch_tx_inserts_all(self, store):
+        t = Topic(content="t", source_id="s1")
+        f = Fact(content="f", source_id="s1")
+        edge = NodeEdge(src_id=f.id, dst_id=t.id, type=EdgeType.SUPPORTS)
+        emb = EmbeddingRecord(item_id=t.id, model_id="m", vector=[1.0, 0.0])
+
+        await store.write_batch_tx(nodes=[t, f], edges=[edge], embeddings=[emb])
+
+        assert (await store.get_node(t.id)).content == "t"
+        assert (await store.get_node(f.id)).content == "f"
+        assert len(await store.get_edges_to(t.id, edge_type=EdgeType.SUPPORTS)) == 1
+        assert len(await store.get_embeddings_for_item(t.id)) == 1
+
+    async def test_write_batch_tx_rolls_back_on_failure(self, store):
+        fresh = Topic(content="fresh", source_id="s1")
+        collide = Topic(content="collide", source_id="s1")
+        # Squat the colliding node's uid so its insert aborts the whole batch.
+        await store.store_node(Topic(id=collide.id, content="squatter", source_id="s1"))
+
+        with pytest.raises(Exception):
+            await store.write_batch_tx(nodes=[fresh, collide])
+
+        # The fresh node never landed.
+        assert await store.get_node(fresh.id) is None
+
     async def test_merge_tx_migrates_dedupes_and_drops_self_loops(self, store):
         a = Topic(content="a", source_id="s1")
         b = Topic(content="b", source_id="s1")

@@ -391,3 +391,35 @@ class TestAtomicOperations:
         assert await store.get_node(new.id) is None
         assert await store.get_embeddings_for_item(new.id) == []
         assert await store.get_edges_from(old.id) == []
+
+    async def test_write_batch_tx_inserts_all(self, store):
+        t = Topic(content="t", source_id="s1")
+        f = Fact(content="f", source_id="s1")
+        edge = NodeEdge(src_id=f.id, dst_id=t.id, type=EdgeType.SUPPORTS)
+        emb = EmbeddingRecord(item_id=t.id, model_id="m", vector=[1.0, 0.0])
+
+        await store.write_batch_tx(nodes=[t, f], edges=[edge], embeddings=[emb])
+
+        assert await store.get_node(t.id) is not None
+        assert await store.get_node(f.id) is not None
+        assert len(await store.get_edges_to(t.id, edge_type=EdgeType.SUPPORTS)) == 1
+        assert len(await store.get_embeddings_for_item(t.id)) == 1
+
+    async def test_write_batch_tx_rolls_back_on_failure(self, store):
+        t = Topic(content="t", source_id="s1")
+        edge = NodeEdge(src_id="x", dst_id=t.id, type=EdgeType.SUPPORTS)
+        emb = EmbeddingRecord(item_id=t.id, model_id="m", vector=[1.0])
+
+        def boom_embeddings():
+            yield emb
+            raise RuntimeError("injected failure")
+
+        with pytest.raises(RuntimeError, match="injected failure"):
+            await store.write_batch_tx(
+                nodes=[t], edges=[edge], embeddings=boom_embeddings()
+            )
+
+        # The node, edge, and embedding added before the failure are all undone.
+        assert await store.get_node(t.id) is None
+        assert await store.get_edges_to(t.id) == []
+        assert await store.get_embeddings_for_item(t.id) == []

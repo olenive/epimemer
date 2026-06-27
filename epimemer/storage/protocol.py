@@ -161,6 +161,23 @@ class StorageBackend(Protocol):
         """
         ...
 
+    async def write_batch_tx(
+        self,
+        *,
+        nodes: Sequence[EpistemicNode] = (),
+        edges: Sequence[NodeEdge] = (),
+        embeddings: Sequence[EmbeddingRecord] = (),
+    ) -> None:
+        """Atomically insert a batch of nodes, edges, and embeddings.
+
+        All-or-nothing pure insert (no status changes or deletes). Used by the
+        multi-write paths that compute their full output in Python before
+        persisting — ingest (``store_decomposition``) and parent/subtopic
+        synthesis — so a mid-operation failure cannot leave a partial graph.
+        Ids are assumed new (these are freshly-created records).
+        """
+        ...
+
     # --- Embeddings ---
 
     async def store_embedding(self, embedding: EmbeddingRecord) -> str:

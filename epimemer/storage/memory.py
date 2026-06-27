@@ -298,6 +298,37 @@ class InMemoryStorage:
             self._graphs[self._database] = snapshot
             raise
 
+    async def write_batch_tx(
+        self,
+        *,
+        nodes: Sequence[EpistemicNode] = (),
+        edges: Sequence[NodeEdge] = (),
+        embeddings: Sequence[EmbeddingRecord] = (),
+    ) -> None:
+        # Pure inserts with new ids → track and undo on failure (cheaper than a
+        # full-graph snapshot).
+        added_nodes: list[str] = []
+        added_edges: list[str] = []
+        added_embeddings: list[str] = []
+        try:
+            for node in nodes:
+                self._g.nodes[node.id] = node
+                added_nodes.append(node.id)
+            for edge in edges:
+                self._g.edges[edge.id] = edge
+                added_edges.append(edge.id)
+            for embedding in embeddings:
+                self._g.embeddings[embedding.id] = embedding
+                added_embeddings.append(embedding.id)
+        except Exception:
+            for node_id in added_nodes:
+                self._g.nodes.pop(node_id, None)
+            for edge_id in added_edges:
+                self._g.edges.pop(edge_id, None)
+            for embedding_id in added_embeddings:
+                self._g.embeddings.pop(embedding_id, None)
+            raise
+
     # --- Embeddings ---
 
     async def store_embedding(self, embedding: EmbeddingRecord) -> str:
