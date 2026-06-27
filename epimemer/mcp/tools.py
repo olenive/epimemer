@@ -287,13 +287,7 @@ async def search(
     for node in nodes:
         node_dict = _node_to_dict(node)
         # Always include metacontext labels
-        node_edges = await storage.get_edges_from(node.id)
-        mc_ids = [e.dst_id for e in node_edges if e.type == EdgeType.HAS_METACONTEXT]
-        mc_labels = []
-        for mc_id in mc_ids:
-            mc = await storage.get_metacontext(mc_id)
-            if mc:
-                mc_labels.append(mc.content)
+        mc_labels = await _metacontext_labels(node.id, storage)
         if mc_labels:
             node_dict["metacontexts"] = mc_labels
         nodes_data.append(node_dict)
@@ -434,6 +428,153 @@ async def supersede_by(
     return result, meta
 
 
+# --- Review loop: detection + verdict recording ---
+
+
+async def check_conflicts(
+    fact_ids: list[str],
+    storage: StorageBackend,
+    embedding_provider: EmbeddingProvider,
+    *,
+    threshold: float = 0.83,
+    k: int = 5,
+) -> tuple[dict, ResponseMeta]:
+    """Find active facts similar to the given facts, for the agent to judge.
+
+    The recall stage of the review loop (REVIEW_EPISTEMIC.md §5.1): for each fact,
+    vector-searches active facts above ``threshold`` (excluding the fact itself)
+    and returns the candidates with their similarity score, metacontext labels,
+    and a same_frame flag. Similarity only *nominates* — the agent then classifies
+    each candidate (redundant / supersedes / contradicts / cross-frame /
+    compatible) and records the verdict via supersede_by / record_contradiction /
+    record_variant. Opt-in and cheap: a single vector lookup per fact at a high bar.
+    """
+    from epimemer.pipelines.reflection.review import same_frame
+
+    model_id = embedding_provider.model_id
+    conflicts: list[dict] = []
+    candidate_count = 0
+
+    for fact_id in fact_ids:
+        source = await storage.get_node(fact_id)
+        if not isinstance(source, Fact):
+            continue
+        embeddings = await storage.get_embeddings_for_item(fact_id, model_id=model_id)
+        if not embeddings:
+            continue
+        # k + 1 because the fact is its own nearest neighbour; trim back to k.
+        hits = await storage.vector_search(
+            embeddings[0].vector, model_id, k=k + 1, node_type=NodeType.FACT,
+        )
+        candidates: list[dict] = []
+        for item_id, score in hits:
+            if item_id == fact_id or score < threshold:
+                continue
+            cand = await storage.get_node(item_id)
+            if not isinstance(cand, Fact):
+                continue
+            candidates.append({
+                "id": cand.id,
+                "content": cand.content,
+                "score": round(score, 4),
+                "metacontexts": await _metacontext_labels(cand.id, storage),
+                "same_frame": await same_frame(fact_id, cand.id, storage),
+            })
+            if len(candidates) >= k:
+                break
+        if candidates:
+            conflicts.append({
+                "fact": {"id": source.id, "content": source.content},
+                "candidates": candidates,
+            })
+            candidate_count += len(candidates)
+
+    result = {"conflicts": conflicts, "threshold": threshold}
+    meta = ResponseMeta(nodes_returned=candidate_count)
+    return result, meta
+
+
+async def record_contradiction(
+    a_id: str,
+    b_id: str,
+    storage: StorageBackend,
+) -> tuple[dict, ResponseMeta]:
+    """Record a genuine contradiction between two facts (both stay active).
+
+    Creates a single ``contradiction`` edge (idempotent — one per pair, either
+    direction). Both facts remain ACTIVE and retrievable; retrieval flags them
+    contested so nothing downstream trusts a contested fact blindly. Returns a
+    notify_user signal: a same-frame contradiction is epistemically consequential
+    and should be surfaced to the user for resolution (REVIEW_EPISTEMIC.md §7). A
+    cross-frame pair is *not* a real contradiction — record_variant fits better.
+    """
+    from epimemer.pipelines.reflection.review import same_frame
+
+    if a_id == b_id:
+        raise ValueError("A node cannot contradict itself")
+    if await storage.get_node(a_id) is None:
+        raise ValueError(f"Node '{a_id}' not found")
+    if await storage.get_node(b_id) is None:
+        raise ValueError(f"Node '{b_id}' not found")
+
+    shares_frame = await same_frame(a_id, b_id, storage)
+    edge_id, created = await _ensure_symmetric_edge(
+        a_id, b_id, EdgeType.CONTRADICTION, storage
+    )
+
+    result = {
+        "edge_id": edge_id,
+        "created": created,
+        "same_frame": shares_frame,
+        "notify_user": shares_frame,
+    }
+    if not shares_frame:
+        result["warning"] = (
+            "These facts are in different metacontext frames, so this is not a "
+            "genuine contradiction — consider record_variant instead."
+        )
+    meta = ResponseMeta(nodes_returned=2)
+    return result, meta
+
+
+async def record_variant(
+    a_id: str,
+    b_id: str,
+    storage: StorageBackend,
+) -> tuple[dict, ResponseMeta]:
+    """Record that two facts are one proposition resolved differently per frame.
+
+    Creates a single ``variant_of`` edge (idempotent — one per pair, either
+    direction) so a cross-frame divergence (e.g. base reality vs. a fiction frame)
+    is a graph traversal rather than a re-derivation (REVIEW_EPISTEMIC.md §8). Both
+    facts stay active. variant_of is for facts in *different* frames; if the two
+    share a frame, a same_frame note is returned so the agent can reconsider (a
+    same-frame conflict is a contradiction, not a variant).
+    """
+    from epimemer.pipelines.reflection.review import same_frame
+
+    if a_id == b_id:
+        raise ValueError("A node cannot be a variant of itself")
+    if await storage.get_node(a_id) is None:
+        raise ValueError(f"Node '{a_id}' not found")
+    if await storage.get_node(b_id) is None:
+        raise ValueError(f"Node '{b_id}' not found")
+
+    shares_frame = await same_frame(a_id, b_id, storage)
+    edge_id, created = await _ensure_symmetric_edge(
+        a_id, b_id, EdgeType.VARIANT_OF, storage
+    )
+
+    result = {"edge_id": edge_id, "created": created, "same_frame": shares_frame}
+    if shares_frame:
+        result["warning"] = (
+            "These facts share a metacontext frame; variant_of is meant for "
+            "cross-frame divergence — if they conflict, record_contradiction fits."
+        )
+    meta = ResponseMeta(nodes_returned=2)
+    return result, meta
+
+
 # --- Reflect (analysis — no LLM) ---
 
 
@@ -506,20 +647,25 @@ async def reflect(
                 "associated_material": material,
             })
 
-    # 5. Detect contradictions
+    # 5. Detect contradictions (safety net for anything ingest-time check missed).
+    #    Similarity nominates; keep only same-frame pairs — a high-similarity pair
+    #    across disjoint metacontext frames is coexistence, not a contradiction.
+    from epimemer.pipelines.reflection.review import same_frame
+
     contradiction_pairs_raw = await detect_contradictions(
         storage, embedding_provider,
         similarity_threshold=0.80,
         model_id=model_id,
     )
-    contradictions = [
-        {
+    contradictions = []
+    for a, b, score in contradiction_pairs_raw:
+        if not await same_frame(a.id, b.id, storage):
+            continue
+        contradictions.append({
             "fact_a": {"id": a.id, "content": a.content},
             "fact_b": {"id": b.id, "content": b.content},
             "similarity": round(score, 4),
-        }
-        for a, b, score in contradiction_pairs_raw
-    ]
+        })
 
     result = {
         "nodes_decayed": nodes_decayed,
@@ -838,6 +984,47 @@ def _reconstruct_node(data: dict) -> EpistemicNode:
         except Exception:
             continue
     raise ValueError(f"Cannot reconstruct node from data: {data}")
+
+
+async def _metacontext_labels(node_id: str, storage: StorageBackend) -> list[str]:
+    """Content labels of the metacontexts a node is tagged with."""
+    edges = await storage.get_edges_from(node_id, edge_type=EdgeType.HAS_METACONTEXT)
+    labels: list[str] = []
+    for edge in edges:
+        mc = await storage.get_metacontext(edge.dst_id)
+        if mc:
+            labels.append(mc.content)
+    return labels
+
+
+async def _symmetric_edge_between(
+    a_id: str, b_id: str, edge_type: EdgeType, storage: StorageBackend
+) -> NodeEdge | None:
+    """An existing edge of ``edge_type`` between a and b, in either direction."""
+    for edge in await storage.get_edges_from(a_id, edge_type=edge_type):
+        if edge.dst_id == b_id:
+            return edge
+    for edge in await storage.get_edges_from(b_id, edge_type=edge_type):
+        if edge.dst_id == a_id:
+            return edge
+    return None
+
+
+async def _ensure_symmetric_edge(
+    a_id: str, b_id: str, edge_type: EdgeType, storage: StorageBackend
+) -> tuple[str, bool]:
+    """Create a symmetric edge between a and b if absent. Returns (edge_id, created).
+
+    Keeps symmetric relationships (contradiction, variant_of) to one edge per
+    pair regardless of direction, so repeated recording does not accumulate
+    duplicates.
+    """
+    existing = await _symmetric_edge_between(a_id, b_id, edge_type, storage)
+    if existing is not None:
+        return existing.id, False
+    edge = NodeEdge(src_id=a_id, dst_id=b_id, type=edge_type)
+    await storage.store_edge(edge)
+    return edge.id, True
 
 
 # --- Timeline tools ---

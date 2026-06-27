@@ -410,6 +410,105 @@ async def memory_supersede_by(
     )
 
 
+@mcp.tool(name="check_conflicts")
+async def memory_check_conflicts(
+    fact_ids: list[str],
+    ctx: Context,
+    threshold: float = 0.83,
+    k: int = 5,
+) -> str:
+    """Find existing facts that may conflict with the given facts (you then judge).
+
+    Recall stage of the review loop: for each fact, returns similar active facts
+    above `threshold` with their similarity score, metacontext labels, and a
+    same_frame flag. Similarity only nominates — classify each candidate yourself
+    (redundant / supersedes / contradicts / cross-frame / compatible) and record
+    the verdict with supersede_by, record_contradiction, or record_variant. Run
+    this on freshly-ingested fact ids to catch outdated or conflicting knowledge.
+
+    Args:
+        fact_ids: Fact node ids to check (e.g. facts just stored).
+        threshold: Minimum cosine similarity for a candidate (default 0.83, high).
+        k: Max candidates returned per fact.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.check_conflicts",
+        lambda: tools.check_conflicts(
+            fact_ids=fact_ids,
+            storage=deps["storage"],
+            embedding_provider=deps["embedding_provider"],
+            threshold=threshold,
+            k=k,
+        ),
+        ctx,
+        f"facts={len(fact_ids)} threshold={threshold}",
+        lambda r, m: f"candidates={m.nodes_returned}",
+    )
+
+
+@mcp.tool(name="record_contradiction")
+async def memory_record_contradiction(
+    a_id: str,
+    b_id: str,
+    ctx: Context,
+) -> str:
+    """Record a genuine contradiction between two facts (both stay active).
+
+    Creates one `contradiction` edge (idempotent per pair). The response includes
+    notify_user — when true (a same-frame contradiction), surface it to the user
+    in conversation and ask how to resolve it. If the facts are in different
+    frames it is not a real contradiction; prefer record_variant.
+
+    Args:
+        a_id: One fact id.
+        b_id: The other fact id.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.record_contradiction",
+        lambda: tools.record_contradiction(
+            a_id=a_id,
+            b_id=b_id,
+            storage=deps["storage"],
+        ),
+        ctx,
+        f"{a_id}<->{b_id}",
+        lambda r, m: f"created={r['created']} notify={r['notify_user']}",
+    )
+
+
+@mcp.tool(name="record_variant")
+async def memory_record_variant(
+    a_id: str,
+    b_id: str,
+    ctx: Context,
+) -> str:
+    """Record that two facts are the same proposition resolved differently per frame.
+
+    Creates one `variant_of` edge (idempotent per pair) so a cross-frame
+    divergence (e.g. real history vs. a fiction frame) is queryable. Both facts
+    stay active. Use for facts in different metacontexts; if they share a frame
+    and conflict, use record_contradiction instead.
+
+    Args:
+        a_id: One fact id.
+        b_id: The other fact id.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.record_variant",
+        lambda: tools.record_variant(
+            a_id=a_id,
+            b_id=b_id,
+            storage=deps["storage"],
+        ),
+        ctx,
+        f"{a_id}<->{b_id}",
+        lambda r, m: f"created={r['created']}",
+    )
+
+
 @mcp.tool(name="reflect")
 async def memory_reflect(
     ctx: Context,

@@ -4,8 +4,34 @@ Pure planning functions (reads only) that compute the edges / edge-ids a
 supersession or resolution must apply atomically.
 """
 
-from epimemer.core.types import EdgeType, Inference, NodeEdge
+from epimemer.core.types import BASE_METACONTEXT_ID, EdgeType, Inference, NodeEdge
 from epimemer.storage.protocol import StorageBackend
+
+
+async def frames_of(node_id: str, storage: StorageBackend) -> set[str]:
+    """Metacontext ids a node belongs to, treating untagged as base reality.
+
+    A node with no ``has_metacontext`` edges is implicitly in "The Real"
+    (``BASE_METACONTEXT_ID``); a node explicitly tagged with the base id reduces
+    to the same single-frame set. Used to decide whether two nodes share a frame
+    (and so whether an apparent conflict is genuine — see REVIEW_EPISTEMIC.md §4.3).
+    """
+    edges = await storage.get_edges_from(node_id, edge_type=EdgeType.HAS_METACONTEXT)
+    frames = {edge.dst_id for edge in edges}
+    return frames or {BASE_METACONTEXT_ID}
+
+
+async def same_frame(a_id: str, b_id: str, storage: StorageBackend) -> bool:
+    """Whether two nodes share at least one metacontext frame.
+
+    Untagged nodes are both in the base frame, so two untagged nodes share a
+    frame (a genuine same-frame relationship); nodes in disjoint frames (e.g. a
+    fiction frame vs. base reality) do not. A frame overlap means an apparent
+    contradiction is real; disjoint frames mean the two simply coexist.
+    """
+    a_frames = await frames_of(a_id, storage)
+    b_frames = await frames_of(b_id, storage)
+    return bool(a_frames & b_frames)
 
 
 async def plan_evidence_stale_edges(

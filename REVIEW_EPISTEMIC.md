@@ -1,9 +1,9 @@
 # Epimemer — Epistemic Review Loop (design)
 
 **Status (2026-06-27):** Phase 1 (atomicity) ✅; Phase 2a (vocabulary) ✅;
-Phase 2b in progress — supersede-by-existing + Case B propagation ✅, detection
-& recording tools (`check_conflicts`, `record_contradiction`, `record_variant`)
-pending; Phase 2c–2e pending.
+Phase 2b ✅ — supersede-by-existing + Case B propagation (2b.1) and detection &
+recording tools `check_conflicts` / `record_contradiction` / `record_variant`
+plus frame helpers and a frame-aware `reflect` sweep (2b.2); Phase 2c–2e pending.
 
 Decisions settled for 2b: separate `check_conflicts` tool (opt-in); pre-compute
 frame + scores; dedicated verdict tools; agent authority per §7; build
@@ -274,8 +274,32 @@ human-in-the-loop; no metacontext association; inferences never revisited.
   migration (both backends) + default traversal exclusion; reserved base
   metacontext (`BASE_METACONTEXT_ID` + `ensure_base_metacontext`). (`contradiction`
   edge type already existed; it gets *created* in 2b.)
-- 2b. Detection: ingest candidate generation + agent judgment + recording;
-  `reflect` safety-net sweep; Case B propagation folded into atomic supersede.
+- 2b.1. ✅ **Done.** Resolution backbone: `supersede(old, by=existing)` (storage
+  `supersede_by_existing_tx` both backends + wrapper, domain `supersede_by_existing`,
+  tool `supersede_by`, MCP); **Case B** propagation (`evidence_superseded` flags on
+  direct dependent inferences) folded atomically into *both* supersede paths;
+  candidate-edge clearing on supersession. Helpers in
+  `pipelines/reflection/review.py` (`plan_evidence_stale_edges`,
+  `find_candidate_edge_ids_into`).
+- 2b.2. ✅ **Done.** Detection & recording tools (all opt-in, agent-driven):
+  - `frames_of(node_id, storage)` / `same_frame(a, b, storage)` in `review.py` —
+    metacontexts of a node, treating untagged as `BASE_METACONTEXT_ID`; two nodes
+    share a frame if their frame sets overlap (untagged⇒base, so two untagged are
+    same-frame; disjoint frames are not).
+  - `check_conflicts(fact_ids, storage, embedding_provider, *, threshold=0.83,
+    k=5)` — per fact, vector-search active facts (exclude self) above threshold;
+    returns candidates with score + the candidate's metacontext labels + same-frame
+    flag. Tool + MCP. Opt-in; the agent calls it on freshly-ingested facts.
+  - `record_contradiction(a_id, b_id, storage)` — idempotent `contradiction` edge
+    (one per pair, either direction); both stay active; returns `notify_user`
+    (= same-frame) and a warning when cross-frame. Tool + MCP.
+  - `record_variant(a_id, b_id, storage)` — idempotent `variant_of` edge; warns
+    when the pair shares a frame. Tool + MCP.
+  - `reflect` frame-aware sweep: `detect_contradictions` output filtered to keep
+    only same-frame pairs (safety net for anything ingest missed).
+  - Edge dedup helper `_ensure_symmetric_edge`; `_metacontext_labels` factored out
+    of `search`. Tests: frame helpers + `check_conflicts` + both record tools +
+    frame-aware `reflect` (382 passing).
 - 2c. Retrieval visibility: computed `review` labels + provenance; frame-scoping.
 - 2d. Resolution: `supersede(old_id, by=existing_id)`; contradiction recording;
   `reflect` surfaces flagged/pending set; resolution action in `apply_reflection`.

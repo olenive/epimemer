@@ -25,6 +25,7 @@ from epimemer.mcp.tools import (
     add_timeline_timepoint,
     apply_reflection,
     archive,
+    check_conflicts,
     create_metacontext,
     create_timelink,
     create_timeline,
@@ -33,6 +34,8 @@ from epimemer.mcp.tools import (
     link,
     query_graph,
     query_timeline,
+    record_contradiction,
+    record_variant,
     reflect,
     restore,
     search,
@@ -813,6 +816,219 @@ class TestReviewEdgeTraversal:
             a.id, storage, hops=1, edge_types=["supersession_candidate"]
         )
         assert b.id in {n["id"] for n in result2["nodes"]}
+
+
+# --- Review loop: detection + verdict recording ---
+
+
+async def _store_fact_with_embedding(
+    storage, model_id, content, vector, *, metacontext_id=None
+):
+    f = Fact(content=content, source_id="s1")
+    await storage.store_node(f)
+    await storage.store_embedding(
+        EmbeddingRecord(item_id=f.id, model_id=model_id, vector=vector)
+    )
+    if metacontext_id is not None:
+        await storage.store_edge(
+            NodeEdge(src_id=f.id, dst_id=metacontext_id, type=EdgeType.HAS_METACONTEXT)
+        )
+    return f
+
+
+class TestCheckConflicts:
+
+    async def test_surfaces_similar_active_facts(self, storage, embedding_provider):
+        model_id = embedding_provider.model_id
+        query = await _store_fact_with_embedding(storage, model_id, "CEO is Alice", [1.0, 0.0])
+        similar = await _store_fact_with_embedding(
+            storage, model_id, "Alice leads the company", [1.0, 0.0]
+        )
+        await _store_fact_with_embedding(storage, model_id, "unrelated", [0.0, 1.0])
+
+        result, meta = await check_conflicts(
+            [query.id], storage, embedding_provider, threshold=0.5
+        )
+
+        assert len(result["conflicts"]) == 1
+        entry = result["conflicts"][0]
+        assert entry["fact"]["id"] == query.id
+        cand_ids = {c["id"] for c in entry["candidates"]}
+        assert similar.id in cand_ids
+        # The fact never appears as its own candidate.
+        assert query.id not in cand_ids
+        assert meta.nodes_returned == len(entry["candidates"])
+
+    async def test_excludes_self_and_below_threshold(self, storage, embedding_provider):
+        model_id = embedding_provider.model_id
+        query = await _store_fact_with_embedding(storage, model_id, "a", [1.0, 0.0])
+        await _store_fact_with_embedding(storage, model_id, "b", [0.0, 1.0])
+
+        result, _ = await check_conflicts(
+            [query.id], storage, embedding_provider, threshold=0.9
+        )
+        # Only self (excluded) and an orthogonal fact (below 0.9) → nothing.
+        assert result["conflicts"] == []
+
+    async def test_flags_cross_frame_candidate(self, storage, embedding_provider):
+        model_id = embedding_provider.model_id
+        fiction = Metacontext(content="Fiction")
+        await storage.store_metacontext(fiction)
+        query = await _store_fact_with_embedding(
+            storage, model_id, "Napoleon lost at Waterloo", [1.0, 0.0]
+        )
+        variant = await _store_fact_with_embedding(
+            storage, model_id, "Napoleon won at Waterloo", [1.0, 0.0],
+            metacontext_id=fiction.id,
+        )
+
+        result, _ = await check_conflicts(
+            [query.id], storage, embedding_provider, threshold=0.5
+        )
+        cand = next(
+            c for c in result["conflicts"][0]["candidates"] if c["id"] == variant.id
+        )
+        assert cand["same_frame"] is False
+        assert "Fiction" in cand["metacontexts"]
+
+    async def test_skips_facts_without_embeddings(self, storage, embedding_provider):
+        f = Fact(content="no embedding", source_id="s1")
+        await storage.store_node(f)
+        result, _ = await check_conflicts([f.id], storage, embedding_provider)
+        assert result["conflicts"] == []
+
+
+class TestRecordContradiction:
+
+    async def test_records_same_frame_and_signals_notify(self, storage):
+        a = Fact(content="X is true", source_id="s1")
+        b = Fact(content="X is false", source_id="s1")
+        await storage.store_node(a)
+        await storage.store_node(b)
+
+        result, _ = await record_contradiction(a.id, b.id, storage)
+
+        assert result["created"] is True
+        assert result["same_frame"] is True
+        assert result["notify_user"] is True
+        edges = await storage.get_edges_from(a.id, edge_type=EdgeType.CONTRADICTION)
+        assert len(edges) == 1 and edges[0].dst_id == b.id
+
+    async def test_idempotent_either_direction(self, storage):
+        a = Fact(content="a", source_id="s1")
+        b = Fact(content="b", source_id="s1")
+        await storage.store_node(a)
+        await storage.store_node(b)
+
+        first, _ = await record_contradiction(a.id, b.id, storage)
+        second, _ = await record_contradiction(b.id, a.id, storage)  # reversed
+
+        assert first["created"] is True
+        assert second["created"] is False
+        assert second["edge_id"] == first["edge_id"]
+        from_a = await storage.get_edges_from(a.id, edge_type=EdgeType.CONTRADICTION)
+        from_b = await storage.get_edges_from(b.id, edge_type=EdgeType.CONTRADICTION)
+        assert len(from_a) + len(from_b) == 1
+
+    async def test_cross_frame_does_not_notify(self, storage):
+        fiction = Metacontext(content="Fiction")
+        await storage.store_metacontext(fiction)
+        a = Fact(content="real", source_id="s1")
+        b = Fact(content="fictional", source_id="s1")
+        await storage.store_node(a)
+        await storage.store_node(b)
+        await storage.store_edge(
+            NodeEdge(src_id=b.id, dst_id=fiction.id, type=EdgeType.HAS_METACONTEXT)
+        )
+
+        result, _ = await record_contradiction(a.id, b.id, storage)
+        assert result["same_frame"] is False
+        assert result["notify_user"] is False
+        assert "warning" in result
+
+    async def test_rejects_self_and_missing(self, storage):
+        a = Fact(content="a", source_id="s1")
+        await storage.store_node(a)
+        with pytest.raises(ValueError, match="cannot contradict itself"):
+            await record_contradiction(a.id, a.id, storage)
+        with pytest.raises(ValueError, match="not found"):
+            await record_contradiction(a.id, "nope", storage)
+
+
+class TestRecordVariant:
+
+    async def test_records_cross_frame_variant(self, storage):
+        novel = Metacontext(content="Novel-X")
+        await storage.store_metacontext(novel)
+        real = Fact(content="Napoleon lost at Waterloo", source_id="s1")
+        fic = Fact(content="Napoleon won at Waterloo", source_id="s1")
+        await storage.store_node(real)
+        await storage.store_node(fic)
+        await storage.store_edge(
+            NodeEdge(src_id=fic.id, dst_id=novel.id, type=EdgeType.HAS_METACONTEXT)
+        )
+
+        result, _ = await record_variant(real.id, fic.id, storage)
+        assert result["created"] is True
+        assert result["same_frame"] is False
+        assert "warning" not in result
+        edges = await storage.get_edges_from(real.id, edge_type=EdgeType.VARIANT_OF)
+        assert len(edges) == 1 and edges[0].dst_id == fic.id
+
+    async def test_same_frame_warns(self, storage):
+        a = Fact(content="a", source_id="s1")
+        b = Fact(content="b", source_id="s1")
+        await storage.store_node(a)
+        await storage.store_node(b)
+        result, _ = await record_variant(a.id, b.id, storage)
+        assert result["same_frame"] is True
+        assert "warning" in result
+
+    async def test_idempotent_either_direction(self, storage):
+        a = Fact(content="a", source_id="s1")
+        b = Fact(content="b", source_id="s1")
+        await storage.store_node(a)
+        await storage.store_node(b)
+        first, _ = await record_variant(a.id, b.id, storage)
+        second, _ = await record_variant(b.id, a.id, storage)
+        assert second["created"] is False and second["edge_id"] == first["edge_id"]
+
+
+class TestReflectFrameAware:
+
+    async def _fact(self, storage, model_id, content, vector, *, mc=None):
+        f = Fact(content=content, source_id="s1")
+        await storage.store_node(f)
+        await storage.store_embedding(
+            EmbeddingRecord(item_id=f.id, model_id=model_id, vector=vector)
+        )
+        if mc is not None:
+            await storage.store_edge(
+                NodeEdge(src_id=f.id, dst_id=mc, type=EdgeType.HAS_METACONTEXT)
+            )
+        return f
+
+    async def test_cross_frame_pairs_dropped_from_contradictions(
+        self, storage, embedding_provider
+    ):
+        model_id = embedding_provider.model_id
+        fiction = Metacontext(content="Fiction")
+        await storage.store_metacontext(fiction)
+        # Same-frame near-identical pair (both untagged → base reality).
+        await self._fact(storage, model_id, "real A", [1.0, 0.0])
+        await self._fact(storage, model_id, "real B", [1.0, 0.0])
+        # Cross-frame near-identical pair (one tagged fiction).
+        await self._fact(storage, model_id, "story A", [0.0, 1.0])
+        await self._fact(storage, model_id, "story B", [0.0, 1.0], mc=fiction.id)
+
+        result, _ = await reflect(storage, embedding_provider)
+        contents = {
+            frozenset({p["fact_a"]["content"], p["fact_b"]["content"]})
+            for p in result["contradictions"]
+        }
+        # The same-frame pair is surfaced; the cross-frame pair is filtered out.
+        assert frozenset({"real A", "real B"}) in contents
+        assert frozenset({"story A", "story B"}) not in contents
 
 
 # --- Search with metacontext ---

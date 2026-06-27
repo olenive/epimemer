@@ -19,9 +19,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
     EdgeType,
     EmbeddingRecord,
     Fact,
+    Metacontext,
     NodeEdge,
     NodeStatus,
     Topic,
@@ -451,3 +453,60 @@ async def test_archive_nodes_exports_correctly(storage_with_archival_candidates)
         assert "content" in node_dict
         assert "status" in node_dict
 
+
+
+# --- Frame helpers (metacontext-relative judgment) ---
+
+
+async def test_frames_of_untagged_is_base():
+    """A node with no metacontext edges is implicitly in base reality."""
+    from epimemer.pipelines.reflection.review import frames_of
+
+    storage = InMemoryStorage()
+    f = Fact(content="untagged", source_id="s1")
+    await storage.store_node(f)
+    assert await frames_of(f.id, storage) == {BASE_METACONTEXT_ID}
+
+
+async def test_frames_of_returns_tagged_frames():
+    """A tagged node reports the metacontexts it is tagged with."""
+    from epimemer.pipelines.reflection.review import frames_of
+
+    storage = InMemoryStorage()
+    mc = Metacontext(content="Fiction")
+    await storage.store_metacontext(mc)
+    f = Fact(content="tagged", source_id="s1")
+    await storage.store_node(f)
+    await storage.store_edge(
+        NodeEdge(src_id=f.id, dst_id=mc.id, type=EdgeType.HAS_METACONTEXT)
+    )
+    assert await frames_of(f.id, storage) == {mc.id}
+
+
+async def test_same_frame_two_untagged_share_base():
+    """Two untagged nodes are both in base reality → same frame (genuine)."""
+    from epimemer.pipelines.reflection.review import same_frame
+
+    storage = InMemoryStorage()
+    a = Fact(content="a", source_id="s1")
+    b = Fact(content="b", source_id="s1")
+    await storage.store_node(a)
+    await storage.store_node(b)
+    assert await same_frame(a.id, b.id, storage) is True
+
+
+async def test_same_frame_disjoint_frames_not_same():
+    """A base-reality node and a fiction-tagged node do not share a frame."""
+    from epimemer.pipelines.reflection.review import same_frame
+
+    storage = InMemoryStorage()
+    mc = Metacontext(content="Fiction")
+    await storage.store_metacontext(mc)
+    real = Fact(content="real", source_id="s1")
+    fic = Fact(content="fictional", source_id="s1")
+    await storage.store_node(real)
+    await storage.store_node(fic)
+    await storage.store_edge(
+        NodeEdge(src_id=fic.id, dst_id=mc.id, type=EdgeType.HAS_METACONTEXT)
+    )
+    assert await same_frame(real.id, fic.id, storage) is False
