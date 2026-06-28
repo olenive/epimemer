@@ -11,13 +11,59 @@ from epimemer.core.types import (
     Metacontext,
     NodeEdge,
     NodeStatus,
+    Provenance,
     RawDocument,
     Segment,
+    Tag,
     Timeline,
     Timepoint,
     Topic,
     ValueSignal,
+    parse_tag,
+    provenance_matches,
+    tag_matches,
+    union_unique,
 )
+
+
+class TestTagAndProvenanceHelpers:
+
+    def test_node_defaults_empty(self):
+        f = Fact(content="x", source_id="s")
+        assert f.tags == [] and f.provenance == []
+
+    def test_parse_tag(self):
+        assert parse_tag("k=v") == Tag(key="k", value="v")
+        assert parse_tag("bare") == Tag(value="bare")
+        # Split only on the first '=', so values may contain '='.
+        assert parse_tag("url=http://x?a=b") == Tag(key="url", value="http://x?a=b")
+
+    def test_tag_matches_key_value_keyonly_and_bare(self):
+        f = Fact(
+            content="x", source_id="s",
+            tags=[Tag(key="speaker", value="alice"), Tag(value="interesting")],
+        )
+        assert tag_matches(f, ["speaker=alice"])   # key=value
+        assert tag_matches(f, ["speaker="])         # key only, any value
+        assert tag_matches(f, ["interesting"])      # bare value, any key
+        assert not tag_matches(f, ["speaker=bob"])
+        assert tag_matches(f, ["speaker=alice", "interesting"])   # AND of all
+        assert not tag_matches(f, ["speaker=alice", "missing"])
+
+    def test_provenance_matches(self):
+        f = Fact(
+            content="x", source_id="s",
+            provenance=[Provenance(source="ISSUES.md", source_type="document")],
+        )
+        assert provenance_matches(f, source="ISSUES.md")
+        assert provenance_matches(f, source_type="document")
+        assert not provenance_matches(f, source="README.md")
+        assert not provenance_matches(f, source_type="api")
+
+    def test_union_unique_preserves_order_and_dedupes(self):
+        a = [Tag(value="x"), Tag(value="y")]
+        b = [Tag(value="y"), Tag(value="z")]
+        assert union_unique(a, b) == [Tag(value="x"), Tag(value="y"), Tag(value="z")]
 
 
 class TestValueSignal:

@@ -25,8 +25,11 @@ from epimemer.core.types import (
     NodeType,
     RawDocument,
     Segment,
+    Tag,
     Timeline,
     Topic,
+    provenance_matches,
+    tag_matches,
 )
 
 
@@ -292,6 +295,9 @@ class SurrealDBStorage:
         node_type: NodeType | None = None,
         status: NodeStatus = NodeStatus.ACTIVE,
         at_time: datetime | None = None,
+        tags: list[str] | None = None,
+        source: str | None = None,
+        source_type: str | None = None,
     ) -> Sequence[EpistemicNode]:
         tables = [_NODE_TYPE_TO_TABLE[node_type]] if node_type else ["topic", "fact", "inference"]
         results = []
@@ -309,6 +315,17 @@ class SurrealDBStorage:
                     {"at_time": at_time.isoformat()},
                 )
             results.extend(_record_to_node(table, r) for r in rows)
+
+        # Tag/provenance filtering is applied in Python via the shared matchers so
+        # semantics are identical to the in-memory backend. Brute-force for now;
+        # push down to SurrealQL with an index if graphs grow large.
+        if tags:
+            results = [n for n in results if tag_matches(n, tags)]
+        if source is not None or source_type is not None:
+            results = [
+                n for n in results
+                if provenance_matches(n, source=source, source_type=source_type)
+            ]
 
         return results
 
@@ -352,6 +369,17 @@ class SurrealDBStorage:
                     "status": status.value,
                     "superseded_at": superseded_at.isoformat() if superseded_at else None,
                 },
+            )
+            if rows:
+                return
+        raise KeyError(f"Node {node_id} not found")
+
+    async def set_node_tags(self, node_id: str, tags: list[Tag]) -> None:
+        serialized = [t.model_dump(mode="json") for t in tags]
+        for table in ("topic", "fact", "inference"):
+            rows = await self.db.query(
+                f"UPDATE {table} SET tags = $tags WHERE uid = $uid",
+                {"uid": node_id, "tags": serialized},
             )
             if rows:
                 return

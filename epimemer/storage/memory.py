@@ -24,8 +24,11 @@ from epimemer.core.types import (
     NodeType,
     RawDocument,
     Segment,
+    Tag,
     Timeline,
     Topic,
+    provenance_matches,
+    tag_matches,
 )
 
 
@@ -141,6 +144,9 @@ class InMemoryStorage:
         node_type: NodeType | None = None,
         status: NodeStatus = NodeStatus.ACTIVE,
         at_time: datetime | None = None,
+        tags: list[str] | None = None,
+        source: str | None = None,
+        source_type: str | None = None,
     ) -> Sequence[EpistemicNode]:
         results = []
         for node in self._g.nodes.values():
@@ -160,6 +166,14 @@ class InMemoryStorage:
                     continue
                 if node.superseded_at is not None and node.superseded_at <= at_time:
                     continue
+
+            # Filter by tags / provenance
+            if tags and not tag_matches(node, tags):
+                continue
+            if (source is not None or source_type is not None) and not provenance_matches(
+                node, source=source, source_type=source_type
+            ):
+                continue
 
             results.append(node)
         return results
@@ -198,6 +212,12 @@ class InMemoryStorage:
             raise KeyError(f"Node {node_id} not found")
         node.status = status
         node.superseded_at = superseded_at
+
+    async def set_node_tags(self, node_id: str, tags: list[Tag]) -> None:
+        node = self._g.nodes.get(node_id)
+        if node is None:
+            raise KeyError(f"Node {node_id} not found")
+        node.tags = list(tags)
 
     async def count_nodes_by_type(
         self,

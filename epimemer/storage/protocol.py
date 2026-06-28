@@ -18,6 +18,7 @@ from epimemer.core.types import (
     NodeType,
     RawDocument,
     Segment,
+    Tag,
     Timeline,
 )
 
@@ -61,8 +62,16 @@ class StorageBackend(Protocol):
         node_type: NodeType | None = None,
         status: NodeStatus = NodeStatus.ACTIVE,
         at_time: datetime | None = None,
+        tags: list[str] | None = None,
+        source: str | None = None,
+        source_type: str | None = None,
     ) -> Sequence[EpistemicNode]:
-        """Query nodes by type, status, and/or temporal filter."""
+        """Query nodes by type, status, temporal filter, and/or tags/provenance.
+
+        tags filter strings parse as "key=value", "key=" (any value), or bare
+        "value" (any key); a node must match all of them. source/source_type
+        match the node's provenance entries.
+        """
         ...
 
     async def query_changes(
@@ -89,6 +98,15 @@ class StorageBackend(Protocol):
         superseded_at: datetime | None = None,
     ) -> None:
         """Update a node's status (e.g., mark as superseded or merged)."""
+        ...
+
+    async def set_node_tags(self, node_id: str, tags: list[Tag]) -> None:
+        """Replace a node's tags in place.
+
+        Tags are non-content metadata (like status), so this mutates the node
+        rather than creating a new version — content and embeddings are untouched.
+        Used by tag consolidation.
+        """
         ...
 
     async def count_nodes_by_type(

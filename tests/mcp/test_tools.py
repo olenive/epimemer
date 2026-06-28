@@ -17,6 +17,8 @@ from epimemer.core.types import (
     NodeEdge,
     NodeStatus,
     NodeType,
+    Provenance,
+    Tag,
     Topic,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
@@ -29,11 +31,13 @@ from epimemer.mcp.tools import (
     check_conflicts,
     create_metacontext,
     events_in_window,
+    find_nodes,
     create_timelink,
     create_timeline,
     get_metacontexts_for_node,
     graph_stats,
     link,
+    list_tags,
     query_changes,
     query_graph,
     query_timeline,
@@ -1510,3 +1514,227 @@ class TestResolveWindows:
                 self.NOW,
                 windows=[["2026-06-20T00:00:00+00:00", "2026-06-10T00:00:00+00:00"]],
             )
+
+
+# --- Provenance & tags ---
+
+
+async def _ingest_facts(storage, ep, config, content, *, source, source_type="document",
+                        facts, tags=None):
+    """Ingest one document and decompose its single segment into the given facts."""
+    seg, _ = await segment_text(
+        content, storage, ep, config, source=source, source_type=source_type,
+    )
+    sid = seg["segments"][0]["segment_id"]
+    await store_decomposition(
+        document_id=seg["document_id"],
+        segments=[{"segment_id": sid, "topics": [], "facts": facts, "inferences": []}],
+        storage=storage, embedding_provider=ep, tags=tags,
+    )
+    return seg["document_id"]
+
+
+class TestIngestProvenanceAndTags:
+
+    async def test_provenance_stamped_from_document(self, storage, embedding_provider, config):
+        await _ingest_facts(
+            storage, embedding_provider, config, "One para.",
+            source="ISSUES.md", facts=["a fact"], tags=["batch=demo"],
+        )
+        facts = await storage.query_nodes(node_type=NodeType.FACT)
+        assert facts
+        for f in facts:
+            assert any(
+                p.source == "ISSUES.md" and p.source_type == "document"
+                for p in f.provenance
+            )
+            assert Tag(key="batch", value="demo") in f.tags
+
+    async def test_per_node_tags_and_doc_tags_combine(self, storage, embedding_provider, config):
+        seg, _ = await segment_text("Solo.", storage, embedding_provider, config, source="x")
+        sid = seg["segments"][0]["segment_id"]
+        await store_decomposition(
+            document_id=seg["document_id"],
+            segments=[{
+                "segment_id": sid, "topics": [], "inferences": [],
+                "facts": [{"content": "special", "tags": ["k=v"]}],
+            }],
+            storage=storage, embedding_provider=embedding_provider, tags=["doc=1"],
+        )
+        f = (await storage.query_nodes(node_type=NodeType.FACT))[0]
+        assert f.content == "special"
+        assert Tag(key="k", value="v") in f.tags        # per-node
+        assert Tag(key="doc", value="1") in f.tags       # document-level
+
+    async def test_default_provenance_uses_document_id(self, storage, embedding_provider, config):
+        seg, _ = await segment_text("No source.", storage, embedding_provider, config)
+        sid = seg["segments"][0]["segment_id"]
+        await store_decomposition(
+            document_id=seg["document_id"],
+            segments=[{"segment_id": sid, "topics": [], "facts": ["f"], "inferences": []}],
+            storage=storage, embedding_provider=embedding_provider,
+        )
+        f = (await storage.query_nodes(node_type=NodeType.FACT))[0]
+        assert any(
+            p.source == seg["document_id"] and p.source_type == "document"
+            for p in f.provenance
+        )
+
+
+class TestFindNodesAndListTags:
+
+    async def _two_sources(self, storage, ep, config):
+        await _ingest_facts(storage, ep, config, "Alpha.", source="ISSUES.md",
+                            facts=["af"], tags=["area=alpha"])
+        await _ingest_facts(storage, ep, config, "Beta.", source="README.md",
+                            facts=["bf"], tags=["area=beta"])
+
+    async def test_find_nodes_by_source(self, storage, embedding_provider, config):
+        await self._two_sources(storage, embedding_provider, config)
+        result, meta = await find_nodes(storage, source="ISSUES.md")
+        assert {n["content"] for n in result["nodes"]} == {"af"}
+        assert all(
+            any(p["source"] == "ISSUES.md" for p in n["provenance"])
+            for n in result["nodes"]
+        )
+
+    async def test_find_nodes_by_tag(self, storage, embedding_provider, config):
+        await self._two_sources(storage, embedding_provider, config)
+        result, _ = await find_nodes(storage, tags=["area=beta"])
+        assert {n["content"] for n in result["nodes"]} == {"bf"}
+
+    async def test_list_tags(self, storage, embedding_provider, config):
+        await self._two_sources(storage, embedding_provider, config)
+        result, _ = await list_tags(storage)
+        assert set(result["sources"]) == {"ISSUES.md", "README.md"}
+        assert result["source_types"] == ["document"]
+        assert set(result["tags"]["area"]) == {"alpha", "beta"}
+
+    async def test_search_filters_by_source(self, storage, embedding_provider, config):
+        await self._two_sources(storage, embedding_provider, config)
+        # Exact-content query retrieves the matching fact (mock embeddings are
+        # deterministic by text); the source filter must drop the other source.
+        result, _ = await search(
+            "af", storage, embedding_provider, source="ISSUES.md", k=10,
+        )
+        contents = {n["content"] for n in result["nodes"]}
+        assert "af" in contents
+        assert "bf" not in contents
+
+
+class TestProvenanceCarryForward:
+
+    async def test_supersede_inherits_provenance_and_tags(self, storage, embedding_provider):
+        from epimemer.pipelines.graph_construction.versioning import supersede_node
+        old = Topic(
+            content="old", source_id="s",
+            provenance=[Provenance(source="ISSUES.md")],
+            tags=[Tag(key="k", value="v")],
+        )
+        await storage.store_node(old)
+        new = Topic(content="new", source_id="s")
+        await supersede_node(old, new, storage, embedding_provider)
+        got = await storage.get_node(new.id)
+        assert any(p.source == "ISSUES.md" for p in got.provenance)
+        assert Tag(key="k", value="v") in got.tags
+
+    async def test_merge_unions_provenance_and_tags(self, storage, embedding_provider):
+        from epimemer.pipelines.graph_construction.versioning import merge_nodes
+        a = Topic(content="a", source_id="s",
+                  provenance=[Provenance(source="A")], tags=[Tag(value="x")])
+        b = Topic(content="b", source_id="s",
+                  provenance=[Provenance(source="B")], tags=[Tag(value="y")])
+        await storage.store_node(a)
+        await storage.store_node(b)
+        merged = Topic(content="m", source_id="s")
+        await merge_nodes([a, b], merged, storage, embedding_provider)
+        got = await storage.get_node(merged.id)
+        assert {p.source for p in got.provenance} == {"A", "B"}
+        assert {t.value for t in got.tags} == {"x", "y"}
+
+
+# --- Phase 2: tag consolidation ---
+
+
+class _FixedEmbed:
+    """Embedding provider returning a fixed vector per exact string (for tests)."""
+    model_id = "fixed"
+
+    def __init__(self, mapping):
+        self.mapping = mapping
+
+    async def embed(self, texts):
+        return [self.mapping[t] for t in texts]
+
+
+class TestFindSimilarTagPairs:
+
+    async def test_groups_by_key_and_finds_synonyms(self, storage):
+        from epimemer.pipelines.reflection.tag_consolidation import find_similar_tag_pairs
+        emb = _FixedEmbed({
+            "billing": [1.0, 0.0], "billings": [1.0, 0.0], "weather": [0.0, 1.0],
+        })
+        await storage.store_node(Fact(content="a", source_id="s", tags=[Tag(value="billing")]))
+        await storage.store_node(Fact(content="b", source_id="s", tags=[Tag(value="billings")]))
+        await storage.store_node(Fact(content="c", source_id="s", tags=[Tag(value="weather")]))
+        pairs = await find_similar_tag_pairs(storage, emb, similarity_threshold=0.9)
+        got = {frozenset((p["tag_a"], p["tag_b"])) for p in pairs}
+        assert got == {frozenset(("billing", "billings"))}
+
+    async def test_does_not_compare_across_keys(self, storage):
+        from epimemer.pipelines.reflection.tag_consolidation import find_similar_tag_pairs
+        emb = _FixedEmbed({"billing": [1.0, 0.0]})
+        await storage.store_node(
+            Fact(content="a", source_id="s", tags=[Tag(key="area", value="billing")])
+        )
+        await storage.store_node(
+            Fact(content="b", source_id="s", tags=[Tag(key="dept", value="billing")])
+        )
+        pairs = await find_similar_tag_pairs(storage, emb, similarity_threshold=0.5)
+        assert pairs == []
+
+
+class TestApplyTagMerges:
+
+    async def test_consolidates_synonymous_tags(self, storage, embedding_provider):
+        a = Fact(content="a", source_id="s", tags=[Tag(value="billings")])
+        b = Fact(content="b", source_id="s", tags=[Tag(value="invoicing")])
+        c = Fact(content="c", source_id="s", tags=[Tag(value="weather")])
+        for n in (a, b, c):
+            await storage.store_node(n)
+        result, _ = await apply_reflection(
+            storage, embedding_provider,
+            tag_merges=[{"tags": ["billings", "invoicing"], "into": "billing"}],
+        )
+        assert result["tags_consolidated"] == 1
+        assert result["nodes_retagged"] == 2
+        assert (await storage.get_node(a.id)).tags == [Tag(value="billing")]
+        assert (await storage.get_node(b.id)).tags == [Tag(value="billing")]
+        assert (await storage.get_node(c.id)).tags == [Tag(value="weather")]   # untouched
+
+    async def test_dedupes_when_canonical_already_present(self, storage, embedding_provider):
+        n = Fact(content="n", source_id="s",
+                 tags=[Tag(value="billing"), Tag(value="billings")])
+        await storage.store_node(n)
+        result, _ = await apply_reflection(
+            storage, embedding_provider,
+            tag_merges=[{"tags": ["billings"], "into": "billing"}],
+        )
+        assert (await storage.get_node(n.id)).tags == [Tag(value="billing")]
+        assert result["nodes_retagged"] == 1
+
+    async def test_no_match_is_a_noop(self, storage, embedding_provider):
+        n = Fact(content="n", source_id="s", tags=[Tag(value="other")])
+        await storage.store_node(n)
+        result, _ = await apply_reflection(
+            storage, embedding_provider,
+            tag_merges=[{"tags": ["billings"], "into": "billing"}],
+        )
+        assert result["tags_consolidated"] == 0
+        assert result["nodes_retagged"] == 0
+        assert (await storage.get_node(n.id)).tags == [Tag(value="other")]
+
+    async def test_reflect_surfaces_similar_tags_key(self, storage, embedding_provider):
+        await storage.store_node(Fact(content="x", source_id="s", tags=[Tag(value="a")]))
+        result, _ = await reflect(storage, embedding_provider)
+        assert "similar_tags" in result and isinstance(result["similar_tags"], list)

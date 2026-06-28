@@ -13,6 +13,31 @@ the history linked. Your job is to write fast and organize deliberately.
   particular source, a perspective). Untagged knowledge is treated as base reality
   — "The Real" (see Metacontexts below).
 
+### Provenance & tags
+
+Two queryable dimensions, separate from metacontexts (which are epistemic *frames*
+that change retrieval scope — provenance/tags do not):
+
+- **Provenance** — *where* knowledge came from. Pass `source` and `source_type`
+  (e.g. `"ISSUES.md"` / `"document"`, `"stripe-api"` / `"api"`, `"chat#4012"` /
+  `"chat"`) to `segment`; every node from that text is stamped with it
+  automatically. This makes "which nodes came from X" answerable.
+- **Tags** — free-text labels for filtering, no controlled vocabulary. Add
+  document-level tags via `store_decomposition(tags=[...])`, or per-node tags by
+  giving an entry as `{"content": ..., "tags": [...]}` instead of a bare string.
+  Each tag string is `"key=value"` (dimensioned) or a bare `"value"`. Tag freely;
+  synonyms are consolidated later by `reflect`, not policed up front.
+
+Filtering & discovery:
+- **`find_nodes(source=…, tags=[…], …)`** — non-semantic listing of exactly the
+  matching nodes (e.g. everything from `ISSUES.md`). Use when you want provenance,
+  not similarity.
+- `search` / `query_changes` also accept `tags` / `source` / `source_type` to
+  narrow results. Tag filters match `key=value`, `key=` (any value), or bare
+  `value`; all supplied filters must match.
+- **`list_tags`** — discover the distinct tags (grouped by key; `""` = bare tags)
+  and provenance sources present, before filtering.
+
 ### When to search (search)
 - Before answering questions that might benefit from prior context, or when the
   user asks "do you remember…" / references past conversations.
@@ -93,12 +118,18 @@ useful:
   configured threshold), when asked to consolidate, or periodically in long
   sessions.
 - `reflect` returns consolidation candidates (similar pairs, splits, enrichments),
-  same-frame contradiction candidates, and `pending_review` — the worklist of
-  nodes already flagged for resolution, each with the related ids to act on.
+  same-frame contradiction candidates, `pending_review` — the worklist of
+  nodes already flagged for resolution — and `similar_tags`, likely-synonymous
+  tags to consolidate.
 - Apply your decisions with `apply_reflection`. To resolve flagged nodes in batch,
   pass `supersessions=[{old_id, by_id}]`. Resolving a loser automatically clears
   the winner's `contested` / `superseded_candidate` labels. Escalate anything you
   shouldn't decide alone to the user.
+- **Tag consolidation**: for `similar_tags` you judge synonymous, pass
+  `tag_merges=[{tags: ["billings", "invoicing"], into: "billing"}]`. Every active
+  node carrying a listed tag is rewritten to the canonical one **in place** — tags
+  are metadata, not content, so this creates no new versions and no re-embedding
+  (the same reason status changes don't either).
 
 ### Metacontexts (epistemic frames)
 - Untagged knowledge is implicitly "The Real" — base physical reality.

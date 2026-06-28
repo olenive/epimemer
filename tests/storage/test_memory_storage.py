@@ -13,8 +13,10 @@ from epimemer.core.types import (
     NodeEdge,
     NodeStatus,
     NodeType,
+    Provenance,
     RawDocument,
     Segment,
+    Tag,
     Timeline,
     Timepoint,
     Topic,
@@ -519,3 +521,48 @@ class TestQueryChanges:
         await store.store_node(at_end)
         changed = await store.query_changes(start=self.W_START, end=self.W_END)
         assert [n.id for n in changed] == [at_start.id]
+
+
+class TestQueryNodesFilters:
+
+    async def test_filter_by_source(self, store):
+        a = Fact(content="from issues", source_id="s",
+                 provenance=[Provenance(source="ISSUES.md", source_type="document")])
+        b = Fact(content="from readme", source_id="s",
+                 provenance=[Provenance(source="README.md", source_type="document")])
+        await store.store_node(a)
+        await store.store_node(b)
+        assert [n.id for n in await store.query_nodes(source="ISSUES.md")] == [a.id]
+
+    async def test_filter_by_source_type(self, store):
+        a = Fact(content="api", source_id="s",
+                 provenance=[Provenance(source="stripe", source_type="api")])
+        b = Fact(content="doc", source_id="s",
+                 provenance=[Provenance(source="x", source_type="document")])
+        await store.store_node(a)
+        await store.store_node(b)
+        assert [n.id for n in await store.query_nodes(source_type="api")] == [a.id]
+
+    async def test_filter_by_tags(self, store):
+        a = Fact(content="a", source_id="s", tags=[Tag(key="speaker", value="alice")])
+        b = Fact(content="b", source_id="s", tags=[Tag(value="misc")])
+        await store.store_node(a)
+        await store.store_node(b)
+        assert [n.id for n in await store.query_nodes(tags=["speaker=alice"])] == [a.id]
+        assert [n.id for n in await store.query_nodes(tags=["misc"])] == [b.id]
+        assert [n.id for n in await store.query_nodes(tags=["speaker="])] == [a.id]
+
+    async def test_filters_compose_with_type(self, store):
+        f = Fact(content="f", source_id="s", tags=[Tag(value="t")])
+        t = Topic(content="t", source_id="s", tags=[Tag(value="t")])
+        await store.store_node(f)
+        await store.store_node(t)
+        got = await store.query_nodes(node_type=NodeType.FACT, tags=["t"])
+        assert [n.id for n in got] == [f.id]
+
+    async def test_set_node_tags_replaces_in_place(self, store):
+        f = Fact(content="x", source_id="s", tags=[Tag(value="old")])
+        await store.store_node(f)
+        await store.set_node_tags(f.id, [Tag(key="k", value="new")])
+        got = await store.get_node(f.id)
+        assert got.tags == [Tag(key="k", value="new")]

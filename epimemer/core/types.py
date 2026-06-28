@@ -116,6 +116,8 @@ class RawDocument(BaseModel):
     """Input text before any processing."""
     id: str = Field(default_factory=_new_id)
     content: str
+    source: str | None = None         # human-meaningful origin, e.g. "ISSUES.md"
+    source_type: str | None = None    # free string; suggested: document|api|chat
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
 
@@ -129,6 +131,35 @@ class Segment(BaseModel):
     span_end: int                     # character offset in source
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
+
+
+# --- Provenance & tags ---
+
+
+class Provenance(BaseModel):
+    """Where a piece of knowledge came from.
+
+    System-stamped on every node at ingest and queryable, so "which nodes came
+    from X" is answerable. Lightly structured (system-owned keys, free values).
+    A node carries a list: a fresh node has one entry; a merged node carries the
+    union of its sources'.
+    """
+    source: str                       # "ISSUES.md", "stripe-api", "chat#4012"
+    source_type: str = "document"     # free string; suggested: document|api|chat
+    source_id: str | None = None      # RawDocument id (or external id) if applicable
+    ingested_at: datetime = Field(default_factory=_now)
+    metadata: dict = Field(default_factory=dict)   # url, line range, author, ...
+
+
+class Tag(BaseModel):
+    """A free-text label for filtering. Optional `key` gives a dimension.
+
+    No controlled vocabulary: keys and values are both free. Dimensioned tags
+    (key set) support "filter by key" queries; bare tags (key None) are casual
+    labels. Sprawl is handled by later consolidation, not upfront rules.
+    """
+    key: str | None = None
+    value: str
 
 
 # --- Epistemic Nodes ---
@@ -147,6 +178,8 @@ class Topic(BaseModel):
     superseded_at: datetime | None = None
     value: ValueSignal = Field(default_factory=ValueSignal)
     extraction_method: str = "llm"
+    provenance: list[Provenance] = Field(default_factory=list)
+    tags: list[Tag] = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
 
@@ -163,6 +196,8 @@ class Fact(BaseModel):
     superseded_at: datetime | None = None
     value: ValueSignal = Field(default_factory=ValueSignal)
     extraction_method: str = "llm"
+    provenance: list[Provenance] = Field(default_factory=list)
+    tags: list[Tag] = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
 
@@ -180,6 +215,8 @@ class Inference(BaseModel):
     superseded_at: datetime | None = None
     value: ValueSignal = Field(default_factory=ValueSignal)
     extraction_method: str = "llm"
+    provenance: list[Provenance] = Field(default_factory=list)
+    tags: list[Tag] = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
 
@@ -198,6 +235,71 @@ class NodeChangeEvent(BaseModel):
     """
     kind: Literal["created", "superseded", "merged"]
     at: datetime
+
+
+# --- Tag / provenance parsing + matching ---
+
+
+def union_unique(*lists):
+    """Concatenate lists, dropping later duplicates (by value), order-preserving.
+
+    Used to carry provenance/tags forward across supersession, merge, and
+    parent/split derivation so a node keeps its predecessors' sources and labels.
+    """
+    out: list = []
+    for items in lists:
+        for it in items:
+            if it not in out:
+                out.append(it)
+    return out
+
+
+def parse_tag(spec: str) -> Tag:
+    """Build a Tag from "key=value" (split on first '=') or bare "value"."""
+    if "=" in spec:
+        k, v = spec.split("=", 1)
+        return Tag(key=k or None, value=v)
+    return Tag(value=spec)
+
+
+def _parse_tag_filter(spec: str) -> tuple[str | None, str | None]:
+    """Parse a tag filter into (key, value) criteria, where None means "any".
+
+    "key=value" -> (key, value); "key=" -> (key, None); bare "value" -> (None, value).
+    """
+    if "=" in spec:
+        k, v = spec.split("=", 1)
+        return (k or None, v or None)
+    return (None, spec)
+
+
+def tag_satisfies(tag: Tag, spec: str) -> bool:
+    """True when a single tag matches a filter spec (key=value / key= / bare value)."""
+    k, v = _parse_tag_filter(spec)
+    return (k is None or tag.key == k) and (v is None or tag.value == v)
+
+
+def tag_matches(node: EpistemicNode, filters: list[str]) -> bool:
+    """True when the node's tags satisfy every filter spec (AND)."""
+    return all(
+        any(tag_satisfies(t, spec) for t in node.tags) for spec in filters
+    )
+
+
+def provenance_matches(
+    node: EpistemicNode,
+    *,
+    source: str | None = None,
+    source_type: str | None = None,
+) -> bool:
+    """True when the node has a provenance entry matching the given criteria."""
+    if source is not None and not any(p.source == source for p in node.provenance):
+        return False
+    if source_type is not None and not any(
+        p.source_type == source_type for p in node.provenance
+    ):
+        return False
+    return True
 
 
 # --- Edges ---

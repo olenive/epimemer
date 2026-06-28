@@ -26,6 +26,7 @@ from epimemer.core.types import (
     NodeType,
     RawDocument,
     Segment,
+    Tag,
     Timeline,
 )
 from epimemer.visualization.event_bus import InProcessEventBus
@@ -117,6 +118,9 @@ class InstrumentedStorage:
             new_status=status.value,
         ))
 
+    async def set_node_tags(self, node_id: str, tags: list[Tag]) -> None:
+        await self._inner.set_node_tags(node_id, tags)
+
     # --- Epistemic Nodes (read) ---
 
     async def get_node(self, node_id: str) -> EpistemicNode | None:
@@ -128,9 +132,13 @@ class InstrumentedStorage:
         node_type: NodeType | None = None,
         status: NodeStatus = NodeStatus.ACTIVE,
         at_time: datetime | None = None,
+        tags: list[str] | None = None,
+        source: str | None = None,
+        source_type: str | None = None,
     ) -> Sequence[EpistemicNode]:
         return await self._inner.query_nodes(
             node_type=node_type, status=status, at_time=at_time,
+            tags=tags, source=source, source_type=source_type,
         )
 
     async def query_changes(

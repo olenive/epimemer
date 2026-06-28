@@ -157,7 +157,7 @@ See [SUMMARY.md](SUMMARY.md) for the full design. Key concepts:
 - **Timelines**: ordered containers of timepoints for temporal relationships
 - **Metacontexts**: epistemic frames that disambiguate fiction from fact, sources, perspectives
 - **Petri nets**: all pipelines are executable, typed, visualizable Petri nets via [Petritype](../petritype)
-- **Immutable history**: nodes are never mutated — updates create new versions with history edges
+- **Immutable history**: a node's *content* is never mutated — updates create new versions with history edges (lifecycle/label metadata like `status` and `tags` is mutated in place; see SUMMARY.md → Node History)
 
 ## Project Structure
 

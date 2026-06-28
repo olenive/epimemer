@@ -85,11 +85,20 @@ The segment-to-topic relationship is **many-to-many**: a segment can be `about` 
 - Graph edges are not dependent on a specific embedding model
 - Background re-indexing when introducing new models, no downtime
 
-### Provenance on everything
-Every node tracks:
-- `source_id` — original document/segment
-- `confidence` — 0.0–1.0
-- `extraction_method` — e.g. `llm_v1`, `rule_based`
+### Provenance & tags on everything
+Every node records **where it came from** and optional **labels for filtering**:
+- `provenance` — a list of `{source, source_type, source_id, ingested_at}` records,
+  system-stamped at ingest from the document's `source`/`source_type` (e.g.
+  `"ISSUES.md"` / `document`, `"stripe-api"` / `api`). Makes "which nodes came from
+  X" queryable (see `find_nodes`). A merged node carries the union of its sources'.
+- `tags` — a list of `{key?, value}` free-text labels (no controlled vocabulary),
+  attached by the agent/user at ingest and consolidated later by `reflect`.
+- `source_id` — the segment a node was extracted from; `extraction_method` — e.g.
+  `agent`, `agent:merge`; `confidence` — 0.0–1.0.
+
+Provenance and tags are *separate from metacontexts*: metacontexts are epistemic
+frames that change retrieval scope, whereas provenance and tags are filterable
+metadata that do not.
 
 ### Test-driven development with analysis and benchmarking
 The memory system's correctness is hard to assess during normal use, so development follows a test-driven approach combined with frequent analysis and benchmarking:
@@ -185,16 +194,37 @@ The "Fall of Carthage" means different things in a historical metacontext vs. th
 
 ## Data Model (Minimal)
 
+Fields are either *content* (immutable — corrections create new nodes) or
+*metadata* (mutated in place; marked below). See **Node History**.
+
 ```
 nodes (
-  id, type, content, embedding_id, metadata,
-  created_at,
-  status,          -- "active" | "superseded" | "merged"
-  superseded_at,   -- timestamp, nullable
-  novelty,         -- 0.0–1.0, updated continuously
-  confidence,      -- 0.0–1.0, updated continuously
-  relevance,       -- 0.0–1.0, updated continuously
-  last_reinforced  -- timestamp
+  id, type, content, source_id, embedding_id, metadata,   -- content (immutable)
+  extraction_method, created_at,                           -- content (immutable)
+  provenance,      -- list of Provenance (where this came from); immutable
+  status,          -- "active" | "superseded" | "merged"   (mutated in place)
+  superseded_at,   -- timestamp, nullable                  (mutated in place)
+  novelty,         -- 0.0–1.0, updated continuously        (mutated in place)
+  confidence,      -- 0.0–1.0, updated continuously        (mutated in place)
+  relevance,       -- 0.0–1.0, updated continuously        (mutated in place)
+  last_reinforced, -- timestamp
+  tags             -- list of Tag; mutated in place by consolidation
+)
+
+provenance entry (
+  source,          -- e.g. "ISSUES.md", "stripe-api", "chat#4012"
+  source_type,     -- free string; e.g. document | api | chat
+  source_id,       -- RawDocument id (or external id), nullable
+  ingested_at, metadata
+)
+
+tag (
+  key,             -- optional dimension (nullable) — enables "filter by key"
+  value            -- free text (no controlled vocabulary)
+)
+
+documents (
+  id, content, source, source_type, metadata, created_at
 )
 
 edges (
@@ -227,12 +257,31 @@ metacontexts (
 
 ## Node History
 
-Nodes are treated as immutable. Updates and merges do not modify or delete existing nodes — they create new nodes linked to their predecessors via typed edges:
+Epimemer is append-only for **knowledge content**: a node's `content` (the claim it
+encodes), its `source_id`, `created_at`, and `provenance` are never changed. A
+correction or consolidation does not modify or delete the existing node — it creates
+a new node linked to its predecessor via typed edges:
 
 - **Update**: `node_v1 --superseded_by--> node_v2`
 - **Merge**: `node_a --merged_into--> node_c`, `node_b --merged_into--> node_c`
 
 This makes history part of the graph itself rather than a separate versioning system. Traversing history is just following edges backwards.
+
+### What is immutable vs. mutated in place
+
+History is preserved by keeping *content* immutable — but a node also carries
+**lifecycle and label metadata** that *is* mutated in place, because it is not the
+knowledge claim and editing it rewrites no history:
+
+| Mutated in place | Set by | Why it's not a version |
+|---|---|---|
+| `status`, `superseded_at` | supersede / merge | this is precisely how a node is *retired* and how "state at time T" is reconstructed |
+| `value` signals (novelty / confidence / relevance) | reflection (decay, reinforcement) | a changing salience score, not a changed claim |
+| `tags` | reflection (tag consolidation) | free-text labels for filtering, not content |
+
+So "a node is never mutated" is shorthand for "a node's *content* is never mutated".
+Mutating metadata uses dedicated in-place storage operations (`update_node_status`,
+`set_node_tags`) and never touches the content embedding.
 
 - **Current state** = all nodes with `status = "active"` (no outgoing `superseded_by` or `merged_into` edges)
 - **State at time T** = all nodes where `created_at <= T` and (`superseded_at IS NULL` or `superseded_at > T`)
