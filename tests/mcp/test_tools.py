@@ -708,6 +708,27 @@ class TestRestore:
         assert node is not None
         assert node.content == "restored topic"
 
+    async def test_restore_is_atomic_on_bad_record(self, storage):
+        # A malformed edge (missing dst_id) must abort the whole restore so the
+        # otherwise-valid node never lands — all-or-nothing.
+        archive_data = {
+            "nodes": [
+                {
+                    "id": "restore-atomic-1",
+                    "content": "should not persist",
+                    "source_id": "s1",
+                    "node_type": "topic",
+                    "status": "active",
+                    "created_at": "2026-01-01T00:00:00Z",
+                }
+            ],
+            "edges": [{"id": "edge-bad", "src_id": "restore-atomic-1", "type": "supports"}],
+        }
+        with pytest.raises(Exception):
+            await restore(archive_data, storage)
+
+        assert await storage.get_node("restore-atomic-1") is None
+
 
 # --- Timeline tool tests ---
 

@@ -977,25 +977,22 @@ async def restore(
     archive_data: dict,
     storage: StorageBackend,
 ) -> tuple[dict, ResponseMeta]:
-    """Restore nodes and edges from archive data."""
-    nodes_restored = 0
-    edges_restored = 0
+    """Restore nodes and edges from archive data as one atomic batch.
 
-    for node_dict in archive_data.get("nodes", []):
-        node = _reconstruct_node(node_dict)
-        await storage.store_node(node)
-        nodes_restored += 1
+    The whole archive is reconstructed first (so a malformed record fails before
+    anything is written), then persisted in a single ``write_batch_tx`` — all of
+    it lands or none of it does, rather than leaving a half-restored graph.
+    """
+    nodes = [_reconstruct_node(nd) for nd in archive_data.get("nodes", [])]
+    edges = [NodeEdge(**ed) for ed in archive_data.get("edges", [])]
 
-    for edge_dict in archive_data.get("edges", []):
-        edge = NodeEdge(**edge_dict)
-        await storage.store_edge(edge)
-        edges_restored += 1
+    await storage.write_batch_tx(nodes=nodes, edges=edges)
 
     result = {
-        "nodes_restored": nodes_restored,
-        "edges_restored": edges_restored,
+        "nodes_restored": len(nodes),
+        "edges_restored": len(edges),
     }
-    meta = ResponseMeta(nodes_returned=nodes_restored)
+    meta = ResponseMeta(nodes_returned=len(nodes))
     return result, meta
 
 

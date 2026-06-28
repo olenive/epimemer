@@ -190,12 +190,16 @@ Tracked here so this file stays the single place to re-visit. Not all are bugs.
    primitive (pure-insert, all-or-nothing) now backs `store_decomposition`
    (one atomic write per document) and `apply_reflection parents`/`splits`
    (plan cycle-checks, then atomic batch). With `supersede`/`merge` already
-   atomic, all multi-write paths are now all-or-nothing. (`archive`/`restore`
-   remain bulk-admin and out of scope; `restore` is a trivial follow-up.)
-2. **SurrealDB verified on embedded `mem://` only.** Transactions and the
-   `vector_search` status filter run against the real engine via `mem://`, but not
-   against a networked `ws://` server (connection/auth/concurrency unproven). The
-   adapter is documented single-connection / not concurrency-safe.
+   atomic, all multi-write paths are now all-or-nothing. (`restore` now also
+   reconstructs the whole archive then persists it via one `write_batch_tx`;
+   `archive` is a read-only export.)
+2. ~~**SurrealDB verified on embedded `mem://` only.**~~ **RESOLVED
+   (2026-06-28).** `tests/storage/test_surrealdb_integration.py` exercises a real
+   networked `ws://` server (opt-in via `EPIMEMER_SURREAL_WS_URL`, skipped
+   otherwise): connection/auth plus transaction atomicity under genuine
+   concurrency (concurrent batches all commit, a colliding batch rolls back fully,
+   concurrent supersedes apply). Verified green against Dockerised SurrealDB. The
+   adapter remains documented single-connection for the *shared viz* path.
 3. **Merge is Topic-only (wired path).** `merge_nodes` is type-agnostic, but
    `apply_reflection merges` only accepts Topics. Whether to extend to
    Facts/Inferences is under discussion (Inferences are meant to let competing
