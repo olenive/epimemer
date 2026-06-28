@@ -39,7 +39,6 @@ from epimemer.pipelines.graph_construction.value_updates import (
     update_value_on_contradiction,
     update_value_on_supporting_evidence,
 )
-from epimemer.pipelines.graph_construction.persist import persist_decomposed_segment
 from epimemer.pipelines.graph_construction.versioning import (
     merge_nodes,
     supersede_node,
@@ -399,89 +398,6 @@ class TestValueUpdates:
         assert stored.value.relevance == 0.6
 
 
-# --- Persistence Tests ---
-
-
-class TestPersistence:
-    """Test the persist_decomposed_segment function."""
-
-    @pytest.mark.asyncio
-    async def test_persist_stores_segment(
-        self,
-        decomposed: DecomposedSegment,
-        storage: InMemoryStorage,
-    ) -> None:
-        edges = create_edges(decomposed)
-        await persist_decomposed_segment(decomposed, edges, storage)
-
-        segments = await storage.get_segments_for_document("doc-1")
-        assert len(segments) == 1
-        assert segments[0].id == decomposed.segment.id
-
-    @pytest.mark.asyncio
-    async def test_persist_stores_all_nodes(
-        self,
-        decomposed: DecomposedSegment,
-        storage: InMemoryStorage,
-    ) -> None:
-        edges = create_edges(decomposed)
-        await persist_decomposed_segment(decomposed, edges, storage)
-
-        # Check topic
-        topic = await storage.get_node("topic-1")
-        assert topic is not None
-        assert isinstance(topic, Topic)
-
-        # Check fact
-        fact = await storage.get_node("fact-1")
-        assert fact is not None
-        assert isinstance(fact, Fact)
-
-        # Check inference
-        inference = await storage.get_node("inf-1")
-        assert inference is not None
-        assert isinstance(inference, Inference)
-
-    @pytest.mark.asyncio
-    async def test_persist_stores_all_edges(
-        self,
-        decomposed: DecomposedSegment,
-        storage: InMemoryStorage,
-    ) -> None:
-        edges = create_edges(decomposed)
-        await persist_decomposed_segment(decomposed, edges, storage)
-
-        assert len(storage.edges) == 6
-
-    @pytest.mark.asyncio
-    async def test_persist_edges_retrievable_by_node(
-        self,
-        decomposed: DecomposedSegment,
-        storage: InMemoryStorage,
-    ) -> None:
-        edges = create_edges(decomposed)
-        await persist_decomposed_segment(decomposed, edges, storage)
-
-        # Segment should have outgoing edges
-        seg_edges = await storage.get_edges_from(decomposed.segment.id)
-        assert len(seg_edges) == 3  # ABOUT, CONTAINS, IMPLIES
-
-    @pytest.mark.asyncio
-    async def test_persist_empty_decomposition(
-        self,
-        segment: Segment,
-        storage: InMemoryStorage,
-    ) -> None:
-        """Persisting a decomposed segment with no nodes stores only the segment."""
-        decomposed = DecomposedSegment(segment=segment)
-        edges = create_edges(decomposed)
-        await persist_decomposed_segment(decomposed, edges, storage)
-
-        assert len(storage.segments) == 1
-        assert len(storage.nodes) == 0
-        assert len(storage.edges) == 0
-
-
 # --- Versioning Tests ---
 
 
@@ -735,7 +651,11 @@ class TestStorageRoundTrip:
             inferences=[inference],
         )
         edges = create_edges(decomposed)
-        await persist_decomposed_segment(decomposed, edges, storage)
+        await storage.store_segment(decomposed.segment)
+        for node in [*decomposed.topics, *decomposed.facts, *decomposed.inferences]:
+            await storage.store_node(node)
+        for edge in edges:
+            await storage.store_edge(edge)
 
         # Verify segment
         stored_segments = await storage.get_segments_for_document("doc-rt")

@@ -9,7 +9,9 @@ Phase 2d ✅ — `reflect` surfaces the `pending_review` worklist and
 `apply_reflection supersessions=[...]` resolves flagged nodes; Phase 2e ✅ —
 agent guidance in `epimemer_prompts/DEFAULT.md`. **Phase 2 complete.** Phase 3 ✅
 — opt-in `ws://` SurrealDB integration test (skipped unless reachable; verified
-green against Dockerised SurrealDB). Phase 4 (re-ingest docs) remains.
+green against Dockerised SurrealDB). Phase 4 ✅ — the review-loop design ingested
+into the `epimemer-docs` graph (15 topics / 55 facts / 2 inferences, tagged
+`epimemer-repo-docs`). **All phases complete.**
 
 Decisions settled for 2b: separate `check_conflicts` tool (opt-in); pre-compute
 frame + scores; dedicated verdict tools; agent authority per §7; build
@@ -341,8 +343,19 @@ human-in-the-loop; no metacontext association; inferences never revisited.
   test uses a unique throwaway database, dropped on teardown. Verified green
   against `surrealdb/surrealdb:latest` in Docker.
 
-**Phase 4 — Refresh `epimemer-docs` graph**
-- Re-ingest changed docs so the design memory reflects reality.
+**Phase 4 — Refresh `epimemer-docs` graph ✅**
+- The review-loop design (this document, distilled to grounded prose) ingested
+  into `epimemer-docs` via `segment` → `store_decomposition`, tagged with the
+  existing `epimemer-repo-docs` metacontext: 15 topics, 55 facts, 2 inferences,
+  207 edges (graph now 420 nodes / 1097 edges). The graph previously held only the
+  pre-review-loop design (it still listed "contradictions" as an *open* question);
+  it now carries the unified loop, verdict taxonomy, review labels, edge types,
+  metacontext/"The Real" model, detection (Case A/B), resolution, and decisions.
+- Note: the *running* MCP server predates the review-loop code, so the new tools
+  (`check_conflicts`, `supersede_by`, frame-scoped `search`) aren't live until it
+  is restarted. Once restarted, running `check_conflicts` on the new design facts
+  would surface (and `supersede_by` could resolve) the now-stale "open question"
+  nodes about contradiction handling — the review loop applied to its own memory.
 
 Checkpoints: the suite stays green and the user commits at each phase boundary;
 each step is independently reviewable.
