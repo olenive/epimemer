@@ -312,6 +312,32 @@ class SurrealDBStorage:
 
         return results
 
+    async def query_changes(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        node_type: NodeType | None = None,
+    ) -> Sequence[EpistemicNode]:
+        tables = [_NODE_TYPE_TO_TABLE[node_type]] if node_type else ["topic", "fact", "inference"]
+        results = []
+
+        # Half-open window [start, end): a node matches if it was born
+        # (created_at) or retired (superseded_at — set for supersede and merge
+        # alike) within the window. Timestamps are uniform UTC ISO-8601 strings,
+        # so the string comparison is chronologically correct.
+        for table in tables:
+            rows = await self.db.query(
+                f"SELECT * FROM {table} WHERE "
+                f"(created_at >= $start AND created_at < $end) "
+                f"OR (superseded_at != NONE AND superseded_at >= $start "
+                f"AND superseded_at < $end)",
+                {"start": start.isoformat(), "end": end.isoformat()},
+            )
+            results.extend(_record_to_node(table, r) for r in rows)
+
+        return results
+
     async def update_node_status(
         self,
         node_id: str,

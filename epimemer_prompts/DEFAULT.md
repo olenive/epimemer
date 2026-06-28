@@ -21,6 +21,27 @@ the history linked. Your job is to write fast and organize deliberately.
 - Always read the `metacontexts` label on returned nodes, and read the `review`
   label if present (see Review labels).
 
+### Temporal queries (as_of vs query_changes)
+
+Two distinct time axes — pick by the question:
+
+- **`as_of(at)` — state at an instant.** Returns the knowledge set that was active
+  *at* `at` (created by then, not yet retired). Use for "what did we believe on
+  date X" / reproducing a past answer. Caveat: it is a node-lifecycle snapshot
+  only — edges, metacontext, and review labels are present-state, not historized,
+  so they are omitted.
+- **`query_changes(...)` — deltas across a span.** Returns nodes whose **birth**
+  (`created_at`) or **retirement** (`superseded_at`, covering supersede and merge)
+  fell inside each half-open window `[start, end)`, each tagged with its `events`
+  (`created` / `superseded` / `merged`, with timestamps). Use for "what changed
+  recently". Specify by `last_hours`/`last_days`, an explicit `windows` list, or
+  nothing (defaults to the last 24h). Multiple windows are returned grouped; a node
+  that changed in several appears in each.
+
+A node born long ago but still active shows up in `as_of` (it's live state) but not
+in a recent `query_changes` window (nothing happened to it there) — unless it was
+retired in that window, where it appears as a retirement event.
+
 ### Reviewing and reconciling knowledge
 
 New information can make existing knowledge outdated, contradicted, or framed

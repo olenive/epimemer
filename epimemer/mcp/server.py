@@ -10,7 +10,7 @@ import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastmcp import Context, FastMCP
 
@@ -22,6 +22,52 @@ from epimemer.mcp.config import (
     load_config,
 )
 from epimemer.mcp.types import ResponseMeta, ToolResponse
+
+
+def _parse_utc(value: str) -> datetime:
+    """Parse an ISO-8601 string to a tz-aware UTC datetime.
+
+    Naive inputs are assumed to be UTC; offset-aware inputs are converted. This
+    keeps every timestamp uniform UTC, which the storage temporal comparisons
+    (lexicographic on ISO strings) rely on for correctness.
+    """
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _resolve_windows(
+    now: datetime,
+    *,
+    last_hours: float | None = None,
+    last_days: float | None = None,
+    windows: list[list[str]] | None = None,
+) -> list[tuple[datetime, datetime]]:
+    """Resolve the ergonomic query_changes args into concrete UTC windows.
+
+    Precedence: explicit `windows` (a missing/empty end means `now`) >
+    `last_hours`/`last_days` trailing window > default last 24h. Every bound is
+    normalized to UTC and each window is validated as start < end.
+    """
+    resolved: list[tuple[datetime, datetime]] = []
+    if windows:
+        for w in windows:
+            start = _parse_utc(w[0])
+            end = _parse_utc(w[1]) if len(w) > 1 and w[1] else now
+            resolved.append((start, end))
+    elif last_hours is not None or last_days is not None:
+        delta = timedelta(hours=last_hours or 0, days=last_days or 0)
+        resolved.append((now - delta, now))
+    else:
+        resolved.append((now - timedelta(hours=24), now))
+
+    for start, end in resolved:
+        if start >= end:
+            raise ValueError(
+                f"window start {start.isoformat()} must be before end {end.isoformat()}"
+            )
+    return resolved
 
 
 @asynccontextmanager
@@ -651,6 +697,82 @@ async def memory_query_graph(
         ctx,
         f"node={node_id} hops={hops}",
         lambda r, m: f"nodes={m.nodes_returned}",
+    )
+
+
+@mcp.tool(name="as_of")
+async def memory_as_of(
+    at: str,
+    ctx: Context,
+    node_types: list[str] | None = None,
+) -> str:
+    """Snapshot the active knowledge set as it stood at a past instant.
+
+    Returns the nodes that existed and were still active at `at` (an ISO
+    datetime, normalized to UTC). This is a node-lifecycle snapshot only — edges,
+    metacontext, and review labels are not time-versioned and are omitted, since
+    they would reflect the present graph rather than the graph at `at`. For the
+    *changes* across a span (births + retirements), use query_changes instead.
+
+    Args:
+        at: ISO datetime to snapshot at.
+        node_types: Optional filter to "topic"/"fact"/"inference".
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.as_of",
+        lambda: tools.as_of(
+            at=_parse_utc(at),
+            storage=deps["storage"],
+            node_types=node_types,
+        ),
+        ctx,
+        f"at={at}",
+        lambda r, m: f"nodes={m.nodes_returned}",
+    )
+
+
+@mcp.tool(name="query_changes")
+async def memory_query_changes(
+    ctx: Context,
+    last_hours: float | None = None,
+    last_days: float | None = None,
+    windows: list[list[str]] | None = None,
+    node_types: list[str] | None = None,
+) -> str:
+    """What changed (births + retirements) in one or more time windows.
+
+    Returns nodes whose creation or retirement fell inside each half-open window
+    [start, end), each tagged with the lifecycle event(s) and enriched with
+    metacontext/review labels. Distinct from `as_of`, which snapshots state at a
+    single instant; this reports the *deltas* across a span.
+
+    Specify windows one of three ways (precedence in this order):
+      - windows: explicit [[startISO, endISO], ...]; a missing/empty end means now.
+      - last_hours / last_days: a single trailing window ending now.
+      - nothing: defaults to the last 24 hours.
+
+    All times are normalized to UTC. node_types optionally filters to
+    "topic"/"fact"/"inference".
+    """
+    deps = ctx.lifespan_context
+    resolved = _resolve_windows(
+        datetime.now(timezone.utc),
+        last_hours=last_hours,
+        last_days=last_days,
+        windows=windows,
+    )
+
+    return await _run_with_timeout(
+        "epimemer.query_changes",
+        lambda: tools.query_changes(
+            windows=resolved,
+            storage=deps["storage"],
+            node_types=node_types,
+        ),
+        ctx,
+        f"windows={len(resolved)}",
+        lambda r, m: f"changes={m.nodes_returned}",
     )
 
 

@@ -374,3 +374,69 @@ class TestAtomicOperations:
         assert (await store.get_node(b.id)).status == NodeStatus.MERGED
         assert len(await store.get_embeddings_for_item(merged.id)) == 1
         assert len(await store.get_edges_to(merged.id, edge_type=EdgeType.MERGED_INTO)) == 2
+
+
+class TestQueryChanges:
+    # Fixed half-open window [W_START, W_END) with deterministic timestamps.
+    W_START = datetime(2026, 6, 10, tzinfo=timezone.utc)
+    W_END = datetime(2026, 6, 20, tzinfo=timezone.utc)
+
+    async def test_returns_node_born_in_window(self, store):
+        f = Fact(
+            content="born inside", source_id="s1",
+            created_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+        )
+        await store.store_node(f)
+        changed = await store.query_changes(start=self.W_START, end=self.W_END)
+        assert [n.id for n in changed] == [f.id]
+
+    async def test_returns_node_retired_in_window(self, store):
+        # Born before the window, retired inside it.
+        t = Topic(
+            content="retired inside", source_id="s1",
+            created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+            status=NodeStatus.SUPERSEDED,
+            superseded_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+        )
+        await store.store_node(t)
+        changed = await store.query_changes(start=self.W_START, end=self.W_END)
+        assert [n.id for n in changed] == [t.id]
+
+    async def test_excludes_node_fully_outside(self, store):
+        before = Topic(
+            content="before", source_id="s1",
+            created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        )
+        after = Inference(
+            content="after", source_id="s1",
+            created_at=datetime(2026, 6, 25, tzinfo=timezone.utc),
+        )
+        await store.store_node(before)
+        await store.store_node(after)
+        changed = await store.query_changes(start=self.W_START, end=self.W_END)
+        assert changed == []
+
+    async def test_respects_node_type_filter(self, store):
+        f = Fact(
+            content="fact in", source_id="s1",
+            created_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+        )
+        t = Topic(
+            content="topic in", source_id="s1",
+            created_at=datetime(2026, 6, 16, tzinfo=timezone.utc),
+        )
+        await store.store_node(f)
+        await store.store_node(t)
+        facts = await store.query_changes(
+            start=self.W_START, end=self.W_END, node_type=NodeType.FACT
+        )
+        assert [n.id for n in facts] == [f.id]
+
+    async def test_half_open_boundaries(self, store):
+        # start is inclusive, end is exclusive.
+        at_start = Fact(content="at start", source_id="s1", created_at=self.W_START)
+        at_end = Fact(content="at end", source_id="s1", created_at=self.W_END)
+        await store.store_node(at_start)
+        await store.store_node(at_end)
+        changed = await store.query_changes(start=self.W_START, end=self.W_END)
+        assert [n.id for n in changed] == [at_start.id]

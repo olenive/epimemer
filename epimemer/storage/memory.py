@@ -164,6 +164,29 @@ class InMemoryStorage:
             results.append(node)
         return results
 
+    async def query_changes(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        node_type: NodeType | None = None,
+    ) -> Sequence[EpistemicNode]:
+        results = []
+        for node in self._g.nodes.values():
+            if node_type is not None:
+                expected_class = _NODE_TYPE_TO_CLASS[node_type]
+                if not isinstance(node, expected_class):
+                    continue
+
+            born = start <= node.created_at < end
+            retired = (
+                node.superseded_at is not None
+                and start <= node.superseded_at < end
+            )
+            if born or retired:
+                results.append(node)
+        return results
+
     async def update_node_status(
         self,
         node_id: str,

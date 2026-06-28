@@ -7,6 +7,7 @@ These types serve double duty:
 
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -185,6 +186,18 @@ class Inference(BaseModel):
 
 # Union of all epistemic node types
 EpistemicNode = Topic | Fact | Inference
+
+
+class NodeChangeEvent(BaseModel):
+    """A lifecycle event on a node that falls inside a queried time window.
+
+    Emitted by temporal change queries: `created` when the node was born in the
+    window; `superseded`/`merged` when the node was retired in the window (the
+    kind mirrors the node's terminal status). A node both born and retired inside
+    one window yields two events.
+    """
+    kind: Literal["created", "superseded", "merged"]
+    at: datetime
 
 
 # --- Edges ---

@@ -65,6 +65,23 @@ class StorageBackend(Protocol):
         """Query nodes by type, status, and/or temporal filter."""
         ...
 
+    async def query_changes(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        node_type: NodeType | None = None,
+    ) -> Sequence[EpistemicNode]:
+        """Nodes whose creation or retirement falls in the half-open window
+        [start, end).
+
+        A node matches if its `created_at` is in the window (born) or its
+        `superseded_at` is in the window (retired — covers both supersession and
+        merge). Returns plain nodes regardless of status; callers derive the
+        specific lifecycle events from each node's timestamps and status.
+        """
+        ...
+
     async def update_node_status(
         self,
         node_id: str,

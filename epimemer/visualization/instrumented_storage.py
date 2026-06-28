@@ -133,6 +133,17 @@ class InstrumentedStorage:
             node_type=node_type, status=status, at_time=at_time,
         )
 
+    async def query_changes(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        node_type: NodeType | None = None,
+    ) -> Sequence[EpistemicNode]:
+        return await self._inner.query_changes(
+            start=start, end=end, node_type=node_type,
+        )
+
     async def count_nodes_by_type(
         self,
         *,

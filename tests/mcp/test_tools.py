@@ -6,7 +6,7 @@ with InMemoryStorage + mock providers.
 
 import pytest
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from epimemer.core.types import (
     EdgeType,
@@ -25,13 +25,16 @@ from epimemer.mcp.tools import (
     add_timeline_timepoint,
     apply_reflection,
     archive,
+    as_of,
     check_conflicts,
     create_metacontext,
+    events_in_window,
     create_timelink,
     create_timeline,
     get_metacontexts_for_node,
     graph_stats,
     link,
+    query_changes,
     query_graph,
     query_timeline,
     record_contradiction,
@@ -44,6 +47,7 @@ from epimemer.mcp.tools import (
     supersede_by,
     update,
 )
+from epimemer.mcp.server import _resolve_windows
 from epimemer.storage.memory import InMemoryStorage
 
 
@@ -1321,3 +1325,188 @@ class TestGraphStats:
 
         result, _ = await graph_stats(storage)
         assert result["metacontexts"] == 2
+
+
+# --- Temporal queries: as_of + query_changes ---
+
+_W_START = datetime(2026, 6, 10, tzinfo=timezone.utc)
+_W_END = datetime(2026, 6, 20, tzinfo=timezone.utc)
+
+
+def _fact_at(content, created, *, status=NodeStatus.ACTIVE, retired=None):
+    return Fact(
+        content=content, source_id="s1", created_at=created,
+        status=status, superseded_at=retired,
+    )
+
+
+class TestEventsInWindow:
+
+    def test_created_in_window(self):
+        f = _fact_at("x", datetime(2026, 6, 15, tzinfo=timezone.utc))
+        evs = events_in_window(f, _W_START, _W_END)
+        assert [e.kind for e in evs] == ["created"]
+        assert evs[0].at == f.created_at
+
+    def test_superseded_in_window(self):
+        f = _fact_at(
+            "x", datetime(2026, 6, 1, tzinfo=timezone.utc),
+            status=NodeStatus.SUPERSEDED,
+            retired=datetime(2026, 6, 15, tzinfo=timezone.utc),
+        )
+        assert [e.kind for e in events_in_window(f, _W_START, _W_END)] == ["superseded"]
+
+    def test_merged_in_window(self):
+        f = _fact_at(
+            "x", datetime(2026, 6, 1, tzinfo=timezone.utc),
+            status=NodeStatus.MERGED,
+            retired=datetime(2026, 6, 15, tzinfo=timezone.utc),
+        )
+        assert [e.kind for e in events_in_window(f, _W_START, _W_END)] == ["merged"]
+
+    def test_created_and_retired_same_window_yields_two_events(self):
+        f = _fact_at(
+            "x", datetime(2026, 6, 12, tzinfo=timezone.utc),
+            status=NodeStatus.SUPERSEDED,
+            retired=datetime(2026, 6, 15, tzinfo=timezone.utc),
+        )
+        assert [e.kind for e in events_in_window(f, _W_START, _W_END)] == [
+            "created", "superseded",
+        ]
+
+    def test_outside_window_yields_nothing(self):
+        f = _fact_at("x", datetime(2026, 6, 1, tzinfo=timezone.utc))
+        assert events_in_window(f, _W_START, _W_END) == []
+
+
+class TestAsOf:
+
+    async def test_snapshot_returns_active_set_at_instant(self, storage):
+        old = _fact_at(
+            "old", datetime(2026, 6, 1, tzinfo=timezone.utc),
+            status=NodeStatus.SUPERSEDED,
+            retired=datetime(2026, 6, 15, tzinfo=timezone.utc),
+        )
+        new = _fact_at("new", datetime(2026, 6, 15, tzinfo=timezone.utc))
+        await storage.store_node(old)
+        await storage.store_node(new)
+
+        # Before new is born and before old is retired: only old is live.
+        early, _ = await as_of(datetime(2026, 6, 10, tzinfo=timezone.utc), storage)
+        assert [n["id"] for n in early["nodes"]] == [old.id]
+
+        # After old retired and new born: only new is live.
+        late, meta = await as_of(datetime(2026, 6, 20, tzinfo=timezone.utc), storage)
+        assert [n["id"] for n in late["nodes"]] == [new.id]
+        assert meta.nodes_returned == 1
+
+    async def test_omits_review_labels(self, storage):
+        # A node with an incoming supersession_candidate edge would be labelled
+        # `superseded_candidate` by review_labels — as_of must not surface that.
+        old = _fact_at("old", datetime(2026, 6, 1, tzinfo=timezone.utc))
+        new = _fact_at("new", datetime(2026, 6, 2, tzinfo=timezone.utc))
+        await storage.store_node(old)
+        await storage.store_node(new)
+        await storage.store_edge(
+            NodeEdge(src_id=new.id, dst_id=old.id, type=EdgeType.SUPERSESSION_CANDIDATE)
+        )
+        result, _ = await as_of(datetime(2026, 6, 10, tzinfo=timezone.utc), storage)
+        assert all("review" not in n for n in result["nodes"])
+
+    async def test_node_type_filter(self, storage):
+        f = _fact_at("f", datetime(2026, 6, 1, tzinfo=timezone.utc))
+        t = Topic(content="t", source_id="s1",
+                  created_at=datetime(2026, 6, 1, tzinfo=timezone.utc))
+        await storage.store_node(f)
+        await storage.store_node(t)
+        result, _ = await as_of(
+            datetime(2026, 6, 10, tzinfo=timezone.utc), storage, node_types=["fact"]
+        )
+        assert [n["id"] for n in result["nodes"]] == [f.id]
+
+
+class TestQueryChangesTool:
+
+    async def test_groups_by_window_with_event_tags(self, storage):
+        a = _fact_at("a", datetime(2026, 6, 15, tzinfo=timezone.utc))   # window 1
+        b = _fact_at("b", datetime(2026, 6, 25, tzinfo=timezone.utc))   # window 2
+        await storage.store_node(a)
+        await storage.store_node(b)
+
+        w1 = (_W_START, _W_END)
+        w2 = (datetime(2026, 6, 20, tzinfo=timezone.utc),
+              datetime(2026, 6, 30, tzinfo=timezone.utc))
+        result, meta = await query_changes([w1, w2], storage)
+
+        win1, win2 = result["windows"]
+        assert [c["id"] for c in win1["changes"]] == [a.id]
+        assert [e["kind"] for e in win1["changes"][0]["events"]] == ["created"]
+        assert [c["id"] for c in win2["changes"]] == [b.id]
+        assert meta.nodes_returned == 2
+
+    async def test_two_events_for_create_and_retire_in_window(self, storage):
+        f = _fact_at(
+            "f", datetime(2026, 6, 12, tzinfo=timezone.utc),
+            status=NodeStatus.SUPERSEDED,
+            retired=datetime(2026, 6, 15, tzinfo=timezone.utc),
+        )
+        await storage.store_node(f)
+        result, _ = await query_changes([(_W_START, _W_END)], storage)
+        changes = result["windows"][0]["changes"]
+        # The node appears exactly once, carrying both lifecycle events.
+        assert [c["id"] for c in changes] == [f.id]
+        assert [e["kind"] for e in changes[0]["events"]] == ["created", "superseded"]
+
+    async def test_includes_metacontext_and_review_labels(self, storage):
+        fiction = Metacontext(content="Fiction")
+        await storage.store_metacontext(fiction)
+        a = _fact_at("a", datetime(2026, 6, 15, tzinfo=timezone.utc))
+        newer = _fact_at("newer", datetime(2026, 6, 16, tzinfo=timezone.utc))
+        await storage.store_node(a)
+        await storage.store_node(newer)
+        await storage.store_edge(
+            NodeEdge(src_id=a.id, dst_id=fiction.id, type=EdgeType.HAS_METACONTEXT)
+        )
+        # newer nominates a as superseded → a gets a `superseded_candidate` label.
+        await storage.store_edge(
+            NodeEdge(src_id=newer.id, dst_id=a.id, type=EdgeType.SUPERSESSION_CANDIDATE)
+        )
+        result, _ = await query_changes([(_W_START, _W_END)], storage)
+        by_id = {c["id"]: c for c in result["windows"][0]["changes"]}
+        assert by_id[a.id]["metacontexts"] == ["Fiction"]
+        assert "superseded_candidate" in by_id[a.id]["review"]
+
+
+class TestResolveWindows:
+    NOW = datetime(2026, 6, 28, 12, 0, tzinfo=timezone.utc)
+
+    def test_defaults_to_last_24h(self):
+        windows = _resolve_windows(self.NOW)
+        assert windows == [(self.NOW - timedelta(hours=24), self.NOW)]
+
+    def test_last_hours_trailing_window(self):
+        windows = _resolve_windows(self.NOW, last_hours=6)
+        assert windows == [(self.NOW - timedelta(hours=6), self.NOW)]
+
+    def test_explicit_windows_with_open_end_uses_now(self):
+        windows = _resolve_windows(
+            self.NOW, windows=[["2026-06-20T00:00:00+00:00", ""]]
+        )
+        assert windows == [(datetime(2026, 6, 20, tzinfo=timezone.utc), self.NOW)]
+
+    def test_windows_take_precedence_over_relative(self):
+        windows = _resolve_windows(
+            self.NOW, last_hours=6,
+            windows=[["2026-06-01T00:00:00+00:00", "2026-06-02T00:00:00+00:00"]],
+        )
+        assert windows == [(
+            datetime(2026, 6, 1, tzinfo=timezone.utc),
+            datetime(2026, 6, 2, tzinfo=timezone.utc),
+        )]
+
+    def test_rejects_inverted_window(self):
+        with pytest.raises(ValueError):
+            _resolve_windows(
+                self.NOW,
+                windows=[["2026-06-20T00:00:00+00:00", "2026-06-10T00:00:00+00:00"]],
+            )

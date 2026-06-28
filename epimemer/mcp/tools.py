@@ -15,7 +15,9 @@ from epimemer.core.types import (
     Fact,
     Inference,
     Metacontext,
+    NodeChangeEvent,
     NodeEdge,
+    NodeStatus,
     NodeType,
     RawDocument,
     Segment,
@@ -308,6 +310,115 @@ async def search(
         graph_hops=query_result.metadata.graph_hops,
         source_types=query_result.metadata.source_types,
     )
+    return result, meta
+
+
+# --- Temporal queries ---
+
+
+def events_in_window(
+    node: EpistemicNode, start: datetime, end: datetime,
+) -> list[NodeChangeEvent]:
+    """Lifecycle events on a node that fall in the half-open window [start, end).
+
+    Emits `created` when the node was born in the window and `superseded`/`merged`
+    (mirroring the node's terminal status) when it was retired in the window. A
+    node both born and retired inside one window yields two events.
+    """
+    events: list[NodeChangeEvent] = []
+    if start <= node.created_at < end:
+        events.append(NodeChangeEvent(kind="created", at=node.created_at))
+    if node.superseded_at is not None and start <= node.superseded_at < end:
+        kind = "merged" if node.status == NodeStatus.MERGED else "superseded"
+        events.append(NodeChangeEvent(kind=kind, at=node.superseded_at))
+    return events
+
+
+async def as_of(
+    at: datetime,
+    storage: StorageBackend,
+    *,
+    node_types: list[str] | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Snapshot the active knowledge set as it stood at instant `at`.
+
+    Returns the nodes that had been created by `at` and were not yet retired then
+    (the storage `at_time` temporal filter). This is a node-lifecycle snapshot
+    only: edges, metacontext, and review labels are *not* time-versioned, so they
+    are intentionally omitted — they would reflect the present graph, not the
+    graph at `at`.
+    """
+    nt_enums = [NodeType(t) for t in node_types] if node_types else [None]
+    nodes: list[EpistemicNode] = []
+    for nt in nt_enums:
+        nodes.extend(await storage.query_nodes(at_time=at, node_type=nt))
+
+    source_types: dict[str, int] = {}
+    for node in nodes:
+        key = _node_type_key(node)
+        source_types[key] = source_types.get(key, 0) + 1
+
+    result = {
+        "at": at.isoformat(),
+        "nodes": [_node_to_dict(n) for n in nodes],
+    }
+    meta = ResponseMeta(nodes_returned=len(nodes), source_types=source_types)
+    return result, meta
+
+
+async def query_changes(
+    windows: list[tuple[datetime, datetime]],
+    storage: StorageBackend,
+    *,
+    node_types: list[str] | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """What changed (births + retirements) in one or more time windows.
+
+    For each half-open window [start, end), returns the nodes whose creation or
+    retirement fell inside it, each tagged with the specific lifecycle event(s)
+    and enriched with metacontext + review labels (these are current nodes, so
+    present-state labels are accurate). Results are grouped per window; a node
+    that changed in several windows appears in each.
+    """
+    from epimemer.pipelines.reflection.review import review_labels
+
+    nt_enums = [NodeType(t) for t in node_types] if node_types else [None]
+
+    windows_data = []
+    total = 0
+    source_types: dict[str, int] = {}
+    for start, end in windows:
+        seen: dict[str, EpistemicNode] = {}
+        for nt in nt_enums:
+            for node in await storage.query_changes(start=start, end=end, node_type=nt):
+                seen[node.id] = node
+
+        changes = []
+        for node in seen.values():
+            node_dict = _node_to_dict(node)
+            node_dict["events"] = [
+                e.model_dump(mode="json") for e in events_in_window(node, start, end)
+            ]
+            mc_labels = await _metacontext_labels(node.id, storage)
+            if mc_labels:
+                node_dict["metacontexts"] = mc_labels
+            review = await review_labels(node, storage)
+            if review:
+                node_dict["review"] = review
+            changes.append(node_dict)
+
+            key = _node_type_key(node)
+            source_types[key] = source_types.get(key, 0) + 1
+            total += 1
+
+        windows_data.append({
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "changes": changes,
+        })
+
+    result = {"windows": windows_data}
+    meta = ResponseMeta(nodes_returned=total, source_types=source_types)
     return result, meta
 
 
