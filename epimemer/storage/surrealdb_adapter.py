@@ -25,11 +25,9 @@ from epimemer.core.types import (
     NodeType,
     RawDocument,
     Segment,
-    Tag,
     Timeline,
     Topic,
-    provenance_matches,
-    tag_matches,
+    migration_excluded,
 )
 
 
@@ -257,6 +255,15 @@ class SurrealDBStorage:
             return None
         return RawDocument.model_validate(_clean_record(rows[0]))
 
+    async def get_document_by_source(self, source: str) -> RawDocument | None:
+        rows = await self.db.query(
+            "SELECT * FROM document WHERE source = $source LIMIT 1",
+            {"source": source},
+        )
+        if not rows:
+            return None
+        return RawDocument.model_validate(_clean_record(rows[0]))
+
     # --- Segments ---
 
     async def store_segment(self, segment: Segment) -> str:
@@ -295,9 +302,6 @@ class SurrealDBStorage:
         node_type: NodeType | None = None,
         status: NodeStatus = NodeStatus.ACTIVE,
         at_time: datetime | None = None,
-        tags: list[str] | None = None,
-        source: str | None = None,
-        source_type: str | None = None,
     ) -> Sequence[EpistemicNode]:
         tables = [_NODE_TYPE_TO_TABLE[node_type]] if node_type else ["topic", "fact", "inference"]
         results = []
@@ -316,18 +320,25 @@ class SurrealDBStorage:
                 )
             results.extend(_record_to_node(table, r) for r in rows)
 
-        # Tag/provenance filtering is applied in Python via the shared matchers so
-        # semantics are identical to the in-memory backend. Brute-force for now;
-        # push down to SurrealQL with an index if graphs grow large.
-        if tags:
-            results = [n for n in results if tag_matches(n, tags)]
-        if source is not None or source_type is not None:
-            results = [
-                n for n in results
-                if provenance_matches(n, source=source, source_type=source_type)
-            ]
-
         return results
+
+    async def get_node_by_content(
+        self,
+        content: str,
+        *,
+        node_type: NodeType | None = None,
+        status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> EpistemicNode | None:
+        """First active node with exactly this content (for exact-name upsert)."""
+        tables = [_NODE_TYPE_TO_TABLE[node_type]] if node_type else ["topic", "fact", "inference"]
+        for table in tables:
+            rows = await self.db.query(
+                f"SELECT * FROM {table} WHERE content = $content AND status = $status LIMIT 1",
+                {"content": content, "status": status.value},
+            )
+            if rows:
+                return _record_to_node(table, rows[0])
+        return None
 
     async def query_changes(
         self,
@@ -374,16 +385,21 @@ class SurrealDBStorage:
                 return
         raise KeyError(f"Node {node_id} not found")
 
-    async def set_node_tags(self, node_id: str, tags: list[Tag]) -> None:
-        serialized = [t.model_dump(mode="json") for t in tags]
-        for table in ("topic", "fact", "inference"):
-            rows = await self.db.query(
-                f"UPDATE {table} SET tags = $tags WHERE uid = $uid",
-                {"uid": node_id, "tags": serialized},
-            )
-            if rows:
-                return
-        raise KeyError(f"Node {node_id} not found")
+    async def relabel_edges(self, old_label: str, new_label: str) -> int:
+        """Rewrite the label on user-tier edges (in place; edges are not versioned)."""
+        rows = await self.db.query(
+            "UPDATE node_edge SET label = $new WHERE type = $related AND label = $old "
+            "RETURN BEFORE",
+            {"new": new_label, "old": old_label, "related": EdgeType.RELATED.value},
+        )
+        return len(rows)
+
+    async def get_relation_kind(self, label: str) -> str | None:
+        rows = await self.db.query(
+            "SELECT kind FROM node_edge WHERE type = $related AND label = $label LIMIT 1",
+            {"related": EdgeType.RELATED.value, "label": label},
+        )
+        return rows[0]["kind"] if rows else None
 
     async def count_nodes_by_type(
         self,
@@ -582,7 +598,7 @@ class SurrealDBStorage:
         repointed_data: list[dict] = []
         seen: set[tuple[str, str, str]] = set()
         for edge in incident.values():
-            if edge.type in NON_KNOWLEDGE_EDGE_TYPES:
+            if migration_excluded(edge):
                 continue
             old_edge_ids.append(edge.id)  # every incident edge is deleted...
             new_src = merged_node.id if edge.src_id in source_ids else edge.src_id

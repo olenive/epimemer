@@ -18,7 +18,6 @@ from epimemer.core.types import (
     NodeType,
     RawDocument,
     Segment,
-    Tag,
     Timeline,
 )
 
@@ -34,6 +33,11 @@ class StorageBackend(Protocol):
 
     async def get_document(self, doc_id: str) -> RawDocument | None:
         """Retrieve a document by id."""
+        ...
+
+    async def get_document_by_source(self, source: str) -> RawDocument | None:
+        """First document whose `source` name matches — lets find_nodes resolve a
+        source by its human name (e.g. "ISSUES.md"), not just its id."""
         ...
 
     # --- Segments ---
@@ -62,16 +66,19 @@ class StorageBackend(Protocol):
         node_type: NodeType | None = None,
         status: NodeStatus = NodeStatus.ACTIVE,
         at_time: datetime | None = None,
-        tags: list[str] | None = None,
-        source: str | None = None,
-        source_type: str | None = None,
     ) -> Sequence[EpistemicNode]:
-        """Query nodes by type, status, temporal filter, and/or tags/provenance.
+        """Query nodes by type, status, and/or temporal filter."""
+        ...
 
-        tags filter strings parse as "key=value", "key=" (any value), or bare
-        "value" (any key); a node must match all of them. source/source_type
-        match the node's provenance entries.
-        """
+    async def get_node_by_content(
+        self,
+        content: str,
+        *,
+        node_type: NodeType | None = None,
+        status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> EpistemicNode | None:
+        """First node with exactly this content — for exact-name upsert of
+        source/tag entity nodes (so a repeated name reuses one node)."""
         ...
 
     async def query_changes(
@@ -100,13 +107,15 @@ class StorageBackend(Protocol):
         """Update a node's status (e.g., mark as superseded or merged)."""
         ...
 
-    async def set_node_tags(self, node_id: str, tags: list[Tag]) -> None:
-        """Replace a node's tags in place.
+    async def relabel_edges(self, old_label: str, new_label: str) -> int:
+        """Rewrite the label on user-tier (RELATED) edges in place. Returns the
+        count relabelled. Edges are not versioned, so this is a plain update.
+        Used by edge-label consolidation."""
+        ...
 
-        Tags are non-content metadata (like status), so this mutates the node
-        rather than creating a new version — content and embeddings are untouched.
-        Used by tag consolidation.
-        """
+    async def get_relation_kind(self, label: str) -> str | None:
+        """The kind of any existing user-tier edge with this label, or None.
+        Lets a coined label reuse its kind (classified once per label)."""
         ...
 
     async def count_nodes_by_type(

@@ -65,11 +65,20 @@ class EdgeType(str, Enum):
     # Epistemic framing
     HAS_METACONTEXT = "has_metacontext"          # node → metacontext
 
+    # Aboutness & provenance (sources/tags are nodes; these connect to them)
+    TAGGED_WITH = "tagged_with"      # node → topic ("about / tagged with this concept")
+    SOURCED_FROM = "sourced_from"    # node → RawDocument (originating document)
+
     # Epistemic review (see REVIEW_EPISTEMIC.md)
     SUPERSESSION_CANDIDATE = "supersession_candidate"  # newer fact → older fact
     EVIDENCE_SUPERSEDED = "evidence_superseded"        # superseded fact → dependent inference
     VARIANT_OF = "variant_of"                          # fact ↔ fact, across frames
     BASED_ON = "based_on"                              # metacontext → metacontext (association)
+
+    # User-defined relationship (open vocabulary): the descriptor lives in
+    # NodeEdge.label, behaviour in NodeEdge.kind. The engine routes on the enum;
+    # all open relationships share this one sentinel.
+    RELATED = "related"
 
 
 # Edges that record version history rather than knowledge. They are anchored to
@@ -91,6 +100,40 @@ REVIEW_EDGE_TYPES: frozenset[EdgeType] = frozenset(
 # such as `contradiction` and `variant_of` are NOT in this set — they are real
 # edges to follow.
 NON_KNOWLEDGE_EDGE_TYPES: frozenset[EdgeType] = HISTORY_EDGE_TYPES | REVIEW_EDGE_TYPES
+
+# Built-in edges pointing at a provenance/source hub. Excluded from default
+# traversal (a search must not fan out into everything a source produced) but NOT
+# from migration (a corrected node keeps its source).
+PROVENANCE_EDGE_TYPES: frozenset[EdgeType] = frozenset({EdgeType.SOURCED_FROM})
+
+# Behavioural kinds for user-tier (RELATED) edges. Open vocabulary lives in the
+# label; the engine only reads the kind. `attribution` = where it came from / who
+# said it (don't fan out from the hub); `relationship` = a real-world relation
+# worth following.
+RELATIONSHIP_KIND = "relationship"
+ATTRIBUTION_KIND = "attribution"
+
+
+def traversal_excluded(edge: "NodeEdge") -> bool:
+    """True when default retrieval should NOT expand through this edge.
+
+    Excludes history + review (graph bookkeeping) and provenance/attribution edges
+    (don't fan out from a version/source hub). `tagged_with` and relationship-kind
+    edges are followed, like `about`/`supports`.
+    """
+    if edge.type in NON_KNOWLEDGE_EDGE_TYPES or edge.type in PROVENANCE_EDGE_TYPES:
+        return True
+    return edge.type == EdgeType.RELATED and edge.kind == ATTRIBUTION_KIND
+
+
+def migration_excluded(edge: "NodeEdge") -> bool:
+    """True when an edge should NOT be carried onto a replacement on supersede/merge.
+
+    Only history + review are excluded (they are anchored to a specific node
+    version). Provenance, tags, and relationships all migrate, so a corrected node
+    keeps its sources, tags, and relationships.
+    """
+    return edge.type in NON_KNOWLEDGE_EDGE_TYPES
 
 # Reserved id for the canonical base-reality frame ("The Real"). Matched by id,
 # never by content, so a fiction frame that internally mentions "reality" is
@@ -133,35 +176,6 @@ class Segment(BaseModel):
     created_at: datetime = Field(default_factory=_now)
 
 
-# --- Provenance & tags ---
-
-
-class Provenance(BaseModel):
-    """Where a piece of knowledge came from.
-
-    System-stamped on every node at ingest and queryable, so "which nodes came
-    from X" is answerable. Lightly structured (system-owned keys, free values).
-    A node carries a list: a fresh node has one entry; a merged node carries the
-    union of its sources'.
-    """
-    source: str                       # "ISSUES.md", "stripe-api", "chat#4012"
-    source_type: str = "document"     # free string; suggested: document|api|chat
-    source_id: str | None = None      # RawDocument id (or external id) if applicable
-    ingested_at: datetime = Field(default_factory=_now)
-    metadata: dict = Field(default_factory=dict)   # url, line range, author, ...
-
-
-class Tag(BaseModel):
-    """A free-text label for filtering. Optional `key` gives a dimension.
-
-    No controlled vocabulary: keys and values are both free. Dimensioned tags
-    (key set) support "filter by key" queries; bare tags (key None) are casual
-    labels. Sprawl is handled by later consolidation, not upfront rules.
-    """
-    key: str | None = None
-    value: str
-
-
 # --- Epistemic Nodes ---
 
 
@@ -173,13 +187,11 @@ class Topic(BaseModel):
     """
     id: str = Field(default_factory=_new_id)
     content: str                      # paragraph-level description
-    source_id: str                    # Segment.id that generated this
+    source_id: str | None = None      # Segment.id, if extracted from text (entity/tag topics have none)
     status: NodeStatus = NodeStatus.ACTIVE
     superseded_at: datetime | None = None
     value: ValueSignal = Field(default_factory=ValueSignal)
     extraction_method: str = "llm"
-    provenance: list[Provenance] = Field(default_factory=list)
-    tags: list[Tag] = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
 
@@ -196,8 +208,6 @@ class Fact(BaseModel):
     superseded_at: datetime | None = None
     value: ValueSignal = Field(default_factory=ValueSignal)
     extraction_method: str = "llm"
-    provenance: list[Provenance] = Field(default_factory=list)
-    tags: list[Tag] = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
 
@@ -215,8 +225,6 @@ class Inference(BaseModel):
     superseded_at: datetime | None = None
     value: ValueSignal = Field(default_factory=ValueSignal)
     extraction_method: str = "llm"
-    provenance: list[Provenance] = Field(default_factory=list)
-    tags: list[Tag] = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
 
@@ -237,80 +245,23 @@ class NodeChangeEvent(BaseModel):
     at: datetime
 
 
-# --- Tag / provenance parsing + matching ---
-
-
-def union_unique(*lists):
-    """Concatenate lists, dropping later duplicates (by value), order-preserving.
-
-    Used to carry provenance/tags forward across supersession, merge, and
-    parent/split derivation so a node keeps its predecessors' sources and labels.
-    """
-    out: list = []
-    for items in lists:
-        for it in items:
-            if it not in out:
-                out.append(it)
-    return out
-
-
-def parse_tag(spec: str) -> Tag:
-    """Build a Tag from "key=value" (split on first '=') or bare "value"."""
-    if "=" in spec:
-        k, v = spec.split("=", 1)
-        return Tag(key=k or None, value=v)
-    return Tag(value=spec)
-
-
-def _parse_tag_filter(spec: str) -> tuple[str | None, str | None]:
-    """Parse a tag filter into (key, value) criteria, where None means "any".
-
-    "key=value" -> (key, value); "key=" -> (key, None); bare "value" -> (None, value).
-    """
-    if "=" in spec:
-        k, v = spec.split("=", 1)
-        return (k or None, v or None)
-    return (None, spec)
-
-
-def tag_satisfies(tag: Tag, spec: str) -> bool:
-    """True when a single tag matches a filter spec (key=value / key= / bare value)."""
-    k, v = _parse_tag_filter(spec)
-    return (k is None or tag.key == k) and (v is None or tag.value == v)
-
-
-def tag_matches(node: EpistemicNode, filters: list[str]) -> bool:
-    """True when the node's tags satisfy every filter spec (AND)."""
-    return all(
-        any(tag_satisfies(t, spec) for t in node.tags) for spec in filters
-    )
-
-
-def provenance_matches(
-    node: EpistemicNode,
-    *,
-    source: str | None = None,
-    source_type: str | None = None,
-) -> bool:
-    """True when the node has a provenance entry matching the given criteria."""
-    if source is not None and not any(p.source == source for p in node.provenance):
-        return False
-    if source_type is not None and not any(
-        p.source_type == source_type for p in node.provenance
-    ):
-        return False
-    return True
-
-
 # --- Edges ---
 
 
 class NodeEdge(BaseModel):
-    """A typed, weighted, directed edge between two nodes."""
+    """A typed, weighted, directed edge between two nodes.
+
+    For engine-tier edges, `type` is a known EdgeType and `label`/`kind` are unused.
+    For user-tier relationships, `type` is `RELATED`, `label` holds the open
+    descriptor (e.g. "published_by"), and `kind` selects behaviour
+    (`relationship` follows in retrieval; `attribution` does not).
+    """
     id: str = Field(default_factory=_new_id)
     src_id: str
     dst_id: str
     type: EdgeType
+    label: str | None = None
+    kind: Literal["relationship", "attribution"] = "relationship"
     weight: float = Field(default=1.0, ge=0.0)
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)

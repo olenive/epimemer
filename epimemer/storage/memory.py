@@ -12,7 +12,6 @@ from datetime import datetime
 from typing import Sequence
 
 from epimemer.core.types import (
-    NON_KNOWLEDGE_EDGE_TYPES,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
@@ -24,11 +23,9 @@ from epimemer.core.types import (
     NodeType,
     RawDocument,
     Segment,
-    Tag,
     Timeline,
     Topic,
-    provenance_matches,
-    tag_matches,
+    migration_excluded,
 )
 
 
@@ -120,6 +117,12 @@ class InMemoryStorage:
     async def get_document(self, doc_id: str) -> RawDocument | None:
         return self._g.documents.get(doc_id)
 
+    async def get_document_by_source(self, source: str) -> RawDocument | None:
+        for doc in self._g.documents.values():
+            if doc.source == source:
+                return doc
+        return None
+
     # --- Segments ---
 
     async def store_segment(self, segment: Segment) -> str:
@@ -144,9 +147,6 @@ class InMemoryStorage:
         node_type: NodeType | None = None,
         status: NodeStatus = NodeStatus.ACTIVE,
         at_time: datetime | None = None,
-        tags: list[str] | None = None,
-        source: str | None = None,
-        source_type: str | None = None,
     ) -> Sequence[EpistemicNode]:
         results = []
         for node in self._g.nodes.values():
@@ -167,16 +167,26 @@ class InMemoryStorage:
                 if node.superseded_at is not None and node.superseded_at <= at_time:
                     continue
 
-            # Filter by tags / provenance
-            if tags and not tag_matches(node, tags):
-                continue
-            if (source is not None or source_type is not None) and not provenance_matches(
-                node, source=source, source_type=source_type
-            ):
-                continue
-
             results.append(node)
         return results
+
+    async def get_node_by_content(
+        self,
+        content: str,
+        *,
+        node_type: NodeType | None = None,
+        status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> EpistemicNode | None:
+        """First active node with exactly this content (for exact-name upsert)."""
+        for node in self._g.nodes.values():
+            if node.status != status or node.content != content:
+                continue
+            if node_type is not None and not isinstance(
+                node, _NODE_TYPE_TO_CLASS[node_type]
+            ):
+                continue
+            return node
+        return None
 
     async def query_changes(
         self,
@@ -213,11 +223,24 @@ class InMemoryStorage:
         node.status = status
         node.superseded_at = superseded_at
 
-    async def set_node_tags(self, node_id: str, tags: list[Tag]) -> None:
-        node = self._g.nodes.get(node_id)
-        if node is None:
-            raise KeyError(f"Node {node_id} not found")
-        node.tags = list(tags)
+    async def relabel_edges(self, old_label: str, new_label: str) -> int:
+        """Rewrite the label on all user-tier edges from old_label to new_label.
+
+        Edge-label consolidation: edges are not versioned, so this is an in-place
+        update. Returns the number of edges relabelled.
+        """
+        n = 0
+        for edge in self._g.edges.values():
+            if edge.type == EdgeType.RELATED and edge.label == old_label:
+                edge.label = new_label
+                n += 1
+        return n
+
+    async def get_relation_kind(self, label: str) -> str | None:
+        for edge in self._g.edges.values():
+            if edge.type == EdgeType.RELATED and edge.label == label:
+                return edge.kind
+        return None
 
     async def count_nodes_by_type(
         self,
@@ -273,7 +296,7 @@ class InMemoryStorage:
         """
         seen_signatures: set[tuple[str, str, str]] = set()
         for edge in list(self._g.edges.values()):
-            if edge.type in NON_KNOWLEDGE_EDGE_TYPES:
+            if migration_excluded(edge):
                 continue
             if edge.src_id not in old_ids and edge.dst_id not in old_ids:
                 continue

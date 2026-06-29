@@ -26,7 +26,6 @@ from epimemer.core.types import (
     NodeType,
     RawDocument,
     Segment,
-    Tag,
     Timeline,
 )
 from epimemer.visualization.event_bus import InProcessEventBus
@@ -69,6 +68,9 @@ class InstrumentedStorage:
 
     async def get_document(self, doc_id: str) -> RawDocument | None:
         return await self._inner.get_document(doc_id)
+
+    async def get_document_by_source(self, source: str) -> RawDocument | None:
+        return await self._inner.get_document_by_source(source)
 
     # --- Segments (write) ---
 
@@ -118,13 +120,27 @@ class InstrumentedStorage:
             new_status=status.value,
         ))
 
-    async def set_node_tags(self, node_id: str, tags: list[Tag]) -> None:
-        await self._inner.set_node_tags(node_id, tags)
+    async def relabel_edges(self, old_label: str, new_label: str) -> int:
+        return await self._inner.relabel_edges(old_label, new_label)
+
+    async def get_relation_kind(self, label: str) -> str | None:
+        return await self._inner.get_relation_kind(label)
 
     # --- Epistemic Nodes (read) ---
 
     async def get_node(self, node_id: str) -> EpistemicNode | None:
         return await self._inner.get_node(node_id)
+
+    async def get_node_by_content(
+        self,
+        content: str,
+        *,
+        node_type: NodeType | None = None,
+        status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> EpistemicNode | None:
+        return await self._inner.get_node_by_content(
+            content, node_type=node_type, status=status,
+        )
 
     async def query_nodes(
         self,
@@ -132,13 +148,9 @@ class InstrumentedStorage:
         node_type: NodeType | None = None,
         status: NodeStatus = NodeStatus.ACTIVE,
         at_time: datetime | None = None,
-        tags: list[str] | None = None,
-        source: str | None = None,
-        source_type: str | None = None,
     ) -> Sequence[EpistemicNode]:
         return await self._inner.query_nodes(
             node_type=node_type, status=status, at_time=at_time,
-            tags=tags, source=source, source_type=source_type,
         )
 
     async def query_changes(

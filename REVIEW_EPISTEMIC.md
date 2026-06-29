@@ -30,9 +30,9 @@ This document supersedes the scattered design discussion. Build against it.
 
 Epimemer is an append-only, immutable-history epistemic memory. Nodes are never
 mutated in content; corrections create new versions linked by history edges
-(`superseded_by`, `merged_into`). Lifecycle/label *metadata* (`status`,
-`superseded_at`, `value` signals, `tags`) is mutated in place — it is not the
-knowledge claim, so editing it rewrites no history (see SUMMARY.md → Node History).
+(`superseded_by`, `merged_into`). Lifecycle *metadata* (`status`, `superseded_at`,
+`value` signals) is mutated in place — it is not the knowledge claim, so editing it
+rewrites no history (see SUMMARY.md → Node History).
 The guiding rhythm is **"write fast, organize slow"**: ingestion is mechanical and
 cheap; organization (consolidation, review) is deliberate and, where it matters,
 *agentic*.
