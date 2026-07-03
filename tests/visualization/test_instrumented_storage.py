@@ -4,14 +4,68 @@ import pytest
 
 from epimemer.core.types import NodeStatus, Topic
 from epimemer.storage.memory import InMemoryStorage
+from epimemer.visualization import instrumented_storage as instrumented_storage_mod
 from epimemer.visualization.event_bus import create_event_bus
-from epimemer.visualization.events import GraphSwitched
+from epimemer.visualization.events import GraphSwitched, NodeStored, node_to_view
 from epimemer.visualization.instrumented_storage import instrument_storage
 
 
 @pytest.fixture
 def bus():
     return create_event_bus()
+
+
+class TestTagTopicEmission:
+    """Regression: tag/entity Topics have source_id=None. The write path and the
+    viz view model must both tolerate that — a tag Topic must never crash a write.
+    """
+
+    def test_node_to_view_allows_none_source_id(self):
+        """NodeView must accept a Topic with no segment origin (tag/entity topic).
+
+        Previously NodeView.source_id was a non-nullable str, so converting a tag
+        Topic raised ValidationError even though Topic.source_id is str | None.
+        """
+        tag = Topic(content="ledger-agent", source_id=None, extraction_method="agent:tag")
+        view = node_to_view(tag, "test-graph")
+        assert view.source_id is None
+        assert view.content == "ledger-agent"
+
+    async def test_write_batch_tx_with_untagged_topic_commits_and_emits(self, bus):
+        """The real smoke-test scenario: a source_id=None Topic goes through
+        write_batch_tx. It must commit and emit a NodeStored, not raise.
+        """
+        inner = InMemoryStorage()
+        wrapped = instrument_storage(inner, bus)
+        received: list[NodeStored] = []
+        bus.subscribe(NodeStored, handler=lambda e: received.append(e))
+
+        tag = Topic(content="smoke-test", source_id=None, extraction_method="agent:tag")
+        await wrapped.write_batch_tx(nodes=[tag])
+
+        assert await wrapped.get_node(tag.id) is not None       # committed
+        assert len(received) == 1                                # emitted
+        assert received[0].node.source_id is None
+
+    async def test_write_batch_tx_survives_emit_failure(self, bus, monkeypatch):
+        """A committed write must never be reported as failed because event
+        emission threw. Otherwise a retrying caller duplicates every node.
+
+        We force the producer-side view construction to raise (the exact spot the
+        original bug lived) and assert the write still commits silently.
+        """
+        inner = InMemoryStorage()
+        wrapped = instrument_storage(inner, bus)
+
+        def boom(node, graph):
+            raise RuntimeError("viz conversion blew up")
+
+        monkeypatch.setattr(instrumented_storage_mod, "node_to_view", boom)
+
+        node = Topic(content="t", source_id="s1")
+        await wrapped.write_batch_tx(nodes=[node])   # must not raise
+
+        assert await wrapped.get_node(node.id) is not None       # still committed
 
 
 class TestMultiGraphPassThrough:

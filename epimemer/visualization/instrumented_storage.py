@@ -13,6 +13,7 @@ Usage:
     await storage.store_node(topic)  # → publishes NodeStored event
 """
 
+import logging
 from datetime import datetime
 from typing import Sequence
 
@@ -40,6 +41,8 @@ from epimemer.visualization.events import (
     edge_to_view,
     node_to_view,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class InstrumentedStorage:
@@ -277,17 +280,23 @@ class InstrumentedStorage:
         embeddings: Sequence[EmbeddingRecord] = (),
     ) -> None:
         await self._inner.write_batch_tx(nodes=nodes, edges=edges, embeddings=embeddings)
-        graph = self._inner.current_database
-        for node in nodes:
-            await self._bus.publish(NodeStored(graph=graph, node=node_to_view(node, graph)))
-        for edge in edges:
-            await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
-        for embedding in embeddings:
-            await self._bus.publish(EmbeddingStored(
-                item_id=embedding.item_id,
-                model_id=embedding.model_id,
-                dimensions=len(embedding.vector),
-            ))
+        # The write above is already committed. Event emission is best-effort
+        # observability and must never turn a committed write into a reported
+        # failure — otherwise a retrying caller duplicates every node.
+        try:
+            graph = self._inner.current_database
+            for node in nodes:
+                await self._bus.publish(NodeStored(graph=graph, node=node_to_view(node, graph)))
+            for edge in edges:
+                await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
+            for embedding in embeddings:
+                await self._bus.publish(EmbeddingStored(
+                    item_id=embedding.item_id,
+                    model_id=embedding.model_id,
+                    dimensions=len(embedding.vector),
+                ))
+        except Exception:
+            logger.exception("write_batch_tx event emission failed; write already committed")
 
     # --- Edges (read) ---
 
