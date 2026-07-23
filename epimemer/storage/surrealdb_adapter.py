@@ -29,6 +29,7 @@ from epimemer.core.types import (
     Topic,
     migration_excluded,
 )
+from epimemer.storage.protocol import drop_none_values, validate_graph_name
 
 
 _NODE_TYPE_TO_TABLE = {
@@ -61,12 +62,30 @@ def _record_to_node(table: str, data: dict) -> EpistemicNode:
     return cls.model_validate(cleaned)
 
 
+def _upsert(table: str) -> str:
+    """SurrealQL to upsert a row keyed on the application id (``uid``).
+
+    `INSERT INTO` is *silently ignored* when the UNIQUE index on `uid` is
+    violated — no error, no update — which makes every re-store a no-op.
+    `UPSERT ... WHERE` inserts when nothing matches and replaces the content
+    when a row does, keeping the generated record id stable so records written
+    before this changed keep working.
+    """
+    return f"UPSERT {table} CONTENT $data WHERE uid = $uid"
+
+
 def _serialize(model) -> dict:
     """Serialize a Pydantic model to a dict suitable for SurrealDB.
 
     Renames 'id' to 'uid' to avoid conflicting with SurrealDB's built-in id.
+
+    Dropping None-valued keys is what SurrealDB would do anyway — the driver
+    encodes every `None` as `NONE`, which stores no key — so this changes
+    nothing here. It is applied explicitly so the returned dict matches what
+    actually lands in the row, and so the shared contract is visible at the
+    boundary rather than being an accident of the driver's encoding.
     """
-    data = model.model_dump(mode="json")
+    data = drop_none_values(model.model_dump(mode="json"))
     data["uid"] = data.pop("id")
     return data
 
@@ -132,12 +151,20 @@ class SurrealDBStorage:
 
     async def switch_database(self, database: str) -> None:
         """Switch to a different database and set up its schema."""
+        validate_graph_name(database)
         await self.db.use(self._namespace, database)
         self._database = database
         await self._setup_schema()
 
     async def delete_database(self, database: str) -> None:
-        """Delete a database from the current namespace."""
+        """Delete a database from the current namespace.
+
+        The name is validated rather than parameterized: SurrealQL takes the
+        database name as an identifier here, not a value, so it cannot be bound.
+        `validate_graph_name` restricts it to characters that carry no meaning
+        inside the backticks.
+        """
+        validate_graph_name(database)
         await self.db.query(f"REMOVE DATABASE IF EXISTS `{database}`;")
 
     # --- Viz reads (cross-graph, no switching of active state) ---
@@ -243,7 +270,7 @@ class SurrealDBStorage:
 
     async def store_document(self, doc: RawDocument) -> str:
         data = _serialize(doc)
-        await self.db.query("INSERT INTO document $data", {"data": data})
+        await self.db.query(_upsert("document"), {"data": data, "uid": doc.id})
         return doc.id
 
     async def get_document(self, doc_id: str) -> RawDocument | None:
@@ -268,7 +295,7 @@ class SurrealDBStorage:
 
     async def store_segment(self, segment: Segment) -> str:
         data = _serialize(segment)
-        await self.db.query("INSERT INTO segment $data", {"data": data})
+        await self.db.query(_upsert("segment"), {"data": data, "uid": segment.id})
         return segment.id
 
     async def get_segments_for_document(self, doc_id: str) -> Sequence[Segment]:
@@ -283,7 +310,7 @@ class SurrealDBStorage:
     async def store_node(self, node: EpistemicNode) -> str:
         table = _node_to_table(node)
         data = _serialize(node)
-        await self.db.query(f"INSERT INTO {table} $data", {"data": data})
+        await self.db.query(_upsert(table), {"data": data, "uid": node.id})
         return node.id
 
     async def get_node(self, node_id: str) -> EpistemicNode | None:
@@ -420,7 +447,7 @@ class SurrealDBStorage:
     async def store_edge(self, edge: NodeEdge) -> str:
         data = _serialize(edge)
         data["type"] = edge.type.value
-        await self.db.query("INSERT INTO node_edge $data", {"data": data})
+        await self.db.query(_upsert("node_edge"), {"data": data, "uid": edge.id})
         return edge.id
 
     async def delete_edge(self, edge_id: str) -> None:
@@ -690,7 +717,7 @@ class SurrealDBStorage:
 
     async def store_embedding(self, embedding: EmbeddingRecord) -> str:
         data = _serialize(embedding)
-        await self.db.query("INSERT INTO embedding $data", {"data": data})
+        await self.db.query(_upsert("embedding"), {"data": data, "uid": embedding.id})
         return embedding.id
 
     async def get_embeddings_for_item(
@@ -751,7 +778,7 @@ class SurrealDBStorage:
 
     async def store_timeline(self, timeline: Timeline) -> str:
         data = _serialize(timeline)
-        await self.db.query("INSERT INTO timeline $data", {"data": data})
+        await self.db.query(_upsert("timeline"), {"data": data, "uid": timeline.id})
         return timeline.id
 
     async def get_timeline(self, timeline_id: str) -> Timeline | None:
@@ -771,7 +798,7 @@ class SurrealDBStorage:
 
     async def store_metacontext(self, mc: Metacontext) -> str:
         data = _serialize(mc)
-        await self.db.query("INSERT INTO metacontext $data", {"data": data})
+        await self.db.query(_upsert("metacontext"), {"data": data, "uid": mc.id})
         return mc.id
 
     async def get_metacontext(self, mc_id: str) -> Metacontext | None:

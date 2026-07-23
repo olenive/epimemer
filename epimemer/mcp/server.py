@@ -78,9 +78,8 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
     storage = create_storage(config)
 
-    # SurrealDB needs async connect
-    if hasattr(storage, "connect"):
-        await storage.connect()
+    # Every backend implements connect (no-op where there's nothing to open).
+    await storage.connect()
 
     embedding_provider = create_embedding_provider(config)
 
@@ -139,8 +138,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     finally:
         if viz_server is not None:
             viz_server.should_exit = True
-        if hasattr(storage, "close"):
-            await storage.close()
+        await storage.close()
 
 
 mcp = FastMCP(
@@ -176,7 +174,6 @@ def _log(
         output_summary=output_summary,
         latency_ms=meta.latency_ms,
         nodes_touched=meta.nodes_returned,
-        llm_calls=meta.llm_calls,
         error=error,
     ))
 
@@ -995,10 +992,9 @@ async def memory_add_timepoint(
         end: Optional ISO datetime string for the end (for intervals).
         label: Optional descriptive label (e.g., "during the Renaissance").
     """
-    from datetime import datetime as dt, timezone
     deps = ctx.lifespan_context
-    parsed_start = dt.fromisoformat(start).replace(tzinfo=timezone.utc) if start else None
-    parsed_end = dt.fromisoformat(end).replace(tzinfo=timezone.utc) if end else None
+    parsed_start = _parse_utc(start) if start else None
+    parsed_end = _parse_utc(end) if end else None
     return await _run_with_timeout(
         "epimemer.add_timepoint",
         lambda: tools.add_timeline_timepoint(
@@ -1034,11 +1030,10 @@ async def memory_query_timeline(
         range_end: ISO datetime — end of range query.
         k: Number of nearest results (default 5).
     """
-    from datetime import datetime as dt, timezone
     deps = ctx.lifespan_context
-    parsed_target = dt.fromisoformat(target).replace(tzinfo=timezone.utc) if target else None
-    parsed_start = dt.fromisoformat(range_start).replace(tzinfo=timezone.utc) if range_start else None
-    parsed_end = dt.fromisoformat(range_end).replace(tzinfo=timezone.utc) if range_end else None
+    parsed_target = _parse_utc(target) if target else None
+    parsed_start = _parse_utc(range_start) if range_start else None
+    parsed_end = _parse_utc(range_end) if range_end else None
     return await _run_with_timeout(
         "epimemer.query_timeline",
         lambda: tools.query_timeline(

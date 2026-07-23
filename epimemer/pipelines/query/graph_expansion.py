@@ -4,7 +4,13 @@ Performs breadth-first traversal from seed nodes to discover related
 nodes and edges in the epistemic graph. Skips history edges by default.
 """
 
-from epimemer.core.types import EdgeType, EpistemicNode, NodeEdge, traversal_excluded
+from epimemer.core.types import (
+    EdgeType,
+    EpistemicNode,
+    NodeEdge,
+    NodeStatus,
+    traversal_excluded,
+)
 from epimemer.storage.protocol import StorageBackend
 
 
@@ -21,6 +27,10 @@ async def expand_via_graph(
     provenance/attribution edges (via ``traversal_excluded``) — so a search does not
     fan out from version or source hubs. An explicit ``exclude_edge_types`` set
     overrides that with plain type membership.
+
+    Only ACTIVE neighbours are traversed; edges leading to superseded, merged or
+    missing nodes are dropped along with the node. Seed nodes are the caller's
+    responsibility and are returned as given.
     """
     def _skip(edge: NodeEdge) -> bool:
         if exclude_edge_types is not None:
@@ -48,20 +58,27 @@ async def expand_via_graph(
                 if _skip(edge):
                     continue
 
-                # Track edge (avoid duplicates)
                 if edge.id in seen_edge_ids:
                     continue
-                seen_edge_ids.add(edge.id)
-                all_edges.append(edge)
 
-                # Discover new node on the other end
+                # Resolve the node on the other end before keeping the edge:
+                # only ACTIVE neighbours are traversable. Supersession does not
+                # always migrate the loser's edges (``supersede_by_existing``
+                # leaves them in place by design), so without this a retired
+                # node is pulled back into results one hop from an active one.
                 neighbor_id = edge.dst_id if edge.src_id == node_id else edge.src_id
                 if neighbor_id not in seen_node_ids:
                     neighbor = await storage.get_node(neighbor_id)
-                    if neighbor is not None:
-                        seen_node_ids.add(neighbor_id)
-                        all_nodes.append(neighbor)
-                        next_frontier_ids.add(neighbor_id)
+                    if neighbor is None or neighbor.status is not NodeStatus.ACTIVE:
+                        # Skip the edge too — an edge to a node the caller will
+                        # never see is dangling noise.
+                        continue
+                    seen_node_ids.add(neighbor_id)
+                    all_nodes.append(neighbor)
+                    next_frontier_ids.add(neighbor_id)
+
+                seen_edge_ids.add(edge.id)
+                all_edges.append(edge)
 
         frontier_ids = next_frontier_ids
 

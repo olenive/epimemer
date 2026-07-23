@@ -57,7 +57,6 @@ class TestToolInvocationLog:
             output_summary="nodes=3",
             latency_ms=15.2,
             nodes_touched=3,
-            llm_calls=0,
         )
         assert entry.tool_name == "epimemer.search"
         assert entry.latency_ms == 15.2
@@ -66,8 +65,10 @@ class TestToolInvocationLog:
     def test_defaults(self):
         entry = ToolInvocationLog(tool_name="test")
         assert entry.input_summary == ""
-        assert entry.llm_calls == 0
         assert entry.timestamp is not None
+
+    def test_no_llm_calls_field(self):
+        assert "llm_calls" not in ToolInvocationLog.model_fields
 
 
 class TestLogToolCall:
@@ -94,7 +95,6 @@ class TestLogToolCall:
                 output_summary="segments=2",
                 latency_ms=50.0,
                 nodes_touched=6,
-                llm_calls=3,
             )
             log_tool_call(entry)
 
@@ -102,6 +102,6 @@ class TestLogToolCall:
             record = captured[-1]
             assert hasattr(record, "structured_data")
             assert record.structured_data["tool_name"] == "epimemer.ingest"
-            assert record.structured_data["llm_calls"] == 3
+            assert record.structured_data["nodes_touched"] == 6
         finally:
             logger.removeHandler(handler)

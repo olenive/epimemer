@@ -151,7 +151,6 @@ useful:
 ### Interpreting _meta
 Every tool response includes a `_meta` field:
 - `nodes_returned`: how many nodes were found/affected
-- `llm_calls`: number of LLM calls made (for cost awareness)
 - `latency_ms`: how long the operation took
 - `source_types`: breakdown by node type (topic, fact, inference)
 

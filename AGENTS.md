@@ -10,6 +10,11 @@ When using Marimo notebooks remember to not re-define variables in different cel
 
 Our goal is to build a robust and secure system, not simply a prototype. We don't want to trade speed for technical debt.
 
+# Git Usage
+- Do not merge into the main branch without asking.
+- Keep commit messages very succinct.
+- Do not add "Co-Authored-By" or similar to commit messages!
+
 # Frontend Coding Style
 1. Prefer a functional programming style.
 2. Prefer Typescript over plain Javascript.
@@ -29,14 +34,13 @@ You have access to an epistemic memory system via MCP tools. Use it to:
 - Use metacontext_id to filter results when the context is clear (e.g., discussing a specific fictional universe)
 
 ### When to reflect (reflect)
-- After ingesting several documents (the system auto-reflects after 10 ingestions)
+- After ingesting several documents (the system auto-suggests reflection once a configured threshold of ingestions is reached — it flags the suggestion, it does not reflect on its own)
 - When explicitly asked to consolidate or organize knowledge
 - Periodically during long sessions
 
 ### Interpreting _meta
 Every tool response includes a _meta field with:
 - nodes_returned: how many nodes were found/affected
-- llm_calls: number of LLM calls made (for cost awareness)
 - latency_ms: how long the operation took
 - source_types: breakdown by node type (topic, fact, inference)
 

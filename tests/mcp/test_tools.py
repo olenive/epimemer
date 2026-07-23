@@ -1,12 +1,24 @@
 """Tests for MCP tool implementations.
 
 Tests call the pure functions in epimemer.mcp.tools directly
-with InMemoryStorage + mock providers.
+against every storage backend, with mock providers.
 """
+
+import asyncio
+import sys
 
 import pytest
 
 from datetime import datetime, timedelta, timezone
+
+from petritype.core.executable_graph_components import (
+    ArgumentEdgeToTransition,
+    ExecutableGraph,
+    ExecutableGraphOperations,
+    FunctionTransitionNode,
+    ListPlaceNode,
+    ReturnedEdgeFromTransition,
+)
 
 from epimemer.core.types import (
     EdgeType,
@@ -50,16 +62,13 @@ from epimemer.mcp.tools import (
     supersede_by,
     update,
 )
+from epimemer.mcp import tools
 from epimemer.mcp.server import _resolve_windows
 from epimemer.storage.memory import InMemoryStorage
+from epimemer.storage.protocol import StorageBackend
 
 
 # --- Fixtures ---
-
-
-@pytest.fixture
-def storage() -> InMemoryStorage:
-    return InMemoryStorage()
 
 
 @pytest.fixture
@@ -81,7 +90,7 @@ def config() -> ServerConfig:
 
 async def _two_step_ingest(
     content: str,
-    storage: InMemoryStorage,
+    storage: StorageBackend,
     embedding_provider: MockEmbeddingProvider,
     config: ServerConfig,
     *,
@@ -1206,6 +1215,80 @@ class TestSearchFrameScoping:
         assert {real.id, fic.id} <= ids
 
 
+class TestSearchFrameScopingBeyondTopK:
+    """Frame-scoping must not be capped by the vector top-k.
+
+    Vector search ranks first and returns k hits; the frame filter runs after.
+    So a frame whose relevant nodes rank below k is dropped before the filter
+    ever sees it — the query comes back short, or empty. These pin that an
+    in-frame node still surfaces when out-of-frame nodes outrank it.
+    """
+
+    async def test_frame_scoped_search_reaches_beyond_top_k(
+        self, storage, embedding_provider
+    ):
+        mc = Metacontext(content="Frame")
+        sibling = Metacontext(content="Sibling")
+        await storage.store_metacontext(mc)
+        await storage.store_metacontext(sibling)
+
+        model_id = embedding_provider.model_id
+        k = 3
+        qvec = (await embedding_provider.embed(["anything"]))[0]
+
+        # k sibling-frame facts, each maximally similar to the query, fill the
+        # top-k. They are excluded by the filter (not base reality), so pre-fix
+        # the frame comes back empty.
+        for i in range(k):
+            await _store_fact_with_embedding(
+                storage, model_id, f"sibling {i}", qvec, metacontext_id=sibling.id
+            )
+        # One in-frame fact, strictly less similar, so it ranks below the top-k.
+        weaker = [qvec[0] * 0.5, *qvec[1:]]
+        in_frame = await _store_fact_with_embedding(
+            storage, model_id, "in-frame fact", weaker, metacontext_id=mc.id
+        )
+
+        result, _ = await search(
+            "anything", storage, embedding_provider,
+            k=k, graph_hops=0, metacontext_id=mc.id,
+        )
+        ids = {n["id"] for n in result["nodes"]}
+        assert in_frame.id in ids  # missed pre-fix: filtered out of the top-k
+
+    async def test_frame_scoped_search_iterates_past_initial_overfetch(
+        self, storage, embedding_provider
+    ):
+        """Enough distractors that one over-fetch still misses the in-frame node;
+        the fetch has to grow until the store is exhausted and it surfaces."""
+        mc = Metacontext(content="Frame")
+        sibling = Metacontext(content="Sibling")
+        await storage.store_metacontext(mc)
+        await storage.store_metacontext(sibling)
+
+        model_id = embedding_provider.model_id
+        k = 3
+        qvec = (await embedding_provider.embed(["anything"]))[0]
+
+        for i in range(15):  # well past the initial k*4 over-fetch of 12
+            await _store_fact_with_embedding(
+                storage, model_id, f"sibling {i}", qvec, metacontext_id=sibling.id
+            )
+        weaker = [qvec[0] * 0.5, *qvec[1:]]
+        in_frame = await _store_fact_with_embedding(
+            storage, model_id, "in-frame fact", weaker, metacontext_id=mc.id
+        )
+
+        result, _ = await search(
+            "anything", storage, embedding_provider,
+            k=k, graph_hops=0, metacontext_id=mc.id,
+        )
+        ids = {n["id"] for n in result["nodes"]}
+        assert in_frame.id in ids
+        # Nothing out-of-frame leaks in on the way to finding it.
+        assert ids == {in_frame.id}
+
+
 class TestReviewLabelsInRetrieval:
 
     async def test_query_graph_flags_superseded_candidate(self, storage):
@@ -1719,3 +1802,89 @@ class TestRelationConsolidation:
     async def test_reflect_surfaces_similar_relations_key(self, storage, embedding_provider):
         result, _ = await reflect(storage, embedding_provider)
         assert "similar_relations" in result and isinstance(result["similar_relations"], list)
+
+
+class TestGraphNameValidationTools:
+    """`use_graph` / `delete_graph` take arbitrary agent-supplied strings and
+    reach SurrealQL that interpolates the database name."""
+
+    async def test_use_graph_rejects_hostile_name(self, storage):
+        result, _ = await tools.use_graph(
+            "pwn`; REMOVE DATABASE `victim", storage, confirm=True
+        )
+        assert result["status"] == "invalid_name"
+        assert "pwn`; REMOVE DATABASE `victim" not in await storage.list_databases()
+
+    async def test_delete_graph_rejects_hostile_name(self, storage):
+        before, _ = await tools.list_graphs(storage)
+        result, _ = await tools.delete_graph("a;b", storage, confirm=True)
+        assert result["status"] == "invalid_name"
+        after, _ = await tools.list_graphs(storage)
+        assert after["graphs"] == before["graphs"]
+
+    async def test_use_graph_still_accepts_legal_name(self, storage):
+        result, _ = await tools.use_graph("my-graph_2", storage, confirm=True)
+        assert result["status"] in {"created", "switched"}
+        assert result["active_graph"] == "my-graph_2"
+
+
+class TestRunNetStdout:
+    """`_run_net` used to swap `sys.stdout` for `sys.stderr` around execution to
+    keep engine debug prints off MCP's stdio transport.
+
+    Two problems: the swap is process-global across `await` points, so with
+    overlapping tool calls one call saves another's redirected stdout as its
+    "original" and the swap never unwinds; and the engine's prints are gated
+    behind `verbose`, which defaults off, so there is nothing to suppress.
+    """
+
+    async def test_run_net_does_not_touch_stdout(self, capsys):
+        original_stdout = sys.stdout
+
+        async def _slow_double(x: int) -> int:
+            # Yield control so the two runs genuinely interleave.
+            await asyncio.sleep(0)
+            return x * 2
+
+        def _build() -> ExecutableGraph:
+            return ExecutableGraphOperations.construct_graph([
+                ListPlaceNode("Input", int, [5]),
+                ListPlaceNode("Output", int),
+                FunctionTransitionNode("double", _slow_double),
+                ArgumentEdgeToTransition("Input", "double", "x"),
+                ReturnedEdgeFromTransition("double", "Output"),
+            ])
+
+        results = await asyncio.gather(
+            tools._run_net(_build(), "pipeline-a", None),
+            tools._run_net(_build(), "pipeline-b", None),
+        )
+
+        for graph, fired in results:
+            assert fired == 1
+            output = next(p for p in graph.places if p.name == "Output")
+            assert output.tokens == [10]
+
+        assert sys.stdout is original_stdout
+        assert capsys.readouterr().out == ""
+
+
+def test_tool_count_matches_integration_doc():
+    """INTEGRATION.md's stated tool count must track the actual registrations.
+
+    A cheap guard against the doc drift catalogued in ISSUES.md — the count can
+    only be stated in one canonical place, and this fails the moment a tool is
+    added or removed without updating it.
+    """
+    import re
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    registered = (repo_root / "epimemer" / "mcp" / "server.py").read_text().count("@mcp.tool(")
+
+    integration = (repo_root / "INTEGRATION.md").read_text()
+    stated = re.search(r"listed with (\d+) tools", integration)
+    assert stated is not None, "INTEGRATION.md no longer states a tool count to check"
+    assert int(stated.group(1)) == registered, (
+        f"INTEGRATION.md says {stated.group(1)} tools but server.py registers {registered}"
+    )

@@ -165,13 +165,23 @@ export interface PipelineCompleted extends BaseEvent {
   duration_ms: number;
 }
 
+export interface PipelineFailed extends BaseEvent {
+  category: "pipeline";
+  event_type: "pipeline_failed";
+  pipeline_name: string;
+  error: string;
+  transitions_fired: number;
+  duration_ms: number;
+}
+
 export type PipelineEvent =
   | PipelineStarted
   | TransitionEnabled
   | TransitionFired
   | TransitionCompleted
   | TokensUpdated
-  | PipelineCompleted;
+  | PipelineCompleted
+  | PipelineFailed;
 
 export type AnyEvent = GraphEvent | PipelineEvent;
 

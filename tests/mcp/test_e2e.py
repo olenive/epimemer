@@ -7,6 +7,7 @@ server wiring including lifespan, Context injection, and JSON serialization.
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 import pytest
 
@@ -205,6 +206,77 @@ class TestMCPProtocol:
         data = _parse_response(result)
         assert data["result"]["name"] == "AI History"
         assert data["result"]["timeline_id"]
+
+    async def test_add_timepoint_converts_offset_to_utc(self, server):
+        """An offset-aware start must be *converted* to UTC, not stripped.
+
+        `.replace(tzinfo=utc)` discards the offset instead of converting, so
+        12:00+02:00 was stored as 12:00Z rather than 10:00Z — silently shifting
+        every timestamp the storage layer then compares lexicographically.
+        """
+        created = _parse_response(
+            await server.call_tool("create_timeline", {"name": "Offsets"})
+        )
+        timeline_id = created["result"]["timeline_id"]
+
+        await server.call_tool(
+            "add_timepoint",
+            {"timeline_id": timeline_id, "start": "2024-01-01T12:00:00+02:00"},
+        )
+
+        queried = _parse_response(
+            await server.call_tool("query_timeline", {"timeline_id": timeline_id})
+        )
+        starts = [tp["start"] for tp in queried["result"]["timepoints"]]
+        assert len(starts) == 1
+        assert datetime.fromisoformat(starts[0]) == datetime(
+            2024, 1, 1, 10, 0, tzinfo=timezone.utc
+        )
+
+    async def test_query_timeline_range_converts_offset_to_utc(self, server):
+        """Range bounds are parsed on the same broken path as `start`.
+
+        The timepoint is stored with an unambiguous UTC string so only the
+        *bounds* are under test. Storing it with an offset too would make the
+        test blind: both values would shift by the same amount and the errors
+        would cancel.
+        """
+        created = _parse_response(
+            await server.call_tool("create_timeline", {"name": "Ranges"})
+        )
+        timeline_id = created["result"]["timeline_id"]
+
+        await server.call_tool(
+            "add_timepoint",
+            {"timeline_id": timeline_id, "start": "2024-01-01T10:00:00+00:00"},
+        )
+
+        # 11:00+02:00 == 09:00Z .. 13:00+02:00 == 11:00Z — brackets 10:00Z.
+        # Left unconverted the bounds read 11:00Z..13:00Z and miss it.
+        inside = _parse_response(
+            await server.call_tool(
+                "query_timeline",
+                {
+                    "timeline_id": timeline_id,
+                    "range_start": "2024-01-01T11:00:00+02:00",
+                    "range_end": "2024-01-01T13:00:00+02:00",
+                },
+            )
+        )
+        assert len(inside["result"]["timepoints"]) == 1
+
+        # 13:00+02:00 == 11:00Z .. 15:00+02:00 == 13:00Z — entirely after it.
+        outside = _parse_response(
+            await server.call_tool(
+                "query_timeline",
+                {
+                    "timeline_id": timeline_id,
+                    "range_start": "2024-01-01T13:00:00+02:00",
+                    "range_end": "2024-01-01T15:00:00+02:00",
+                },
+            )
+        )
+        assert outside["result"]["timepoints"] == []
 
     async def test_create_metacontext_via_protocol(self, server):
         result = await server.call_tool(

@@ -260,4 +260,4 @@ def semantic_similarity_segmentation_net(
             "SimilarityScores", "detect_boundaries_and_form_segments", "similarity_scores"
         ),
         ReturnedEdgeFromTransition("detect_boundaries_and_form_segments", "Segments"),
-    ])
+    ], expect_acyclic=True)

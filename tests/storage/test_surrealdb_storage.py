@@ -472,3 +472,38 @@ class TestSourceTopicAndRelationHelpers:
         ))
         assert await store.get_relation_kind("funded_by") == "attribution"
         assert await store.get_relation_kind("unknown") is None
+
+
+class TestGraphNameInjection:
+    """Graph names reach ``REMOVE DATABASE IF EXISTS `{name}` `` by f-string
+    interpolation, and `use_graph`/`delete_graph` are agent-facing tools taking
+    arbitrary strings.
+
+    The exploit takes two steps, because `delete_graph` returns `not_found` for
+    a name it cannot see: create a graph whose name breaks out of the backtick
+    quoting, then delete it. The injected statement then runs.
+    """
+
+    async def test_hostile_graph_names_rejected(self, store):
+        hostile = "pwn`; REMOVE DATABASE `victim"
+        with pytest.raises(ValueError):
+            await store.delete_database(hostile)
+        with pytest.raises(ValueError):
+            await store.switch_database(hostile)
+        with pytest.raises(ValueError):
+            await store.switch_database("a;b")
+
+    async def test_bystander_database_survives_injection_attempt(self, store):
+        await store.switch_database("victim")
+        await store.switch_database("default")
+        assert "victim" in await store.list_databases()
+
+        hostile = "pwn`; REMOVE DATABASE `victim"
+        with pytest.raises(ValueError):
+            await store.switch_database(hostile)
+        with pytest.raises(ValueError):
+            await store.delete_database(hostile)
+
+        remaining = await store.list_databases()
+        assert "victim" in remaining
+        assert hostile not in remaining

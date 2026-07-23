@@ -27,6 +27,25 @@ def store():
     return InMemoryStorage()
 
 
+class TestLifecycleNoOps:
+
+    async def test_inmemory_connect_close_are_noops(self, store):
+        # InMemoryStorage implements the full protocol, so connect/close exist
+        # and do nothing — callers invoke them unconditionally (no hasattr).
+        assert await store.connect() is None
+
+        doc = RawDocument(content="alive")
+        await store.store_document(doc)
+        got = await store.get_document(doc.id)
+        assert got is not None and got.content == "alive"
+
+        # close is a no-op: idempotent and leaves the in-memory data intact.
+        assert await store.close() is None
+        assert await store.close() is None
+        still = await store.get_document(doc.id)
+        assert still is not None and still.content == "alive"
+
+
 class TestDocumentStorage:
 
     async def test_store_and_retrieve(self, store):
@@ -551,3 +570,129 @@ class TestSourceTopicAndRelationHelpers:
         ))
         assert await store.get_relation_kind("funded_by") == "attribution"
         assert await store.get_relation_kind("unknown") is None
+
+
+class TestStoreIsolation:
+    """The store must not share object identity with its callers.
+
+    Keeping the caller's object (and handing it back out again) means a caller
+    mutating a "returned" node silently rewrites the store, with no write call.
+    SurrealDB round-trips through serialization and cannot behave that way, so
+    the aliasing let code pass in-memory that was broken against the real
+    backend — it is why the insert-only `store_*` bug stayed invisible.
+    """
+
+    async def test_mutating_returned_node_does_not_change_store(self, store):
+        topic = Topic(content="original", source_id="s1")
+        await store.store_node(topic)
+
+        got = await store.get_node(topic.id)
+        got.content = "mutated"
+        got.value.relevance = 0.999
+
+        again = await store.get_node(topic.id)
+        assert again.content == "original"
+        assert again.value.relevance != 0.999
+
+    async def test_mutating_caller_object_after_store_does_not_change_store(self, store):
+        topic = Topic(content="original", source_id="s1")
+        await store.store_node(topic)
+
+        topic.content = "mutated"
+        topic.value.relevance = 0.999
+
+        got = await store.get_node(topic.id)
+        assert got.content == "original"
+        assert got.value.relevance != 0.999
+
+    async def test_mutating_queried_node_does_not_change_store(self, store):
+        topic = Topic(content="original", source_id="s1")
+        await store.store_node(topic)
+
+        (await store.query_nodes())[0].content = "mutated"
+
+        assert (await store.get_node(topic.id)).content == "original"
+
+    async def test_mutating_returned_edge_does_not_change_store(self, store):
+        a, b = Topic(content="a"), Topic(content="b")
+        await store.store_node(a)
+        await store.store_node(b)
+        edge = NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.RELATED, label="cites")
+        await store.store_edge(edge)
+
+        (await store.get_edges_from(a.id))[0].label = "mutated"
+
+        assert (await store.get_edges_from(a.id))[0].label == "cites"
+
+    async def test_mutating_returned_timeline_does_not_change_store(self, store):
+        timeline = Timeline(name="tl")
+        await store.store_timeline(timeline)
+
+        got = await store.get_timeline(timeline.id)
+        got.timepoints.append(Timepoint(label="smuggled"))
+
+        assert (await store.get_timeline(timeline.id)).timepoints == []
+
+    async def test_mutating_returned_document_does_not_change_store(self, store):
+        doc = RawDocument(content="original")
+        await store.store_document(doc)
+
+        (await store.get_document(doc.id)).content = "mutated"
+
+        assert (await store.get_document(doc.id)).content == "original"
+
+    async def test_mutating_returned_metacontext_does_not_change_store(self, store):
+        mc = Metacontext(content="frame")
+        await store.store_metacontext(mc)
+
+        (await store.get_metacontext(mc.id)).description = "mutated"
+
+        assert (await store.get_metacontext(mc.id)).description == ""
+
+    async def test_mutating_returned_embedding_does_not_change_store(self, store):
+        emb = EmbeddingRecord(item_id="i1", model_id="m", vector=[0.1, 0.2])
+        await store.store_embedding(emb)
+
+        (await store.get_embeddings_for_item("i1"))[0].vector[0] = 0.999
+
+        assert (await store.get_embeddings_for_item("i1"))[0].vector == [0.1, 0.2]
+
+    async def test_write_batch_tx_does_not_alias_caller_objects(self, store):
+        node = Topic(content="original", source_id="s1")
+        edge_target = Topic(content="target", source_id="s1")
+        edge = NodeEdge(src_id=node.id, dst_id=edge_target.id, type=EdgeType.RELATED,
+                        label="cites")
+        emb = EmbeddingRecord(item_id=node.id, model_id="m", vector=[0.1])
+
+        await store.write_batch_tx(nodes=[node, edge_target], edges=[edge],
+                                   embeddings=[emb])
+
+        node.content = "mutated"
+        edge.label = "mutated"
+        emb.vector[0] = 0.999
+
+        assert (await store.get_node(node.id)).content == "original"
+        assert (await store.get_edges_from(node.id))[0].label == "cites"
+        assert (await store.get_embeddings_for_item(node.id))[0].vector == [0.1]
+
+    async def test_supersede_tx_does_not_alias_caller_objects(self, store):
+        old = Fact(content="old", source_id="s1")
+        await store.store_node(old)
+
+        new = Fact(content="new", source_id="s1")
+        new_emb = EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.2])
+        lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
+
+        await store.supersede_node_tx(
+            old_node=old,
+            new_node=new,
+            new_embedding=new_emb,
+            lineage_edge=lineage,
+            superseded_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        )
+
+        new.content = "mutated"
+        lineage.label = "mutated"
+
+        assert (await store.get_node(new.id)).content == "new"
+        assert (await store.get_edges_from(old.id))[0].label != "mutated"

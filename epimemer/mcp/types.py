@@ -13,7 +13,6 @@ class ResponseMeta(BaseModel):
     nodes_searched: int = 0
     nodes_returned: int = 0
     graph_hops: int = 0
-    llm_calls: int = 0
     latency_ms: float = 0.0
     source_types: dict[str, int] = Field(default_factory=dict)
 

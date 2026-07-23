@@ -5,6 +5,8 @@ no global state, easily testable. The MCP server layer in server.py
 calls these and wraps the results.
 """
 
+import asyncio
+
 from datetime import datetime
 
 from epimemer.core.types import (
@@ -29,9 +31,10 @@ from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.types import ResponseMeta
 from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment
-from epimemer.storage.protocol import StorageBackend
+from epimemer.storage.protocol import StorageBackend, validate_graph_name
 
-from petritype.core.executable_graph_components import ExecutableGraph, ExecutableGraphOperations
+from petritype.core.executable_graph_components import ExecutableGraph
+from petritype.runtime import RunContext, Runner
 
 from epimemer.visualization.event_bus import InProcessEventBus
 
@@ -40,27 +43,30 @@ async def _run_net(
     graph: ExecutableGraph,
     pipeline_name: str,
     event_bus: InProcessEventBus | None,
-    *,
-    max_transitions: int = 10,
 ) -> tuple[ExecutableGraph, int]:
-    """Execute a Petri net, optionally emitting visualization events.
+    """Execute a Petri net to quiescence, optionally emitting visualization events.
 
-    Redirects stdout to stderr during execution because Petritype has
-    debug print() statements that would corrupt MCP's stdio transport.
+    Runs until nothing is enabled. There is deliberately no transition budget:
+    a net that has stopped firing is finished, and a number chosen in advance is
+    either too small — truncating the pipeline and returning a partial result
+    with no error — or large enough never to matter.
+
+    Both paths are the same runner; the event bus only adds an observer, so
+    watching a pipeline cannot change what it computes.
+
+    Nothing here may write to stdout: MCP's stdio transport is stdout, so a
+    stray print corrupts the protocol. The engine's own progress prints are
+    gated behind `verbose`, which the runner leaves off, so no suppression is
+    needed — and suppressing it by swapping `sys.stdout` would be worse than the
+    problem, since that is process-global state mutated across `await` points.
     """
-    import sys
+    if event_bus is not None:
+        from epimemer.visualization.instrumented_executor import execute_with_events
+        return await execute_with_events(graph, event_bus, pipeline_name)
 
-    original_stdout = sys.stdout
-    sys.stdout = sys.stderr
-    try:
-        if event_bus is not None:
-            from epimemer.visualization.instrumented_executor import execute_with_events
-            return await execute_with_events(
-                graph, event_bus, pipeline_name, max_iterations=max_transitions,
-            )
-        return await ExecutableGraphOperations.execute_graph(graph, max_transitions=max_transitions)
-    finally:
-        sys.stdout = original_stdout
+    steps_before = graph.step_count
+    graph = await Runner.run_to_completion(RunContext(graph=graph))
+    return graph, graph.step_count - steps_before
 
 
 # --- Segment (step 1 of agent-driven ingest) ---
@@ -310,6 +316,80 @@ async def store_decomposition(
 # --- Search ---
 
 
+# Frame-scoped search over-fetches. Vector top-k is computed before the frame
+# filter runs, so a frame whose nodes rank below k would be dropped before the
+# filter ever saw them — the query comes back short, or empty. We pull a multiple
+# of k candidates and grow the fetch until k in-frame nodes survive or the vector
+# store is exhausted. A storage-level frame filter is the eventual answer; this
+# bounds the work until then. (Issue 13, REVIEW_EPISTEMIC.md §4.3.)
+_FRAME_SCOPE_OVERFETCH = 4
+_FRAME_SCOPE_MAX_K = 200
+
+
+async def _run_retrieval(
+    request,
+    embedding_provider: EmbeddingProvider,
+    storage: StorageBackend,
+    event_bus: InProcessEventBus | None,
+):
+    """Run the hybrid-retrieval net once and return its QueryResult."""
+    from epimemer.pipelines.query.hybrid_retrieval import hybrid_retrieval_net
+    from epimemer.pipelines.query.types import QueryResult
+
+    graph = hybrid_retrieval_net(request, embedding_provider, storage)
+    graph, _ = await _run_net(graph, "retrieval", event_bus)
+    result: QueryResult = graph.place_named("QueryResult").tokens[0]
+    return result
+
+
+async def _in_frame_nodes(
+    nodes: list[EpistemicNode], metacontext_id: str, storage: StorageBackend
+) -> list[EpistemicNode]:
+    """Nodes in `metacontext_id` or in untagged base reality (The Real).
+
+    Knowledge in the base frame applies everywhere; sibling frames are excluded.
+    `frames_of` is a storage round-trip per node, so the lookups are gathered
+    rather than awaited one at a time.
+    """
+    from epimemer.pipelines.reflection.review import frames_of
+
+    frame_sets = await asyncio.gather(
+        *(frames_of(node.id, storage) for node in nodes)
+    )
+    return [
+        node
+        for node, frames in zip(nodes, frame_sets)
+        if metacontext_id in frames or BASE_METACONTEXT_ID in frames
+    ]
+
+
+async def _retrieve_frame_scoped(
+    request,
+    embedding_provider: EmbeddingProvider,
+    storage: StorageBackend,
+    metacontext_id: str,
+    event_bus: InProcessEventBus | None,
+) -> tuple[list[EpistemicNode], object]:
+    """Retrieve in-frame nodes without being capped by the vector top-k.
+
+    Over-fetch candidates and grow the fetch until at least `request.k` in-frame
+    nodes survive the filter, or the store returns fewer hits than asked for
+    (exhausted), or the cap is hit. Returns the filtered nodes plus the final
+    QueryResult, whose edges and metadata describe the run that produced them.
+    """
+    k = request.k
+    fetch_k = min(k * _FRAME_SCOPE_OVERFETCH, _FRAME_SCOPE_MAX_K)
+    while True:
+        widened = request.model_copy(update={"k": fetch_k})
+        result = await _run_retrieval(widened, embedding_provider, storage, event_bus)
+        in_frame = await _in_frame_nodes(result.nodes, metacontext_id, storage)
+
+        exhausted = result.metadata.nodes_searched < fetch_k
+        if len(in_frame) >= k or exhausted or fetch_k >= _FRAME_SCOPE_MAX_K:
+            return in_frame, result
+        fetch_k = min(fetch_k * 2, _FRAME_SCOPE_MAX_K)
+
+
 async def search(
     query: str,
     storage: StorageBackend,
@@ -326,12 +406,13 @@ async def search(
 
     If metacontext_id is provided, results are frame-scoped to that metacontext
     plus untagged base-reality nodes (set cross_frame=True to ignore frames).
-    Metacontext labels and computed review labels (superseded_candidate /
-    evidence_stale / contested) are always included on returned nodes.
+    Frame-scoping over-fetches so an in-frame node ranked below the vector top-k
+    is still found (see `_retrieve_frame_scoped`). Metacontext labels and computed
+    review labels (superseded_candidate / evidence_stale / contested) are always
+    included on returned nodes.
     """
-    from epimemer.pipelines.query.hybrid_retrieval import hybrid_retrieval_net
-    from epimemer.pipelines.query.types import QueryRequest, QueryResult
-    from epimemer.pipelines.reflection.review import frames_of, review_labels
+    from epimemer.pipelines.query.types import QueryRequest
+    from epimemer.pipelines.reflection.review import review_labels
 
     # Map string node types to enums
     nt_enums = None
@@ -345,24 +426,18 @@ async def search(
         graph_hops=graph_hops,
         model_id=embedding_provider.model_id,
     )
-    graph = hybrid_retrieval_net(request, embedding_provider, storage)
-    graph, _ = await _run_net(graph, "retrieval", event_bus, max_transitions=3)
 
-    query_result: QueryResult = graph.place_named("QueryResult").tokens[0]
-
-    nodes = query_result.nodes
-    edges_data = [e.model_dump(mode="json") for e in query_result.edges]
-
-    # Frame-scoping: when scoped to a metacontext, return that frame plus untagged
-    # base-reality nodes (knowledge in The Real applies everywhere); sibling frames
-    # are excluded unless cross_frame is set. (REVIEW_EPISTEMIC.md §4.3)
     if metacontext_id and not cross_frame:
-        in_frame = []
-        for node in nodes:
-            node_frames = await frames_of(node.id, storage)
-            if metacontext_id in node_frames or BASE_METACONTEXT_ID in node_frames:
-                in_frame.append(node)
-        nodes = in_frame
+        nodes, query_result = await _retrieve_frame_scoped(
+            request, embedding_provider, storage, metacontext_id, event_bus
+        )
+    else:
+        query_result = await _run_retrieval(
+            request, embedding_provider, storage, event_bus
+        )
+        nodes = query_result.nodes
+
+    edges_data = [e.model_dump(mode="json") for e in query_result.edges]
 
     # Build node dicts with metacontext labels and computed review labels.
     nodes_data = []
@@ -1102,7 +1177,7 @@ async def apply_reflection(
 
         parent_topic = Topic(
             content=content,
-            source_id=children[0].source_id if hasattr(children[0], "source_id") else None,
+            source_id=children[0].source_id,
             extraction_method="agent:parent_synthesis",
             metadata={"synthesized_from": children_ids},
         )
@@ -1657,6 +1732,19 @@ async def graph_stats(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
     return result, meta
 
 
+def _reject_invalid_graph_name(name: str) -> tuple[dict, ResponseMeta] | None:
+    """Return an error response for an illegal graph name, else None.
+
+    The storage backends raise on these too (defence in depth); this layer turns
+    it into a result the calling agent can read and act on.
+    """
+    try:
+        validate_graph_name(name)
+    except ValueError as exc:
+        return {"status": "invalid_name", "message": str(exc)}, ResponseMeta()
+    return None
+
+
 async def list_graphs(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
     """List available knowledge graphs."""
     databases = await storage.list_databases()
@@ -1681,6 +1769,10 @@ async def use_graph(
     If the graph doesn't exist and confirm is False, returns a confirmation
     prompt with similar graph names. If confirm is True, creates the graph.
     """
+    invalid = _reject_invalid_graph_name(name)
+    if invalid is not None:
+        return invalid
+
     existing = await storage.list_databases()
 
     if name in existing:
@@ -1724,6 +1816,10 @@ async def delete_graph(
 
     Requires confirm=True. Refuses to delete the currently active graph.
     """
+    invalid = _reject_invalid_graph_name(name)
+    if invalid is not None:
+        return invalid
+
     existing = await storage.list_databases()
 
     if name not in existing:

@@ -47,8 +47,8 @@ async def apply_decay(
                 relevance=new_relevance,
                 last_reinforced=node.value.last_reinforced,
             )
-            # For InMemoryStorage the node is already mutated in place,
-            # but we store it back for correctness with other backends.
+            # No backend shares object identity with its callers, so the
+            # mutation above is local until it is written back.
             await storage.store_node(node)
             decayed_count += 1
 

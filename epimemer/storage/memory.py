@@ -7,9 +7,12 @@ Vector search uses brute-force cosine similarity.
 
 import copy
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Sequence
+from typing import Sequence, TypeVar
+
+from pydantic import BaseModel
 
 from epimemer.core.types import (
     EdgeType,
@@ -27,6 +30,37 @@ from epimemer.core.types import (
     Topic,
     migration_excluded,
 )
+from epimemer.storage.protocol import normalize_for_storage, validate_graph_name
+
+_M = TypeVar("_M", bound=BaseModel)
+
+
+def _copy(model: _M) -> _M:
+    """Deep-copy a record crossing the storage boundary.
+
+    The store must not share object identity with its callers in either
+    direction: a caller mutating a returned record would otherwise rewrite the
+    store with no write call, and mutating an object after storing it would
+    change what was stored. A serializing backend cannot behave that way, so
+    aliasing here would let code pass in-memory that is broken in production.
+    """
+    return model.model_copy(deep=True)
+
+
+def _store(model: _M) -> _M:
+    """Prepare a record for the store: normalized, then detached from the caller.
+
+    Writes go through here rather than `_copy` so this backend applies the same
+    None-dropping every backend does. Without it the in-memory store would be
+    *more* faithful than a serializing one, and a caller that wrote
+    `metadata={"note": None}` would read it back here and lose it in production
+    — exactly the kind of divergence that lets broken code pass its tests.
+    """
+    return _copy(normalize_for_storage(model))
+
+
+def _copy_all(models: Iterable[_M]) -> list[_M]:
+    return [m.model_copy(deep=True) for m in models]
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -72,6 +106,16 @@ class InMemoryStorage:
         self._database: str = _DEFAULT_DB
         self._graphs: dict[str, _GraphStore] = {_DEFAULT_DB: _GraphStore()}
 
+    # --- Lifecycle ---
+    # No external connection to manage; these exist so the full StorageBackend
+    # protocol is implemented and callers need no hasattr guards.
+
+    async def connect(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
     @property
     def _g(self) -> _GraphStore:
         """The active graph's data store."""
@@ -111,35 +155,39 @@ class InMemoryStorage:
     # --- Documents ---
 
     async def store_document(self, doc: RawDocument) -> str:
-        self._g.documents[doc.id] = doc
+        self._g.documents[doc.id] = _store(doc)
         return doc.id
 
     async def get_document(self, doc_id: str) -> RawDocument | None:
-        return self._g.documents.get(doc_id)
+        doc = self._g.documents.get(doc_id)
+        return None if doc is None else _copy(doc)
 
     async def get_document_by_source(self, source: str) -> RawDocument | None:
         for doc in self._g.documents.values():
             if doc.source == source:
-                return doc
+                return _copy(doc)
         return None
 
     # --- Segments ---
 
     async def store_segment(self, segment: Segment) -> str:
-        self._g.segments[segment.id] = segment
+        self._g.segments[segment.id] = _store(segment)
         return segment.id
 
     async def get_segments_for_document(self, doc_id: str) -> Sequence[Segment]:
-        return [s for s in self._g.segments.values() if s.source_id == doc_id]
+        return _copy_all(
+            s for s in self._g.segments.values() if s.source_id == doc_id
+        )
 
     # --- Epistemic Nodes ---
 
     async def store_node(self, node: EpistemicNode) -> str:
-        self._g.nodes[node.id] = node
+        self._g.nodes[node.id] = _store(node)
         return node.id
 
     async def get_node(self, node_id: str) -> EpistemicNode | None:
-        return self._g.nodes.get(node_id)
+        node = self._g.nodes.get(node_id)
+        return None if node is None else _copy(node)
 
     async def query_nodes(
         self,
@@ -168,7 +216,7 @@ class InMemoryStorage:
                     continue
 
             results.append(node)
-        return results
+        return _copy_all(results)
 
     async def get_node_by_content(
         self,
@@ -185,7 +233,7 @@ class InMemoryStorage:
                 node, _NODE_TYPE_TO_CLASS[node_type]
             ):
                 continue
-            return node
+            return _copy(node)
         return None
 
     async def query_changes(
@@ -209,7 +257,7 @@ class InMemoryStorage:
             )
             if born or retired:
                 results.append(node)
-        return results
+        return _copy_all(results)
 
     async def update_node_status(
         self,
@@ -257,7 +305,7 @@ class InMemoryStorage:
     # --- Edges ---
 
     async def store_edge(self, edge: NodeEdge) -> str:
-        self._g.edges[edge.id] = edge
+        self._g.edges[edge.id] = _store(edge)
         return edge.id
 
     async def delete_edge(self, edge_id: str) -> None:
@@ -266,18 +314,18 @@ class InMemoryStorage:
     async def get_edges_from(
         self, node_id: str, *, edge_type: EdgeType | None = None
     ) -> Sequence[NodeEdge]:
-        return [
+        return _copy_all(
             e for e in self._g.edges.values()
             if e.src_id == node_id and (edge_type is None or e.type == edge_type)
-        ]
+        )
 
     async def get_edges_to(
         self, node_id: str, *, edge_type: EdgeType | None = None
     ) -> Sequence[NodeEdge]:
-        return [
+        return _copy_all(
             e for e in self._g.edges.values()
             if e.dst_id == node_id and (edge_type is None or e.type == edge_type)
-        ]
+        )
 
     async def count_edges_by_type(self) -> dict[EdgeType, int]:
         counts = {et: 0 for et in EdgeType}
@@ -331,12 +379,12 @@ class InMemoryStorage:
                 raise KeyError(f"Node {old_node.id} not found")
             node.status = NodeStatus.SUPERSEDED
             node.superseded_at = superseded_at
-            self._g.nodes[new_node.id] = new_node
-            self._g.embeddings[new_embedding.id] = new_embedding
+            self._g.nodes[new_node.id] = _store(new_node)
+            self._g.embeddings[new_embedding.id] = _store(new_embedding)
             self._migrate_edges_inplace({old_node.id}, new_node.id)
-            self._g.edges[lineage_edge.id] = lineage_edge
+            self._g.edges[lineage_edge.id] = _store(lineage_edge)
             for edge in evidence_edges:
-                self._g.edges[edge.id] = edge
+                self._g.edges[edge.id] = _store(edge)
             for edge_id in clear_edge_ids:
                 self._g.edges.pop(edge_id, None)
         except Exception:
@@ -361,9 +409,9 @@ class InMemoryStorage:
             node.status = NodeStatus.SUPERSEDED
             node.superseded_at = superseded_at
             # No new node, no embedding, no migration — the existing node stands.
-            self._g.edges[lineage_edge.id] = lineage_edge
+            self._g.edges[lineage_edge.id] = _store(lineage_edge)
             for edge in evidence_edges:
-                self._g.edges[edge.id] = edge
+                self._g.edges[edge.id] = _store(edge)
             for edge_id in clear_edge_ids:
                 self._g.edges.pop(edge_id, None)
         except Exception:
@@ -381,8 +429,8 @@ class InMemoryStorage:
     ) -> None:
         snapshot = copy.deepcopy(self._g)
         try:
-            self._g.nodes[merged_node.id] = merged_node
-            self._g.embeddings[merged_embedding.id] = merged_embedding
+            self._g.nodes[merged_node.id] = _store(merged_node)
+            self._g.embeddings[merged_embedding.id] = _store(merged_embedding)
             # Migrate before writing lineage edges so they are not re-pointed.
             self._migrate_edges_inplace({s.id for s in source_nodes}, merged_node.id)
             for source in source_nodes:
@@ -392,7 +440,7 @@ class InMemoryStorage:
                 node.status = NodeStatus.MERGED
                 node.superseded_at = merged_at
             for edge in lineage_edges:
-                self._g.edges[edge.id] = edge
+                self._g.edges[edge.id] = _store(edge)
         except Exception:
             self._graphs[self._database] = snapshot
             raise
@@ -411,13 +459,13 @@ class InMemoryStorage:
         added_embeddings: list[str] = []
         try:
             for node in nodes:
-                self._g.nodes[node.id] = node
+                self._g.nodes[node.id] = _store(node)
                 added_nodes.append(node.id)
             for edge in edges:
-                self._g.edges[edge.id] = edge
+                self._g.edges[edge.id] = _store(edge)
                 added_edges.append(edge.id)
             for embedding in embeddings:
-                self._g.embeddings[embedding.id] = embedding
+                self._g.embeddings[embedding.id] = _store(embedding)
                 added_embeddings.append(embedding.id)
         except Exception:
             for node_id in added_nodes:
@@ -431,7 +479,7 @@ class InMemoryStorage:
     # --- Embeddings ---
 
     async def store_embedding(self, embedding: EmbeddingRecord) -> str:
-        self._g.embeddings[embedding.id] = embedding
+        self._g.embeddings[embedding.id] = _store(embedding)
         return embedding.id
 
     async def get_embeddings_for_item(
@@ -444,7 +492,7 @@ class InMemoryStorage:
             if model_id is not None and emb.model_id != model_id:
                 continue
             results.append(emb)
-        return results
+        return _copy_all(results)
 
     async def vector_search(
         self,
@@ -477,30 +525,34 @@ class InMemoryStorage:
     # --- Timelines ---
 
     async def store_timeline(self, timeline: Timeline) -> str:
-        self._g.timelines[timeline.id] = timeline
+        self._g.timelines[timeline.id] = _store(timeline)
         return timeline.id
 
     async def get_timeline(self, timeline_id: str) -> Timeline | None:
-        return self._g.timelines.get(timeline_id)
+        timeline = self._g.timelines.get(timeline_id)
+        return None if timeline is None else _copy(timeline)
 
     async def query_timelines(self) -> Sequence[Timeline]:
-        return list(self._g.timelines.values())
+        return _copy_all(self._g.timelines.values())
 
     # --- Metacontexts ---
 
     async def store_metacontext(self, mc: Metacontext) -> str:
-        self._g.metacontexts[mc.id] = mc
+        self._g.metacontexts[mc.id] = _store(mc)
         return mc.id
 
     async def get_metacontext(self, mc_id: str) -> Metacontext | None:
-        return self._g.metacontexts.get(mc_id)
+        mc = self._g.metacontexts.get(mc_id)
+        return None if mc is None else _copy(mc)
 
     async def query_metacontexts(
         self,
         *,
         status: NodeStatus = NodeStatus.ACTIVE,
     ) -> Sequence[Metacontext]:
-        return [mc for mc in self._g.metacontexts.values() if mc.status == status]
+        return _copy_all(
+            mc for mc in self._g.metacontexts.values() if mc.status == status
+        )
 
     # --- Multi-graph management ---
 
@@ -512,11 +564,13 @@ class InMemoryStorage:
         return sorted(self._graphs.keys())
 
     async def switch_database(self, database: str) -> None:
+        validate_graph_name(database)
         if database not in self._graphs:
             self._graphs[database] = _GraphStore()
         self._database = database
 
     async def delete_database(self, database: str) -> None:
+        validate_graph_name(database)
         if database == self._database:
             raise ValueError(f"Cannot delete the currently active graph '{database}'")
         if database not in self._graphs:

@@ -11,6 +11,7 @@ import type { EventRouter } from "./events";
 import type {
   PipelineStarted,
   PipelineCompleted,
+  PipelineFailed,
   TransitionFired,
   TransitionCompleted,
   TokensUpdated,
@@ -260,6 +261,15 @@ export const initPipelinePanel = (
     );
   };
 
+  const handlePipelineFailed = (event: PipelineFailed): void => {
+    // Terminal, like completion: clear the running state, but surface the error
+    // instead of a success so the pipeline doesn't read as still running.
+    state.activeTransition = null;
+    onStatusChange(
+      `Failed after ${event.transitions_fired} transitions: ${event.error}`,
+    );
+  };
+
   const handleEvent = (event: AnyEvent): void => {
     switch (event.event_type) {
       case "pipeline_started":
@@ -277,6 +287,9 @@ export const initPipelinePanel = (
       case "pipeline_completed":
         handlePipelineCompleted(event as PipelineCompleted);
         break;
+      case "pipeline_failed":
+        handlePipelineFailed(event as PipelineFailed);
+        break;
     }
   };
 
@@ -286,6 +299,7 @@ export const initPipelinePanel = (
     router.subscribe("transition_completed", handleEvent),
     router.subscribe("tokens_updated", handleEvent),
     router.subscribe("pipeline_completed", handleEvent),
+    router.subscribe("pipeline_failed", handleEvent),
   ];
 
   const clearPipeline = (): void => {

@@ -239,10 +239,26 @@ class TokensUpdated(Event):
 
 
 class PipelineCompleted(Event):
-    """A pipeline execution has finished."""
+    """A pipeline execution has finished successfully."""
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
     event_type: Literal["pipeline_completed"] = "pipeline_completed"
     pipeline_name: str
+    transitions_fired: int
+    duration_ms: float
+
+
+class PipelineFailed(Event):
+    """A pipeline execution ended by raising — terminal, like PipelineCompleted.
+
+    Kept distinct from `PipelineCompleted` so a consumer can clear the "running"
+    state *and* surface the error, rather than mistaking a failure for a success.
+    `transitions_fired` counts the transitions that fired before the raising one
+    (which did not fire).
+    """
+    category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
+    event_type: Literal["pipeline_failed"] = "pipeline_failed"
+    pipeline_name: str
+    error: str
     transitions_fired: int
     duration_ms: float
 
@@ -262,6 +278,6 @@ class GraphSwitched(Event):
 # --- Union of all concrete event types ---
 
 GraphEvent = NodeStored | NodeStatusChanged | EdgeStored | EmbeddingStored | DocumentStored | SegmentStored | GraphSwitched
-PipelineEvent = PipelineStarted | TransitionEnabled | TransitionFired | TransitionCompleted | TokensUpdated | PipelineCompleted
+PipelineEvent = PipelineStarted | TransitionEnabled | TransitionFired | TransitionCompleted | TokensUpdated | PipelineCompleted | PipelineFailed
 
 AnyEvent = GraphEvent | PipelineEvent

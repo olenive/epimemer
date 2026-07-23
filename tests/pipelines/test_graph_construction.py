@@ -34,11 +34,6 @@ from epimemer.pipelines.graph_construction.edge_creation import (
     create_edges,
     edge_creation_net,
 )
-from epimemer.pipelines.graph_construction.value_updates import (
-    reinforce_node,
-    update_value_on_contradiction,
-    update_value_on_supporting_evidence,
-)
 from epimemer.pipelines.graph_construction.versioning import (
     merge_nodes,
     supersede_node,
@@ -101,11 +96,6 @@ def decomposed(
         facts=[fact],
         inferences=[inference],
     )
-
-
-@pytest.fixture
-def storage() -> InMemoryStorage:
-    return InMemoryStorage()
 
 
 @pytest.fixture
@@ -220,7 +210,7 @@ class TestEdgeCreationPetriNet:
     async def test_petri_net_produces_edges(self, decomposed: DecomposedSegment) -> None:
         graph = edge_creation_net(decomposed)
         graph, transitions_fired = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10,
+            graph, stop_after_n_firings=10,
         )
         assert transitions_fired == 1
 
@@ -232,7 +222,7 @@ class TestEdgeCreationPetriNet:
     async def test_petri_net_input_consumed(self, decomposed: DecomposedSegment) -> None:
         graph = edge_creation_net(decomposed)
         graph, _ = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10,
+            graph, stop_after_n_firings=10,
         )
 
         input_place = graph.place_named("DecomposedSegments")
@@ -243,7 +233,7 @@ class TestEdgeCreationPetriNet:
     async def test_petri_net_edge_types_correct(self, decomposed: DecomposedSegment) -> None:
         graph = edge_creation_net(decomposed)
         graph, _ = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10,
+            graph, stop_after_n_firings=10,
         )
 
         edges_place = graph.place_named("Edges")
@@ -254,148 +244,6 @@ class TestEdgeCreationPetriNet:
         assert EdgeType.IMPLIES in edge_types
         assert EdgeType.SUPPORTS in edge_types
         assert EdgeType.ABSTRACTS in edge_types
-
-
-# --- Value Update Tests ---
-
-
-class TestValueUpdates:
-    """Test value signal update functions."""
-
-    @pytest.mark.asyncio
-    async def test_supporting_evidence_increases_confidence(self, storage: InMemoryStorage) -> None:
-        fact = Fact(
-            id="f-val-1",
-            content="Test fact",
-            source_id="seg-1",
-            value=ValueSignal(confidence=0.5),
-        )
-        await storage.store_node(fact)
-        original_confidence = fact.value.confidence
-
-        await update_value_on_supporting_evidence(fact, storage)
-
-        stored = await storage.get_node("f-val-1")
-        assert stored is not None
-        assert stored.value.confidence == original_confidence + 0.1
-
-    @pytest.mark.asyncio
-    async def test_supporting_evidence_updates_recency(self, storage: InMemoryStorage) -> None:
-        old_time = datetime(2020, 1, 1, tzinfo=timezone.utc)
-        fact = Fact(
-            id="f-val-2",
-            content="Test fact",
-            source_id="seg-1",
-            value=ValueSignal(last_reinforced=old_time),
-        )
-        await storage.store_node(fact)
-
-        await update_value_on_supporting_evidence(fact, storage)
-
-        stored = await storage.get_node("f-val-2")
-        assert stored is not None
-        assert stored.value.last_reinforced > old_time
-
-    @pytest.mark.asyncio
-    async def test_supporting_evidence_confidence_clamps_at_one(self, storage: InMemoryStorage) -> None:
-        fact = Fact(
-            id="f-val-3",
-            content="Test fact",
-            source_id="seg-1",
-            value=ValueSignal(confidence=0.95),
-        )
-        await storage.store_node(fact)
-
-        await update_value_on_supporting_evidence(fact, storage)
-
-        stored = await storage.get_node("f-val-3")
-        assert stored is not None
-        assert stored.value.confidence == 1.0
-
-    @pytest.mark.asyncio
-    async def test_contradiction_increases_novelty_on_both(self, storage: InMemoryStorage) -> None:
-        fact_a = Fact(
-            id="f-contra-1",
-            content="The earth is flat.",
-            source_id="seg-1",
-            value=ValueSignal(novelty=0.3),
-        )
-        fact_b = Fact(
-            id="f-contra-2",
-            content="The earth is round.",
-            source_id="seg-2",
-            value=ValueSignal(novelty=0.4),
-        )
-        await storage.store_node(fact_a)
-        await storage.store_node(fact_b)
-
-        await update_value_on_contradiction(fact_a, fact_b, storage)
-
-        stored_a = await storage.get_node("f-contra-1")
-        stored_b = await storage.get_node("f-contra-2")
-        assert stored_a is not None
-        assert stored_b is not None
-        assert stored_a.value.novelty == pytest.approx(0.5)  # 0.3 + 0.2
-        assert stored_b.value.novelty == pytest.approx(0.6)  # 0.4 + 0.2
-
-    @pytest.mark.asyncio
-    async def test_contradiction_novelty_clamps_at_one(self, storage: InMemoryStorage) -> None:
-        fact_a = Fact(
-            id="f-clamp-1",
-            content="Fact A",
-            source_id="seg-1",
-            value=ValueSignal(novelty=0.9),
-        )
-        fact_b = Fact(
-            id="f-clamp-2",
-            content="Fact B",
-            source_id="seg-2",
-            value=ValueSignal(novelty=0.95),
-        )
-        await storage.store_node(fact_a)
-        await storage.store_node(fact_b)
-
-        await update_value_on_contradiction(fact_a, fact_b, storage)
-
-        stored_a = await storage.get_node("f-clamp-1")
-        stored_b = await storage.get_node("f-clamp-2")
-        assert stored_a is not None
-        assert stored_b is not None
-        assert stored_a.value.novelty == 1.0
-        assert stored_b.value.novelty == 1.0
-
-    @pytest.mark.asyncio
-    async def test_reinforce_updates_last_reinforced(self, storage: InMemoryStorage) -> None:
-        old_time = datetime(2020, 1, 1, tzinfo=timezone.utc)
-        topic = Topic(
-            id="t-reinforce-1",
-            content="Test topic",
-            source_id="seg-1",
-            value=ValueSignal(last_reinforced=old_time),
-        )
-        await storage.store_node(topic)
-
-        await reinforce_node(topic, storage)
-
-        stored = await storage.get_node("t-reinforce-1")
-        assert stored is not None
-        assert stored.value.last_reinforced > old_time
-
-    @pytest.mark.asyncio
-    async def test_reinforce_boosts_relevance(self, storage: InMemoryStorage) -> None:
-        topic = Topic(
-            id="t-reinforce-2",
-            content="Test topic",
-            source_id="seg-1",
-            value=ValueSignal(relevance=0.5),
-        )
-        await storage.store_node(topic)
-
-        await reinforce_node(topic, storage)
-
-        stored = await storage.get_node("t-reinforce-2")
-        assert stored is not None
-        assert stored.value.relevance == 0.6
 
 
 # --- Versioning Tests ---

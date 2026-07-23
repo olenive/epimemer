@@ -31,6 +31,8 @@ from epimemer.core.types import (
     Topic,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
+from epimemer.mcp import tools
+from epimemer.pipelines.graph_construction.versioning import supersede_by_existing
 from epimemer.pipelines.query.graph_expansion import expand_via_graph
 from epimemer.pipelines.query.hybrid_retrieval import hybrid_retrieval_net
 from epimemer.pipelines.query.types import QueryRequest, QueryResult
@@ -259,6 +261,53 @@ async def test_graph_expansion_does_not_revisit_nodes(populated_graph):
     assert node_ids.count("topic-1") == 1
 
 
+async def test_graph_expansion_excludes_non_active_neighbors(embedding_provider):
+    """Retired nodes must not come back one hop away.
+
+    `supersede_by_existing` deliberately does NOT migrate the loser's edges (the
+    winner carries its own evidence), so a superseded node keeps its knowledge
+    edges to active nodes. Without a status filter on the graph-hop path, any
+    search reaching the active neighbour drags the retired node back into the
+    results — the status guard on the vector path does not cover this.
+    """
+    storage = InMemoryStorage()
+
+    fact_a = Fact(id="fact-a", content="A", source_id="doc-1")
+    fact_b = Fact(id="fact-b", content="B", source_id="doc-1")
+    inference = Inference(id="inf-1", content="I", source_id="doc-1")
+    for node in (fact_a, fact_b, inference):
+        await storage.store_node(node)
+
+    supports = NodeEdge(
+        id="edge-a-i",
+        src_id="fact-a",
+        dst_id="inf-1",
+        type=EdgeType.SUPPORTS,
+    )
+    await storage.store_edge(supports)
+
+    await supersede_by_existing(fact_a, "fact-b", storage)
+    assert (await storage.get_node("fact-a")).status is NodeStatus.SUPERSEDED
+    # The edge survives supersession by design — that is what makes this a bug.
+    assert any(e.id == "edge-a-i" for e in await storage.get_edges_to("inf-1"))
+
+    seed = await storage.get_node("inf-1")
+    nodes, edges = await expand_via_graph(
+        seed_nodes=[seed],
+        storage=storage,
+        hops=1,
+    )
+
+    assert "fact-a" not in {n.id for n in nodes}
+    # An edge to a hidden node is dangling noise — drop it too.
+    assert "edge-a-i" not in {e.id for e in edges}
+
+    # Same guarantee through the tool layer, which is where an agent sees it.
+    result, _ = await tools.query_graph("inf-1", storage, hops=1)
+    assert "fact-a" not in {n["id"] for n in result["nodes"]}
+    assert "edge-a-i" not in {e["id"] for e in result["edges"]}
+
+
 # --- Hybrid Petri net tests ---
 
 
@@ -274,7 +323,7 @@ async def test_hybrid_retrieval_end_to_end(populated_graph):
     graph = hybrid_retrieval_net(request, emb_provider, storage)
 
     # Execute all 3 transitions
-    graph, fired = await ExecutableGraphOperations.execute_graph(graph, max_transitions=3)
+    graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=3)
 
     assert fired == 3
 
@@ -297,7 +346,7 @@ async def test_hybrid_retrieval_metadata_counts(populated_graph):
         graph_hops=1,
     )
     graph = hybrid_retrieval_net(request, emb_provider, storage)
-    graph, fired = await ExecutableGraphOperations.execute_graph(graph, max_transitions=3)
+    graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=3)
 
     result = graph.place_named("QueryResult").tokens[0]
     metadata = result.metadata
@@ -335,17 +384,17 @@ async def test_hybrid_retrieval_tokens_flow_correctly(populated_graph):
     assert len(graph.place_named("QueryResult").tokens) == 0
 
     # After transition 1: VectorResults has a token
-    graph, _ = await ExecutableGraphOperations.execute_graph(graph, max_transitions=1)
+    graph, _ = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=1)
     assert len(graph.place_named("QueryRequest").tokens) == 0
     assert len(graph.place_named("VectorResults").tokens) == 1
 
     # After transition 2: ExpandedResults has a token
-    graph, _ = await ExecutableGraphOperations.execute_graph(graph, max_transitions=1)
+    graph, _ = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=1)
     assert len(graph.place_named("VectorResults").tokens) == 0
     assert len(graph.place_named("ExpandedResults").tokens) == 1
 
     # After transition 3: QueryResult has a token
-    graph, _ = await ExecutableGraphOperations.execute_graph(graph, max_transitions=1)
+    graph, _ = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=1)
     assert len(graph.place_named("ExpandedResults").tokens) == 0
     assert len(graph.place_named("QueryResult").tokens) == 1
 

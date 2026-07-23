@@ -20,7 +20,6 @@ class ToolInvocationLog(BaseModel):
     output_summary: str = ""
     latency_ms: float = 0.0
     nodes_touched: int = 0
-    llm_calls: int = 0
     error: str | None = None
 
 
