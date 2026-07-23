@@ -12,7 +12,6 @@ from epimemer.core.types import (
     EpistemicNode,
     NodeEdge,
     Topic,
-    union_unique,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.storage.protocol import StorageBackend
@@ -52,11 +51,8 @@ async def supersede_node(
 
     now = datetime.now(timezone.utc)
 
-    # Carry provenance/tags forward so a correction keeps its predecessor's
-    # sources and labels (correct by construction, like edge migration below).
-    new_node.provenance = union_unique(old_node.provenance, new_node.provenance)
-    new_node.tags = union_unique(old_node.tags, new_node.tags)
-
+    # Sources, tags, and relationships ride along via edge migration below
+    # (sourced_from / tagged_with / user edges are migrated, not version-anchored).
     vectors = await embedding_provider.embed([new_node.content])
     new_embedding = EmbeddingRecord(
         item_id=new_node.id,
@@ -144,12 +140,8 @@ async def merge_nodes(
     """
     now = datetime.now(timezone.utc)
 
-    # The merged node carries the union of its sources' provenance and tags.
-    merged_node.provenance = union_unique(
-        *[s.provenance for s in source_nodes], merged_node.provenance
-    )
-    merged_node.tags = union_unique(*[s.tags for s in source_nodes], merged_node.tags)
-
+    # The merged node inherits its sources' sources/tags/relationships via edge
+    # migration below (sourced_from / tagged_with / user edges are migrated).
     vectors = await embedding_provider.embed([merged_node.content])
     merged_embedding = EmbeddingRecord(
         item_id=merged_node.id,

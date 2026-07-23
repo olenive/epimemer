@@ -19,18 +19,11 @@ from epimemer.core.types import (
     NodeEdge,
     NodeStatus,
     NodeType,
-    Provenance,
     RawDocument,
     Segment,
-    Tag,
     Timeline,
     Topic,
     ValueSignal,
-    parse_tag,
-    provenance_matches,
-    tag_matches,
-    tag_satisfies,
-    union_unique,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.mcp.config import ServerConfig
@@ -81,6 +74,7 @@ async def segment_text(
     *,
     source: str | None = None,
     source_type: str | None = None,
+    published_by: str | None = None,
     metadata: dict | None = None,
     segmentation_strategy: str | None = None,
     event_bus: InProcessEventBus | None = None,
@@ -91,8 +85,10 @@ async def segment_text(
     receives the segments, extracts topics/facts/inferences itself, then
     calls store_decomposition (step 2).
 
-    source/source_type record where this text came from; they are stamped as
-    provenance onto every node derived from it in store_decomposition.
+    source/source_type describe the originating document; every node decomposed
+    from it gets a `sourced_from` edge to this document. `published_by` names a
+    publishing/authoring entity — resolved-or-created as an entity Topic and linked
+    to the document by a `published_by` (attribution) edge.
     """
     from epimemer.pipelines.segmentation.paragraph_split import paragraph_split_segmentation_net
     from epimemer.pipelines.segmentation.semantic_similarity import semantic_similarity_segmentation_net
@@ -103,6 +99,13 @@ async def segment_text(
         content=content, source=source, source_type=source_type, metadata=metadata or {},
     )
     await storage.store_document(doc)
+
+    if published_by:
+        entity = await _upsert_entity_topic(published_by, storage, embedding_provider)
+        await storage.store_edge(NodeEdge(
+            src_id=doc.id, dst_id=entity.id, type=EdgeType.RELATED,
+            label="published_by", kind="attribution",
+        ))
 
     if strategy == "semantic":
         seg_graph = semantic_similarity_segmentation_net(doc, embedding_provider)
@@ -131,14 +134,35 @@ async def segment_text(
 # --- Store Decomposition (step 2 of agent-driven ingest) ---
 
 
-def _content_and_tags(entry) -> tuple[str, list[Tag]]:
-    """Extract (content, tags) from a decomposition entry.
+async def _upsert_entity_topic(
+    name: str,
+    storage: StorageBackend,
+    embedding_provider: EmbeddingProvider,
+    *,
+    extraction_method: str = "agent:source",
+) -> Topic:
+    """Resolve-or-create (by exact name) an entity Topic and persist it directly.
 
-    An entry is either a bare content string, or an object
-    {"content": str, "tags": [str, ...]} carrying per-node tags.
+    Used for source/publisher entities at segment time. Exact-name match means a
+    repeated name reuses one node; fuzzy duplicates are merged later by reflect.
     """
+    existing = await storage.get_node_by_content(name, node_type=NodeType.TOPIC)
+    if isinstance(existing, Topic):
+        return existing
+    topic = Topic(content=name, source_id=None, extraction_method=extraction_method)
+    await storage.store_node(topic)
+    vec = (await embedding_provider.embed([name]))[0]
+    await storage.store_embedding(EmbeddingRecord(
+        item_id=topic.id, model_id=embedding_provider.model_id, vector=vec,
+    ))
+    return topic
+
+
+def _content_and_tags(entry) -> tuple[str, list[str]]:
+    """Extract (content, tag names) from a decomposition entry: a bare content
+    string, or {"content": str, "tags": [name, ...]} for per-node tags."""
     if isinstance(entry, dict):
-        return entry["content"], [parse_tag(t) for t in entry.get("tags", [])]
+        return entry["content"], list(entry.get("tags", []))
     return entry, []
 
 
@@ -156,21 +180,15 @@ async def store_decomposition(
 
     Each entry in segments should have:
         segment_id: str
-        topics:     list of str, or {"content": str, "tags": [str, ...]}
-        facts:      same
-        inferences: same
+        topics/facts/inferences: each a content string, or {"content": str,
+            "tags": [name, ...]} for per-node tags.
 
-    Provenance is stamped on every node from the document's source/source_type.
-    `tags` are document-level tags applied to all nodes; per-node tags may also be
-    given via the object form of an entry. Tag strings parse as "key=value" or a
-    bare "value". Creates typed nodes, edges, and embeddings for everything.
+    Every node gets a `sourced_from` edge to the originating document. `tags`
+    (document-level) and per-node tags are resolved-or-created (by exact name) as
+    Topics linked by `tagged_with` edges, so a repeated tag reuses one Topic.
+    Everything is persisted in one atomic write.
     """
     from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment, edge_creation_net
-
-    total_topics = 0
-    total_facts = 0
-    total_inferences = 0
-    total_edges = 0
 
     # Accumulate the whole document's writes, then persist them atomically so a
     # mid-document failure cannot leave a partial graph.
@@ -181,44 +199,53 @@ async def store_decomposition(
     stored_segments = await storage.get_segments_for_document(document_id)
     segments_by_id = {s.id: s for s in stored_segments}
 
-    # Provenance for every node, derived from the document being decomposed.
-    doc = await storage.get_document(document_id)
-    provenance = [Provenance(
-        source=(doc.source if doc and doc.source else document_id),
-        source_type=(doc.source_type if doc and doc.source_type else "document"),
-        source_id=document_id,
-    )]
-    doc_tags = [parse_tag(t) for t in (tags or [])]
+    total_topics = total_facts = total_inferences = 0
+    doc_tag_names = list(tags or [])
+    tag_cache: dict[str, Topic] = {}
 
-    def _build(cls, entry):
-        content, node_tags = _content_and_tags(entry)
-        return cls(
-            content=content, source_id=segment_id, extraction_method="agent",
-            provenance=list(provenance), tags=doc_tags + node_tags,
-        )
+    async def _tag_topic(name: str) -> Topic:
+        """Resolve-or-create a tag Topic, adding new ones to the batch."""
+        if name in tag_cache:
+            return tag_cache[name]
+        existing = await storage.get_node_by_content(name, node_type=NodeType.TOPIC)
+        if isinstance(existing, Topic):
+            tag_cache[name] = existing
+            return existing
+        topic = Topic(content=name, source_id=None, extraction_method="agent:tag")
+        tag_cache[name] = topic
+        batch_nodes.append(topic)
+        vec = (await embedding_provider.embed([name]))[0]
+        batch_embeddings.append(EmbeddingRecord(
+            item_id=topic.id, model_id=embedding_provider.model_id, vector=vec,
+        ))
+        return topic
 
     for seg_data in segments:
         segment_id = seg_data["segment_id"]
-        raw_topics = seg_data.get("topics", [])
-        raw_facts = seg_data.get("facts", [])
-        raw_inferences = seg_data.get("inferences", [])
-
-        topics = [_build(Topic, e) for e in raw_topics]
-        facts = [_build(Fact, e) for e in raw_facts]
-        inferences = [_build(Inference, e) for e in raw_inferences]
-
         segment = segments_by_id.get(segment_id)
         if segment is None:
             raise ValueError(f"Segment '{segment_id}' not found for document '{document_id}'")
 
-        decomposed = DecomposedSegment(
-            segment=segment,
-            topics=topics,
-            facts=facts,
-            inferences=inferences,
-        )
+        topics: list[Topic] = []
+        facts: list[Fact] = []
+        inferences: list[Inference] = []
+        tag_assignments: list[tuple[EpistemicNode, list[str]]] = []
+        for cls, entries, bucket in (
+            (Topic, seg_data.get("topics", []), topics),
+            (Fact, seg_data.get("facts", []), facts),
+            (Inference, seg_data.get("inferences", []), inferences),
+        ):
+            for entry in entries:
+                content, node_tag_names = _content_and_tags(entry)
+                node = cls(content=content, source_id=segment_id, extraction_method="agent")
+                bucket.append(node)
+                names = doc_tag_names + node_tag_names
+                if names:
+                    tag_assignments.append((node, names))
 
-        # Create edges via Petri net
+        decomposed = DecomposedSegment(
+            segment=segment, topics=topics, facts=facts, inferences=inferences,
+        )
         edge_graph = edge_creation_net(decomposed)
         edge_graph, _ = await _run_net(edge_graph, "edge_creation", event_bus)
         edges: list[NodeEdge] = list(edge_graph.place_named("Edges").tokens)
@@ -227,31 +254,35 @@ async def store_decomposition(
         batch_nodes.extend(seg_nodes)
         batch_edges.extend(edges)
 
-        # Embed all nodes
         if seg_nodes:
-            texts = [n.content for n in seg_nodes]
-            vectors = await embedding_provider.embed(texts)
+            vectors = await embedding_provider.embed([n.content for n in seg_nodes])
             for node, vector in zip(seg_nodes, vectors):
                 batch_embeddings.append(EmbeddingRecord(
-                    item_id=node.id,
-                    model_id=embedding_provider.model_id,
-                    vector=vector,
+                    item_id=node.id, model_id=embedding_provider.model_id, vector=vector,
                 ))
 
-        # Add metacontext edges if specified
-        if metacontext_id and seg_nodes:
+        # Provenance: every node is sourced_from the originating document.
+        for node in seg_nodes:
+            batch_edges.append(NodeEdge(
+                src_id=node.id, dst_id=document_id, type=EdgeType.SOURCED_FROM,
+            ))
+        # Tags: each becomes (or reuses) a Topic linked by tagged_with.
+        for node, names in tag_assignments:
+            for name in names:
+                topic = await _tag_topic(name)
+                batch_edges.append(NodeEdge(
+                    src_id=node.id, dst_id=topic.id, type=EdgeType.TAGGED_WITH,
+                ))
+        # Optional metacontext framing.
+        if metacontext_id:
             for node in seg_nodes:
                 batch_edges.append(NodeEdge(
-                    src_id=node.id,
-                    dst_id=metacontext_id,
-                    type=EdgeType.HAS_METACONTEXT,
+                    src_id=node.id, dst_id=metacontext_id, type=EdgeType.HAS_METACONTEXT,
                 ))
-            total_edges += len(seg_nodes)
 
         total_topics += len(topics)
         total_facts += len(facts)
         total_inferences += len(inferences)
-        total_edges += len(edges)
 
     # One atomic write for the entire document.
     await storage.write_batch_tx(
@@ -266,7 +297,7 @@ async def store_decomposition(
     result = {
         "document_id": document_id,
         "nodes_created": nodes_created,
-        "edges_created": total_edges,
+        "edges_created": len(batch_edges),
     }
     meta = ResponseMeta(
         nodes_returned=total_topics + total_facts + total_inferences,
@@ -289,16 +320,12 @@ async def search(
     graph_hops: int = 1,
     metacontext_id: str | None = None,
     cross_frame: bool = False,
-    tags: list[str] | None = None,
-    source: str | None = None,
-    source_type: str | None = None,
     event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Search the memory graph via hybrid retrieval (vector + graph expansion).
 
     If metacontext_id is provided, results are frame-scoped to that metacontext
     plus untagged base-reality nodes (set cross_frame=True to ignore frames).
-    tags/source/source_type further restrict results by label and provenance.
     Metacontext labels and computed review labels (superseded_candidate /
     evidence_stale / contested) are always included on returned nodes.
     """
@@ -336,14 +363,6 @@ async def search(
             if metacontext_id in node_frames or BASE_METACONTEXT_ID in node_frames:
                 in_frame.append(node)
         nodes = in_frame
-
-    # Tag / provenance filtering (same matchers as the storage layer).
-    if tags:
-        nodes = [n for n in nodes if tag_matches(n, tags)]
-    if source is not None or source_type is not None:
-        nodes = [
-            n for n in nodes if provenance_matches(n, source=source, source_type=source_type)
-        ]
 
     # Build node dicts with metacontext labels and computed review labels.
     nodes_data = []
@@ -428,18 +447,14 @@ async def query_changes(
     storage: StorageBackend,
     *,
     node_types: list[str] | None = None,
-    tags: list[str] | None = None,
-    source: str | None = None,
-    source_type: str | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """What changed (births + retirements) in one or more time windows.
 
     For each half-open window [start, end), returns the nodes whose creation or
     retirement fell inside it, each tagged with the specific lifecycle event(s)
     and enriched with metacontext + review labels (these are current nodes, so
-    present-state labels are accurate). tags/source/source_type further restrict
-    results. Results are grouped per window; a node that changed in several
-    windows appears in each.
+    present-state labels are accurate). Results are grouped per window; a node
+    that changed in several windows appears in each.
     """
     from epimemer.pipelines.reflection.review import review_labels
 
@@ -456,12 +471,6 @@ async def query_changes(
 
         changes = []
         for node in seen.values():
-            if tags and not tag_matches(node, tags):
-                continue
-            if (source is not None or source_type is not None) and not provenance_matches(
-                node, source=source, source_type=source_type
-            ):
-                continue
             node_dict = _node_to_dict(node)
             node_dict["events"] = [
                 e.model_dump(mode="json") for e in events_in_window(node, start, end)
@@ -489,70 +498,122 @@ async def query_changes(
     return result, meta
 
 
-# --- Tag / provenance queries ---
+# --- Source / topic / relation queries ---
+
+
+async def _resolve_hub_id(value: str, storage: StorageBackend) -> str:
+    """Resolve a hub reference to an id: a node id, a Topic name, or a document's
+    source name (e.g. "ISSUES.md"). Falls back to the raw value if none match.
+    """
+    if await storage.get_node(value) is not None:
+        return value
+    topic = await storage.get_node_by_content(value, node_type=NodeType.TOPIC)
+    if isinstance(topic, Topic):
+        return topic.id
+    doc = await storage.get_document_by_source(value)
+    if doc is not None:
+        return doc.id
+    return value
 
 
 async def find_nodes(
     storage: StorageBackend,
     *,
-    tags: list[str] | None = None,
-    source: str | None = None,
-    source_type: str | None = None,
+    sourced_from: str | None = None,
+    tagged_with: str | None = None,
     node_types: list[str] | None = None,
     status: str = "active",
     limit: int = 50,
 ) -> tuple[dict, ResponseMeta]:
-    """List nodes by tags/provenance — a non-semantic filtered listing.
+    """Find nodes connected to a source or topic hub by graph traversal.
 
-    Unlike search (vector similarity), this returns exactly the nodes matching
-    the given tags and/or provenance source — e.g. "all nodes that came from
-    ISSUES.md". Each returned node carries its provenance and tags.
+    `sourced_from` (a document/entity id or name) returns the nodes with a
+    `sourced_from` edge to it — "which nodes came from X". `tagged_with` (a Topic
+    id or name) returns the nodes tagged with that concept. A native graph query,
+    replacing the old string-filter listing.
     """
-    nt_enums = [NodeType(t) for t in node_types] if node_types else [None]
+    if tagged_with is not None:
+        hub_id = await _resolve_hub_id(tagged_with, storage)
+        edge_type = EdgeType.TAGGED_WITH
+    elif sourced_from is not None:
+        hub_id = await _resolve_hub_id(sourced_from, storage)
+        edge_type = EdgeType.SOURCED_FROM
+    else:
+        raise ValueError("find_nodes requires sourced_from or tagged_with")
+
     st = NodeStatus(status)
+    allowed = set(node_types) if node_types else None
 
     nodes: list[EpistemicNode] = []
-    for nt in nt_enums:
-        nodes.extend(await storage.query_nodes(
-            node_type=nt, status=st, tags=tags, source=source, source_type=source_type,
-        ))
-    nodes = nodes[:limit]
+    seen: set[str] = set()
+    for edge in await storage.get_edges_to(hub_id, edge_type=edge_type):
+        if edge.src_id in seen:
+            continue
+        seen.add(edge.src_id)
+        node = await storage.get_node(edge.src_id)
+        if node is None or node.status != st:
+            continue
+        if allowed and _node_type_key(node) not in allowed:
+            continue
+        nodes.append(node)
+        if len(nodes) >= limit:
+            break
 
     source_types: dict[str, int] = {}
     for node in nodes:
         key = _node_type_key(node)
         source_types[key] = source_types.get(key, 0) + 1
-
     result = {"nodes": [_node_to_dict(n) for n in nodes]}
     meta = ResponseMeta(nodes_returned=len(nodes), source_types=source_types)
     return result, meta
 
 
-async def list_tags(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
-    """Discover the distinct tags and provenance sources in the active graph.
+async def list_sources(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
+    """Distinct source/origin nodes with how many nodes reference each — the
+    documents nodes are `sourced_from`, plus entities linked by attribution edges
+    (e.g. published_by). Discovery before find_nodes."""
+    counts: dict[str, int] = {}
+    for node in await storage.query_nodes():
+        for e in await storage.get_edges_from(node.id, edge_type=EdgeType.SOURCED_FROM):
+            counts[e.dst_id] = counts.get(e.dst_id, 0) + 1
+        for e in await storage.get_edges_to(node.id):
+            if e.type == EdgeType.RELATED and e.kind == "attribution":
+                counts[node.id] = counts.get(node.id, 0) + 1
 
-    Returns tags grouped by key (the "" key holds bare, keyless tags) plus the
-    distinct provenance sources and source types — so you can see what exists
-    before filtering with find_nodes / search.
-    """
-    nodes = await storage.query_nodes()  # all active nodes
+    sources = []
+    for dst_id, count in sorted(counts.items(), key=lambda kv: -kv[1]):
+        doc = await storage.get_document(dst_id)
+        node = await storage.get_node(dst_id)
+        name = (doc.source if doc and doc.source else None) or (
+            node.content if node else dst_id
+        )
+        kind = "document" if doc else ("entity" if node else "unknown")
+        sources.append({"id": dst_id, "name": name, "kind": kind, "node_count": count})
 
-    by_key: dict[str, set[str]] = {}
-    sources: set[str] = set()
-    source_types: set[str] = set()
-    for node in nodes:
-        for t in node.tags:
-            by_key.setdefault(t.key or "", set()).add(t.value)
-        for p in node.provenance:
-            sources.add(p.source)
-            source_types.add(p.source_type)
+    result = {"sources": sources}
+    meta = ResponseMeta(nodes_returned=len(sources))
+    return result, meta
 
-    result = {
-        "tags": {k: sorted(v) for k, v in sorted(by_key.items())},
-        "sources": sorted(sources),
-        "source_types": sorted(source_types),
-    }
-    meta = ResponseMeta(nodes_returned=len(nodes))
+
+async def list_relations(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
+    """Distinct user-tier relationship labels (with kind + usage count) — discovery
+    before coining a new label or consolidating synonyms via apply_reflection."""
+    counts: dict[tuple[str, str], int] = {}
+    seen_edges: set[str] = set()
+    for node in await storage.query_nodes():
+        for e in list(await storage.get_edges_from(node.id)) + list(
+            await storage.get_edges_to(node.id)
+        ):
+            if e.type == EdgeType.RELATED and e.id not in seen_edges:
+                seen_edges.add(e.id)
+                counts[(e.label or "", e.kind)] = counts.get((e.label or "", e.kind), 0) + 1
+
+    relations = [
+        {"label": label, "kind": kind, "count": c}
+        for (label, kind), c in sorted(counts.items(), key=lambda kv: -kv[1])
+    ]
+    result = {"relations": relations}
+    meta = ResponseMeta(nodes_returned=len(relations))
     return result, meta
 
 
@@ -562,39 +623,54 @@ async def list_tags(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
 async def link(
     src_id: str,
     dst_id: str,
-    edge_type: str,
     storage: StorageBackend,
     *,
+    edge_type: str | None = None,
+    relation: str | None = None,
+    kind: str = "relationship",
     weight: float = 1.0,
     metadata: dict | None = None,
 ) -> tuple[dict, ResponseMeta]:
-    """Create a direct edge between two existing nodes."""
-    # Validate edge type
-    try:
-        et = EdgeType(edge_type)
-    except ValueError:
-        valid = [e.value for e in EdgeType]
-        raise ValueError(f"Invalid edge_type '{edge_type}'. Valid types: {valid}")
+    """Create a direct edge between two existing nodes.
+
+    Give either `edge_type` (a known engine EdgeType) or `relation` (a free
+    user-defined label → a RELATED edge). For a user relation, `kind` is
+    "relationship" (followed in retrieval) or "attribution" (not); a label already
+    in use reuses its existing kind (set once per label).
+    """
+    if relation is not None:
+        et = EdgeType.RELATED
+        resolved_kind = await storage.get_relation_kind(relation) or kind
+        label = relation
+    elif edge_type is not None:
+        try:
+            et = EdgeType(edge_type)
+        except ValueError:
+            valid = [e.value for e in EdgeType]
+            raise ValueError(f"Invalid edge_type '{edge_type}'. Valid types: {valid}")
+        resolved_kind = "relationship"
+        label = None
+    else:
+        raise ValueError("link requires either edge_type or relation")
 
     # Verify both nodes exist
-    src_node = await storage.get_node(src_id)
-    if src_node is None:
+    if await storage.get_node(src_id) is None:
         raise ValueError(f"Source node '{src_id}' not found")
-
-    dst_node = await storage.get_node(dst_id)
-    if dst_node is None:
+    if await storage.get_node(dst_id) is None:
         raise ValueError(f"Destination node '{dst_id}' not found")
 
     edge = NodeEdge(
         src_id=src_id,
         dst_id=dst_id,
         type=et,
+        label=label,
+        kind=resolved_kind,
         weight=weight,
         metadata=metadata or {},
     )
     await storage.store_edge(edge)
 
-    result = {"edge_id": edge.id}
+    result = {"edge_id": edge.id, "kind": resolved_kind}
     meta = ResponseMeta(nodes_returned=2)
     return result, meta
 
@@ -835,18 +911,18 @@ async def reflect(
     *,
     similarity_threshold: float = 0.85,
     decay_rate: float = 0.05,
-    tag_similarity_threshold: float = 0.9,
+    relation_similarity_threshold: float = 0.9,
     event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Analyse the memory graph and return candidates for the agent to act on.
 
     Runs embedding-based analysis and value decay (applied immediately).
     Returns split candidates, similar topic pairs, enrichment candidates,
-    contradiction pairs, and similar-tag pairs for the agent to review and act
-    on via memory.apply_reflection.
+    contradiction pairs, and similar relationship-label pairs for the agent to
+    review and act on via memory.apply_reflection.
     """
     from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
-    from epimemer.pipelines.reflection.tag_consolidation import find_similar_tag_pairs
+    from epimemer.pipelines.reflection.relation_consolidation import find_similar_relation_pairs
     from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
     from epimemer.pipelines.reflection.topic_enrichment import gather_associated_material, _should_enrich
     from epimemer.pipelines.reflection.topic_splitting import should_split
@@ -932,10 +1008,10 @@ async def reflect(
         for n, labels in await gather_pending_review(storage)
     ]
 
-    # 7. Find likely-synonymous tags to consolidate (free-text capture, organized
-    #    slow). Applied via apply_reflection tag_merges.
-    similar_tags = await find_similar_tag_pairs(
-        storage, embedding_provider, similarity_threshold=tag_similarity_threshold,
+    # 7. Find likely-synonymous user relationship labels (open vocabulary captured
+    #    fast, organized slow). Applied via apply_reflection relation_merges.
+    similar_relations = await find_similar_relation_pairs(
+        storage, embedding_provider, similarity_threshold=relation_similarity_threshold,
     )
 
     result = {
@@ -945,35 +1021,19 @@ async def reflect(
         "enrichment_candidates": enrichment_candidates,
         "contradictions": contradictions,
         "pending_review": pending_review,
-        "similar_tags": similar_tags,
+        "similar_relations": similar_relations,
     }
     meta = ResponseMeta(
         nodes_returned=(
             len(similar_pairs) + len(split_candidates)
             + len(enrichment_candidates) + len(contradictions)
-            + len(pending_review) + len(similar_tags)
+            + len(pending_review) + len(similar_relations)
         ),
     )
     return result, meta
 
 
 # --- Apply Reflection (stores agent decisions) ---
-
-
-def _apply_tag_merge(node_tags, drop_specs, canonical):
-    """Rewrite a node's tags for a tag merge: drop tags matching any spec in
-    drop_specs and ensure the canonical tag is present. Returns (new_tags, changed).
-    """
-    kept = []
-    changed = False
-    for t in node_tags:
-        if any(tag_satisfies(t, spec) for spec in drop_specs):
-            changed = True
-            continue
-        kept.append(t)
-    if changed and canonical not in kept:
-        kept.append(canonical)
-    return kept, changed
 
 
 async def apply_reflection(
@@ -985,7 +1045,7 @@ async def apply_reflection(
     enrichments: list[dict] | None = None,
     merges: list[dict] | None = None,
     supersessions: list[dict] | None = None,
-    tag_merges: list[dict] | None = None,
+    relation_merges: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
 ) -> tuple[dict, ResponseMeta]:
     """Apply agent-provided reflection decisions to the graph.
@@ -999,16 +1059,16 @@ async def apply_reflection(
         merge_similarity_threshold; otherwise it is rejected. This is the one
         consolidation that retires nodes from the active graph, so the bar is
         high by design — use parents for merely related (not duplicate) topics.
+        (Sources, tags, and entities are also Topics, so they consolidate here.)
     supersessions: [{old_id: str, by_id: str}] — resolve a flagged/contested node
         (from reflect's pending_review) by superseding ``old_id`` with an existing
         node ``by_id``. Atomic: marks old superseded (lineage old → by), flags
         inferences that depended on old as evidence_stale, and clears any
         supersession candidacy on it. The winner is unchanged; no new node.
-    tag_merges: [{tags: [str], into: str}] — consolidate synonymous tags (from
-        reflect's similar_tags). Every active node carrying a tag matching one of
-        ``tags`` has it replaced by the canonical ``into`` tag. Tag strings are
-        "key=value", "key=" (any value), or bare "value". Tags are non-content
-        metadata, so nodes are rewritten in place — no new versions, no re-embed.
+    relation_merges: [{labels: [str], into: str}] — consolidate synonymous user
+        relationship labels (from reflect's similar_relations). Every user-tier
+        edge with a listed label is relabelled to ``into``, in place (edges are
+        not versioned).
     """
     from epimemer.pipelines.graph_construction.versioning import (
         merge_nodes,
@@ -1042,10 +1102,8 @@ async def apply_reflection(
 
         parent_topic = Topic(
             content=content,
-            source_id=children[0].source_id if hasattr(children[0], "source_id") else "",
+            source_id=children[0].source_id if hasattr(children[0], "source_id") else None,
             extraction_method="agent:parent_synthesis",
-            provenance=union_unique(*[c.provenance for c in children]),
-            tags=union_unique(*[c.tags for c in children]),
             metadata={"synthesized_from": children_ids},
         )
         edges = await plan_subtopic_edges(children, parent_topic.id, storage)
@@ -1071,7 +1129,6 @@ async def apply_reflection(
         subtopics = [
             Topic(
                 content=sc, source_id=parent.source_id, extraction_method="agent:split",
-                provenance=list(parent.provenance), tags=list(parent.tags),
                 metadata={"split_from": topic_id},
             )
             for sc in subtopic_contents
@@ -1158,26 +1215,22 @@ async def apply_reflection(
         await supersede_by_existing(old_node, by_id, storage)
         supersessions_applied += 1
 
-    # 6. Consolidate synonymous tags: rewrite affected active nodes to use the
-    #    canonical tag. Tags are non-content metadata, so this mutates nodes in
-    #    place (like status) rather than creating new versions.
-    tags_consolidated = 0
-    retagged_ids: set[str] = set()
-    if tag_merges:
-        active = list(await storage.query_nodes())
-        for tm_spec in tag_merges:
-            drop_specs: list[str] = tm_spec["tags"]
-            canonical = parse_tag(tm_spec["into"])
-            applied = False
-            for node in active:
-                new_tags, changed = _apply_tag_merge(node.tags, drop_specs, canonical)
-                if changed:
-                    await storage.set_node_tags(node.id, new_tags)
-                    node.tags = new_tags  # keep local copy current for later specs
-                    retagged_ids.add(node.id)
-                    applied = True
-            if applied:
-                tags_consolidated += 1
+    # 6. Consolidate synonymous user relationship labels: relabel edges in place
+    #    (edges are not versioned).
+    relations_consolidated = 0
+    edges_relabeled = 0
+    for rm_spec in (relation_merges or []):
+        into = rm_spec["into"]
+        applied = False
+        for label in rm_spec["labels"]:
+            if label == into:
+                continue
+            n = await storage.relabel_edges(label, into)
+            edges_relabeled += n
+            if n:
+                applied = True
+        if applied:
+            relations_consolidated += 1
 
     result = {
         "parents_created": parents_created,
@@ -1186,13 +1239,13 @@ async def apply_reflection(
         "topics_merged": topics_merged,
         "merges_rejected": merges_rejected,
         "supersessions_applied": supersessions_applied,
-        "tags_consolidated": tags_consolidated,
-        "nodes_retagged": len(retagged_ids),
+        "relations_consolidated": relations_consolidated,
+        "edges_relabeled": edges_relabeled,
     }
     meta = ResponseMeta(
         nodes_returned=(
             parents_created + topics_split + topics_enriched
-            + topics_merged + supersessions_applied + tags_consolidated
+            + topics_merged + supersessions_applied + relations_consolidated
         ),
     )
     return result, meta

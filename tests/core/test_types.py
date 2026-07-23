@@ -11,59 +11,43 @@ from epimemer.core.types import (
     Metacontext,
     NodeEdge,
     NodeStatus,
-    Provenance,
     RawDocument,
     Segment,
-    Tag,
     Timeline,
     Timepoint,
     Topic,
     ValueSignal,
-    parse_tag,
-    provenance_matches,
-    tag_matches,
-    union_unique,
+    migration_excluded,
+    traversal_excluded,
 )
 
 
-class TestTagAndProvenanceHelpers:
+class TestEdgeBehaviour:
 
-    def test_node_defaults_empty(self):
-        f = Fact(content="x", source_id="s")
-        assert f.tags == [] and f.provenance == []
+    def test_relationship_edge_traversed_and_migrated(self):
+        e = NodeEdge(src_id="a", dst_id="b", type=EdgeType.RELATED,
+                     label="refuted_in", kind="relationship")
+        assert not traversal_excluded(e) and not migration_excluded(e)
 
-    def test_parse_tag(self):
-        assert parse_tag("k=v") == Tag(key="k", value="v")
-        assert parse_tag("bare") == Tag(value="bare")
-        # Split only on the first '=', so values may contain '='.
-        assert parse_tag("url=http://x?a=b") == Tag(key="url", value="http://x?a=b")
+    def test_attribution_edge_not_traversed_but_migrated(self):
+        e = NodeEdge(src_id="a", dst_id="b", type=EdgeType.RELATED,
+                     label="published_by", kind="attribution")
+        assert traversal_excluded(e) and not migration_excluded(e)
 
-    def test_tag_matches_key_value_keyonly_and_bare(self):
-        f = Fact(
-            content="x", source_id="s",
-            tags=[Tag(key="speaker", value="alice"), Tag(value="interesting")],
-        )
-        assert tag_matches(f, ["speaker=alice"])   # key=value
-        assert tag_matches(f, ["speaker="])         # key only, any value
-        assert tag_matches(f, ["interesting"])      # bare value, any key
-        assert not tag_matches(f, ["speaker=bob"])
-        assert tag_matches(f, ["speaker=alice", "interesting"])   # AND of all
-        assert not tag_matches(f, ["speaker=alice", "missing"])
+    def test_sourced_from_not_traversed_but_migrated(self):
+        e = NodeEdge(src_id="a", dst_id="d", type=EdgeType.SOURCED_FROM)
+        assert traversal_excluded(e) and not migration_excluded(e)
 
-    def test_provenance_matches(self):
-        f = Fact(
-            content="x", source_id="s",
-            provenance=[Provenance(source="ISSUES.md", source_type="document")],
-        )
-        assert provenance_matches(f, source="ISSUES.md")
-        assert provenance_matches(f, source_type="document")
-        assert not provenance_matches(f, source="README.md")
-        assert not provenance_matches(f, source_type="api")
+    def test_tagged_with_traversed_and_migrated(self):
+        e = NodeEdge(src_id="a", dst_id="t", type=EdgeType.TAGGED_WITH)
+        assert not traversal_excluded(e) and not migration_excluded(e)
 
-    def test_union_unique_preserves_order_and_dedupes(self):
-        a = [Tag(value="x"), Tag(value="y")]
-        b = [Tag(value="y"), Tag(value="z")]
-        assert union_unique(a, b) == [Tag(value="x"), Tag(value="y"), Tag(value="z")]
+    def test_history_edge_neither(self):
+        e = NodeEdge(src_id="a", dst_id="b", type=EdgeType.SUPERSEDED_BY)
+        assert traversal_excluded(e) and migration_excluded(e)
+
+    def test_topic_source_id_optional(self):
+        assert Topic(content="BBC").source_id is None
 
 
 class TestValueSignal:

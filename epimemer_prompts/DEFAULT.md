@@ -13,30 +13,37 @@ the history linked. Your job is to write fast and organize deliberately.
   particular source, a perspective). Untagged knowledge is treated as base reality
   — "The Real" (see Metacontexts below).
 
-### Provenance & tags
+### Sources, tags, and relations (all nodes & edges, not strings)
 
-Two queryable dimensions, separate from metacontexts (which are epistemic *frames*
-that change retrieval scope — provenance/tags do not):
+Provenance and "aboutness" are modelled as **nodes and edges**, not string fields —
+so a source or tag can carry its own facts, relate to siblings, and sit in a frame.
+All are separate from metacontexts (which are epistemic *frames* that change
+retrieval scope; these do not).
 
-- **Provenance** — *where* knowledge came from. Pass `source` and `source_type`
-  (e.g. `"ISSUES.md"` / `"document"`, `"stripe-api"` / `"api"`, `"chat#4012"` /
-  `"chat"`) to `segment`; every node from that text is stamped with it
-  automatically. This makes "which nodes came from X" answerable.
-- **Tags** — free-text labels for filtering, no controlled vocabulary. Add
-  document-level tags via `store_decomposition(tags=[...])`, or per-node tags by
-  giving an entry as `{"content": ..., "tags": [...]}` instead of a bare string.
-  Each tag string is `"key=value"` (dimensioned) or a bare `"value"`. Tag freely;
-  synonyms are consolidated later by `reflect`, not policed up front.
+- **Source** — *where* knowledge came from. Pass `source`/`source_type` to
+  `segment`; every node decomposed from it gets a `sourced_from` edge to the
+  document. Name a publisher/author with `published_by="BBC"` — it becomes (or
+  reuses) an entity **Topic** linked by an attribution edge, and can itself accrue
+  facts.
+- **Tags = Topics.** Pass `tags=[...]` to `store_decomposition` (doc-level) or per
+  node via `{"content": ..., "tags": [...]}`. Each tag name becomes (or reuses, by
+  exact name) a **Topic** linked by a `tagged_with` edge — so tag consolidation is
+  just topic-merge. There are no `key=value` tags: a relationship dimension is an
+  **edge** (`link(a, b, relation="spoken_by")`); a scalar like sensitivity belongs
+  in node metadata.
+- **Relations are open vocabulary.** `link(src, dst, relation="published_by",
+  kind="attribution")` coins any relationship you need. `kind` is `relationship`
+  (followed in retrieval) or `attribution` (where it came from / who said it — not
+  followed); a label reuses its kind after first use. Known engine edges still use
+  `link(..., edge_type="supports")`.
 
-Filtering & discovery:
-- **`find_nodes(source=…, tags=[…], …)`** — non-semantic listing of exactly the
-  matching nodes (e.g. everything from `ISSUES.md`). Use when you want provenance,
-  not similarity.
-- `search` / `query_changes` also accept `tags` / `source` / `source_type` to
-  narrow results. Tag filters match `key=value`, `key=` (any value), or bare
-  `value`; all supplied filters must match.
-- **`list_tags`** — discover the distinct tags (grouped by key; `""` = bare tags)
-  and provenance sources present, before filtering.
+Discovery & lookup:
+- **`find_nodes(sourced_from=…)` / `find_nodes(tagged_with=…)`** — exactly the nodes
+  linked to a document/source or a concept (id or name). The graph-native "which
+  nodes came from ISSUES.md / are about billing". Use instead of `search` when you
+  want provenance/aboutness, not similarity.
+- **`list_sources`** / **`list_relations`** — discover the sources and the
+  user-defined relationship labels present before filtering or coining new ones.
 
 ### When to search (search)
 - Before answering questions that might benefit from prior context, or when the
@@ -117,19 +124,20 @@ useful:
 - After ingesting several documents (the system auto-suggests reflect after the
   configured threshold), when asked to consolidate, or periodically in long
   sessions.
-- `reflect` returns consolidation candidates (similar pairs, splits, enrichments),
-  same-frame contradiction candidates, `pending_review` — the worklist of
-  nodes already flagged for resolution — and `similar_tags`, likely-synonymous
-  tags to consolidate.
+- `reflect` returns consolidation candidates (similar pairs, splits, enrichments —
+  similar pairs also surface duplicate source/tag/entity Topics), same-frame
+  contradiction candidates, `pending_review` — the worklist of nodes already
+  flagged for resolution — and `similar_relations`, likely-synonymous user
+  relationship labels.
 - Apply your decisions with `apply_reflection`. To resolve flagged nodes in batch,
   pass `supersessions=[{old_id, by_id}]`. Resolving a loser automatically clears
   the winner's `contested` / `superseded_candidate` labels. Escalate anything you
   shouldn't decide alone to the user.
-- **Tag consolidation**: for `similar_tags` you judge synonymous, pass
-  `tag_merges=[{tags: ["billings", "invoicing"], into: "billing"}]`. Every active
-  node carrying a listed tag is rewritten to the canonical one **in place** — tags
-  are metadata, not content, so this creates no new versions and no re-embedding
-  (the same reason status changes don't either).
+- **Source/tag/entity consolidation** is ordinary topic-merge — they're Topics, so
+  pass `merges=[...]` for synonymous ones.
+- **Relation consolidation**: for `similar_relations` you judge synonymous, pass
+  `relation_merges=[{labels: ["written_by"], into: "authored_by"}]`. Every user-tier
+  edge with a listed label is relabelled in place (edges aren't versioned).
 
 ### Metacontexts (epistemic frames)
 - Untagged knowledge is implicitly "The Real" — base physical reality.

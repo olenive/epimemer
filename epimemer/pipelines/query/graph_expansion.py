@@ -4,13 +4,8 @@ Performs breadth-first traversal from seed nodes to discover related
 nodes and edges in the epistemic graph. Skips history edges by default.
 """
 
-from epimemer.core.types import NON_KNOWLEDGE_EDGE_TYPES, EdgeType, EpistemicNode, NodeEdge
+from epimemer.core.types import EdgeType, EpistemicNode, NodeEdge, traversal_excluded
 from epimemer.storage.protocol import StorageBackend
-
-
-# History and review edges are metadata/signals, not knowledge — skipped by
-# default traversal (still reachable via an explicit edge_types filter).
-_HISTORY_EDGE_TYPES = NON_KNOWLEDGE_EDGE_TYPES
 
 
 async def expand_via_graph(
@@ -22,10 +17,15 @@ async def expand_via_graph(
 ) -> tuple[list[EpistemicNode], list[NodeEdge]]:
     """Expand from seed nodes by traversing graph edges.
 
-    Returns all discovered nodes (including seeds) and the edges between them.
-    Skips history edges (SUPERSEDED_BY, MERGED_INTO) by default.
+    By default skips edges that are not knowledge to follow — history, review, and
+    provenance/attribution edges (via ``traversal_excluded``) — so a search does not
+    fan out from version or source hubs. An explicit ``exclude_edge_types`` set
+    overrides that with plain type membership.
     """
-    excluded = exclude_edge_types if exclude_edge_types is not None else _HISTORY_EDGE_TYPES
+    def _skip(edge: NodeEdge) -> bool:
+        if exclude_edge_types is not None:
+            return edge.type in exclude_edge_types
+        return traversal_excluded(edge)
 
     seen_node_ids: set[str] = {node.id for node in seed_nodes}
     all_nodes: list[EpistemicNode] = list(seed_nodes)
@@ -44,8 +44,8 @@ async def expand_via_graph(
             incoming = await storage.get_edges_to(node_id)
 
             for edge in list(outgoing) + list(incoming):
-                # Skip excluded edge types
-                if edge.type in excluded:
+                # Skip edges not followed in default traversal
+                if _skip(edge):
                     continue
 
                 # Track edge (avoid duplicates)

@@ -40,7 +40,7 @@ class NodeView(BaseModel):
     node_type: str            # "topic" | "fact" | "inference"
     content: str
     status: str               # "active" | "superseded" | "merged"
-    source_id: str
+    source_id: str | None = None  # tag/entity topics have no segment origin
     extraction_method: str
     novelty: float
     confidence: float

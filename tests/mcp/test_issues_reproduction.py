@@ -218,7 +218,7 @@ class TestIssue5LinkCannotTargetDocument:
         await storage.store_node(topic)
 
         with pytest.raises(ValueError, match="Source node"):
-            await link(doc.id, topic.id, "about", storage)
+            await link(doc.id, topic.id, storage, edge_type="about")
 
 
 # --- Combined: the headline user-visible failure (Issues 1 + 2) ---------------

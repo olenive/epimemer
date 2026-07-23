@@ -13,6 +13,7 @@ Usage:
     await storage.store_node(topic)  # → publishes NodeStored event
 """
 
+import logging
 from datetime import datetime
 from typing import Sequence
 
@@ -26,7 +27,6 @@ from epimemer.core.types import (
     NodeType,
     RawDocument,
     Segment,
-    Tag,
     Timeline,
 )
 from epimemer.visualization.event_bus import InProcessEventBus
@@ -41,6 +41,8 @@ from epimemer.visualization.events import (
     edge_to_view,
     node_to_view,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class InstrumentedStorage:
@@ -69,6 +71,9 @@ class InstrumentedStorage:
 
     async def get_document(self, doc_id: str) -> RawDocument | None:
         return await self._inner.get_document(doc_id)
+
+    async def get_document_by_source(self, source: str) -> RawDocument | None:
+        return await self._inner.get_document_by_source(source)
 
     # --- Segments (write) ---
 
@@ -118,13 +123,27 @@ class InstrumentedStorage:
             new_status=status.value,
         ))
 
-    async def set_node_tags(self, node_id: str, tags: list[Tag]) -> None:
-        await self._inner.set_node_tags(node_id, tags)
+    async def relabel_edges(self, old_label: str, new_label: str) -> int:
+        return await self._inner.relabel_edges(old_label, new_label)
+
+    async def get_relation_kind(self, label: str) -> str | None:
+        return await self._inner.get_relation_kind(label)
 
     # --- Epistemic Nodes (read) ---
 
     async def get_node(self, node_id: str) -> EpistemicNode | None:
         return await self._inner.get_node(node_id)
+
+    async def get_node_by_content(
+        self,
+        content: str,
+        *,
+        node_type: NodeType | None = None,
+        status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> EpistemicNode | None:
+        return await self._inner.get_node_by_content(
+            content, node_type=node_type, status=status,
+        )
 
     async def query_nodes(
         self,
@@ -132,13 +151,9 @@ class InstrumentedStorage:
         node_type: NodeType | None = None,
         status: NodeStatus = NodeStatus.ACTIVE,
         at_time: datetime | None = None,
-        tags: list[str] | None = None,
-        source: str | None = None,
-        source_type: str | None = None,
     ) -> Sequence[EpistemicNode]:
         return await self._inner.query_nodes(
             node_type=node_type, status=status, at_time=at_time,
-            tags=tags, source=source, source_type=source_type,
         )
 
     async def query_changes(
@@ -265,17 +280,23 @@ class InstrumentedStorage:
         embeddings: Sequence[EmbeddingRecord] = (),
     ) -> None:
         await self._inner.write_batch_tx(nodes=nodes, edges=edges, embeddings=embeddings)
-        graph = self._inner.current_database
-        for node in nodes:
-            await self._bus.publish(NodeStored(graph=graph, node=node_to_view(node, graph)))
-        for edge in edges:
-            await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
-        for embedding in embeddings:
-            await self._bus.publish(EmbeddingStored(
-                item_id=embedding.item_id,
-                model_id=embedding.model_id,
-                dimensions=len(embedding.vector),
-            ))
+        # The write above is already committed. Event emission is best-effort
+        # observability and must never turn a committed write into a reported
+        # failure — otherwise a retrying caller duplicates every node.
+        try:
+            graph = self._inner.current_database
+            for node in nodes:
+                await self._bus.publish(NodeStored(graph=graph, node=node_to_view(node, graph)))
+            for edge in edges:
+                await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
+            for embedding in embeddings:
+                await self._bus.publish(EmbeddingStored(
+                    item_id=embedding.item_id,
+                    model_id=embedding.model_id,
+                    dimensions=len(embedding.vector),
+                ))
+        except Exception:
+            logger.exception("write_batch_tx event emission failed; write already committed")
 
     # --- Edges (read) ---
 

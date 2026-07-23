@@ -231,6 +231,7 @@ async def memory_segment(
     ctx: Context,
     source: str | None = None,
     source_type: str | None = None,
+    published_by: str | None = None,
     metadata: dict | None = None,
     segmentation_strategy: str | None = None,
 ) -> str:
@@ -246,10 +247,13 @@ async def memory_segment(
 
     Args:
         content: The text to segment and store.
-        source: Where this text came from, e.g. "ISSUES.md", "stripe-api",
-            "chat#4012". Stamped as provenance on every node derived from it.
+        source: Name of the originating document, e.g. "ISSUES.md", "stripe-api",
+            "chat#4012". Every node decomposed from it gets a `sourced_from` edge
+            to this document.
         source_type: Free label for the kind of source (suggested: document,
-            api, chat). Defaults to "document" downstream if omitted.
+            api, chat).
+        published_by: Optional publishing/authoring entity (e.g. "BBC"). Resolved-
+            or-created as an entity Topic and linked to the document.
         metadata: Optional metadata to attach to the document.
         segmentation_strategy: "paragraph" or "semantic". Uses server default if omitted.
     """
@@ -263,6 +267,7 @@ async def memory_segment(
             config=deps["config"],
             source=source,
             source_type=source_type,
+            published_by=published_by,
             metadata=metadata,
             segmentation_strategy=segmentation_strategy,
             event_bus=deps.get("event_bus"),
@@ -294,12 +299,12 @@ async def memory_store_decomposition(
         segments: List of decomposed segments. Each entry:
             segment_id: str — from segment result
             topics/facts/inferences: each item is either a content string, or
-              an object {"content": str, "tags": ["key=value", "bare", ...]} to
-              attach per-node tags.
+              an object {"content": str, "tags": ["billing", ...]} to attach
+              per-node tags.
         metacontext_id: Optional metacontext ID — all nodes will inherit this.
-        tags: Optional document-level tags applied to every node. Each is
-            "key=value" or a bare "value". Provenance is stamped automatically
-            from the document's source/source_type.
+        tags: Optional document-level tag names applied to every node. Each tag
+            becomes (or reuses) a Topic linked by a tagged_with edge. Every node
+            also gets a sourced_from edge to the document.
     """
     deps = ctx.lifespan_context
 
@@ -341,9 +346,6 @@ async def memory_search(
     graph_hops: int = 1,
     metacontext_id: str | None = None,
     cross_frame: bool = False,
-    tags: list[str] | None = None,
-    source: str | None = None,
-    source_type: str | None = None,
 ) -> str:
     """Search the epistemic memory graph.
 
@@ -352,6 +354,9 @@ async def memory_search(
     metacontext labels and computed review labels (superseded_candidate /
     evidence_stale / contested) so you can see when a node may be outdated,
     have stale evidence, or be contested before relying on it.
+
+    For provenance/topic listings (which nodes came from X / are about Y), use
+    find_nodes, not search.
 
     Args:
         query: Natural language search query.
@@ -362,9 +367,6 @@ async def memory_search(
             untagged base-reality nodes (other frames are excluded).
         cross_frame: Set true to ignore frame scoping and search across all
             metacontexts (opt-in; otherwise frames don't bleed together).
-        tags: Optional tag filters ("key=value", "key=", or bare "value");
-            results must match all of them.
-        source / source_type: Optional provenance filters.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -378,9 +380,6 @@ async def memory_search(
             graph_hops=graph_hops,
             metacontext_id=metacontext_id,
             cross_frame=cross_frame,
-            tags=tags,
-            source=source,
-            source_type=source_type,
             event_bus=deps.get("event_bus"),
         ),
         ctx,
@@ -393,17 +392,26 @@ async def memory_search(
 async def memory_link(
     src_id: str,
     dst_id: str,
-    edge_type: str,
     ctx: Context,
+    edge_type: str | None = None,
+    relation: str | None = None,
+    kind: str = "relationship",
     weight: float = 1.0,
     metadata: dict | None = None,
 ) -> str:
-    """Create a typed edge between two existing nodes.
+    """Create an edge between two existing nodes.
+
+    Give either a known engine `edge_type` or a free `relation` label (open
+    vocabulary — anything you need, e.g. "refuted_in", "funded_by").
 
     Args:
         src_id: Source node ID.
         dst_id: Destination node ID.
-        edge_type: Edge type (e.g., "supports", "contradicts", "derived_from").
+        edge_type: A known engine edge type (e.g. "supports", "contradicts").
+        relation: A free user-defined relationship label (creates a RELATED edge).
+        kind: For a user relation — "relationship" (followed in retrieval) or
+            "attribution" (where it came from / who said it; not followed). A
+            label already in use reuses its kind (classified once per label).
         weight: Edge weight (default 1.0).
         metadata: Optional metadata for the edge.
     """
@@ -413,13 +421,15 @@ async def memory_link(
         lambda: tools.link(
             src_id=src_id,
             dst_id=dst_id,
-            edge_type=edge_type,
             storage=deps["storage"],
+            edge_type=edge_type,
+            relation=relation,
+            kind=kind,
             weight=weight,
             metadata=metadata,
         ),
         ctx,
-        f"{src_id}->{dst_id}:{edge_type}",
+        f"{src_id}->{dst_id}:{relation or edge_type}",
         lambda r, m: f"edge={r['edge_id']}",
     )
 
@@ -589,20 +599,21 @@ async def memory_reflect(
     ctx: Context,
     similarity_threshold: float = 0.85,
     decay_rate: float = 0.05,
-    tag_similarity_threshold: float = 0.9,
+    relation_similarity_threshold: float = 0.9,
 ) -> str:
     """Analyse the memory graph and return candidates for you to act on.
 
     Applies value decay immediately, then identifies:
-    - Similar topic pairs that could be consolidated under a parent
+    - Similar topic pairs that could be consolidated under a parent (this also
+      covers duplicate source/tag/entity Topics)
     - Topics with high internal variance that could be split
     - Topics with thin descriptions but rich associated material
     - Potential contradictions between facts (same-frame only)
     - pending_review: active nodes already flagged for resolution
       (superseded_candidate / evidence_stale / contested), with the related
       ids to act on via apply_reflection supersessions / supersede_by
-    - similar_tags: likely-synonymous tags to consolidate via apply_reflection
-      tag_merges
+    - similar_relations: likely-synonymous user relationship labels to consolidate
+      via apply_reflection relation_merges
 
     Review the candidates and call apply_reflection with your decisions.
 
@@ -612,7 +623,8 @@ async def memory_reflect(
     Args:
         similarity_threshold: Cosine similarity threshold for finding similar pairs.
         decay_rate: Multiplicative decay factor for relevance.
-        tag_similarity_threshold: Similarity bar for proposing tag consolidations.
+        relation_similarity_threshold: Similarity bar for proposing relationship-
+            label consolidations.
     """
     deps = ctx.lifespan_context
     stores_before = deps.get("stores_since_reflect", 0)
@@ -623,7 +635,7 @@ async def memory_reflect(
             embedding_provider=deps["embedding_provider"],
             similarity_threshold=similarity_threshold,
             decay_rate=decay_rate,
-            tag_similarity_threshold=tag_similarity_threshold,
+            relation_similarity_threshold=relation_similarity_threshold,
             event_bus=deps.get("event_bus"),
         )
         deps["stores_since_reflect"] = 0
@@ -637,7 +649,7 @@ async def memory_reflect(
         f"threshold={similarity_threshold} stores_since={stores_before}",
         lambda r, m: (
             f"decayed={r['nodes_decayed']} pairs={len(r['similar_pairs'])} "
-            f"pending={len(r['pending_review'])} tags={len(r['similar_tags'])}"
+            f"pending={len(r['pending_review'])} relations={len(r['similar_relations'])}"
         ),
     )
 
@@ -650,7 +662,7 @@ async def memory_apply_reflection(
     enrichments: list[dict] | None = None,
     merges: list[dict] | None = None,
     supersessions: list[dict] | None = None,
-    tag_merges: list[dict] | None = None,
+    relation_merges: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
 ) -> str:
     """Apply your reflection decisions to the memory graph.
@@ -675,10 +687,9 @@ async def memory_apply_reflection(
             pending_review by superseding the outdated/losing node with an
             existing one. Each: {old_id: str, by_id: str}. Atomic; the winner is
             unchanged and dependent inferences are flagged evidence_stale.
-        tag_merges: Consolidate synonymous tags from reflect's similar_tags.
-            Each: {tags: ["key=value" | "value", ...], into: "key=value" | "value"}.
-            Every active node tagged with one of `tags` is rewritten to the
-            canonical `into` tag, in place (tags are metadata, not content).
+        relation_merges: Consolidate synonymous user relationship labels from
+            reflect's similar_relations. Each: {labels: [str], into: str}. Every
+            user-tier edge with a listed label is relabelled to `into`, in place.
         merge_similarity_threshold: Minimum pairwise cosine similarity required
             to allow a merge (default 0.92, deliberately high).
     """
@@ -693,13 +704,13 @@ async def memory_apply_reflection(
             enrichments=enrichments,
             merges=merges,
             supersessions=supersessions,
-            tag_merges=tag_merges,
+            relation_merges=relation_merges,
             merge_similarity_threshold=merge_similarity_threshold,
         ),
         ctx,
         f"parents={len(parents or [])} splits={len(splits or [])} "
         f"enrichments={len(enrichments or [])} merges={len(merges or [])} "
-        f"supersessions={len(supersessions or [])} tag_merges={len(tag_merges or [])}",
+        f"supersessions={len(supersessions or [])} relation_merges={len(relation_merges or [])}",
         lambda r, m: f"applied={m.nodes_returned}",
     )
 
@@ -772,9 +783,6 @@ async def memory_query_changes(
     last_days: float | None = None,
     windows: list[list[str]] | None = None,
     node_types: list[str] | None = None,
-    tags: list[str] | None = None,
-    source: str | None = None,
-    source_type: str | None = None,
 ) -> str:
     """What changed (births + retirements) in one or more time windows.
 
@@ -789,7 +797,7 @@ async def memory_query_changes(
       - nothing: defaults to the last 24 hours.
 
     All times are normalized to UTC. node_types optionally filters to
-    "topic"/"fact"/"inference"; tags/source/source_type further restrict results.
+    "topic"/"fact"/"inference".
     """
     deps = ctx.lifespan_context
     resolved = _resolve_windows(
@@ -805,9 +813,6 @@ async def memory_query_changes(
             windows=resolved,
             storage=deps["storage"],
             node_types=node_types,
-            tags=tags,
-            source=source,
-            source_type=source_type,
         ),
         ctx,
         f"windows={len(resolved)}",
@@ -818,22 +823,22 @@ async def memory_query_changes(
 @mcp.tool(name="find_nodes")
 async def memory_find_nodes(
     ctx: Context,
-    tags: list[str] | None = None,
-    source: str | None = None,
-    source_type: str | None = None,
+    sourced_from: str | None = None,
+    tagged_with: str | None = None,
     node_types: list[str] | None = None,
     status: str = "active",
     limit: int = 50,
 ) -> str:
-    """List nodes by tag / provenance — a non-semantic filtered listing.
+    """Find nodes connected to a source or topic hub by graph traversal.
 
-    Unlike search (vector similarity), returns exactly the nodes matching the
-    given filters — e.g. find_nodes(source="ISSUES.md") returns everything that
-    came from that document. Each node carries its provenance and tags.
+    Unlike search (vector similarity), this returns exactly the nodes linked to a
+    hub — e.g. find_nodes(sourced_from="ISSUES.md") returns everything that came
+    from that document; find_nodes(tagged_with="billing") returns nodes about
+    billing.
 
     Args:
-        tags: Tag filters ("key=value", "key=", or bare "value"); match all.
-        source / source_type: Provenance filters.
+        sourced_from: A document/entity id or name — return its `sourced_from` nodes.
+        tagged_with: A Topic id or name — return nodes tagged with that concept.
         node_types: Filter to "topic"/"fact"/"inference".
         status: Node status to list (default "active").
         limit: Maximum nodes to return.
@@ -843,36 +848,54 @@ async def memory_find_nodes(
         "epimemer.find_nodes",
         lambda: tools.find_nodes(
             storage=deps["storage"],
-            tags=tags,
-            source=source,
-            source_type=source_type,
+            sourced_from=sourced_from,
+            tagged_with=tagged_with,
             node_types=node_types,
             status=status,
             limit=limit,
         ),
         ctx,
-        f"source={source} tags={tags}",
+        f"sourced_from={sourced_from} tagged_with={tagged_with}",
         lambda r, m: f"nodes={m.nodes_returned}",
     )
 
 
-@mcp.tool(name="list_tags")
-async def memory_list_tags(
+@mcp.tool(name="list_sources")
+async def memory_list_sources(
     ctx: Context,
 ) -> str:
-    """Discover the distinct tags and provenance sources in the active graph.
+    """Discover the distinct source/origin nodes in the active graph.
 
-    Returns tags grouped by key (the "" key holds bare, keyless tags) plus the
-    distinct provenance sources and source types — so you can see what exists
-    before filtering with find_nodes / search.
+    Returns the documents nodes are `sourced_from`, plus publishing entities,
+    each with how many nodes reference it — so you can see what exists before
+    find_nodes(sourced_from=...).
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
-        "epimemer.list_tags",
-        lambda: tools.list_tags(storage=deps["storage"]),
+        "epimemer.list_sources",
+        lambda: tools.list_sources(storage=deps["storage"]),
         ctx,
         "",
-        lambda r, m: f"sources={len(r['sources'])} tag_keys={len(r['tags'])}",
+        lambda r, m: f"sources={len(r['sources'])}",
+    )
+
+
+@mcp.tool(name="list_relations")
+async def memory_list_relations(
+    ctx: Context,
+) -> str:
+    """Discover the distinct user-defined relationship labels in the active graph.
+
+    Returns each label with its kind (relationship/attribution) and usage count —
+    useful before coining a new label or proposing consolidations.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.list_relations",
+        lambda: tools.list_relations(storage=deps["storage"]),
+        ctx,
+        "",
+        lambda r, m: f"relations={len(r['relations'])}",
     )
 
 
