@@ -14,18 +14,29 @@ Phases 0-6 and 8 are complete. Phase 7 is partially complete. The visualization 
 
 ### What's done
 
-- **Phase 0 (Foundation)**: Core types, storage protocol (memory + SurrealDB), LLM abstraction (Pydantic AI + mock), embedding abstraction (sentence-transformers + mock)
+- **Phase 0 (Foundation)**: Core types, storage protocol (memory + SurrealDB), embedding abstraction (sentence-transformers + mock). The original LLM abstraction (Pydantic AI + mock) was later removed — see *Pivot* below.
 - **Phase 1 (Segmentation)**: Paragraph split and semantic similarity strategies with Petri nets
-- **Phase 2 (Decomposition)**: LLM decomposition net, hybrid topic assignment (vector-first, LLM-fallback)
+- **Phase 2 (Decomposition)**: superseded — decomposition is now agent-driven. The in-server LLM decomposition net and hybrid topic-assignment path were removed; see *Pivot* below.
 - **Phase 3 (Graph Construction)**: Edge creation net, value signal init/update, persistence, node versioning
 - **Phase 4 (Query Layer)**: Vector search, graph expansion, hybrid retrieval net, temporal queries
 - **Phase 5 (Reflection)**: Topic consolidation (flat + hierarchical), value decay, contradiction detection, topic splitting, topic enrichment, topic hierarchy (DAG with SUBTOPIC_OF), archival, full reflection Petri net
-- **Phase 6 (MCP Server)**: 14 tools, structured logging, response metadata
+- **Phase 6 (MCP Server)**: 29 tools (see [INTEGRATION.md](INTEGRATION.md#available-tools) for the canonical list), structured logging, response metadata
 - **Phase 7 (Timelines & Metacontext)**: Base Timeline/Timepoint types, Metacontext with propagation, MCP tools for both
-- **Phase 8 (Orchestration)**: Orchestration net with auto-reflect activation
+- **Phase 8 (Orchestration)**: Orchestration net with auto-suggested reflection
 - **Visualization**: Event bus, instrumented storage/executor, WebSocket server, Cytoscape.js graph panel, Graphviz SVG pipeline panel, graph browser with snapshot loading
 - **Multi-graph for InMemoryStorage**: All backends support multiple named graphs, `supports_multi_graph` flag removed from protocol
 - **Visualization Data Model**: NodeView/EdgeView shared models for events and snapshots, HTTP endpoints for graph listing and snapshot retrieval, WebSocket sequence numbers and subscription filtering
+
+### Pivot: decomposition is agent-driven
+
+The original plan (Phases 0 and 2) ran decomposition *inside* the server, via an
+LLM abstraction (Pydantic AI + mock) and a hybrid vector-first / LLM-fallback
+topic-assignment net. That path was removed: **Epimemer makes no LLM calls of its
+own.** Ingest is now the two-step `segment` → `store_decomposition` flow, where
+the *calling* agent extracts topics/facts/inferences. Anything below that
+describes an in-server LLM decomposition, a `SegmentationProvider` /
+`DecompositionProvider` LLM protocol, or an "LLM-fallback" topic strategy is
+retained as design history, not current behaviour.
 
 ---
 
@@ -39,7 +50,7 @@ Two segmentation strategies from the original plan have not been implemented. Th
 ```
 [RawDocument] → llm_segment → [Segments]
 ```
-Uses `SegmentationProvider` from the LLM protocol (protocol already exists, no implementation).
+Would use a `SegmentationProvider` abstraction. Note the original LLM protocol was removed (see *Pivot*), so this strategy would require re-introducing a provider or delegating the split to the calling agent.
 
 #### Hybrid segmentation
 ```
@@ -116,7 +127,7 @@ No dedicated benchmarking module exists. Structured logging captures latency per
 - Storage: SurrealDB write throughput (nodes/sec), vector search latency (ms at N vectors)
 - Embeddings: throughput (texts/sec for sentence-transformers)
 - Segmentation: segments/sec per strategy
-- Decomposition: LLM call reduction ratio (vector-matched vs LLM-fallback) over time
+- Decomposition: n/a — decomposition is agent-driven, so there are no in-server LLM calls to measure
 - Graph construction: time per document, edge count growth rate
 - Query: latency at various graph sizes (100, 1K, 10K, 100K nodes)
 - Reflection: time at various graph sizes, merge/decay/archive counts
@@ -126,12 +137,15 @@ No dedicated benchmarking module exists. Structured logging captures latency per
 
 ## Topic Assignment Deep Dive
 
-Three approaches on a spectrum. Approach 2 is implemented as the default.
+**Retired** — this in-server topic-extraction machinery was removed when ingest
+went agent-driven (see *Pivot*). Kept as design history; the calling agent now
+performs topic/fact/inference extraction and passes the result to
+`store_decomposition`.
 
 | # | Strategy | Status | Notes |
 |---|----------|--------|-------|
-| 1 | All LLM | Implemented | Every segment gets LLM topic extraction |
-| 2 | Vector-first, LLM-fallback | **Implemented (default)** | LLM calls decrease as topic graph grows |
+| 1 | All LLM | Removed | Every segment got LLM topic extraction |
+| 2 | Vector-first, LLM-fallback | Removed (was default) | LLM calls decreased as the topic graph grew |
 | 3 | All vector (BERTopic-style) | Not implemented | Cluster embeddings, no LLM. Fast but less rich |
 
 ---
@@ -148,7 +162,7 @@ The end state is:
    - `segment` + `store_decomposition` to ingest new information (two-step: segment text, then store extracted nodes), optionally with a metacontext
    - `search` to find relevant context (vector + graph hybrid retrieval), optionally filtered by metacontext
    - `query_graph` for structured traversal
-   - `reflect` to trigger consolidation (or this fires automatically via activation functions)
+   - `reflect` to trigger consolidation (the orchestration net can auto-suggest it once enough new items accumulate)
    - `create_timeline` / `add_timepoint` / `query_timeline` / `create_timelink` for temporal relationships
    - `list_graphs` / `use_graph` / `delete_graph` to manage multiple knowledge graphs (all backends)
 6. Every tool call produces:
@@ -160,4 +174,4 @@ The end state is:
    - Open any Marimo notebook to inspect the current graph state
    - Open the visualization dashboard (http://127.0.0.1:8765) to browse knowledge graphs, watch live events, and view pipeline execution
    - View logs to see when and how memory was used
-   - Query historical graph state via `at_time` parameters
+   - Query historical graph state via the `as_of` and `query_changes` tools

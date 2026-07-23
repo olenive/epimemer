@@ -56,6 +56,14 @@ class InstrumentedStorage:
         self._inner = inner
         self._bus = bus
 
+    # --- Lifecycle (delegate) ---
+
+    async def connect(self) -> None:
+        await self._inner.connect()
+
+    async def close(self) -> None:
+        await self._inner.close()
+
     # --- Documents (write) ---
 
     async def store_document(self, doc: RawDocument) -> str:

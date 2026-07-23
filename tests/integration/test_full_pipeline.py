@@ -2,7 +2,7 @@
 
 Exercises the complete flow: segment → store_decomposition → search →
 reflect → update → timeline → metacontext → archive → restore,
-using InMemoryStorage and mock providers.
+against every storage backend, with mock providers.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -34,11 +34,7 @@ from epimemer.mcp.tools import (
     update,
 )
 from epimemer.storage.memory import InMemoryStorage
-
-
-@pytest.fixture
-def storage() -> InMemoryStorage:
-    return InMemoryStorage()
+from epimemer.storage.protocol import StorageBackend
 
 
 @pytest.fixture
@@ -56,7 +52,7 @@ def config() -> ServerConfig:
 
 async def _two_step_ingest(
     content: str,
-    storage: InMemoryStorage,
+    storage: StorageBackend,
     embedding_provider: MockEmbeddingProvider,
     config: ServerConfig,
     *,

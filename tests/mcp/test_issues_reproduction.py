@@ -27,12 +27,7 @@ from epimemer.core.types import (
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.tools import link, query_graph, search, update
-from epimemer.storage.memory import InMemoryStorage
-
-
-@pytest.fixture
-def storage() -> InMemoryStorage:
-    return InMemoryStorage()
+from epimemer.storage.protocol import StorageBackend
 
 
 @pytest.fixture
@@ -41,7 +36,7 @@ def embedding_provider() -> MockEmbeddingProvider:
 
 
 async def _store_with_embedding(
-    storage: InMemoryStorage,
+    storage: StorageBackend,
     embedding_provider: MockEmbeddingProvider,
     node,
 ) -> None:

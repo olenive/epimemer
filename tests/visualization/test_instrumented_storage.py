@@ -15,6 +15,26 @@ def bus():
     return create_event_bus()
 
 
+class TestLifecyclePassThrough:
+    """The server calls connect/close unconditionally, so the wrapper must
+    forward them to the inner backend (no hasattr guard, no __getattr__)."""
+
+    async def test_connect_close_delegate_to_inner(self, bus):
+        calls: list[str] = []
+
+        class SpyStorage(InMemoryStorage):
+            async def connect(self) -> None:
+                calls.append("connect")
+
+            async def close(self) -> None:
+                calls.append("close")
+
+        wrapped = instrument_storage(SpyStorage(), bus)
+        await wrapped.connect()
+        await wrapped.close()
+        assert calls == ["connect", "close"]
+
+
 class TestTagTopicEmission:
     """Regression: tag/entity Topics have source_id=None. The write path and the
     viz view model must both tolerate that — a tag Topic must never crash a write.

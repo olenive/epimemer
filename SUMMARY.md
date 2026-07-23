@@ -299,31 +299,13 @@ The active graph is unaffected — every `active` node's content, provenance, an
 
 Memory is exposed as tools, not as a raw database. Claude Code auto-prefixes these as `mcp__epimemer__<name>`.
 
-Ingestion is a two-step process: `segment` breaks text into chunks, then the agent extracts topics/facts/inferences and passes them to `store_decomposition`.
+Ingestion is a two-step process: `segment` breaks text into chunks, then the agent extracts topics/facts/inferences and passes them to `store_decomposition`. Epimemer does not decompose text itself — that is the calling agent's job.
 
-| Tool                  | Purpose                                        |
-|-----------------------|------------------------------------------------|
-| `segment`             | Segment text into chunks (step 1 of ingest)    |
-| `store_decomposition` | Store extracted nodes and edges (step 2)       |
-| `search`              | Semantic + graph retrieval, metacontext-aware   |
-| `link`                | Create explicit edges between nodes             |
-| `update`              | Create new node version, supersede the old one  |
-| `reflect`             | Analyse graph for consolidation opportunities   |
-| `apply_reflection`    | Apply agent decisions from reflection analysis  |
-| `query_graph`         | Structured traversal from a starting node       |
-| `archive`             | Move superseded nodes older than cutoff to cold storage |
-| `restore`             | Reimport archived nodes for a time range        |
-| `create_timeline`     | Create a named timeline                         |
-| `add_timepoint`       | Add a concrete or vague timepoint to a timeline |
-| `query_timeline`      | Find nearest timepoints or query a time range   |
-| `create_timelink`     | Link a node to a timepoint on a timeline        |
-| `create_metacontext`  | Create an epistemic frame for disambiguation    |
-| `get_metacontexts`    | Get metacontexts for a node                     |
-| `list_graphs`         | List available knowledge graphs                 |
-| `use_graph`           | Switch to or create a knowledge graph           |
-| `delete_graph`        | Delete a knowledge graph permanently            |
+The tools group into: **core memory** (`segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`); **discovery & stats** (`query_graph`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`); **conflict handling** (`check_conflicts`, `record_contradiction`, `record_variant`); **reflection** (`reflect`, `apply_reflection`); **temporal access** (`as_of`, `query_changes`); **archival** (`archive`, `restore`); **timelines** (`create_timeline`, `add_timepoint`, `query_timeline`, `create_timelink`); **metacontexts** (`create_metacontext`, `get_metacontexts`); and **graph management** (`list_graphs`, `use_graph`, `delete_graph`).
 
-Both `search` and `query_graph` accept an optional `at_time` parameter to query historical graph state.
+See [INTEGRATION.md](INTEGRATION.md#available-tools) for the canonical table with one-line descriptions and the authoritative tool count — this document intentionally does not restate the count so it can only drift in one place.
+
+Historical graph state is read with the dedicated `as_of` (a lifecycle snapshot at a past instant) and `query_changes` (births and retirements across a window) tools — not via an `at_time` parameter on `search`/`query_graph`.
 
 ## Storage
 
@@ -332,6 +314,10 @@ Both `search` and `query_graph` accept an optional `at_time` parameter to query 
 ### Multi-Graph Support
 
 All backends support multiple named graphs. The `StorageBackend` protocol requires `list_databases`, `switch_database`, and `delete_database`. SurrealDB uses separate databases within a namespace; InMemoryStorage uses a dict-of-dicts pattern. The default graph is `"default"`. Agents manage graphs at runtime via the `list_graphs`, `use_graph`, and `delete_graph` tools.
+
+### Scaling Limits
+
+Several read paths are currently O(N) in the number of active nodes and do per-node edge fetches: `list_sources` / `list_relations`, `reflect`'s pending-review gather and split/enrichment loops, and `search`'s per-node frame/label enrichment. This is fine in-memory, but over a websocket to SurrealDB each item is a round-trip, so these do not yet scale to a large persistent graph. The fix direction (aggregate queries, batched edge fetches, and `asyncio.gather` for per-node enrichment) is a known, documented ceiling rather than a defect — don't point a large graph at it unwarned.
 
 ## Update Behaviours
 
@@ -361,7 +347,7 @@ Petri nets are a natural fit because:
 - Concurrency is pervasive (parallel embeddings, async reflection, simultaneous ingestion)
 - The type system on places creates natural interfaces between processing stages
 - **Type-based output routing** means a decomposition transition that returns a Topic, Fact, or Inference will automatically route each to the correct typed place — branching logic is expressed by the graph structure, not hidden in conditionals
-- **Activation functions** can implement the "write fast, organize slow" principle — e.g., the reflect transition only fires when enough unprocessed items accumulate
+- **Transition guards** (paired with priorities) can implement the "write fast, organize slow" principle — e.g., the reflect transition only fires when enough unprocessed items accumulate
 - **Async transitions** align with the inherently async operations in this system (LLM calls, embedding APIs, database writes)
 
 ### Development Strategy
@@ -386,7 +372,7 @@ This separation means:
 Petritype features that support this:
 - Async transitions allow the orchestration net to invoke sub-nets without blocking
 - Type routing at the orchestration level handles branching between processes
-- Activation functions on orchestration transitions gate when processes trigger (e.g., reflect only fires when enough new items accumulate)
+- Guards on orchestration transitions gate when processes trigger (e.g., reflect only fires when enough new items accumulate)
 
 ### Swappable Strategies via Typed Interfaces
 

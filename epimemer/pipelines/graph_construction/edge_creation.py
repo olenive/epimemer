@@ -133,4 +133,4 @@ def edge_creation_net(
         FunctionTransitionNode("create_edges", create_edges),
         ArgumentEdgeToTransition("DecomposedSegments", "create_edges", "decomposed"),
         ReturnedEdgeFromTransition("create_edges", "Edges"),
-    ])
+    ], expect_acyclic=True)

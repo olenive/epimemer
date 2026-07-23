@@ -222,4 +222,4 @@ def hybrid_retrieval_net(
         FunctionTransitionNode("build_query_result", build_query_result),
         ArgumentEdgeToTransition("ExpandedResults", "build_query_result", "expanded_results"),
         ReturnedEdgeFromTransition("build_query_result", "QueryResult"),
-    ])
+    ], expect_acyclic=True)

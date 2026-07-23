@@ -27,6 +27,7 @@ from petritype.core.executable_graph_components import (
     ListPlaceNode,
     ReturnedEdgeFromTransition,
 )
+from petritype.runtime import RunContext, Runner
 
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.mcp.config import ServerConfig
@@ -308,7 +309,7 @@ def orchestration_net(
         ),
         ArgumentEdgeToTransition("ReflectInput", "run_reflect", "input"),
         ReturnedEdgeFromTransition("run_reflect", "MemoryResult"),
-    ])
+    ], expect_acyclic=True)
 
 
 # --- Auto-reflect helper ---
@@ -332,7 +333,7 @@ async def execute_with_auto_reflect(
         (result, updated_state, reflect_result_or_none)
     """
     graph = orchestration_net(request, storage, embedding_provider, config)
-    graph, _ = await ExecutableGraphOperations.execute_graph(graph, max_transitions=10)
+    graph = await Runner.run_to_completion(RunContext(graph=graph))
     result: MemoryResult = graph.place_named("MemoryResult").tokens[0]
 
     reflect_result = None
@@ -346,7 +347,7 @@ async def execute_with_auto_reflect(
             reflect_graph = orchestration_net(
                 reflect_request, storage, embedding_provider, config,
             )
-            reflect_graph, _ = await ExecutableGraphOperations.execute_graph(reflect_graph, max_transitions=10)
+            reflect_graph = await Runner.run_to_completion(RunContext(graph=reflect_graph))
             reflect_result = reflect_graph.place_named("MemoryResult").tokens[0]
             state = state.model_copy(update={"stores_since_reflect": 0})
 

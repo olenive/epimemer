@@ -93,4 +93,4 @@ def paragraph_split_segmentation_net(
         FunctionTransitionNode("split_paragraphs", split_paragraphs),
         ArgumentEdgeToTransition("RawDocument", "split_paragraphs", "doc"),
         ReturnedEdgeFromTransition("split_paragraphs", "Segments"),
-    ])
+    ], expect_acyclic=True)

@@ -64,7 +64,7 @@ class TestOrchestrationRouting:
             payload={"content": "Test content about AI."},
         )
         graph = orchestration_net(request, storage, embedding_provider, config)
-        graph, fired = await ExecutableGraphOperations.execute_graph(graph, max_transitions=10)
+        graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=10)
 
         assert fired == 2  # route_request + run_segment
         results = graph.place_named("MemoryResult").tokens
@@ -81,7 +81,7 @@ class TestOrchestrationRouting:
 
         request = MemoryRequest(action="store_decomposition", payload=payload)
         graph = orchestration_net(request, storage, embedding_provider, config)
-        graph, fired = await ExecutableGraphOperations.execute_graph(graph, max_transitions=10)
+        graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=10)
 
         assert fired == 2  # route + run_store_decomposition
         result = graph.place_named("MemoryResult").tokens[0]
@@ -107,7 +107,7 @@ class TestOrchestrationRouting:
             payload={"query": "Neural networks learn from data.", "k": 5},
         )
         graph = orchestration_net(search_req, storage, embedding_provider, config)
-        graph, fired = await ExecutableGraphOperations.execute_graph(graph, max_transitions=10)
+        graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=10)
 
         assert fired == 2  # route + run_search
         result = graph.place_named("MemoryResult").tokens[0]
@@ -119,7 +119,7 @@ class TestOrchestrationRouting:
     ):
         request = MemoryRequest(action="reflect", payload={})
         graph = orchestration_net(request, storage, embedding_provider, config)
-        graph, fired = await ExecutableGraphOperations.execute_graph(graph, max_transitions=10)
+        graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=10)
 
         assert fired == 2  # route + run_reflect
         result = graph.place_named("MemoryResult").tokens[0]
@@ -141,12 +141,12 @@ class TestOrchestrationRouting:
         assert len(graph.place_named("MemoryResult").tokens) == 0
 
         # After routing
-        graph, _ = await ExecutableGraphOperations.execute_graph(graph, max_transitions=1)
+        graph, _ = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=1)
         assert len(graph.place_named("MemoryRequest").tokens) == 0
         assert len(graph.place_named("SegmentInput").tokens) == 1
 
         # After segment
-        graph, _ = await ExecutableGraphOperations.execute_graph(graph, max_transitions=1)
+        graph, _ = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=1)
         assert len(graph.place_named("SegmentInput").tokens) == 0
         assert len(graph.place_named("MemoryResult").tokens) == 1
 

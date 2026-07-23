@@ -196,7 +196,7 @@ class TestSemanticSimilarityStrategy:
 
         graph = semantic_similarity_segmentation_net(doc, provider)
         updated_graph, fired = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10
+            graph, stop_after_n_firings=10
         )
 
         segments = updated_graph.place_named("Segments").tokens
@@ -226,7 +226,7 @@ class TestSemanticSimilarityStrategy:
 
         graph = semantic_similarity_segmentation_net(doc, provider)
         updated_graph, fired = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10
+            graph, stop_after_n_firings=10
         )
 
         segments = updated_graph.place_named("Segments").tokens
@@ -241,7 +241,7 @@ class TestSemanticSimilarityStrategy:
 
         graph = semantic_similarity_segmentation_net(doc, provider)
         updated_graph, _ = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10
+            graph, stop_after_n_firings=10
         )
 
         segments = updated_graph.place_named("Segments").tokens
@@ -269,7 +269,7 @@ class TestSemanticSimilarityStrategy:
 
         graph = semantic_similarity_segmentation_net(doc, provider)
         updated_graph, _ = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10
+            graph, stop_after_n_firings=10
         )
 
         segments = updated_graph.place_named("Segments").tokens
@@ -283,7 +283,7 @@ class TestSemanticSimilarityStrategy:
 
         graph = semantic_similarity_segmentation_net(doc, provider)
         updated_graph, _ = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10
+            graph, stop_after_n_firings=10
         )
 
         segments = updated_graph.place_named("Segments").tokens
@@ -309,7 +309,7 @@ class TestSemanticPetriNetFlow:
         assert len(graph.place_named("Segments").tokens) == 0
 
         # Fire transition 1: split_sentences
-        graph, fired = await ExecutableGraphOperations.execute_graph(graph, max_transitions=1)
+        graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=1)
         assert fired == 1
         assert len(graph.place_named("RawDocument").tokens) == 0
         assert len(graph.place_named("SentenceList").tokens) == 1
@@ -318,7 +318,7 @@ class TestSemanticPetriNetFlow:
         assert len(sentence_list.sentences) == 2
 
         # Fire transition 2: compute_similarities
-        graph, fired = await ExecutableGraphOperations.execute_graph(graph, max_transitions=1)
+        graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=1)
         assert fired == 1
         assert len(graph.place_named("SentenceList").tokens) == 0
         assert len(graph.place_named("SimilarityScores").tokens) == 1
@@ -327,13 +327,13 @@ class TestSemanticPetriNetFlow:
         assert len(sim_scores.scores) == 1  # 2 sentences -> 1 similarity score
 
         # Fire transition 3: detect_boundaries_and_form_segments
-        graph, fired = await ExecutableGraphOperations.execute_graph(graph, max_transitions=1)
+        graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=1)
         assert fired == 1
         assert len(graph.place_named("SimilarityScores").tokens) == 0
         assert len(graph.place_named("Segments").tokens) >= 1
 
         # No more transitions should fire
-        graph, fired = await ExecutableGraphOperations.execute_graph(graph, max_transitions=1)
+        graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=1)
         assert fired == 0
 
     async def test_three_transitions_fire(self):
@@ -344,7 +344,7 @@ class TestSemanticPetriNetFlow:
 
         graph = semantic_similarity_segmentation_net(doc, provider)
         updated_graph, fired = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10
+            graph, stop_after_n_firings=10
         )
 
         assert fired == 3
@@ -364,7 +364,7 @@ class TestParagraphSplitStrategy:
 
         graph = paragraph_split_segmentation_net(doc)
         updated_graph, fired = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10
+            graph, stop_after_n_firings=10
         )
 
         segments = updated_graph.place_named("Segments").tokens
@@ -380,7 +380,7 @@ class TestParagraphSplitStrategy:
 
         graph = paragraph_split_segmentation_net(doc)
         updated_graph, _ = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10
+            graph, stop_after_n_firings=10
         )
 
         segments = updated_graph.place_named("Segments").tokens
@@ -394,7 +394,7 @@ class TestParagraphSplitStrategy:
 
         graph = paragraph_split_segmentation_net(doc)
         updated_graph, _ = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10
+            graph, stop_after_n_firings=10
         )
 
         segments = updated_graph.place_named("Segments").tokens
@@ -407,7 +407,7 @@ class TestParagraphSplitStrategy:
 
         graph = paragraph_split_segmentation_net(doc)
         updated_graph, _ = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10
+            graph, stop_after_n_firings=10
         )
 
         segments = updated_graph.place_named("Segments").tokens
@@ -421,7 +421,7 @@ class TestParagraphSplitStrategy:
 
         graph = paragraph_split_segmentation_net(doc)
         updated_graph, _ = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10
+            graph, stop_after_n_firings=10
         )
 
         segments = updated_graph.place_named("Segments").tokens
@@ -436,7 +436,7 @@ class TestParagraphSplitStrategy:
 
         graph = paragraph_split_segmentation_net(doc)
         updated_graph, _ = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10
+            graph, stop_after_n_firings=10
         )
 
         segments = updated_graph.place_named("Segments").tokens
@@ -453,7 +453,7 @@ class TestParagraphPetriNetFlow:
 
         graph = paragraph_split_segmentation_net(doc)
         updated_graph, fired = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10
+            graph, stop_after_n_firings=10
         )
 
         assert fired == 1
@@ -471,7 +471,7 @@ class TestParagraphPetriNetFlow:
 
         # After execution
         updated_graph, fired = await ExecutableGraphOperations.execute_graph(
-            graph, max_transitions=10
+            graph, stop_after_n_firings=10
         )
 
         assert len(updated_graph.place_named("RawDocument").tokens) == 0

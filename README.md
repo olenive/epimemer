@@ -124,29 +124,19 @@ All configuration is via `EPIMEMER_` environment variables:
 
 ## MCP Tools
 
-Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<name>` by Claude Code):
+Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<name>` by Claude Code), grouped by purpose:
 
-| Tool | Purpose |
-|------|---------|
-| `segment` | Segment text into chunks (step 1 of ingest) |
-| `store_decomposition` | Store agent-extracted topics/facts/inferences (step 2 of ingest) |
-| `search` | Hybrid retrieval (vector + graph), metacontext-aware |
-| `link` | Create typed edges between nodes |
-| `update` | Create new node version (immutable history) |
-| `reflect` | Analyse graph for consolidation opportunities (embedding-based) |
-| `apply_reflection` | Apply agent decisions from reflection analysis |
-| `query_graph` | Traverse the graph from a node |
-| `archive` | Export old superseded nodes to cold storage |
-| `restore` | Reimport archived nodes |
-| `create_timeline` | Create a named timeline |
-| `add_timepoint` | Add a concrete or vague timepoint to a timeline |
-| `query_timeline` | Find nearest timepoints or query a time range |
-| `create_timelink` | Link a node to a timepoint on a timeline |
-| `create_metacontext` | Create an epistemic frame for disambiguation |
-| `get_metacontexts` | Get metacontexts for a node |
-| `list_graphs` | List available knowledge graphs |
-| `use_graph` | Switch to or create a knowledge graph |
-| `delete_graph` | Delete a knowledge graph permanently |
+- **Core memory**: `segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`
+- **Discovery & stats**: `query_graph`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`
+- **Conflict handling**: `check_conflicts`, `record_contradiction`, `record_variant`
+- **Reflection**: `reflect`, `apply_reflection`
+- **Temporal access**: `as_of`, `query_changes`
+- **Archival**: `archive`, `restore`
+- **Timelines**: `create_timeline`, `add_timepoint`, `query_timeline`, `create_timelink`
+- **Metacontexts**: `create_metacontext`, `get_metacontexts`
+- **Graph management**: `list_graphs`, `use_graph`, `delete_graph`
+
+See [INTEGRATION.md](INTEGRATION.md#available-tools) for the canonical table with one-line descriptions and the authoritative tool count.
 
 ## Architecture
 
@@ -169,7 +159,7 @@ epimemer/
   embeddings/     — Embedding protocol + sentence-transformers + mock
   pipelines/
     segmentation/     — Paragraph split, semantic similarity
-    graph_construction/ — Edge creation, value updates, versioning, persistence
+    graph_construction/ — Edge creation, node versioning
     query/            — Vector search, graph expansion, hybrid retrieval
     reflection/       — Topic consolidation, value decay, contradiction detection, archival
     timeline/         — Pure functional timeline operations
@@ -178,6 +168,26 @@ epimemer/
   logging/        — Structured JSON logging
   visualization/ — Real-time WebSocket visualization server and frontend
 tests/            — 283 tests (unit, pipeline, MCP, integration)
+```
+
+## Testing
+
+```bash
+# Default suite — embedded, no external services
+make test          # or: uv run python -m pytest tests/ -q
+```
+
+Most storage and MCP tests run against **both** backends (a `conftest.py` fixture
+parameterizes over `InMemoryStorage` and `SurrealDBStorage("mem://")`).
+
+The embedded `mem://` backend cannot model two real connections, so there is a
+separate **opt-in** suite (`tests/storage/test_surrealdb_integration.py`) for
+real ws:// connection/auth and cross-connection transaction atomicity. It
+**skips itself** when `EPIMEMER_SURREAL_WS_URL` is unset — so a bare `pytest`
+never runs it and never signals that it exists. Run it via Docker:
+
+```bash
+make test-integration   # spins up SurrealDB, waits for it, runs the suite, tears it down
 ```
 
 ## Documentation

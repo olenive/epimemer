@@ -5,8 +5,11 @@ The protocol is designed to be storage-agnostic — SurrealDB, Postgres,
 in-memory, or anything else can implement it.
 """
 
+import re
 from datetime import datetime
-from typing import Protocol, Sequence
+from typing import Protocol, Sequence, TypeVar
+
+from pydantic import BaseModel
 
 from epimemer.core.types import (
     EdgeType,
@@ -21,9 +24,117 @@ from epimemer.core.types import (
     Timeline,
 )
 
+_M = TypeVar("_M", bound=BaseModel)
+
+GRAPH_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def validate_graph_name(name: str) -> str:
+    """Reject graph names that are not a plain identifier. Returns the name.
+
+    Graph names arrive from agent-facing MCP tools as arbitrary strings and
+    reach SurrealQL that cannot fully parameterize a database name, so a name
+    containing a backtick can close the quoting and append its own statements.
+    Every backend applies this so the two agree on what a legal graph name is —
+    a name one backend accepts must never be one the other would interpolate.
+    """
+    if not isinstance(name, str) or not GRAPH_NAME_PATTERN.fullmatch(name):
+        raise ValueError(
+            f"Invalid graph name {name!r}. Graph names must be 1-64 characters "
+            "of letters, digits, hyphen or underscore."
+        )
+    return name
+
+
+def drop_none_values(value):
+    """Remove None-valued keys from dicts, recursively. Returns a new value.
+
+    Python has one "nothing" (``None``); SurrealDB has two — ``NULL`` (the key
+    exists, its value is nothing) and ``NONE`` (the key does not exist). They do
+    not compare equal, and the Python driver has no way to express ``NULL`` for
+    a parameterized value: every ``None`` is encoded as ``NONE``, so the key is
+    simply absent from the stored row.
+
+    Rather than let that produce different behaviour per backend, every backend
+    normalizes the same way *before* writing: a None-valued key is dropped, so
+    absence is the single representation of "no information". In a free-form
+    bag like `metadata`, `{"note": None}` and `{}` mean the same thing, so
+    nothing recoverable is lost.
+
+    Note the asymmetry, which mirrors SurrealDB exactly: a None *inside a list*
+    is preserved, because arrays keep their positions and dropping an element
+    would shift every index after it.
+
+    Declared model fields are unaffected in practice — they are absent from the
+    stored row either way, and Pydantic refills their `= None` default on read.
+    """
+    if isinstance(value, dict):
+        return {k: drop_none_values(v) for k, v in value.items() if v is not None}
+    if isinstance(value, list):
+        return [drop_none_values(v) for v in value]
+    return value
+
+
+def normalize_for_storage(model: _M) -> _M:
+    """Return a copy of `model` with None-valued keys dropped from dict fields.
+
+    Every backend applies this on the way in, so a record round-trips
+    identically whichever backend is configured. See `drop_none_values`.
+    """
+    updates = {
+        name: drop_none_values(attr)
+        for name in type(model).model_fields
+        if isinstance(attr := getattr(model, name, None), dict)
+    }
+    return model.model_copy(update=updates) if updates else model
+
 
 class StorageBackend(Protocol):
-    """Protocol for all storage backends."""
+    """Protocol for all storage backends.
+
+    **`store_*` is upsert by id.** Storing a record whose id already exists
+    replaces it in place; it must not duplicate the record and must not
+    silently do nothing. Every caller relies on this — `apply_decay` re-stores
+    decayed nodes, `add_timeline_timepoint` re-stores the timeline — so a
+    backend that treats `store_*` as insert-only loses those writes without
+    raising. `write_batch_tx` is the deliberate exception; see its docstring.
+
+    **Records round-trip unchanged.** What `store_*` accepts is what the
+    matching getter returns: content is preserved byte-for-byte (unicode,
+    quotes, backticks, `$`, newlines — a backend that reaches its store through
+    query text must parameterize rather than interpolate), floats keep their
+    precision, and nested structure is preserved.
+
+    **The one documented exception is None-valued dict keys**, which every
+    backend drops on the way in by calling `normalize_for_storage`. Callers must
+    treat absence as the only representation of "no information" in free-form
+    dicts like `metadata`; `{"note": None}` is stored, and reads back, as `{}`.
+    A new backend that skips this normalization will *appear* to work — it will
+    simply be more faithful than the others — and will diverge the moment a
+    caller writes a None. Apply it.
+
+    Backend parity is covered by `tests/storage/test_storage_parity.py`, which
+    runs the same assertions against every implementation. A new backend should
+    be added to the fixture there and in `tests/conftest.py`; if it passes both,
+    it satisfies this contract.
+    """
+
+    # --- Lifecycle ---
+
+    async def connect(self) -> None:
+        """Open any underlying connection. Called once at startup.
+
+        A backend with nothing to open (e.g. in-memory) implements this as a
+        no-op so callers can invoke it unconditionally.
+        """
+        ...
+
+    async def close(self) -> None:
+        """Release any underlying connection. Called once at shutdown.
+
+        A no-op for backends holding no external resources.
+        """
+        ...
 
     # --- Documents ---
 
@@ -242,7 +353,10 @@ class StorageBackend(Protocol):
         multi-write paths that compute their full output in Python before
         persisting — ingest (``store_decomposition``) and parent/subtopic
         synthesis — so a mid-operation failure cannot leave a partial graph.
-        Ids are assumed new (these are freshly-created records).
+
+        Unlike the `store_*` methods this is **insert-only, not upsert**: ids
+        are assumed new (these are freshly-created records). Re-writing an
+        existing id through this path is a caller error, not an update.
         """
         ...
 

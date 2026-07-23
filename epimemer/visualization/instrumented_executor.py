@@ -1,29 +1,39 @@
-"""Instrumented pipeline executor that emits Petri net events.
+"""Turns Petri net execution into the event stream the visualization consumes.
 
-Wraps Petritype's execute_graph with event emission so the pipeline
-visualization panel can show transitions firing and tokens moving
-in real time.
+Petritype's `Runner` already drives a net to quiescence and hands observers the
+live graph after every state change. All that is missing is a translation: graph
+state → `PipelineEvent`. That translation is `pipeline_observer`, and it is the
+only thing in this module that knows about the wire format.
+
+Two consequences worth stating, because they were not true of the hand-rolled
+loop this replaces:
+
+- **No iteration cap.** The net stops when nothing is enabled, not when a
+  guessed budget runs out. A cap that is too low truncates the pipeline and
+  returns a half-filled result with no error; one that is high enough to be safe
+  never fires.
+- **Observing does not change the run.** Events are published from a graph the
+  runner owns; the observer only reads. The bus is a tap, not a valve — see
+  `tests/pipelines/test_net_execution.py`.
+- **Every run ends the stream.** Success emits `PipelineCompleted`; a raising
+  transition emits `PipelineFailed` and then re-raises. The two are distinct so a
+  consumer can tell a finished pipeline from a failed one.
 
 Usage:
     bus = create_event_bus()
     graph = reflection_net(request, storage, embedding_provider)
-    result_graph, steps = await execute_with_events(graph, bus, "reflection")
+    result_graph, fired = await execute_with_events(graph, bus, "reflection")
 """
 
 import time
 
-from petritype.core.executable_graph_components import (
-    ArgumentEdgeToTransition,
-    ExecutableGraph,
-    ExecutableGraphOperations,
-    FunctionTransitionNode,
-    ListPlaceNode,
-    ReturnedEdgeFromTransition,
-)
+from petritype.core.executable_graph_components import ExecutableGraph
+from petritype.runtime import Observer, RunContext, Runner
 
 from epimemer.visualization.event_bus import InProcessEventBus
 from epimemer.visualization.events import (
     PipelineCompleted,
+    PipelineFailed,
     PipelineStarted,
     PipelineTopologyEdge,
     TokensUpdated,
@@ -48,47 +58,124 @@ def _transition_names(graph: ExecutableGraph) -> list[str]:
 
 def _topology_edges(graph: ExecutableGraph) -> list[PipelineTopologyEdge]:
     """Extract the Petri net topology as a list of directed edges."""
-    edges: list[PipelineTopologyEdge] = []
-    for edge in graph.argument_edges:
-        edges.append(PipelineTopologyEdge(
-            source=edge.place_node_name,
-            target=edge.transition_node_name,
-            label=edge.argument,
+    return [
+        *(
+            PipelineTopologyEdge(
+                source=edge.place_node_name,
+                target=edge.transition_node_name,
+                label=edge.argument,
+            )
+            for edge in graph.argument_edges
+        ),
+        *(
+            PipelineTopologyEdge(
+                source=edge.transition_node_name,
+                target=edge.place_node_name,
+            )
+            for edge in graph.return_edges
+        ),
+    ]
+
+
+def _input_place_names(graph: ExecutableGraph, transition_name: str) -> list[str]:
+    """Places wired as inputs to a transition, including non-consuming read edges.
+
+    Taken from the topology rather than from the engine's fire history: the
+    history is capped for memory and its retention is configurable, so it is not
+    a dependable source. The two agree for any transition whose input arcs all
+    carry a token when it fires, which is every net here.
+    """
+    return [
+        edge.place_node_name
+        for edge in (*graph.argument_edges, *graph.snapshot_edges, *graph.mutate_edges)
+        if edge.transition_node_name == transition_name
+    ]
+
+
+def _output_place_names(graph: ExecutableGraph, transition_name: str) -> list[str]:
+    """Places a transition deposits into, from the topology. See `_input_place_names`."""
+    return [
+        edge.place_node_name
+        for edge in graph.return_edges
+        if edge.transition_node_name == transition_name
+    ]
+
+
+def pipeline_observer(bus: InProcessEventBus, pipeline_name: str) -> Observer:
+    """Build an observer that republishes graph state changes as pipeline events.
+
+    The runner calls this once for the initial marking and once after every
+    change. What fired since the last call is read by diffing `fired_counts` — a
+    per-transition tally the engine keeps, monotonic and never trimmed — not from
+    `last_fired`. That distinction is load-bearing in `CONCURRENT` mode: a single
+    notification can cover a whole batch of completions, `step_count` jumps by
+    more than one, and `last_fired` names only the last of them. Diffing the
+    counts catches every firing in the batch; reading `last_fired` would drop all
+    but one. In `SEQUENTIAL` mode each firing gets its own notification, so the
+    diff is +1 on one transition and the two readings agree.
+
+    `TransitionEnabled` / `Fired` / `Completed` are emitted together, after the
+    fact — one triple per firing. The runner fires atomically from an observer's
+    point of view (no callback between "enabled" and "done"), so the three
+    describe one completed firing rather than three moments; they stay separate
+    events because the frontend consumes them that way. Within one batch the
+    triples are ordered by net definition, not completion order — concurrent
+    completion order is only partial anyway.
+    """
+    state: dict = {"fired_counts": None, "since": time.monotonic()}
+
+    async def observe(graph: ExecutableGraph) -> None:
+        now = time.monotonic()
+        previous = state["fired_counts"]
+        current = dict(graph.fired_counts)
+        state["fired_counts"] = current
+
+        if previous is not None:
+            for transition_name in _transition_names(graph):
+                fired = current.get(transition_name, 0) - previous.get(transition_name, 0)
+                for _ in range(fired):
+                    await bus.publish(TransitionEnabled(
+                        pipeline_name=pipeline_name,
+                        transition_name=transition_name,
+                    ))
+                    await bus.publish(TransitionFired(
+                        pipeline_name=pipeline_name,
+                        transition_name=transition_name,
+                        input_places=_input_place_names(graph, transition_name),
+                    ))
+                    await bus.publish(TransitionCompleted(
+                        pipeline_name=pipeline_name,
+                        transition_name=transition_name,
+                        output_places=_output_place_names(graph, transition_name),
+                        duration_ms=(now - state["since"]) * 1000,
+                    ))
+
+        state["since"] = now
+        await bus.publish(TokensUpdated(
+            pipeline_name=pipeline_name,
+            place_token_counts=_place_token_counts(graph),
         ))
-    for edge in graph.return_edges:
-        edges.append(PipelineTopologyEdge(
-            source=edge.transition_node_name,
-            target=edge.place_node_name,
-        ))
-    return edges
+
+    return observe
 
 
 async def execute_with_events(
     graph: ExecutableGraph,
     bus: InProcessEventBus,
     pipeline_name: str,
-    *,
-    max_iterations: int = 100,
 ) -> tuple[ExecutableGraph, int]:
-    """Execute a Petri net graph step-by-step, emitting pipeline events.
-
-    Fires one transition per step so the visualization can track each
-    transition individually. Emits events for:
-    - Pipeline start/complete (with full topology for rendering)
-    - Each transition enabled/fired/completed
-    - Token count updates after each step
+    """Run a Petri net to quiescence, publishing the pipeline's event stream.
 
     Args:
         graph: The executable Petri net graph.
         bus: Event bus to publish pipeline events on.
         pipeline_name: Name for this pipeline execution (e.g., "reflection").
-        max_iterations: Safety limit on total transitions fired.
 
     Returns:
-        (updated_graph, total_transitions_fired)
+        (updated_graph, transitions_fired)
     """
-    pipeline_start = time.monotonic()
-    total_fired = 0
+    started_at = time.monotonic()
+    steps_before = graph.step_count
 
     await bus.publish(PipelineStarted(
         pipeline_name=pipeline_name,
@@ -97,63 +184,29 @@ async def execute_with_events(
         edges=_topology_edges(graph),
     ))
 
-    await bus.publish(TokensUpdated(
-        pipeline_name=pipeline_name,
-        place_token_counts=_place_token_counts(graph),
-    ))
-
-    for _ in range(max_iterations):
-        step_start = time.monotonic()
-
-        graph, fired = await ExecutableGraphOperations.execute_graph(
-            executable_graph=graph,
-            max_transitions=1,
-            transition_history_length=1,
-            place_history_length=1,
+    # A raising transition must still close the stream. The runner mutates this
+    # graph in place, so `step_count` reflects what fired before the failure even
+    # after the exception unwinds. Publish a terminal `PipelineFailed` and
+    # re-raise — the caller (`_run_with_timeout`) turns it into an error response;
+    # without this the frontend would show a pipeline that never ends.
+    try:
+        graph = await Runner.run_to_completion(
+            RunContext(graph=graph, observers=(pipeline_observer(bus, pipeline_name),))
         )
-
-        if fired == 0:
-            break
-
-        total_fired += fired
-        step_duration_ms = (time.monotonic() - step_start) * 1000
-
-        # Extract what happened from history
-        # History is list[list[...]] — one entry per step, each entry is a list of places/transitions
-        transition = graph.transition_history[0] if graph.transition_history else None
-        input_places = [p.name for p in graph.input_place_history[0]] if graph.input_place_history else []
-        output_places = [p.name for p in graph.output_place_history[0]] if graph.output_place_history else []
-
-        if transition is not None:
-            await bus.publish(TransitionEnabled(
-                pipeline_name=pipeline_name,
-                transition_name=transition.name,
-            ))
-
-            await bus.publish(TransitionFired(
-                pipeline_name=pipeline_name,
-                transition_name=transition.name,
-                input_places=input_places,
-            ))
-
-            await bus.publish(TransitionCompleted(
-                pipeline_name=pipeline_name,
-                transition_name=transition.name,
-                output_places=output_places,
-                duration_ms=step_duration_ms,
-            ))
-
-        await bus.publish(TokensUpdated(
+    except Exception as exc:
+        await bus.publish(PipelineFailed(
             pipeline_name=pipeline_name,
-            place_token_counts=_place_token_counts(graph),
+            error=str(exc),
+            transitions_fired=graph.step_count - steps_before,
+            duration_ms=(time.monotonic() - started_at) * 1000,
         ))
+        raise
 
-    pipeline_duration_ms = (time.monotonic() - pipeline_start) * 1000
-
+    fired = graph.step_count - steps_before
     await bus.publish(PipelineCompleted(
         pipeline_name=pipeline_name,
-        transitions_fired=total_fired,
-        duration_ms=pipeline_duration_ms,
+        transitions_fired=fired,
+        duration_ms=(time.monotonic() - started_at) * 1000,
     ))
 
-    return graph, total_fired
+    return graph, fired
