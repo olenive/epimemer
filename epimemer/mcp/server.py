@@ -1191,16 +1191,23 @@ async def epimemer_graph_stats(
     Returns total node and edge counts, a breakdown by node type
     (topic/fact/inference) and edge type, and metacontext/timeline totals.
     Use this to gauge how much is stored before searching or reflecting.
+
+    Also reports stores_since_reflect against reflect_threshold for the active
+    graph. When reflect_suggested is true, suggest running reflect to the user.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
         "epimemer.graph_stats",
-        lambda: tools.graph_stats(storage=deps["storage"]),
+        lambda: tools.graph_stats(
+            storage=deps["storage"],
+            reflect_threshold=deps["config"].reflect_threshold,
+        ),
         ctx,
         "",
         lambda r, m: (
             f"nodes={r['total_nodes']} edges={r['total_edges']} "
-            f"mc={r['metacontexts']} graph={r['graph']}"
+            f"mc={r['metacontexts']} graph={r['graph']} "
+            f"reflect={r['stores_since_reflect']}/{r['reflect_threshold']}"
         ),
     )
 

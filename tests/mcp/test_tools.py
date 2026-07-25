@@ -1394,7 +1394,7 @@ class TestSearchWithMetacontext:
 class TestGraphStats:
 
     async def test_empty_graph(self, storage):
-        result, meta = await graph_stats(storage)
+        result, meta = await graph_stats(storage, reflect_threshold=10)
         assert result["total_nodes"] == 0
         assert result["total_edges"] == 0
         assert result["empty"] is True
@@ -1420,7 +1420,7 @@ class TestGraphStats:
             NodeEdge(src_id=inference.id, dst_id=fact_a.id, type=EdgeType.DERIVED_FROM)
         )
 
-        result, meta = await graph_stats(storage)
+        result, meta = await graph_stats(storage, reflect_threshold=10)
         assert result["total_nodes"] == 4
         assert result["nodes_by_type"] == {"topic": 1, "fact": 2, "inference": 1}
         assert result["total_edges"] == 3
@@ -1433,7 +1433,7 @@ class TestGraphStats:
         await storage.store_node(topic)
         await storage.update_node_status(topic.id, NodeStatus.SUPERSEDED)
 
-        result, _ = await graph_stats(storage)
+        result, _ = await graph_stats(storage, reflect_threshold=10)
         assert result["nodes_by_type"]["topic"] == 0
         assert result["total_nodes"] == 0
 
@@ -1441,7 +1441,7 @@ class TestGraphStats:
         await storage.store_metacontext(Metacontext(content="Real world"))
         await storage.store_metacontext(Metacontext(content="Fiction"))
 
-        result, _ = await graph_stats(storage)
+        result, _ = await graph_stats(storage, reflect_threshold=10)
         assert result["metacontexts"] == 2
 
 

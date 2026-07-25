@@ -5,11 +5,12 @@
     OPEN: extending the wired merge to Facts/Inferences — under discussion (Inferences
     are designed to let competing derivations coexist, so merge there should be rare).
 
-[~] Also we need a way divide up a Topic or other node if it's description/context gets too big and we need to break it up into sub-topics. Ideally this sub-division would have an inherent hierarch so that when recalling the topic we can drill down into specific sub-topics without having to load everything into context.
-    PARTIAL: `apply_reflection splits=[{topic_id, subtopics}]` creates subtopic nodes
-    linked to the parent via `subtopic_of` edges (the hierarchy exists). OPEN: making
-    recall actually drill down the hierarchy instead of loading everything (a retrieval
-    feature, not yet implemented).
+[x] Also we need a way divide up a Topic or other node if it's description/context gets too big and we need to break it up into sub-topics. Ideally this sub-division would have an inherent hierarch so that when recalling the topic we can drill down into specific sub-topics without having to load everything into context.
+    DONE: `apply_reflection splits=[{topic_id, subtopics}]` builds the `subtopic_of`
+    hierarchy, and recall now uses it — `search` annotates returned Topics with their
+    parents/subtopics (id + preview), and the `topic_tree` tool returns ancestors plus
+    descendants to a depth as previews only, so a caller drills into one branch instead
+    of loading the subtree.
 
 
 [ ] Let's make sure we have a visible counter for the auto-reflect - also let's discuss how we can allow the user to trigger the reflect step sooner or to delay it.

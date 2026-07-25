@@ -5,10 +5,10 @@ Living issue tracker. **Last review: 2026-07-28.**
 Everything found so far is resolved except **14** and **16**, both deferred by
 design and described below. Resolved entries are **removed from this file** —
 their resolution lives in git history and the merged code. Issue numbers are
-stable IDs; the gaps (6–13, 15, 17–25) are deleted-resolved items, not missing
-work. **26–30** below are planned work (features/enhancements, prioritized
-2026-07-28), written so another agent can pick each up cold. New findings
-continue from **31**.
+stable IDs; the gaps (6–13, 15, 17–25, 27) are deleted-resolved items, not
+missing work. **26** and **28–30** below are planned work (features/
+enhancements, prioritized 2026-07-28), written so another agent can pick each up
+cold. New findings continue from **31**.
 
 **Workflow (required for every fix):**
 
@@ -117,11 +117,38 @@ while the server is single-client stdio; keep this issue open as the reminder.
 
 Not bugs — the next tranche of product work, tracked here at the user's request
 so the workflow above (failing test first, scoped commits, delete on merge)
-applies to them too. Ordered by priority. Cross-references: **27** is the open
-item in TODO.md ("visible counter" is **26**, "drill-down recall" is **27**);
-**28** is README → *Not yet built* → *Benchmarking*.
+applies to them too. Ordered by priority. Cross-references: **26** is the
+"visible counter" item in TODO.md; **28** is README → *Not yet built* →
+*Benchmarking*.
 
-### Issue 26 — Auto-reflect counter: make it visible and user-controllable — 🆕 PLANNED
+### Issue 26 — Auto-reflect counter: make it visible and user-controllable — 🔨 PART 1 DONE
+
+> **✅ Scope 1 done 2026-07-28.** `graph_stats` now reports
+> `stores_since_reflect`, `reflect_threshold` and `reflect_suggested`, so
+> reflection pressure is readable without storing something first. The threshold
+> is process config, not stored state, so `tools.graph_stats` takes it as a
+> **required** keyword argument and the MCP wrapper passes
+> `config.reflect_threshold` — no default inside the tool, which would have made
+> two places disagree about the effective threshold once scope 2 adds an
+> override.
+>
+> All three keys are always present, unlike `store_decomposition` which omits
+> `reflect_suggested` when false: an absent key is indistinguishable from
+> `false` to a caller, and this readout exists to be checked. The `>=` boundary
+> matches `store_decomposition` so the two never disagree about whether a
+> reflect is due.
+>
+> Guarded by `tests/mcp/test_graph_stats.py` (both backends):
+> `test_reports_reflect_counter`, `test_fresh_graph_reports_zero`,
+> `test_suggests_reflect_from_the_threshold_onwards`,
+> `test_suggestion_clears_after_a_reset`,
+> `test_reflect_keys_are_always_present`, and
+> `test_tool_reports_the_configured_threshold` for the wrapper's config
+> pass-through.
+>
+> **Scopes 2 and 3 below are still open.** Note for scope 2: the effective
+> threshold is now computed in exactly one place (the wrapper), so the override
+> lands there.
 
 **Why.** Post-#25 the counter is persistent per-graph (storage protocol:
 `get_reflect_counter` / `bump_reflect_counter` / `reset_reflect_counter`;
@@ -135,11 +162,7 @@ no "snooze".
 
 **Scope (three independent pieces, in order of value):**
 
-1. **`graph_stats` reports it.** Add `stores_since_reflect`,
-   `reflect_threshold`, `reflect_suggested` to the `graph_stats` result
-   (`tools.graph_stats`; the tool wrapper at `mcp/server.py:1150-1163` already
-   has `storage` and `config` in scope). This alone answers "how close am I to
-   a suggested reflect?".
+1. ~~**`graph_stats` reports it.**~~ ✅ done — see the note above.
 2. **Per-graph threshold override.** New small tool
    `configure_reflection(threshold: int | None)`: persists an override next to
    the counter (same per-graph marker record both backends already maintain —
@@ -156,86 +179,11 @@ no "snooze".
    `count >= threshold` (`frontend/src/main.ts` + `types.ts`; rebuild and
    commit the static bundle).
 
-**Tests first.** `tests/mcp/test_graph_stats.py::test_reports_reflect_counter`
-(parameterized `storage` fixture); `test_configure_reflection_persists_override`
-— set override, rebuild server context on the same storage, assert the
-effective threshold survives (mirrors the #25 guard test);
-`tests/visualization/`: counter event emitted on bump and reset.
-
----
-
-### Issue 27 — Hierarchy-aware recall: make splits pay off at retrieval time — ✅ RESOLVED
-
-> **✅ Resolved 2026-07-28.** Scope 1 and 2 built; scope 3 (hierarchy-aware
-> ranking) deliberately **not** built — it was conditional on results looking
-> noisy after 1+2, and they don't. Reopen only with a concrete query where a
-> parent and child both rank and the parent is noise.
->
-> - `search` annotates returned Topics with `parents` / `subtopics` as
->   `{id, content_preview}` (`_hierarchy_annotations`, `mcp/tools.py`). Topics
->   outside a hierarchy gain no keys; non-Topic nodes are untouched.
-> - New `topic_tree(topic_id, depth=2)` tool (`mcp/tools.py` +
->   `mcp/server.py`): ancestors to the roots, descendants to `depth`, previews
->   only, with `has_more` on branches cut off by the limit so a truncation is
->   never read as a leaf. `get_ancestors` added to
->   `pipelines/reflection/topic_hierarchy.py`; `get_children` / `get_parents`
->   now have production callers for the first time.
->
-> **Deviations from the plan below, both deliberate:** the annotation key is
-> `parents` (plural), because SUBTOPIC_OF is a DAG and a topic can hold several
-> parents — a singular `parent` would silently drop one. And the lookups are
-> *deduplicated* rather than batched: the protocol has no multi-node edge fetch,
-> and adding one is #14's work, not this issue's. Neighbour bodies are fetched
-> once each across the result set and reuse nodes the result already carries, so
-> a parent and its children returning together cost no extra fetches.
->
-> Guarded by `tests/mcp/test_topic_hierarchy_recall.py` (11 tests, both
-> backends): `test_annotates_parents_and_subtopics`,
-> `test_annotations_carry_previews_not_full_content`,
-> `test_unrelated_topics_carry_no_hierarchy_keys`,
-> `test_non_topic_nodes_are_not_annotated`,
-> `test_returns_ancestors_and_nested_descendants`,
-> `test_ancestors_run_from_nearest_parent_to_root`,
-> `test_depth_limits_descent_and_flags_more`,
-> `test_returns_previews_not_material`, `test_rejects_depth_below_one`,
-> `test_rejects_unknown_topic`, `test_rejects_non_topic_node`.
-
-**Why.** `apply_reflection splits` builds a `SUBTOPIC_OF` DAG
-(`core/types.py:55`; helpers in `pipelines/reflection/topic_hierarchy.py` —
-parents/children/roots/cycle detection all exist;
-`graph_construction/versioning.py:167-191` plans the edges), but retrieval
-never uses it: `search` (hybrid retrieval + `query/graph_expansion.py`) treats
-`subtopic_of` as just another edge. Splitting a bloated topic currently buys
-nothing at recall time — the stated point of the feature (TODO.md, marked
-PARTIAL) was drill-down without loading everything into context.
-
-**Scope:**
-
-1. **Search results expose the hierarchy.** In `search` enrichment, when a
-   returned node is a Topic with `subtopic_of` neighbours, annotate it:
-   `parent: {id, content_preview}` and `subtopics: [{id, content_preview}]`
-   (previews ~100 chars — ids + previews only, never full material). The
-   calling agent can then decide to drill rather than receiving everything.
-2. **New tool `topic_tree(topic_id, depth=2)`.** Lazy subtree fetch built on
-   the existing `topic_hierarchy` functions: returns the topic, its ancestors
-   to the root, and descendants to `depth`, previews only. This is the
-   drill-down primitive.
-3. **(Stretch, separate commit) hierarchy-aware ranking.** When both a parent
-   and its child match a query, prefer the child (more specific) and mention
-   the parent in its annotation instead of returning both at full weight.
-   Decide based on how noisy real results look after 1+2 — don't build it
-   speculatively.
-
-**Notes for the implementer.** Enrichment in `search` is per-node storage
-round-trips — the same N+1 family as #14. Keep the new lookups batched per
-result set (one `get_edges_*` pass over returned topic ids), not per-node
-loops, so this doesn't deepen the #14 ceiling.
-
-**Tests first.** `tests/mcp/test_search.py::test_search_annotates_hierarchy`
-and `test_topic_tree_depth_and_previews` — build a 3-level hierarchy via the
-public tools (`store_decomposition` + `apply_reflection splits`), assert
-annotations/subtree shape on the parameterized `storage` fixture; cycle-safety
-already guarded in `topic_hierarchy`, don't re-test it here.
+**Tests first.** For the remaining scopes:
+`test_configure_reflection_persists_override` — set override, rebuild server
+context on the same storage, assert the effective threshold survives (mirrors
+the #25 guard test); `tests/visualization/`: counter event emitted on bump and
+reset.
 
 ---
 
@@ -377,11 +325,9 @@ it lives in README → *Not yet built*.
 
 | Order | Issue | Why |
 |---|---|---|
-| 1 | 26.1 | `graph_stats` reports the counter — ~30 min, and it makes reflection pressure visible while working on 27 |
-| ✅ | 27 | Hierarchy-aware recall — done (scope 1+2); ranking stretch deliberately skipped |
-| 2 | 30 | Frontend test runner — before 26.3 and 29 add more untested TypeScript |
-| 4 | 26.2, 26.3 | Threshold override (storage-protocol change, both backends) then the viz badge — the non-small half of 26 |
-| 5 | 28 | Benchmark harness — turns #14's trigger from a complaint into a number |
-| 6 | 29 | Reflect in the pipeline strip — closes the observability gap the strip redesign created |
+| 1 | 30 | Frontend test runner — before 26.3 and 29 add more untested TypeScript |
+| 2 | 26.2, 26.3 | Threshold override (storage-protocol change, both backends) then the viz badge — the non-small half of 26 |
+| 3 | 28 | Benchmark harness — turns #14's trigger from a complaint into a number |
+| 4 | 29 | Reflect in the pipeline strip — closes the observability gap the strip redesign created |
 | deferred | 16 | Multi-graph concurrency — trigger: the server gains concurrent clients (viz-read leg closed by the hub; fix now scoped to `hub_client.py`) |
 | deferred | 14 | Full-scan / N+1 — trigger: a large persistent graph makes latency felt (measure with #28) |

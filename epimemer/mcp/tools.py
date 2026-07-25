@@ -1851,15 +1851,24 @@ def _similar_names(target: str, candidates: list[str], max_results: int = 3) -> 
     return [name for name, score in scored[:max_results] if score > 0.4]
 
 
-async def graph_stats(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
+async def graph_stats(
+    storage: StorageBackend, *, reflect_threshold: int
+) -> tuple[dict, ResponseMeta]:
     """Summarize the active graph: node counts by type, edge counts by type, totals.
 
     Aggregate-only — does not materialize node or edge bodies.
+
+    Also reports reflection pressure: the graph's store counter, the effective
+    threshold, and whether a reflect is due. The counter is stored per graph but
+    the threshold is process config, so it is passed in rather than read here.
+    All three keys are always present — an absent key reads the same as `false`
+    to a caller, and this is a readout meant to be checked.
     """
     node_counts = await storage.count_nodes_by_type()
     edge_counts = await storage.count_edges_by_type()
     metacontexts = await storage.query_metacontexts()
     timelines = await storage.query_timelines()
+    stores_since_reflect = await storage.get_reflect_counter()
 
     nodes_by_type = {nt.value: node_counts.get(nt, 0) for nt in NodeType}
     edges_by_type = {et.value: edge_counts.get(et, 0) for et in EdgeType}
@@ -1877,6 +1886,11 @@ async def graph_stats(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
         "metacontexts": len(metacontexts),
         "timelines": len(timelines),
         "empty": total_nodes == 0 and total_edges == 0,
+        "stores_since_reflect": stores_since_reflect,
+        "reflect_threshold": reflect_threshold,
+        # Inclusive, matching store_decomposition — the two readouts must not
+        # disagree about whether a reflect is due.
+        "reflect_suggested": stores_since_reflect >= reflect_threshold,
     }
     meta = ResponseMeta(nodes_returned=total_nodes, source_types=nodes_by_type)
     return result, meta

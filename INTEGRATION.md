@@ -86,7 +86,7 @@ restate the count.
 | `find_nodes` | Return nodes linked to a source or topic hub (traversal, not similarity) |
 | `list_sources` | List the distinct source/origin nodes, with reference counts |
 | `list_relations` | List the distinct user-defined relationship labels, with usage counts |
-| `graph_stats` | Node/edge counts and type breakdown for the active graph |
+| `graph_stats` | Node/edge counts, type breakdown, and reflection pressure for the active graph |
 
 ### Conflict Handling
 
