@@ -2,6 +2,7 @@
 #
 #   make test              default suite — embedded, no external services
 #   make test-frontend     visualization frontend: vitest + tsc type-check
+#   make bench             scaling measurements (see dev-docs/BENCHMARKS.md)
 #   make test-integration  opt-in SurrealDB suites (real ws:// connection +
 #                          cross-connection concurrency, and on-disk durability
 #                          across a server restart) that mem:// can't cover.
@@ -22,8 +23,9 @@ SURREAL_IMAGE ?= surrealdb/surrealdb:latest
 SURREAL_CONTAINER ?= epimemer-surreal-it
 SURREAL_WS_URL ?= ws://localhost:8000/rpc
 FRONTEND_DIR ?= epimemer/visualization/frontend
+BENCH_N ?= 100,1000
 
-.PHONY: test test-frontend test-integration
+.PHONY: test test-frontend test-integration bench
 
 test:
 	uv run python -m pytest tests/ -q
@@ -32,6 +34,12 @@ test:
 # tests deliberately leave alone, so together they cover the whole frontend.
 test-frontend:
 	cd $(FRONTEND_DIR) && npm run typecheck && npm test
+
+# Run on demand, never in CI — these are measurements, not assertions. Set
+# EPIMEMER_BENCH_URL to add a real SurrealDB backend alongside mem://.
+# BENCH_N overrides the sizes, e.g. `make bench BENCH_N=100,1000,10000`.
+bench:
+	uv run python scripts/bench.py --n $(BENCH_N)
 
 test-integration:
 	docker run -d --rm --name $(SURREAL_CONTAINER) -p 8000:8000 \

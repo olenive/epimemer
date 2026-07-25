@@ -235,10 +235,11 @@ fixes live in [ISSUES.md](ISSUES.md) instead.
   instances on link) are described in SUMMARY.md → *Timelines* → *Multiple
   Implementations*. Each needs add/remove/reorder with stable UUIDs, proximity
   search, overlap detection, and storage round-trip.
-- **Benchmarking.** No benchmark module. Structured logging gives per-tool
-  latency, but there is nothing measuring write throughput, vector-search
-  latency at N vectors, embedding throughput, reflect cost by graph size, or
-  end-to-end ingest/query/reflect.
+- **Benchmarking beyond scaling.** `scripts/bench.py` (`make bench`) measures
+  ingest throughput, search p50/p95, `list_sources` and `reflect` against graph
+  size — see [dev-docs/BENCHMARKS.md](dev-docs/BENCHMARKS.md) for baselines.
+  Still unmeasured: embedding throughput on its own, and a SurrealDB-over-`ws://`
+  run (the case that matters most, since it multiplies the per-node queries).
 - **Notebooks.** `notebooks/00_foundation.py` (storage + vector search + type
   diagrams), `07_timelines_metacontext.py`, and `08_orchestration.py` are
   missing.

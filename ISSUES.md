@@ -45,6 +45,32 @@ is entirely sequential.
 > persistent SurrealDB graph large enough that `list_sources` / `reflect` /
 > `search` latency is felt. The ceiling is now documented for users (SUMMARY.md
 > *Scaling Limits*).
+>
+> **Update 2026-07-29 — the trigger now has a number (from #28).** First
+> baselines in `dev-docs/BENCHMARKS.md`, on `mem://` with mocked embeddings (so
+> a floor, on fast hardware, with no network):
+>
+> | Nodes | search p50 | `list_sources` | `reflect` |
+> |---|---|---|---|
+> | 100 | 2.9 ms | 4.6 ms | 25.7 ms |
+> | 1,000 | 21.3 ms | 208 ms | 5,412 ms |
+> | 10,000 | 212 ms | **18,066 ms** | **>19 min**, abandoned unfinished |
+>
+> `search` is linear and fine. `list_sources` is **quadratic** — ~45× then ~87×
+> per 10× of data — and `reflect` is worse.
+>
+> **This changes the severity.** `EPIMEMER_TOOL_TIMEOUT_SECONDS` defaults to
+> 30 s, and `list_sources` already burns 18 s of it at 10k nodes under the most
+> favourable conditions measurable. On SurrealDB over a websocket — where every
+> per-node edge fetch becomes a round-trip — `list_sources` and `reflect` will
+> **exceed the timeout and fail**, not merely feel slow. So this stops being a
+> "performance ceiling" and becomes a broken tool call somewhere below 10k
+> nodes.
+>
+> Still deferred, because no real graph here is near that size yet, but the
+> trigger is now concrete: **~10k nodes on `mem://`, materially fewer on
+> SurrealDB.** The SurrealDB run is the measurement still missing
+> (`EPIMEMER_BENCH_URL=ws://... make bench`) and would set the real number.
 
 **Severity: performance (not a bug).** Fine in-memory; over websocket to
 SurrealDB each item is a round-trip:
@@ -244,7 +270,36 @@ count/threshold reduction in a pure function and test it under
 
 ---
 
-### Issue 28 — Benchmark harness (arms the #14 trigger) — 🆕 PLANNED
+### Issue 28 — Benchmark harness (arms the #14 trigger) — ✅ RESOLVED
+
+> **✅ Resolved 2026-07-29.** `scripts/bench.py` + `make bench`, first baselines
+> in `dev-docs/BENCHMARKS.md`, and #14 updated above with what they show. It
+> did its job on the first run: `list_sources` is quadratic and already takes
+> 18 s at 10k nodes, which reframes #14 from "slow" to "fails the 30 s tool
+> timeout".
+>
+> **Embeddings are mocked at 384 dimensions** rather than real. Model inference
+> is a large constant per text that would dominate every measurement and hide
+> the graph costs the harness exists to expose; the vector *width* is kept
+> because scan cost scales with it. Every number is therefore a floor, which is
+> stated at the top of BENCHMARKS.md — `--real-embeddings` gives the end-to-end
+> figure when that is the question.
+>
+> The script reuses the public tool functions rather than storage directly, so
+> the timings include the same enrichment a real call pays for. Progress goes to
+> stderr and records to stdout, so `bench.py > run.jsonl` is a clean record.
+> SurrealDB databases it creates are prefix-guarded (`bench_*`) and dropped at
+> the end unless `--keep`.
+>
+> Guarded by `tests/test_bench_smoke.py` (4 tests): a `--quick --n 10` run exits
+> clean and emits one parseable record per operation, the records carry the
+> measurements they promise, `reflect` is timed unless skipped, and progress
+> output stays off stdout.
+>
+> **Not measured yet, and it is the interesting one:** SurrealDB over `ws://`
+> (`EPIMEMER_BENCH_URL=... make bench`), which multiplies exactly the per-node
+> queries that dominate. Also `reflect` at 10k, which needs a longer budget than
+> the first run allowed.
 
 **Why.** #14's deferral condition is "a graph large enough that latency is
 felt" — but nothing measures it, so the trigger can only fire as a user
@@ -330,7 +385,6 @@ it lives in README → *Not yet built*.
 
 | Order | Issue | Why |
 |---|---|---|
-| 1 | 28 | Benchmark harness — turns #14's trigger from a complaint into a number |
-| 2 | 29 | Reflect in the pipeline strip — closes the observability gap the strip redesign created |
+| 1 | 29 | Reflect in the pipeline strip — closes the observability gap the strip redesign created |
 | deferred | 16 | Multi-graph concurrency — trigger: the server gains concurrent clients (viz-read leg closed by the hub; fix now scoped to `hub_client.py`) |
-| deferred | 14 | Full-scan / N+1 — trigger: a large persistent graph makes latency felt (measure with #28) |
+| deferred | 14 | Full-scan / N+1 — trigger measured (#28): ~10k nodes on `mem://`, fewer on SurrealDB, where it fails the tool timeout rather than just feeling slow |
