@@ -58,12 +58,12 @@ the knowledge graph and pipeline execution in real time.
 
 ### Verify Connection
 
-In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 31 tools.
+In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 32 tools.
 
 ## Available Tools
 
 Tools are auto-prefixed as `mcp__epimemer__<name>` by Claude Code. This table is
-the canonical list of the 30 tools — other docs should link here rather than
+the canonical list of the 32 tools — other docs should link here rather than
 restate the count.
 
 ### Core Memory Operations
@@ -101,6 +101,7 @@ restate the count.
 | Tool | Purpose |
 |------|---------|
 | `reflect` | Analyse the graph for consolidation/decay candidates |
+| `configure_reflection` | Set (or clear) this graph's store threshold for suggesting a reflect |
 | `apply_reflection` | Apply agent decisions from a reflection |
 
 ### Temporal Access
@@ -135,8 +136,9 @@ restate the count.
 
 ### Graph Management (knowledge graphs)
 
-Both storage backends support multiple named graphs (the default graph is
-`"default"`).
+Both storage backends support multiple named graphs. The starting graph is
+`"default"` in-memory and `EPIMEMER_SURREALDB_DATABASE` (default `"memory"`)
+under SurrealDB.
 
 | Tool | Purpose |
 |------|---------|

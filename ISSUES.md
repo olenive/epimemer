@@ -121,15 +121,15 @@ applies to them too. Ordered by priority. Cross-references: **26** is the
 "visible counter" item in TODO.md; **28** is README → *Not yet built* →
 *Benchmarking*.
 
-### Issue 26 — Auto-reflect counter: make it visible and user-controllable — 🔨 PART 1 DONE
+### Issue 26 — Auto-reflect counter: make it visible and user-controllable — 🔨 SCOPE 3 REMAINS
 
 > **✅ Scope 1 done 2026-07-28.** `graph_stats` now reports
 > `stores_since_reflect`, `reflect_threshold` and `reflect_suggested`, so
-> reflection pressure is readable without storing something first. The threshold
-> is process config, not stored state, so `tools.graph_stats` takes it as a
-> **required** keyword argument and the MCP wrapper passes
+> reflection pressure is readable without storing something first. The default
+> threshold is process config, so `tools.graph_stats` takes it as a **required**
+> keyword argument (`default_reflect_threshold`) and the MCP wrapper passes
 > `config.reflect_threshold` — no default inside the tool, which would have made
-> two places disagree about the effective threshold once scope 2 adds an
+> two places disagree about the effective threshold once scope 2 added an
 > override.
 >
 > All three keys are always present, unlike `store_decomposition` which omits
@@ -146,9 +146,40 @@ applies to them too. Ordered by priority. Cross-references: **26** is the
 > `test_tool_reports_the_configured_threshold` for the wrapper's config
 > pass-through.
 >
-> **Scopes 2 and 3 below are still open.** Note for scope 2: the effective
-> threshold is now computed in exactly one place (the wrapper), so the override
-> lands there.
+> **✅ Scope 2 done 2026-07-29.** New `configure_reflection(threshold)` tool
+> and a per-graph override on the storage protocol
+> (`get_reflect_threshold_override` / `set_reflect_threshold_override`),
+> implemented on **both** backends and on the viz instrumentation wrapper.
+> In-memory it is a field on the per-graph store; under SurrealDB it shares the
+> existing `graph_state:reflect` record with the counter, clearing via `NONE` so
+> the key is removed rather than storing a 0 that would read back as a threshold
+> of zero.
+>
+> Resolution (`override if set, else the configured default`) is one shared
+> function, `resolve_reflect_threshold` — `graph_stats` reads the override
+> itself because it reports whether one is set, and `store_decomposition` goes
+> through `effective_reflect_threshold`. The rule exists once so the number an
+> agent is *shown* is the number it is *judged against*. `graph_stats` gained
+> `reflect_threshold_overridden` so a surprising threshold is attributable.
+>
+> Clearing stores "no override" rather than the default's current value, so a
+> later change to `EPIMEMER_REFLECT_THRESHOLD` still reaches a graph that was
+> once overridden. Thresholds below 1 are rejected, not clamped. The counter is
+> never touched: raising the threshold defers the signal instead of discarding
+> it, which is why the "true snooze" the scope below rules out stays ruled out.
+>
+> Guarded by `tests/mcp/test_configure_reflection.py` (37 tests, both backends):
+> storage-level set/read/overwrite/clear, per-graph isolation across a
+> `switch_database`, the counter left undisturbed, resolution and its fallback,
+> the tool's report/validation/no-reset behaviour, both `graph_stats` readouts,
+> and — through a real MCP session — persistence across a reconnect plus
+> `store_decomposition` honouring the override.
+>
+> **Note for scope 3:** the badge should read `reflect_threshold` and
+> `reflect_threshold_overridden` from `graph_stats` rather than the env default,
+> or an overridden graph will render the wrong denominator.
+>
+> **Scope 3 below is still open.**
 
 **Why.** Post-#25 the counter is persistent per-graph (storage protocol:
 `get_reflect_counter` / `bump_reflect_counter` / `reset_reflect_counter`;
@@ -163,15 +194,7 @@ no "snooze".
 **Scope (three independent pieces, in order of value):**
 
 1. ~~**`graph_stats` reports it.**~~ ✅ done — see the note above.
-2. **Per-graph threshold override.** New small tool
-   `configure_reflection(threshold: int | None)`: persists an override next to
-   the counter (same per-graph marker record both backends already maintain —
-   extend the storage protocol with get/set, implemented on **both** backends
-   per the parity rule; no `hasattr` probing). `None` clears the override;
-   effective threshold = override or config default. "Reflect sooner" is then
-   just calling `reflect`; "delay" is raising the threshold. Resetting the
-   counter without reflecting (true snooze) is deliberately **not** included —
-   it would silently discard the signal.
+2. ~~**Per-graph threshold override.**~~ ✅ done — see the note above.
 3. **Viz badge.** Emit a small `ReflectCounterUpdated` graph event
    (`visualization/events.py`; fields: `count`, `threshold`) after bump
    (`server.py:327`) and reset (reflect path, `server.py:637-648`). Frontend:
@@ -275,7 +298,7 @@ it lives in README → *Not yet built*.
 
 | Order | Issue | Why |
 |---|---|---|
-| 1 | 26.2, 26.3 | Threshold override (storage-protocol change, both backends) then the viz badge — the non-small half of 26 |
+| 1 | 26.3 | Reflect badge in the viz header — the last piece of 26 |
 | 2 | 28 | Benchmark harness — turns #14's trigger from a complaint into a number |
 | 3 | 29 | Reflect in the pipeline strip — closes the observability gap the strip redesign created |
 | deferred | 16 | Multi-graph concurrency — trigger: the server gains concurrent clients (viz-read leg closed by the hub; fix now scoped to `hub_client.py`) |

@@ -92,6 +92,17 @@ _REFLECT_BUMP = (
 )
 _REFLECT_RESET = f"UPSERT {_REFLECT_RECORD} SET {_REFLECT_FIELD} = 0 RETURN BEFORE;"
 
+# The per-graph threshold override shares the record with the counter — same
+# scope, same lifetime — but never the same field. Clearing writes NONE, which
+# removes the key rather than storing a zero that would read back as a
+# threshold of 0.
+_THRESHOLD_FIELD = "reflect_threshold_override"
+
+_THRESHOLD_GET = f"SELECT {_THRESHOLD_FIELD} FROM {_REFLECT_RECORD};"
+_THRESHOLD_SET = (
+    f"UPSERT {_REFLECT_RECORD} SET {_THRESHOLD_FIELD} = $threshold RETURN AFTER;"
+)
+
 
 def _reflect_count(rows) -> int:
     """Read the counter out of a reflect-state row set.
@@ -102,6 +113,19 @@ def _reflect_count(rows) -> int:
     if not rows or rows[0] is None:
         return 0
     return int(rows[0].get(_REFLECT_FIELD) or 0)
+
+
+def _threshold_override(rows) -> int | None:
+    """Read the threshold override out of a reflect-state row set.
+
+    No row, a null row, or a row without the field all mean "no override" —
+    distinct from a stored value, which is why this cannot reuse
+    `_reflect_count`'s `or 0` collapse.
+    """
+    if not rows or rows[0] is None:
+        return None
+    value = rows[0].get(_THRESHOLD_FIELD)
+    return None if value is None else int(value)
 
 
 def _serialize(model) -> dict:
@@ -874,3 +898,10 @@ class SurrealDBStorage:
     async def reset_reflect_counter(self) -> int:
         rows = await self.db.query(_REFLECT_RESET)
         return _reflect_count(rows)
+
+    async def get_reflect_threshold_override(self) -> int | None:
+        rows = await self.db.query(_THRESHOLD_GET)
+        return _threshold_override(rows)
+
+    async def set_reflect_threshold_override(self, threshold: int | None) -> None:
+        await self.db.query(_THRESHOLD_SET, {"threshold": threshold})

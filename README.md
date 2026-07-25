@@ -114,7 +114,7 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_EMBEDDING_DIMENSION` | `384` | Embedding vector dimension |
 | `EPIMEMER_SEGMENTATION_STRATEGY` | `paragraph` | `paragraph` or `semantic` |
 | `EPIMEMER_SIMILARITY_THRESHOLD` | `0.75` | Similarity threshold for search |
-| `EPIMEMER_REFLECT_THRESHOLD` | `10` | Stores in a graph before suggesting reflection (counted per graph, in storage; the count and the threshold are both reported by `graph_stats`) |
+| `EPIMEMER_REFLECT_THRESHOLD` | `10` | Server-wide default: stores in a graph before suggesting reflection (counted per graph, in storage; reported with the count by `graph_stats`, and overridable per graph via `configure_reflection`) |
 | `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
 | `EPIMEMER_VIZ_ENABLED` | `true` | Publish visualization events to the hub |
 | `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Visualization hub host |
@@ -130,7 +130,7 @@ Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<
 - **Core memory**: `segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`
 - **Discovery & stats**: `query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`
 - **Conflict handling**: `check_conflicts`, `record_contradiction`, `record_variant`
-- **Reflection**: `reflect`, `apply_reflection`
+- **Reflection**: `reflect`, `configure_reflection`, `apply_reflection`
 - **Temporal access**: `as_of`, `query_changes`
 - **Archival**: `archive`, `restore`
 - **Timelines**: `create_timeline`, `add_timepoint`, `query_timeline`, `create_timelink`

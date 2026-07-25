@@ -325,7 +325,9 @@ async def memory_store_decomposition(
             event_bus=deps.get("event_bus"),
         )
         count = await deps["storage"].bump_reflect_counter()
-        threshold = deps["config"].reflect_threshold
+        threshold = await tools.effective_reflect_threshold(
+            deps["storage"], deps["config"].reflect_threshold
+        )
         result["stores_since_reflect"] = count
         result["reflect_threshold"] = threshold
         if count >= threshold:
@@ -1194,13 +1196,15 @@ async def epimemer_graph_stats(
 
     Also reports stores_since_reflect against reflect_threshold for the active
     graph. When reflect_suggested is true, suggest running reflect to the user.
+    reflect_threshold_overridden says whether that threshold was set for this
+    graph via configure_reflection or comes from the server default.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
         "epimemer.graph_stats",
         lambda: tools.graph_stats(
             storage=deps["storage"],
-            reflect_threshold=deps["config"].reflect_threshold,
+            default_reflect_threshold=deps["config"].reflect_threshold,
         ),
         ctx,
         "",
@@ -1208,6 +1212,42 @@ async def epimemer_graph_stats(
             f"nodes={r['total_nodes']} edges={r['total_edges']} "
             f"mc={r['metacontexts']} graph={r['graph']} "
             f"reflect={r['stores_since_reflect']}/{r['reflect_threshold']}"
+        ),
+    )
+
+
+@mcp.tool(name="configure_reflection")
+async def epimemer_configure_reflection(
+    ctx: Context,
+    threshold: int | None = None,
+) -> str:
+    """Set how many stores this graph takes before a reflect is suggested.
+
+    The setting belongs to the active graph and persists — use it when one
+    graph deserves a different rhythm from the server default (a scratchpad
+    that should consolidate often, a reference graph that should not).
+
+    To reflect sooner, just call reflect; to defer, raise the threshold. There
+    is deliberately no way to zero the counter without reflecting, which would
+    throw the signal away rather than postpone it.
+
+    Args:
+        threshold: Stores before a reflect is suggested (at least 1). Omit it
+            to clear this graph's setting and follow the server default again.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.configure_reflection",
+        lambda: tools.configure_reflection(
+            storage=deps["storage"],
+            threshold=threshold,
+            default_threshold=deps["config"].reflect_threshold,
+        ),
+        ctx,
+        f"threshold={threshold}",
+        lambda r, m: (
+            f"graph={r['graph']} threshold={r['reflect_threshold']} "
+            f"overridden={r['overridden']}"
         ),
     )
 

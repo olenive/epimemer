@@ -6,9 +6,10 @@ graph was to a suggested reflect by storing something. `graph_stats` is the
 question "what is in this graph and what does it need?", so the counter, the
 effective threshold, and whether reflect is due belong in its answer.
 
-The threshold is process config, not stored state, so it is passed in rather
-than read from storage; these tests pin that the tool reports the threshold it
-was given and that the MCP wrapper hands it the configured one.
+The *default* threshold is process config, so it is passed in rather than read
+from storage; these tests pin that the tool reports the threshold it was given
+and that the MCP wrapper hands it the configured one. Per-graph overrides of
+that default are covered in `test_configure_reflection.py`.
 """
 
 import json
@@ -32,14 +33,14 @@ class TestReflectCounterInStats:
         await storage.bump_reflect_counter()
         await storage.bump_reflect_counter()
 
-        result, _ = await graph_stats(storage, reflect_threshold=5)
+        result, _ = await graph_stats(storage, default_reflect_threshold=5)
 
         assert result["stores_since_reflect"] == 2
         assert result["reflect_threshold"] == 5
         assert result["reflect_suggested"] is False
 
     async def test_fresh_graph_reports_zero(self, storage):
-        result, _ = await graph_stats(storage, reflect_threshold=10)
+        result, _ = await graph_stats(storage, default_reflect_threshold=10)
 
         assert result["stores_since_reflect"] == 0
         assert result["reflect_suggested"] is False
@@ -53,11 +54,11 @@ class TestReflectCounterInStats:
         await storage.bump_reflect_counter()
         await storage.bump_reflect_counter()
 
-        at_threshold, _ = await graph_stats(storage, reflect_threshold=2)
+        at_threshold, _ = await graph_stats(storage, default_reflect_threshold=2)
         assert at_threshold["reflect_suggested"] is True
 
         await storage.bump_reflect_counter()
-        past_threshold, _ = await graph_stats(storage, reflect_threshold=2)
+        past_threshold, _ = await graph_stats(storage, default_reflect_threshold=2)
         assert past_threshold["stores_since_reflect"] == 3
         assert past_threshold["reflect_suggested"] is True
 
@@ -66,7 +67,7 @@ class TestReflectCounterInStats:
         await storage.bump_reflect_counter()
         await storage.reset_reflect_counter()
 
-        result, _ = await graph_stats(storage, reflect_threshold=2)
+        result, _ = await graph_stats(storage, default_reflect_threshold=2)
 
         assert result["stores_since_reflect"] == 0
         assert result["reflect_suggested"] is False
@@ -74,7 +75,7 @@ class TestReflectCounterInStats:
     async def test_reflect_keys_are_always_present(self, storage):
         """Even on an empty graph — an absent key is indistinguishable from
         `false` to a caller, and this readout exists to be checked."""
-        result, _ = await graph_stats(storage, reflect_threshold=10)
+        result, _ = await graph_stats(storage, default_reflect_threshold=10)
 
         assert result["empty"] is True
         assert {"stores_since_reflect", "reflect_threshold", "reflect_suggested"} <= (

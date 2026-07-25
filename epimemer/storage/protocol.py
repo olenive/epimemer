@@ -439,6 +439,22 @@ class StorageBackend(Protocol):
         """Zero the active graph's counter. Returns the count before the reset."""
         ...
 
+    async def get_reflect_threshold_override(self) -> int | None:
+        """The active graph's threshold override, or None if it has none.
+
+        Stored beside the counter and scoped the same way, so a graph carries
+        its own answer to "how many stores before you suggest reflecting?"
+        across restarts. None means the graph follows the process default —
+        deliberately not the default's current *value*, so that changing the
+        configured default later still reaches graphs that were once overridden
+        and then cleared.
+        """
+        ...
+
+    async def set_reflect_threshold_override(self, threshold: int | None) -> None:
+        """Set the active graph's threshold override, or clear it with None."""
+        ...
+
     # --- Multi-graph management ---
 
     @property

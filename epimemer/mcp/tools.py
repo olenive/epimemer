@@ -1851,24 +1851,83 @@ def _similar_names(target: str, candidates: list[str], max_results: int = 3) -> 
     return [name for name, score in scored[:max_results] if score > 0.4]
 
 
+def resolve_reflect_threshold(override: int | None, default: int) -> int:
+    """The one rule for which threshold wins. Trivial, and deliberately shared:
+    a second copy is how `graph_stats` starts reporting a number the ingest path
+    does not judge against."""
+    return default if override is None else override
+
+
+async def effective_reflect_threshold(
+    storage: StorageBackend, default: int
+) -> int:
+    """The threshold in force for the active graph: its override, else `default`.
+
+    For callers that need only the number. `graph_stats` reads the override
+    itself — it reports whether one is set — and resolves it with
+    `resolve_reflect_threshold` rather than fetching twice.
+    """
+    return resolve_reflect_threshold(
+        await storage.get_reflect_threshold_override(), default
+    )
+
+
+async def configure_reflection(
+    storage: StorageBackend,
+    *,
+    threshold: int | None,
+    default_threshold: int,
+) -> tuple[dict, ResponseMeta]:
+    """Set the active graph's reflect threshold, or clear it back to the default.
+
+    `threshold=None` clears the override — the graph then follows whatever the
+    process default is at the time, rather than freezing today's value.
+
+    Deliberately does not touch the counter: raising the threshold means "not
+    yet", and zeroing the count would discard the accumulated signal instead of
+    deferring it.
+    """
+    if threshold is not None and threshold < 1:
+        raise ValueError(f"threshold must be at least 1, got {threshold}")
+
+    await storage.set_reflect_threshold_override(threshold)
+
+    count = await storage.get_reflect_counter()
+    effective = await effective_reflect_threshold(storage, default_threshold)
+    result = {
+        "graph": storage.current_database,
+        "reflect_threshold": effective,
+        "overridden": threshold is not None,
+        "default_threshold": default_threshold,
+        "stores_since_reflect": count,
+        "reflect_suggested": count >= effective,
+    }
+    return result, ResponseMeta()
+
+
 async def graph_stats(
-    storage: StorageBackend, *, reflect_threshold: int
+    storage: StorageBackend, *, default_reflect_threshold: int
 ) -> tuple[dict, ResponseMeta]:
     """Summarize the active graph: node counts by type, edge counts by type, totals.
 
     Aggregate-only — does not materialize node or edge bodies.
 
-    Also reports reflection pressure: the graph's store counter, the effective
-    threshold, and whether a reflect is due. The counter is stored per graph but
-    the threshold is process config, so it is passed in rather than read here.
-    All three keys are always present — an absent key reads the same as `false`
-    to a caller, and this is a readout meant to be checked.
+    Also reports reflection pressure: the graph's store counter, the threshold in
+    force, whether that threshold is a per-graph override, and whether a reflect
+    is due. The counter and any override are stored per graph; the default is
+    process config, so it is passed in. These keys are always present — an absent
+    key reads the same as `false` to a caller, and this is a readout meant to be
+    checked.
     """
     node_counts = await storage.count_nodes_by_type()
     edge_counts = await storage.count_edges_by_type()
     metacontexts = await storage.query_metacontexts()
     timelines = await storage.query_timelines()
     stores_since_reflect = await storage.get_reflect_counter()
+    threshold_override = await storage.get_reflect_threshold_override()
+    reflect_threshold = resolve_reflect_threshold(
+        threshold_override, default_reflect_threshold
+    )
 
     nodes_by_type = {nt.value: node_counts.get(nt, 0) for nt in NodeType}
     edges_by_type = {et.value: edge_counts.get(et, 0) for et in EdgeType}
@@ -1888,6 +1947,7 @@ async def graph_stats(
         "empty": total_nodes == 0 and total_edges == 0,
         "stores_since_reflect": stores_since_reflect,
         "reflect_threshold": reflect_threshold,
+        "reflect_threshold_overridden": threshold_override is not None,
         # Inclusive, matching store_decomposition — the two readouts must not
         # disagree about whether a reflect is due.
         "reflect_suggested": stores_since_reflect >= reflect_threshold,

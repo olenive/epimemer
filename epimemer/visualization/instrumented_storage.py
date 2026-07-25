@@ -388,6 +388,12 @@ class InstrumentedStorage:
     async def reset_reflect_counter(self) -> int:
         return await self._inner.reset_reflect_counter()
 
+    async def get_reflect_threshold_override(self) -> int | None:
+        return await self._inner.get_reflect_threshold_override()
+
+    async def set_reflect_threshold_override(self, threshold: int | None) -> None:
+        await self._inner.set_reflect_threshold_override(threshold)
+
     # --- Multi-graph management (pass-through) ---
 
     @property

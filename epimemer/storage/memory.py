@@ -92,6 +92,7 @@ class _GraphStore:
     timelines: dict[str, Timeline] = field(default_factory=dict)
     metacontexts: dict[str, Metacontext] = field(default_factory=dict)
     stores_since_reflect: int = 0
+    reflect_threshold_override: int | None = None
 
 
 _DEFAULT_DB = "default"
@@ -568,6 +569,12 @@ class InMemoryStorage:
         previous = self._g.stores_since_reflect
         self._g.stores_since_reflect = 0
         return previous
+
+    async def get_reflect_threshold_override(self) -> int | None:
+        return self._g.reflect_threshold_override
+
+    async def set_reflect_threshold_override(self, threshold: int | None) -> None:
+        self._g.reflect_threshold_override = threshold
 
     # --- Multi-graph management ---
 

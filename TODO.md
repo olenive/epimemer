@@ -13,4 +13,9 @@
     of loading the subtree.
 
 
-[ ] Let's make sure we have a visible counter for the auto-reflect - also let's discuss how we can allow the user to trigger the reflect step sooner or to delay it.
+[~] Let's make sure we have a visible counter for the auto-reflect - also let's discuss how we can allow the user to trigger the reflect step sooner or to delay it.
+    PARTIAL: `graph_stats` reports the count, the threshold in force, and whether a
+    reflect is due; `configure_reflection` sets a per-graph threshold (reflect sooner
+    by lowering it or just calling `reflect`; delay by raising it). Deliberately no
+    way to zero the counter without reflecting — that discards the signal rather than
+    deferring it. OPEN: the visualization header badge (ISSUES.md #26 scope 3).
