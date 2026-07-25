@@ -1,6 +1,10 @@
 # Visualization: Hub Architecture & Pipeline Strip Redesign
 
-Implementation plan, written 2026-07-24. Two independent work packages:
+Implementation plan, written 2026-07-24, **both parts now built and merged** —
+kept as the design record. Issue numbers below (#24, #16) are as they stood when
+it was written; #24 has since been resolved and removed from ISSUES.md.
+
+Two independent work packages:
 
 - **Part A — Multi-client viz hub.** Replace the embedded per-process viz server
   with a standalone hub that MCP server processes publish to. Resolves the

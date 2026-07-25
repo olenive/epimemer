@@ -128,7 +128,7 @@ All configuration is via `EPIMEMER_` environment variables:
 Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<name>` by Claude Code), grouped by purpose:
 
 - **Core memory**: `segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`
-- **Discovery & stats**: `query_graph`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`
+- **Discovery & stats**: `query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`
 - **Conflict handling**: `check_conflicts`, `record_contradiction`, `record_variant`
 - **Reflection**: `reflect`, `apply_reflection`
 - **Temporal access**: `as_of`, `query_changes`

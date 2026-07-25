@@ -60,6 +60,33 @@ async def get_parents(
     return parents
 
 
+async def get_ancestors(
+    storage: StorageBackend, topic_id: str
+) -> Sequence[EpistemicNode]:
+    """Get all ancestors of a topic, nearest first, excluding the topic itself.
+
+    Breadth-first towards the roots, so a caller can read the result as a path
+    outwards even though the hierarchy is a DAG and a topic may have several
+    parents. Cycle-safe: writes are cycle-checked, but a graph built before that
+    guard — or by direct edge writes — could still contain one, and traversal
+    has to terminate either way.
+    """
+    visited: set[str] = {topic_id}
+    result: list[EpistemicNode] = []
+    frontier = [topic_id]
+    while frontier:
+        next_frontier: list[str] = []
+        for current in frontier:
+            for parent in await get_parents(storage, current):
+                if parent.id in visited:
+                    continue
+                visited.add(parent.id)
+                result.append(parent)
+                next_frontier.append(parent.id)
+        frontier = next_frontier
+    return result
+
+
 async def get_roots(storage: StorageBackend) -> Sequence[EpistemicNode]:
     """Get all root topics (topics with no SUBTOPIC_OF edges pointing outward)."""
     all_topics = await storage.query_nodes(node_type=NodeType.TOPIC)

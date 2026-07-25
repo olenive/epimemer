@@ -8,6 +8,7 @@ calls these and wraps the results.
 import asyncio
 
 from datetime import datetime
+from typing import Sequence
 
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
@@ -390,6 +391,142 @@ async def _retrieve_frame_scoped(
         fetch_k = min(fetch_k * 2, _FRAME_SCOPE_MAX_K)
 
 
+_HIERARCHY_PREVIEW_CHARS = 100
+
+
+def _content_preview(node: EpistemicNode) -> dict:
+    """Reduce a node to id plus truncated content.
+
+    Hierarchy responses carry previews and never full material: the point of
+    drill-down is that the caller decides what is worth loading, which a
+    response that already inlined everything would defeat.
+    """
+    content = node.content
+    if len(content) > _HIERARCHY_PREVIEW_CHARS:
+        content = content[:_HIERARCHY_PREVIEW_CHARS] + "…"
+    return {"id": node.id, "content_preview": content}
+
+
+async def _hierarchy_annotations(
+    nodes: Sequence[EpistemicNode], storage: StorageBackend
+) -> dict[str, dict]:
+    """Map topic id -> {parents?, subtopics?} for the Topics among `nodes`.
+
+    Splitting a broad topic builds a SUBTOPIC_OF DAG; without this, retrieval
+    never mentions it and a split buys the caller nothing. Only Topics
+    participate, and a topic outside any hierarchy gets no keys at all rather
+    than empty ones.
+
+    Edge lookups are per topic (the same N+1 family as the rest of `search`
+    enrichment), but neighbour bodies are fetched once each across the whole
+    result set and reuse nodes the result already carries — so a parent and its
+    children coming back together costs no extra fetches.
+    """
+    topics = [n for n in nodes if isinstance(n, Topic)]
+    if not topics:
+        return {}
+
+    neighbours_by_topic: dict[str, tuple[list[str], list[str]]] = {}
+    needed: set[str] = set()
+    for topic in topics:
+        parent_edges = await storage.get_edges_from(
+            topic.id, edge_type=EdgeType.SUBTOPIC_OF
+        )
+        child_edges = await storage.get_edges_to(
+            topic.id, edge_type=EdgeType.SUBTOPIC_OF
+        )
+        parent_ids = [e.dst_id for e in parent_edges]
+        child_ids = [e.src_id for e in child_edges]
+        neighbours_by_topic[topic.id] = (parent_ids, child_ids)
+        needed.update(parent_ids)
+        needed.update(child_ids)
+
+    known: dict[str, EpistemicNode] = {n.id: n for n in nodes}
+    for node_id in needed - known.keys():
+        neighbour = await storage.get_node(node_id)
+        if neighbour is not None:
+            known[node_id] = neighbour
+
+    annotations: dict[str, dict] = {}
+    for topic_id, (parent_ids, child_ids) in neighbours_by_topic.items():
+        annotation: dict = {}
+        parents = [known[i] for i in parent_ids if i in known]
+        children = [known[i] for i in child_ids if i in known]
+        if parents:
+            annotation["parents"] = [_content_preview(p) for p in parents]
+        if children:
+            annotation["subtopics"] = [_content_preview(c) for c in children]
+        if annotation:
+            annotations[topic_id] = annotation
+    return annotations
+
+
+async def topic_tree(
+    topic_id: str,
+    storage: StorageBackend,
+    *,
+    depth: int = 2,
+) -> tuple[dict, ResponseMeta]:
+    """Ancestors and a depth-limited subtree for one topic, previews only.
+
+    The drill-down primitive for a split hierarchy: it answers "what is under
+    this topic, and what is it part of" with shape and identity rather than
+    material, so the caller can pick a branch and fetch only that.
+
+    `depth` counts levels of descendants — 1 is direct subtopics only. A node
+    held back by the limit that does have children is flagged ``has_more``, so a
+    truncated branch is never mistaken for a leaf.
+    """
+    from epimemer.pipelines.reflection.topic_hierarchy import (
+        get_ancestors,
+        get_children,
+    )
+
+    if depth < 1:
+        raise ValueError("depth must be at least 1")
+
+    node = await storage.get_node(topic_id)
+    if node is None:
+        raise ValueError(f"Topic {topic_id} not found")
+    if not isinstance(node, Topic):
+        raise ValueError(f"Node {topic_id} is not a Topic")
+
+    # Shared across the recursion so a DAG with several paths to the same
+    # subtopic reports it once, and a malformed cyclic graph still terminates.
+    visited: set[str] = {topic_id}
+
+    async def descend(node_id: str, remaining: int) -> list[dict]:
+        entries: list[dict] = []
+        for child in await get_children(storage, node_id):
+            if child.id in visited:
+                continue
+            visited.add(child.id)
+            entry = _content_preview(child)
+            if remaining > 1:
+                entry["subtopics"] = await descend(child.id, remaining - 1)
+            else:
+                entry["subtopics"] = []
+                if await get_children(storage, child.id):
+                    entry["has_more"] = True
+            entries.append(entry)
+        return entries
+
+    ancestors = await get_ancestors(storage, topic_id)
+    subtopics = await descend(topic_id, depth)
+
+    result = {
+        "topic": _content_preview(node),
+        "ancestors": [_content_preview(a) for a in ancestors],
+        "subtopics": subtopics,
+        "depth": depth,
+    }
+    meta = ResponseMeta(
+        nodes_returned=len(visited) + len(ancestors),
+        source_types={"topic": len(visited) + len(ancestors)},
+    )
+    return result, meta
+
+
 async def search(
     query: str,
     storage: StorageBackend,
@@ -409,7 +546,9 @@ async def search(
     Frame-scoping over-fetches so an in-frame node ranked below the vector top-k
     is still found (see `_retrieve_frame_scoped`). Metacontext labels and computed
     review labels (superseded_candidate / evidence_stale / contested) are always
-    included on returned nodes.
+    included on returned nodes. Returned Topics that sit in a split hierarchy also
+    carry `parents` / `subtopics` as id + preview, so the caller can drill via
+    `topic_tree` instead of being handed the whole subtree.
     """
     from epimemer.pipelines.query.types import QueryRequest
     from epimemer.pipelines.reflection.review import review_labels
@@ -439,7 +578,10 @@ async def search(
 
     edges_data = [e.model_dump(mode="json") for e in query_result.edges]
 
-    # Build node dicts with metacontext labels and computed review labels.
+    # Build node dicts with metacontext labels, computed review labels, and —
+    # for topics in a split hierarchy — their neighbours, so the caller can
+    # drill rather than be handed the whole subtree.
+    hierarchy = await _hierarchy_annotations(nodes, storage)
     nodes_data = []
     for node in nodes:
         node_dict = _node_to_dict(node)
@@ -449,6 +591,7 @@ async def search(
         review = await review_labels(node, storage)
         if review:
             node_dict["review"] = review
+        node_dict.update(hierarchy.get(node.id, {}))
         nodes_data.append(node_dict)
 
     result = {

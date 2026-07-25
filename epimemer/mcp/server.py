@@ -750,6 +750,41 @@ async def memory_query_graph(
     )
 
 
+@mcp.tool(name="topic_tree")
+async def memory_topic_tree(
+    topic_id: str,
+    ctx: Context,
+    depth: int = 2,
+) -> str:
+    """Drill into a topic hierarchy: its ancestors and its subtopics.
+
+    Returns ids and short content previews only — never the underlying
+    material — so you can pick a branch and then search or query_graph just
+    that. Use it when search returns a topic carrying `subtopics`, or to see
+    how a broad topic was split.
+
+    Args:
+        topic_id: The topic to centre the tree on.
+        depth: Levels of subtopics to descend (default 2; 1 is direct
+            subtopics only). A subtopic cut off by the limit that has children
+            of its own is flagged `has_more`.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.topic_tree",
+        lambda: tools.topic_tree(
+            topic_id=topic_id,
+            storage=deps["storage"],
+            depth=depth,
+        ),
+        ctx,
+        f"topic={topic_id} depth={depth}",
+        lambda r, m: (
+            f"ancestors={len(r['ancestors'])} subtopics={len(r['subtopics'])}"
+        ),
+    )
+
+
 @mcp.tool(name="as_of")
 async def memory_as_of(
     at: str,

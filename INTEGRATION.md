@@ -58,7 +58,7 @@ the knowledge graph and pipeline execution in real time.
 
 ### Verify Connection
 
-In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 30 tools.
+In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 31 tools.
 
 ## Available Tools
 
@@ -82,6 +82,7 @@ restate the count.
 | Tool | Purpose |
 |------|---------|
 | `query_graph` | Traverse the graph from a starting node |
+| `topic_tree` | Drill into a topic hierarchy — ancestors and subtopics, previews only |
 | `find_nodes` | Return nodes linked to a source or topic hub (traversal, not similarity) |
 | `list_sources` | List the distinct source/origin nodes, with reference counts |
 | `list_relations` | List the distinct user-defined relationship labels, with usage counts |

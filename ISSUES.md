@@ -1,12 +1,14 @@
 # Epimemer — Known Issues
 
-Living issue tracker. **Last review: 2026-07-23.**
+Living issue tracker. **Last review: 2026-07-28.**
 
-The 2026-07-20 code-review sweep (issues 6–23) is complete: 16 resolved, 2
-deferred by design (**14** and **16**, below). The resolved entries have been
-**removed from this file** — their resolution lives in git history and the
-merged code. Issue numbers are stable IDs; the gaps (6–13, 15, 17–23) are
-deleted-resolved items, not missing work. New findings continue from **24**.
+Everything found so far is resolved except **14** and **16**, both deferred by
+design and described below. Resolved entries are **removed from this file** —
+their resolution lives in git history and the merged code. Issue numbers are
+stable IDs; the gaps (6–13, 15, 17–25) are deleted-resolved items, not missing
+work. **26–30** below are planned work (features/enhancements, prioritized
+2026-07-28), written so another agent can pick each up cold. New findings
+continue from **31**.
 
 **Workflow (required for every fix):**
 
@@ -85,6 +87,16 @@ graph at it unwarned.
 > call* on the same shared SurrealDB connection — is unchanged and still deferred;
 > its eventual fix (a dedicated read connection for SurrealDB) lands in the hub
 > client's RPC handler.
+>
+> **Update 2026-07-28 (fix shape shrank).** The old blocker on the
+> dedicated-second-connection fix — "a second `mem://` connection is a separate
+> store, so viz would read an empty graph" — **no longer applies**: snapshot
+> reads run inside the owning process now, so only the SurrealDB path needs the
+> second connection (opened in `hub_client.py`'s RPC handler against the same
+> external DB; `mem://` keeps the existing lock path). What was an adapter-wide
+> locking change is now a scoped one. Still deferred — the trigger (concurrent
+> tool-call clients) hasn't fired — but whoever picks this up should start from
+> the hub client, not the adapter.
 
 **Severity: low now, high the moment there are concurrent clients.**
 
@@ -101,147 +113,250 @@ while the server is single-client stdio; keep this issue open as the reminder.
 
 ---
 
-### Issue 24 — Visualizer silently serves a stale/empty graph after a reconnect — ✅ RESOLVED (2026-07-24, viz hub)
+## Planned work (features & enhancements, prioritized 2026-07-28)
 
-> **✅ Resolved by the visualization hub** (`dev-docs/VISUALISATION.md`, Part A).
-> The embedded per-process viz server is gone (`ws_server.py` deleted); a
-> standalone hub now owns the port and MCP processes dial out to it as *sessions*.
-> A stale MCP orphan is therefore a dead session in the selector, never a stray
-> server answering on the port with an empty graph. The browser header shows the
-> session + backend so an in-memory/`default` session is self-evidently not the
-> persistent one, and the new `viz_status` MCP tool answers "which session am I?"
-> authoritatively from inside the process being driven. Guarding tests:
-> `tests/visualization/test_hub.py` (bind-race, RPC, fan-out),
-> `test_hub_client.py` (register / reconnect / unreachable),
-> `tests/mcp/test_viz_status.py`, and `backend_name` parity in
-> `test_storage_parity.py`. **Delete this entry once merged.**
+Not bugs — the next tranche of product work, tracked here at the user's request
+so the workflow above (failing test first, scoped commits, delete on merge)
+applies to them too. Ordered by priority. Cross-references: **27** is the open
+item in TODO.md ("visible counter" is **26**, "drill-down recall" is **27**);
+**28** is README → *Not yet built* → *Benchmarking*.
 
-**Severity: medium (observability correctness — it actively misleads).** Found
-2026-07-23 while viewing the live visualizer. *(Original analysis retained below
-until merge.)*
+### Issue 26 — Auto-reflect counter: make it visible and user-controllable — 🆕 PLANNED
 
-**Symptom.** The browser at `http://127.0.0.1:8765` shows an empty knowledge
-graph and a graph dropdown listing only `default`, with the header reading
-`MCP: default`, even though the MCP server the user is actually driving is on the
-SurrealDB `memory` graph with data in it. Nothing in the UI or in tool responses
-signals a problem — the graph just looks empty.
+**Why.** Post-#25 the counter is persistent per-graph (storage protocol:
+`get_reflect_counter` / `bump_reflect_counter` / `reset_reflect_counter`;
+`storage/memory.py:561-569`, `surrealdb_adapter.py` `_REFLECT_FIELD`), but it
+is only surfaced inside `store_decomposition` responses
+(`mcp/server.py:327-332`). The user cannot *see* reflection pressure at a
+glance, and the threshold is a static process config
+(`reflect_threshold: int = 10`, `mcp/config.py:34`, env
+`EPIMEMER_REFLECT_THRESHOLD`) with no runtime control — no "reflect sooner",
+no "snooze".
 
-**Root cause — a stale process holds the viz port.**
+**Scope (three independent pieces, in order of value):**
 
-1. Every `/mcp` reconnect (and every manual `python -m epimemer.mcp.server`)
-   spawns a new server process; old ones are **not reliably reaped** (one
-   session accumulated ~10). Confirm with `ps ax | grep '[e]pimemer.mcp.server'`.
-2. The viz server binds a **fixed** port (`config.viz_port`, default 8765;
-   `server.py:105`). Only the first process to bind wins.
-3. A stray process launched **without `EPIMEMER_*` env** defaults to the
-   in-memory backend and the `default` database — an empty store. If it grabbed
-   `:8765` first, the browser is talking to *it*.
-4. The process the user actually drives (surrealdb/`memory`) tries to bind
-   `:8765`, fails, and `_run_viz` (`server.py:112-121`) catches the uvicorn
-   `SystemExit` and logs only a **warning to `EPIMEMER_LOG_FILE`** ("port in
-   use? Continuing without visualization"), then serves MCP without viz. The
-   user never sees that log, and the stale server keeps answering on `:8765`.
+1. **`graph_stats` reports it.** Add `stores_since_reflect`,
+   `reflect_threshold`, `reflect_suggested` to the `graph_stats` result
+   (`tools.graph_stats`; the tool wrapper at `mcp/server.py:1150-1163` already
+   has `storage` and `config` in scope). This alone answers "how close am I to
+   a suggested reflect?".
+2. **Per-graph threshold override.** New small tool
+   `configure_reflection(threshold: int | None)`: persists an override next to
+   the counter (same per-graph marker record both backends already maintain —
+   extend the storage protocol with get/set, implemented on **both** backends
+   per the parity rule; no `hasattr` probing). `None` clears the override;
+   effective threshold = override or config default. "Reflect sooner" is then
+   just calling `reflect`; "delay" is raising the threshold. Resetting the
+   counter without reflecting (true snooze) is deliberately **not** included —
+   it would silently discard the signal.
+3. **Viz badge.** Emit a small `ReflectCounterUpdated` graph event
+   (`visualization/events.py`; fields: `count`, `threshold`) after bump
+   (`server.py:327`) and reset (reflect path, `server.py:637-648`). Frontend:
+   a header badge `reflect 7/10` for the selected session, amber once
+   `count >= threshold` (`frontend/src/main.ts` + `types.ts`; rebuild and
+   commit the static bundle).
 
-**Verified 2026-07-23.** `lsof -nP -iTCP:8765 -sTCP:LISTEN` pointed at a python
-PID whose `ps eww` showed no `EPIMEMER_*` env; `curl -s
-http://127.0.0.1:8765/api/graphs` returned `{"graphs":["default"],
-"active_graph":"default"}`. Cleared by `pkill -f 'epimemer.mcp.server'` then a
-clean `/mcp` reconnect, after which the correct process bound `:8765` and served
-`memory`.
-
-**Why the suite misses it.** It is a multi-process / lifecycle + UX failure, not
-a single-process behaviour. Adjacent to Issue 16 (both stem from viz/multi-graph
-process-global assumptions) but distinct: this is about which *process* owns the
-port and how silently the loser fails.
-
-**Fix direction — independently pickable:**
-
-1. **Make the mismatch self-evident in the UI (cheapest, highest value).**
-   `api_graphs` (`ws_server.py:137-142`) returns only db names + active db; add
-   the **backend kind** (in-memory vs surrealdb) and render it in the header, so
-   `MCP: default (in-memory)` reads instantly as "wrong/empty server". Needs a
-   backend label on the storage protocol (e.g. a `backend_name` property) or
-   `type(storage).__name__`. Touches `ws_server.py`, `frontend/src/api.ts`, and
-   the header render in `frontend/src/main.ts`; rebuild the bundle
-   (`cd frontend && npm run build`) and commit `visualization/static/`.
-2. **Make the bind conflict loud where the user looks.** In `_run_viz`
-   (`server.py:112-121`) escalate to `logger.error` **and write to stderr**
-   (Claude Code surfaces MCP-server stderr, unlike the log file) with an explicit
-   message: "port 8765 already held by another epimemer server — your browser is
-   NOT talking to this process; stop stray servers." Optionally add an
-   `EPIMEMER_VIZ_STRICT` flag that fails startup instead of continuing.
-3. **Startup pre-flight.** Before binding, probe `:viz_port`; if something already
-   answers `/api/graphs`, log the conflict explicitly, naming the other server's
-   active graph/backend. `server.py`.
-4. **(Follow-up, heavier) single-instance hygiene.** A pidfile + "new server
-   signals the old to release the port", or the harness reaping the old child on
-   reconnect. Orphan accumulation is partly a Claude-Code reconnect behaviour
-   epimemer can't fully control, so treat this as mitigation, not the core fix.
-
-**Operational aid (do first — it's tiny):** a `make viz-doctor` /
-`scripts/viz_doctor.sh` that prints running `epimemer.mcp.server` PIDs (with
-their `EPIMEMER_*` env) and the PID owning `:8765`. Turns this 20-minute
-diagnosis into one command.
-
-**Tests.** The race itself is not unit-testable, but the pieces are:
-`tests/visualization/test_ws_server.py::test_api_graphs_reports_backend` (the
-backend label is present in the payload), and a `server.py` test that
-monkeypatches `uvicorn.Server.serve` to raise `SystemExit` and asserts the
-bind-failure path logs at ERROR / writes the explicit stderr message.
+**Tests first.** `tests/mcp/test_graph_stats.py::test_reports_reflect_counter`
+(parameterized `storage` fixture); `test_configure_reflection_persists_override`
+— set override, rebuild server context on the same storage, assert the
+effective threshold survives (mirrors the #25 guard test);
+`tests/visualization/`: counter event emitted on bump and reset.
 
 ---
 
-### Issue 25 — `stores_since_reflect` is process-local and resets on reconnect — ✅ RESOLVED (2026-07-25, per-graph counter)
+### Issue 27 — Hierarchy-aware recall: make splits pay off at retrieval time — ✅ RESOLVED
 
-> **✅ Resolved by moving the counter into storage**, the per-graph option below
-> (it is the one the docs already promise). `StorageBackend` gained
-> `get_reflect_counter` / `bump_reflect_counter` / `reset_reflect_counter`,
-> implemented explicitly on both backends — a field on the in-memory
-> `_GraphStore`, and a fixed `graph_state:reflect` record in SurrealDB whose
-> bump/reset are single atomic `UPSERT ... RETURN` statements, so no read-modify-
-> write races. The lifespan context no longer holds the count at all, which
-> removes the shadow copy rather than trying to keep two in sync. Because the
-> state now lives in the graph, the count also follows a `use_graph` switch
-> instead of leaking across graphs. Guarding tests:
-> `tests/mcp/test_reflect_counter.py` (reconnect, reset, threshold, graph switch)
-> and `TestReflectCounter` in `tests/storage/test_storage_parity.py` (both
-> backends). **Delete this entry once merged.**
+> **✅ Resolved 2026-07-28.** Scope 1 and 2 built; scope 3 (hierarchy-aware
+> ranking) deliberately **not** built — it was conditional on results looking
+> noisy after 1+2, and they don't. Reopen only with a concrete query where a
+> parent and child both rank and the parent is noise.
+>
+> - `search` annotates returned Topics with `parents` / `subtopics` as
+>   `{id, content_preview}` (`_hierarchy_annotations`, `mcp/tools.py`). Topics
+>   outside a hierarchy gain no keys; non-Topic nodes are untouched.
+> - New `topic_tree(topic_id, depth=2)` tool (`mcp/tools.py` +
+>   `mcp/server.py`): ancestors to the roots, descendants to `depth`, previews
+>   only, with `has_more` on branches cut off by the limit so a truncation is
+>   never read as a leaf. `get_ancestors` added to
+>   `pipelines/reflection/topic_hierarchy.py`; `get_children` / `get_parents`
+>   now have production callers for the first time.
+>
+> **Deviations from the plan below, both deliberate:** the annotation key is
+> `parents` (plural), because SUBTOPIC_OF is a DAG and a topic can hold several
+> parents — a singular `parent` would silently drop one. And the lookups are
+> *deduplicated* rather than batched: the protocol has no multi-node edge fetch,
+> and adding one is #14's work, not this issue's. Neighbour bodies are fetched
+> once each across the result set and reuse nodes the result already carries, so
+> a parent and its children returning together cost no extra fetches.
+>
+> Guarded by `tests/mcp/test_topic_hierarchy_recall.py` (11 tests, both
+> backends): `test_annotates_parents_and_subtopics`,
+> `test_annotations_carry_previews_not_full_content`,
+> `test_unrelated_topics_carry_no_hierarchy_keys`,
+> `test_non_topic_nodes_are_not_annotated`,
+> `test_returns_ancestors_and_nested_descendants`,
+> `test_ancestors_run_from_nearest_parent_to_root`,
+> `test_depth_limits_descent_and_flags_more`,
+> `test_returns_previews_not_material`, `test_rejects_depth_below_one`,
+> `test_rejects_unknown_topic`, `test_rejects_non_topic_node`.
 
-**Severity: low (feature reliability).** Found 2026-07-23: two documents stored
-across a `/mcp` reconnect both reported `stores_since_reflect: 1`. *(Original
-analysis retained below until merge.)*
+**Why.** `apply_reflection splits` builds a `SUBTOPIC_OF` DAG
+(`core/types.py:55`; helpers in `pipelines/reflection/topic_hierarchy.py` —
+parents/children/roots/cycle detection all exist;
+`graph_construction/versioning.py:167-191` plans the edges), but retrieval
+never uses it: `search` (hybrid retrieval + `query/graph_expansion.py`) treats
+`subtopic_of` as just another edge. Splitting a bloated topic currently buys
+nothing at recall time — the stated point of the feature (TODO.md, marked
+PARTIAL) was drill-down without loading everything into context.
 
-**Symptom.** The auto-suggest-reflection signal (`reflect_suggested`, meant to
-fire once `reflect_threshold` ingests accumulate — default 10, `config.py:34`)
-effectively never triggers for a user who reconnects between ingests, even though
-the persistent graph keeps growing.
+**Scope:**
 
-**Root cause.** The counter lives in the server's in-memory lifespan context, not
-in storage. `server.py:136` seeds `"stores_since_reflect": 0` per process;
-`server.py:318` increments it on each `store_decomposition`; `server.py:627,638`
-resets it to 0 on `reflect`. A new process (every reconnect / restart) starts
-again at 0. So with a **persistent** graph the data survives but the "stores
-since reflect" signal does not — the two are inconsistent.
+1. **Search results expose the hierarchy.** In `search` enrichment, when a
+   returned node is a Topic with `subtopic_of` neighbours, annotate it:
+   `parent: {id, content_preview}` and `subtopics: [{id, content_preview}]`
+   (previews ~100 chars — ids + previews only, never full material). The
+   calling agent can then decide to drill rather than receiving everything.
+2. **New tool `topic_tree(topic_id, depth=2)`.** Lazy subtree fetch built on
+   the existing `topic_hierarchy` functions: returns the topic, its ancestors
+   to the root, and descendants to `depth`, previews only. This is the
+   drill-down primitive.
+3. **(Stretch, separate commit) hierarchy-aware ranking.** When both a parent
+   and its child match a query, prefer the child (more specific) and mention
+   the parent in its annotation instead of returning both at full weight.
+   Decide based on how noisy real results look after 1+2 — don't build it
+   speculatively.
 
-**Decide the intended semantics first.** The docs frame it per-graph-lifetime
-("auto-suggests after N ingestions"); the implementation is per-session. Pick
-one:
+**Notes for the implementer.** Enrichment in `search` is per-node storage
+round-trips — the same N+1 family as #14. Keep the new lookups batched per
+result set (one `get_edges_*` pass over returned topic ids), not per-node
+loops, so this doesn't deepen the #14 ceiling.
 
-- **Per-graph (matches the docs):** persist the counter — e.g. a small
-  `reflect_state` marker in the active graph, updated on store and cleared on
-  reflect, read back into the context on `connect`. Survives reconnects. Cost: a
-  storage read on startup + a write per store.
-- **Per-session (matches the code):** keep it, but document it and rename the
-  surfaced semantics so it doesn't read as a lifetime count — then the docs
-  ("auto-suggests after N ingestions") need correcting.
+**Tests first.** `tests/mcp/test_search.py::test_search_annotates_hierarchy`
+and `test_topic_tree_depth_and_previews` — build a 3-level hierarchy via the
+public tools (`store_decomposition` + `apply_reflection splits`), assert
+annotations/subtree shape on the parameterized `storage` fixture; cycle-safety
+already guarded in `topic_hierarchy`, don't re-test it here.
 
-A cheaper alternative: base the suggestion on a persistent node-count delta since
-the last reflect, avoiding a dedicated counter entirely.
+---
 
-**Test.** `tests/mcp/...::test_reflect_counter_survives_reconnect` — drive a
-store through the tool, tear down and rebuild the server context against the
-**same** storage, and assert the counter reflects the prior store (fails today:
-resets to 0). Only meaningful once the semantics above are decided.
+### Issue 28 — Benchmark harness (arms the #14 trigger) — 🆕 PLANNED
+
+**Why.** #14's deferral condition is "a graph large enough that latency is
+felt" — but nothing measures it, so the trigger can only fire as a user
+complaint. A small harness turns it into a number.
+
+**Scope.** `scripts/bench.py` (standalone, not pytest) + `make bench`:
+
+- Seed a synthetic graph of parameterized size (N documents × M segments,
+  reusing the public ingest path so numbers reflect reality).
+- Measure, per backend (`mem://` always; Docker SurrealDB when
+  `EPIMEMER_BENCH_URL` is set): `store_decomposition` throughput
+  (docs/min), `search` p50/p95 latency at N nodes, `reflect` wall time vs
+  graph size, `list_sources` latency (the known worst N+1 offender,
+  `mcp/tools.py:571-617`).
+- Output one JSON line per (operation, backend, N) to stdout; a run at, say,
+  N ∈ {100, 1k, 10k} nodes.
+- Record the first real baselines in `dev-docs/BENCHMARKS.md` (date, machine,
+  commit) — that file, not the script, is what makes #14's trigger checkable
+  later.
+
+Keep it ~200 lines; it's an instrument, not a framework. No CI wiring — run on
+demand.
+
+**Tests.** Exempt from the test-first rule (it *is* a measuring tool): one
+smoke test that `bench.py --n 10 --quick` runs green on `mem://` in a few
+seconds, so it doesn't rot.
+
+---
+
+### Issue 29 — `reflect` is invisible in the pipeline strip — 🆕 PLANNED
+
+**Why.** The pipeline strip (dev-docs/VISUALISATION.md Part B) lights up for
+the four `_run_net` pipelines, but `reflect` — the most interesting process in
+the system — runs as plain function phases (`mcp/tools.py:999-1057`:
+contradiction detection, relation/topic consolidation, enrichment gathering,
+split detection, decay, pending review) and never appears. The strip's
+observability story has a hole exactly where users most want to watch.
+
+**Scope — cheap synthetic-pipeline option (recommended).** Do **not** net-ify
+`reflect` for this; that's a real refactor with its own risks (the
+orchestration net in `pipelines/orchestration/orchestration_net.py` already
+models auto-reflect state and would be the vehicle if net-ification is ever
+wanted — separate decision). Instead, emit the existing pipeline events with a
+hand-written topology from inside the `reflect` tool when `event_bus` is
+present:
+
+- On entry: `PipelineStarted(pipeline_name="reflect", ...)` with a linear
+  places/transitions chain naming the phases above (the topology is synthetic;
+  `events.py` doesn't care).
+- Around each phase: `TransitionFired` / `TransitionCompleted` (with real
+  `duration_ms`), and `TokensUpdated` with meaningful counts (e.g. pending
+  candidates found per phase).
+- On exit: `PipelineCompleted` / `PipelineFailed`.
+
+The frontend needs **zero changes** — the strip renders whatever
+`PipelineStarted` describes. Keep the emission helper as a small function in
+`mcp/tools.py` (or `visualization/`) so the phase list lives in one place.
+
+**Tests first.**
+`tests/visualization/test_reflect_events.py::test_reflect_emits_pipeline_events`
+— run `reflect` with a recording bus, assert the started → per-phase →
+completed sequence and that `pipeline_failed` fires when a phase raises. Also
+assert **no events and no behaviour change** when `event_bus` is `None`
+(mirrors the `_run_net` guarantee that watching cannot change what is
+computed, `tools.py:54-55`).
+
+---
+
+### Issue 30 — Frontend has no test runner — 🆕 PLANNED
+
+**Why.** `epimemer/visualization/frontend/src/` is 1,706 lines of TypeScript
+across 8 modules with **zero tests** — no runner is installed (`package.json`
+has no `test` script; nothing in the repo references vitest, jest or
+playwright). The Python side has a parity-parameterized suite and a `make test`
+target; the frontend has `tsc` type-checking only, which catches shape errors
+and nothing about behaviour. Two planned items (26.3's reflect badge, 29's
+reflect strip rendering) add to this pile, so the runner should land first.
+
+The event-reduction logic is the part that actually warrants tests, and it is
+already written in a testable shape — pure functions plus closure factories, no
+DOM:
+
+- `pipeline-store.ts` (175 lines): `emptyRunState`, `applyTokensUpdate`,
+  `applyPipelineEvent`, `markStale` are pure state transitions;
+  `createPipelineStore` is a factory over them.
+- `events.ts` (169 lines): `createEventRouter` — per-session subscription
+  routing and system-message dispatch.
+- `api.ts` (44 lines): three `fetch` wrappers, testable against a stubbed
+  `fetch`.
+
+`graph-panel.ts`, `pipeline-strip.ts`, `pipeline-detail.ts` and `main.ts` are
+DOM/Cytoscape rendering — **out of scope**; testing them needs jsdom and a
+Cytoscape harness for little return. Draw the line at the logic modules.
+
+**Scope.**
+
+1. Add `vitest` as a devDependency (it reuses the existing `vite.config.ts`, so
+   no second build config) and a `"test": "vitest run"` script. Node
+   environment, not jsdom — the in-scope modules never touch the DOM.
+2. `src/*.test.ts` beside each module under test, matching the codebase's
+   functional style.
+3. Wire it into `make test-frontend`, and note in the Makefile header that the
+   default `make test` stays Python-only so the frontend toolchain is not a
+   prerequisite for running the backend suite.
+
+**Tests.** This issue *is* the tests; the test-first rule does not apply.
+Minimum coverage to call it done:
+
+- `applyPipelineEvent` over a full started → transition fired/completed →
+  completed sequence, and the failure path (`pipeline_failed`), asserting
+  status and per-transition state at each step.
+- `applyPipelineEvent` on an out-of-order or unknown-transition event — assert
+  it does not throw and leaves state coherent, since the hub gives no ordering
+  guarantee across reconnects.
+- `applyTokensUpdate` and `markStale` as isolated transitions.
+- `createEventRouter`: an event for session A reaches only A's handler; system
+  messages reach the system handler; unsubscribing stops delivery.
 
 ---
 
@@ -250,11 +365,11 @@ resets to 0). Only meaningful once the semantics above are decided.
 From the original live-graph walkthrough (issues 1–5, otherwise resolved or kept
 by design — see git history of this file, commit `22fc874` and follow-ups):
 
-- **Merge is Topic-only (wired path).** `merge_nodes` is type-agnostic but
-  `apply_reflection merges` accepts Topics only. Extension to Facts/Inferences is
-  under discussion (Inferences are meant to let competing derivations coexist).
 - **No retroactive repair of old graphs.** Fixes apply to new operations;
   pre-existing graphs keep stale state until rebuilt. Accepted.
+
+Merge being Topic-only on the wired path is a scope question rather than a bug —
+it lives in README → *Not yet built*.
 
 ---
 
@@ -262,7 +377,11 @@ by design — see git history of this file, commit `22fc874` and follow-ups):
 
 | Order | Issue | Why |
 |---|---|---|
-| ✅ done | 24 | Resolved by the viz hub (2026-07-24) — delete once merged |
-| ✅ done | 25 | Resolved by the per-graph reflect counter (2026-07-25) — delete once merged |
-| deferred | 16 | Multi-graph concurrency — trigger: the server gains concurrent clients (viz-read leg now closed by the hub) |
-| deferred | 14 | Full-scan / N+1 — trigger: a large persistent graph makes latency felt |
+| 1 | 26.1 | `graph_stats` reports the counter — ~30 min, and it makes reflection pressure visible while working on 27 |
+| ✅ | 27 | Hierarchy-aware recall — done (scope 1+2); ranking stretch deliberately skipped |
+| 2 | 30 | Frontend test runner — before 26.3 and 29 add more untested TypeScript |
+| 4 | 26.2, 26.3 | Threshold override (storage-protocol change, both backends) then the viz badge — the non-small half of 26 |
+| 5 | 28 | Benchmark harness — turns #14's trigger from a complaint into a number |
+| 6 | 29 | Reflect in the pipeline strip — closes the observability gap the strip redesign created |
+| deferred | 16 | Multi-graph concurrency — trigger: the server gains concurrent clients (viz-read leg closed by the hub; fix now scoped to `hub_client.py`) |
+| deferred | 14 | Full-scan / N+1 — trigger: a large persistent graph makes latency felt (measure with #28) |
