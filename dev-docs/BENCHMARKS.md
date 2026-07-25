@@ -157,13 +157,65 @@ the remaining 5.8 s at 1,500 nodes. That is **genuine O(F²) work, not
 redundancy**. Vectorizing it would buy a large constant factor but not change
 the exponent, and it is not currently on the issue list.
 
+---
+
+## 2026-07-29 — SurrealDB over `ws://`
+
+The measurement every earlier section listed as missing. Throwaway container
+(`surrealdb/surrealdb:latest start --user root --pass root memory`) on
+localhost, so this is a **loopback** round-trip — a remote server would be
+worse. Post-#31 code.
+
+| Nodes | ingest (s) | search p50 | list_sources | reflect |
+|---|---|---|---|---|
+| 100 | 0.067 | 126 ms | 91 ms | 463 ms |
+| 500 | 0.243 | 447 ms | 465 ms | 2,720 ms |
+| 1,000 | 0.504 | 1,443 ms | 911 ms | 6,060 ms |
+| 2,000 | 0.999 | **5,284 ms** | 1,870 ms | 15,679 ms |
+
+Ratio to in-memory at 1,000 nodes: **search 68×**, `list_sources` 4.4×,
+`reflect` 1.1×.
+
+### `search` is the urgent one, and that was not the expectation
+
+Everything before this treated `search` as the healthy operation — linear
+in-memory, 212 ms at 10k nodes. Over a websocket it is **68× slower and
+superlinear** (exponent 1.87 between 1,000 and 2,000), crossing the 30 s tool
+timeout at **~5,100 nodes**. At 1,000 nodes it is already 1.4 s per call.
+
+That matters more than the raw number suggests: `search` is the most frequently
+called tool in the system, where `list_sources` and `reflect` are occasional.
+A 1.4 s search on a 1,000-node graph is a bad interactive experience well
+before anything fails.
+
+### `list_sources` is *linear* here, and quadratic in-memory
+
+The reversal is the useful clue. `InMemoryStorage.get_edges_from` /
+`get_edges_to` scan the entire edge set on every call (`storage/memory.py`);
+SurrealDB has an index. So the in-memory backend pays O(E) per edge lookup where
+SurrealDB pays one round-trip, and the in-memory quadratic curve is an artefact
+of a missing index rather than of the N+1 call pattern.
+
+At 10k nodes the two cross over: in-memory `list_sources` (18 s) is already
+worse than SurrealDB's projection (~9 s), despite having no network at all.
+
+### 30 s crossings, both backends
+
+| Operation | in-memory | SurrealDB (loopback) |
+|---|---|---|
+| `search` | ~140k (linear, 212 ms at 10k) | **~5,100** |
+| `reflect` | ~5,000 | ~3,200 |
+| `list_sources` | ~11,000 | ~29,000 |
+
 ### Not yet measured
 
-- **SurrealDB over `ws://`.** The interesting case, since it multiplies exactly
-  the per-node queries that dominate above. Run with
-  `EPIMEMER_BENCH_URL=ws://localhost:8000/rpc make bench`.
-- **`reflect` at 10k, to completion.** Abandoned at 19 minutes here. Worth one
-  patient run to get the real figure, though the shape is already clear enough
-  to act on.
+- ~~**SurrealDB over `ws://`.**~~ Measured — see the last section.
+- **`reflect` at 10k, to completion.** Abandoned at 19 minutes on the pre-#31
+  code; post-fix it should be tractable and is worth one patient run.
+- **A remote (non-loopback) SurrealDB.** Every network number here is over
+  localhost, so real deployments are worse by the RTT difference multiplied by
+  the round-trip count.
+- **A diverse corpus.** See the caveat above: the 17-word synthetic vocabulary
+  inflates anything that scales with surviving candidate pairs.
 - **Real embeddings.** `--real-embeddings` adds the constant this deliberately
   omits, for an end-to-end figure.

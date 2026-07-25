@@ -6,8 +6,9 @@ Everything found so far is resolved except **14** and **16**, both deferred by
 design and described below. Resolved entries are **removed from this file** —
 their resolution lives in git history and the merged code. Issue numbers are
 stable IDs; the gaps (6–13, 15, 17–25, 27, 30) are deleted-resolved items, not
-missing work. **26**, **28** and **29** are done and awaiting deletion on merge;
-**31** is new and open. New findings continue from **32**.
+missing work. **26**, **28**, **29** and **31** are done and awaiting deletion
+on merge. Open: **14** and **16** (deferred, with measured triggers) and **32**
+(new). New findings continue from **33**.
 
 **Workflow (required for every fix):**
 
@@ -34,77 +35,178 @@ is entirely sequential.
 
 ## Open issues
 
-### Issue 14 — Full-scan / N+1 query patterns (known scaling ceiling) — ⏸ DEFERRED (by design)
+### Issue 14 — Full-scan / N+1 query patterns — ⏸ DEFERRED, triggers now measured
 
-> **⏸ Deferred 2026-07-22.** Not a bug — a performance ceiling. Fine at current
-> scale (in-memory, and small SurrealDB graphs). The fix is a real protocol
-> change (aggregate/grouped query methods on `StorageBackend`, batched edge
-> fetch, `asyncio.gather` on `search` enrichment) that should be driven by a
-> measured need, not landed speculatively. The trigger to pick this up: a
-> persistent SurrealDB graph large enough that `list_sources` / `reflect` /
-> `search` latency is felt. The ceiling is now documented for users (SUMMARY.md
-> *Scaling Limits*).
->
-> **Update 2026-07-29 — the trigger now has a number (from #28).** First
-> baselines in `dev-docs/BENCHMARKS.md`, on `mem://` with mocked embeddings (so
-> a floor, on fast hardware, with no network):
->
-> | Nodes | search p50 | `list_sources` | `reflect` |
-> |---|---|---|---|
-> | 100 | 2.9 ms | 4.6 ms | 25.7 ms |
-> | 1,000 | 21.3 ms | 208 ms | 5,412 ms |
-> | 10,000 | 212 ms | **18,066 ms** | **>19 min**, abandoned unfinished |
->
-> `search` is linear and fine. `list_sources` is **quadratic** — ~45× then ~87×
-> per 10× of data — and `reflect` is worse.
->
-> **This changes the severity.** `EPIMEMER_TOOL_TIMEOUT_SECONDS` defaults to
-> 30 s, and `list_sources` already burns 18 s of it at 10k nodes under the most
-> favourable conditions measurable. On SurrealDB over a websocket — where every
-> per-node edge fetch becomes a round-trip — `list_sources` and `reflect` will
-> **exceed the timeout and fail**, not merely feel slow. So this stops being a
-> "performance ceiling" and becomes a broken tool call somewhere below 10k
-> nodes.
->
-> **Correction, same day — the trigger had already fired for `reflect`; now
-> fixed under #31, which moved its crossing from ~1,800 to ~5,000 nodes. The
-> table below is the pre-fix measurement, kept because it is what prompted the
-> split.**
->
-> A follow-up run across 1,500–3,000 nodes (BENCHMARKS.md, second section)
-> showed `reflect` was **cubic**, not the ~N^2.3 the two-point estimate
-> suggested:
->
-> | Nodes | 1,000 | 1,500 | 2,000 | 2,500 | 3,000 |
-> |---|---|---|---|---|---|
-> | `reflect` | 5.4 s | 16.4 s | **40.2 s** | 81.4 s | 138.4 s |
->
-> That put the 30 s crossing at **~1,800 nodes** — roughly 100 documents of five
-> segments — so it was a live defect rather than a deferred ceiling, tracked and
-> fixed as **#31**. Post-fix it is quadratic and crosses at ~5,000.
->
-> `list_sources` (quadratic, crossing ~11k) and `search` (linear) stay deferred
-> here — the earlier note above overstates `list_sources`' urgency relative to
-> `reflect`. The SurrealDB run is still missing
-> (`EPIMEMER_BENCH_URL=ws://... make bench`) and would lower both numbers.
+**Status.** Still deferred, but no longer on a guess: `scripts/bench.py` (#28)
+has measured both backends, and #31 removed the one part that had already
+broken. What remains is real but not yet reached. Full data and method:
+`dev-docs/BENCHMARKS.md`.
 
-**Severity: performance (not a bug).** Fine in-memory; over websocket to
-SurrealDB each item is a round-trip:
+**Why it is deferred and not closed.** The fix is a storage-protocol change
+(aggregate queries, batched edge fetch) plus concurrency, and one prong —
+`asyncio.gather` on enrichment — is blocked by **#16**'s shared-connection
+hazard. It should be driven by a graph that actually hurts, not landed
+speculatively. Nothing here is near the sizes below.
 
-- `list_sources` / `list_relations` (`mcp/tools.py:571-617`): iterate **all**
-  active nodes and fetch edges per node — O(N) queries per listing call.
-- `gather_pending_review` (`review.py:114-130`): `review_labels` per active
-  node — several edge queries each — on every `reflect`.
-- `reflect` split/enrichment loops (`tools.py:952-977`): re-embed every
-  topic's associated material on every reflect call.
-- `search` enrichment: `frames_of` + `review_labels` per returned node.
+---
 
-**Fix direction (when it bites):** aggregate queries in the protocol
-(`count edges grouped by dst for sourced_from`, `distinct labels+kind for
-RELATED`), batched edge fetch for a set of node ids, and concurrency
-(`asyncio.gather`) for the per-node enrichment in `search`. Until then this is
-a documented ceiling (SUMMARY.md *Scaling Limits*) so nobody points a large
-graph at it unwarned.
+#### The measurements
+
+`EPIMEMER_TOOL_TIMEOUT_SECONDS` defaults to **30 s**, so "crossing" below means
+*the tool call fails*, not *feels slow*.
+
+In-memory (`mem://`), post-#31, mocked embeddings, Apple M4 Max:
+
+| Nodes | search p50 | `list_sources` | `reflect` |
+|---|---|---|---|
+| 1,000 | 21 ms | 208 ms | ~1,900 ms |
+| 3,000 | 69 ms | 1,898 ms | 10,584 ms |
+| 10,000 | 212 ms | 18,066 ms | not re-run post-fix |
+
+SurrealDB over `ws://` (**loopback** — a remote server is worse):
+
+| Nodes | search p50 | `list_sources` | `reflect` |
+|---|---|---|---|
+| 100 | 126 ms | 91 ms | 463 ms |
+| 1,000 | 1,443 ms | 911 ms | 6,060 ms |
+| 2,000 | **5,284 ms** | 1,870 ms | 15,679 ms |
+
+30 s crossings:
+
+| Operation | in-memory | SurrealDB (loopback) |
+|---|---|---|
+| `search` | ~140k (linear) | **~5,100** |
+| `reflect` | ~5,000 | ~3,200 |
+| `list_sources` | ~11,000 | ~29,000 |
+
+---
+
+#### Per-operation analysis
+
+**`search` — the urgent one, and not where anyone was looking.** In-memory it
+is linear and healthy (212 ms at 10k). Over a websocket it is **68× slower and
+superlinear** (exponent 1.87 between 1,000 and 2,000 nodes), crossing 30 s at
+~5,100. At 1,000 nodes it already costs 1.4 s per call. It is also the *most
+frequently called* tool in the system, where `reflect` and `list_sources` are
+occasional — so it degrades the experience long before it fails.
+
+The superlinearity is the thing to chase first: a fixed `k=10` should make the
+enrichment cost constant, so something in the path scales with graph size per
+call. Start by profiling `tools.search` against SurrealDB at 1,000 vs 2,000
+nodes — candidates are the vector-similarity scan fetching embeddings per item,
+and the per-node enrichment (`frames_of`, `review_labels`,
+`_hierarchy_annotations`) each doing their own round-trips.
+
+**`reflect` — fixed once, still the second concern.** #31 made it quadratic
+(was cubic) and moved the in-memory crossing from ~1,800 to ~5,000 nodes; on
+SurrealDB it crosses at ~3,200. What remains is dominated by
+`_cosine_similarity` in `detect_contradictions` — 280k pure-Python pairwise
+comparisons at 1,500 nodes, ~3 s of 5.8 s. That is **genuine O(F²) work, not
+redundancy**; vectorizing it (numpy) would buy a large constant factor but not
+change the exponent. Nobody has raised that as an issue — do so if it bites.
+
+**`list_sources` / `list_relations` — least urgent, and the in-memory half is
+somebody else's bug.** `mcp/tools.py` iterates every active node and fetches
+that node's edges: O(N) queries per call. On SurrealDB that is linear with a
+round-trip constant (~29k crossing). In-memory it measures *quadratic* — worse
+than the networked backend past ~10k — because `InMemoryStorage.get_edges_from`
+/ `get_edges_to` scan the whole edge set per call. That is **#32**, is cheap,
+and needs no protocol change; do it before touching this.
+
+**Ingest — not a problem.** Flat at ~30k docs/min in-memory across every size
+measured, ~2k docs/min on SurrealDB. The write path is fine.
+
+---
+
+#### What to fix, in order
+
+1. **#32 — index edges in `InMemoryStorage`.** Not this issue, no protocol
+   change, and it removes the in-memory quadratic curve wholesale. Cheapest
+   real win available.
+2. **Find `search`'s superlinear term on SurrealDB.** Profile before
+   optimizing — #31 is the cautionary tale: its three predicted fixes were all
+   wrong and the profile found the real one (88% of wall clock in an
+   uncached frame lookup) in minutes.
+3. **Batched edge fetch in the protocol.** `get_edges_for(node_ids, edge_type)`
+   returning a map, implemented on **both** backends per the parity rule. This
+   is the one change that helps every N+1 site at once, and it is what
+   `_hierarchy_annotations` (`mcp/tools.py`) was deliberately left waiting for.
+4. **Aggregate queries** for the listing tools: count edges grouped by `dst`
+   for `sourced_from`; distinct label+kind for `RELATED`.
+5. **`asyncio.gather` on per-node enrichment** — **blocked by #16**. Do not
+   introduce concurrent storage access while the SurrealDB connection is
+   shared and `use()`-switched.
+
+---
+
+#### How to reproduce
+
+```bash
+make bench BENCH_N=1000,3000                      # in-memory
+docker run -d --rm --name bench-surreal -p 8001:8000 \
+  surrealdb/surrealdb:latest start --user root --pass root memory
+EPIMEMER_BENCH_URL=ws://localhost:8001/rpc make bench BENCH_N=1000,2000
+```
+
+Profiling recipe that found #31's real cause: seed via `bench._seed`, wrap one
+`await reflect(...)` in `cProfile`, sort by cumulative time. Do this before
+optimizing anything here.
+
+#### Caveats on every number above
+
+- **The synthetic corpus is unrealistically self-similar** — a 17-word
+  vocabulary, so most fact pairs clear the 0.80 contradiction threshold (19%
+  under the mock, 49% under the real model on templated text). Anything scaling
+  with *surviving candidate pairs* is overstated. Node- and edge-scaled costs
+  are not.
+- **`MockEmbeddingProvider` is capped at 32 dimensions** by its SHA-256 source
+  regardless of the `dimension` argument, while its `dimension` property reports
+  what was asked for. Vector-scan cost is understated relative to a real 384-dim
+  model. (That inconsistency is arguably its own small bug.)
+- **All network numbers are loopback.** A remote SurrealDB is worse by the RTT
+  difference times the round-trip count.
+
+---
+
+### Issue 32 — `InMemoryStorage` edge lookups scan the whole edge set — 🆕 OPEN
+
+**Why.** `get_edges_from` / `get_edges_to` (`epimemer/storage/memory.py`) filter
+`self._g.edges.values()` on every call — O(E) per lookup, where SurrealDB
+answers the same question from an index. Every operation that walks nodes and
+asks for their edges therefore pays O(N·E) in-memory, which is why `list_sources`
+measures **quadratic on `mem://` and linear on SurrealDB**, and why at 10k nodes
+the in-memory backend (18 s) is *slower than the networked one* (~9 s projected)
+despite having no network at all (`dev-docs/BENCHMARKS.md`).
+
+This is the default backend — what a user gets with no configuration — and the
+one the whole test suite runs on.
+
+**Scope.** Maintain two indexes beside `edges` in the per-graph store:
+`by_src: dict[str, set[str]]` and `by_dst: dict[str, set[str]]` (edge ids).
+Update them in `store_edge` and `delete_edge`; read them in `get_edges_from` /
+`get_edges_to`, filtering by `edge_type` after the index lookup. Everything
+stays in one file behind the existing protocol — no protocol change, no
+SurrealDB change, nothing for #16 to interact with.
+
+Watch the compound write paths (`write_batch_tx`, `supersede_node_tx`,
+`merge_nodes`) — anything that mutates `edges` directly rather than through
+`store_edge` must keep the indexes in step. An index that silently drifts is
+worse than no index, which is what the tests below are for.
+
+**Tests first.** `tests/storage/test_memory_edge_index.py`:
+
+- Edges are found after `store_edge`, and *not* found after `delete_edge`
+  (the index must not outlive the edge).
+- The compound transactional writes leave the indexes consistent: after
+  `supersede_node_tx` and `write_batch_tx`, `get_edges_from`/`get_edges_to`
+  agree with a brute-force scan of `edges.values()`.
+- A rolled-back / failed transaction leaves no orphan index entries.
+- Parity: the existing `tests/storage/test_storage_parity.py` already covers
+  behaviour across both backends — this issue must not change any of it.
+
+**Verify with numbers, not vibes.** `make bench BENCH_N=1000,3000,10000` before
+and after; `list_sources` should go from quadratic to linear. Record the result
+as a new section in `dev-docs/BENCHMARKS.md`.
 
 ---
 
@@ -531,11 +633,14 @@ it lives in README → *Not yet built*.
 
 ## Recommended order
 
-Nothing active. **31** is resolved (delete on merge); the two deferred issues
-stay deferred, with #14's `list_sources` now the next thing to cross the tool
-timeout, at ~11k nodes.
+Performance work is now measured rather than guessed — `dev-docs/BENCHMARKS.md`
+has the data and #14 the analysis. The surprise from the SurrealDB run is that
+**`search`** is the operation nearest to failing (~5,100 nodes over a
+websocket), not the listing tools everyone had been watching.
 
 | Order | Issue | Why |
 |---|---|---|
+| 1 | 32 | Index in-memory edge lookups — cheapest real win, default backend, no protocol change, and it removes the in-memory quadratic curve |
+| 2 | 14 (search leg) | Profile `search` against SurrealDB: superlinear and crossing 30 s at ~5,100 nodes, on the most-called tool |
 | deferred | 16 | Multi-graph concurrency — trigger: the server gains concurrent clients (viz-read leg closed by the hub; fix now scoped to `hub_client.py`) |
-| deferred | 14 | Full-scan / N+1 — trigger measured (#28): ~10k nodes on `mem://`, fewer on SurrealDB, where it fails the tool timeout rather than just feeling slow |
+| deferred | 14 (rest) | Batched edge fetch + aggregate queries: a protocol change on both backends, and the `asyncio.gather` prong is blocked by #16 |

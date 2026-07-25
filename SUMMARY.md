@@ -325,7 +325,17 @@ All backends support multiple named graphs. The `StorageBackend` protocol requir
 
 ### Scaling Limits
 
-Several read paths are currently O(N) in the number of active nodes and do per-node edge fetches: `list_sources` / `list_relations`, `reflect`'s pending-review gather and split/enrichment loops, and `search`'s per-node frame/label enrichment. This is fine in-memory, but over a websocket to SurrealDB each item is a round-trip, so these do not yet scale to a large persistent graph. The fix direction (aggregate queries, batched edge fetches, and `asyncio.gather` for per-node enrichment) is a known, documented ceiling rather than a defect — don't point a large graph at it unwarned.
+Several read paths are O(N) in the number of active nodes and do per-node edge fetches: `list_sources` / `list_relations`, `reflect`'s pending-review gather and split/enrichment loops, and `search`'s per-node frame/label enrichment. Over a websocket to SurrealDB each item is a round-trip.
+
+These limits are now **measured** rather than estimated — see [dev-docs/BENCHMARKS.md](dev-docs/BENCHMARKS.md) for data and ISSUES.md #14 for the analysis. Against the 30 s default tool timeout (`EPIMEMER_TOOL_TIMEOUT_SECONDS`), the operations fail at roughly:
+
+| Operation | in-memory | SurrealDB (loopback) |
+|---|---|---|
+| `search` | ~140k nodes | **~5,100 nodes** |
+| `reflect` | ~5,000 nodes | ~3,200 nodes |
+| `list_sources` | ~11,000 nodes | ~29,000 nodes |
+
+So: comfortable up to a few thousand nodes, and `search` over a network backend is the first thing to degrade — it is already ~1.4 s per call at 1,000 nodes. Ingest is flat and not a concern. Don't point a large persistent graph at this unwarned.
 
 ## Update Behaviours
 
