@@ -77,6 +77,14 @@ graph at it unwarned.
 > integration suite. The trigger to pick this up: the server gains concurrent
 > clients (e.g. the multi-agent viz path in IMPLEMENTATION_PLAN, or an HTTP/SSE
 > transport). Keeping open as the reminder, as the analysis below intends.
+>
+> **Update 2026-07-24 (viz hub):** viz snapshot reads now execute **in the owning
+> MCP process** (the hub RPCs to each session), serialized there by an
+> `asyncio.Lock` in `hub_client.py`, so the old cross-connection `use()`-switch
+> race in `viz_list_*` is gone. The remaining hazard — a viz read racing a *tool
+> call* on the same shared SurrealDB connection — is unchanged and still deferred;
+> its eventual fix (a dedicated read connection for SurrealDB) lands in the hub
+> client's RPC handler.
 
 **Severity: low now, high the moment there are concurrent clients.**
 
@@ -93,10 +101,24 @@ while the server is single-client stdio; keep this issue open as the reminder.
 
 ---
 
-### Issue 24 — Visualizer silently serves a stale/empty graph after a reconnect — 🆕 OPEN
+### Issue 24 — Visualizer silently serves a stale/empty graph after a reconnect — ✅ RESOLVED (2026-07-24, viz hub)
+
+> **✅ Resolved by the visualization hub** (`dev-docs/VISUALISATION.md`, Part A).
+> The embedded per-process viz server is gone (`ws_server.py` deleted); a
+> standalone hub now owns the port and MCP processes dial out to it as *sessions*.
+> A stale MCP orphan is therefore a dead session in the selector, never a stray
+> server answering on the port with an empty graph. The browser header shows the
+> session + backend so an in-memory/`default` session is self-evidently not the
+> persistent one, and the new `viz_status` MCP tool answers "which session am I?"
+> authoritatively from inside the process being driven. Guarding tests:
+> `tests/visualization/test_hub.py` (bind-race, RPC, fan-out),
+> `test_hub_client.py` (register / reconnect / unreachable),
+> `tests/mcp/test_viz_status.py`, and `backend_name` parity in
+> `test_storage_parity.py`. **Delete this entry once merged.**
 
 **Severity: medium (observability correctness — it actively misleads).** Found
-2026-07-23 while viewing the live visualizer.
+2026-07-23 while viewing the live visualizer. *(Original analysis retained below
+until merge.)*
 
 **Symptom.** The browser at `http://127.0.0.1:8765` shows an empty knowledge
 graph and a graph dropdown listing only `default`, with the header reading
@@ -169,10 +191,25 @@ bind-failure path logs at ERROR / writes the explicit stderr message.
 
 ---
 
-### Issue 25 — `stores_since_reflect` is process-local and resets on reconnect — 🆕 OPEN
+### Issue 25 — `stores_since_reflect` is process-local and resets on reconnect — ✅ RESOLVED (2026-07-25, per-graph counter)
+
+> **✅ Resolved by moving the counter into storage**, the per-graph option below
+> (it is the one the docs already promise). `StorageBackend` gained
+> `get_reflect_counter` / `bump_reflect_counter` / `reset_reflect_counter`,
+> implemented explicitly on both backends — a field on the in-memory
+> `_GraphStore`, and a fixed `graph_state:reflect` record in SurrealDB whose
+> bump/reset are single atomic `UPSERT ... RETURN` statements, so no read-modify-
+> write races. The lifespan context no longer holds the count at all, which
+> removes the shadow copy rather than trying to keep two in sync. Because the
+> state now lives in the graph, the count also follows a `use_graph` switch
+> instead of leaking across graphs. Guarding tests:
+> `tests/mcp/test_reflect_counter.py` (reconnect, reset, threshold, graph switch)
+> and `TestReflectCounter` in `tests/storage/test_storage_parity.py` (both
+> backends). **Delete this entry once merged.**
 
 **Severity: low (feature reliability).** Found 2026-07-23: two documents stored
-across a `/mcp` reconnect both reported `stores_since_reflect: 1`.
+across a `/mcp` reconnect both reported `stores_since_reflect: 1`. *(Original
+analysis retained below until merge.)*
 
 **Symptom.** The auto-suggest-reflection signal (`reflect_suggested`, meant to
 fire once `reflect_threshold` ingests accumulate — default 10, `config.py:34`)
@@ -225,7 +262,7 @@ by design — see git history of this file, commit `22fc874` and follow-ups):
 
 | Order | Issue | Why |
 |---|---|---|
-| 1 | 24 | Silently shows the wrong/empty graph in the visualizer — actively misleading |
-| 2 | 25 | Auto-reflect suggestion never fires across reconnects |
-| deferred | 16 | Multi-graph concurrency — trigger: the server gains concurrent clients |
+| ✅ done | 24 | Resolved by the viz hub (2026-07-24) — delete once merged |
+| ✅ done | 25 | Resolved by the per-graph reflect counter (2026-07-25) — delete once merged |
+| deferred | 16 | Multi-graph concurrency — trigger: the server gains concurrent clients (viz-read leg now closed by the hub) |
 | deferred | 14 | Full-scan / N+1 — trigger: a large persistent graph makes latency felt |

@@ -1,7 +1,12 @@
-"""Tests for viz-only storage methods, HTTP endpoints, and snapshot isolation."""
+"""Tests for viz-only storage methods, snapshot assembly, and view conversion.
+
+The HTTP/relay layer moved to the standalone hub (`test_hub.py`); the read-side
+assembly that used to live in the embedded server's `/api/snapshot` and
+`/api/graphs` handlers now lives in `visualization/snapshot.py` and is tested
+here directly, against storage.
+"""
 
 import pytest
-from starlette.testclient import TestClient
 
 from epimemer.core.types import (
     Fact,
@@ -12,25 +17,13 @@ from epimemer.core.types import (
     Topic,
 )
 from epimemer.storage.memory import InMemoryStorage
-from epimemer.visualization.event_bus import create_event_bus
 from epimemer.visualization.events import node_to_view, edge_to_view
-from epimemer.visualization.ws_server import create_app
+from epimemer.visualization.snapshot import assemble_snapshot, list_graphs_result
 
 
 @pytest.fixture
 def storage():
     return InMemoryStorage()
-
-
-@pytest.fixture
-def bus():
-    return create_event_bus()
-
-
-@pytest.fixture
-def client(bus, storage):
-    app = create_app(bus, storage)
-    return TestClient(app)
 
 
 # --- viz_list_nodes / viz_list_edges ---
@@ -93,67 +86,43 @@ class TestVizStorageMethods:
         assert edges == []
 
 
-# --- HTTP endpoint tests ---
+# --- Snapshot / graph-list assembly (was the embedded server's HTTP handlers) ---
 
 
-class TestHttpEndpoints:
+class TestSnapshotAssembly:
 
-    def test_api_graphs(self, client, storage):
-        resp = client.get("/api/graphs")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["graphs"] == ["default"]
-        assert data["active_graph"] == "default"
+    async def test_list_graphs_result_includes_backend(self, storage):
+        result = await list_graphs_result(storage)
+        assert result["graphs"] == ["default"]
+        assert result["active_graph"] == "default"
+        assert result["backend"] == "memory"
 
-    def test_api_snapshot_missing_param(self, client):
-        resp = client.get("/api/snapshot")
-        assert resp.status_code == 400
-        assert "Missing" in resp.json()["error"]
-
-    def test_api_snapshot_not_found(self, client):
-        resp = client.get("/api/snapshot?graph=nonexistent")
-        assert resp.status_code == 404
-
-    def test_api_snapshot_returns_nodes_and_edges(self, client, storage):
+    async def test_assemble_snapshot_returns_node_and_edge_views(self, storage):
         t = Topic(content="Test topic", source_id="s1")
-        storage.nodes[t.id] = t
+        await storage.store_node(t)
         e = NodeEdge(src_id=t.id, dst_id=t.id, type=EdgeType.SUPPORTS)
-        storage.edges[e.id] = e
+        await storage.store_edge(e)
 
-        resp = client.get("/api/snapshot?graph=default")
-        assert resp.status_code == 200
-        data = resp.json()
+        data = await assemble_snapshot(storage, "default")
         assert data["graph"] == "default"
         assert len(data["nodes"]) == 1
         assert len(data["edges"]) == 1
-        # Verify NodeView shape
         node = data["nodes"][0]
-        assert "node_id" in node
-        assert "node_type" in node
-        assert "confidence" in node
-        # Verify EdgeView shape
+        assert "node_id" in node and "node_type" in node and "confidence" in node
         edge = data["edges"][0]
-        assert "edge_id" in edge
-        assert "edge_type" in edge
+        assert "edge_id" in edge and "edge_type" in edge
 
-    def test_api_snapshot_empty_graph(self, client, storage):
-        resp = client.get("/api/snapshot?graph=default")
-        assert resp.status_code == 200
-        data = resp.json()
+    async def test_assemble_snapshot_empty_graph(self, storage):
+        data = await assemble_snapshot(storage, "default")
         assert data["nodes"] == []
         assert data["edges"] == []
 
-    def test_api_snapshot_does_not_affect_active_graph(self, client, storage):
-        """Fetching a snapshot for a different graph must not switch the active graph."""
-        import asyncio
-        loop = asyncio.new_event_loop()
-        loop.run_until_complete(storage.switch_database("other"))
-        loop.run_until_complete(storage.switch_database("default"))
-        loop.close()
-
+    async def test_assemble_snapshot_does_not_switch_active_graph(self, storage):
+        await storage.switch_database("other")
+        await storage.switch_database("default")
         assert storage.current_database == "default"
-        resp = client.get("/api/snapshot?graph=other")
-        assert resp.status_code == 200
+
+        await assemble_snapshot(storage, "other")
         assert storage.current_database == "default"
 
 

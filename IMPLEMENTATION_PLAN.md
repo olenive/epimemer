@@ -99,14 +99,16 @@ All backends now support multiple named graphs. InMemoryStorage uses a dict-of-d
 
 ---
 
-### Future — Multi-agent Visualization
+### Multi-agent Visualization — implemented (viz hub)
 
-Not yet implemented. When multiple MCP servers need to share events:
-
-- Replace `InProcessEventBus` with Redis Pub/Sub or NATS
-- Each MCP server publishes events with `graph` tag to shared channel
-- Centralized viz server subscribes and routes to frontend connections by subscription
-- The WebSocket subscription mechanism already provides the frontend protocol
+The embedded per-process viz server was replaced by a **standalone hub**
+(`epimemer/visualization/hub.py`) that many MCP sessions publish to over plain
+WebSocket — no Redis/NATS. Each MCP process keeps its `InProcessEventBus` and adds
+a hub client (`hub_client.py`) that dials the hub, registers as a session, forwards
+events, and answers snapshot / graph-list RPCs from its own storage (so `mem://`
+graphs are viewable). Browsers select a session from the header; the hub routes by
+`{session, graphs}` subscription. See `dev-docs/VISUALISATION.md` for the design and
+`README.md` → *Visualization* for operation.
 
 ---
 

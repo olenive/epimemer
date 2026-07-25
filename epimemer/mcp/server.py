@@ -7,10 +7,12 @@ query_graph, archive, restore) via the Model Context Protocol.
 import asyncio
 import json
 import logging
+import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from fastmcp import Context, FastMCP
 
@@ -83,48 +85,52 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
     embedding_provider = create_embedding_provider(config)
 
-    # Optional: visualization server with instrumented storage
-    viz_server = None
+    # Optional: publish visualization events to the standalone hub. This process
+    # never binds the viz port itself — it dials out to the hub (auto-spawning one
+    # if none is running), so stale MCP orphans become dead sessions rather than a
+    # stray server answering on the port with the wrong graph.
+    stop_viz_client = None
     event_bus = None
+    viz_session = None
+    viz_hub_url = None
     if config.viz_enabled:
-        import asyncio
-        import logging
-        import uvicorn
         from epimemer.visualization.event_bus import create_event_bus
+        from epimemer.visualization.hub import ensure_hub_running
+        from epimemer.visualization.hub_client import start_hub_client
         from epimemer.visualization.instrumented_storage import instrument_storage
-        from epimemer.visualization.ws_server import create_app
+        from epimemer.visualization.protocol import SessionInfo
 
+        logger = logging.getLogger(__name__)
         event_bus = create_event_bus()
-        raw_storage = storage  # Keep reference for viz snapshot reads
+        raw_storage = storage  # pre-instrumentation, for viz snapshot reads
         storage = instrument_storage(storage, event_bus)
 
-        viz_app = create_app(event_bus, raw_storage)
-        viz_config = uvicorn.Config(
-            viz_app,
-            host=config.viz_host,
-            port=config.viz_port,
-            log_level="warning",
-            lifespan="off",
+        viz_session = SessionInfo(
+            session_id=uuid4().hex,
+            pid=os.getpid(),
+            backend=raw_storage.backend_name,
+            active_graph=raw_storage.current_database,
         )
-        viz_server = uvicorn.Server(viz_config)
-        logger = logging.getLogger(__name__)
+        viz_hub_url = f"http://{config.viz_host}:{config.viz_port}"
+        ingest_url = f"ws://{config.viz_host}:{config.viz_port}/ingest"
 
-        async def _run_viz():
-            try:
-                await viz_server.serve()
-            except SystemExit:
-                logger.warning(
-                    "Visualization server failed to start on %s:%d (port in use?). "
-                    "Continuing without visualization.",
-                    config.viz_host,
-                    config.viz_port,
-                )
-
-        asyncio.create_task(_run_viz())
+        reachable = await ensure_hub_running(
+            config.viz_host, config.viz_port, autospawn=config.viz_autospawn
+        )
+        if not reachable:
+            logger.warning(
+                "Visualization hub not reachable at %s and not spawned "
+                "(autospawn=%s). Publishing will retry in the background.",
+                viz_hub_url,
+                config.viz_autospawn,
+            )
+        stop_viz_client = await start_hub_client(
+            event_bus, raw_storage, viz_session, ingest_url
+        )
         logger.info(
-            "Visualization server starting at http://%s:%d",
-            config.viz_host,
-            config.viz_port,
+            "Visualization: publishing to hub at %s (session %s)",
+            viz_hub_url,
+            viz_session.session_id,
         )
 
     try:
@@ -133,11 +139,12 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             "embedding_provider": embedding_provider,
             "config": config,
             "event_bus": event_bus,
-            "stores_since_reflect": 0,
+            "viz_session": viz_session,
+            "viz_hub_url": viz_hub_url,
         }
     finally:
-        if viz_server is not None:
-            viz_server.should_exit = True
+        if stop_viz_client is not None:
+            await stop_viz_client()
         await storage.close()
 
 
@@ -289,7 +296,9 @@ async def memory_store_decomposition(
     with your extracted nodes.
 
     The response includes stores_since_reflect and reflect_threshold. When
-    reflect_suggested is true, suggest running reflect to the user.
+    reflect_suggested is true, suggest running reflect to the user. The count
+    belongs to the active graph, so it accumulates across reconnects and follows
+    a use_graph switch.
 
     Args:
         document_id: The document ID returned by segment.
@@ -315,9 +324,8 @@ async def memory_store_decomposition(
             tags=tags,
             event_bus=deps.get("event_bus"),
         )
-        deps["stores_since_reflect"] = deps.get("stores_since_reflect", 0) + 1
+        count = await deps["storage"].bump_reflect_counter()
         threshold = deps["config"].reflect_threshold
-        count = deps["stores_since_reflect"]
         result["stores_since_reflect"] = count
         result["reflect_threshold"] = threshold
         if count >= threshold:
@@ -624,7 +632,9 @@ async def memory_reflect(
             label consolidations.
     """
     deps = ctx.lifespan_context
-    stores_before = deps.get("stores_since_reflect", 0)
+    # Read for the log line only; the authoritative value is what the reset
+    # below clears, which also counts anything stored while reflect ran.
+    stores_before = await deps["storage"].get_reflect_counter()
 
     async def _do() -> tuple[dict, ResponseMeta]:
         result, meta = await tools.reflect(
@@ -635,8 +645,7 @@ async def memory_reflect(
             relation_similarity_threshold=relation_similarity_threshold,
             event_bus=deps.get("event_bus"),
         )
-        deps["stores_since_reflect"] = 0
-        result["stores_since_last_reflect"] = stores_before
+        result["stores_since_last_reflect"] = await deps["storage"].reset_reflect_counter()
         return result, meta
 
     return await _run_with_timeout(
@@ -1234,6 +1243,60 @@ async def epimemer_delete_graph(
         ctx,
         f"name={name} confirm={confirm}",
         lambda r, m: f"status={r.get('status', 'error')}",
+    )
+
+
+@mcp.tool(name="viz_status")
+async def epimemer_viz_status(ctx: Context) -> str:
+    """Report where this session publishes visualization events, and whether the
+    hub can see it.
+
+    The durable answer to "I opened the visualizer but can't find my graph": the
+    returned session_id / backend / active_graph name the session to pick in the
+    UI's session selector. Because this runs inside the very process you are
+    driving, its answer is authoritative for *this* session.
+    """
+    deps = ctx.lifespan_context
+
+    async def _do() -> tuple[dict, ResponseMeta]:
+        session = deps.get("viz_session")
+        hub_url = deps.get("viz_hub_url")
+        if session is None or hub_url is None:
+            return {"viz_enabled": False}, ResponseMeta()
+
+        from urllib.parse import urlparse
+
+        from epimemer.visualization.hub import hub_sessions, probe_health
+
+        parsed = urlparse(hub_url)
+        host, port = parsed.hostname, parsed.port
+        health = await asyncio.to_thread(probe_health, host, port)
+        sessions = await asyncio.to_thread(hub_sessions, host, port) if health else None
+
+        connected = False
+        for s in sessions or []:
+            if s.get("session_id") == session.session_id:
+                connected = bool(s.get("connected"))
+                break
+
+        result = {
+            "viz_enabled": True,
+            "hub_url": hub_url,
+            "hub_reachable": health is not None,
+            "connected": connected,
+            "session_id": session.session_id,
+            "backend": session.backend,
+            "active_graph": deps["storage"].current_database,
+            "sessions_on_hub": len(sessions) if sessions is not None else 0,
+        }
+        return result, ResponseMeta()
+
+    return await _run_with_timeout(
+        "epimemer.viz_status",
+        _do,
+        ctx,
+        "",
+        lambda r, m: f"reachable={r.get('hub_reachable')} connected={r.get('connected')}",
     )
 
 

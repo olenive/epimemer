@@ -91,6 +91,7 @@ class _GraphStore:
     embeddings: dict[str, EmbeddingRecord] = field(default_factory=dict)
     timelines: dict[str, Timeline] = field(default_factory=dict)
     metacontexts: dict[str, Metacontext] = field(default_factory=dict)
+    stores_since_reflect: int = 0
 
 
 _DEFAULT_DB = "default"
@@ -554,7 +555,25 @@ class InMemoryStorage:
             mc for mc in self._g.metacontexts.values() if mc.status == status
         )
 
+    # --- Reflection bookkeeping ---
+
+    async def get_reflect_counter(self) -> int:
+        return self._g.stores_since_reflect
+
+    async def bump_reflect_counter(self) -> int:
+        self._g.stores_since_reflect += 1
+        return self._g.stores_since_reflect
+
+    async def reset_reflect_counter(self) -> int:
+        previous = self._g.stores_since_reflect
+        self._g.stores_since_reflect = 0
+        return previous
+
     # --- Multi-graph management ---
+
+    @property
+    def backend_name(self) -> str:
+        return "memory"
 
     @property
     def current_database(self) -> str:

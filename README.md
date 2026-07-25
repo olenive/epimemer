@@ -114,11 +114,12 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_EMBEDDING_DIMENSION` | `384` | Embedding vector dimension |
 | `EPIMEMER_SEGMENTATION_STRATEGY` | `paragraph` | `paragraph` or `semantic` |
 | `EPIMEMER_SIMILARITY_THRESHOLD` | `0.75` | Similarity threshold for search |
-| `EPIMEMER_REFLECT_THRESHOLD` | `10` | Stores before suggesting reflection |
+| `EPIMEMER_REFLECT_THRESHOLD` | `10` | Stores in a graph before suggesting reflection (counted per graph, in storage) |
 | `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
-| `EPIMEMER_VIZ_ENABLED` | `true` | Enable visualization server |
-| `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Visualization server host |
-| `EPIMEMER_VIZ_PORT` | `8765` | Visualization server port |
+| `EPIMEMER_VIZ_ENABLED` | `true` | Publish visualization events to the hub |
+| `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Visualization hub host |
+| `EPIMEMER_VIZ_PORT` | `8765` | Visualization hub port |
+| `EPIMEMER_VIZ_AUTOSPAWN` | `true` | Spawn a hub automatically if none is running |
 | `EPIMEMER_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `EPIMEMER_LOG_FILE` | (stderr) | Path to log file |
 
@@ -166,9 +167,31 @@ epimemer/
     orchestration/    — Top-level request routing Petri net
   mcp/            — FastMCP server, tool implementations, config
   logging/        — Structured JSON logging
-  visualization/ — Real-time WebSocket visualization server and frontend
+  visualization/ — Standalone viz hub, session client, and frontend
 tests/            — 283 tests (unit, pipeline, MCP, integration)
 ```
+
+## Visualization
+
+The visualizer is a **standalone hub** that many MCP sessions publish to, rather
+than an HTTP server embedded in each MCP process. This resolves the port-contention
+failure where a stale MCP orphan would hold the port and serve the wrong (empty)
+graph.
+
+- **The hub owns the port** (`EPIMEMER_VIZ_HOST:EPIMEMER_VIZ_PORT`, default
+  `127.0.0.1:8765`). Each MCP process dials out to it and registers as a *session*;
+  the browser picks a session from the header selector.
+- **Auto-spawn**: the first MCP process with `EPIMEMER_VIZ_ENABLED=true` spawns a
+  detached hub if none is running (disable with `EPIMEMER_VIZ_AUTOSPAWN=false`).
+- **CLI**: `uv run epimemer-viz [--status|--stop]` for explicit control.
+- **`viz_status` tool**: ask through the very session you are driving — it returns
+  the hub URL, whether the hub can see this session, and the `session_id` to pick
+  in the selector. The durable answer to "I opened the visualizer but can't find my
+  graph".
+
+**Migrating from the embedded server:** old MCP processes running pre-hub code may
+still hold `:8765` with the old embedded server. Run `pkill -f epimemer.mcp.server`
+once (or `uv run epimemer-viz --status` to see what holds the port), then reconnect.
 
 ## Testing
 

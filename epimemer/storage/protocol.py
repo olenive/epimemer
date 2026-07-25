@@ -419,7 +419,38 @@ class StorageBackend(Protocol):
         """Query metacontexts by status."""
         ...
 
+    # --- Reflection bookkeeping ---
+
+    async def get_reflect_counter(self) -> int:
+        """Stores recorded in the active graph since its last reflect.
+
+        The counter belongs to the graph, not the process: it lives beside the
+        data it describes, so a persistent graph carries it across server
+        restarts and client reconnects, and switching graphs switches counters.
+        Absent state reads as 0.
+        """
+        ...
+
+    async def bump_reflect_counter(self) -> int:
+        """Record one store against the active graph. Returns the new count."""
+        ...
+
+    async def reset_reflect_counter(self) -> int:
+        """Zero the active graph's counter. Returns the count before the reset."""
+        ...
+
     # --- Multi-graph management ---
+
+    @property
+    def backend_name(self) -> str:
+        """Short, human-readable backend kind (e.g. "memory", "surrealdb").
+
+        Surfaced to the visualization UI so a viewer can tell instantly whether
+        they are looking at an ephemeral in-memory store or a persistent one.
+        Every backend implements it explicitly — no duck-typing on the class
+        name — so the label stays stable if a class is renamed.
+        """
+        ...
 
     @property
     def current_database(self) -> str:

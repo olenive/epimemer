@@ -8,6 +8,8 @@
 import cytoscape, { type Core, type LayoutOptions } from "cytoscape";
 // @ts-expect-error — cytoscape-dagre has no types
 import dagre from "cytoscape-dagre";
+// @ts-expect-error — cytoscape-fcose has no types
+import fcose from "cytoscape-fcose";
 import type { EventRouter } from "./events";
 import type {
   EdgeStored,
@@ -19,6 +21,7 @@ import type {
 } from "./types";
 
 cytoscape.use(dagre);
+cytoscape.use(fcose);
 
 // --- Color scheme by node type ---
 
@@ -48,13 +51,23 @@ const STATUS_OPACITY: Record<string, number> = {
 };
 
 // --- Layout configs ---
+//
+// The graph is wide and shallow: a few ranks (topic → fact → inference) holding
+// many peers each. `rankDir` sets the direction ranks advance in, so the *peers*
+// spread along the other axis — a vertical rankDir is what puts them across the
+// viewport's width. "LR" reads as a single tall column that auto-fit then
+// shrinks to nothing.
+//
+// "BT" over "TB" so edges point upward into what they are about: facts settle
+// at the bottom and the topics they support rise to the top. That holds while
+// edges run detail → abstraction; a graph wired the other way inverts.
 
 const LAYOUT_CONFIGS: Record<string, object> = {
   dagre: {
     name: "dagre",
-    rankDir: "LR",
-    rankSep: 60,
-    nodeSep: 30,
+    rankDir: "BT",
+    rankSep: 90,
+    nodeSep: 45,
     animate: true,
     animationDuration: 300,
   },

@@ -1,18 +1,19 @@
 /**
  * Entry point for the Epimemer visualization frontend.
  *
- * Wires together the WebSocket event router, split pane layout,
- * pipeline panel, knowledge graph panel, and graph selector.
+ * The hub serves many MCP sessions at once. The header's session selector
+ * chooses which one to view; everything below (graph list, snapshot, live
+ * events) is scoped to that session. Disconnected sessions stay listed (greyed)
+ * until the hub drops them.
  */
 
 import "./style.css";
 
-import { fetchGraphs, fetchSnapshot } from "./api";
+import { fetchGraphs, fetchSessions, fetchSnapshot } from "./api";
 import { createEventRouter } from "./events";
 import { initGraphPanel } from "./graph-panel";
-import { initPipelinePanel } from "./pipeline-panel";
-import { initSplitPane } from "./split-pane";
-import type { AnyEvent, GraphSwitched } from "./types";
+import { initPipelineStrip } from "./pipeline-strip";
+import type { AnyEvent, GraphSwitched, SessionInfo, SystemMessage } from "./types";
 
 // --- DOM element lookup ---
 
@@ -24,14 +25,18 @@ const $ = <T extends HTMLElement>(id: string): T => {
 
 // --- State ---
 
+let sessions: SessionInfo[] = [];
+let selectedSession: string | null = null;
 let viewedGraph = "";
 let mcpActiveGraph = "";
+let mcpBackend = "";
 
 // --- Initialize ---
 
 const wsUrl = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 
 const wsStatus = $("ws-status");
+const sessionSelector = $<HTMLSelectElement>("session-selector");
 const mcpActiveLabel = $("mcp-active-graph");
 const graphSelector = $<HTMLSelectElement>("graph-selector");
 const viewModeBadge = $("view-mode-badge");
@@ -43,20 +48,10 @@ const router = createEventRouter(wsUrl, (connected) => {
     ? "px-2 py-1 text-xs rounded bg-green-900/50 text-green-400"
     : "px-2 py-1 text-xs rounded bg-red-900/50 text-red-400";
 
-  // Auto-refresh snapshot on reconnect
-  if (connected && viewedGraph) {
-    loadGraphSnapshot(viewedGraph);
+  // The hub or sessions may have changed while we were away — resync.
+  if (connected) {
+    refreshSessions();
   }
-});
-
-// --- Split pane ---
-
-initSplitPane({
-  leftPanel: $("panel-pipeline"),
-  rightPanel: $("panel-graph"),
-  handle: $("resize-handle"),
-  toggleLeft: $("btn-toggle-pipeline"),
-  toggleRight: $("btn-toggle-graph"),
 });
 
 // --- Detail drawer ---
@@ -75,17 +70,25 @@ $("btn-close-detail").addEventListener("click", () => {
   detailDrawer.classList.add("hidden");
 });
 
-// --- Pipeline panel ---
+// --- Pipeline strip ---
 
-const pipelineStatus = $("pipeline-status");
+const pipelineStrip = initPipelineStrip(router, {
+  strip: $("pipeline-strip"),
+  hint: $("pipeline-strip-hint"),
+  detail: $("pipeline-detail"),
+  detailTitle: $("pipeline-detail-title"),
+  detailSvg: $("pipeline-detail-svg"),
+  detailClose: $("pipeline-detail-close"),
+});
 
-const pipelinePanel = initPipelinePanel(
-  $("pipeline-container"),
-  router,
-  (status) => {
-    pipelineStatus.textContent = status;
-  },
-);
+const stripRow = $("pipeline-strip");
+$("btn-toggle-pipeline").addEventListener("click", () => {
+  stripRow.classList.toggle("hidden");
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") pipelineStrip.closeDetail();
+});
 
 // --- Knowledge graph panel ---
 
@@ -109,13 +112,22 @@ const updateModeBadge = (): void => {
     : "px-1.5 py-0.5 rounded text-xs bg-gray-700 text-gray-400";
 };
 
+const updateMcpLabel = (): void => {
+  mcpActiveLabel.textContent = mcpActiveGraph
+    ? `${mcpActiveGraph}${mcpBackend ? ` (${mcpBackend})` : ""}`
+    : "-";
+};
+
 // --- Graph loading ---
 
 const loadGraphSnapshot = async (graph: string): Promise<void> => {
+  if (!selectedSession) return;
   try {
-    const snapshot = await fetchSnapshot(graph);
+    const snapshot = await fetchSnapshot(selectedSession, graph);
     graphPanel.clearGraph();
-    pipelinePanel.clearPipeline();
+    // NB: do not clear the pipeline strip here — a snapshot reload must not wipe
+    // pipeline history (run counts, glyphs). The strip is cleared only on a
+    // session switch.
     graphPanel.loadSnapshot(snapshot.nodes, snapshot.edges);
     btnRefresh.classList.remove("ring-2", "ring-amber-500");
   } catch (err) {
@@ -125,12 +137,12 @@ const loadGraphSnapshot = async (graph: string): Promise<void> => {
 
 const switchViewedGraph = async (graph: string): Promise<void> => {
   viewedGraph = graph;
-  router.setGraphSubscription([graph]);
+  router.setSessionSubscription({ session: selectedSession, graphs: [graph] });
   updateModeBadge();
   await loadGraphSnapshot(graph);
 };
 
-// --- Graph selector population ---
+// --- Selectors ---
 
 const populateGraphSelector = (graphs: string[], activeGraph: string): void => {
   graphSelector.innerHTML = "";
@@ -143,48 +155,152 @@ const populateGraphSelector = (graphs: string[], activeGraph: string): void => {
   graphSelector.value = activeGraph;
 };
 
+const sessionLabel = (s: SessionInfo): string => {
+  const base = `${s.backend}:${s.active_graph} (pid ${s.pid})`;
+  return s.connected ? base : `${base} — disconnected`;
+};
+
+const populateSessionSelector = (): void => {
+  sessionSelector.innerHTML = "";
+  if (sessions.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No sessions";
+    sessionSelector.appendChild(opt);
+    return;
+  }
+  for (const s of sessions) {
+    const opt = document.createElement("option");
+    opt.value = s.session_id;
+    opt.textContent = sessionLabel(s);
+    opt.disabled = !s.connected;
+    if (!s.connected) opt.className = "text-gray-600";
+    sessionSelector.appendChild(opt);
+  }
+  if (selectedSession) sessionSelector.value = selectedSession;
+};
+
+const pickDefaultSession = (): string | null => {
+  const connected = sessions.filter((s) => s.connected);
+  const pool = connected.length > 0 ? connected : sessions;
+  if (pool.length === 0) return null;
+  // Most recently active first.
+  const sorted = [...pool].sort((a, b) => {
+    const ta = a.last_event_at ? Date.parse(a.last_event_at) : 0;
+    const tb = b.last_event_at ? Date.parse(b.last_event_at) : 0;
+    return tb - ta;
+  });
+  return sorted[0].session_id;
+};
+
+// --- Session selection ---
+
+const selectSession = async (sessionId: string): Promise<void> => {
+  // A different session has its own pipelines — start its strip fresh.
+  if (sessionId !== selectedSession) pipelineStrip.clearAll();
+  selectedSession = sessionId;
+  sessionSelector.value = sessionId;
+  try {
+    const { graphs, active_graph, backend } = await fetchGraphs(sessionId);
+    mcpActiveGraph = active_graph;
+    mcpBackend = backend;
+    updateMcpLabel();
+    populateGraphSelector(graphs, active_graph);
+    await switchViewedGraph(active_graph);
+  } catch (err) {
+    console.error("Failed to select session:", err);
+  }
+};
+
+const upsertSession = (info: SessionInfo): void => {
+  const idx = sessions.findIndex((s) => s.session_id === info.session_id);
+  if (idx >= 0) sessions[idx] = info;
+  else sessions.push(info);
+};
+
+const refreshSessions = async (): Promise<void> => {
+  try {
+    sessions = await fetchSessions();
+  } catch (err) {
+    console.error("Failed to fetch sessions:", err);
+    return;
+  }
+  // Keep the current selection if it still exists; otherwise pick a default.
+  if (!selectedSession || !sessions.some((s) => s.session_id === selectedSession)) {
+    const next = pickDefaultSession();
+    populateSessionSelector();
+    if (next) await selectSession(next);
+  } else {
+    populateSessionSelector();
+    // Reload the selected session's snapshot in case we missed events while away.
+    if (viewedGraph) await loadGraphSnapshot(viewedGraph);
+  }
+};
+
 // --- Event handlers ---
+
+sessionSelector.addEventListener("change", () => {
+  if (sessionSelector.value) selectSession(sessionSelector.value);
+});
 
 graphSelector.addEventListener("change", () => {
   switchViewedGraph(graphSelector.value);
 });
 
 btnRefresh.addEventListener("click", () => {
-  if (viewedGraph) {
-    loadGraphSnapshot(viewedGraph);
+  if (viewedGraph) loadGraphSnapshot(viewedGraph);
+});
+
+router.onGapDetected(() => {
+  btnRefresh.classList.add("ring-2", "ring-amber-500");
+  pipelineStrip.markStale();
+});
+
+// Hub system messages — keep the session selector current.
+router.onSystemMessage((msg: SystemMessage) => {
+  if (msg.type === "session_connected") {
+    upsertSession(msg.session);
+    if (!selectedSession) {
+      populateSessionSelector();
+      selectSession(msg.session.session_id);
+    } else {
+      populateSessionSelector();
+    }
+  } else if (msg.type === "session_disconnected") {
+    const s = sessions.find((x) => x.session_id === msg.session_id);
+    if (s) s.connected = false;
+    populateSessionSelector();
+  } else if (msg.type === "session_dropped") {
+    sessions = sessions.filter((x) => x.session_id !== msg.session_id);
+    if (selectedSession === msg.session_id) {
+      selectedSession = null;
+      const next = pickDefaultSession();
+      populateSessionSelector();
+      if (next) selectSession(next);
+    } else {
+      populateSessionSelector();
+    }
   }
 });
 
-// Gap detection — highlight Refresh button
-router.onGapDetected(() => {
-  btnRefresh.classList.add("ring-2", "ring-amber-500");
-});
-
-// GraphSwitched event — MCP changed its active graph
+// GraphSwitched — MCP changed its active graph. Only for the viewed session.
 router.subscribe("graph_switched", (event: AnyEvent) => {
   const e = event as GraphSwitched;
+  if (e.session_id && e.session_id !== selectedSession) return;
   mcpActiveGraph = e.new_graph;
-  mcpActiveLabel.textContent = mcpActiveGraph;
+  updateMcpLabel();
   updateModeBadge();
 
-  // Re-fetch graph list (new graphs may have been created)
-  fetchGraphs().then(({ graphs }) => {
-    populateGraphSelector(graphs, viewedGraph);
-  }).catch(console.error);
+  if (!selectedSession) return;
+  fetchGraphs(selectedSession)
+    .then(({ graphs }) => populateGraphSelector(graphs, viewedGraph))
+    .catch(console.error);
 });
 
 // --- Initial load ---
 
 const init = async (): Promise<void> => {
-  try {
-    const { graphs, active_graph } = await fetchGraphs();
-    mcpActiveGraph = active_graph;
-    mcpActiveLabel.textContent = mcpActiveGraph;
-    populateGraphSelector(graphs, active_graph);
-    await switchViewedGraph(active_graph);
-  } catch (err) {
-    console.error("Failed to initialize graph selector:", err);
-  }
+  await refreshSessions();
 };
 
 init();

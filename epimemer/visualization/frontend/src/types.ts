@@ -14,7 +14,41 @@ export interface BaseEvent {
   category: EventCategory;
   event_type: string;
   graph: string;
+  /** Injected by the hub — which session produced this event. */
+  session_id?: string;
 }
+
+// --- Sessions (hub) ---
+
+export interface SessionInfo {
+  session_id: string;
+  pid: number;
+  backend: string;
+  active_graph: string;
+  started_at: string;
+  connected: boolean;
+  last_event_at: string | null;
+}
+
+export interface SessionConnected {
+  type: "session_connected";
+  session: SessionInfo;
+  seq: number;
+}
+
+export interface SessionDisconnected {
+  type: "session_disconnected";
+  session_id: string;
+  seq: number;
+}
+
+export interface SessionDropped {
+  type: "session_dropped";
+  session_id: string;
+  seq: number;
+}
+
+export type SystemMessage = SessionConnected | SessionDisconnected | SessionDropped;
 
 // --- Shared view models ---
 

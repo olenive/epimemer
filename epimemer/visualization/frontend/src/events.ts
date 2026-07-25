@@ -6,18 +6,33 @@
  * per-connection sequence tracking, gap detection, and graph subscriptions.
  */
 
-import type { AnyEvent, WireEvent } from "./types";
+import type { AnyEvent, SystemMessage, WireEvent } from "./types";
 
 export type EventHandler = (event: AnyEvent) => void;
+export type SystemHandler = (message: SystemMessage) => void;
+
+/** The one session (and optional graph set) a browser views at a time. */
+export interface SessionSubscription {
+  session: string | null;
+  graphs: string[] | null; // null = all graphs of that session
+}
 
 export interface EventRouter {
   subscribe: (eventType: string, handler: EventHandler) => () => void;
   subscribeAll: (handler: EventHandler) => () => void;
-  /** Update the graph subscription filter. Pass null to receive all graphs. */
-  setGraphSubscription: (graphs: string[] | null) => void;
+  /** Choose the session (and optional graph filter) to view. */
+  setSessionSubscription: (sub: SessionSubscription) => void;
+  /** Register a handler for hub system messages (session up/down/dropped). */
+  onSystemMessage: (handler: SystemHandler) => void;
   /** Register a callback for when a sequence gap is detected. */
   onGapDetected: (callback: () => void) => void;
 }
+
+const SYSTEM_TYPES = new Set([
+  "session_connected",
+  "session_disconnected",
+  "session_dropped",
+]);
 
 interface Subscription {
   id: number;
@@ -44,9 +59,10 @@ export const createEventRouter = (
   // Sequence tracking
   let lastSeq = 0;
   let gapCallback: (() => void) | null = null;
+  let systemHandler: SystemHandler | null = null;
 
-  // Graph subscription state (sent to server after connect)
-  let pendingGraphSubscription: string[] | null = null;
+  // Subscription state (re-sent to the hub after each connect).
+  let pendingSubscription: SessionSubscription | null = null;
 
   const dispatch = (event: AnyEvent): void => {
     for (const sub of subscriptions.values()) {
@@ -61,8 +77,8 @@ export const createEventRouter = (
   };
 
   const sendSubscription = (): void => {
-    if (ws && ws.readyState === WebSocket.OPEN && pendingGraphSubscription !== undefined) {
-      ws.send(JSON.stringify({ subscribe: pendingGraphSubscription }));
+    if (ws && ws.readyState === WebSocket.OPEN && pendingSubscription !== null) {
+      ws.send(JSON.stringify({ subscribe: pendingSubscription }));
     }
   };
 
@@ -82,9 +98,9 @@ export const createEventRouter = (
 
     ws.onmessage = (msg) => {
       try {
-        const wire = JSON.parse(msg.data) as WireEvent;
+        const wire = JSON.parse(msg.data) as { seq?: number; type?: string };
 
-        // Sequence gap detection
+        // Sequence gap detection (per-connection; system + events share the counter)
         if (wire.seq !== undefined) {
           if (lastSeq > 0 && wire.seq !== lastSeq + 1) {
             gapCallback?.();
@@ -92,7 +108,11 @@ export const createEventRouter = (
           lastSeq = wire.seq;
         }
 
-        dispatch(wire);
+        if (wire.type && SYSTEM_TYPES.has(wire.type)) {
+          systemHandler?.(wire as unknown as SystemMessage);
+        } else {
+          dispatch(wire as WireEvent);
+        }
       } catch (err) {
         console.error("Failed to parse event:", err);
       }
@@ -129,9 +149,13 @@ export const createEventRouter = (
     return () => { subscriptions.delete(id); };
   };
 
-  const setGraphSubscription = (graphs: string[] | null): void => {
-    pendingGraphSubscription = graphs;
+  const setSessionSubscription = (sub: SessionSubscription): void => {
+    pendingSubscription = sub;
     sendSubscription();
+  };
+
+  const onSystemMessage = (handler: SystemHandler): void => {
+    systemHandler = handler;
   };
 
   const onGapDetected = (callback: () => void): void => {
@@ -141,5 +165,5 @@ export const createEventRouter = (
   // Start connection
   connect();
 
-  return { subscribe, subscribeAll, setGraphSubscription, onGapDetected };
+  return { subscribe, subscribeAll, setSessionSubscription, onSystemMessage, onGapDetected };
 };

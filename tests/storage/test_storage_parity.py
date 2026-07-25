@@ -300,3 +300,53 @@ class TestTimelineToolsPersist:
         )
         returned_ids = {tp["id"] for tp in queried["timepoints"]}
         assert returned_ids == {first["timepoint_id"], second["timepoint_id"]}
+
+
+class TestBackendName:
+    """Every backend exposes a stable, human-readable `backend_name` label,
+    surfaced to the visualization UI so a viewer can tell an in-memory store
+    from a persistent one."""
+
+    async def test_backend_name_is_a_known_label(self, store):
+        assert store.backend_name in {"memory", "surrealdb"}
+
+    async def test_backend_name_matches_implementation(self, store):
+        expected = "memory" if isinstance(store, InMemoryStorage) else "surrealdb"
+        assert store.backend_name == expected
+
+
+class TestReflectCounter:
+    """The "stores since last reflect" count is graph state, so it must behave
+    identically on both backends: absent reads as zero, bumps accumulate, a
+    reset reports what it cleared, and graphs never share a count."""
+
+    async def test_unused_graph_reads_zero(self, store):
+        assert await store.get_reflect_counter() == 0
+
+    async def test_bump_returns_the_new_count(self, store):
+        assert await store.bump_reflect_counter() == 1
+        assert await store.bump_reflect_counter() == 2
+        assert await store.get_reflect_counter() == 2
+
+    async def test_reset_returns_the_previous_count(self, store):
+        await store.bump_reflect_counter()
+        await store.bump_reflect_counter()
+
+        assert await store.reset_reflect_counter() == 2
+        assert await store.get_reflect_counter() == 0
+
+    async def test_reset_on_an_untouched_graph_is_zero(self, store):
+        assert await store.reset_reflect_counter() == 0
+        assert await store.get_reflect_counter() == 0
+
+    async def test_counters_are_per_graph(self, store):
+        original = store.current_database
+        await store.bump_reflect_counter()
+        await store.bump_reflect_counter()
+
+        await store.switch_database("other_graph")
+        assert await store.get_reflect_counter() == 0
+        assert await store.bump_reflect_counter() == 1
+
+        await store.switch_database(original)
+        assert await store.get_reflect_counter() == 2

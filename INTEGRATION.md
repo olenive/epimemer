@@ -58,12 +58,12 @@ the knowledge graph and pipeline execution in real time.
 
 ### Verify Connection
 
-In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 29 tools.
+In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 30 tools.
 
 ## Available Tools
 
 Tools are auto-prefixed as `mcp__epimemer__<name>` by Claude Code. This table is
-the canonical list of the 29 tools — other docs should link here rather than
+the canonical list of the 30 tools — other docs should link here rather than
 restate the count.
 
 ### Core Memory Operations
@@ -142,6 +142,12 @@ Both storage backends support multiple named graphs (the default graph is
 | `list_graphs` | List available knowledge graphs and show the active one |
 | `use_graph` | Switch to or create a knowledge graph |
 | `delete_graph` | Delete a knowledge graph permanently |
+
+### Visualization
+
+| Tool | Purpose |
+|------|---------|
+| `viz_status` | Report this session's visualization hub URL, reachability, and the session id to select in the viewer |
 
 ## System Prompt Guidance
 

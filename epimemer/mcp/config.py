@@ -40,6 +40,7 @@ class ServerConfig(BaseModel):
     viz_enabled: bool = True
     viz_host: str = "127.0.0.1"
     viz_port: int = 8765
+    viz_autospawn: bool = True
 
 
 def load_config() -> ServerConfig:
@@ -64,6 +65,7 @@ def load_config() -> ServerConfig:
         "viz_enabled": "EPIMEMER_VIZ_ENABLED",
         "viz_host": "EPIMEMER_VIZ_HOST",
         "viz_port": "EPIMEMER_VIZ_PORT",
+        "viz_autospawn": "EPIMEMER_VIZ_AUTOSPAWN",
     }
 
     overrides = {}

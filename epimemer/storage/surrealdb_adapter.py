@@ -74,6 +74,36 @@ def _upsert(table: str) -> str:
     return f"UPSERT {table} CONTENT $data WHERE uid = $uid"
 
 
+# --- Reflection bookkeeping ---
+#
+# One fixed record per graph holds the "stores since the last reflect" count, so
+# the read-modify-write is a single atomic statement on the server rather than a
+# racy round trip. `?? 0` covers the create path, where the field does not exist
+# yet. Both mutations return the row so the caller needs no follow-up read:
+# BUMP returns the incremented value, RESET the value it cleared.
+
+_REFLECT_RECORD = "graph_state:reflect"
+_REFLECT_FIELD = "stores_since_reflect"
+
+_REFLECT_GET = f"SELECT {_REFLECT_FIELD} FROM {_REFLECT_RECORD};"
+_REFLECT_BUMP = (
+    f"UPSERT {_REFLECT_RECORD} SET {_REFLECT_FIELD} = "
+    f"({_REFLECT_FIELD} ?? 0) + 1 RETURN AFTER;"
+)
+_REFLECT_RESET = f"UPSERT {_REFLECT_RECORD} SET {_REFLECT_FIELD} = 0 RETURN BEFORE;"
+
+
+def _reflect_count(rows) -> int:
+    """Read the counter out of a reflect-state row set.
+
+    A graph that has never stored anything yields no row (SELECT) or a null one
+    (RETURN BEFORE on the create path); both mean zero.
+    """
+    if not rows or rows[0] is None:
+        return 0
+    return int(rows[0].get(_REFLECT_FIELD) or 0)
+
+
 def _serialize(model) -> dict:
     """Serialize a Pydantic model to a dict suitable for SurrealDB.
 
@@ -133,6 +163,10 @@ class SurrealDBStorage:
             await self._db.signin({"username": self._user, "password": self._password})
         await self._db.use(self._namespace, self._database)
         await self._setup_schema()
+
+    @property
+    def backend_name(self) -> str:
+        return "surrealdb"
 
     @property
     def current_database(self) -> str:
@@ -258,6 +292,12 @@ class SurrealDBStorage:
             DEFINE TABLE IF NOT EXISTS metacontext SCHEMALESS;
             DEFINE INDEX IF NOT EXISTS idx_mc_uid ON metacontext FIELDS uid UNIQUE;
             DEFINE INDEX IF NOT EXISTS idx_mc_status ON metacontext FIELDS status;
+        """)
+
+        # Per-graph bookkeeping (reflection counter). Addressed by fixed record
+        # id, so it needs no uid index.
+        await self.db.query("""
+            DEFINE TABLE IF NOT EXISTS graph_state SCHEMALESS;
         """)
 
     @property
@@ -820,3 +860,17 @@ class SurrealDBStorage:
             {"status": status.value},
         )
         return [Metacontext.model_validate(_clean_record(r)) for r in rows]
+
+    # --- Reflection bookkeeping ---
+
+    async def get_reflect_counter(self) -> int:
+        rows = await self.db.query(_REFLECT_GET)
+        return _reflect_count(rows)
+
+    async def bump_reflect_counter(self) -> int:
+        rows = await self.db.query(_REFLECT_BUMP)
+        return _reflect_count(rows)
+
+    async def reset_reflect_counter(self) -> int:
+        rows = await self.db.query(_REFLECT_RESET)
+        return _reflect_count(rows)

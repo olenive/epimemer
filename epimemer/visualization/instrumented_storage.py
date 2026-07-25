@@ -377,8 +377,22 @@ class InstrumentedStorage:
     ) -> Sequence[Metacontext]:
         return await self._inner.query_metacontexts(status=status)
 
+    # --- Reflection bookkeeping (pass-through) ---
+
+    async def get_reflect_counter(self) -> int:
+        return await self._inner.get_reflect_counter()
+
+    async def bump_reflect_counter(self) -> int:
+        return await self._inner.bump_reflect_counter()
+
+    async def reset_reflect_counter(self) -> int:
+        return await self._inner.reset_reflect_counter()
 
     # --- Multi-graph management (pass-through) ---
+
+    @property
+    def backend_name(self) -> str:
+        return self._inner.backend_name
 
     @property
     def current_database(self) -> str:

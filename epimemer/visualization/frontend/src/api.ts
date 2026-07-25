@@ -1,15 +1,17 @@
 /**
- * HTTP client for the visualization server's read-only API.
+ * HTTP client for the visualization hub's read-only API.
  *
- * These endpoints return graph metadata and snapshot data.
- * They never modify MCP state or stored data.
+ * Every read is scoped to a session: the hub forwards the request to that MCP
+ * process, which answers from its own storage. These endpoints never modify MCP
+ * state or stored data.
  */
 
-import type { NodeView, EdgeView } from "./types";
+import type { EdgeView, NodeView, SessionInfo } from "./types";
 
 export interface GraphListResponse {
   graphs: string[];
   active_graph: string;
+  backend: string;
 }
 
 export interface SnapshotResponse {
@@ -18,14 +20,25 @@ export interface SnapshotResponse {
   edges: EdgeView[];
 }
 
-export const fetchGraphs = async (): Promise<GraphListResponse> => {
-  const resp = await fetch("/api/graphs");
+export const fetchSessions = async (): Promise<SessionInfo[]> => {
+  const resp = await fetch("/api/sessions");
+  if (!resp.ok) throw new Error(`Failed to fetch sessions: ${resp.status}`);
+  return resp.json();
+};
+
+export const fetchGraphs = async (session: string): Promise<GraphListResponse> => {
+  const resp = await fetch(`/api/graphs?session=${encodeURIComponent(session)}`);
   if (!resp.ok) throw new Error(`Failed to fetch graphs: ${resp.status}`);
   return resp.json();
 };
 
-export const fetchSnapshot = async (graph: string): Promise<SnapshotResponse> => {
-  const resp = await fetch(`/api/snapshot?graph=${encodeURIComponent(graph)}`);
+export const fetchSnapshot = async (
+  session: string,
+  graph: string,
+): Promise<SnapshotResponse> => {
+  const resp = await fetch(
+    `/api/snapshot?session=${encodeURIComponent(session)}&graph=${encodeURIComponent(graph)}`,
+  );
   if (!resp.ok) throw new Error(`Failed to fetch snapshot for '${graph}': ${resp.status}`);
   return resp.json();
 };
