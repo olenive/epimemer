@@ -331,13 +331,13 @@ These limits are now **measured** rather than estimated — see [dev-docs/BENCHM
 
 | Operation | in-memory | SurrealDB (loopback) |
 |---|---|---|
-| `search` | ~10M nodes | **~5,100 nodes** |
-| `reflect` | ~7,400 nodes | ~3,200 nodes |
+| `search` | ~10M nodes | not reachable (flat, ~135 ms) |
+| `reflect` | ~7,400 nodes | **~3,200 nodes** |
 | `list_sources` | ~1M nodes | ~29,000 nodes |
 
-So: comfortable up to a few thousand nodes, and `search` over a network backend is the first thing to degrade — it is already ~1.4 s per call at 1,000 nodes. In-memory, `reflect` is the only operation that fails at a reachable size. Ingest is flat and not a concern. Don't point a large persistent graph at this unwarned.
+So: `reflect` is the limiting operation on both backends, and everything else has been pushed past any size worth quoting. Ingest is flat and not a concern. Don't point a large persistent graph at this unwarned.
 
-The in-memory figures assume indexed edge lookups (`by_src` / `by_dst` in `storage/memory.py`); before those existed, `list_sources` was quadratic and failed at ~11,000 nodes. The SurrealDB column predates that change — the adapter is untouched by it, but its per-node enrichment shares the same call sites, so treat those numbers as an upper bound.
+These figures depend on two optimisations worth knowing about, because the naive form of each is what a reader would otherwise expect: in-memory edge lookups go through endpoint indexes (`by_src` / `by_dst` in `storage/memory.py`) rather than scanning the edge set, and SurrealDB's `vector_search` ranks before filtering by status rather than filtering inside the ranking query — SurrealDB re-runs such a subquery per row, which cost `search` two orders of magnitude. What remains under `search` on SurrealDB is ~120 ms of per-result enrichment round-trips, the N+1 pattern ISSUES.md #14 tracks.
 
 ## Update Behaviours
 

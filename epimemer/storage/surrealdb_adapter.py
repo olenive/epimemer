@@ -62,6 +62,114 @@ def _record_to_node(table: str, data: dict) -> EpistemicNode:
     return cls.model_validate(cleaned)
 
 
+def _node_tables(node_type: NodeType | None) -> str:
+    """The node table(s) a search covers, as a SurrealQL `FROM` target."""
+    if node_type is None:
+        return "topic, fact, inference"
+    return _NODE_TYPE_TO_TABLE[node_type]
+
+
+# How far past `k` to reach when ranking before filtering by status. Tried in
+# order: each attempt is one cheap unfiltered top-N plus a membership check on
+# those few ids, so escalating is affordable, and it only happens on graphs
+# where the best matches are mostly retired.
+_OVERFETCH_FACTORS = (3, 10)
+
+
+async def _ranked_items(
+    db, query_vector: list[float], model_id: str, limit: int
+) -> list[tuple[str, float]]:
+    """Top `limit` embeddings by cosine similarity, with no status filter.
+
+    Cheap and linear: one pass over the embeddings for a model. Everything
+    expensive about this query historically came from the filter, not the scan.
+    """
+    rows = await db.query(
+        """
+        SELECT
+            item_id,
+            vector::similarity::cosine(vector, $query_vector) AS score
+        FROM embedding
+        WHERE model_id = $model_id
+        ORDER BY score DESC
+        LIMIT $limit
+        """,
+        {"query_vector": query_vector, "model_id": model_id, "limit": limit},
+    )
+    return [(r["item_id"], r["score"]) for r in rows]
+
+
+async def _active_ids(
+    db, node_type: NodeType | None, *, among: list[str] | None = None
+) -> list[str]:
+    """Uids of active nodes — all of them, or only those in `among`.
+
+    Restricting to `among` is the cheap direction: a handful of candidate ids
+    checked against the unique index on `uid`. Passing `among=None` reads every
+    active id, which is only worth doing to feed the exact query below.
+    """
+    tables = _node_tables(node_type)
+    if among is None:
+        return list(
+            await db.query(f"SELECT VALUE uid FROM {tables} WHERE status = 'active'")
+        )
+    if not among:
+        return []
+    return list(
+        await db.query(
+            f"SELECT VALUE uid FROM {tables} WHERE status = 'active' AND uid IN $ids",
+            {"ids": among},
+        )
+    )
+
+
+async def _ranked_active_items(
+    db,
+    query_vector: list[float],
+    model_id: str,
+    k: int,
+    node_type: NodeType | None,
+) -> list[tuple[str, float]]:
+    """Exact top-k over active nodes only: rank what survives the filter.
+
+    Two round-trips rather than one query with a subquery. Expressing the filter
+    as `item_id IN (SELECT ...)` reads well but makes SurrealDB re-run that
+    subquery *per embedding row*, so the cost becomes embeddings × nodes — the
+    quadratic term that made search the first operation in this system to fail
+    its tool timeout. Fetching the ids first and binding them as a parameter
+    turns the per-row work into an array membership test.
+
+    Still linear in (rows × active nodes) in-engine, so this is the fallback
+    rather than the usual path — correct at any ratio of retired nodes, and
+    bounded, but it grows.
+
+    (It cannot be written as one `LET $active = (...); SELECT ...` call: this
+    driver returns the *first* statement's result, so the select's rows would be
+    thrown away and `LET`'s `None` returned in their place.)
+    """
+    active = await _active_ids(db, node_type)
+    if not active:
+        return []
+    rows = await db.query(
+        """
+        SELECT
+            item_id,
+            vector::similarity::cosine(vector, $query_vector) AS score
+        FROM embedding
+        WHERE model_id = $model_id AND item_id IN $active
+        ORDER BY score DESC
+        LIMIT $k
+        """,
+        {
+            "query_vector": query_vector,
+            "model_id": model_id,
+            "k": k,
+            "active": active,
+        },
+    )
+    return [(r["item_id"], r["score"]) for r in rows]
+
+
 def _upsert(table: str) -> str:
     """SurrealQL to upsert a row keyed on the application id (``uid``).
 
@@ -807,36 +915,43 @@ class SurrealDBStorage:
         k: int = 10,
         node_type: NodeType | None = None,
     ) -> Sequence[tuple[str, float]]:
-        # TODO: When SurrealDB adds native HNSW vector indexes, switch to those.
-        # For now, brute-force via SurrealQL vector::similarity::cosine().
-        #
-        # Both paths restrict results to *active* nodes: superseded/merged nodes
-        # must never resurface via vector search. The typed path scopes to one
-        # node table; the untyped path spans all three.
-        if node_type is not None:
-            table = _NODE_TYPE_TO_TABLE[node_type]
-            active_filter = (
-                f"AND item_id IN (SELECT VALUE uid FROM {table} WHERE status = 'active')"
-            )
-        else:
-            active_filter = (
-                "AND item_id IN "
-                "(SELECT VALUE uid FROM topic, fact, inference WHERE status = 'active')"
-            )
+        """Top-k active nodes by cosine similarity.
 
-        rows = await self.db.query(
-            f"""
-            SELECT
-                item_id,
-                vector::similarity::cosine(vector, $query_vector) AS score
-            FROM embedding
-            WHERE model_id = $model_id {active_filter}
-            ORDER BY score DESC
-            LIMIT $k
-            """,
-            {"query_vector": query_vector, "model_id": model_id, "k": k},
+        Superseded and merged nodes must never resurface here, and `k` counts
+        results the caller can use rather than rows examined — so the filter
+        cannot simply be applied to an already-truncated ranking.
+
+        Rank first, filter after, over-fetching enough that the filter has
+        candidates to keep. Retired nodes are a small minority of a healthy
+        graph, so reaching `k × 3` deep almost always leaves `k` survivors after
+        one cheap scan and one membership check on ~30 ids. When it does not —
+        a graph with a lot of history, or a typed search where the requested
+        type is a minority of the embeddings — reach further, and only then pay
+        for the exact query.
+
+        The obvious formulation, filtering inside the ranking query with
+        `item_id IN (SELECT ...)`, is the one thing to avoid: SurrealDB re-runs
+        that subquery per embedding row. See `_ranked_active_items`.
+
+        TODO: When SurrealDB adds native HNSW vector indexes, switch to those.
+        For now, brute-force via SurrealQL vector::similarity::cosine().
+        """
+        for factor in _OVERFETCH_FACTORS:
+            limit = k * factor
+            candidates = await _ranked_items(self.db, query_vector, model_id, limit)
+            keep = set(
+                await _active_ids(
+                    self.db, node_type, among=[item_id for item_id, _ in candidates]
+                )
+            )
+            active = [(i, score) for i, score in candidates if i in keep]
+            # Fewer rows than asked for means the scan reached the end of the
+            # embeddings, so a deeper reach cannot find anything more.
+            if len(active) >= k or len(candidates) < limit:
+                return active[:k]
+        return await _ranked_active_items(
+            self.db, query_vector, model_id, k, node_type
         )
-        return [(r["item_id"], r["score"]) for r in rows]
 
     # --- Timelines ---
 

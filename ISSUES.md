@@ -6,10 +6,9 @@ Everything found so far is resolved except **14** and **16**, both deferred by
 design and described below. Resolved entries are **removed from this file** —
 their resolution lives in git history and the merged code. Issue numbers are
 stable IDs; the gaps (6–13, 15, 17–25, 27, 30) are deleted-resolved items, not
-missing work. **26**, **28**, **29**, **31** and **32** are done and awaiting
-deletion on merge. Open: **14** and **16** (deferred, with measured triggers)
-and **33** (the `search` superlinearity from #14, profiled to a single query
-with a verified fix). New findings continue from **34**.
+missing work. **26**, **28**, **29**, **31**, **32** and **33** are done and
+awaiting deletion on merge. Open: **14** and **16** only, both deferred with
+measured triggers. New findings continue from **34**.
 
 **Workflow (required for every fix):**
 
@@ -66,45 +65,50 @@ like the problem):
 | 3,000 | 8.9 ms *(64)* | 85 ms *(1,740)* | 4,402 ms *(10,554)* |
 | 10,000 | 27.9 ms *(214)* | 278 ms *(18,757)* | 54,579 ms *(125,180)* |
 
-SurrealDB over `ws://` (**loopback** — a remote server is worse):
+SurrealDB over `ws://` (**loopback** — a remote server is worse), post-#33:
 
 | Nodes | search p50 | `list_sources` | `reflect` |
 |---|---|---|---|
-| 100 | 126 ms | 91 ms | 463 ms |
-| 1,000 | 1,443 ms | 911 ms | 6,060 ms |
-| 2,000 | **5,284 ms** | 1,870 ms | 15,679 ms |
+| 1,000 | 118 ms *(1,515)* | 857 ms | 6,060 ms |
+| 2,000 | 131 ms *(5,875)* | 1,818 ms | 15,679 ms |
+| 4,000 | 136 ms | 3,743 ms | not run |
 
 30 s crossings:
 
 | Operation | in-memory | SurrealDB (loopback) |
 |---|---|---|
-| `search` | ~10M (linear) | **~5,100** |
-| `reflect` | ~7,400 | ~3,200 |
+| `search` | ~10M (linear) | not reachable (flat) |
+| `reflect` | ~7,400 | **~3,200** |
 | `list_sources` | ~1M (linear) | ~29,000 |
 
-**Everything in-memory is now a distant concern**; `reflect` is the only
-operation that fails at a size anyone will reach, and both remaining SurrealDB
-numbers are far lower than any of them. The SurrealDB column has not been
-re-measured since #32 — the adapter is unchanged, but its enrichment shares the
-same call sites, so those figures are an upper bound rather than current.
+**`reflect` is now the limiting operation on both backends** — ~7,400 nodes
+in-memory, ~3,200 on SurrealDB — and it is the one whose residual cost is
+genuine O(F²) work rather than a fixable access pattern. Everything else has
+been pushed past any size worth quoting.
+
+`list_sources` and `reflect` in the SurrealDB table above predate #33 but are
+unaffected by it (`list_sources` was re-measured alongside `search` as a control
+and moved by less than run-to-run noise). The in-memory and SurrealDB columns
+never confound each other: the backends share call sites at the tool layer and
+no implementation, so a fix to one cannot move the other.
 
 ---
 
 #### Per-operation analysis
 
-**`search` — the urgent one, and not where anyone was looking.** In-memory it
-is linear and healthy (28 ms at 10k post-#32). Over a websocket it is **two
-orders of magnitude slower and superlinear** (exponent 1.87 between 1,000 and 2,000 nodes), crossing 30 s at
-~5,100. At 1,000 nodes it already costs 1.4 s per call. It is also the *most
-frequently called* tool in the system, where `reflect` and `list_sources` are
-occasional — so it degrades the experience long before it fails.
+**`search` — was the urgent one, now the cheapest.** In-memory it was always
+linear and healthy (28 ms at 10k post-#32). Over a websocket it was **two orders
+of magnitude slower and superlinear** (exponent 1.96 per doubling), crossing 30 s
+at ~5,100 nodes on the most frequently called tool in the system.
 
-**Profiled 2026-07-29 and split out as #33** — the same move as #31, and the
+**Profiled and split out as #33, now fixed** — the same move as #31, and the
 same lesson: both candidate explanations named here (per-item embedding
-fetches, per-node enrichment round-trips) were **wrong**. A component
-breakdown put 99% of the call in the single `vector_search` SurrealQL query;
-the enrichment is ~120 ms and *flat* between 1,000 and 2,000 nodes. See #33
-for the cause and the verified fix.
+fetches, per-node enrichment round-trips) were **wrong**. A component breakdown
+put 99% of the call in the single `vector_search` SurrealQL query, whose status
+filter SurrealDB re-ran per embedding row. Ranking before filtering made it
+flat: 118/131/136 ms at 1k/2k/4k nodes, exponent 0.10. The ~120 ms that remains
+is the per-result enrichment — the N+1 pattern that *is* this issue's, and the
+floor any further work here would have to attack.
 
 **`reflect` — fixed twice, still the second concern.** #31 made it quadratic
 (was cubic), moving the in-memory crossing from ~1,800 to ~5,000 nodes, and #32
@@ -135,8 +139,8 @@ measured, ~2k docs/min on SurrealDB. The write path is fine.
 1. ~~**#32 — index edges in `InMemoryStorage`.**~~ **Done 2026-07-29.** Removed
    the in-memory quadratic curve wholesale, and took `search` and `reflect`
    with it — every caller that walks nodes and asks for their edges got faster.
-2. **#33 — fix `vector_search`'s correlated `IN`-subquery.** Found and
-   verified 2026-07-29; no longer this issue's work. (The profile-first rule
+2. ~~**#33 — fix `vector_search`'s correlated `IN`-subquery.**~~ **Done
+   2026-07-29.** Quadratic → flat, 45× at 2,000 nodes. (The profile-first rule
    paid out again: both superlinear-term candidates predicted here were wrong.)
 3. **Batched edge fetch in the protocol.** `get_edges_for(node_ids, edge_type)`
    returning a map, implemented on **both** backends per the parity rule. This
@@ -265,7 +269,56 @@ as a new section in `dev-docs/BENCHMARKS.md`.
 
 ---
 
-### Issue 33 — SurrealDB `vector_search`: correlated `IN`-subquery makes `search` quadratic — 🆕 OPEN, fix verified
+### Issue 33 — SurrealDB `vector_search`: correlated `IN`-subquery makes `search` quadratic — ✅ RESOLVED
+
+> **✅ Resolved 2026-07-29.** `vector_search` ranks `k × 3` rows unfiltered,
+> checks that handful of ids against the node tables, escalates to `k × 10` if
+> too few survive, and only then falls back to the exact query. Measured against
+> a throwaway Docker SurrealDB, before-run taken fresh on `main` in the same
+> session:
+>
+> | Nodes | `search` p50 | `list_sources` (control) |
+> |---|---|---|
+> | 1,000 | 1,515 → **118 ms** (12.8×) | 878 → 857 ms |
+> | 2,000 | 5,875 → **131 ms** (44.9×) | 1,712 → 1,818 ms |
+> | 4,000 | — → **136 ms** | 3,743 ms |
+>
+> **Quadratic → flat.** Growth was 3.88× per doubling (exponent 1.96); it is now
+> 1.15× across a *4×* increase in nodes — exponent 0.10. At 4,000 nodes `search`
+> costs less than it did at 100 before the fix. What remains is the ~120 ms
+> enrichment floor the profile predicted, plus roughly 6 µs per node of
+> unfiltered scan. `search` is no longer among the operations worth quoting a
+> timeout crossing for; on SurrealDB the nearest failure is now `reflect`
+> (~3,200 nodes), then `list_sources` (~29,000).
+>
+> **Two things found while building it, neither of which was in the plan:**
+>
+> 1. **Variant B cannot be one call.** `LET $active = (…); SELECT …` through this
+>    driver returns the *first* statement's result — the select's rows are
+>    discarded and `LET`'s `None` is returned in their place, silently. The
+>    fallback is two calls: fetch the active ids, bind them as a parameter.
+>    Confirmed against `query_raw`, which does return every statement's result.
+> 2. **The typed path over-fetches harder than expected.** The unfiltered scan
+>    cannot exclude other node types — `embedding` has no type column — so a
+>    typed search reaches past every embedding of the wrong type. Fine when the
+>    requested type is common (`check_conflicts` searches facts in a loop), and
+>    handled by the escalation when it is not.
+>
+> **Over-fetching is not merely an optimisation**, which is what makes the test
+> shape matter: ranking `k` and filtering afterwards returns *fewer than `k`*
+> results on any graph whose top hits are retired — retrieval would quietly go
+> blind on the longest-lived graphs. The parity file now carries that invariant
+> for both backends (`TestVectorSearchReturnsOnlyActiveNodes`, folding in the two
+> near-duplicate single-backend tests), including the case where inactive nodes
+> would otherwise consume the `k` budget.
+>
+> Backend-specific behaviour is in `test_surrealdb_storage.py`
+> (`TestVectorSearchOverFetch`): starvation, escalation, the exact fallback,
+> all-retired and fewer-than-`k` graphs, top-k equivalence against a brute-force
+> reference, and the typed path. Three of those tests assert *which path
+> answered* by making the exact query raise — without them, a mutant that ranks
+> only `k` rows still passes everything, because the fallback rescues its
+> correctness while reintroducing the cost. Nine mutants tried, all caught.
 
 **Severity: the nearest failure in the system.** Split out of #14's search leg
 on 2026-07-29 after profiling. `search` is the most-called tool; over a
@@ -304,35 +357,49 @@ both wrong; enrichment is flat.)
 | B. `LET $active = (…)` then `IN $active` | 142 ms | 36× |
 | C. **over-fetch top `k×3` unfiltered; second query filters those ids by active status** | **10.6 ms** | **485×, identical top-k** |
 
-Take **C**: two cheap queries replace one quadratic one. Fetch top `k×3` by
-similarity with no status filter; one `uid IN $ids` membership check on those
-~30 ids; keep active ones; if fewer than `k` survive (rare — inactive nodes
-are a small minority), retry with a larger multiplier before falling back to
-the full filter. B is a one-line fallback but still O(rows × array) in-engine
-and will keep growing. With C, `search` at 2k drops to ~130 ms
-(enrichment-dominated, flat), and the residual unfiltered scan is linear and
-tiny (6.9 ms at 2k → ~35 ms projected at 10k). The adapter's existing TODO
-(native HNSW index) remains the eventual ending; no pressure at these sizes
-once the quadratic filter is gone.
+Take **C with B as the starvation fallback**: two cheap queries replace one
+quadratic one. Fetch top `k×3` by similarity with no status filter; one
+`uid IN $ids` membership check on those ~30 ids; keep active ones; if fewer
+than `k` survive (rare — inactive nodes are a small minority), retry with a
+larger multiplier, and past that fall back to **variant B** — *never* to the
+shipped query, which is the quadratic path this issue exists to remove. A
+graph with many superseded nodes would otherwise pay ~5 s on exactly the calls
+over-fetching failed to serve; B caps the worst case at its measured 142 ms
+while staying exact. (B alone is not the primary because it is still
+O(rows × array) in-engine and keeps growing.) With C, `search` at 2k drops to
+~130 ms (enrichment-dominated, flat), and the residual unfiltered scan is
+linear and tiny (6.9 ms at 2k → ~35 ms projected at 10k). The adapter's
+existing TODO (native HNSW index) remains the eventual ending; no pressure at
+these sizes once the quadratic filter is gone.
 
 **Scope.** `surrealdb_adapter.py` `vector_search` only — both the typed
 (`node_type` given, single-table subquery) and untyped (three-table) paths.
 No protocol change, no `InMemoryStorage` change, nothing for #16 to interact
 with.
 
-**Tests first.** `tests/storage/test_surrealdb_storage.py` (backend-specific
-internals belong there per the parity rule):
+**Tests first.** Split by what the assertion is about, per the parity rule:
 
-- `test_vector_search_excludes_inactive_nodes` — the invariant the filter
-  exists for: superseded/merged nodes never resurface, on both the typed and
-  untyped paths. Must pass before and after.
-- `test_vector_search_starved_overfetch_retries` — with > 2/3 of the top hits
-  inactive, still returns `k` active results.
-- Result-equivalence: same (id, score) top-k as a brute-force reference on a
-  mixed active/inactive corpus.
+- **Parity** (`tests/storage/test_storage_parity.py`, parameterized `storage`
+  fixture): `test_vector_search_excludes_inactive_nodes` — the invariant the
+  filter exists for: superseded/merged nodes never resurface, on both the
+  typed and untyped paths. This is **protocol-level** and currently has no
+  parity coverage at all — it lives only as near-duplicate backend tests
+  (`test_memory_storage.py:243`, `test_surrealdb_storage.py:214`). Add it to
+  the parity file (and fold the two duplicates into it); it must pass before
+  and after the fix.
+- **Backend-specific** (`tests/storage/test_surrealdb_storage.py`):
+  `test_vector_search_starved_overfetch_retries` — with > 2/3 of the top hits
+  inactive, still returns `k` active results (exercises the retry, then the
+  variant-B fallback); result-equivalence — same (id, score) top-k as a
+  brute-force reference on a mixed active/inactive corpus.
 
 **Verify with numbers**: `EPIMEMER_BENCH_URL=… make bench BENCH_N=1000,2000`
-before and after; `search` p50 should fall ~100× and go flat. Record in
+— take a **fresh before** on current `main` rather than reusing the
+BENCHMARKS.md table. Not because that table is stale: #32 changed only
+`InMemoryStorage`, the two backends share no implementation, and the recorded
+SurrealDB column is still current. It is so that before and after come from one
+session on one machine, which is what made #31's and #32's numbers trustworthy.
+Then after; `search` p50 should fall ~100× and go flat. Record both runs in
 `dev-docs/BENCHMARKS.md` as the #31 fix was.
 
 ---
@@ -770,7 +837,7 @@ remaining SurrealDB crossings are below that.
 
 | Order | Issue | Why |
 |---|---|---|
-| 1 | 33 | `vector_search` correlated-`IN` fix: adapter-only, fix already benchmarked at 485×, removes the nearest timeout crossing on the most-called tool |
-| 2 | reflect's O(F²) | Not yet an issue. Post-#31/#32 it is the only in-memory operation that still fails at a reachable size (~7,400 nodes) and the residual is genuine pairwise work — vectorizing `_cosine_similarity` buys a constant factor, not an exponent. Raise it when a real graph gets close |
+| 1 | reflect's O(F²) | **Not yet an issue — raise one when a real graph gets close.** With #31, #32 and #33 done it is the limiting operation on both backends (~7,400 nodes in-memory, ~3,200 on SurrealDB) and the only remaining cost that is genuine pairwise work rather than a fixable access pattern. Vectorizing `_cosine_similarity` buys a large constant factor, not an exponent |
+| 2 | 14 (enrichment N+1) | The ~120 ms floor under every SurrealDB `search` is now the per-result enrichment round-trips. Nothing is failing because of it, so it stays deferred — but it is what a batched edge fetch would attack |
 | deferred | 16 | Multi-graph concurrency — trigger: the server gains concurrent clients (viz-read leg closed by the hub; fix now scoped to `hub_client.py`) |
 | deferred | 14 (rest) | Batched edge fetch + aggregate queries: a protocol change on both backends, and the `asyncio.gather` prong is blocked by #16 |

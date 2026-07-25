@@ -284,3 +284,66 @@ being indexed. Nothing here trades meaningful memory for the speed.
 uv run python scripts/bench.py --n 1000,3000   # ~1 min
 uv run python scripts/bench.py --n 10000       # ~2 min, dominated by reflect
 ```
+
+---
+
+## 2026-07-29 (after the #33 fix) — `search` on SurrealDB is flat
+
+`vector_search` no longer filters by status inside the ranking query. It ranks
+`k × 3` rows unfiltered, checks that handful of ids against the node tables,
+and reaches further (`k × 10`) only if too few survive; past that it falls back
+to fetching the active ids and binding them as a parameter.
+
+Fresh before-run on `main` in the same session, same throwaway container
+(`surrealdb/surrealdb:latest` on `ws://localhost:8001/rpc`), mock embeddings.
+
+| Nodes | `search` p50 before → after | `list_sources` (control) |
+|---|---|---|
+| 1,000 | 1,515 ms → **118 ms** (12.8×) | 878 → 857 ms |
+| 2,000 | 5,875 ms → **131 ms** (44.9×) | 1,712 → 1,818 ms |
+| 4,000 | (not run) → **136 ms** | 3,743 ms |
+
+**The quadratic term is gone, and what is left is flat.** `search` grew 3.88×
+per doubling before (exponent 1.96); after, it grows **1.15× over a 4× increase
+in nodes** — exponent 0.10. At 4,000 nodes it costs less than it did at 100
+before the fix (126 ms). This is the enrichment-dominated floor the profile
+predicted: ~120 ms of `get_node` and per-result annotation round-trips, plus a
+residual unfiltered scan of about 6 µs per node.
+
+`list_sources` is untouched by this change and was measured alongside as a
+control — it moves by less than run-to-run noise at 1k and 2k.
+
+### What is now the nearest failure on SurrealDB
+
+| Operation | 30 s crossing | shape |
+|---|---|---|
+| `reflect` | ~3,200 nodes | quadratic |
+| `list_sources` | ~29,000 nodes | linear |
+| `search` | not reachable at any size worth quoting | flat + ~6 µs/node |
+
+`search` was the urgent one for a day. It is now the cheapest of the three, and
+`reflect` — already known, already fixed twice, and still genuinely O(F²) —
+inherits the position.
+
+### Two notes for anyone extending this
+
+- **A single `LET $active = (…); SELECT …` call does not work through this
+  driver.** `db.query` returns the *first* statement's result, so the select's
+  rows are discarded and `LET`'s `None` comes back in their place — silently.
+  The exact fallback is therefore two calls. Verified with `query_raw`, which
+  does return every statement's result.
+- **The over-fetch is not merely an optimisation.** Ranking `k` rows and
+  filtering afterwards returns fewer than `k` results on any graph with history
+  at the top of the ranking — retrieval would quietly go blind on the oldest
+  graphs. That is why the escalation and the exact fallback both exist, and why
+  the tests pin *which path* answered rather than only what it returned.
+
+### Reproduction
+
+```bash
+docker run -d --rm --name bench-surreal -p 8001:8000 \
+  surrealdb/surrealdb:latest start --user root --pass root memory
+EPIMEMER_BENCH_URL=ws://localhost:8001/rpc \
+  uv run python scripts/bench.py --n 1000,2000,4000 --skip-reflect
+docker stop bench-surreal
+```

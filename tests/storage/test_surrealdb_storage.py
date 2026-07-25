@@ -211,16 +211,9 @@ class TestEmbeddingStorage:
         assert results[0][0] == t.id
         assert results[0][1] > 0.9
 
-    async def test_vector_search_excludes_superseded(self, store):
-        t = Topic(content="ML", source_id="s1")
-        await store.store_node(t)
-        emb = EmbeddingRecord(item_id=t.id, model_id="test", vector=[1.0, 0.0, 0.0])
-        await store.store_embedding(emb)
-        await store.update_node_status(t.id, NodeStatus.SUPERSEDED)
-
-        # Exact-match query, but the node is superseded → must be filtered out.
-        results = await store.vector_search([1.0, 0.0, 0.0], "test", k=5)
-        assert all(item_id != t.id for item_id, _ in results)
+    # Excluding inactive nodes is protocol-level and lives in
+    # test_storage_parity.py. What stays here is what only this backend can get
+    # wrong: over-fetching enough rows that the filter has candidates to keep.
 
 
 class TestAtomicOperations:
@@ -507,3 +500,180 @@ class TestGraphNameInjection:
         remaining = await store.list_databases()
         assert "victim" in remaining
         assert hostile not in remaining
+
+
+class TestVectorSearchOverFetch:
+    """Ranking happens before the status filter, so enough rows must be ranked.
+
+    The exclusion invariant itself is protocol-level and lives in
+    `test_storage_parity.py`. What is specific to this backend is *how* it gets
+    there: a status filter written into the ranking query costs embeddings ×
+    nodes, because SurrealDB re-runs the subquery per row, so this adapter ranks
+    first and filters a small candidate set afterwards. That trade only holds if
+    the over-fetch reaches deep enough to still find `k` survivors, and if it
+    escalates when it does not.
+    """
+
+    async def _corpus(self, store, *, live: int, retired: int, model_id="test"):
+        """Retired nodes that all out-score every live one.
+
+        The adversarial ordering is the point: any retired node that ranks below
+        a live one is harmless, so only this arrangement can starve the filter.
+        """
+        made = {"live": [], "retired": []}
+        for i in range(retired):
+            fact = Fact(content=f"retired {i}", source_id="s1")
+            await store.store_node(fact)
+            await store.store_embedding(
+                EmbeddingRecord(
+                    item_id=fact.id, model_id=model_id, vector=[1.0, 0.001 * i, 0.0]
+                )
+            )
+            await store.update_node_status(fact.id, NodeStatus.SUPERSEDED)
+            made["retired"].append(fact)
+        for i in range(live):
+            fact = Fact(content=f"live {i}", source_id="s1")
+            await store.store_node(fact)
+            await store.store_embedding(
+                EmbeddingRecord(
+                    item_id=fact.id,
+                    model_id=model_id,
+                    vector=[0.5, 0.85 - 0.001 * i, 0.0],
+                )
+            )
+            made["live"].append(fact)
+        return made
+
+    async def test_a_few_retired_nodes_do_not_reach_for_the_exact_query(
+        self, store, monkeypatch
+    ):
+        """Over-fetching has to reach *past* `k`, not just to it.
+
+        Three retired nodes sit above the live ones, so ranking exactly `k` rows
+        comes back short and the exact query gets used on an ordinary graph —
+        correct, but it is the quadratic-ish path this whole design exists to
+        avoid, and nothing about the returned results would show it.
+        """
+        from epimemer.storage import surrealdb_adapter
+
+        await self._corpus(store, live=10, retired=3)
+
+        async def refuse(*args, **kwargs):
+            raise AssertionError(
+                "the exact query is the fallback, not the path for a healthy graph"
+            )
+
+        monkeypatch.setattr(surrealdb_adapter, "_ranked_active_items", refuse)
+
+        results = await store.vector_search([1.0, 0.0, 0.0], "test", k=5)
+
+        assert len(results) == 5
+
+    async def test_escalation_is_tried_before_the_exact_query(
+        self, store, monkeypatch
+    ):
+        """Reaching further is cheap; the exact query is not. Try it first."""
+        from epimemer.storage import surrealdb_adapter
+
+        made = await self._corpus(store, live=5, retired=25)
+
+        async def refuse(*args, **kwargs):
+            raise AssertionError("escalation should have filled k without falling back")
+
+        monkeypatch.setattr(surrealdb_adapter, "_ranked_active_items", refuse)
+
+        results = await store.vector_search([1.0, 0.0, 0.0], "test", k=5)
+
+        assert sorted(i for i, _ in results) == sorted(n.id for n in made["live"])
+
+    async def test_returns_k_when_most_top_hits_are_retired(self, store):
+        """More than two thirds retired: the first over-fetch cannot fill `k`."""
+        made = await self._corpus(store, live=5, retired=25)
+
+        results = await store.vector_search([1.0, 0.0, 0.0], "test", k=5)
+
+        assert len(results) == 5
+        assert set(i for i, _ in results) <= {n.id for n in made["live"]}
+
+    async def test_returns_k_when_the_escalation_also_falls_short(self, store):
+        """Past every over-fetch factor, the exact query has to take over."""
+        made = await self._corpus(store, live=3, retired=150)
+
+        results = await store.vector_search([1.0, 0.0, 0.0], "test", k=3)
+
+        assert sorted(i for i, _ in results) == sorted(n.id for n in made["live"])
+
+    async def test_returns_what_exists_when_fewer_than_k_are_active(
+        self, store, monkeypatch
+    ):
+        """Asking for more than the graph holds returns everything it holds —
+        without reaching again for rows that provably are not there.
+
+        The scan came back short of its own limit, which means it hit the end of
+        the embeddings. Escalating or falling back cannot find an eleventh node
+        in a graph of ten, so doing either is wasted work on every small graph.
+        """
+        from epimemer.storage import surrealdb_adapter
+
+        made = await self._corpus(store, live=2, retired=8)
+
+        async def refuse(*args, **kwargs):
+            raise AssertionError("the scan already reached the end of the embeddings")
+
+        monkeypatch.setattr(surrealdb_adapter, "_ranked_active_items", refuse)
+
+        results = await store.vector_search([1.0, 0.0, 0.0], "test", k=10)
+
+        assert sorted(i for i, _ in results) == sorted(n.id for n in made["live"])
+
+    async def test_an_all_retired_graph_returns_nothing(self, store):
+        await self._corpus(store, live=0, retired=12)
+
+        assert await store.vector_search([1.0, 0.0, 0.0], "test", k=5) == []
+
+    async def test_top_k_matches_a_brute_force_reference(self, store):
+        """Over-fetching must not change *which* nodes come back, or in what
+        order — it is a way of reaching the same answer, not a different one."""
+        made = await self._corpus(store, live=12, retired=9)
+        query = [0.7, 0.7, 0.0]
+
+        results = await store.vector_search(query, "test", k=5)
+
+        def cosine(a, b):
+            dot = sum(x * y for x, y in zip(a, b))
+            na = sum(x * x for x in a) ** 0.5
+            nb = sum(x * x for x in b) ** 0.5
+            return dot / (na * nb)
+
+        scored = []
+        for fact in made["live"]:
+            vector = (await store.get_embeddings_for_item(fact.id))[0].vector
+            scored.append((fact.id, cosine(query, vector)))
+        expected = sorted(scored, key=lambda pair: -pair[1])[:5]
+
+        assert [i for i, _ in results] == [i for i, _ in expected]
+        for (_, got), (_, want) in zip(results, expected):
+            assert got == pytest.approx(want, rel=1e-6)
+
+    async def test_the_typed_path_over_fetches_too(self, store):
+        """A typed search reaches past embeddings of other node types, which the
+        unfiltered scan cannot exclude up front."""
+        for i in range(20):
+            fact = Fact(content=f"fact {i}", source_id="s1")
+            await store.store_node(fact)
+            await store.store_embedding(
+                EmbeddingRecord(
+                    item_id=fact.id, model_id="test", vector=[1.0, 0.001 * i, 0.0]
+                )
+            )
+        topic = Topic(content="the one topic", source_id="s1")
+        await store.store_node(topic)
+        await store.store_embedding(
+            EmbeddingRecord(item_id=topic.id, model_id="test", vector=[0.5, 0.85, 0.0])
+        )
+
+        results = await store.vector_search(
+            [1.0, 0.0, 0.0], "test", k=1, node_type=NodeType.TOPIC
+        )
+
+        assert [i for i, _ in results] == [topic.id]

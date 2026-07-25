@@ -16,7 +16,10 @@ import pytest
 
 from epimemer.core.types import (
     EmbeddingRecord,
+    Fact,
     Metacontext,
+    NodeStatus,
+    NodeType,
     RawDocument,
     Timeline,
     Topic,
@@ -350,3 +353,105 @@ class TestReflectCounter:
 
         await store.switch_database(original)
         assert await store.get_reflect_counter() == 2
+
+
+class TestVectorSearchReturnsOnlyActiveNodes:
+    """Retired nodes must never resurface through similarity search.
+
+    This is the invariant the status filter exists for, and it is protocol-level:
+    both backends promise it, and each implements it differently — in-memory by
+    filtering candidates before ranking, SurrealDB inside (or alongside) the
+    ranking query. It previously had no parity coverage at all, only
+    near-duplicate single-backend tests, which is how an optimisation to one
+    implementation could quietly weaken it.
+
+    The last test here is the one with teeth: a backend that filters *after*
+    taking the top k satisfies every other assertion while silently returning
+    fewer results than asked for.
+    """
+
+    async def _stored(self, store, node, vector, *, model_id="test"):
+        await store.store_node(node)
+        await store.store_embedding(
+            EmbeddingRecord(item_id=node.id, model_id=model_id, vector=vector)
+        )
+        return node
+
+    async def test_superseded_nodes_never_resurface(self, store):
+        topic = await self._stored(
+            store, Topic(content="ML", source_id="s1"), [1.0, 0.0, 0.0]
+        )
+        await store.update_node_status(topic.id, NodeStatus.SUPERSEDED)
+
+        # An exact match on the query vector: only the status filter can hide it.
+        results = await store.vector_search([1.0, 0.0, 0.0], "test", k=5)
+
+        assert all(item_id != topic.id for item_id, _ in results)
+
+    async def test_merged_nodes_never_resurface(self, store):
+        topic = await self._stored(
+            store, Topic(content="ML", source_id="s1"), [1.0, 0.0, 0.0]
+        )
+        await store.update_node_status(topic.id, NodeStatus.MERGED)
+
+        results = await store.vector_search([1.0, 0.0, 0.0], "test", k=5)
+
+        assert all(item_id != topic.id for item_id, _ in results)
+
+    async def test_active_nodes_are_still_returned(self, store):
+        """The filter must not be so eager that it hides live nodes."""
+        topic = await self._stored(
+            store, Topic(content="ML", source_id="s1"), [1.0, 0.0, 0.0]
+        )
+
+        results = await store.vector_search([0.9, 0.1, 0.0], "test", k=5)
+
+        assert [item_id for item_id, _ in results] == [topic.id]
+
+    async def test_the_type_filter_also_excludes_inactive(self, store):
+        """The typed path is a separate query on both backends."""
+        topic = await self._stored(
+            store, Topic(content="ML", source_id="s1"), [1.0, 0.0, 0.0]
+        )
+        live = await self._stored(
+            store, Topic(content="AI", source_id="s1"), [0.9, 0.1, 0.0]
+        )
+        await store.update_node_status(topic.id, NodeStatus.SUPERSEDED)
+
+        results = await store.vector_search(
+            [1.0, 0.0, 0.0], "test", k=5, node_type=NodeType.TOPIC
+        )
+
+        assert [item_id for item_id, _ in results] == [live.id]
+
+    async def test_inactive_nodes_do_not_consume_the_k_budget(self, store):
+        """`k` counts results the caller can use, not rows the backend looked at.
+
+        Six retired nodes score *above* every live one here, so an implementation
+        that ranks first and filters second returns nothing while three perfectly
+        good matches sit just below the cut. Retrieval would silently go blind on
+        any graph with a lot of history — which is exactly the graph that has
+        been in use longest.
+        """
+        retired = [
+            await self._stored(
+                store,
+                Fact(content=f"retired {i}", source_id="s1"),
+                [1.0, 0.01 * i, 0.0],
+            )
+            for i in range(6)
+        ]
+        for node in retired:
+            await store.update_node_status(node.id, NodeStatus.SUPERSEDED)
+        live = [
+            await self._stored(
+                store,
+                Fact(content=f"live {i}", source_id="s1"),
+                [0.6, 0.8 - 0.01 * i, 0.0],
+            )
+            for i in range(3)
+        ]
+
+        results = await store.vector_search([1.0, 0.0, 0.0], "test", k=3)
+
+        assert sorted(item_id for item_id, _ in results) == sorted(n.id for n in live)

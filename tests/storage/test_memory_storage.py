@@ -240,15 +240,8 @@ class TestEmbeddingStorage:
         assert len(results) == 1
         assert results[0][0] == t.id
 
-    async def test_vector_search_excludes_superseded(self, store):
-        t = Topic(content="ML", source_id="s1")
-        await store.store_node(t)
-        emb = EmbeddingRecord(item_id=t.id, model_id="test", vector=[1.0, 0.0, 0.0])
-        await store.store_embedding(emb)
-        await store.update_node_status(t.id, NodeStatus.SUPERSEDED)
-
-        results = await store.vector_search([1.0, 0.0, 0.0], "test", k=5)
-        assert all(item_id != t.id for item_id, _ in results)
+    # Excluding inactive nodes is protocol-level and lives in
+    # test_storage_parity.py, where both backends must satisfy it.
 
 
 class TestTimelineStorage:
