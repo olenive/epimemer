@@ -1134,6 +1134,19 @@ async def record_variant(
 # --- Reflect (analysis — no LLM) ---
 
 
+# The phases `reflect` reports to the visualization strip, in execution order.
+# Named here so the topology and the calls below cannot drift apart.
+REFLECT_PHASES = (
+    "decay",
+    "topic_consolidation",
+    "split_detection",
+    "enrichment_scan",
+    "contradiction_detection",
+    "pending_review",
+    "relation_consolidation",
+)
+
+
 async def reflect(
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
@@ -1155,93 +1168,131 @@ async def reflect(
     from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
     from epimemer.pipelines.reflection.topic_enrichment import gather_associated_material, _should_enrich
     from epimemer.pipelines.reflection.topic_splitting import should_split
-    from epimemer.pipelines.reflection.value_decay import apply_decay
+    from epimemer.pipelines.reflection.review import gather_pending_review, same_frame
+    from epimemer.pipelines.reflection import value_decay
+    from epimemer.visualization.phase_events import phase_pipeline
 
     model_id = embedding_provider.model_id
 
     # 1. Decay (applied immediately — no agent input needed)
-    nodes_decayed = await apply_decay(storage, decay_rate=decay_rate)
+    async def _decay():
+        return await value_decay.apply_decay(storage, decay_rate=decay_rate)
 
     # 2. Find similar topic pairs for consolidation
-    pairs = await find_similar_topic_pairs(
-        storage, embedding_provider,
-        similarity_threshold=similarity_threshold,
-        model_id=model_id,
-    )
-    similar_pairs = [
-        {
-            "topic_a": {"id": a.id, "content": a.content},
-            "topic_b": {"id": b.id, "content": b.content},
-            "similarity": round(score, 4),
-        }
-        for a, b, score in pairs
-    ]
+    async def _consolidation():
+        pairs = await find_similar_topic_pairs(
+            storage, embedding_provider,
+            similarity_threshold=similarity_threshold,
+            model_id=model_id,
+        )
+        return [
+            {
+                "topic_a": {"id": a.id, "content": a.content},
+                "topic_b": {"id": b.id, "content": b.content},
+                "similarity": round(score, 4),
+            }
+            for a, b, score in pairs
+        ]
 
     # 3. Find split candidates (topics with high internal variance)
-    all_topics = await storage.query_nodes(node_type=NodeType.TOPIC)
-    topics = [t for t in all_topics if isinstance(t, Topic)]
-
-    split_candidates = []
-    for topic in topics:
-        material = await gather_associated_material(topic, storage)
-        if len(material) < 4:
-            continue
-        material_vectors = await embedding_provider.embed(material)
-        if should_split(material_vectors):
-            split_candidates.append({
-                "topic_id": topic.id,
-                "topic_content": topic.content,
-                "material": material,
-            })
+    async def _splits():
+        candidates = []
+        for topic in await _active_topics():
+            material = await gather_associated_material(topic, storage)
+            if len(material) < 4:
+                continue
+            material_vectors = await embedding_provider.embed(material)
+            if should_split(material_vectors):
+                candidates.append({
+                    "topic_id": topic.id,
+                    "topic_content": topic.content,
+                    "material": material,
+                })
+        return candidates
 
     # 4. Find enrichment candidates (thin descriptions with rich material)
-    enrichment_candidates = []
-    for topic in topics:
-        material = await gather_associated_material(topic, storage)
-        if _should_enrich(topic, material, material_ratio=3.0):
-            enrichment_candidates.append({
-                "topic_id": topic.id,
-                "current_content": topic.content,
-                "associated_material": material,
-            })
+    async def _enrichment():
+        candidates = []
+        for topic in await _active_topics():
+            material = await gather_associated_material(topic, storage)
+            if _should_enrich(topic, material, material_ratio=3.0):
+                candidates.append({
+                    "topic_id": topic.id,
+                    "current_content": topic.content,
+                    "associated_material": material,
+                })
+        return candidates
+
+    # Split detection and the enrichment scan walk the same topic set. Fetched
+    # once and reused: a second full scan would add to exactly the N+1 cost
+    # (ISSUES.md #14) that makes reflect the slowest operation here. Lazy rather
+    # than hoisted so the fetch stays attributed to the phase that needs it
+    # first.
+    topic_cache: list[Topic] = []
+
+    async def _active_topics() -> list[Topic]:
+        if not topic_cache:
+            all_topics = await storage.query_nodes(node_type=NodeType.TOPIC)
+            topic_cache.extend(t for t in all_topics if isinstance(t, Topic))
+        return topic_cache
 
     # 5. Detect contradictions (safety net for anything ingest-time check missed).
     #    Similarity nominates; keep only same-frame pairs — a high-similarity pair
     #    across disjoint metacontext frames is coexistence, not a contradiction.
-    from epimemer.pipelines.reflection.review import gather_pending_review, same_frame
-
-    contradiction_pairs_raw = await detect_contradictions(
-        storage, embedding_provider,
-        similarity_threshold=0.80,
-        model_id=model_id,
-    )
-    contradictions = []
-    for a, b, score in contradiction_pairs_raw:
-        if not await same_frame(a.id, b.id, storage):
-            continue
-        contradictions.append({
-            "fact_a": {"id": a.id, "content": a.content},
-            "fact_b": {"id": b.id, "content": b.content},
-            "similarity": round(score, 4),
-        })
+    async def _contradictions():
+        raw = await detect_contradictions(
+            storage, embedding_provider,
+            similarity_threshold=0.80,
+            model_id=model_id,
+        )
+        found = []
+        for a, b, score in raw:
+            if not await same_frame(a.id, b.id, storage):
+                continue
+            found.append({
+                "fact_a": {"id": a.id, "content": a.content},
+                "fact_b": {"id": b.id, "content": b.content},
+                "similarity": round(score, 4),
+            })
+        return found
 
     # 6. Surface the pending-review worklist: active nodes already carrying review
     #    state (a candidate to supersede, stale evidence, or an unresolved
     #    contest), with the related ids to act on via apply_reflection /
     #    supersede_by / record_variant.
-    pending_review = [
-        {
-            "node": {"id": n.id, "content": n.content, "node_type": _node_type_key(n)},
-            "review": labels,
-        }
-        for n, labels in await gather_pending_review(storage)
-    ]
+    async def _pending_review():
+        return [
+            {
+                "node": {"id": n.id, "content": n.content, "node_type": _node_type_key(n)},
+                "review": labels,
+            }
+            for n, labels in await gather_pending_review(storage)
+        ]
 
     # 7. Find likely-synonymous user relationship labels (open vocabulary captured
     #    fast, organized slow). Applied via apply_reflection relation_merges.
-    similar_relations = await find_similar_relation_pairs(
-        storage, embedding_provider, similarity_threshold=relation_similarity_threshold,
-    )
+    async def _relations():
+        return await find_similar_relation_pairs(
+            storage, embedding_provider,
+            similarity_threshold=relation_similarity_threshold,
+        )
+
+    # Reflect is the longest operation in the system and the one users most want
+    # to watch, but it is plain functions rather than a Petri net — so it
+    # declares a synthetic linear topology and fires it by hand. Without a bus
+    # `phase` is a bare await, so watching cannot change what is computed.
+    async with phase_pipeline(event_bus, "reflect", REFLECT_PHASES) as phase:
+        nodes_decayed = await phase("decay", _decay, tokens=int)
+        similar_pairs = await phase("topic_consolidation", _consolidation, tokens=len)
+        split_candidates = await phase("split_detection", _splits, tokens=len)
+        enrichment_candidates = await phase("enrichment_scan", _enrichment, tokens=len)
+        contradictions = await phase(
+            "contradiction_detection", _contradictions, tokens=len
+        )
+        pending_review = await phase("pending_review", _pending_review, tokens=len)
+        similar_relations = await phase(
+            "relation_consolidation", _relations, tokens=len
+        )
 
     result = {
         "nodes_decayed": nodes_decayed,

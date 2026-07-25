@@ -431,9 +431,11 @@ interface PipelineRunState {
 
 Tiles are created lazily on first `PipelineStarted` for a name (topology
 arrives with that event, `events.py:196-203`). Before any run, the strip shows
-nothing — acceptable; optionally pre-seed placeholder tiles for the four known
+nothing — acceptable; optionally pre-seed placeholder tiles for the known
 names (`segmentation:semantic`, `segmentation:paragraph`, `edge_creation`,
-`retrieval`) with an empty-glyph "not yet run" look. Pre-seeding real
+`retrieval`, and — added later — `reflect`, which is not a net but declares a
+synthetic linear topology via `visualization/phase_events.py`) with an
+empty-glyph "not yet run" look. Pre-seeding real
 topologies server-side is **out of scope** (net builders need runtime inputs).
 
 ## B.2 The "how much data" number

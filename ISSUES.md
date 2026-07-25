@@ -1,14 +1,13 @@
 # Epimemer — Known Issues
 
-Living issue tracker. **Last review: 2026-07-28.**
+Living issue tracker. **Last review: 2026-07-29.**
 
 Everything found so far is resolved except **14** and **16**, both deferred by
 design and described below. Resolved entries are **removed from this file** —
 their resolution lives in git history and the merged code. Issue numbers are
 stable IDs; the gaps (6–13, 15, 17–25, 27, 30) are deleted-resolved items, not
-missing work. **26**, **28** and **29** below are planned work (features/
-enhancements, prioritized 2026-07-28), written so another agent can pick each up
-cold. New findings continue from **31**.
+missing work. **26**, **28** and **29** are done and awaiting deletion on merge.
+New findings continue from **31**.
 
 **Workflow (required for every fix):**
 
@@ -139,13 +138,13 @@ while the server is single-client stdio; keep this issue open as the reminder.
 
 ---
 
-## Planned work (features & enhancements, prioritized 2026-07-28)
+## Planned work — all resolved 2026-07-28/29, delete on merge
 
 Not bugs — the next tranche of product work, tracked here at the user's request
 so the workflow above (failing test first, scoped commits, delete on merge)
-applies to them too. Ordered by priority. Cross-references: **26** is the
-"visible counter" item in TODO.md; **28** is README → *Not yet built* →
-*Benchmarking*.
+applies to them too. **All of 26–30 are now done**; their entries are deleted as
+each merges to `main`, leaving only the two deferred issues above. New work
+continues from **31**.
 
 ### Issue 26 — Auto-reflect counter: make it visible and user-controllable — ✅ RESOLVED
 
@@ -329,7 +328,40 @@ seconds, so it doesn't rot.
 
 ---
 
-### Issue 29 — `reflect` is invisible in the pipeline strip — 🆕 PLANNED
+### Issue 29 — `reflect` is invisible in the pipeline strip — ✅ RESOLVED
+
+> **✅ Resolved 2026-07-29.** `reflect` now appears in the strip alongside the
+> real nets. Frontend unchanged, as predicted.
+>
+> The emitter is `visualization/phase_events.py` — `phase_pipeline(bus, name,
+> phases)`, an async context manager yielding `phase(name, work, tokens=...)`.
+> It builds the linear topology, fires each phase, and publishes
+> `PipelineCompleted` or `PipelineFailed` on the way out. Generic rather than
+> reflect-specific: any sequence of awaits can now declare itself to the strip,
+> and the phase list lives in one constant (`tools.REFLECT_PHASES`) that the
+> topology and the calls both read.
+>
+> With no bus, `phase` is a bare `await` — the `_run_net` guarantee that
+> watching cannot change what is computed, kept for the synthetic path too.
+>
+> **`tokens` carries the finding, not just the fact of running:** `len` over
+> each phase's candidate list, `int` over the decay count, so the strip's token
+> badges show what reflect actually turned up. Counts accumulate across phases,
+> matching the net observer, so one event read in isolation still shows the run
+> so far.
+>
+> **Watch for:** restructuring the phases into local coroutines briefly made
+> `query_nodes(TOPIC)` run twice (split detection and the enrichment scan share
+> the set). Caught and fixed with a lazy cache — a second full scan would have
+> added to exactly the #14 cost that makes reflect the slowest operation here.
+> `make bench --n 1000` confirms no regression: 5,307 ms against the 5,412 ms
+> baseline recorded the same day.
+>
+> Guarded by `tests/visualization/test_reflect_events.py` (16 tests, both
+> backends): topology shape, every phase firing and completing in order, the
+> terminal `completed`, real durations, token accumulation, `pipeline_failed`
+> plus re-raise when a phase throws, and — the pair that matter most — no events
+> without a bus and an identical result either way.
 
 **Why.** The pipeline strip (dev-docs/VISUALISATION.md Part B) lights up for
 the four `_run_net` pipelines, but `reflect` — the most interesting process in
@@ -383,8 +415,10 @@ it lives in README → *Not yet built*.
 
 ## Recommended order
 
+Nothing active. The next piece of work is whichever of the two deferred issues
+trips its trigger first — or new findings from **31**.
+
 | Order | Issue | Why |
 |---|---|---|
-| 1 | 29 | Reflect in the pipeline strip — closes the observability gap the strip redesign created |
 | deferred | 16 | Multi-graph concurrency — trigger: the server gains concurrent clients (viz-read leg closed by the hub; fix now scoped to `hub_client.py`) |
 | deferred | 14 | Full-scan / N+1 — trigger measured (#28): ~10k nodes on `mem://`, fewer on SurrealDB, where it fails the tool timeout rather than just feeling slow |
