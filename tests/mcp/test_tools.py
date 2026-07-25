@@ -381,6 +381,21 @@ class TestUpdate:
         old = await storage.get_node(t.id)
         assert old.value.confidence == 0.9
 
+    async def test_preserves_extraction_method(self, storage, embedding_provider):
+        """Correcting the wording does not change where the material came from.
+
+        Left unset, the replacement silently takes the model default, so every
+        corrected node would claim a provenance nobody asserted.
+        """
+        f = Fact(content="old fact", source_id="s1",
+                 extraction_method="agent:import")
+        await storage.store_node(f)
+
+        result, _ = await update(f.id, "new fact", storage, embedding_provider)
+        new = await storage.get_node(result["new_node_id"])
+
+        assert new.extraction_method == "agent:import"
+
 
 # --- Supersede-by-existing + Case B tests ---
 

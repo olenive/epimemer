@@ -774,18 +774,25 @@ async def update(
     # content correction does not reset reinforcement history. The signal is
     # copied (not shared) so later reinforcement of the new node cannot mutate
     # the superseded original's recorded value.
+    #
+    # `extraction_method` carries over for the same reason: correcting the
+    # wording does not change where the material came from.
     carried_value = old_node.value.model_copy()
+    carried_method = old_node.extraction_method
     if isinstance(old_node, Topic):
         new_node: EpistemicNode = Topic(
-            content=new_content, source_id=old_node.source_id, value=carried_value
+            content=new_content, source_id=old_node.source_id,
+            value=carried_value, extraction_method=carried_method,
         )
     elif isinstance(old_node, Fact):
         new_node = Fact(
-            content=new_content, source_id=old_node.source_id, value=carried_value
+            content=new_content, source_id=old_node.source_id,
+            value=carried_value, extraction_method=carried_method,
         )
     elif isinstance(old_node, Inference):
         new_node = Inference(
-            content=new_content, source_id=old_node.source_id, value=carried_value
+            content=new_content, source_id=old_node.source_id,
+            value=carried_value, extraction_method=carried_method,
         )
     else:
         raise ValueError(f"Unknown node type for node '{node_id}'")

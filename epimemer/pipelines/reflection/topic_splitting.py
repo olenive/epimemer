@@ -9,10 +9,11 @@ Split decision:
     2. Embed all material items
     3. Bisect: partition into two clusters (k-means with k=2)
     4. Compare inter-cluster distance to intra-cluster spread
-    5. If ratio > threshold, the split is meaningful → ask LLM to decompose
+    5. If ratio > threshold, the split is meaningful → propose it
 
-This ensures we only call the LLM when the embeddings show genuine
-internal diversity, not on every topic.
+Proposals only. The clusters say *that* a topic covers two things; naming the
+subtopics is a judgement call, so the calling agent supplies the descriptions
+and applies the split through `apply_reflection`.
 """
 
 import math

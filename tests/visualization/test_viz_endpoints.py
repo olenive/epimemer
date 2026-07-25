@@ -140,7 +140,7 @@ class TestViewConversion:
         assert view.status == "active"
         assert view.graph == "my-graph"
         assert view.source_id == "s1"
-        assert view.extraction_method == "llm"
+        assert view.extraction_method == "unspecified"
         assert 0.0 <= view.novelty <= 1.0
         assert 0.0 <= view.confidence <= 1.0
 

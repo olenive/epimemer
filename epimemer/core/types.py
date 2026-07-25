@@ -191,7 +191,7 @@ class Topic(BaseModel):
     status: NodeStatus = NodeStatus.ACTIVE
     superseded_at: datetime | None = None
     value: ValueSignal = Field(default_factory=ValueSignal)
-    extraction_method: str = "llm"
+    extraction_method: str = "unspecified"
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
 
@@ -207,7 +207,7 @@ class Fact(BaseModel):
     status: NodeStatus = NodeStatus.ACTIVE
     superseded_at: datetime | None = None
     value: ValueSignal = Field(default_factory=ValueSignal)
-    extraction_method: str = "llm"
+    extraction_method: str = "unspecified"
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
 
@@ -224,7 +224,7 @@ class Inference(BaseModel):
     status: NodeStatus = NodeStatus.ACTIVE
     superseded_at: datetime | None = None
     value: ValueSignal = Field(default_factory=ValueSignal)
-    extraction_method: str = "llm"
+    extraction_method: str = "unspecified"
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
 

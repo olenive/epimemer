@@ -109,7 +109,7 @@ class TestEpistemicNodes:
         assert t.status == NodeStatus.ACTIVE
         assert t.superseded_at is None
         assert t.value.novelty == 1.0
-        assert t.extraction_method == "llm"
+        assert t.extraction_method == "unspecified"
 
     def test_fact_defaults(self):
         f = Fact(content="Water boils at 100C", source_id="seg1")

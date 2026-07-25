@@ -168,7 +168,7 @@ epimemer/
   mcp/            — FastMCP server, tool implementations, config
   logging/        — Structured JSON logging
   visualization/ — Standalone viz hub, session client, and frontend
-tests/            — 283 tests (unit, pipeline, MCP, integration)
+tests/            — unit, pipeline, MCP, integration
 ```
 
 ## Visualization
@@ -213,9 +213,38 @@ never runs it and never signals that it exists. Run it via Docker:
 make test-integration   # spins up SurrealDB, waits for it, runs the suite, tears it down
 ```
 
+## Not yet built
+
+Designed but unimplemented, in rough priority order. Known bugs and deferred
+fixes live in [ISSUES.md](ISSUES.md) instead.
+
+- **Specialized timelines.** Only the base `Timeline`/`Timepoint` exists.
+  `PreciseTimeline` (datetime interval index for range and proximity queries),
+  `VagueTimeline` (labelled points with relative before/after ordering), and
+  `CyclicalTimeline` (templates like "every Monday", mapped to concrete
+  instances on link) are described in SUMMARY.md → *Timelines* → *Multiple
+  Implementations*. Each needs add/remove/reorder with stable UUIDs, proximity
+  search, overlap detection, and storage round-trip.
+- **Benchmarking.** No benchmark module. Structured logging gives per-tool
+  latency, but there is nothing measuring write throughput, vector-search
+  latency at N vectors, embedding throughput, reflect cost by graph size, or
+  end-to-end ingest/query/reflect.
+- **Notebooks.** `notebooks/00_foundation.py` (storage + vector search + type
+  diagrams), `07_timelines_metacontext.py`, and `08_orchestration.py` are
+  missing.
+- **LLM-guided and hybrid segmentation.** Both need an LLM; the server makes no
+  LLM calls of its own (SUMMARY.md → *Epimemer makes no LLM calls*), so this
+  means either delegating the split to the calling agent or re-introducing a
+  provider abstraction. Paragraph and semantic-similarity segmentation cover
+  the current use cases.
+- **Merge is Topic-only on the wired path.** `merge_nodes` is type-agnostic but
+  `apply_reflection merges` accepts Topics only; extending to Facts and
+  Inferences is undecided (Inferences are meant to let competing derivations
+  coexist).
+
 ## Documentation
 
 - [SUMMARY.md](SUMMARY.md) — Architectural design
-- [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) — Phased implementation plan
+- [ISSUES.md](ISSUES.md) — Known issues and deferred fixes
 - [INTEGRATION.md](INTEGRATION.md) — Claude Code integration guide
 - [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) — Development and debugging guide

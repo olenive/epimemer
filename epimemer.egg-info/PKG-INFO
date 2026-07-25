@@ -80,16 +80,16 @@ Higher-level interpretive derivations reasoned from facts and context. Explicitl
 
 ### Segmentation
 
-Text is broken into non-overlapping, variable-length segments aligned to semantic boundaries (not naive fixed-size chunks). Candidate strategies include:
-- **Semantic similarity drop** (TextTiling-style) — embed each sentence, cut where cosine similarity between adjacent sentences drops sharply. Cheap, no LLM needed.
-- **LLM-guided** — ask an LLM to identify topic boundaries. Most accurate, most expensive.
-- **Hybrid** — use embedding similarity to find candidate boundaries, then LLM to refine.
+Text is broken into non-overlapping, variable-length segments aligned to semantic boundaries (not naive fixed-size chunks). Strategies:
+- **Paragraph split** — implemented, the default.
+- **Semantic similarity drop** (TextTiling-style) — implemented. Embed each sentence, cut where cosine similarity between adjacent sentences drops sharply. Cheap, no LLM needed.
+- **LLM-guided** and **hybrid** (embedding boundaries, LLM refinement) — designed, not built. Both need an LLM, which the server does not call (see *Epimemer makes no LLM calls*), so either the split is delegated to the calling agent or a provider is re-introduced.
 
 ### Topic assignment
 
 The segment-to-topic relationship is **many-to-many**: a segment can be `about` multiple topics, and a topic can span multiple segments. Topic overlap is represented structurally in the graph via edges, not by duplicating text.
 
-**At ingestion** (write fast): per-segment LLM extraction produces one or more paragraph-level topic descriptions per segment. Each becomes a new topic node. No deduplication at this stage — if a topic is described slightly differently across segments, both versions are kept (lazy approach avoids premature commitment).
+**At ingestion** (write fast): the calling agent extracts one or more paragraph-level topic descriptions per segment and passes them to `store_decomposition`. Each becomes a new topic node. No deduplication at this stage — if a topic is described slightly differently across segments, both versions are kept (lazy approach avoids premature commitment).
 
 **At reflect** (organize slow): topic descriptions are embedded and clustered. Similar topics across segments are merged into unified topic nodes, with originals preserved via `merged_into` history edges. Value signals help identify merge candidates — topics with high mutual similarity and many shared segments surface naturally.
 
@@ -125,12 +125,20 @@ These are *separate from metacontexts*: metacontexts are epistemic frames that
 change retrieval scope; sources/tags/relations are structure that (for sources and
 attribution) is deliberately not expanded in default retrieval.
 
+### Epimemer makes no LLM calls
+Ingest is the two-step `segment` → `store_decomposition` flow: the server splits
+text and stores what it is given, and the **calling agent** does the
+topic/fact/inference extraction. An earlier design ran decomposition inside the
+server behind an LLM abstraction (Pydantic AI + mock), with a hybrid
+vector-first / LLM-fallback topic assignment; that path was removed. The server
+therefore has no API keys, no model choice, and no per-ingest LLM latency of its
+own, and anything requiring a judgement call is the agent's to make.
+
 ### Test-driven development with analysis and benchmarking
 The memory system's correctness is hard to assess during normal use, so development follows a test-driven approach combined with frequent analysis and benchmarking:
-- **Unit tests** with mocked LLM calls for each module
+- **Unit tests** for each module, with a mock embedding provider so no model is downloaded
 - **Marimo notebooks** for interactive step-through and visualization of each Petri net sub-module in action
 - **Benchmarking hooks** built into each module from the start — not necessarily measured upfront, but with placeholders and instrumentation so benchmarks can be added incrementally
-- See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the phased plan
 
 ## Node Value Signals
 
@@ -166,7 +174,7 @@ Topics (and other nodes) connect to their Timelines via `ASSOCIATED_TIMELINE` ed
 
 Different contexts need different backing structures:
 - **Precise timelines** (hundreds of dated events) — DataFrame-backed (Polars/Pandas) with a time interval index for efficient range queries and ordering
-- **Vague timelines** (ordered events without concrete dates) — list of labeled timepoints, ordering assisted by LLM when needed
+- **Vague timelines** (ordered events without concrete dates) — list of labeled timepoints, ordered by the calling agent when the labels alone are ambiguous
 - **Cyclical timelines** (recurring events) — represent templates like "weekly standup" or "annual review" separately from concrete instance timelines
 
 All implementations share the same typed interface (Timepoint with stable UUIDs, same edge patterns).
@@ -369,7 +377,7 @@ Petri nets are a natural fit because:
 - The type system on places creates natural interfaces between processing stages
 - **Type-based output routing** means a decomposition transition that returns a Topic, Fact, or Inference will automatically route each to the correct typed place — branching logic is expressed by the graph structure, not hidden in conditionals
 - **Transition guards** (paired with priorities) can implement the "write fast, organize slow" principle — e.g., the reflect transition only fires when enough unprocessed items accumulate
-- **Async transitions** align with the inherently async operations in this system (LLM calls, embedding APIs, database writes)
+- **Async transitions** align with the inherently async operations in this system (embedding models, database writes, hub event publishing)
 
 ### Development Strategy
 1. Decompose the system into discrete algorithms (segmentation, decomposition, embedding, graph construction, reflection, querying, etc.)
@@ -412,9 +420,9 @@ The `@petri_net` decorator supports this by tagging each strategy with metadata 
            description="TextTiling-style semantic similarity segmentation")
 def semantic_segmentation() -> ExecutableGraph: ...
 
-@petri_net(name="segmentation-llm", mode="manual",
-           description="LLM-guided topic boundary detection")
-def llm_segmentation() -> ExecutableGraph: ...
+@petri_net(name="segmentation-paragraph", mode="manual",
+           description="Paragraph-boundary segmentation")
+def paragraph_segmentation() -> ExecutableGraph: ...
 ```
 
 ### Boundary Guideline

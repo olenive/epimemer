@@ -19,8 +19,7 @@ Decisions already made with the user (do not re-litigate):
 1. Hub lifecycle: **both** auto-spawn (first MCP server spawns a detached hub if
    none is running) **and** a CLI entry point for explicit start/stop/status.
 2. Transport: **plain WebSocket** — MCP processes dial out to the hub. No
-   Redis/NATS (supersedes the sketch in IMPLEMENTATION_PLAN "Future —
-   Multi-agent Visualization").
+   Redis/NATS (supersedes an earlier sketch that assumed a message broker).
 3. UI: **session selector** dropdown; one session viewed at a time; most
    recently active is the default; disconnected sessions grey out.
 4. The embedded viz server is **fully replaced**. One code path. Hub down ⇒ no
@@ -311,9 +310,7 @@ graph": the tool names the session to select in the UI dropdown.
   browser-facing routes are shape-compatible).
 - ISSUES.md: #24 → resolved by this work (the failure class is structural now);
   note on #16 that viz reads now happen in the owning process behind a lock,
-  remaining hazard unchanged and still deferred. Update the
-  IMPLEMENTATION_PLAN "Future — Multi-agent Visualization" section to point
-  here.
+  remaining hazard unchanged and still deferred.
 - DEVELOPER_GUIDE / SUMMARY: hub lifecycle, `epimemer-viz` CLI, `viz_status`
   tool, env vars (`EPIMEMER_VIZ_HOST/PORT` now describe the hub;
   `EPIMEMER_VIZ_AUTOSPAWN` new; `EPIMEMER_VIZ_ENABLED` now means "publish to

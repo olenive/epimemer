@@ -75,8 +75,8 @@ graph at it unwarned.
 > *every* adapter operation to hold the "active DB stays put for the whole logical
 > operation" invariant — a broad change whose only real test is the Docker
 > integration suite. The trigger to pick this up: the server gains concurrent
-> clients (e.g. the multi-agent viz path in IMPLEMENTATION_PLAN, or an HTTP/SSE
-> transport). Keeping open as the reminder, as the analysis below intends.
+> clients (e.g. an HTTP/SSE transport). Keeping open as the reminder, as the
+> analysis below intends.
 >
 > **Update 2026-07-24 (viz hub):** viz snapshot reads now execute **in the owning
 > MCP process** (the hub RPCs to each session), serialized there by an

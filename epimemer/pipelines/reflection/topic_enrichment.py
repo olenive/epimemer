@@ -1,8 +1,8 @@
 """Topic enrichment for the reflection layer.
 
 Identifies topics whose associated material has grown substantially
-richer than their current description, and re-synthesizes the
-description via LLM to incorporate the new detail.
+richer than their current description, and gathers that material so the
+calling agent can re-synthesize the description through `apply_reflection`.
 """
 
 from epimemer.core.types import (
