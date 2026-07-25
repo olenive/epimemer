@@ -331,11 +331,13 @@ These limits are now **measured** rather than estimated — see [dev-docs/BENCHM
 
 | Operation | in-memory | SurrealDB (loopback) |
 |---|---|---|
-| `search` | ~140k nodes | **~5,100 nodes** |
-| `reflect` | ~5,000 nodes | ~3,200 nodes |
-| `list_sources` | ~11,000 nodes | ~29,000 nodes |
+| `search` | ~10M nodes | **~5,100 nodes** |
+| `reflect` | ~7,400 nodes | ~3,200 nodes |
+| `list_sources` | ~1M nodes | ~29,000 nodes |
 
-So: comfortable up to a few thousand nodes, and `search` over a network backend is the first thing to degrade — it is already ~1.4 s per call at 1,000 nodes. Ingest is flat and not a concern. Don't point a large persistent graph at this unwarned.
+So: comfortable up to a few thousand nodes, and `search` over a network backend is the first thing to degrade — it is already ~1.4 s per call at 1,000 nodes. In-memory, `reflect` is the only operation that fails at a reachable size. Ingest is flat and not a concern. Don't point a large persistent graph at this unwarned.
+
+The in-memory figures assume indexed edge lookups (`by_src` / `by_dst` in `storage/memory.py`); before those existed, `list_sources` was quadratic and failed at ~11,000 nodes. The SurrealDB column predates that change — the adapter is untouched by it, but its per-node enrichment shares the same call sites, so treat those numbers as an upper bound.
 
 ## Update Behaviours
 

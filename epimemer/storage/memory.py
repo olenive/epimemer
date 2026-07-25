@@ -88,11 +88,77 @@ class _GraphStore:
     segments: dict[str, Segment] = field(default_factory=dict)
     nodes: dict[str, EpistemicNode] = field(default_factory=dict)
     edges: dict[str, NodeEdge] = field(default_factory=dict)
+    # Endpoint indexes over `edges`: node id → the ids of edges at that endpoint.
+    # Derived state — `_put_edge` and `_drop_edge` are their only writers, so
+    # that no write path can update `edges` and forget these.
+    by_src: dict[str, set[str]] = field(default_factory=dict)
+    by_dst: dict[str, set[str]] = field(default_factory=dict)
     embeddings: dict[str, EmbeddingRecord] = field(default_factory=dict)
     timelines: dict[str, Timeline] = field(default_factory=dict)
     metacontexts: dict[str, Metacontext] = field(default_factory=dict)
     stores_since_reflect: int = 0
     reflect_threshold_override: int | None = None
+
+
+def _index_edge(g: _GraphStore, edge: NodeEdge) -> None:
+    g.by_src.setdefault(edge.src_id, set()).add(edge.id)
+    g.by_dst.setdefault(edge.dst_id, set()).add(edge.id)
+
+
+def _unindex_edge(g: _GraphStore, edge: NodeEdge) -> None:
+    """Remove an edge's index entries, using the endpoints it currently has.
+
+    Call this *before* re-pointing an edge in place; afterwards its old
+    endpoints are unrecoverable and the entries under them become orphans.
+    """
+    for index, key in ((g.by_src, edge.src_id), (g.by_dst, edge.dst_id)):
+        ids = index.get(key)
+        if ids is None:
+            continue
+        ids.discard(edge.id)
+        if not ids:
+            # Drop the key rather than leave an empty set: on a long-lived graph
+            # the index would otherwise accumulate an entry per node ever seen.
+            del index[key]
+
+
+def _put_edge(g: _GraphStore, edge: NodeEdge) -> str:
+    """Insert or replace an edge and keep the endpoint indexes exact.
+
+    Writes are upserts by id, so an edge stored again under different endpoints
+    has to be un-indexed from the old ones first.
+    """
+    previous = g.edges.get(edge.id)
+    if previous is not None:
+        _unindex_edge(g, previous)
+    g.edges[edge.id] = edge
+    _index_edge(g, edge)
+    return edge.id
+
+
+def _drop_edge(g: _GraphStore, edge_id: str) -> None:
+    edge = g.edges.pop(edge_id, None)
+    if edge is not None:
+        _unindex_edge(g, edge)
+
+
+def _edges_at(
+    g: _GraphStore,
+    index: dict[str, set[str]],
+    node_id: str,
+    edge_type: EdgeType | None,
+) -> list[NodeEdge]:
+    """Edges at one endpoint, from the index rather than a scan of every edge.
+
+    The type filter is applied after the index lookup: edges per node are few,
+    so narrowing them costs nothing, while indexing by (node, type) would double
+    the bookkeeping for no gain.
+    """
+    return _copy_all(
+        edge
+        for edge in (g.edges[edge_id] for edge_id in index.get(node_id, ()))
+        if edge_type is None or edge.type == edge_type
+    )
 
 
 _DEFAULT_DB = "default"
@@ -307,27 +373,20 @@ class InMemoryStorage:
     # --- Edges ---
 
     async def store_edge(self, edge: NodeEdge) -> str:
-        self._g.edges[edge.id] = _store(edge)
-        return edge.id
+        return _put_edge(self._g, _store(edge))
 
     async def delete_edge(self, edge_id: str) -> None:
-        self._g.edges.pop(edge_id, None)
+        _drop_edge(self._g, edge_id)
 
     async def get_edges_from(
         self, node_id: str, *, edge_type: EdgeType | None = None
     ) -> Sequence[NodeEdge]:
-        return _copy_all(
-            e for e in self._g.edges.values()
-            if e.src_id == node_id and (edge_type is None or e.type == edge_type)
-        )
+        return _edges_at(self._g, self._g.by_src, node_id, edge_type)
 
     async def get_edges_to(
         self, node_id: str, *, edge_type: EdgeType | None = None
     ) -> Sequence[NodeEdge]:
-        return _copy_all(
-            e for e in self._g.edges.values()
-            if e.dst_id == node_id and (edge_type is None or e.type == edge_type)
-        )
+        return _edges_at(self._g, self._g.by_dst, node_id, edge_type)
 
     async def count_edges_by_type(self) -> dict[EdgeType, int]:
         counts = {et: 0 for et in EdgeType}
@@ -356,11 +415,14 @@ class InMemoryStorage:
                 continue
             signature = (new_src, new_dst, edge.type.value)
             if new_src == new_dst or signature in seen_signatures:
-                del self._g.edges[edge.id]
+                _drop_edge(self._g, edge.id)
                 continue
             seen_signatures.add(signature)
+            # Un-index against the old endpoints while they are still readable.
+            _unindex_edge(self._g, edge)
             edge.src_id = new_src
             edge.dst_id = new_dst
+            _index_edge(self._g, edge)
 
     async def supersede_node_tx(
         self,
@@ -384,11 +446,11 @@ class InMemoryStorage:
             self._g.nodes[new_node.id] = _store(new_node)
             self._g.embeddings[new_embedding.id] = _store(new_embedding)
             self._migrate_edges_inplace({old_node.id}, new_node.id)
-            self._g.edges[lineage_edge.id] = _store(lineage_edge)
+            _put_edge(self._g, _store(lineage_edge))
             for edge in evidence_edges:
-                self._g.edges[edge.id] = _store(edge)
+                _put_edge(self._g, _store(edge))
             for edge_id in clear_edge_ids:
-                self._g.edges.pop(edge_id, None)
+                _drop_edge(self._g, edge_id)
         except Exception:
             self._graphs[self._database] = snapshot
             raise
@@ -411,11 +473,11 @@ class InMemoryStorage:
             node.status = NodeStatus.SUPERSEDED
             node.superseded_at = superseded_at
             # No new node, no embedding, no migration — the existing node stands.
-            self._g.edges[lineage_edge.id] = _store(lineage_edge)
+            _put_edge(self._g, _store(lineage_edge))
             for edge in evidence_edges:
-                self._g.edges[edge.id] = _store(edge)
+                _put_edge(self._g, _store(edge))
             for edge_id in clear_edge_ids:
-                self._g.edges.pop(edge_id, None)
+                _drop_edge(self._g, edge_id)
         except Exception:
             self._graphs[self._database] = snapshot
             raise
@@ -442,7 +504,7 @@ class InMemoryStorage:
                 node.status = NodeStatus.MERGED
                 node.superseded_at = merged_at
             for edge in lineage_edges:
-                self._g.edges[edge.id] = _store(edge)
+                _put_edge(self._g, _store(edge))
         except Exception:
             self._graphs[self._database] = snapshot
             raise
@@ -464,7 +526,7 @@ class InMemoryStorage:
                 self._g.nodes[node.id] = _store(node)
                 added_nodes.append(node.id)
             for edge in edges:
-                self._g.edges[edge.id] = _store(edge)
+                _put_edge(self._g, _store(edge))
                 added_edges.append(edge.id)
             for embedding in embeddings:
                 self._g.embeddings[embedding.id] = _store(embedding)
@@ -473,7 +535,7 @@ class InMemoryStorage:
             for node_id in added_nodes:
                 self._g.nodes.pop(node_id, None)
             for edge_id in added_edges:
-                self._g.edges.pop(edge_id, None)
+                _drop_edge(self._g, edge_id)
             for embedding_id in added_embeddings:
                 self._g.embeddings.pop(embedding_id, None)
             raise

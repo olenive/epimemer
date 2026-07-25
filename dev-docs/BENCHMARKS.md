@@ -191,13 +191,16 @@ before anything fails.
 ### `list_sources` is *linear* here, and quadratic in-memory
 
 The reversal is the useful clue. `InMemoryStorage.get_edges_from` /
-`get_edges_to` scan the entire edge set on every call (`storage/memory.py`);
-SurrealDB has an index. So the in-memory backend pays O(E) per edge lookup where
-SurrealDB pays one round-trip, and the in-memory quadratic curve is an artefact
+`get_edges_to` scanned the entire edge set on every call (`storage/memory.py`);
+SurrealDB has an index. So the in-memory backend paid O(E) per edge lookup where
+SurrealDB pays one round-trip, and the in-memory quadratic curve was an artefact
 of a missing index rather than of the N+1 call pattern.
 
-At 10k nodes the two cross over: in-memory `list_sources` (18 s) is already
+At 10k nodes the two crossed over: in-memory `list_sources` (18 s) was already
 worse than SurrealDB's projection (~9 s), despite having no network at all.
+
+That diagnosis was acted on as #32 — see the last section, where the in-memory
+curve becomes linear and this reversal disappears.
 
 ### 30 s crossings, both backends
 
@@ -209,9 +212,12 @@ worse than SurrealDB's projection (~9 s), despite having no network at all.
 
 ### Not yet measured
 
-- ~~**SurrealDB over `ws://`.**~~ Measured — see the last section.
-- **`reflect` at 10k, to completion.** Abandoned at 19 minutes on the pre-#31
-  code; post-fix it should be tractable and is worth one patient run.
+- ~~**SurrealDB over `ws://`.**~~ Measured — see below.
+- ~~**`reflect` at 10k, to completion.**~~ Measured in the #32 section: 125 s
+  before that change, 55 s after. Both past the tool timeout.
+- **The in-memory crossings in the table above are superseded** by the #32
+  section — `list_sources` ~11,000 and `search` ~140k were measured before edge
+  lookups were indexed.
 - **A remote (non-loopback) SurrealDB.** Every network number here is over
   localhost, so real deployments are worse by the RTT difference multiplied by
   the round-trip count.
@@ -219,3 +225,62 @@ worse than SurrealDB's projection (~9 s), despite having no network at all.
   inflates anything that scales with surviving candidate pairs.
 - **Real embeddings.** `--real-embeddings` adds the constant this deliberately
   omits, for an end-to-end figure.
+
+---
+
+## 2026-07-29 (after the #32 fix) — in-memory edge lookups are indexed
+
+`InMemoryStorage` now keeps two endpoint indexes beside `edges` (`by_src`,
+`by_dst`: node id → edge ids) instead of filtering the whole edge set on every
+`get_edges_from` / `get_edges_to`.
+
+Before and after were measured back-to-back on the same machine in the same
+session, `main` code vs. the change, mock embeddings, same corpus and seed.
+
+| Nodes | `list_sources` before → after | `search` p50 | `reflect` |
+|---|---|---|---|
+| 1,000 | 203 ms → **27 ms** (7.4×) | 21.0 → 3.6 ms | 1,204 → 559 ms |
+| 3,000 | 1,740 ms → **85 ms** (20.5×) | 63.7 → 8.9 ms | 10,554 → 4,402 ms |
+| 10,000 | 18,757 ms → **278 ms** (67.5×) | 214.4 → 27.9 ms | 125,180 → 54,579 ms |
+
+**`list_sources` is linear now.** Its fitted exponent over 1k → 10k falls from
+**1.97 to 1.01**; the 3× steps cost 3.09× and 3.28×. The 30 s crossing moves
+from ~11,000 nodes to **~1,000,000**, which is another way of saying this
+operation is no longer a scaling concern in-memory.
+
+### Two operations improved that were not the target
+
+- **`search` — 7.7× faster** and still linear. It was never the *shape* of the
+  problem in-memory (212 ms at 10k), but its per-result enrichment
+  (`frames_of`, `review_labels`, `_hierarchy_annotations`) does several edge
+  lookups per hit, each of which was a full scan. Its crossing goes from ~140k
+  to ~10M nodes.
+- **`reflect` — 2.3× faster**, exponent unchanged at 2.09. #31 removed the
+  *redundant* frame lookups; the ones that remain are now cheap individually.
+  The 30 s crossing moves from ~5,000 nodes to **~7,400**.
+
+This is the same pattern as #31: the fix was aimed at one operation and paid out
+across every caller that walks nodes and asks for their edges, because that
+access pattern is everywhere in this codebase.
+
+### `reflect` at 10,000 nodes, to completion
+
+Listed as missing in every earlier section, now run twice: **125,180 ms** before
+this change, **54,579 ms** after. Both are far past the 30 s tool timeout —
+`reflect` remains the operation that fails first in-memory, and its residual
+cost is the genuine O(F²) `_cosine_similarity` work described in the #31
+section, not redundancy.
+
+### What the index costs
+
+~102 bytes per edge (3.2 MiB at 32,500 edges), measured with
+`sys.getsizeof` over both index dicts and their sets. That is roughly what the
+`edges` dict's own table and keys cost, and small next to the `NodeEdge` objects
+being indexed. Nothing here trades meaningful memory for the speed.
+
+### Reproduction
+
+```bash
+uv run python scripts/bench.py --n 1000,3000   # ~1 min
+uv run python scripts/bench.py --n 10000       # ~2 min, dominated by reflect
+```
