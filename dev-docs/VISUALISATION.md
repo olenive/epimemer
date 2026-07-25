@@ -499,13 +499,18 @@ glyph is a genuine miniature of what clicking reveals:
 
 ## B.6 Tests / verification
 
-There is no frontend test harness; keep it that way for now but keep logic
-testable-by-inspection:
+> **Superseded 2026-07-28.** This section said "there is no frontend test
+> harness; keep it that way for now" — that was the state when the plan was
+> written, and the pure-function shape it prescribed is exactly what made the
+> harness cheap to add later. There is now a vitest suite (`make test-frontend`)
+> over `pipeline-store.ts`, `events.ts` and `api.ts`; the rendering modules are
+> still covered by `tsc` and the manual QA script below.
+
+Keep logic testable-by-inspection:
 
 - All state transitions live in `pipeline-store.ts` as pure functions
   (event in → new state out), separated from DOM code.
-- `npx tsc --noEmit` in `frontend/` must pass (add to the build docs if not
-  already implied by `npm run build`).
+- `make test-frontend` (type-check + vitest) must pass.
 - Manual QA script (run against a live server): call `segment` on a multi-
   paragraph text → segmentation tile animates, counter increments, ends
   "1 run"; call `store_decomposition` → edge_creation tile animates while

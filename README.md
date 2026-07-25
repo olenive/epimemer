@@ -114,7 +114,7 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_EMBEDDING_DIMENSION` | `384` | Embedding vector dimension |
 | `EPIMEMER_SEGMENTATION_STRATEGY` | `paragraph` | `paragraph` or `semantic` |
 | `EPIMEMER_SIMILARITY_THRESHOLD` | `0.75` | Similarity threshold for search |
-| `EPIMEMER_REFLECT_THRESHOLD` | `10` | Stores in a graph before suggesting reflection (counted per graph, in storage) |
+| `EPIMEMER_REFLECT_THRESHOLD` | `10` | Stores in a graph before suggesting reflection (counted per graph, in storage; the count and the threshold are both reported by `graph_stats`) |
 | `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
 | `EPIMEMER_VIZ_ENABLED` | `true` | Publish visualization events to the hub |
 | `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Visualization hub host |
@@ -211,6 +211,16 @@ never runs it and never signals that it exists. Run it via Docker:
 
 ```bash
 make test-integration   # spins up SurrealDB, waits for it, runs the suite, tears it down
+```
+
+The visualization frontend has its own suite (vitest, no browser or DOM
+required) covering the event-reduction logic — pipeline run state, the
+WebSocket event router, and the hub API client. Rendering modules are covered by
+`tsc` rather than unit tests. `make test` stays Python-only, so Node is not a
+prerequisite for backend work:
+
+```bash
+make test-frontend      # npm run typecheck && npm test, in the frontend directory
 ```
 
 ## Not yet built

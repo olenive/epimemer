@@ -5,8 +5,8 @@ Living issue tracker. **Last review: 2026-07-28.**
 Everything found so far is resolved except **14** and **16**, both deferred by
 design and described below. Resolved entries are **removed from this file** —
 their resolution lives in git history and the merged code. Issue numbers are
-stable IDs; the gaps (6–13, 15, 17–25, 27) are deleted-resolved items, not
-missing work. **26** and **28–30** below are planned work (features/
+stable IDs; the gaps (6–13, 15, 17–25, 27, 30) are deleted-resolved items, not
+missing work. **26**, **28** and **29** below are planned work (features/
 enhancements, prioritized 2026-07-28), written so another agent can pick each up
 cold. New findings continue from **31**.
 
@@ -183,7 +183,9 @@ no "snooze".
 `test_configure_reflection_persists_override` — set override, rebuild server
 context on the same storage, assert the effective threshold survives (mirrors
 the #25 guard test); `tests/visualization/`: counter event emitted on bump and
-reset.
+reset. Scope 3's frontend half now has a runner — put the badge's
+count/threshold reduction in a pure function and test it under
+`make test-frontend`, rather than only in the DOM code.
 
 ---
 
@@ -256,58 +258,6 @@ computed, `tools.py:54-55`).
 
 ---
 
-### Issue 30 — Frontend has no test runner — 🆕 PLANNED
-
-**Why.** `epimemer/visualization/frontend/src/` is 1,706 lines of TypeScript
-across 8 modules with **zero tests** — no runner is installed (`package.json`
-has no `test` script; nothing in the repo references vitest, jest or
-playwright). The Python side has a parity-parameterized suite and a `make test`
-target; the frontend has `tsc` type-checking only, which catches shape errors
-and nothing about behaviour. Two planned items (26.3's reflect badge, 29's
-reflect strip rendering) add to this pile, so the runner should land first.
-
-The event-reduction logic is the part that actually warrants tests, and it is
-already written in a testable shape — pure functions plus closure factories, no
-DOM:
-
-- `pipeline-store.ts` (175 lines): `emptyRunState`, `applyTokensUpdate`,
-  `applyPipelineEvent`, `markStale` are pure state transitions;
-  `createPipelineStore` is a factory over them.
-- `events.ts` (169 lines): `createEventRouter` — per-session subscription
-  routing and system-message dispatch.
-- `api.ts` (44 lines): three `fetch` wrappers, testable against a stubbed
-  `fetch`.
-
-`graph-panel.ts`, `pipeline-strip.ts`, `pipeline-detail.ts` and `main.ts` are
-DOM/Cytoscape rendering — **out of scope**; testing them needs jsdom and a
-Cytoscape harness for little return. Draw the line at the logic modules.
-
-**Scope.**
-
-1. Add `vitest` as a devDependency (it reuses the existing `vite.config.ts`, so
-   no second build config) and a `"test": "vitest run"` script. Node
-   environment, not jsdom — the in-scope modules never touch the DOM.
-2. `src/*.test.ts` beside each module under test, matching the codebase's
-   functional style.
-3. Wire it into `make test-frontend`, and note in the Makefile header that the
-   default `make test` stays Python-only so the frontend toolchain is not a
-   prerequisite for running the backend suite.
-
-**Tests.** This issue *is* the tests; the test-first rule does not apply.
-Minimum coverage to call it done:
-
-- `applyPipelineEvent` over a full started → transition fired/completed →
-  completed sequence, and the failure path (`pipeline_failed`), asserting
-  status and per-transition state at each step.
-- `applyPipelineEvent` on an out-of-order or unknown-transition event — assert
-  it does not throw and leaves state coherent, since the hub gives no ordering
-  guarantee across reconnects.
-- `applyTokensUpdate` and `markStale` as isolated transitions.
-- `createEventRouter`: an event for session A reaches only A's handler; system
-  messages reach the system handler; unsubscribing stops delivery.
-
----
-
 ## Older carry-overs (open, low priority)
 
 From the original live-graph walkthrough (issues 1–5, otherwise resolved or kept
@@ -325,9 +275,8 @@ it lives in README → *Not yet built*.
 
 | Order | Issue | Why |
 |---|---|---|
-| 1 | 30 | Frontend test runner — before 26.3 and 29 add more untested TypeScript |
-| 2 | 26.2, 26.3 | Threshold override (storage-protocol change, both backends) then the viz badge — the non-small half of 26 |
-| 3 | 28 | Benchmark harness — turns #14's trigger from a complaint into a number |
-| 4 | 29 | Reflect in the pipeline strip — closes the observability gap the strip redesign created |
+| 1 | 26.2, 26.3 | Threshold override (storage-protocol change, both backends) then the viz badge — the non-small half of 26 |
+| 2 | 28 | Benchmark harness — turns #14's trigger from a complaint into a number |
+| 3 | 29 | Reflect in the pipeline strip — closes the observability gap the strip redesign created |
 | deferred | 16 | Multi-graph concurrency — trigger: the server gains concurrent clients (viz-read leg closed by the hub; fix now scoped to `hub_client.py`) |
 | deferred | 14 | Full-scan / N+1 — trigger: a large persistent graph makes latency felt (measure with #28) |

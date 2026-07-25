@@ -7,6 +7,10 @@ __pycache__
 .ipynb_checkpoints/
 build
 
+# Node — installed from package-lock.json, never committed. The built bundle
+# under visualization/static IS committed; its inputs are not.
+node_modules/
+
 # Editor
 .vscode
 
