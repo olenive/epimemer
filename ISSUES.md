@@ -6,8 +6,8 @@ Everything found so far is resolved except **14** and **16**, both deferred by
 design and described below. Resolved entries are **removed from this file** —
 their resolution lives in git history and the merged code. Issue numbers are
 stable IDs; the gaps (6–13, 15, 17–25, 27, 30) are deleted-resolved items, not
-missing work. **26**, **28** and **29** are done and awaiting deletion on merge.
-New findings continue from **31**.
+missing work. **26**, **28** and **29** are done and awaiting deletion on merge;
+**31** is new and open. New findings continue from **32**.
 
 **Workflow (required for every fix):**
 
@@ -66,10 +66,27 @@ is entirely sequential.
 > "performance ceiling" and becomes a broken tool call somewhere below 10k
 > nodes.
 >
-> Still deferred, because no real graph here is near that size yet, but the
-> trigger is now concrete: **~10k nodes on `mem://`, materially fewer on
-> SurrealDB.** The SurrealDB run is the measurement still missing
-> (`EPIMEMER_BENCH_URL=ws://... make bench`) and would set the real number.
+> **Correction, same day — the trigger had already fired for `reflect`; now
+> fixed under #31, which moved its crossing from ~1,800 to ~5,000 nodes. The
+> table below is the pre-fix measurement, kept because it is what prompted the
+> split.**
+>
+> A follow-up run across 1,500–3,000 nodes (BENCHMARKS.md, second section)
+> showed `reflect` was **cubic**, not the ~N^2.3 the two-point estimate
+> suggested:
+>
+> | Nodes | 1,000 | 1,500 | 2,000 | 2,500 | 3,000 |
+> |---|---|---|---|---|---|
+> | `reflect` | 5.4 s | 16.4 s | **40.2 s** | 81.4 s | 138.4 s |
+>
+> That put the 30 s crossing at **~1,800 nodes** — roughly 100 documents of five
+> segments — so it was a live defect rather than a deferred ceiling, tracked and
+> fixed as **#31**. Post-fix it is quadratic and crosses at ~5,000.
+>
+> `list_sources` (quadratic, crossing ~11k) and `search` (linear) stay deferred
+> here — the earlier note above overstates `list_sources`' urgency relative to
+> `reflect`. The SurrealDB run is still missing
+> (`EPIMEMER_BENCH_URL=ws://... make bench`) and would lower both numbers.
 
 **Severity: performance (not a bug).** Fine in-memory; over websocket to
 SurrealDB each item is a round-trip:
@@ -138,13 +155,112 @@ while the server is single-client stdio; keep this issue open as the reminder.
 
 ---
 
+### Issue 31 — `reflect` was cubic and failed the tool timeout at ~1,800 nodes — ✅ RESOLVED
+
+> **✅ Resolved 2026-07-29.** `reflect` is now **quadratic** (fitted exponent
+> 2.03) and the 30 s crossing moved from ~1,800 nodes to **~5,000** — measured,
+> not extrapolated. 6.3× faster at 1,500 nodes, 13.1× at 3,000.
+>
+> **The profile redirected the fix.** None of the three directions below was the
+> problem. Profiling at 1,500 nodes put **88% of the wall clock** in
+> `same_frame` → `frames_of` → `get_edges_from`: 105k lookups to resolve the
+> frames of at most 1,500 distinct nodes, each a full edge scan. Candidate pairs
+> are quadratic in facts, the scan is linear in edges — that product was the
+> cubic term. `frame_resolver(storage)` in `pipelines/reflection/review.py`
+> caches per pass; `same_frame` and `review_labels` take it as an optional
+> argument, so the cache is created by the caller and cannot outlive the
+> operation. Applied in the contradiction loop and in `gather_pending_review`.
+>
+> Direction 1 below (gather material once) was real but worth only 4–5%.
+> Direction 2 (cache the material embedding) is **not built**: there is no
+> repeated embedding *within* a call, so it would be a cross-call cache with
+> invalidation to get wrong, and the profile does not justify it. Direction 3
+> stays #14's.
+>
+> What remains is `_cosine_similarity` in `detect_contradictions` — 280k pure-
+> Python pairwise comparisons, ~3 s of the remaining 5.8 s at 1,500 nodes. That
+> is genuine O(F²) work, not redundancy; vectorizing it would buy a constant
+> factor, not an exponent. Not raised as an issue — raise one if it bites.
+>
+> **Caveat on the trigger numbers, found while doing this** (recorded in
+> BENCHMARKS.md): the synthetic corpus draws from a 17-word vocabulary, so most
+> fact pairs clear the 0.80 contradiction threshold — 19% of unrelated pairs
+> under the mock, 49% under the real model on similarly templated text. Costs
+> that scale with *surviving candidate pairs* are therefore overstated against a
+> diverse real corpus. And `MockEmbeddingProvider` is capped at **32
+> dimensions** by its SHA-256 source regardless of the `dimension` requested,
+> while reporting the requested value — so earlier claims in BENCHMARKS.md of
+> "mocked at 384, the real model's width" were wrong and are corrected there.
+>
+> Guarded by `tests/pipelines/reflection/test_reflect_scaling.py` (12 tests,
+> both backends): frames resolved once per node not per pair, lookup growth
+> bounded when facts double, material gathered once per topic, and — the ones
+> that matter — disjoint frames still suppress a contradiction, same-frame
+> candidates still surface, and the result shape is unchanged. Timing lives in
+> `make bench`, never in the suite.
+
+**Severity: live defect, not a ceiling.** Split out of #14 on 2026-07-29 after
+the benchmark harness (#28) measured it. #14 stays deferred for `list_sources`
+and `search`; this is the part that is already broken.
+
+**Measured** (`dev-docs/BENCHMARKS.md`, `mem://`, mock embeddings, M4 Max — so a
+floor):
+
+| Nodes | 1,000 | 1,500 | 2,000 | 2,500 | 3,000 |
+|---|---|---|---|---|---|
+| `reflect` | 5.4 s | 16.4 s | **40.2 s** | 81.4 s | 138.4 s |
+
+Fitted exponents between adjacent points: 2.73, 3.12, 3.16, 2.91 — cubic.
+`EPIMEMER_TOOL_TIMEOUT_SECONDS` defaults to 30 s, so `reflect` **fails at
+~1,800 nodes** — about 100 documents of five segments. Raising the timeout
+turns a failure into a two-minute wait, which is not a fix.
+
+**Where the cost is** (structure identified; the exact cubic term wants a
+profile before anyone optimizes on faith):
+
+- `gather_associated_material(topic, storage)` is called **twice per topic** —
+  once in split detection, once in the enrichment scan (`mcp/tools.py`, phases
+  `split_detection` and `enrichment_scan`). Each call is two `get_edges_to`
+  lookups, and `InMemoryStorage.get_edges_to` **scans every edge in the graph**
+  (`storage/memory.py`). So the pair of loops is O(T·E) twice over.
+- Split detection also calls `embedding_provider.embed(material)` per topic, on
+  every reflect, re-embedding material that has not changed.
+- `find_similar_topic_pairs` is O(T²) vector comparisons and
+  `detect_contradictions` O(F²); `gather_pending_review` is per-node edge
+  queries over all active nodes.
+
+**Fix direction, cheapest first.** These are independent; the first two need no
+storage-protocol change and so are not blocked by #14 or #16:
+
+1. **Gather once.** Compute each topic's material a single time and hand it to
+   both phases. Halves the dominant term for free.
+2. **Cache the material embedding.** Split detection re-embeds every topic's
+   material on every call. Key by material content so an unchanged topic costs
+   nothing on the second reflect.
+3. **Batch the edge fetch** (this *is* #14's protocol work): one grouped query
+   for the SUPPORTS/ABSTRACTS edges of all topics, instead of two full scans per
+   topic.
+
+**Tests first.** `tests/pipelines/reflection/test_reflect_scaling.py` — assert
+`gather_associated_material` is called once per topic per reflect (a counting
+spy on the storage backend, both backends via the parameterized fixture), and
+that results are unchanged before and after. The timing itself belongs in
+`make bench`, not the suite: a wall-clock assertion in pytest is a flake
+waiting to happen.
+
+**Do not** net-ify `reflect` as part of this — that is a separate decision
+(#29's note), and the phase events added there already make the slow phase
+visible in the strip while this is unfixed.
+
+---
+
 ## Planned work — all resolved 2026-07-28/29, delete on merge
 
 Not bugs — the next tranche of product work, tracked here at the user's request
 so the workflow above (failing test first, scoped commits, delete on merge)
 applies to them too. **All of 26–30 are now done**; their entries are deleted as
-each merges to `main`, leaving only the two deferred issues above. New work
-continues from **31**.
+each merges to `main`. #28's harness then measured #14, which produced **31**
+above.
 
 ### Issue 26 — Auto-reflect counter: make it visible and user-controllable — ✅ RESOLVED
 
@@ -415,8 +531,9 @@ it lives in README → *Not yet built*.
 
 ## Recommended order
 
-Nothing active. The next piece of work is whichever of the two deferred issues
-trips its trigger first — or new findings from **31**.
+Nothing active. **31** is resolved (delete on merge); the two deferred issues
+stay deferred, with #14's `list_sources` now the next thing to cross the tool
+timeout, at ~11k nodes.
 
 | Order | Issue | Why |
 |---|---|---|

@@ -1168,7 +1168,11 @@ async def reflect(
     from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
     from epimemer.pipelines.reflection.topic_enrichment import gather_associated_material, _should_enrich
     from epimemer.pipelines.reflection.topic_splitting import should_split
-    from epimemer.pipelines.reflection.review import gather_pending_review, same_frame
+    from epimemer.pipelines.reflection.review import (
+        frame_resolver,
+        gather_pending_review,
+        same_frame,
+    )
     from epimemer.pipelines.reflection import value_decay
     from epimemer.visualization.phase_events import phase_pipeline
 
@@ -1198,7 +1202,7 @@ async def reflect(
     async def _splits():
         candidates = []
         for topic in await _active_topics():
-            material = await gather_associated_material(topic, storage)
+            material = await _material_for(topic)
             if len(material) < 4:
                 continue
             material_vectors = await embedding_provider.embed(material)
@@ -1214,7 +1218,7 @@ async def reflect(
     async def _enrichment():
         candidates = []
         for topic in await _active_topics():
-            material = await gather_associated_material(topic, storage)
+            material = await _material_for(topic)
             if _should_enrich(topic, material, material_ratio=3.0):
                 candidates.append({
                     "topic_id": topic.id,
@@ -1236,6 +1240,15 @@ async def reflect(
             topic_cache.extend(t for t in all_topics if isinstance(t, Topic))
         return topic_cache
 
+    # Both phases want the same material, and gathering it is two full edge
+    # scans per topic. Read once, scoped to this call so nothing goes stale.
+    material_cache: dict[str, list[str]] = {}
+
+    async def _material_for(topic: Topic) -> list[str]:
+        if topic.id not in material_cache:
+            material_cache[topic.id] = await gather_associated_material(topic, storage)
+        return material_cache[topic.id]
+
     # 5. Detect contradictions (safety net for anything ingest-time check missed).
     #    Similarity nominates; keep only same-frame pairs — a high-similarity pair
     #    across disjoint metacontext frames is coexistence, not a contradiction.
@@ -1245,9 +1258,13 @@ async def reflect(
             similarity_threshold=0.80,
             model_id=model_id,
         )
+        # One resolver for the whole pass: candidate pairs are quadratic in
+        # facts while the facts themselves are not, and an uncached frame lookup
+        # is a full edge scan.
+        resolve_frames = frame_resolver(storage)
         found = []
         for a, b, score in raw:
-            if not await same_frame(a.id, b.id, storage):
+            if not await same_frame(a.id, b.id, storage, resolve=resolve_frames):
                 continue
             found.append({
                 "fact_a": {"id": a.id, "content": a.content},

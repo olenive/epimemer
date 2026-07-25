@@ -4,6 +4,8 @@ Pure planning functions (reads only) that compute the edges / edge-ids a
 supersession or resolution must apply atomically.
 """
 
+from collections.abc import Awaitable, Callable
+
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
     EdgeType,
@@ -27,7 +29,10 @@ def _unique(ids: list[str]) -> list[str]:
 
 
 async def review_labels(
-    node: EpistemicNode, storage: StorageBackend
+    node: EpistemicNode,
+    storage: StorageBackend,
+    *,
+    resolve_frames: "FrameResolver | None" = None,
 ) -> dict[str, list[str]]:
     """Compute epistemic review labels for an active node (REVIEW_EPISTEMIC.md §4.1).
 
@@ -77,7 +82,7 @@ async def review_labels(
         other = await storage.get_node(other_id)
         if other is None or other.status != NodeStatus.ACTIVE:
             continue  # resolved (the partner was retired) — no longer contested
-        if await same_frame(node.id, other_id, storage):
+        if await same_frame(node.id, other_id, storage, resolve=resolve_frames):
             contesting.append(other_id)
     if contesting:
         labels["contested"] = _unique(contesting)
@@ -98,17 +103,49 @@ async def frames_of(node_id: str, storage: StorageBackend) -> set[str]:
     return frames or {BASE_METACONTEXT_ID}
 
 
-async def same_frame(a_id: str, b_id: str, storage: StorageBackend) -> bool:
+def frame_resolver(storage: StorageBackend) -> "FrameResolver":
+    """A `frames_of` that answers each node once.
+
+    Frame checks are made per *pair* — of contradiction candidates, of
+    contesting nodes — while the nodes involved are drawn from a much smaller
+    set, and each uncached lookup is a full edge scan. Without this, a pass that
+    compares P pairs over N nodes does O(P) scans instead of O(N).
+
+    The cache is created by the caller and lives for that one pass, so it cannot
+    serve a stale frame to a later operation.
+    """
+    cache: dict[str, set[str]] = {}
+
+    async def resolve(node_id: str) -> set[str]:
+        if node_id not in cache:
+            cache[node_id] = await frames_of(node_id, storage)
+        return cache[node_id]
+
+    return resolve
+
+
+FrameResolver = Callable[[str], Awaitable[set[str]]]
+
+
+async def same_frame(
+    a_id: str,
+    b_id: str,
+    storage: StorageBackend,
+    *,
+    resolve: "FrameResolver | None" = None,
+) -> bool:
     """Whether two nodes share at least one metacontext frame.
 
     Untagged nodes are both in the base frame, so two untagged nodes share a
     frame (a genuine same-frame relationship); nodes in disjoint frames (e.g. a
     fiction frame vs. base reality) do not. A frame overlap means an apparent
     contradiction is real; disjoint frames mean the two simply coexist.
+
+    Pass `resolve` (from `frame_resolver`) when checking many pairs, so repeated
+    nodes are not re-read once per pair.
     """
-    a_frames = await frames_of(a_id, storage)
-    b_frames = await frames_of(b_id, storage)
-    return bool(a_frames & b_frames)
+    lookup = resolve or (lambda node_id: frames_of(node_id, storage))
+    return bool(await lookup(a_id) & await lookup(b_id))
 
 
 async def gather_pending_review(
@@ -123,8 +160,9 @@ async def gather_pending_review(
     act.
     """
     flagged: list[tuple[EpistemicNode, dict[str, list[str]]]] = []
+    resolve_frames = frame_resolver(storage)
     for node in await storage.query_nodes():
-        labels = await review_labels(node, storage)
+        labels = await review_labels(node, storage, resolve_frames=resolve_frames)
         if labels:
             flagged.append((node, labels))
     return flagged
