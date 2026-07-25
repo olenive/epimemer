@@ -46,6 +46,18 @@ def validate_graph_name(name: str) -> str:
     return name
 
 
+def resolve_reflect_threshold(override: int | None, default: int) -> int:
+    """The one rule for which reflect threshold wins: a graph's override, else
+    the process default.
+
+    Trivial, and deliberately shared rather than inlined. It lives beside the
+    protocol methods that store the override because both the MCP tools and the
+    visualization instrumentation resolve it, and a second copy is how a badge
+    starts showing a number the ingest path does not judge against.
+    """
+    return default if override is None else override
+
+
 def drop_none_values(value):
     """Remove None-valued keys from dicts, recursively. Returns a new value.
 

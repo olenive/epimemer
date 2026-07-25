@@ -134,8 +134,21 @@ export interface GraphSwitched extends BaseEvent {
   new_graph: string;
 }
 
+/** How close a graph is to a suggested reflect. */
+export interface ReflectPressure {
+  count: number;
+  threshold: number;
+  suggested: boolean;
+}
+
+export interface ReflectCounterUpdated extends BaseEvent, ReflectPressure {
+  category: "graph";
+  event_type: "reflect_counter_updated";
+}
+
 export type GraphEvent =
   | NodeStored
+  | ReflectCounterUpdated
   | NodeStatusChanged
   | EdgeStored
   | EmbeddingStored

@@ -103,7 +103,9 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         logger = logging.getLogger(__name__)
         event_bus = create_event_bus()
         raw_storage = storage  # pre-instrumentation, for viz snapshot reads
-        storage = instrument_storage(storage, event_bus)
+        storage = instrument_storage(
+            storage, event_bus, default_threshold=config.reflect_threshold
+        )
 
         viz_session = SessionInfo(
             session_id=uuid4().hex,
@@ -125,7 +127,11 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
                 config.viz_autospawn,
             )
         stop_viz_client = await start_hub_client(
-            event_bus, raw_storage, viz_session, ingest_url
+            event_bus,
+            raw_storage,
+            viz_session,
+            ingest_url,
+            default_reflect_threshold=config.reflect_threshold,
         )
         logger.info(
             "Visualization: publishing to hub at %s (session %s)",

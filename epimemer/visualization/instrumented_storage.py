@@ -29,6 +29,7 @@ from epimemer.core.types import (
     Segment,
     Timeline,
 )
+from epimemer.storage.protocol import resolve_reflect_threshold
 from epimemer.visualization.event_bus import InProcessEventBus
 from epimemer.visualization.events import (
     DocumentStored,
@@ -37,6 +38,7 @@ from epimemer.visualization.events import (
     GraphSwitched,
     NodeStatusChanged,
     NodeStored,
+    ReflectCounterUpdated,
     SegmentStored,
     edge_to_view,
     node_to_view,
@@ -52,9 +54,15 @@ class InstrumentedStorage:
     All read methods delegate directly with no overhead.
     """
 
-    def __init__(self, inner: object, bus: InProcessEventBus) -> None:
+    def __init__(
+        self, inner: object, bus: InProcessEventBus, default_threshold: int
+    ) -> None:
         self._inner = inner
         self._bus = bus
+        # The process default the reflect counter is judged against. Stored here
+        # because a per-graph override can replace it but not supply it, and the
+        # wrapper has no access to server config otherwise.
+        self._default_threshold = default_threshold
 
     # --- Lifecycle (delegate) ---
 
@@ -379,20 +387,43 @@ class InstrumentedStorage:
 
     # --- Reflection bookkeeping (pass-through) ---
 
+    async def _publish_reflect_state(self, count: int) -> None:
+        """Announce reflection pressure for the active graph.
+
+        Emitted on every write that can move either number — both counter
+        mutations and a threshold change — because a viewer updated on stores
+        alone would show the right count against a stale denominator.
+        """
+        threshold = resolve_reflect_threshold(
+            await self._inner.get_reflect_threshold_override(),
+            self._default_threshold,
+        )
+        await self._bus.publish(ReflectCounterUpdated(
+            graph=self._inner.current_database,
+            count=count,
+            threshold=threshold,
+            suggested=count >= threshold,
+        ))
+
     async def get_reflect_counter(self) -> int:
         return await self._inner.get_reflect_counter()
 
     async def bump_reflect_counter(self) -> int:
-        return await self._inner.bump_reflect_counter()
+        count = await self._inner.bump_reflect_counter()
+        await self._publish_reflect_state(count)
+        return count
 
     async def reset_reflect_counter(self) -> int:
-        return await self._inner.reset_reflect_counter()
+        previous = await self._inner.reset_reflect_counter()
+        await self._publish_reflect_state(0)
+        return previous
 
     async def get_reflect_threshold_override(self) -> int | None:
         return await self._inner.get_reflect_threshold_override()
 
     async def set_reflect_threshold_override(self, threshold: int | None) -> None:
         await self._inner.set_reflect_threshold_override(threshold)
+        await self._publish_reflect_state(await self._inner.get_reflect_counter())
 
     # --- Multi-graph management (pass-through) ---
 
@@ -438,10 +469,17 @@ class InstrumentedStorage:
         return await self._inner.viz_list_edges(database)
 
 
-def instrument_storage(inner: object, bus: InProcessEventBus) -> InstrumentedStorage:
+def instrument_storage(
+    inner: object, bus: InProcessEventBus, default_threshold: int = 10
+) -> InstrumentedStorage:
     """Wrap a storage backend with event instrumentation.
 
     The returned object satisfies the StorageBackend protocol and
     publishes graph events on every write operation.
+
+    `default_threshold` is the server's configured reflect threshold, reported
+    on reflection-pressure events unless the graph overrides it. It defaults to
+    the same value as `ServerConfig.reflect_threshold` so tests and ad-hoc
+    wrapping need not supply it; the MCP lifespan passes the real config.
     """
-    return InstrumentedStorage(inner, bus)
+    return InstrumentedStorage(inner, bus, default_threshold)

@@ -44,12 +44,15 @@ async def start_hub_client(
     raw_storage: StorageBackend,
     info: SessionInfo,
     hub_url: str,
+    default_reflect_threshold: int = 10,
 ) -> Callable[[], Awaitable[None]]:
     """Start forwarding this session to the hub. Returns an async ``stop()``.
 
     ``raw_storage`` is the *pre-instrumentation* backend, used to answer RPC
     reads without emitting further events. ``hub_url`` is the ``/ingest``
     endpoint (e.g. ``ws://127.0.0.1:8765/ingest``).
+    ``default_reflect_threshold`` is the server default reported with the
+    active graph's reflection pressure, unless that graph overrides it.
     """
     stop_event = asyncio.Event()
     # RPC reads share one lock: two concurrent viz reads must not interleave the
@@ -77,7 +80,9 @@ async def start_hub_client(
         try:
             async with read_lock:
                 if req.method == "list_graphs":
-                    result = await list_graphs_result(raw_storage)
+                    result = await list_graphs_result(
+                        raw_storage, default_reflect_threshold
+                    )
                 elif req.method == "snapshot":
                     result = await assemble_snapshot(raw_storage, req.params["graph"])
                 else:

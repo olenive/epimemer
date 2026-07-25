@@ -294,7 +294,11 @@ graph": the tool names the session to select in the UI dropdown.
   - Selecting a session: send the extended subscribe message, re-fetch graphs,
     load snapshot — the existing `switchViewedGraph` flow, session-scoped.
   - Header shows `MCP: {active_graph} ({backend})` for the selected session
-    (this is ISSUES.md #24 fix #1's UI half).
+    (this is ISSUES.md #24 fix #1's UI half). *Added later:* a `reflect n/m`
+    badge beside it, amber once a reflect is due — seeded from the `reflect`
+    field on `/api/graphs` and then moved by `reflect_counter_updated` events.
+    Seeding matters: events alone would leave a browser that connected to a
+    graph already at 7 of 10 showing nothing until the next store.
   - `graph_switched` handler (main.ts:164-174): only act if the event's
     `session_id` matches the selected session.
 - `events.ts`: pass through `session_id`; drop events from non-selected

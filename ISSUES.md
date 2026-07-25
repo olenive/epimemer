@@ -121,7 +121,7 @@ applies to them too. Ordered by priority. Cross-references: **26** is the
 "visible counter" item in TODO.md; **28** is README → *Not yet built* →
 *Benchmarking*.
 
-### Issue 26 — Auto-reflect counter: make it visible and user-controllable — 🔨 SCOPE 3 REMAINS
+### Issue 26 — Auto-reflect counter: make it visible and user-controllable — ✅ RESOLVED
 
 > **✅ Scope 1 done 2026-07-28.** `graph_stats` now reports
 > `stores_since_reflect`, `reflect_threshold` and `reflect_suggested`, so
@@ -175,11 +175,43 @@ applies to them too. Ordered by priority. Cross-references: **26** is the
 > and — through a real MCP session — persistence across a reconnect plus
 > `store_decomposition` honouring the override.
 >
-> **Note for scope 3:** the badge should read `reflect_threshold` and
-> `reflect_threshold_overridden` from `graph_stats` rather than the env default,
-> or an overridden graph will render the wrong denominator.
+> **✅ Scope 3 done 2026-07-29.** A `reflect n/m` badge sits in the viewer's
+> header next to the MCP graph label, amber once a reflect is due.
 >
-> **Scope 3 below is still open.**
+> The event (`ReflectCounterUpdated`, fields `count` / `threshold` /
+> `suggested`) is emitted from the **instrumentation wrapper**, not from the two
+> call sites the plan named. The wrapper is where every other graph event comes
+> from, the counter mutations are storage mutations like any other, and one
+> emission helper there covers bump, reset *and* a threshold change — which the
+> two named sites would have missed, leaving the badge showing the right count
+> against a stale denominator after `configure_reflection`. The wrapper takes
+> the process default (`instrument_storage(..., default_threshold=...)`) since a
+> per-graph override can replace it but not supply it.
+>
+> `suggested` rides on the event rather than being recomputed in the browser, so
+> the inclusive boundary rule stays in one place and the badge cannot disagree
+> with what the agent is told at ingest.
+>
+> **Beyond the written scope:** `/api/graphs` now carries a `reflect` block for
+> the active graph, and the badge seeds from it on session select and on
+> `graph_switched`. Events alone describe only what happened *since the browser
+> connected* — a viewer opening onto a graph already at 7 of 10 would have shown
+> nothing until the next store, which is the exact "see pressure at a glance"
+> this issue exists for. Threading it through cost one parameter on
+> `start_hub_client`.
+>
+> The resolution rule moved to `storage/protocol.py` as
+> `resolve_reflect_threshold`, since both `mcp/tools.py` and the visualization
+> wrapper now need it and visualization importing `mcp.tools` would invert the
+> layering.
+>
+> Guarded by `tests/visualization/test_reflect_counter_events.py` (emission on
+> each mutation, override precedence, active graph, and pass-through: values
+> returned unchanged and reads emitting nothing),
+> `tests/visualization/test_viz_endpoints.py` (the seeded `reflect` block,
+> including an override), and `src/reflect-badge.test.ts` (10 tests: unknown vs
+> zero, seeding, threshold changes under a steady count, and the amber
+> transition).
 
 **Why.** Post-#25 the counter is persistent per-graph (storage protocol:
 `get_reflect_counter` / `bump_reflect_counter` / `reset_reflect_counter`;
@@ -195,7 +227,7 @@ no "snooze".
 
 1. ~~**`graph_stats` reports it.**~~ ✅ done — see the note above.
 2. ~~**Per-graph threshold override.**~~ ✅ done — see the note above.
-3. **Viz badge.** Emit a small `ReflectCounterUpdated` graph event
+3. ~~**Viz badge.**~~ ✅ done — see the note above. Original plan: emit a small `ReflectCounterUpdated` graph event
    (`visualization/events.py`; fields: `count`, `threshold`) after bump
    (`server.py:327`) and reset (reflect path, `server.py:637-648`). Frontend:
    a header badge `reflect 7/10` for the selected session, amber once
@@ -298,8 +330,7 @@ it lives in README → *Not yet built*.
 
 | Order | Issue | Why |
 |---|---|---|
-| 1 | 26.3 | Reflect badge in the viz header — the last piece of 26 |
-| 2 | 28 | Benchmark harness — turns #14's trigger from a complaint into a number |
-| 3 | 29 | Reflect in the pipeline strip — closes the observability gap the strip redesign created |
+| 1 | 28 | Benchmark harness — turns #14's trigger from a complaint into a number |
+| 2 | 29 | Reflect in the pipeline strip — closes the observability gap the strip redesign created |
 | deferred | 16 | Multi-graph concurrency — trigger: the server gains concurrent clients (viz-read leg closed by the hub; fix now scoped to `hub_client.py`) |
 | deferred | 14 | Full-scan / N+1 — trigger: a large persistent graph makes latency felt (measure with #28) |

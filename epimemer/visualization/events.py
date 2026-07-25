@@ -275,9 +275,23 @@ class GraphSwitched(Event):
     new_graph: str
 
 
+class ReflectCounterUpdated(Event):
+    """The graph's reflection pressure changed — its count or its threshold.
+
+    Carries `suggested` rather than leaving the viewer to compare, so the
+    boundary rule (inclusive) lives in one place and a badge cannot disagree
+    with what `store_decomposition` tells the agent.
+    """
+    category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
+    event_type: Literal["reflect_counter_updated"] = "reflect_counter_updated"
+    count: int
+    threshold: int
+    suggested: bool
+
+
 # --- Union of all concrete event types ---
 
-GraphEvent = NodeStored | NodeStatusChanged | EdgeStored | EmbeddingStored | DocumentStored | SegmentStored | GraphSwitched
+GraphEvent = NodeStored | NodeStatusChanged | EdgeStored | EmbeddingStored | DocumentStored | SegmentStored | GraphSwitched | ReflectCounterUpdated
 PipelineEvent = PipelineStarted | TransitionEnabled | TransitionFired | TransitionCompleted | TokensUpdated | PipelineCompleted | PipelineFailed
 
 AnyEvent = GraphEvent | PipelineEvent

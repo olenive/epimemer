@@ -97,6 +97,34 @@ class TestSnapshotAssembly:
         assert result["active_graph"] == "default"
         assert result["backend"] == "memory"
 
+    async def test_list_graphs_result_seeds_reflection_pressure(self, storage):
+        """A browser connecting mid-session needs the current numbers, not just
+        the events that happen after it arrives."""
+        await storage.bump_reflect_counter()
+        await storage.bump_reflect_counter()
+
+        result = await list_graphs_result(storage, default_reflect_threshold=10)
+
+        assert result["reflect"] == {
+            "count": 2,
+            "threshold": 10,
+            "suggested": False,
+        }
+
+    async def test_list_graphs_result_reports_a_due_reflect(self, storage):
+        await storage.bump_reflect_counter()
+
+        result = await list_graphs_result(storage, default_reflect_threshold=1)
+
+        assert result["reflect"]["suggested"] is True
+
+    async def test_list_graphs_result_honours_a_threshold_override(self, storage):
+        await storage.set_reflect_threshold_override(3)
+
+        result = await list_graphs_result(storage, default_reflect_threshold=10)
+
+        assert result["reflect"]["threshold"] == 3
+
     async def test_assemble_snapshot_returns_node_and_edge_views(self, storage):
         t = Topic(content="Test topic", source_id="s1")
         await storage.store_node(t)

@@ -6,12 +6,14 @@
  * state or stored data.
  */
 
-import type { EdgeView, NodeView, SessionInfo } from "./types";
+import type { EdgeView, NodeView, ReflectPressure, SessionInfo } from "./types";
 
 export interface GraphListResponse {
   graphs: string[];
   active_graph: string;
   backend: string;
+  /** Pressure on the active graph. Absent from a hub that predates the badge. */
+  reflect?: ReflectPressure;
 }
 
 export interface SnapshotResponse {

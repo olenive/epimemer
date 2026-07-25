@@ -32,7 +32,11 @@ from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.types import ResponseMeta
 from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment
-from epimemer.storage.protocol import StorageBackend, validate_graph_name
+from epimemer.storage.protocol import (
+    StorageBackend,
+    resolve_reflect_threshold,
+    validate_graph_name,
+)
 
 from petritype.core.executable_graph_components import ExecutableGraph
 from petritype.runtime import RunContext, Runner
@@ -1849,13 +1853,6 @@ def _similar_names(target: str, candidates: list[str], max_results: int = 3) -> 
     ]
     scored.sort(key=lambda x: x[1], reverse=True)
     return [name for name, score in scored[:max_results] if score > 0.4]
-
-
-def resolve_reflect_threshold(override: int | None, default: int) -> int:
-    """The one rule for which threshold wins. Trivial, and deliberately shared:
-    a second copy is how `graph_stats` starts reporting a number the ingest path
-    does not judge against."""
-    return default if override is None else override
 
 
 async def effective_reflect_threshold(

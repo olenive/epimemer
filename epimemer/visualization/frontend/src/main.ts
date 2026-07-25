@@ -13,7 +13,21 @@ import { fetchGraphs, fetchSessions, fetchSnapshot } from "./api";
 import { createEventRouter } from "./events";
 import { initGraphPanel } from "./graph-panel";
 import { initPipelineStrip } from "./pipeline-strip";
-import type { AnyEvent, GraphSwitched, SessionInfo, SystemMessage } from "./types";
+import {
+  applyReflectCounterEvent,
+  reflectBadgeClass,
+  reflectBadgeLabel,
+  reflectBadgeTitle,
+  seedReflectState,
+  unknownReflectState,
+} from "./reflect-badge";
+import type {
+  AnyEvent,
+  GraphSwitched,
+  ReflectCounterUpdated,
+  SessionInfo,
+  SystemMessage,
+} from "./types";
 
 // --- DOM element lookup ---
 
@@ -40,6 +54,7 @@ const sessionSelector = $<HTMLSelectElement>("session-selector");
 const mcpActiveLabel = $("mcp-active-graph");
 const graphSelector = $<HTMLSelectElement>("graph-selector");
 const viewModeBadge = $("view-mode-badge");
+const reflectBadge = $("reflect-badge");
 const btnRefresh = $("btn-refresh");
 
 const router = createEventRouter(wsUrl, (connected) => {
@@ -110,6 +125,14 @@ const updateModeBadge = (): void => {
   viewModeBadge.className = isLive
     ? "px-1.5 py-0.5 rounded text-xs bg-green-900/50 text-green-400"
     : "px-1.5 py-0.5 rounded text-xs bg-gray-700 text-gray-400";
+};
+
+let reflectState = unknownReflectState();
+
+const renderReflectBadge = (): void => {
+  reflectBadge.textContent = reflectBadgeLabel(reflectState);
+  reflectBadge.className = reflectBadgeClass(reflectState);
+  reflectBadge.title = reflectBadgeTitle(reflectState);
 };
 
 const updateMcpLabel = (): void => {
@@ -201,10 +224,14 @@ const selectSession = async (sessionId: string): Promise<void> => {
   selectedSession = sessionId;
   sessionSelector.value = sessionId;
   try {
-    const { graphs, active_graph, backend } = await fetchGraphs(sessionId);
+    const { graphs, active_graph, backend, reflect } = await fetchGraphs(sessionId);
     mcpActiveGraph = active_graph;
     mcpBackend = backend;
     updateMcpLabel();
+    // Seed from the listing so the badge is right on arrival; events move it
+    // from here.
+    reflectState = seedReflectState(reflect);
+    renderReflectBadge();
     populateGraphSelector(graphs, active_graph);
     await switchViewedGraph(active_graph);
   } catch (err) {
@@ -283,6 +310,14 @@ router.onSystemMessage((msg: SystemMessage) => {
   }
 });
 
+// ReflectCounterUpdated — the viewed session's pressure moved.
+router.subscribe("reflect_counter_updated", (event: AnyEvent) => {
+  const e = event as ReflectCounterUpdated;
+  if (e.session_id && e.session_id !== selectedSession) return;
+  reflectState = applyReflectCounterEvent(reflectState, e);
+  renderReflectBadge();
+});
+
 // GraphSwitched — MCP changed its active graph. Only for the viewed session.
 router.subscribe("graph_switched", (event: AnyEvent) => {
   const e = event as GraphSwitched;
@@ -293,7 +328,13 @@ router.subscribe("graph_switched", (event: AnyEvent) => {
 
   if (!selectedSession) return;
   fetchGraphs(selectedSession)
-    .then(({ graphs }) => populateGraphSelector(graphs, viewedGraph))
+    .then(({ graphs, reflect }) => {
+      populateGraphSelector(graphs, viewedGraph);
+      // The counter belongs to the graph, so a switch changes it — re-seed
+      // rather than leaving the old graph's number on screen.
+      reflectState = seedReflectState(reflect);
+      renderReflectBadge();
+    })
     .catch(console.error);
 });
 
