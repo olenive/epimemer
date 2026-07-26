@@ -686,3 +686,23 @@ class InMemoryStorage:
         if graph is None:
             return []
         return list(graph.edges.values())
+
+    async def viz_list_timelines(
+        self,
+        database: str,
+    ) -> Sequence[Timeline]:
+        graph = self._graphs.get(database)
+        if graph is None:
+            return []
+        return _copy_all(graph.timelines.values())
+
+    async def viz_list_metacontexts(
+        self,
+        database: str,
+    ) -> Sequence[Metacontext]:
+        graph = self._graphs.get(database)
+        if graph is None:
+            return []
+        return _copy_all(
+            mc for mc in graph.metacontexts.values() if mc.status == NodeStatus.ACTIVE
+        )

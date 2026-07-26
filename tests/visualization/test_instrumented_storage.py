@@ -2,11 +2,19 @@
 
 import pytest
 
-from epimemer.core.types import NodeStatus, Topic
+from datetime import datetime, timezone
+
+from epimemer.core.types import NodeStatus, Timeline, Topic
+from epimemer.pipelines.timeline.functions import add_timepoint
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization import instrumented_storage as instrumented_storage_mod
 from epimemer.visualization.event_bus import create_event_bus
-from epimemer.visualization.events import GraphSwitched, NodeStored, node_to_view
+from epimemer.visualization.events import (
+    GraphSwitched,
+    NodeStored,
+    TimelineStored,
+    node_to_view,
+)
 from epimemer.visualization.instrumented_storage import instrument_storage
 
 
@@ -153,6 +161,75 @@ class TestMultiGraphPassThrough:
         nodes = await wrapped.viz_list_nodes("other")
         assert len(nodes) == 1
         assert wrapped.current_database == "default"
+
+
+class TestTimelineEvents:
+    """A timeline panel fed only by the load-time snapshot goes stale the moment
+    an agent adds a timepoint, so every timeline write must announce itself."""
+
+    async def test_store_timeline_emits_the_whole_timeline(self, bus):
+        inner = InMemoryStorage()
+        wrapped = instrument_storage(inner, bus)
+        received: list[TimelineStored] = []
+        bus.subscribe(TimelineStored, handler=lambda e: received.append(e))
+
+        timeline, _ = add_timepoint(
+            Timeline(name="History"),
+            start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            label="the beginning",
+        )
+        await wrapped.store_timeline(timeline)
+
+        assert len(received) == 1
+        view = received[0].timeline
+        assert view.name == "History"
+        assert received[0].graph == "default"
+        assert [tp.label for tp in view.timepoints] == ["the beginning"]
+
+    async def test_appending_a_timepoint_emits_the_new_state(self, bus):
+        """Adding a timepoint re-stores the timeline, and the event must carry
+        the timeline as it now is — a viewer applying the event replaces its
+        copy rather than merging, so a stale payload would lose the new point."""
+        inner = InMemoryStorage()
+        wrapped = instrument_storage(inner, bus)
+        received: list[TimelineStored] = []
+        bus.subscribe(TimelineStored, handler=lambda e: received.append(e))
+
+        timeline = Timeline(name="History")
+        await wrapped.store_timeline(timeline)
+        extended, _ = add_timepoint(
+            timeline, start=datetime(2024, 6, 1, tzinfo=timezone.utc)
+        )
+        await wrapped.store_timeline(extended)
+
+        assert [len(e.timeline.timepoints) for e in received] == [0, 1]
+        assert received[1].timeline.timeline_id == timeline.id
+
+    async def test_vague_timepoints_survive_conversion_without_a_start(self, bus):
+        """A label-only timepoint must reach the frontend with start unset. If
+        conversion invented a date the panel would plot it on the axis as fact."""
+        inner = InMemoryStorage()
+        wrapped = instrument_storage(inner, bus)
+        received: list[TimelineStored] = []
+        bus.subscribe(TimelineStored, handler=lambda e: received.append(e))
+
+        timeline, _ = add_timepoint(
+            Timeline(name="History"), label="during the Renaissance"
+        )
+        await wrapped.store_timeline(timeline)
+
+        [point] = received[0].timeline.timepoints
+        assert point.start is None
+        assert point.end is None
+        assert point.label == "during the Renaissance"
+
+    async def test_viz_list_timelines_passes_through(self, bus):
+        inner = InMemoryStorage()
+        wrapped = instrument_storage(inner, bus)
+        await wrapped.store_timeline(Timeline(name="History"))
+
+        listed = await wrapped.viz_list_timelines("default")
+        assert [t.name for t in listed] == ["History"]
 
 
 class TestAggregatePassThrough:

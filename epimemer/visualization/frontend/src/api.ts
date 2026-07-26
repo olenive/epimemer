@@ -6,7 +6,14 @@
  * state or stored data.
  */
 
-import type { EdgeView, NodeView, ReflectPressure, SessionInfo } from "./types";
+import type {
+  EdgeView,
+  MetacontextView,
+  NodeView,
+  ReflectPressure,
+  SessionInfo,
+  TimelineView,
+} from "./types";
 
 export interface GraphListResponse {
   graphs: string[];
@@ -20,6 +27,9 @@ export interface SnapshotResponse {
   graph: string;
   nodes: NodeView[];
   edges: EdgeView[];
+  /** Both absent from a hub that predates the timeline panel. */
+  timelines?: TimelineView[];
+  metacontexts?: MetacontextView[];
 }
 
 export const fetchSessions = async (): Promise<SessionInfo[]> => {

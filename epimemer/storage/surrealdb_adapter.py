@@ -375,6 +375,39 @@ class SurrealDBStorage:
         finally:
             await self.db.use(self._namespace, original_db)
 
+    async def viz_list_timelines(
+        self,
+        database: str,
+    ) -> Sequence[Timeline]:
+        """List all timelines in a graph for visualization snapshot.
+
+        Timepoints come back embedded, as they are stored — a timeline is one
+        record, not a parent with child rows.
+        """
+        original_db = self._database
+        try:
+            await self.db.use(self._namespace, database)
+            rows = await self.db.query("SELECT * FROM timeline")
+            return [Timeline.model_validate(_clean_record(r)) for r in rows]
+        finally:
+            await self.db.use(self._namespace, original_db)
+
+    async def viz_list_metacontexts(
+        self,
+        database: str,
+    ) -> Sequence[Metacontext]:
+        """List all active metacontexts in a graph for visualization."""
+        original_db = self._database
+        try:
+            await self.db.use(self._namespace, database)
+            rows = await self.db.query(
+                "SELECT * FROM metacontext WHERE status = $status",
+                {"status": NodeStatus.ACTIVE.value},
+            )
+            return [Metacontext.model_validate(_clean_record(r)) for r in rows]
+        finally:
+            await self.db.use(self._namespace, original_db)
+
     async def close(self) -> None:
         if self._db is not None:
             await self._db.close()

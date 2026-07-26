@@ -20,7 +20,10 @@ from epimemer.core.types import (
     EpistemicNode,
     Fact,
     Inference,
+    Metacontext,
     NodeEdge,
+    Timeline,
+    Timepoint,
     Topic,
 )
 
@@ -58,6 +61,42 @@ class EdgeView(BaseModel):
     dst_id: str
     edge_type: str
     weight: float = 1.0
+    created_at: datetime
+    graph: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TimepointView(BaseModel):
+    """A point or interval on a timeline.
+
+    `start` is absent for a vague timepoint ("during the Renaissance"), which
+    the frontend must place off the metric axis rather than guess a date for.
+    """
+    timepoint_id: str
+    start: datetime | None = None
+    end: datetime | None = None
+    label: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class MetacontextView(BaseModel):
+    """An epistemic frame, so the dashboard can name one rather than show a uuid."""
+    metacontext_id: str
+    content: str
+    description: str = ""
+    graph: str
+
+
+class TimelineView(BaseModel):
+    """Unified timeline representation for events and snapshots.
+
+    Timepoints travel embedded, matching how they are stored — a timeline is
+    one record, and its points are not graph nodes.
+    """
+    timeline_id: str
+    name: str
+    description: str = ""
+    timepoints: list[TimepointView] = Field(default_factory=list)
     created_at: datetime
     graph: str
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -111,6 +150,39 @@ def edge_to_view(edge: NodeEdge, graph: str) -> EdgeView:
     )
 
 
+def metacontext_to_view(mc: Metacontext, graph: str) -> MetacontextView:
+    """Convert a storage Metacontext to a MetacontextView for the frontend."""
+    return MetacontextView(
+        metacontext_id=mc.id,
+        content=mc.content,
+        description=mc.description,
+        graph=graph,
+    )
+
+
+def _timepoint_to_view(timepoint: Timepoint) -> TimepointView:
+    return TimepointView(
+        timepoint_id=timepoint.id,
+        start=timepoint.start,
+        end=timepoint.end,
+        label=timepoint.label,
+        metadata=timepoint.metadata,
+    )
+
+
+def timeline_to_view(timeline: Timeline, graph: str) -> TimelineView:
+    """Convert a storage Timeline to a TimelineView for the frontend."""
+    return TimelineView(
+        timeline_id=timeline.id,
+        name=timeline.name,
+        description=timeline.description,
+        timepoints=[_timepoint_to_view(tp) for tp in timeline.timepoints],
+        created_at=timeline.created_at,
+        graph=graph,
+        metadata=timeline.metadata,
+    )
+
+
 # --- Base ---
 
 
@@ -151,6 +223,21 @@ class EdgeStored(Event):
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
     event_type: Literal["edge_stored"] = "edge_stored"
     edge: EdgeView
+
+
+class TimelineStored(Event):
+    """A timeline was created or updated.
+
+    One event carrying the whole timeline rather than separate created/appended
+    events: `store_timeline` is an upsert and the only write path — adding a
+    timepoint re-stores the timeline — so telling creation from extension would
+    mean reading before every write to learn something the viewer can see for
+    itself. Timelines are small; sending the current state is cheaper and cannot
+    drift from storage.
+    """
+    category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
+    event_type: Literal["timeline_stored"] = "timeline_stored"
+    timeline: TimelineView
 
 
 class EmbeddingStored(Event):
@@ -291,7 +378,7 @@ class ReflectCounterUpdated(Event):
 
 # --- Union of all concrete event types ---
 
-GraphEvent = NodeStored | NodeStatusChanged | EdgeStored | EmbeddingStored | DocumentStored | SegmentStored | GraphSwitched | ReflectCounterUpdated
+GraphEvent = NodeStored | NodeStatusChanged | EdgeStored | TimelineStored | EmbeddingStored | DocumentStored | SegmentStored | GraphSwitched | ReflectCounterUpdated
 PipelineEvent = PipelineStarted | TransitionEnabled | TransitionFired | TransitionCompleted | TokensUpdated | PipelineCompleted | PipelineFailed
 
 AnyEvent = GraphEvent | PipelineEvent

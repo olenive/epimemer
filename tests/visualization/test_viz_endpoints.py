@@ -6,6 +6,8 @@ assembly that used to live in the embedded server's `/api/snapshot` and
 here directly, against storage.
 """
 
+from datetime import datetime, timezone
+
 import pytest
 
 from epimemer.core.types import (
@@ -14,8 +16,10 @@ from epimemer.core.types import (
     NodeEdge,
     EdgeType,
     NodeStatus,
+    Timeline,
     Topic,
 )
+from epimemer.pipelines.timeline.functions import add_timepoint
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization.events import node_to_view, edge_to_view
 from epimemer.visualization.snapshot import assemble_snapshot, list_graphs_result
@@ -140,10 +144,35 @@ class TestSnapshotAssembly:
         edge = data["edges"][0]
         assert "edge_id" in edge and "edge_type" in edge
 
+    async def test_assemble_snapshot_includes_timelines_with_timepoints(self, storage):
+        timeline, _ = add_timepoint(
+            Timeline(name="History"),
+            start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            label="the beginning",
+        )
+        await storage.store_timeline(timeline)
+
+        data = await assemble_snapshot(storage, "default")
+
+        [view] = data["timelines"]
+        assert view["name"] == "History"
+        assert view["timepoints"][0]["label"] == "the beginning"
+        # Serialized for the wire, so datetimes must already be strings.
+        assert isinstance(view["timepoints"][0]["start"], str)
+
+    async def test_assemble_snapshot_keeps_vague_timepoints_undated(self, storage):
+        timeline, _ = add_timepoint(Timeline(name="History"), label="long ago")
+        await storage.store_timeline(timeline)
+
+        data = await assemble_snapshot(storage, "default")
+
+        assert data["timelines"][0]["timepoints"][0]["start"] is None
+
     async def test_assemble_snapshot_empty_graph(self, storage):
         data = await assemble_snapshot(storage, "default")
         assert data["nodes"] == []
         assert data["edges"] == []
+        assert data["timelines"] == []
 
     async def test_assemble_snapshot_does_not_switch_active_graph(self, storage):
         await storage.switch_database("other")

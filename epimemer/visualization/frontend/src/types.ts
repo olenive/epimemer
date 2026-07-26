@@ -79,6 +79,38 @@ export interface EdgeView {
   metadata: Record<string, unknown>;
 }
 
+/**
+ * A point or interval on a timeline.
+ *
+ * `start` is null for a vague timepoint ("during the Renaissance"). Such a
+ * point has no coordinate and must never be placed on the metric axis.
+ */
+export interface TimepointView {
+  timepoint_id: string;
+  start: string | null;
+  end: string | null;
+  label: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface TimelineView {
+  timeline_id: string;
+  name: string;
+  description: string;
+  timepoints: TimepointView[];
+  created_at: string;
+  graph: string;
+  metadata: Record<string, unknown>;
+}
+
+/** An epistemic frame, so a filter can name one rather than show a uuid. */
+export interface MetacontextView {
+  metacontext_id: string;
+  content: string;
+  description: string;
+  graph: string;
+}
+
 // --- Graph events ---
 
 export interface NodeStored extends BaseEvent {
@@ -99,6 +131,18 @@ export interface EdgeStored extends BaseEvent {
   category: "graph";
   event_type: "edge_stored";
   edge: EdgeView;
+}
+
+/**
+ * A timeline was created or extended.
+ *
+ * Carries the whole timeline, not a delta: adding a timepoint re-stores the
+ * timeline, so a receiver replaces its copy rather than merging.
+ */
+export interface TimelineStored extends BaseEvent {
+  category: "graph";
+  event_type: "timeline_stored";
+  timeline: TimelineView;
 }
 
 export interface EmbeddingStored extends BaseEvent {
@@ -151,6 +195,7 @@ export type GraphEvent =
   | ReflectCounterUpdated
   | NodeStatusChanged
   | EdgeStored
+  | TimelineStored
   | EmbeddingStored
   | DocumentStored
   | SegmentStored

@@ -147,6 +147,8 @@ export interface GraphPanelHandle {
   cleanup: () => void;
   clearGraph: () => void;
   loadSnapshot: (nodes: NodeView[], edges: EdgeView[]) => void;
+  /** Mark exactly these nodes; an empty list clears the highlight. */
+  highlightNodes: (nodeIds: readonly string[]) => void;
 }
 
 /**
@@ -334,12 +336,24 @@ export const initGraphPanel = (
     router.subscribe("edge_stored", handleEvent),
   ];
 
+  /**
+   * Highlight a set of nodes selected elsewhere — currently a timepoint on the
+   * timeline panel, whose linked nodes these are. Replaces any previous
+   * highlight rather than adding to it, so selection reads as one thing.
+   */
+  const highlightNodes = (nodeIds: readonly string[]): void => {
+    state.cy.nodes().removeClass("highlighted");
+    for (const id of nodeIds) {
+      state.cy.getElementById(id).addClass("highlighted");
+    }
+  };
+
   const cleanup = (): void => {
     unsubs.forEach((u) => u());
     state.cy.destroy();
   };
 
-  return { cleanup, clearGraph, loadSnapshot };
+  return { cleanup, clearGraph, loadSnapshot, highlightNodes };
 };
 
 // --- Layout ---

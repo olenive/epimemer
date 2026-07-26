@@ -1,14 +1,21 @@
 # Visualization: Hub Architecture & Pipeline Strip Redesign
 
 Implementation plan, written 2026-07-24, **both parts now built and merged** —
-kept as the design record. Issue numbers below (#24, #16) are as they stood when
-it was written; #24 has since been resolved and removed from ISSUES.md.
+kept as the design record.
+
+The failure this was written to kill: a stale MCP process holds the fixed viz
+port, so the browser shows *its* empty in-memory store while the session the
+user is actually driving fails to bind and serves no visualization at all —
+silently, with the bind error going only to a log file nobody reads. It was
+Issue 24 in ISSUES.md at the time; that entry is resolved and deleted, so this
+document is now its description. (#16, referenced below, is still open.)
 
 Two independent work packages:
 
 - **Part A — Multi-client viz hub.** Replace the embedded per-process viz server
-  with a standalone hub that MCP server processes publish to. Resolves the
-  port-contention failure class (ISSUES.md #24) and unblocks the multi-client
+  with a standalone hub that MCP server processes publish to. Removes the
+  port-contention failure class structurally — nothing but the hub ever binds
+  the port, so there is no race to lose — and unblocks the multi-client
   scenario (#16's trigger).
 - **Part B — Pipeline strip.** Knowledge graph takes most of the viewport; a
   narrow bottom strip shows one small glyph per Petri net, lighting up as data
@@ -36,14 +43,24 @@ over classes). Type annotations without over-complication.
 
 ---
 
-## Current state (what you're changing)
+## Starting point — the architecture this replaced (historical)
+
+> **None of this is current.** It is the *before* picture the plan below was
+> written against, kept so the design decisions have something to argue with.
+> `ws_server.py`, `pipeline-panel.ts` and `split-pane.ts` no longer exist; the
+> MCP process no longer binds a port. For what the code looks like now, read
+> Parts A and B — they were followed closely and their specs still match
+> (`protocol.py`, the hub routes, `viz_status`, the frontend file plan were all
+> checked against the code on 2026-07-29). Line numbers throughout this document
+> are plan-time coordinates and have drifted.
 
 - `epimemer/mcp/server.py:86-141` — lifespan conditionally instruments storage
   (`instrument_storage`) with an `InProcessEventBus`, builds the viz Starlette
   app (`create_app`), and runs uvicorn **inside the MCP process** on
   `config.viz_port` (default 8765, `epimemer/mcp/config.py:40-42`,
   env `EPIMEMER_VIZ_*`). Bind failure is swallowed into a log-file warning
-  (`_run_viz`, server.py:112-121) — this is Issue 24.
+  (`_run_viz`, server.py:112-121) — the silent-wrong-viz bug described at the
+  top.
 - `epimemer/visualization/ws_server.py` — Starlette app: `/` + static,
   `/ws` (browser WebSocket, per-connection seq numbers, graph subscription
   filtering), `/api/graphs`, `/api/snapshot?graph=X` (reads via
@@ -138,7 +155,7 @@ Notes:
 ## A.2 Hub server
 
 New module `epimemer/visualization/hub.py`. Reuses the relay logic from
-`ws_server.py` (move/adapt; `ws_server.py` is deleted at the end — see A.7).
+`ws_server.py` (move/adapt; `ws_server.py` is deleted at the end — see A.8).
 
 Starlette app, functional construction (`create_hub_app() -> Starlette`):
 
@@ -232,8 +249,10 @@ Behaviour:
 Per the project's explicit-protocol preference (no `hasattr` probing): add
 `backend_name: str` as a property to the `StorageBackend` protocol and both
 implementations (`"memory"` for `InMemoryStorage`, `"surrealdb"` for
-`SurrealDBStorage`). Every backend implements it. This also directly implements
-fix #1 of ISSUES.md #24.
+`SurrealDBStorage`). Every backend implements it. This is also what lets the UI
+name the backend it is showing — the cheapest half of the silent-wrong-viz fix,
+since `MCP: default (in-memory)` reads instantly as "wrong server" where
+`MCP: default` does not.
 
 ## A.5 MCP server changes (`epimemer/mcp/server.py`)
 
@@ -294,7 +313,8 @@ graph": the tool names the session to select in the UI dropdown.
   - Selecting a session: send the extended subscribe message, re-fetch graphs,
     load snapshot — the existing `switchViewedGraph` flow, session-scoped.
   - Header shows `MCP: {active_graph} ({backend})` for the selected session
-    (this is ISSUES.md #24 fix #1's UI half). *Added later:* a `reflect n/m`
+    — the UI half of the backend label (A.4): it is what makes an empty
+    in-memory store legible as the wrong one. *Added later:* a `reflect n/m`
     badge beside it, amber once a reflect is due — seeded from the `reflect`
     field on `/api/graphs` and then moved by `reflect_counter_updated` events.
     Seeding matters: events alone would leave a browser that connected to a
@@ -316,8 +336,9 @@ graph": the tool names the session to select in the UI dropdown.
   `tests/visualization/test_ws_server.py` / `test_ws_relay.py` /
   `test_viz_endpoints.py` to target the hub app (most cases port 1:1 — the
   browser-facing routes are shape-compatible).
-- ISSUES.md: #24 → resolved by this work (the failure class is structural now);
-  note on #16 that viz reads now happen in the owning process behind a lock,
+- ISSUES.md: the port-contention issue → resolved by this work (the failure
+  class is structural now, so the entry can be deleted per the workflow); note
+  on #16 that viz reads now happen in the owning process behind a lock,
   remaining hazard unchanged and still deferred.
 - DEVELOPER_GUIDE / SUMMARY: hub lifecycle, `epimemer-viz` CLI, `viz_status`
   tool, env vars (`EPIMEMER_VIZ_HOST/PORT` now describe the hub;

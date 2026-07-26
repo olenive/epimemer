@@ -305,6 +305,74 @@ class TestTimelineToolsPersist:
         assert returned_ids == {first["timepoint_id"], second["timepoint_id"]}
 
 
+class TestVizListTimelines:
+    """`viz_list_timelines` reads a named graph without disturbing the active
+    connection — the hub asks one session for any of its graphs, so a read that
+    switched the connection would leave the MCP session pointed elsewhere."""
+
+    async def test_returns_timelines_with_their_timepoints(self, store):
+        timeline, _ = add_timepoint(
+            Timeline(name="History"), start=datetime(2024, 1, 1, tzinfo=timezone.utc)
+        )
+        await store.store_timeline(timeline)
+
+        listed = await store.viz_list_timelines(store.current_database)
+
+        assert [t.name for t in listed] == ["History"]
+        assert len(listed[0].timepoints) == 1
+
+    async def test_reads_another_graph_without_switching_the_active_one(self, store):
+        # The backends disagree on what their starting graph is called
+        # ("default" vs "main"), so ask rather than assume.
+        home = store.current_database
+        await store.store_timeline(Timeline(name="At home"))
+        await store.switch_database("other")
+        await store.store_timeline(Timeline(name="In other"))
+        await store.switch_database(home)
+
+        listed = await store.viz_list_timelines("other")
+
+        assert [t.name for t in listed] == ["In other"]
+        assert store.current_database == home
+
+    async def test_unknown_graph_is_empty_not_an_error(self, store):
+        assert list(await store.viz_list_timelines("no-such-graph")) == []
+
+
+class TestVizListMetacontexts:
+    """Metacontexts are named in the dashboard's frame filter, so the viz read
+    must reach them the same way it reaches timelines — by graph, without
+    moving the active connection."""
+
+    async def test_returns_active_metacontexts(self, store):
+        await store.store_metacontext(Metacontext(content="Real historical events"))
+
+        listed = await store.viz_list_metacontexts(store.current_database)
+
+        assert [mc.content for mc in listed] == ["Real historical events"]
+
+    async def test_omits_superseded_metacontexts(self, store):
+        await store.store_metacontext(
+            Metacontext(content="Retired frame", status=NodeStatus.SUPERSEDED)
+        )
+
+        assert list(await store.viz_list_metacontexts(store.current_database)) == []
+
+    async def test_reads_another_graph_without_switching_the_active_one(self, store):
+        home = store.current_database
+        await store.switch_database("other")
+        await store.store_metacontext(Metacontext(content="Elsewhere"))
+        await store.switch_database(home)
+
+        listed = await store.viz_list_metacontexts("other")
+
+        assert [mc.content for mc in listed] == ["Elsewhere"]
+        assert store.current_database == home
+
+    async def test_unknown_graph_is_empty_not_an_error(self, store):
+        assert list(await store.viz_list_metacontexts("no-such-graph")) == []
+
+
 class TestBackendName:
     """Every backend exposes a stable, human-readable `backend_name` label,
     surfaced to the visualization UI so a viewer can tell an in-memory store

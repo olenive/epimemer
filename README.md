@@ -189,6 +189,30 @@ graph.
   in the selector. The durable answer to "I opened the visualizer but can't find my
   graph".
 
+### Panels
+
+- **Knowledge graph** — nodes and edges, force or hierarchy layout.
+- **Pipelines** — Petri net execution, live.
+- **Timeline** — marks on a left-to-right axis, one row per timeline, with hover
+  detail, filters and per-row zoom. Two modes:
+  - *record time*, the default: when the graph learned each node, drawn from
+    `created_at` out to `last_reinforced`. Always populated.
+  - *content time*: `Timeline`/`Timepoint` data — when the described events
+    happened. Populated only when an agent calls `create_timeline`,
+    `add_timepoint` and `create_timelink`.
+
+  Where a row's data has a gap far larger than its local spacing — a graph idle
+  for days between bursts, or a timeline jumping centuries — the axis **breaks**
+  and collapses the gap to a labelled marker, so dense clusters stay legible.
+  Zooming into a cluster dissolves the break. Vague timepoints ("during the
+  Renaissance") have no coordinate and sit in an *undated* lane below the axis
+  rather than being given an invented date.
+
+  Filter by linked node type, status, epistemic frame, date range, or free text.
+  Text supports `field:value` (`source:BBC`, `mc:fiction`, `type:fact`) and
+  quoted phrases; an unrecognised prefix is treated as literal text, so `12:30`
+  searches for a time rather than a field called `12`.
+
 **Migrating from the embedded server:** old MCP processes running pre-hub code may
 still hold `:8765` with the old embedded server. Run `pkill -f epimemer.mcp.server`
 once (or `uv run epimemer-viz --status` to see what holds the port), then reconnect.
@@ -213,9 +237,11 @@ never runs it and never signals that it exists. Run it via Docker:
 make test-integration   # spins up SurrealDB, waits for it, runs the suite, tears it down
 ```
 
-The visualization frontend has its own suite (vitest, no browser or DOM
-required) covering the event-reduction logic — pipeline run state, the
-WebSocket event router, and the hub API client. Rendering modules are covered by
+The visualization frontend has its own suite (vitest) covering the
+event-reduction logic — pipeline run state, the WebSocket event router, the hub
+API client — and the timeline panel's scale, break heuristic, filters and mark
+construction, which are pure and DOM-free. The timeline panel's own rendering
+and interaction are covered under jsdom; the cytoscape graph panel is covered by
 `tsc` rather than unit tests. `make test` stays Python-only, so Node is not a
 prerequisite for backend work:
 

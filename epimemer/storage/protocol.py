@@ -524,3 +524,27 @@ class StorageBackend(Protocol):
         Reads from the specified database without switching the active connection.
         """
         ...
+
+    async def viz_list_timelines(
+        self,
+        database: str,
+    ) -> Sequence[Timeline]:
+        """List all timelines in a graph, with their timepoints embedded.
+
+        Distinct from `query_timelines`, which reads the *active* graph: the hub
+        asks a single session for any of the graphs it can see, so this must
+        name its target and leave the active connection where it found it.
+        """
+        ...
+
+    async def viz_list_metacontexts(
+        self,
+        database: str,
+    ) -> Sequence[Metacontext]:
+        """List all active metacontexts in a graph, for visualization.
+
+        The dashboard filters by epistemic frame, and `has_metacontext` edges
+        carry only ids — without the metacontexts themselves a viewer could
+        offer no better than a list of UUIDs.
+        """
+        ...

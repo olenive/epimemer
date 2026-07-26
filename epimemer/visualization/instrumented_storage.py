@@ -40,8 +40,10 @@ from epimemer.visualization.events import (
     NodeStored,
     ReflectCounterUpdated,
     SegmentStored,
+    TimelineStored,
     edge_to_view,
     node_to_view,
+    timeline_to_view,
 )
 
 logger = logging.getLogger(__name__)
@@ -359,16 +361,27 @@ class InstrumentedStorage:
             query_vector, model_id, k=k, node_type=node_type,
         )
 
-    # --- Timelines (pass-through) ---
+    # --- Timelines ---
 
     async def store_timeline(self, timeline: Timeline) -> str:
-        return await self._inner.store_timeline(timeline)
+        timeline_id = await self._inner.store_timeline(timeline)
+        await self._bus.publish(TimelineStored(
+            graph=self._inner.current_database,
+            timeline=timeline_to_view(timeline, self._inner.current_database),
+        ))
+        return timeline_id
 
     async def get_timeline(self, timeline_id: str) -> Timeline | None:
         return await self._inner.get_timeline(timeline_id)
 
     async def query_timelines(self) -> Sequence[Timeline]:
         return await self._inner.query_timelines()
+
+    async def viz_list_timelines(self, database: str) -> Sequence[Timeline]:
+        return await self._inner.viz_list_timelines(database)
+
+    async def viz_list_metacontexts(self, database: str) -> Sequence[Metacontext]:
+        return await self._inner.viz_list_metacontexts(database)
 
     # --- Metacontexts (pass-through) ---
 

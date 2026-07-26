@@ -32,6 +32,7 @@
           </div>
         </div>
         <div class="flex gap-2">
+          <button id="btn-toggle-timeline" class="px-2 py-1 text-xs rounded bg-gray-800 hover:bg-gray-700 text-gray-400 transition-colors" title="Toggle timeline panel">Timeline</button>
           <button id="btn-toggle-pipeline" class="px-2 py-1 text-xs rounded bg-gray-800 hover:bg-gray-700 text-gray-400 transition-colors" title="Toggle pipeline strip">Pipelines</button>
           <span id="ws-status" class="px-2 py-1 text-xs rounded bg-red-900/50 text-red-400">Disconnected</span>
         </div>
@@ -75,6 +76,42 @@
           <button id="btn-close-detail" class="text-xs text-gray-600 hover:text-gray-400">&times;</button>
         </div>
         <pre id="detail-content" class="px-3 py-2 text-xs text-gray-400 whitespace-pre-wrap"></pre>
+      </div>
+
+      <!-- Timeline panel -->
+      <div id="timeline-panel-wrap" class="hidden shrink-0 border-t border-gray-800 bg-gray-900">
+        <div class="flex items-center gap-2 flex-wrap px-3 py-1 border-b border-gray-800/50">
+          <span class="text-xs font-medium text-gray-500 uppercase tracking-wider">Timeline</span>
+          <select id="timeline-mode" class="text-xs bg-gray-800 text-gray-400 rounded px-1.5 py-0.5 border border-gray-700" title="Which time the axis measures">
+            <option value="record">Record time — when the graph learned it</option>
+            <option value="content">Content time — when it happened</option>
+          </select>
+          <select id="timeline-type" class="text-xs bg-gray-800 text-gray-400 rounded px-1.5 py-0.5 border border-gray-700" title="Linked node type">
+            <option value="all">All types</option>
+            <option value="topic">Topics</option>
+            <option value="fact">Facts</option>
+            <option value="inference">Inferences</option>
+          </select>
+          <select id="timeline-status" class="text-xs bg-gray-800 text-gray-400 rounded px-1.5 py-0.5 border border-gray-700" title="Linked node status">
+            <option value="all">Any status</option>
+            <option value="active">Active</option>
+            <option value="superseded">Superseded</option>
+            <option value="merged">Merged</option>
+          </select>
+          <select id="timeline-metacontext" class="text-xs bg-gray-800 text-gray-400 rounded px-1.5 py-0.5 border border-gray-700" title="Epistemic frame">
+            <option value="all">All frames</option>
+          </select>
+          <input id="timeline-query" type="search" placeholder="text, or source:BBC" class="text-xs bg-gray-800 text-gray-300 rounded px-1.5 py-0.5 border border-gray-700 w-48" title="Free text. Prefix with type:, status:, mc:, source:, label: or content: to target one field; quote a phrase." />
+          <div class="flex items-center gap-1 text-xs text-gray-500">
+            <input id="timeline-range-start" type="date" class="text-xs bg-gray-800 text-gray-400 rounded px-1 py-0.5 border border-gray-700" title="Show marks from" />
+            <span>→</span>
+            <input id="timeline-range-end" type="date" class="text-xs bg-gray-800 text-gray-400 rounded px-1 py-0.5 border border-gray-700" title="Show marks until" />
+          </div>
+          <button id="timeline-reset-zoom" class="px-1.5 py-0.5 text-xs rounded bg-gray-800 hover:bg-gray-700 text-gray-400 transition-colors" title="Reset zoom on every row">Reset zoom</button>
+          <span class="text-[10px] text-gray-600">scroll to zoom · drag to pan · shift-drag to select · ⌥ for all rows</span>
+        </div>
+        <div id="timeline-rows" class="overflow-y-auto" style="max-height: 15rem"></div>
+        <div id="timeline-empty" class="hidden px-3 py-4 text-xs text-gray-600"></div>
       </div>
 
       <!-- Pipeline strip (ambient awareness) -->

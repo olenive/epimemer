@@ -11,17 +11,34 @@ tests can call them directly.
 """
 
 from epimemer.storage.protocol import StorageBackend, resolve_reflect_threshold
-from epimemer.visualization.events import edge_to_view, node_to_view
+from epimemer.visualization.events import (
+    edge_to_view,
+    metacontext_to_view,
+    node_to_view,
+    timeline_to_view,
+)
 
 
 async def assemble_snapshot(storage: StorageBackend, graph: str) -> dict:
-    """Full node+edge snapshot of `graph`, shaped for the frontend."""
+    """Full snapshot of `graph` — nodes, edges, timelines, metacontexts.
+
+    Metacontexts ride along because `has_metacontext` edges carry only ids, and
+    a frame the viewer cannot name is a frame it cannot offer as a filter.
+    """
     nodes = await storage.viz_list_nodes(graph)
     edges = await storage.viz_list_edges(graph)
+    timelines = await storage.viz_list_timelines(graph)
+    metacontexts = await storage.viz_list_metacontexts(graph)
     return {
         "graph": graph,
         "nodes": [node_to_view(n, graph).model_dump(mode="json") for n in nodes],
         "edges": [edge_to_view(e, graph).model_dump(mode="json") for e in edges],
+        "timelines": [
+            timeline_to_view(t, graph).model_dump(mode="json") for t in timelines
+        ],
+        "metacontexts": [
+            metacontext_to_view(m, graph).model_dump(mode="json") for m in metacontexts
+        ],
     }
 
 

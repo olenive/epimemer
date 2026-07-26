@@ -13,6 +13,8 @@ import { fetchGraphs, fetchSessions, fetchSnapshot } from "./api";
 import { createEventRouter } from "./events";
 import { initGraphPanel } from "./graph-panel";
 import { initPipelineStrip } from "./pipeline-strip";
+import { initTimelinePanel } from "./timeline-panel";
+import type { TimelineMark } from "./timeline-model";
 import {
   applyReflectCounterEvent,
   reflectBadgeClass,
@@ -117,6 +119,37 @@ const graphPanel = initGraphPanel(
   },
 );
 
+// --- Timeline panel ---
+
+const timelineWrap = $("timeline-panel-wrap");
+
+const timelinePanel = initTimelinePanel(
+  router,
+  {
+    rows: $("timeline-rows"),
+    empty: $("timeline-empty"),
+    modeSelect: $<HTMLSelectElement>("timeline-mode"),
+    typeSelect: $<HTMLSelectElement>("timeline-type"),
+    statusSelect: $<HTMLSelectElement>("timeline-status"),
+    metacontextSelect: $<HTMLSelectElement>("timeline-metacontext"),
+    queryInput: $<HTMLInputElement>("timeline-query"),
+    rangeStart: $<HTMLInputElement>("timeline-range-start"),
+    rangeEnd: $<HTMLInputElement>("timeline-range-end"),
+    resetButton: $("timeline-reset-zoom"),
+  },
+  (mark: TimelineMark | null) => {
+    // A timepoint is not a graph node, so the bridge is the nodes linked to it.
+    graphPanel.highlightNodes(mark?.nodeIds ?? []);
+    if (mark) showDetail(mark.id, mark.detail, "timepoint");
+  },
+);
+
+$("btn-toggle-timeline").addEventListener("click", () => {
+  timelineWrap.classList.toggle("hidden");
+  // Rows are laid out from their measured width, which is zero while hidden.
+  if (!timelineWrap.classList.contains("hidden")) timelinePanel.refresh();
+});
+
 // --- Mode badge ---
 
 const updateModeBadge = (): void => {
@@ -152,6 +185,12 @@ const loadGraphSnapshot = async (graph: string): Promise<void> => {
     // pipeline history (run counts, glyphs). The strip is cleared only on a
     // session switch.
     graphPanel.loadSnapshot(snapshot.nodes, snapshot.edges);
+    timelinePanel.loadSnapshot({
+      nodes: snapshot.nodes,
+      edges: snapshot.edges,
+      timelines: snapshot.timelines,
+      metacontexts: snapshot.metacontexts,
+    });
     btnRefresh.classList.remove("ring-2", "ring-amber-500");
   } catch (err) {
     console.error("Failed to load snapshot:", err);

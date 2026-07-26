@@ -8,6 +8,12 @@ numbers that say when.
 Re-run and append a new section rather than editing an old one — a baseline is
 only useful next to the one before it.
 
+**This file is the durable record for the performance work.** Issues 28, 31, 32
+and 33 have been resolved and their ISSUES.md entries deleted per that file's
+workflow, so the sections below — with their issue numbers kept as historical
+labels, findable in `git log` — are where the measurements, the method and the
+reasoning now live. Each is written to be read without its issue.
+
 ## How to read these
 
 - **Embeddings are mocked.** Model inference is a constant per text that would
