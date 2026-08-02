@@ -1,12 +1,14 @@
 # Epimemer — Known Issues
 
-Living issue tracker. **Last review: 2026-07-29.**
+Living issue tracker. **Last review: 2026-08-07.**
 
 Everything found so far is resolved except **14** and **16**, both deferred by
-design, and **34**, which is scoped and actionable. Resolved entries are
-**removed from this file** — their resolution lives in git history and the
-merged code. Issue numbers are stable IDs; the gaps (6–13, 15, 17–33) are
-deleted-resolved items, not missing work. New findings continue from **35**.
+design, and **34–38**, which are scoped and actionable (35–37 are the value
+model & graph hygiene plan, designed in `dev-docs/REVIEW_EPISTEMIC.md` §12;
+38 is a small standalone fix). Resolved entries are **removed from this file**
+— their resolution lives in git history and the merged code. Issue numbers are
+stable IDs; the gaps (6–13, 15, 17–33) are deleted-resolved items, not missing
+work. New findings continue from **39**.
 
 The performance work (issues 28, 31, 32 and 33) is the exception worth knowing
 about: its entries are gone, but the measurements, the method and the reasoning
@@ -186,7 +188,8 @@ project so far has overturned the cause its issue predicted.
 - **`MockEmbeddingProvider` is capped at 32 dimensions** by its SHA-256 source
   regardless of the `dimension` argument, while its `dimension` property reports
   what was asked for. Vector-scan cost is understated relative to a real 384-dim
-  model. (That inconsistency is arguably its own small bug.)
+  model. (Now filed as **#38**; fixing it invalidates these baselines — see the
+  re-bench note there.)
 - **All network numbers are loopback.** A remote SurrealDB is worse by the RTT
   difference times the round-trip count.
 
@@ -275,6 +278,178 @@ that is the first commit, not an afterthought.
 
 ---
 
+### Issue 35 — Value signal is write-only: decay has no upward counterpart and nothing reads the result
+
+**Status.** Open. Design: `dev-docs/REVIEW_EPISTEMIC.md` §12 (path 1 of §12.2).
+Independent of #36/#37; smallest of the three — do it first.
+
+**Symptom.** `ValueSignal` (`epimemer/core/types.py:147`) has exactly three
+writers: creation defaults, `apply_decay`
+(`pipelines/reflection/value_decay.py`, down only, uniform), and topic-merge.
+`last_reinforced` is never updated after creation and nothing reinforces
+`relevance`, so relevance is a monotone function of age — it cannot distinguish
+"old and load-bearing" from "old and dead", which is exactly the distinction
+the #37 archival sweep needs.
+
+**Fix.** In `search` (`epimemer/mcp/tools.py`), after the result set is chosen:
+for each returned node set `last_reinforced = now` and
+`relevance += boost × (1 − relevance)`, then write back with `store_node`.
+Asymptotic form so repeated hits saturate instead of pinning at 1.0. `boost`
+comes from `ServerConfig` (suggest `reinforcement_boost: float = 0.2`; `0.0`
+disables). Tool-layer change, so both backends get it through the ordinary
+write path — no protocol change.
+
+**Scope guard.** Reinforcement must **not** feed back into search ranking —
+results stay ordered by similarity only. The feedback loop (retrieved → higher
+relevance → retrieved) is benign at archival granularity but compounds if
+wired into ranking. See `dev-docs/REVIEW_EPISTEMIC.md` §12.4.
+
+**Cost note.** Adds k writes per search on top of the ~120 ms SurrealDB
+enrichment floor documented in #14. After landing, re-run
+`EPIMEMER_BENCH_URL=… make bench BENCH_N=1000,2000` and update
+`dev-docs/BENCHMARKS.md` if search p50 moves materially.
+
+**Failing test first.** In `tests/mcp/test_tools.py`, against the parametrized
+`storage` fixture (both backends):
+- `test_search_reinforces_returned_nodes` — ingest, capture a returned node's
+  `relevance`/`last_reinforced`, search again; both must have increased, and
+  non-returned nodes must be untouched.
+- `test_search_reinforcement_disabled_at_zero_boost` — `boost=0.0` leaves
+  signals byte-identical.
+
+---
+
+### Issue 36 — No `importance` dimension and no agent-facing upward path for it
+
+**Status.** Open. Design: `dev-docs/REVIEW_EPISTEMIC.md` §12 (§12.1–12.2).
+Independent of #35; **prerequisite for #37**.
+
+**Symptom.** An agent that learns something making an existing node more
+important has no way to record that. The only candidate field, `relevance`, is
+owned by the decay clock — a judgment written there silently decays back out.
+
+**Fix.** Three parts, one commit each is fine:
+
+1. **Field.** `importance: float = Field(default=0.5, ge=0.0, le=1.0)` on
+   `ValueSignal`. Excluded from `apply_decay` — importance never moves on the
+   clock. `update`'s copy-the-signal behaviour (`mcp/tools.py:921`) already
+   carries it forward. Pydantic's default covers rows written before the field
+   existed (consistent with the "no retroactive repair" carry-over below).
+2. **Tool.** `reinforce(node_id, reason, related_id=None)` in `mcp/tools.py` +
+   MCP registration: bumps `importance += step × (1 − importance)` (config
+   `importance_step`, suggest 0.25) and appends
+   `{at, reason, related_id}` to a `reinforcements` list in the node's
+   `metadata` — every bump leaves an auditable trace; there is **no raw
+   setter**. Error on unknown `node_id` or unknown `related_id`.
+3. **Ingest prior.** `store_decomposition` accepts an optional per-fact
+   `importance` (default 0.5) as a prior; real judgment happens at reflect time
+   (#37).
+
+**Failing test first.**
+- `tests/storage/test_storage_parity.py::test_value_signal_importance_round_trips`
+  — a node stored with non-default `importance` reads back with it, both
+  backends. (Serialization is the likely SurrealDB failure mode — this is the
+  test that must fail first.)
+- `tests/pipelines/…::test_decay_leaves_importance_untouched` — `apply_decay`
+  moves `relevance`, never `importance`.
+- `tests/mcp/test_tools.py::test_reinforce_bumps_and_records_provenance` —
+  bump applied asymptotically; `metadata["reinforcements"]` records reason and
+  `related_id`; unknown ids error.
+
+---
+
+### Issue 37 — No hygiene path for trivial facts: active nodes accumulate forever
+
+**Status.** Open. Design: `dev-docs/REVIEW_EPISTEMIC.md` §12.3. **Depends on
+#36** (importance field); #35 makes nomination meaningfully better but is not
+a hard blocker. Build this as **one more arm of the existing review loop, not
+a new subsystem**: nomination = candidate generation, resolution through
+`reflect` → `apply_reflection`, human approval in-conversation — the
+`pending_review` pattern with a different verdict. If the implementation
+grows a parallel workflow, it has gone wrong.
+
+**Symptom.** Principle 2 ("nothing is destroyed") has no counterweight:
+trivial facts — small decisions, stale error records — stay active and
+retrievable forever, diluting search. `archive` today only ever sees
+SUPERSEDED/MERGED nodes >90 days old (`pipelines/reflection/archival.py`) and
+is **export-only**: there is no status an active node can move to, so even a
+node judged worthless cannot leave the active set.
+
+**Fix.** Four parts; the status is the foundation and goes first.
+
+1. **`NodeStatus.ARCHIVED`.** New enum member. Approved archival = export via
+   the existing `archive_nodes` path **+** atomic status flip (one transaction,
+   both backends — same shape as `supersede_by_existing_tx`). Existing
+   `status = 'active'` filters (`query_nodes`, `vector_search`) then exclude
+   archived nodes with no further query changes — verify, don't assume.
+   `restore` flips back to ACTIVE.
+2. **Nomination.** Pure function in `pipelines/reflection/archival.py`
+   (mechanical, no LLM), priority-ordered per §12.3: superseded/merged with low
+   `importance` first; then `evidence_stale` inferences; then active facts with
+   `last_reinforced == created_at`, low importance, and zero knowledge-edge
+   in-degree (exclude `NON_KNOWLEDGE_EDGE_TYPES`).
+3. **Worklist + resolution.** `reflect` surfaces `archival_candidates`
+   (pattern: `pending_review`); `apply_reflection(archivals=[...])` applies the
+   human-approved set via part 1. Missing/already-archived ids skipped, same
+   as `supersessions`.
+4. **Inference follow-on.** After archiving facts, walk `derived_from`: an
+   inference whose entire evidence set is archived/superseded joins the *next*
+   `archival_candidates` list — flagged, never auto-archived.
+
+**Failing test first.**
+- `tests/storage/test_storage_parity.py::test_archived_nodes_excluded_from_queries`
+  — a node flipped to ARCHIVED disappears from `query_nodes(status=ACTIVE)` and
+  from `vector_search` results, both backends; restore brings it back.
+- Parity: the export+flip transaction is atomic — a failure mid-batch leaves
+  every node ACTIVE.
+- `tests/pipelines/…::test_archival_nomination_ordering` — fixture graph with
+  one node of each class; assert the priority order and that a reinforced or
+  high-in-degree node is *not* nominated.
+- `tests/mcp/test_tools.py` — `reflect` surfaces the worklist;
+  `apply_reflection(archivals=…)` archives exactly the approved ids; an
+  inference with fully-archived evidence appears in the next worklist.
+
+---
+
+### Issue 38 — `MockEmbeddingProvider` silently caps vectors at 32 dimensions while reporting the requested width
+
+**Status.** Open. Small and self-contained. First flagged as a caveat under
+#14's benchmark numbers ("arguably its own small bug") — promoting it to an
+issue because it quietly distorts every mock-embedding measurement and test.
+
+**Symptom.** `_deterministic_vector` (`epimemer/embeddings/mock.py:28`) takes
+`digest[: self._dimension]` of a SHA-256 digest — 32 bytes — so any
+`dimension > 32` yields 32-wide vectors while the `dimension` property reports
+what was asked for. The provider is not even internally consistent: the
+zero-norm branch returns `[0.0] * self._dimension` at the *requested* width.
+Consequences: `scripts/bench.py` runs "mock-384" embeddings that are actually
+32-wide, so every vector-scan cost in `dev-docs/BENCHMARKS.md` and #14 is
+understated relative to a real 384-dim model; any test that trusts
+`provider.dimension` to match the stored vectors is silently wrong for
+widths > 32.
+
+**Fix.** Stretch the hash instead of truncating it: concatenate
+`sha256(f"{text}:{i}")` blocks for `i = 0, 1, 2, …` until `dimension` bytes are
+available, then normalize. Determinism is preserved; vectors for
+`dimension ≤ 32` change only if the block scheme replaces the plain digest —
+keep `i = 0` as the unsuffixed digest if avoiding that churn matters (check
+what breaks; snapshot-style tests may pin exact vectors).
+
+**Consequence to plan for.** Fixing this changes what `make bench` measures —
+vector width goes from 32 to a real 384. The recorded baselines in
+`dev-docs/BENCHMARKS.md` were taken under the bug, so after the fix re-run
+both backends and annotate the table (one line: numbers before this date were
+32-wide). This is not optional; otherwise the next benchmark comparison
+"regresses" mysteriously.
+
+**Failing test first.**
+`tests/embeddings/…::test_mock_embedding_width_matches_reported_dimension` —
+for `dimension` in {8, 32, 384}: every vector from `embed` has length
+`provider.dimension`, is unit-norm, and is deterministic across calls.
+Fails today at 384 (length 32).
+
+---
+
 ## Older carry-overs (open, low priority)
 
 From the original live-graph walkthrough (issues 1–5, otherwise resolved or kept
@@ -290,7 +465,7 @@ it lives in README → *Not yet built*.
 
 ## Recommended order
 
-**#34 is the actionable one.** The other two are deferred by design with stated
+**#34–37 are the actionable ones.** #14/#16 are deferred by design with stated
 triggers, and the performance work that was actionable is done: `reflect` went
 cubic → quadratic, in-memory edge lookups are indexed, and SurrealDB's `search`
 went quadratic → flat. `dev-docs/BENCHMARKS.md` has the data; #14 above has the
@@ -301,7 +476,11 @@ What to pick up, and what has to be true first:
 | Order | Work | Trigger |
 |---|---|---|
 | 1 | 34 (timepoint extraction) | Ready now. Settle the `write_batch_tx` atomicity question first, in its own commit |
-| 2 | reflect's O(F²) | **Not an issue yet — raise one when a real graph gets close.** It is the limiting operation on both backends (~7,400 nodes in-memory, ~3,200 on SurrealDB) and the only remaining cost that is genuine pairwise work rather than a fixable access pattern. Vectorizing `_cosine_similarity` buys a large constant factor, not an exponent |
-| 3 | 14 (enrichment N+1) | The ~120 ms floor under every SurrealDB `search` is now per-result enrichment round-trips. Nothing fails because of it, so it stays deferred — but it is what a batched edge fetch would attack |
+| 2 | 35 (retrieval reinforcement) | Ready now; smallest, independent. Re-bench search after |
+| 3 | 36 (importance + `reinforce`) | Ready now; independent of 35. The parity round-trip test is the one to write first |
+| 4 | 37 (archival arm) | After 36 (needs `importance`). `NodeStatus.ARCHIVED` + atomic flip is the foundation commit |
+| anytime | 38 (mock embedding width) | Independent of everything; pairs naturally with the re-bench steps in 35/14 since it changes what `make bench` measures |
+| watch | reflect's O(F²) | **Not an issue yet — raise one when a real graph gets close.** It is the limiting operation on both backends (~7,400 nodes in-memory, ~3,200 on SurrealDB) and the only remaining cost that is genuine pairwise work rather than a fixable access pattern. Vectorizing `_cosine_similarity` buys a large constant factor, not an exponent |
+| watch | 14 (enrichment N+1) | The ~120 ms floor under every SurrealDB `search` is now per-result enrichment round-trips. Nothing fails because of it, so it stays deferred — but it is what a batched edge fetch would attack |
 | deferred | 16 | The server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`) |
 | deferred | 14 (rest) | Batched edge fetch + aggregate queries: a protocol change on both backends, and the `asyncio.gather` prong is blocked by #16 |

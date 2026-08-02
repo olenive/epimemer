@@ -13,6 +13,7 @@ import { Graphviz } from "@hpcc-js/wasm-graphviz";
 
 import type { PipelineStarted } from "./types";
 import type { PipelineRunState } from "./pipeline-store";
+import { currentPalette } from "./theme";
 
 // One shared WASM instance for glyphs and the detail view.
 let _gvPromise: Promise<Graphviz> | null = null;
@@ -41,12 +42,14 @@ export const generateDot = (
     "  // Places",
   );
 
+  const palette = currentPalette();
+
   for (const place of event.place_names) {
     const label = mini ? ' label=""' : "";
     const size = mini ? "width=0.14 height=0.14 fixedsize=true" : "width=0.6";
     lines.push(
-      `  "${escapeDot(place)}" [shape=circle style=filled fillcolor="#1e293b" ` +
-        `color="#475569" fontcolor="#94a3b8" ${size}${label} ` +
+      `  "${escapeDot(place)}" [shape=circle style=filled fillcolor="${palette.placeFill}" ` +
+        `color="${palette.placeStroke}" fontcolor="${palette.placeText}" ${size}${label} ` +
         `id="place-${escapeDot(place)}"];`,
     );
   }
@@ -57,7 +60,8 @@ export const generateDot = (
     const size = mini ? "width=0.26 height=0.14 fixedsize=true" : "width=1.2 height=0.4";
     lines.push(
       `  "${escapeDot(transition)}" [shape=rect style="filled,rounded" ` +
-        `fillcolor="#1e3a5f" color="#3b82f6" fontcolor="#93c5fd" ${size}${label} ` +
+        `fillcolor="${palette.transitionFill}" color="${palette.transitionStroke}" ` +
+        `fontcolor="${palette.transitionText}" ${size}${label} ` +
         `id="transition-${escapeDot(transition)}"];`,
     );
   }
@@ -65,12 +69,12 @@ export const generateDot = (
   lines.push("  // Edges");
   for (const edge of event.edges) {
     const label = !mini && edge.label
-      ? ` [label="${escapeDot(edge.label)}" fontcolor="#64748b"]`
+      ? ` [label="${escapeDot(edge.label)}" fontcolor="${palette.dotEdgeLabel}"]`
       : "";
     const extra = mini ? " arrowsize=0.4 penwidth=0.6" : "";
     lines.push(
       `  "${escapeDot(edge.source)}" -> "${escapeDot(edge.target)}"${label} ` +
-        `[color="#475569"${extra}];`,
+        `[color="${palette.dotEdge}"${extra}];`,
     );
   }
 
@@ -83,8 +87,9 @@ export const generateDot = (
 const ACTIVE_TRANSITION_COLOR = "#ec4899"; // pink-500
 const COMPLETED_TRANSITION_COLOR = "#22c55e"; // green-500
 const ACTIVE_PLACE_COLOR = "#f59e0b"; // amber-500
-const IDLE_TRANSITION_COLOR = "#3b82f6"; // blue-500
-const IDLE_PLACE_COLOR = "#475569"; // gray-600
+/** Idle colours follow the theme; the active/completed hues do not. */
+const idlePlaceColor = (): string => currentPalette().placeStroke;
+const idleTransitionColor = (): string => currentPalette().transitionStroke;
 
 const setSvgNodeColor = (
   svgRoot: SVGElement,
@@ -141,10 +146,10 @@ export const applyState = (
   if (!topo) return;
 
   for (const t of topo.transition_names) {
-    setSvgNodeColor(svgRoot, `transition-${t}`, IDLE_TRANSITION_COLOR, "1.5");
+    setSvgNodeColor(svgRoot, `transition-${t}`, idleTransitionColor(), "1.5");
   }
   for (const p of topo.place_names) {
-    setSvgNodeColor(svgRoot, `place-${p}`, IDLE_PLACE_COLOR, "1.5");
+    setSvgNodeColor(svgRoot, `place-${p}`, idlePlaceColor(), "1.5");
   }
   for (const t of state.completedTransitions) {
     setSvgNodeColor(svgRoot, `transition-${t}`, COMPLETED_TRANSITION_COLOR, "2.5");

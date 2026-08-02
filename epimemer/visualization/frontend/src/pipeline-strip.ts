@@ -30,6 +30,8 @@ export interface PipelineStripHandle {
   /** Mark running tiles as possibly-stale after a sequence gap. */
   markStale: () => void;
   closeDetail: () => void;
+  /** Regenerate the open detail — its colours are baked in at render time. */
+  repaintDetail: () => void;
   cleanup: () => void;
 }
 
@@ -53,10 +55,11 @@ const PIPELINE_EVENTS = [
 
 const TILE_BASE =
   "pipeline-tile flex flex-col items-center gap-1 shrink-0 w-24 rounded border p-1.5 " +
-  "bg-gray-900/60 hover:bg-gray-800 transition-colors cursor-pointer focus:outline-none";
+  "bg-gray-100 hover:bg-gray-50 dark:bg-gray-900/60 dark:hover:bg-gray-800 " +
+  "transition-colors cursor-pointer focus:outline-none";
 
 const borderClass = (state: PipelineRunState): string => {
-  if (state.stale) return "border-gray-600 animate-pulse";
+  if (state.stale) return "border-gray-500 dark:border-gray-600 animate-pulse";
   switch (state.status) {
     case "running":
       return "border-amber-500/70 ring-1 ring-amber-500/40";
@@ -65,7 +68,7 @@ const borderClass = (state: PipelineRunState): string => {
     case "failed":
       return "border-red-600/70";
     default:
-      return "border-gray-700";
+      return "border-gray-400 dark:border-gray-700";
   }
 };
 
@@ -111,18 +114,19 @@ export const initPipelineStrip = (
 
   const createTile = (name: string): TileRefs => {
     const root = document.createElement("button");
-    root.className = `${TILE_BASE} border-gray-700`;
+    root.className = `${TILE_BASE} border-gray-400 dark:border-gray-700`;
     root.title = name;
 
     const glyph = document.createElement("div");
     glyph.className = "w-full h-10 flex items-center justify-center overflow-hidden";
 
     const nameEl = document.createElement("div");
-    nameEl.className = "text-[10px] leading-tight text-gray-300 truncate w-full text-center";
+    nameEl.className =
+      "text-[10px] leading-tight text-gray-700 dark:text-gray-300 truncate w-full text-center";
     nameEl.textContent = name;
 
     const statusEl = document.createElement("div");
-    statusEl.className = "text-[10px] leading-tight text-gray-500 truncate w-full text-center";
+    statusEl.className = "text-[10px] leading-tight text-gray-600 dark:text-gray-500 truncate w-full text-center";
 
     root.append(glyph, nameEl, statusEl);
     root.addEventListener("click", () => openDetail(name));
@@ -172,6 +176,19 @@ export const initPipelineStrip = (
     if (detailSvgRoot) applyState(detailSvgRoot, state, { tokens: true });
   };
 
+  /**
+   * Redraw the open detail from scratch.
+   *
+   * The net's colours are baked into the DOT at generation time, so a theme
+   * change cannot reach an already-rendered SVG. Clearing the topology key is
+   * what forces `updateDetail` to regenerate rather than reuse it.
+   */
+  const repaintDetail = (): void => {
+    if (!detailName) return;
+    detailTopoKey = "";
+    updateDetail();
+  };
+
   const closeDetail = (): void => {
     detailName = null;
     detailSvgRoot = null;
@@ -213,5 +230,5 @@ export const initPipelineStrip = (
   };
 
   updateHint();
-  return { clearAll, markStale, closeDetail, cleanup };
+  return { clearAll, markStale, closeDetail, repaintDetail, cleanup };
 };

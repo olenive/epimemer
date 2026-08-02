@@ -13,6 +13,9 @@ green against Dockerised SurrealDB). Phase 4 ✅ — the review-loop design inge
 into the `epimemer-docs` graph (15 topics / 55 facts / 2 inferences, tagged
 `epimemer-repo-docs`). **All phases complete.**
 
+**Update (2026-08-07):** §12 extends the loop with a value model and an archival
+(hygiene) arm — designed, **not built**. Implementation plan: ISSUES.md #35–37.
+
 Decisions settled for 2b: separate `check_conflicts` tool (opt-in); pre-compute
 frame + scores; dedicated verdict tools; agent authority per §7; build
 `supersede(old, by=existing)` (done, **does not migrate edges**); Case B
@@ -58,7 +61,9 @@ Three principles drive this design:
 ## 2. The unified review loop
 
 Contradictions, staleness, and metacontext coexistence are **not separate
-subsystems** — they are outcomes of one loop:
+subsystems** — they are outcomes of one loop. (§12 later extends the same loop
+with a fourth outcome, *triviality* → archival; cleanup is one more arm of this
+loop, not a new subsystem.)
 
 ```
 new/changed knowledge
@@ -226,6 +231,12 @@ a `supersessions` / resolution action.
   fiction ↔ real, or genuine uncertainty); just-do-with-provenance for expected
   pulls (a frame `based_on` The Real drawing base facts).
 
+- **Archival approval (§12.3):** cleanup reuses this same channel — `reflect`
+  surfaces `archival_candidates` the way it surfaces `pending_review`, the user
+  approves in-conversation, `apply_reflection(archivals=[...])` applies. No
+  separate cleanup UI or workflow; archival is just another resolution the
+  human signs off on.
+
 Most of this is **agent guidance** (in `epimemer_prompts/DEFAULT.md` / the system
 prompt) plus the visibility the data model already provides (provenance on every
 node, `metacontext_id` filtering on `search`, association edges).
@@ -382,3 +393,119 @@ each step is independently reviewable.
 - Final names for the new edge types/labels.
 - Whether ingest-time detection defaults **on** or **off** (and the threshold).
 - Dashboard panel for human resolution (later; in-conversation first).
+
+---
+
+## 12. Value model & graph hygiene (designed 2026-08-07 — not built)
+
+Phases 1–4 handle *wrong* knowledge — superseded, contradicted, evidentially
+stale. They do nothing about *trivial* knowledge: small decisions, transient
+error records, one-off details that were worth writing but not worth keeping.
+Under principle 2 these accumulate forever — active, retrievable, diluting
+every similarity search. This section extends the review loop with a hygiene
+arm. **Implementation plan: ISSUES.md #35–37.**
+
+### 12.1 The value model, revised
+
+`ValueSignal` exists on every node (`novelty` / `confidence` / `relevance` /
+`last_reinforced`, `core/types.py`) but is write-only today. Its only writers
+are creation defaults, `apply_decay` (down only, uniform across all active
+nodes), and topic-merge; nothing reinforces it and nothing reads it — not
+retrieval ranking, not archival candidacy. Relevance is therefore a monotone
+function of age and carries no information about a node's worth.
+
+The revision splits value into two dimensions with different dynamics:
+
+| Dimension | Moves down | Moves up | Answers |
+| --- | --- | --- | --- |
+| `relevance` (existing) | decay (existing) | automatic reinforcement on retrieval | "is this being used?" |
+| `importance` (new) | judgment only — never the decay clock | explicit judgment: agent `reinforce` tool, human review | "does this matter?" |
+
+Decay must never erode a judgment: an agent that marks a node important is
+recording an assessment, not starting a timer. That is why importance is a
+separate field rather than a relevance bump — a bumped relevance would silently
+decay back out.
+
+A third signal is **computed, not stored**: *structural importance* — a node's
+knowledge-edge in-degree (inferences `derived_from` it, facts supporting it).
+"New information makes X more important" usually arrives as an edge, so the
+graph already holds the evidence; candidacy reads it live rather than caching
+a number that goes stale. Edges in `NON_KNOWLEDGE_EDGE_TYPES` (§4.2) do not
+count.
+
+All of this is lifecycle metadata under §1 — mutable in place, no history
+rewrite.
+
+### 12.2 Upward paths
+
+1. **Usage reinforcement (automatic).** A node returned by `search` gets
+   `last_reinforced = now` and a partial relevance restore
+   (`relevance += boost × (1 − relevance)`). System-driven, no judgment; the
+   asymptotic form means repeated hits saturate rather than pin at 1.0.
+2. **Agent judgment (explicit).** New tool
+   `reinforce(node_id, reason, related_id=None)`: raises `importance` and
+   records *why* — and optionally *which* new node triggered the
+   re-assessment. Deliberately **not** a raw setter: every bump leaves an
+   auditable trace, so a human reviewing a trivial-looking fact rated high can
+   see the justification. Same asymptotic step form as above.
+3. **Structure (derived).** Knowledge-edge in-degree, computed at read time
+   (see 12.1).
+
+### 12.3 Cleanup: the archival arm of the review loop
+
+Cleanup is **not a new subsystem** — it is one more arm of the §2 loop, reusing
+every stage that already exists: nomination plays the candidate-generation
+role, the agent judges, resolution goes through `reflect` →
+`apply_reflection`, and the human approves in-conversation exactly as §7
+prescribes for contradictions. Nothing new is invented except the nomination
+heuristics and the `ARCHIVED` status; everything else is the proven
+`pending_review` pattern with a different verdict.
+
+Same three-tier shape as detection (§1, §5): cheap nomination → agent
+judgment → human approval. Cost stays proportional to the junk, not the graph.
+
+- **Nominate (mechanical, no LLM):** in priority order — superseded/merged
+  nodes with low importance (the existing age-based candidates, now
+  value-aware); then `evidence_stale` inferences; then *active* facts never
+  reinforced since creation (`last_reinforced == created_at`) with low
+  importance and zero knowledge in-degree. `source_type` may weight the
+  ordering (chat/error-log before document).
+- **Judge (agent):** the LLM reviews the nominated set *with graph context*.
+  Importance is judged at reflect time, not ingest time — triviality is only
+  visible once the neighbourhood exists ("error message X" matters until the
+  bug is fixed, then doesn't). The agent may `reinforce` a nominee instead of
+  letting it go.
+- **Approve (human, in-conversation):** `reflect` surfaces an
+  `archival_candidates` worklist (exactly like `pending_review`);
+  `apply_reflection(archivals=[...])` applies the approved set. **Archive,
+  never delete** — export via the existing archive path, `restore` reverses.
+
+**New status `ARCHIVED`.** Today `archive_nodes` is export-only and its
+candidates are already SUPERSEDED/MERGED, so nothing needed to change state.
+Archiving an *active* trivial fact must remove it from the active set:
+approved archival = export **+** atomic status flip to `ARCHIVED`. Existing
+`status = 'active'` filters (queries, `vector_search`) then exclude it with no
+further changes; `restore` flips it back.
+
+**Inference follow-on.** Archiving a fact walks `derived_from`: an inference
+whose *entire* evidence set is now archived/superseded joins the next
+candidate list — flagged for the same review, never auto-archived. Inferences
+are the expensive-to-recreate layer.
+
+### 12.4 Decisions
+
+- `importance` is a **stored field**; structural importance is **computed** —
+  blended at candidacy time, never cached.
+- Retrieval reinforcement is **on by default** (k writes per search; boost
+  configurable).
+- Importance is judged **at reflect time**; `store_decomposition` *may* accept
+  an optional per-fact importance as a prior (default 0.5).
+- Cleanup is **archive-only**. Deletion stays out of the system.
+- `reinforce` records provenance for every bump; there is no raw setter.
+- **Value signals do not feed search ranking.** Retrieval reinforcement creates
+  a feedback loop (retrieved → higher relevance → retrieved). At archival
+  granularity that loop is benign — it only protects used nodes from cleanup.
+  Wired into ranking it would compound: popular nodes crowd out better matches,
+  which then decay unread and get archived for it. If ranking ever wants a
+  value term, that is a deliberate future decision with its own analysis, not
+  a free by-product of this design.

@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { EventRouter } from "./events";
+import { paletteFor } from "./theme";
 import type { TimelineMark } from "./timeline-model";
 import {
   initTimelinePanel,
@@ -253,6 +254,50 @@ describe("content mode", () => {
 
     expect(document.querySelectorAll("#rows rect.cursor-pointer")).toHaveLength(1);
     expect(document.querySelectorAll("#rows circle")).toHaveLength(1);
+  });
+});
+
+describe("theming", () => {
+  // The axis is drawn, not styled, so Tailwind's dark: variants cannot reach
+  // it — the palette has to be read at render time or the timeline stays dark
+  // on a white page.
+  const axisStroke = (): string | null =>
+    document.querySelector("#rows line")?.getAttribute("stroke") ?? null;
+
+  const twoNodes = {
+    nodes: [
+      node({ node_id: "n1", created_at: "2024-01-01T00:00:00Z" }),
+      node({ node_id: "n2", created_at: "2024-06-01T00:00:00Z" }),
+    ],
+    edges: [],
+  };
+
+  it("draws the axis in the light palette by default", () => {
+    panel.loadSnapshot(twoNodes);
+    expect(axisStroke()).toBe(paletteFor("light").axis);
+  });
+
+  it("draws the axis in the dark palette when the dark class is set", () => {
+    document.documentElement.classList.add("dark");
+    try {
+      panel.loadSnapshot(twoNodes);
+      expect(axisStroke()).toBe(paletteFor("dark").axis);
+    } finally {
+      document.documentElement.classList.remove("dark");
+    }
+  });
+
+  it("repaints on refresh when the theme changed underneath it", () => {
+    panel.loadSnapshot(twoNodes);
+    expect(axisStroke()).toBe(paletteFor("light").axis);
+
+    document.documentElement.classList.add("dark");
+    try {
+      panel.refresh();
+      expect(axisStroke()).toBe(paletteFor("dark").axis);
+    } finally {
+      document.documentElement.classList.remove("dark");
+    }
   });
 });
 

@@ -189,6 +189,22 @@ graph.
   in the selector. The durable answer to "I opened the visualizer but can't find my
   graph".
 
+### Light and dark mode
+
+A toggle sits at the top right of the header. The choice persists in
+`localStorage`; with nothing stored the page follows the OS and keeps following
+it live, so a system change mid-session is picked up. An inline script in the
+document head applies the theme before first paint, so a dark-mode user never
+sees a white flash while the bundle loads.
+
+Page chrome uses Tailwind's `dark:` variants against a `dark` class on `<html>`.
+The three *drawn* surfaces — the cytoscape canvas, the timeline SVG and the
+graphviz Petri nets — cannot be reached by CSS variants, so they read a palette
+from `theme.ts` at render time and are repainted on toggle. That palette is
+neutrals only: node and edge hues are saturated enough to read on either
+background and are deliberately shared, so "fact green" means the same thing in
+both themes.
+
 ### Panels
 
 - **Knowledge graph** — nodes and edges, force or hierarchy layout.

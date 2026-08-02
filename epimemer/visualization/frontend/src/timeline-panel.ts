@@ -41,6 +41,7 @@ import {
   type Gap,
   type Scale,
 } from "./timeline-scale";
+import { currentPalette } from "./theme";
 import type { AnyEvent, NodeStatusChanged, NodeStored, TimelineStored } from "./types";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -53,8 +54,10 @@ const INTERVAL_HEIGHT = 9;
 /** One wheel notch. Below 1 zooms in. */
 const WHEEL_STEP = 0.85;
 
-const MARK_FILL = "#60a5fa";
-const MARK_FILL_SELECTED = "#f472b6";
+// Mark hues read on either background, so only the neutrals come from the
+// palette. "Selected pink" means the same thing in both themes.
+const MARK_FILL = "#3b82f6";
+const MARK_FILL_SELECTED = "#ec4899";
 
 interface RowZoom {
   domain: Domain;
@@ -251,13 +254,14 @@ export const initTimelinePanel = (
   };
 
   const renderAxis = (group: SVGGElement, scale: Scale, width: number): void => {
+    const palette = currentPalette();
     group.appendChild(
       svg("line", {
         x1: 0,
         y1: AXIS_Y,
         x2: width,
         y2: AXIS_Y,
-        stroke: "#374151",
+        stroke: palette.axis,
         "stroke-width": 1,
       }),
     );
@@ -272,14 +276,14 @@ export const initTimelinePanel = (
             y1: AXIS_Y,
             x2: x,
             y2: AXIS_Y + 5,
-            stroke: "#4b5563",
+            stroke: palette.tick,
             "stroke-width": 1,
           }),
         );
         const label = svg("text", {
           x,
           y: TICK_LABEL_Y,
-          fill: "#6b7280",
+          fill: palette.tickLabel,
           "font-size": 9,
           "text-anchor": "middle",
         });
@@ -295,7 +299,7 @@ export const initTimelinePanel = (
           y: AXIS_Y - 10,
           width: BREAK_PX,
           height: 20,
-          fill: "#111827",
+          fill: palette.breakBackground,
         }),
       );
       // Two slashes, the conventional mark for a collapsed axis.
@@ -306,7 +310,7 @@ export const initTimelinePanel = (
             y1: AXIS_Y + 7,
             x2: brk.x0 + offset + 3,
             y2: AXIS_Y - 7,
-            stroke: "#6b7280",
+            stroke: palette.breakSlash,
             "stroke-width": 1.5,
           }),
         );
@@ -314,7 +318,7 @@ export const initTimelinePanel = (
       const label = svg("text", {
         x: brk.x0 + BREAK_PX / 2,
         y: AXIS_Y - 14,
-        fill: "#9ca3af",
+        fill: palette.breakLabel,
         "font-size": 9,
         "text-anchor": "middle",
       });
@@ -376,7 +380,8 @@ export const initTimelinePanel = (
     lane.className = "flex flex-wrap items-center gap-1 pl-1 pb-1.5";
 
     const caption = document.createElement("span");
-    caption.className = "text-[10px] uppercase tracking-wider text-gray-600 pr-1";
+    caption.className =
+      "text-[10px] uppercase tracking-wider text-gray-600 pr-1";
     caption.textContent = "undated";
     lane.appendChild(caption);
 
@@ -384,8 +389,10 @@ export const initTimelinePanel = (
       const chip = document.createElement("button");
       chip.className =
         mark.id === state.selectedMarkId
-          ? "px-1.5 py-0.5 text-[10px] rounded bg-pink-900/60 text-pink-200 border border-pink-700"
-          : "px-1.5 py-0.5 text-[10px] rounded bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700";
+          ? "px-1.5 py-0.5 text-[10px] rounded border bg-pink-100 text-pink-800 border-pink-300 " +
+            "dark:bg-pink-900/60 dark:text-pink-200 dark:border-pink-700"
+          : "px-1.5 py-0.5 text-[10px] rounded border bg-gray-100 text-gray-600 border-gray-400 hover:bg-gray-50 " +
+            "dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700 dark:hover:bg-gray-700";
       chip.textContent = truncate(mark.title, 34);
       chip.title = mark.detail;
       chip.addEventListener("mouseenter", () => onSelect(mark));
@@ -401,12 +408,12 @@ export const initTimelinePanel = (
 
   const renderRow = (row: TimelineRow, width: number): HTMLElement => {
     const wrapper = document.createElement("div");
-    wrapper.className = "border-b border-gray-800/60";
+    wrapper.className = "border-b border-gray-400 dark:border-gray-800/60";
 
     const head = document.createElement("div");
     head.className = "flex items-baseline gap-2 px-2 pt-1.5";
     const name = document.createElement("span");
-    name.className = "text-xs font-medium text-gray-400";
+    name.className = "text-xs font-medium text-gray-600 dark:text-gray-400";
     name.textContent = row.name;
     const count = document.createElement("span");
     count.className = "text-[10px] text-gray-600";

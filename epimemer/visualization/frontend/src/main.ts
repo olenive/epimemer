@@ -16,6 +16,16 @@ import { initPipelineStrip } from "./pipeline-strip";
 import { initTimelinePanel } from "./timeline-panel";
 import type { TimelineMark } from "./timeline-model";
 import {
+  applyTheme,
+  currentTheme,
+  nextTheme,
+  persistTheme,
+  storedTheme,
+  themeToggleIcon,
+  themeToggleTitle,
+  type Theme,
+} from "./theme";
+import {
   applyReflectCounterEvent,
   reflectBadgeClass,
   reflectBadgeLabel,
@@ -62,8 +72,8 @@ const btnRefresh = $("btn-refresh");
 const router = createEventRouter(wsUrl, (connected) => {
   wsStatus.textContent = connected ? "Connected" : "Disconnected";
   wsStatus.className = connected
-    ? "px-2 py-1 text-xs rounded bg-green-900/50 text-green-400"
-    : "px-2 py-1 text-xs rounded bg-red-900/50 text-red-400";
+    ? "px-2 py-1 text-xs rounded bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400"
+    : "px-2 py-1 text-xs rounded bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400";
 
   // The hub or sessions may have changed while we were away — resync.
   if (connected) {
@@ -150,14 +160,50 @@ $("btn-toggle-timeline").addEventListener("click", () => {
   if (!timelineWrap.classList.contains("hidden")) timelinePanel.refresh();
 });
 
+// --- Theme ---
+
+const themeButton = $("btn-toggle-theme");
+
+/**
+ * Put a theme on the page.
+ *
+ * The class is what Tailwind reads, but the graph canvas and the timeline SVG
+ * are drawn rather than styled, so each has to be told separately.
+ */
+const useTheme = (theme: Theme): void => {
+  applyTheme(theme);
+  themeButton.textContent = themeToggleIcon(theme);
+  themeButton.title = themeToggleTitle(theme);
+  graphPanel.applyTheme();
+  timelinePanel.refresh();
+  pipelineStrip.repaintDetail();
+};
+
+// The inline script in index.html already set the class before first paint, so
+// read that back rather than resolving a second time and risking disagreement.
+useTheme(currentTheme());
+
+themeButton.addEventListener("click", () => {
+  const theme = nextTheme(currentTheme());
+  persistTheme(theme);
+  useTheme(theme);
+});
+
+// Follow the OS while the user has expressed no preference of their own.
+if (typeof matchMedia === "function") {
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+    if (storedTheme() === null) useTheme(e.matches ? "dark" : "light");
+  });
+}
+
 // --- Mode badge ---
 
 const updateModeBadge = (): void => {
   const isLive = viewedGraph === mcpActiveGraph;
   viewModeBadge.textContent = isLive ? "Live" : "Snapshot";
   viewModeBadge.className = isLive
-    ? "px-1.5 py-0.5 rounded text-xs bg-green-900/50 text-green-400"
-    : "px-1.5 py-0.5 rounded text-xs bg-gray-700 text-gray-400";
+    ? "px-1.5 py-0.5 rounded text-xs bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400"
+    : "px-1.5 py-0.5 rounded text-xs bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-400";
 };
 
 let reflectState = unknownReflectState();
@@ -236,7 +282,7 @@ const populateSessionSelector = (): void => {
     opt.value = s.session_id;
     opt.textContent = sessionLabel(s);
     opt.disabled = !s.connected;
-    if (!s.connected) opt.className = "text-gray-600";
+    if (!s.connected) opt.className = "text-gray-400 dark:text-gray-600";
     sessionSelector.appendChild(opt);
   }
   if (selectedSession) sessionSelector.value = selectedSession;

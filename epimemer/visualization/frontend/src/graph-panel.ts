@@ -11,6 +11,7 @@ import dagre from "cytoscape-dagre";
 // @ts-expect-error — cytoscape-fcose has no types
 import fcose from "cytoscape-fcose";
 import type { EventRouter } from "./events";
+import { currentPalette, type Palette } from "./theme";
 import type {
   EdgeStored,
   EdgeView,
@@ -82,8 +83,12 @@ const LAYOUT_CONFIGS: Record<string, object> = {
 
 // --- Cytoscape stylesheet ---
 
-// Cast needed: Cytoscape types don't model data() mappers for numeric fields
-const STYLESHEET = [
+// Cast needed: Cytoscape types don't model data() mappers for numeric fields.
+//
+// Built per theme rather than declared once: the canvas is drawn, not styled,
+// so Tailwind's `dark:` variants cannot reach it. Node and edge hues are
+// theme-independent (see `theme.ts`); only the label and border neutrals move.
+const stylesheetFor = (palette: Palette) => [
   {
     selector: "node",
     style: {
@@ -91,7 +96,7 @@ const STYLESHEET = [
       "text-wrap": "ellipsis",
       "text-max-width": "120px",
       "font-size": "10px",
-      color: "#d1d5db",
+      color: palette.nodeLabel,
       "text-valign": "bottom",
       "text-margin-y": 6,
       "background-color": "data(color)",
@@ -99,7 +104,7 @@ const STYLESHEET = [
       width: 24,
       height: 24,
       "border-width": 2,
-      "border-color": "#1f2937",
+      "border-color": palette.nodeBorder,
     },
   },
   {
@@ -133,6 +138,7 @@ const STYLESHEET = [
 
 // --- Panel state and initialization ---
 
+
 interface GraphPanelState {
   cy: Core;
   currentLayout: string;
@@ -149,6 +155,8 @@ export interface GraphPanelHandle {
   loadSnapshot: (nodes: NodeView[], edges: EdgeView[]) => void;
   /** Mark exactly these nodes; an empty list clears the highlight. */
   highlightNodes: (nodeIds: readonly string[]) => void;
+  /** Re-style the canvas for the current theme, preserving layout and selection. */
+  applyTheme: () => void;
 }
 
 /**
@@ -165,7 +173,7 @@ export const initGraphPanel = (
   const state: GraphPanelState = {
     cy: cytoscape({
       container,
-      style: STYLESHEET,
+      style: stylesheetFor(currentPalette()),
       layout: { name: "preset" },
       minZoom: 0.2,
       maxZoom: 4,
@@ -348,12 +356,23 @@ export const initGraphPanel = (
     }
   };
 
+  /**
+   * Swap the stylesheet for the current theme.
+   *
+   * Restyling rather than reloading: cytoscape keeps positions and selection
+   * across a style change, so toggling the theme must not scatter a layout the
+   * user has already read.
+   */
+  const applyTheme = (): void => {
+    state.cy.style(stylesheetFor(currentPalette()));
+  };
+
   const cleanup = (): void => {
     unsubs.forEach((u) => u());
     state.cy.destroy();
   };
 
-  return { cleanup, clearGraph, loadSnapshot, highlightNodes };
+  return { cleanup, clearGraph, loadSnapshot, highlightNodes, applyTheme };
 };
 
 // --- Layout ---
