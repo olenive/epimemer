@@ -120,6 +120,19 @@ useful:
   basis changed and it may need re-deriving.
 - `contested` → an unresolved same-frame contradiction; do not trust it blindly.
 
+### Recording that something matters (reinforce)
+- Two value dimensions move independently. `relevance` answers "is this being
+  used?" and maintains itself — retrieval restores it, time decays it, you never
+  touch it. `importance` answers "does this matter?" and only moves when someone
+  judges that it does.
+- `reinforce(node_id, reason, related_id=None)` is that judgment. Use it when new
+  knowledge raises an existing node's standing: evidence arrives supporting it, a
+  decision turns out to hinge on it, it keeps proving load-bearing. Pass
+  `related_id` when a specific new node triggered the reassessment.
+- Don't reinforce a node just because you read it — retrieval already did that.
+- `reason` is read by whoever later reviews the judgment, so write it for them.
+  There is no way to set importance directly; every bump keeps its reason.
+
 ### When to reflect (reflect)
 - After ingesting several documents (the system auto-suggests reflect after the
   configured threshold), when asked to consolidate, or periodically in long

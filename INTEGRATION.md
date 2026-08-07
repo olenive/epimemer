@@ -49,6 +49,8 @@ the knowledge graph and pipeline execution in real time.
 | `EPIMEMER_EMBEDDING_PROVIDER` | `sentence-transformers` | `sentence-transformers`, `mock` |
 | `EPIMEMER_EMBEDDING_MODEL_ID` | `all-MiniLM-L6-v2` | Any sentence-transformers model |
 | `EPIMEMER_SEGMENTATION_STRATEGY` | `paragraph` | `paragraph`, `semantic` |
+| `EPIMEMER_REINFORCEMENT_BOOST` | `0.2` | Relevance restored per retrieval; `0.0` disables |
+| `EPIMEMER_IMPORTANCE_STEP` | `0.25` | Importance gained per `reinforce` call |
 | `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
 | `EPIMEMER_VIZ_ENABLED` | `true` | `true`, `false` |
 | `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Any bind address |
@@ -58,7 +60,7 @@ the knowledge graph and pipeline execution in real time.
 
 ### Verify Connection
 
-In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 32 tools.
+In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 33 tools.
 
 ## Available Tools
 
@@ -76,6 +78,7 @@ restate the count.
 | `link` | Create typed edges between nodes |
 | `update` | Create a new node version (immutable history) |
 | `supersede_by` | Retire a node in favour of an already-existing one |
+| `reinforce` | Raise a node's importance and record why (protects it from archival) |
 
 ### Discovery & Stats
 

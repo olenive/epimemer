@@ -509,6 +509,48 @@ async def memory_supersede_by(
     )
 
 
+@mcp.tool(name="reinforce")
+async def memory_reinforce(
+    node_id: str,
+    reason: str,
+    ctx: Context,
+    related_id: str | None = None,
+) -> str:
+    """Record that a node matters more than its current importance says.
+
+    Use when you learn something that raises an existing node's standing — new
+    evidence supporting it, a decision that turned out to hinge on it, a fact
+    that keeps proving load-bearing. Importance is what protects a node from
+    the archival sweep; retrieval already maintains relevance on its own, so
+    there is no need to reinforce a node merely because you read it.
+
+    Each call raises importance asymptotically (repeated calls approach 1.0,
+    they do not pin it) and appends the reason to the node's reinforcement
+    trail — there is no way to set the number directly, because an
+    unattributable judgment cannot be reviewed later.
+
+    Args:
+        node_id: The node whose importance rises.
+        reason: Why it matters — this is read by whoever reviews the judgment.
+        related_id: Optional — the node whose arrival triggered the
+            reassessment.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.reinforce",
+        lambda: tools.reinforce(
+            node_id=node_id,
+            reason=reason,
+            storage=deps["storage"],
+            related_id=related_id,
+            importance_step=deps["config"].importance_step,
+        ),
+        ctx,
+        f"node={node_id} related={related_id}",
+        lambda r, m: f"importance={r['importance']:.3f} bumps={r['reinforcements']}",
+    )
+
+
 @mcp.tool(name="check_conflicts")
 async def memory_check_conflicts(
     fact_ids: list[str],

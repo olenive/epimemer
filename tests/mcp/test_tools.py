@@ -30,6 +30,7 @@ from epimemer.core.types import (
     NodeStatus,
     NodeType,
     Topic,
+    ValueSignal,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
@@ -55,6 +56,7 @@ from epimemer.mcp.tools import (
     record_contradiction,
     record_variant,
     reflect,
+    reinforce,
     restore,
     search,
     segment_text,
@@ -356,6 +358,88 @@ class TestSearchReinforcement:
             reinforcement_boost=0.0,
         )
         assert await _value_signals(storage) == before
+
+
+# --- Explicit reinforcement (importance) ---
+
+
+class TestReinforce:
+    """`reinforce` is the only agent-facing upward path on `importance`.
+
+    It is deliberately not a raw setter: every bump leaves a trace, so a human
+    reviewing a trivial-looking node rated highly can see the justification.
+    """
+
+    async def test_reinforce_bumps_and_records_provenance(self, storage):
+        node = Fact(content="load-bearing fact", source_id="s1")
+        trigger = Fact(content="the new information", source_id="s1")
+        await storage.store_node(node)
+        await storage.store_node(trigger)
+
+        result, meta = await reinforce(
+            node.id,
+            reason="cited by the incident review",
+            storage=storage,
+            related_id=trigger.id,
+            importance_step=0.25,
+        )
+
+        stored = await storage.get_node(node.id)
+        assert stored.value.importance == pytest.approx(0.5 + 0.25 * 0.5)
+        assert result["importance"] == pytest.approx(stored.value.importance)
+        assert meta.nodes_returned == 1
+
+        trace = stored.metadata["reinforcements"]
+        assert len(trace) == 1
+        assert trace[0]["reason"] == "cited by the incident review"
+        assert trace[0]["related_id"] == trigger.id
+        assert trace[0]["at"]
+
+    async def test_reinforce_appends_rather_than_replaces(self, storage):
+        node = Fact(content="reinforced twice", source_id="s1")
+        await storage.store_node(node)
+
+        await reinforce(node.id, reason="first", storage=storage, importance_step=0.25)
+        await reinforce(node.id, reason="second", storage=storage, importance_step=0.25)
+
+        stored = await storage.get_node(node.id)
+        # Asymptotic: 0.5 → 0.625 → 0.71875, approaching 1.0 without reaching it.
+        assert stored.value.importance == pytest.approx(0.71875)
+        assert [r["reason"] for r in stored.metadata["reinforcements"]] == [
+            "first", "second",
+        ]
+
+    async def test_reinforce_leaves_relevance_alone(self, storage):
+        """Importance is a judgment; it must not double as a usage signal."""
+        node = Fact(
+            content="untouched relevance",
+            source_id="s1",
+            value=ValueSignal(relevance=0.3),
+        )
+        await storage.store_node(node)
+
+        await reinforce(node.id, reason="matters", storage=storage)
+
+        stored = await storage.get_node(node.id)
+        assert stored.value.relevance == pytest.approx(0.3)
+
+    async def test_reinforce_rejects_unknown_node(self, storage):
+        with pytest.raises(ValueError, match="nope"):
+            await reinforce("nope", reason="r", storage=storage)
+
+    async def test_reinforce_rejects_unknown_related_id(self, storage):
+        node = Fact(content="real", source_id="s1")
+        await storage.store_node(node)
+
+        with pytest.raises(ValueError, match="ghost"):
+            await reinforce(
+                node.id, reason="r", storage=storage, related_id="ghost"
+            )
+
+        # ...and the rejected call left nothing behind.
+        stored = await storage.get_node(node.id)
+        assert stored.value.importance == pytest.approx(0.5)
+        assert "reinforcements" not in stored.metadata
 
 
 # --- Link tests ---

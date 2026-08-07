@@ -18,6 +18,10 @@ from epimemer.storage.protocol import StorageBackend
 # copy that can drift out of step with the config.
 DEFAULT_REINFORCEMENT_BOOST = 0.2
 
+# How much of the gap to 1.0 one `reinforce` call closes. Shared with
+# `tools.reinforce` for the same reason as the boost above.
+DEFAULT_IMPORTANCE_STEP = 0.25
+
 
 class ServerConfig(BaseModel):
     """Configuration for the Epimemer MCP server."""
@@ -43,6 +47,10 @@ class ServerConfig(BaseModel):
     # How much of the gap to 1.0 a retrieved node's relevance closes. 0.0
     # disables retrieval reinforcement entirely.
     reinforcement_boost: float = DEFAULT_REINFORCEMENT_BOOST
+
+    # Asymptotic step applied by the `reinforce` tool. Not a decay counterpart:
+    # nothing lowers importance on a clock.
+    importance_step: float = DEFAULT_IMPORTANCE_STEP
 
     log_level: str = "INFO"
     log_file: str | None = None
@@ -70,6 +78,7 @@ def load_config() -> ServerConfig:
         "similarity_threshold": "EPIMEMER_SIMILARITY_THRESHOLD",
         "reflect_threshold": "EPIMEMER_REFLECT_THRESHOLD",
         "reinforcement_boost": "EPIMEMER_REINFORCEMENT_BOOST",
+        "importance_step": "EPIMEMER_IMPORTANCE_STEP",
         "tool_timeout_seconds": "EPIMEMER_TOOL_TIMEOUT_SECONDS",
         "log_level": "EPIMEMER_LOG_LEVEL",
         "log_file": "EPIMEMER_LOG_FILE",

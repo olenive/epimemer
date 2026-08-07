@@ -29,7 +29,11 @@ from epimemer.core.types import (
     ValueSignal,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
-from epimemer.mcp.config import DEFAULT_REINFORCEMENT_BOOST, ServerConfig
+from epimemer.mcp.config import (
+    DEFAULT_IMPORTANCE_STEP,
+    DEFAULT_REINFORCEMENT_BOOST,
+    ServerConfig,
+)
 from epimemer.mcp.types import ResponseMeta
 from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment
 from epimemer.storage.protocol import (
@@ -1005,6 +1009,59 @@ async def update(
     }
     meta = ResponseMeta(nodes_returned=2)
     return result, meta
+
+
+async def reinforce(
+    node_id: str,
+    reason: str,
+    storage: StorageBackend,
+    *,
+    related_id: str | None = None,
+    importance_step: float = DEFAULT_IMPORTANCE_STEP,
+) -> tuple[dict, ResponseMeta]:
+    """Raise a node's `importance` and record why.
+
+    The explicit upward path: an agent that learns something making an existing
+    node matter more has nowhere else to put that. `relevance` is owned by the
+    decay clock, so a judgment written there quietly decays back out.
+
+    Not a raw setter, deliberately. Every bump appends
+    `{at, reason, related_id}` to `metadata["reinforcements"]`, so a human
+    reviewing a trivial-looking node rated highly can see the justification
+    rather than an unattributable number. The step is asymptotic
+    (`importance += step × (1 − importance)`), so repeated reinforcement
+    approaches 1.0 instead of pinning there on the second call.
+
+    `related_id` is validated rather than trusted: a dangling reference in a
+    provenance trail is worse than no reference, because it reads as evidence.
+    """
+    node = await storage.get_node(node_id)
+    if node is None:
+        raise ValueError(f"Node '{node_id}' not found")
+
+    if related_id is not None and await storage.get_node(related_id) is None:
+        raise ValueError(f"Related node '{related_id}' not found")
+
+    at = datetime.now(timezone.utc)
+    node.value = node.value.model_copy(update={
+        "importance": node.value.importance
+        + importance_step * (1.0 - node.value.importance),
+    })
+    node.metadata = {
+        **node.metadata,
+        "reinforcements": [
+            *node.metadata.get("reinforcements", []),
+            {"at": at.isoformat(), "reason": reason, "related_id": related_id},
+        ],
+    }
+    await storage.store_node(node)
+
+    result = {
+        "node_id": node.id,
+        "importance": node.value.importance,
+        "reinforcements": len(node.metadata["reinforcements"]),
+    }
+    return result, ResponseMeta(nodes_returned=1)
 
 
 async def supersede_by(
