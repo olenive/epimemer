@@ -20,12 +20,14 @@ reasoning now live. Each is written to be read without its issue.
   dominate and hide the graph costs this exists to expose. Every number here is
   therefore a **floor** — real ingest is slower by the embedding time, real
   search by roughly one query embedding.
-  **Correction (2026-07-29):** earlier revisions of this file claimed the mock
-  runs at 384 dimensions, the real model's width. It does not.
-  `MockEmbeddingProvider` derives its vector from a SHA-256 digest and so is
-  capped at **32 dimensions** regardless of the `dimension` argument, while its
-  `dimension` property still reports what was asked for. Vector-scan cost is
-  therefore understated relative to a real 384-dim model.
+  **Width, and a break in the series (2026-08-07).** Everything measured before
+  this date ran at **32 dimensions, not the 384 it reported**:
+  `MockEmbeddingProvider` truncated a single SHA-256 digest while its
+  `dimension` property returned what was asked for (ISSUES.md #38, now fixed by
+  stretching the hash across blocks). Vector-scan cost in every section dated
+  2026-07-29 is therefore understated. **Do not compare those numbers with
+  anything measured after the fix** — see the 2026-08-07 re-baseline below for
+  the like-for-like replacement.
 - **The synthetic corpus is unrealistically self-similar.** Documents are drawn
   from a 17-word vocabulary, so most fact pairs clear the 0.80 contradiction
   threshold. Measured: 19% of unrelated pairs under the mock, and 49% under real
@@ -351,5 +353,76 @@ docker run -d --rm --name bench-surreal -p 8001:8000 \
   surrealdb/surrealdb:latest start --user root --pass root memory
 EPIMEMER_BENCH_URL=ws://localhost:8001/rpc \
   uv run python scripts/bench.py --n 1000,2000,4000 --skip-reflect
+docker stop bench-surreal
+```
+
+---
+
+## 2026-08-07 (after the #38 fix) — re-baseline at a real 384 dimensions
+
+**Every section above measured 32-wide vectors while reporting 384.** #38
+stretched the mock's SHA-256 source across blocks, so `make bench` now measures
+the width it always claimed. This section re-establishes the baseline; it is
+the one to compare future runs against, and the *only* one that may be compared
+with a run made after 2026-08-07.
+
+**Machine:** Apple M4 Max, macOS 26.4.1, arm64, Python 3.14.0.
+**Commit:** `183bc39` + the #38 fix. **Embeddings:** mock-384 (genuinely 384).
+SurrealDB is the same throwaway loopback container as the section above.
+
+| Nodes | Backend | search p50 | `list_sources` | `reflect` |
+|---|---|---|---|---|
+| 1,000 | memory | 23.3 ms | 30 ms | 3,568 ms |
+| 2,000 | memory | 46.4 ms | 61 ms | 14,229 ms |
+| 3,000 | memory | 68.7 ms | 101 ms | 31,612 ms |
+| 1,000 | SurrealDB | 149 ms | 968 ms | 17,128 ms |
+| 2,000 | SurrealDB | 180 ms | 1,966 ms | 59,786 ms |
+
+Ingest: **19,700 docs/min** in-memory (was ~30,700 at 32-wide), **3,500
+docs/min** on SurrealDB (was ~5,950). The mock now computes twelve SHA-256
+blocks per text instead of one, so part of that is the mock itself — a cost a
+real provider pays many times over.
+
+### What the width was hiding
+
+| Operation | 32-wide | 384-wide | factor |
+|---|---|---|---|
+| memory `search` p50 @1k | 3.6 ms | 23.3 ms | 6.5× |
+| memory `reflect` @1k | 559 ms | 3,568 ms | 6.4× |
+| memory `reflect` @3k | 4,402 ms | 31,612 ms | 7.2× |
+| SurrealDB `search` p50 @1k | 118 ms | 149 ms | 1.27× |
+| SurrealDB `reflect` @1k | 6,060 ms | 17,128 ms | 2.8× |
+
+The pattern is exactly what a 12× wider vector predicts: operations dominated
+by pairwise float work in Python pay most of it, operations dominated by
+round-trips barely notice. `list_sources` touches no vectors and did not move
+(30 vs 27 ms in-memory; within noise on SurrealDB).
+
+### The 30 s crossings all move, and `reflect` moves a lot
+
+| Operation | in-memory | SurrealDB (loopback) |
+|---|---|---|
+| `search` | ~1.3M (linear, exponent 0.98) | not reachable (exponent 0.27) |
+| `reflect` | **~2,900** (was ~7,400) | **~1,400** (was ~3,200) |
+| `list_sources` | ~1M (linear) | ~30,000 (linear) |
+
+`reflect`'s *shape* is unchanged — in-memory it still fits an exponent of 1.99,
+quadratic, as it has since the #31 fix. Only the constant grew, and it grew
+enough to halve the graph size at which the tool call fails. At 3,000 nodes
+in-memory `reflect` now exceeds the 30 s default timeout outright (31.6 s).
+
+That is a correction to the record rather than a regression: these are the
+numbers that were always true of a 384-dim model, and #14's residual
+`_cosine_similarity` cost — genuine O(F²) work over 384-component vectors
+rather than 32 — is 12× more of the profile than the earlier sections implied.
+It strengthens the case for vectorizing it, which remains unraised as an issue.
+
+### Reproduction
+
+```bash
+make bench BENCH_N=1000,3000
+docker run -d --rm --name bench-surreal -p 8001:8000 \
+  surrealdb/surrealdb:latest start --user root --pass root memory
+EPIMEMER_BENCH_URL=ws://localhost:8001/rpc make bench BENCH_N=1000,2000
 docker stop bench-surreal
 ```

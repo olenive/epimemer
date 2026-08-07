@@ -3,9 +3,9 @@
 Living issue tracker. **Last review: 2026-08-07.**
 
 Everything found so far is resolved except **14** and **16**, both deferred by
-design, and **34–38**, which are scoped and actionable (35–37 are the value
-model & graph hygiene plan, designed in `dev-docs/REVIEW_EPISTEMIC.md` §12;
-38 is a small standalone fix). Resolved entries are **removed from this file**
+design, and **34–37**, which are scoped and actionable (35–37 are the value
+model & graph hygiene plan, designed in `dev-docs/REVIEW_EPISTEMIC.md` §12).
+Resolved entries are **removed from this file**
 — their resolution lives in git history and the merged code. Issue numbers are
 stable IDs; the gaps (6–13, 15, 17–33) are deleted-resolved items, not missing
 work. New findings continue from **39**.
@@ -63,6 +63,12 @@ speculatively. Nothing here is near the sizes below.
 `EPIMEMER_TOOL_TIMEOUT_SECONDS` defaults to **30 s**, so "crossing" below means
 *the tool call fails*, not *feels slow*.
 
+**The two tables below are 32-wide** (see the caveats at the end of this issue);
+the 384-wide replacements are in `dev-docs/BENCHMARKS.md` § *2026-08-07*. They
+are kept because the *relative* story they tell — which operation dominates,
+and which fix moved what — is unchanged by the width. The crossings table after
+them is the corrected one.
+
 In-memory (`mem://`), current code, mocked embeddings, Apple M4 Max. Bracketed
 figures are from before edge lookups were indexed — they are what made the
 in-memory backend look like the problem:
@@ -82,16 +88,16 @@ SurrealDB over `ws://` (**loopback** — a remote server is worse). Bracketed
 | 2,000 | 131 ms *(5,875)* | 1,818 ms | 15,679 ms |
 | 4,000 | 136 ms | 3,743 ms | not run |
 
-30 s crossings:
+30 s crossings, at a real 384 dimensions (2026-08-07 re-baseline):
 
 | Operation | in-memory | SurrealDB (loopback) |
 |---|---|---|
-| `search` | ~10M (linear) | not reachable (flat) |
-| `reflect` | ~7,400 | **~3,200** |
-| `list_sources` | ~1M (linear) | ~29,000 |
+| `search` | ~1.3M (linear) | not reachable (flat) |
+| `reflect` | ~2,900 | **~1,400** |
+| `list_sources` | ~1M (linear) | ~30,000 |
 
-**`reflect` is now the limiting operation on both backends** — ~7,400 nodes
-in-memory, ~3,200 on SurrealDB — and it is the one whose residual cost is
+**`reflect` is now the limiting operation on both backends** — ~2,900 nodes
+in-memory, ~1,400 on SurrealDB — and it is the one whose residual cost is
 genuine O(F²) work rather than a fixable access pattern. Everything else has
 been pushed past any size worth quoting.
 
@@ -122,11 +128,14 @@ work here would have to attack.
 **`reflect` — fixed twice, now the limiting operation.** Caching frame
 lookups per pass made it quadratic (it was cubic), moving the in-memory
 crossing from ~1,800 to ~5,000 nodes; indexing edge lookups bought a further
-2.3× for ~7,400. On SurrealDB it crosses at ~3,200. What remains is dominated
-by `_cosine_similarity` in `detect_contradictions` — 280k pure-Python pairwise
-comparisons at 1,500 nodes, ~3 s of 5.8 s. That is **genuine O(F²) work, not
-redundancy**; vectorizing it (numpy) would buy a large constant factor but not
-change the exponent. Nobody has raised that as an issue — do so if it bites.
+2.3× for ~7,400 — both figures at the old 32-wide vectors. At a real 384 it
+crosses at **~2,900** in-memory and **~1,400** on SurrealDB. What remains is
+dominated by `_cosine_similarity` in `detect_contradictions` — 280k
+pure-Python pairwise comparisons at 1,500 nodes, and now over 384-component
+vectors rather than 32. That is **genuine O(F²) work, not redundancy**;
+vectorizing it (numpy) would buy a large constant factor but not change the
+exponent. Nobody has raised that as an issue — do so if it bites, and the
+width correction makes it likelier to.
 
 **`list_sources` / `list_relations` — least urgent, and the in-memory half was
 a different bug.** `mcp/tools.py` iterates every active node and fetches that
@@ -185,11 +194,10 @@ project so far has overturned the cause its issue predicted.
   under the mock, 49% under the real model on templated text). Anything scaling
   with *surviving candidate pairs* is overstated. Node- and edge-scaled costs
   are not.
-- **`MockEmbeddingProvider` is capped at 32 dimensions** by its SHA-256 source
-  regardless of the `dimension` argument, while its `dimension` property reports
-  what was asked for. Vector-scan cost is understated relative to a real 384-dim
-  model. (Now filed as **#38**; fixing it invalidates these baselines — see the
-  re-bench note there.)
+- **Every number above was measured at 32 vector dimensions, not 384** — the
+  mock provider truncated its SHA-256 source (**#38**, fixed 2026-08-07). The
+  384-wide re-baseline is in `dev-docs/BENCHMARKS.md`; the crossings it
+  supersedes are corrected in the table above.
 - **All network numbers are loopback.** A remote SurrealDB is worse by the RTT
   difference times the round-trip count.
 
@@ -411,9 +419,25 @@ node judged worthless cannot leave the active set.
 
 ---
 
-### Issue 38 — `MockEmbeddingProvider` silently caps vectors at 32 dimensions while reporting the requested width
+### Issue 38 — `MockEmbeddingProvider` silently caps vectors at 32 dimensions while reporting the requested width — ✅ RESOLVED
 
-**Status.** Open. Small and self-contained. First flagged as a caveat under
+> **✅ Resolved 2026-08-07.** `_hash_bytes` stretches the SHA-256 source across
+> as many blocks as the width needs (block 0 is still the plain digest, so
+> vectors of width ≤ 32 are byte-identical to before), and
+> `deterministic_vector` is now a module-level pure function.
+> **Guarding test:**
+> `tests/embeddings/test_embeddings.py::TestMockEmbeddingProvider::test_mock_embedding_width_matches_reported_dimension`
+> — width, unit-norm and determinism at 8/32/384.
+>
+> **Re-bench done, and it matters more than expected.** `dev-docs/BENCHMARKS.md`
+> § *2026-08-07 (after the #38 fix)* is the new baseline; everything dated
+> 2026-07-29 was 32-wide and must not be compared against it. `reflect` got
+> 6.4–7.2× more expensive in-memory and 2.8× on SurrealDB, moving its 30 s
+> crossing from ~7,400 to **~2,900** nodes in-memory and from ~3,200 to
+> **~1,400** on SurrealDB. Shape is unchanged (still quadratic); only the
+> constant grew. Round-trip-bound operations barely moved.
+
+**Status.** Was open. Small and self-contained. First flagged as a caveat under
 #14's benchmark numbers ("arguably its own small bug") — promoting it to an
 issue because it quietly distorts every mock-embedding measurement and test.
 
@@ -479,8 +503,8 @@ What to pick up, and what has to be true first:
 | 2 | 35 (retrieval reinforcement) | Ready now; smallest, independent. Re-bench search after |
 | 3 | 36 (importance + `reinforce`) | Ready now; independent of 35. The parity round-trip test is the one to write first |
 | 4 | 37 (archival arm) | After 36 (needs `importance`). `NodeStatus.ARCHIVED` + atomic flip is the foundation commit |
-| anytime | 38 (mock embedding width) | Independent of everything; pairs naturally with the re-bench steps in 35/14 since it changes what `make bench` measures |
-| watch | reflect's O(F²) | **Not an issue yet — raise one when a real graph gets close.** It is the limiting operation on both backends (~7,400 nodes in-memory, ~3,200 on SurrealDB) and the only remaining cost that is genuine pairwise work rather than a fixable access pattern. Vectorizing `_cosine_similarity` buys a large constant factor, not an exponent |
+| ✅ done | 38 (mock embedding width) | Resolved 2026-08-07, before the rest — it changed what `make bench` measures, so the re-baseline had to land first or every later measurement would confound the two |
+| watch | reflect's O(F²) | **Not an issue yet — raise one when a real graph gets close.** It is the limiting operation on both backends (~2,900 nodes in-memory, ~1,400 on SurrealDB at a real 384 dimensions) and the only remaining cost that is genuine pairwise work rather than a fixable access pattern. Vectorizing `_cosine_similarity` buys a large constant factor, not an exponent |
 | watch | 14 (enrichment N+1) | The ~120 ms floor under every SurrealDB `search` is now per-result enrichment round-trips. Nothing fails because of it, so it stays deferred — but it is what a batched edge fetch would attack |
 | deferred | 16 | The server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`) |
 | deferred | 14 (rest) | Batched edge fetch + aggregate queries: a protocol change on both backends, and the `asyncio.gather` prong is blocked by #16 |
