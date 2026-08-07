@@ -104,6 +104,14 @@ REVIEW_EDGE_TYPES: frozenset[EdgeType] = frozenset(
 # edges to follow.
 NON_KNOWLEDGE_EDGE_TYPES: frozenset[EdgeType] = HISTORY_EDGE_TYPES | REVIEW_EDGE_TYPES
 
+# Edges anchoring a node to the segment it was extracted from. They record
+# where a node came from, not that anything in the graph depends on it — every
+# extracted node has exactly one, so counting them as structural support would
+# make the count constant and meaningless.
+SEGMENT_ANCHOR_EDGE_TYPES: frozenset[EdgeType] = frozenset(
+    {EdgeType.ABOUT, EdgeType.CONTAINS, EdgeType.IMPLIES}
+)
+
 # Built-in edges pointing at a provenance/source hub. Excluded from default
 # traversal (a search must not fan out into everything a source produced) but NOT
 # from migration (a corrected node keeps its source).

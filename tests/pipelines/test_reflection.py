@@ -31,7 +31,11 @@ from epimemer.core.types import (
     ValueSignal,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
-from epimemer.pipelines.reflection.archival import archive_nodes, find_archival_candidates
+from epimemer.pipelines.reflection.archival import (
+    archive_nodes,
+    find_archival_candidates,
+    nominate_archival_candidates,
+)
 from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
 from epimemer.pipelines.reflection.topic_consolidation import (
     find_similar_topic_pairs,
@@ -703,3 +707,195 @@ async def test_gather_pending_review_collects_flagged_only():
     # The newer fact and the unrelated topic are not flagged.
     assert newer.id not in flagged
     assert clean.id not in flagged
+
+
+# --- Archival nomination (the hygiene arm of the review loop) ---
+
+
+@pytest.fixture
+async def storage_for_nomination():
+    """One node of each nomination class, plus three that must be spared.
+
+    Nominate:
+      - fact-retired: SUPERSEDED long ago, low importance
+      - inference-stale: evidence superseded out from under it
+      - fact-trivial: active, never reinforced, low importance, unsupported
+    Spare:
+      - fact-reinforced: used since it was created
+      - fact-supported: another node depends on it (structural importance)
+      - fact-important: judged important
+    """
+    storage = InMemoryStorage()
+    now = datetime.now(timezone.utc)
+    born = now - timedelta(days=200)
+
+    def untouched(importance: float) -> ValueSignal:
+        # last_reinforced == created_at is the "never used" signal; both are
+        # pinned here so the fixture states it rather than relying on defaults.
+        return ValueSignal(importance=importance, last_reinforced=born)
+
+    retired = Fact(
+        id="fact-retired", content="retired and unimportant", source_id="seg-1",
+        status=NodeStatus.SUPERSEDED, superseded_at=now - timedelta(days=120),
+        created_at=born, value=untouched(0.2),
+    )
+    superseded_evidence = Fact(
+        id="fact-evidence", content="evidence that was superseded", source_id="seg-1",
+        status=NodeStatus.SUPERSEDED, superseded_at=now - timedelta(days=5),
+        created_at=born, value=untouched(0.5),
+    )
+    stale = Inference(
+        id="inference-stale", content="rests on superseded evidence", source_id="seg-1",
+        created_at=born, value=untouched(0.3),
+    )
+    trivial = Fact(
+        id="fact-trivial", content="never used, never judged", source_id="seg-1",
+        created_at=born, value=untouched(0.3),
+    )
+    reinforced = Fact(
+        id="fact-reinforced", content="used since creation", source_id="seg-1",
+        created_at=born,
+        value=ValueSignal(importance=0.3, last_reinforced=now - timedelta(days=1)),
+    )
+    supported = Fact(
+        id="fact-supported", content="something depends on this", source_id="seg-1",
+        created_at=born, value=untouched(0.3),
+    )
+    important = Fact(
+        id="fact-important", content="judged to matter", source_id="seg-1",
+        created_at=born, value=untouched(0.9),
+    )
+    dependent = Inference(
+        id="inference-dependent", content="derived from the supported fact",
+        source_id="seg-1", created_at=born,
+    )
+
+    for node in (retired, superseded_evidence, stale, trivial, reinforced,
+                 supported, important, dependent):
+        await storage.store_node(node)
+
+    await storage.store_edge(NodeEdge(
+        src_id=stale.id, dst_id=superseded_evidence.id, type=EdgeType.DERIVED_FROM,
+    ))
+    await storage.store_edge(NodeEdge(
+        src_id=dependent.id, dst_id=supported.id, type=EdgeType.DERIVED_FROM,
+    ))
+    # Every extracted node carries a segment anchor; it must not read as support.
+    for node in (trivial, reinforced, supported, important):
+        await storage.store_edge(NodeEdge(
+            src_id="seg-1", dst_id=node.id, type=EdgeType.CONTAINS,
+        ))
+
+    return storage
+
+
+async def test_archival_nomination_ordering(storage_for_nomination):
+    """Nominees come back worst-first, and the three spared classes are absent."""
+    candidates = await nominate_archival_candidates(
+        storage_for_nomination, max_age_days=90
+    )
+
+    assert [c.node_id for c in candidates] == [
+        "fact-retired", "inference-stale", "fact-trivial",
+    ]
+    assert [c.reason for c in candidates] == [
+        "retired", "evidence_stale", "never_reinforced",
+    ]
+
+
+async def test_archival_nomination_spares_used_and_supported_nodes(
+    storage_for_nomination,
+):
+    nominated = {
+        c.node_id
+        for c in await nominate_archival_candidates(
+            storage_for_nomination, max_age_days=90
+        )
+    }
+    assert "fact-reinforced" not in nominated
+    assert "fact-supported" not in nominated
+    assert "fact-important" not in nominated
+
+
+async def test_archival_nomination_respects_the_limit(storage_for_nomination):
+    """The cheap pass is bounded: cost tracks the junk, not the graph."""
+    candidates = await nominate_archival_candidates(
+        storage_for_nomination, max_age_days=90, limit=2
+    )
+    assert [c.node_id for c in candidates] == ["fact-retired", "inference-stale"]
+
+
+async def test_archival_nomination_never_nominates_a_reinforced_node_by_default():
+    """A node created moments ago is 'never reinforced' — but only just.
+
+    `created_at` and `last_reinforced` are filled by two separate clock reads,
+    so they are never exactly equal on a freshly created node. Comparing them
+    for equality would spare every node ever written; the tolerance is what
+    makes the rule mean 'not used since creation'.
+    """
+    storage = InMemoryStorage()
+    fresh = Fact(content="just created", source_id="seg-1")
+    await storage.store_node(fresh)
+
+    candidates = await nominate_archival_candidates(storage, max_age_days=90)
+
+    assert [c.node_id for c in candidates] == [fresh.id]
+
+
+async def test_archived_evidence_strands_its_inference():
+    """The follow-on: archive the evidence, and what rests on it comes back.
+
+    Flagged, never swept along — an inference is the layer that is expensive to
+    recreate, so it goes through review on its own.
+    """
+    storage = InMemoryStorage()
+    now = datetime.now(timezone.utc)
+
+    evidence = Fact(id="fact-swept", content="trivial detail", source_id="seg-1")
+    inference = Inference(
+        id="inference-stranded", content="rests on the swept fact", source_id="seg-1",
+        value=ValueSignal(importance=0.9),  # high, so only the follow-on can nominate it
+    )
+    await storage.store_node(evidence)
+    await storage.store_node(inference)
+    await storage.store_edge(NodeEdge(
+        src_id=inference.id, dst_id=evidence.id, type=EdgeType.DERIVED_FROM,
+    ))
+
+    before = {c.node_id for c in await nominate_archival_candidates(storage)}
+    assert "inference-stranded" not in before
+
+    await storage.set_node_status_tx(
+        [evidence], status=NodeStatus.ARCHIVED, retired_at=now
+    )
+
+    after = await nominate_archival_candidates(storage)
+    stranded = [c for c in after if c.node_id == "inference-stranded"]
+    assert len(stranded) == 1
+    assert stranded[0].reason == "evidence_stale"
+    # ...and the archived evidence is gone from the active set, not re-nominated.
+    assert "fact-swept" not in {c.node_id for c in after}
+
+
+async def test_partly_archived_evidence_does_not_strand_an_inference():
+    """One surviving support is still a basis."""
+    storage = InMemoryStorage()
+    kept = Fact(id="fact-kept", content="still good", source_id="seg-1")
+    swept = Fact(id="fact-gone", content="trivial", source_id="seg-1")
+    inference = Inference(
+        id="inference-ok", content="two supports", source_id="seg-1",
+        value=ValueSignal(importance=0.9),
+    )
+    for node in (kept, swept, inference):
+        await storage.store_node(node)
+    for dst in (kept.id, swept.id):
+        await storage.store_edge(NodeEdge(
+            src_id=inference.id, dst_id=dst, type=EdgeType.DERIVED_FROM,
+        ))
+
+    await storage.set_node_status_tx(
+        [swept], status=NodeStatus.ARCHIVED, retired_at=datetime.now(timezone.utc)
+    )
+
+    nominated = {c.node_id for c in await nominate_archival_candidates(storage)}
+    assert "inference-ok" not in nominated
