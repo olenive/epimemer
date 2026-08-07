@@ -266,6 +266,31 @@ async def test_dissimilar_topics_not_paired(
         assert "topic-c" not in pair_ids
 
 
+async def test_merge_carries_the_higher_importance(embedding_provider):
+    """A judgment on either source survives the merge.
+
+    Merge builds a fresh node, so anything the merged signal forgets to name is
+    silently reset to its default — and losing an importance judgment because
+    two topics were collapsed is exactly the erosion the field exists to stop.
+    """
+    storage = InMemoryStorage()
+    for node_id, importance in (("topic-i", 0.9), ("topic-j", 0.4)):
+        await storage.store_node(Topic(
+            id=node_id,
+            content="Machine learning algorithms",
+            source_id="seg-1",
+            value=ValueSignal(importance=importance),
+        ))
+
+    merged = await merge_similar_topics(
+        await storage.get_node("topic-i"),
+        await storage.get_node("topic-j"),
+        storage,
+        embedding_provider,
+    )
+    assert merged.value.importance == pytest.approx(0.9)
+
+
 async def test_merge_creates_new_topic_marks_originals(
     storage_with_similar_topics, embedding_provider
 ):
@@ -345,6 +370,30 @@ async def test_value_decay_returns_correct_count():
 
     count = await apply_decay(storage, decay_rate=0.1)
     assert count == 5
+
+
+async def test_decay_leaves_importance_untouched():
+    """Decay is a clock; importance is a judgment. The clock must not erode it.
+
+    An agent that marks a node important is recording an assessment, not
+    starting a timer — an importance that decayed back out would make the
+    judgment worthless.
+    """
+    storage = InMemoryStorage()
+
+    topic = Topic(
+        id="topic-important",
+        content="A topic judged important",
+        source_id="seg-1",
+        value=ValueSignal(relevance=0.8, importance=0.9),
+    )
+    await storage.store_node(topic)
+
+    await apply_decay(storage, decay_rate=0.1)
+
+    updated = await storage.get_node("topic-important")
+    assert updated.value.relevance == pytest.approx(0.72)
+    assert updated.value.importance == pytest.approx(0.9)
 
 
 async def test_value_decay_respects_min_relevance():

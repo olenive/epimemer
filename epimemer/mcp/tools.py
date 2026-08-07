@@ -1539,6 +1539,8 @@ async def apply_reflection(
             confidence=max(s.value.confidence for s in sources),
             relevance=max(s.value.relevance for s in sources),
             novelty=sum(s.value.novelty for s in sources) / len(sources),
+            # Max, as above: collapsing topics must not discard a judgment.
+            importance=max(s.value.importance for s in sources),
         )
         merged_topic = Topic(
             content=content,

@@ -145,10 +145,20 @@ BASE_METACONTEXT_ID = "the-real"
 
 
 class ValueSignal(BaseModel):
-    """Multi-dimensional value signal attached to every node."""
+    """Multi-dimensional value signal attached to every node.
+
+    `relevance` and `importance` answer different questions and move on
+    different clocks: relevance is "is this being used?" (decays, restored by
+    retrieval), importance is "does this matter?" (judgment only). Keeping them
+    apart is what stops decay from quietly eroding an assessment an agent or a
+    human deliberately recorded.
+    """
     novelty: float = Field(default=1.0, ge=0.0, le=1.0)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     relevance: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Never moved by `apply_decay`. Raised only by judgment — the `reinforce`
+    # tool, or a prior supplied at ingest.
+    importance: float = Field(default=0.5, ge=0.0, le=1.0)
     last_reinforced: datetime = Field(default_factory=_now)
 
 

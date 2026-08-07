@@ -23,6 +23,7 @@ from epimemer.core.types import (
     RawDocument,
     Timeline,
     Topic,
+    ValueSignal,
 )
 from epimemer.mcp import tools
 from epimemer.pipelines.timeline.functions import add_timepoint
@@ -180,6 +181,41 @@ class TestPayloadFidelity:
         got = await store.get_node(topic.id)
         assert got is not None
         assert got.source_id is None
+
+    async def test_value_signal_importance_round_trips(self, store):
+        """A judged `importance` survives the round trip on every backend.
+
+        Serialization is the plausible divergence: `importance` is a new field
+        on a nested model, and a backend that reconstructs `ValueSignal` from
+        its own row shape would silently hand back the default instead.
+        """
+        topic = Topic(
+            content="important",
+            source_id="s1",
+            value=ValueSignal(importance=0.87, relevance=0.31),
+        )
+        await store.store_node(topic)
+
+        got = await store.get_node(topic.id)
+        assert got is not None
+        assert got.value.importance == pytest.approx(0.87)
+        assert got.value.relevance == pytest.approx(0.31)
+
+    async def test_value_signal_importance_defaults_for_older_rows(self, store):
+        """A row written before the field existed reads back at the default.
+
+        Simulated by storing a node whose value payload omits `importance`
+        entirely — the "no retroactive repair" carry-over means old graphs must
+        keep working rather than be migrated.
+        """
+        topic = Topic(content="legacy", source_id="s1")
+        payload = topic.model_dump(mode="json")
+        payload["value"].pop("importance", None)
+        await store.store_node(Topic.model_validate(payload))
+
+        got = await store.get_node(topic.id)
+        assert got is not None
+        assert got.value.importance == pytest.approx(0.5)
 
     async def test_nested_metadata_round_trips(self, store):
         metadata = {"k": "v", "nested": {"a": [1, 2]}, "empty": {}}

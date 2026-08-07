@@ -4,7 +4,7 @@ Applies multiplicative relevance decay to all active nodes, simulating
 the natural fading of unreinforced memories over time.
 """
 
-from epimemer.core.types import EpistemicNode, NodeStatus, ValueSignal
+from epimemer.core.types import EpistemicNode, NodeStatus
 from epimemer.storage.protocol import StorageBackend
 
 
@@ -41,12 +41,11 @@ async def apply_decay(
         new_relevance = max(new_relevance, min_relevance)
 
         if new_relevance != old_relevance:
-            node.value = ValueSignal(
-                novelty=node.value.novelty,
-                confidence=node.value.confidence,
-                relevance=new_relevance,
-                last_reinforced=node.value.last_reinforced,
-            )
+            # Copy-with-update rather than reconstruct: decay owns exactly one
+            # field, and a field-by-field rebuild silently resets every signal
+            # it forgets to name — `importance` above all, which is a judgment
+            # the clock must never touch.
+            node.value = node.value.model_copy(update={"relevance": new_relevance})
             # No backend shares object identity with its callers, so the
             # mutation above is local until it is written back.
             await storage.store_node(node)

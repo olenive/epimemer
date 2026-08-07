@@ -150,10 +150,13 @@ async def merge_similar_topics(
     merged_content = f"{primary.content} {secondary.content}"
 
     # Combine value signals
+    # Importance takes the max, like confidence and relevance: a judgment made
+    # about either source still applies to what replaces them.
     merged_value = ValueSignal(
         confidence=max(topic_a.value.confidence, topic_b.value.confidence),
         relevance=max(topic_a.value.relevance, topic_b.value.relevance),
         novelty=(topic_a.value.novelty + topic_b.value.novelty) / 2.0,
+        importance=max(topic_a.value.importance, topic_b.value.importance),
     )
 
     # Create the merged topic
