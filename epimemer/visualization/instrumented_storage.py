@@ -265,6 +265,25 @@ class InstrumentedStorage:
         for edge in evidence_edges:
             await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
 
+    async def set_node_status_tx(
+        self,
+        nodes: Sequence[EpistemicNode],
+        *,
+        status: NodeStatus,
+        retired_at: datetime | None,
+    ) -> None:
+        await self._inner.set_node_status_tx(
+            nodes, status=status, retired_at=retired_at
+        )
+        graph = self._inner.current_database
+        for node in nodes:
+            await self._bus.publish(NodeStatusChanged(
+                graph=graph,
+                node_id=node.id,
+                old_status=node.status.value,
+                new_status=status.value,
+            ))
+
     async def merge_nodes_tx(
         self,
         source_nodes: Sequence[EpistemicNode],

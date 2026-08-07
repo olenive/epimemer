@@ -786,6 +786,41 @@ class SurrealDBStorage:
         self._append_review_writes(statements, params, evidence_edges, clear_edge_ids)
         await self._run_transaction(statements, params)
 
+    async def set_node_status_tx(
+        self,
+        nodes: Sequence[EpistemicNode],
+        *,
+        status: NodeStatus,
+        retired_at: datetime | None,
+    ) -> None:
+        if not nodes:
+            return
+
+        # `UPDATE … WHERE uid = $uid` silently matches nothing when the row is
+        # absent, so a missing node would flip the rest and report success. The
+        # THROW makes the transaction fail the way the in-memory backend's
+        # KeyError does — the parity rule is about behaviour, and "partially
+        # applied" is exactly the behaviour that must not differ.
+        uids = [node.id for node in nodes]
+        statements = [
+            f"LET $found = (SELECT VALUE uid FROM {_node_tables(None)} "
+            "WHERE uid IN $uids)",
+            "IF array::len($found) != $expected "
+            "{ THROW 'set_node_status_tx: node not found' }",
+        ]
+        params: dict = {
+            "uids": uids,
+            "expected": len(set(uids)),
+            "status": status.value,
+            "retired_at": retired_at.isoformat() if retired_at else None,
+        }
+        for table in {_node_to_table(node) for node in nodes}:
+            statements.append(
+                f"UPDATE {table} SET status = $status, "
+                "superseded_at = $retired_at WHERE uid IN $uids"
+            )
+        await self._run_transaction(statements, params)
+
     @staticmethod
     def _append_review_writes(
         statements: list[str],

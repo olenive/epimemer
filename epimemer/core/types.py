@@ -34,6 +34,9 @@ class NodeStatus(str, Enum):
     ACTIVE = "active"
     SUPERSEDED = "superseded"
     MERGED = "merged"
+    # Retired for triviality rather than for being wrong: the node was fine,
+    # it just was not worth keeping in the active set. Reversed by `restore`.
+    ARCHIVED = "archived"
 
 
 class EdgeType(str, Enum):

@@ -65,6 +65,7 @@ from epimemer.mcp.tools import (
     update,
 )
 from epimemer.mcp import tools
+from epimemer.mcp.tools import _node_to_dict
 from epimemer.mcp.server import _resolve_windows
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.storage.protocol import StorageBackend
@@ -974,6 +975,35 @@ class TestRestore:
         node = await storage.get_node("restored-1")
         assert node is not None
         assert node.content == "restored topic"
+
+    async def test_restore_reactivates_an_archived_node(self, storage):
+        """Un-archival, not reimport: the row is still there, so a re-insert
+        would write nothing and the node would stay out of the active set."""
+        node = Fact(content="archived but wanted back", source_id="s1")
+        await storage.store_node(node)
+        await storage.set_node_status_tx(
+            [node], status=NodeStatus.ARCHIVED, retired_at=datetime.now(timezone.utc)
+        )
+
+        result, _ = await restore({"nodes": [_node_to_dict(node)]}, storage)
+
+        assert result["nodes_reactivated"] == 1
+        assert result["nodes_restored"] == 0
+        restored = await storage.get_node(node.id)
+        assert restored.status == NodeStatus.ACTIVE
+        assert restored.superseded_at is None
+
+    async def test_restore_leaves_a_superseded_node_retired(self, storage):
+        """An archive may hold nodes retired for being *wrong*. Those stay
+        retired — restoring an archive is not a blanket resurrection."""
+        node = Fact(content="wrong and superseded", source_id="s1")
+        await storage.store_node(node)
+        await storage.update_node_status(node.id, NodeStatus.SUPERSEDED)
+
+        result, _ = await restore({"nodes": [_node_to_dict(node)]}, storage)
+
+        assert result["nodes_reactivated"] == 0
+        assert (await storage.get_node(node.id)).status == NodeStatus.SUPERSEDED
 
     async def test_restore_is_atomic_on_bad_record(self, storage):
         # A malformed edge (missing dst_id) must abort the whole restore so the

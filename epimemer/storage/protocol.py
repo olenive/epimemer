@@ -332,6 +332,28 @@ class StorageBackend(Protocol):
         """
         ...
 
+    async def set_node_status_tx(
+        self,
+        nodes: Sequence[EpistemicNode],
+        *,
+        status: NodeStatus,
+        retired_at: datetime | None,
+    ) -> None:
+        """Atomically move every node in ``nodes`` to ``status``.
+
+        No node, edge or embedding is created or destroyed — only the status
+        and ``superseded_at`` (the instant the node left the active set, which
+        is what temporal queries read; pass None when returning to ACTIVE).
+
+        Archival is the reason this exists: the caller exports the nodes first,
+        and the flip must not apply partially, because a half-flipped batch
+        makes the report of what was archived untrue. Restoring runs the same
+        operation in the other direction.
+
+        Raises if any node is missing, before flipping any of them.
+        """
+        ...
+
     async def merge_nodes_tx(
         self,
         source_nodes: Sequence[EpistemicNode],

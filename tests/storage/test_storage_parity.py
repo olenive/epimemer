@@ -559,3 +559,86 @@ class TestVectorSearchReturnsOnlyActiveNodes:
         results = await store.vector_search([1.0, 0.0, 0.0], "test", k=3)
 
         assert sorted(item_id for item_id, _ in results) == sorted(n.id for n in live)
+
+
+class TestArchivalStatus:
+    """`ARCHIVED` is how an *active* node leaves the active set.
+
+    Everything else that retires a node (supersede, merge) says the node was
+    wrong or duplicated. Archival says it was trivial — the hygiene arm of the
+    review loop — and it is the first status flip applied to nodes that are
+    otherwise perfectly good, so the exclusion has to hold on both backends
+    rather than only where it was implemented.
+    """
+
+    async def _stored(self, store, node, vector):
+        await store.store_node(node)
+        await store.store_embedding(
+            EmbeddingRecord(item_id=node.id, model_id="test", vector=vector)
+        )
+        return node
+
+    async def test_archived_nodes_excluded_from_queries(self, store):
+        keep = await self._stored(
+            store, Fact(content="kept", source_id="s1"), [1.0, 0.0, 0.0]
+        )
+        junk = await self._stored(
+            store, Fact(content="trivial", source_id="s1"), [1.0, 0.0, 0.0]
+        )
+        at = datetime.now(timezone.utc)
+
+        await store.set_node_status_tx(
+            [junk], status=NodeStatus.ARCHIVED, retired_at=at
+        )
+
+        active_ids = {n.id for n in await store.query_nodes(status=NodeStatus.ACTIVE)}
+        assert keep.id in active_ids
+        assert junk.id not in active_ids
+
+        # An exact match on the query vector: only the status filter can hide it.
+        found = {item_id for item_id, _ in await store.vector_search(
+            [1.0, 0.0, 0.0], "test", k=5
+        )}
+        assert keep.id in found
+        assert junk.id not in found
+
+        archived = await store.query_nodes(status=NodeStatus.ARCHIVED)
+        assert [n.id for n in archived] == [junk.id]
+        assert archived[0].superseded_at is not None
+
+    async def test_restore_returns_an_archived_node_to_active(self, store):
+        junk = await self._stored(
+            store, Fact(content="trivial", source_id="s1"), [1.0, 0.0, 0.0]
+        )
+        await store.set_node_status_tx(
+            [junk], status=NodeStatus.ARCHIVED, retired_at=datetime.now(timezone.utc)
+        )
+
+        await store.update_node_status(junk.id, NodeStatus.ACTIVE)
+
+        active_ids = {n.id for n in await store.query_nodes(status=NodeStatus.ACTIVE)}
+        assert junk.id in active_ids
+
+    async def test_archival_flip_is_atomic(self, store):
+        """A failure part-way through leaves *every* node active.
+
+        Half an approved archival batch is worse than none of it: the agent is
+        told what was archived, and a partial flip makes that report a lie.
+        """
+        nodes = [
+            await self._stored(
+                store, Fact(content=f"junk {i}", source_id="s1"), [1.0, 0.0, 0.0]
+            )
+            for i in range(3)
+        ]
+        missing = Fact(content="never stored", source_id="s1")
+
+        with pytest.raises(Exception):
+            await store.set_node_status_tx(
+                [*nodes, missing],
+                status=NodeStatus.ARCHIVED,
+                retired_at=datetime.now(timezone.utc),
+            )
+
+        active_ids = {n.id for n in await store.query_nodes(status=NodeStatus.ACTIVE)}
+        assert {n.id for n in nodes} <= active_ids

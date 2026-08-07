@@ -482,6 +482,25 @@ class InMemoryStorage:
             self._graphs[self._database] = snapshot
             raise
 
+    async def set_node_status_tx(
+        self,
+        nodes: Sequence[EpistemicNode],
+        *,
+        status: NodeStatus,
+        retired_at: datetime | None,
+    ) -> None:
+        snapshot = copy.deepcopy(self._g)
+        try:
+            for node in nodes:
+                stored = self._g.nodes.get(node.id)
+                if stored is None:
+                    raise KeyError(f"Node {node.id} not found")
+                stored.status = status
+                stored.superseded_at = retired_at
+        except Exception:
+            self._graphs[self._database] = snapshot
+            raise
+
     async def merge_nodes_tx(
         self,
         source_nodes: Sequence[EpistemicNode],

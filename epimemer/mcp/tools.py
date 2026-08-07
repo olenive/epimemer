@@ -1760,22 +1760,54 @@ async def restore(
     archive_data: dict,
     storage: StorageBackend,
 ) -> tuple[dict, ResponseMeta]:
-    """Restore nodes and edges from archive data as one atomic batch.
+    """Restore nodes and edges from archive data.
 
-    The whole archive is reconstructed first (so a malformed record fails before
-    anything is written), then persisted in a single ``write_batch_tx`` — all of
-    it lands or none of it does, rather than leaving a half-restored graph.
+    Two shapes of archive reach this, and they need different writes.
+
+    A *cold-storage reimport* brings back records the graph no longer holds:
+    those are reconstructed first (so a malformed record fails before anything
+    is written) and persisted in a single ``write_batch_tx`` — all of it lands
+    or none of it does.
+
+    An *un-archival* is the reversal of the hygiene sweep, and there the rows
+    are still present: `archive` never deletes, it flips status. Re-inserting
+    them would write nothing, so anything already stored as ARCHIVED is flipped
+    back to ACTIVE instead. Records present under any other status are left
+    alone — restoring an archive must not resurrect a node that was superseded
+    for being wrong.
     """
     nodes = [_reconstruct_node(nd) for nd in archive_data.get("nodes", [])]
     edges = [NodeEdge(**ed) for ed in archive_data.get("edges", [])]
 
-    await storage.write_batch_tx(nodes=nodes, edges=edges)
+    missing: list[EpistemicNode] = []
+    archived: list[EpistemicNode] = []
+    for node in nodes:
+        stored = await storage.get_node(node.id)
+        if stored is None:
+            missing.append(node)
+        elif stored.status is NodeStatus.ARCHIVED:
+            archived.append(stored)
+
+    # Only edges reaching a node that was itself missing can be missing: an
+    # edge between two nodes still in the graph was never removed.
+    missing_ids = {node.id for node in missing}
+    missing_edges = [
+        edge for edge in edges
+        if edge.src_id in missing_ids or edge.dst_id in missing_ids
+    ]
+
+    await storage.write_batch_tx(nodes=missing, edges=missing_edges)
+    if archived:
+        await storage.set_node_status_tx(
+            archived, status=NodeStatus.ACTIVE, retired_at=None
+        )
 
     result = {
-        "nodes_restored": len(nodes),
-        "edges_restored": len(edges),
+        "nodes_restored": len(missing),
+        "nodes_reactivated": len(archived),
+        "edges_restored": len(missing_edges),
     }
-    meta = ResponseMeta(nodes_returned=len(nodes))
+    meta = ResponseMeta(nodes_returned=len(missing) + len(archived))
     return result, meta
 
 
