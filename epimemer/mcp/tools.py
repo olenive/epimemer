@@ -1946,16 +1946,66 @@ async def _ensure_symmetric_edge(
 # --- Timeline tools ---
 
 
+def _reference_time_iso(timeline: Timeline) -> str | None:
+    """A timeline's reference time as ISO, or None when it follows the clock."""
+    return (
+        None if timeline.reference_time is None
+        else timeline.reference_time.isoformat()
+    )
+
+
 async def create_timeline(
     name: str,
     storage: StorageBackend,
     *,
     description: str = "",
+    reference_time: datetime | None = None,
 ) -> tuple[dict, ResponseMeta]:
-    """Create a new timeline."""
-    tl = Timeline(name=name, description=description)
+    """Create a new timeline.
+
+    `reference_time` is the timeline's own "now" — set it for a fictional or
+    historical timeline whose present is not the wall clock. Leaving it unset
+    means the timeline tracks real time, which is not the same as pinning it to
+    the instant of creation.
+    """
+    tl = Timeline(name=name, description=description, reference_time=reference_time)
     await storage.store_timeline(tl)
-    result = {"timeline_id": tl.id, "name": tl.name}
+    result = {
+        "timeline_id": tl.id,
+        "name": tl.name,
+        "reference_time": _reference_time_iso(tl),
+    }
+    meta = ResponseMeta(nodes_returned=1)
+    return result, meta
+
+
+async def set_reference_time(
+    timeline_id: str,
+    storage: StorageBackend,
+    *,
+    reference_time: datetime | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Set (or clear) a timeline's reference time.
+
+    Separate from creation because a fiction's present is often learned later,
+    and read wrong first — the opening chapter dates the story only once you
+    have read it. Passing nothing clears the setting, returning the timeline to
+    the wall clock.
+    """
+    tl = await storage.get_timeline(timeline_id)
+    if tl is None:
+        raise ValueError(f"Timeline '{timeline_id}' not found")
+
+    # Copy-with-update rather than mutate-and-store: `store_timeline` is an
+    # upsert of the whole record, so the timepoints have to travel with it.
+    updated = tl.model_copy(update={"reference_time": reference_time})
+    await storage.store_timeline(updated)
+
+    result = {
+        "timeline_id": updated.id,
+        "name": updated.name,
+        "reference_time": _reference_time_iso(updated),
+    }
     meta = ResponseMeta(nodes_returned=1)
     return result, meta
 
@@ -2015,6 +2065,9 @@ async def query_timeline(
     result = {
         "timeline_id": tl.id,
         "timeline_name": tl.name,
+        # Reported on every query so a caller reading timepoints can tell which
+        # of them are past and which are future without a second call.
+        "reference_time": _reference_time_iso(tl),
         "timepoints": [tp.model_dump(mode="json") for tp in timepoints],
     }
     meta = ResponseMeta(nodes_returned=len(timepoints))

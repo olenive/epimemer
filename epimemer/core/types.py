@@ -327,6 +327,16 @@ class Timeline(BaseModel):
     name: str
     description: str = ""
     timepoints: list[Timepoint] = Field(default_factory=list)
+    # This timeline's "now" — the instant a viewer should be centred on and
+    # measure "past" and "future" against. A fictional timeline's present is a
+    # fact about that world ("the novel opens in May 1897"), not a viewer
+    # preference, so it lives here rather than in a browser.
+    #
+    # `None` means *follow the wall clock*, and is deliberately distinct from
+    # storing the current instant at creation: a real-world timeline whose
+    # present was frozen at the moment it was first written would drift further
+    # out of date every day it was used.
+    reference_time: datetime | None = None
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
 

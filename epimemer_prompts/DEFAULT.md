@@ -175,6 +175,23 @@ the same loop: nomination proposes, you judge, the **user approves**.
 - Never archive an inference on your own initiative. A stale inference is a
   prompt to re-derive it, and inferences are the expensive layer to recreate.
 
+### Timelines (when things happened)
+Distinct from record time — a timeline is about the *content*, not about when the
+graph learned it.
+- `create_timeline` names one; `add_timepoint` adds a moment (concrete, an
+  interval, or vague label-only); `create_timelink` attaches a node to a
+  timepoint. A vague timepoint is fine and preferred over a guessed date — "during
+  the Renaissance" must not become 1500-01-01.
+- **`reference_time` is the timeline's own "now"** — what a reader centres on and
+  measures past and future against. Set it (at `create_timeline`, or later with
+  `set_reference_time`) when a timeline is fictional or historical and its present
+  is not today: "the novel opens in May 1897". Leave it unset for anything that
+  tracks real time — unset means *follow the clock*, which is not the same as
+  passing today's date.
+- Expect to set it *after* ingesting enough of a source to know the anchor, and to
+  revise it when you learn you read it wrong. `set_reference_time` with no
+  timestamp clears it.
+
 ### Metacontexts (epistemic frames)
 - Untagged knowledge is implicitly "The Real" — base physical reality.
 - Tag framed knowledge (a fiction setting, a specific source/perspective) with a

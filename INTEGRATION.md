@@ -60,7 +60,7 @@ the knowledge graph and pipeline execution in real time.
 
 ### Verify Connection
 
-In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 33 tools.
+In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 34 tools.
 
 ## Available Tools
 
@@ -125,7 +125,8 @@ restate the count.
 
 | Tool | Purpose |
 |------|---------|
-| `create_timeline` | Create a named timeline |
+| `create_timeline` | Create a named timeline (optionally anchored to its own "now") |
+| `set_reference_time` | Set or clear a timeline's "now" — what past and future are measured against |
 | `add_timepoint` | Add a timepoint (concrete or vague) to a timeline |
 | `query_timeline` | Find nearest timepoints or query a time range |
 | `create_timelink` | Link a node to a specific timepoint on a timeline |

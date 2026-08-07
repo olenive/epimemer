@@ -135,7 +135,7 @@ Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<
 - **Reflection**: `reflect`, `configure_reflection`, `apply_reflection`
 - **Temporal access**: `as_of`, `query_changes`
 - **Archival**: `archive`, `restore`
-- **Timelines**: `create_timeline`, `add_timepoint`, `query_timeline`, `create_timelink`
+- **Timelines**: `create_timeline`, `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`
 - **Metacontexts**: `create_metacontext`, `get_metacontexts`
 - **Graph management**: `list_graphs`, `use_graph`, `delete_graph`
 

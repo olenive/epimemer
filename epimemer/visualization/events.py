@@ -97,6 +97,10 @@ class TimelineView(BaseModel):
     name: str
     description: str = ""
     timepoints: list[TimepointView] = Field(default_factory=list)
+    # The timeline's own "now". None means it follows the wall clock, and the
+    # frontend resolves that at render time rather than being handed a stale
+    # timestamp from whenever the snapshot was assembled.
+    reference_time: datetime | None = None
     created_at: datetime
     graph: str
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -177,6 +181,7 @@ def timeline_to_view(timeline: Timeline, graph: str) -> TimelineView:
         name=timeline.name,
         description=timeline.description,
         timepoints=[_timepoint_to_view(tp) for tp in timeline.timepoints],
+        reference_time=timeline.reference_time,
         created_at=timeline.created_at,
         graph=graph,
         metadata=timeline.metadata,

@@ -1061,12 +1061,18 @@ async def memory_create_timeline(
     name: str,
     ctx: Context,
     description: str = "",
+    reference_time: str | None = None,
 ) -> str:
     """Create a new timeline for tracking temporal relationships.
 
     Args:
         name: Name of the timeline (e.g., "History of AI").
         description: Optional description.
+        reference_time: ISO-8601 instant that counts as this timeline's
+            "now" — set it for a fictional or historical timeline whose present
+            is not today ("the novel opens in May 1897"). Leave it unset for a
+            timeline that tracks real time; that is not the same as passing
+            today's date, which would freeze its present at this moment.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -1075,10 +1081,43 @@ async def memory_create_timeline(
             name=name,
             storage=deps["storage"],
             description=description,
+            reference_time=_parse_utc(reference_time) if reference_time else None,
         ),
         ctx,
-        f"name={name}",
+        f"name={name} reference_time={reference_time}",
         lambda r, m: f"id={r['timeline_id']}",
+    )
+
+
+@mcp.tool(name="set_reference_time")
+async def memory_set_reference_time(
+    timeline_id: str,
+    ctx: Context,
+    reference_time: str | None = None,
+) -> str:
+    """Set or clear a timeline's "now".
+
+    A timeline's reference time is what a reader centres on and measures past
+    and future against. Set it once you know when a fictional or historical
+    timeline is anchored — that is usually after ingesting enough of the source
+    to say, which is why this is separate from create_timeline.
+
+    Args:
+        timeline_id: The timeline to anchor.
+        reference_time: ISO-8601 instant. **Omit to clear it**, returning the
+            timeline to real time.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.set_reference_time",
+        lambda: tools.set_reference_time(
+            timeline_id=timeline_id,
+            storage=deps["storage"],
+            reference_time=_parse_utc(reference_time) if reference_time else None,
+        ),
+        ctx,
+        f"timeline={timeline_id} reference_time={reference_time}",
+        lambda r, m: f"reference_time={r['reference_time']}",
     )
 
 

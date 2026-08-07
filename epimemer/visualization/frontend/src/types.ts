@@ -98,6 +98,12 @@ export interface TimelineView {
   name: string;
   description: string;
   timepoints: TimepointView[];
+  /**
+   * The timeline's own "now" — what the view centres on and measures past and
+   * future against. `null` means follow the wall clock; resolve it at render
+   * time rather than substituting a fixed instant on arrival.
+   */
+  reference_time: string | null;
   created_at: string;
   graph: string;
   metadata: Record<string, unknown>;

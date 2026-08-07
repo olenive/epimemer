@@ -47,6 +47,7 @@ const timeline = (over: Partial<TimelineView> & { timeline_id: string }): Timeli
   name: "History",
   description: "",
   timepoints: [],
+  reference_time: null,
   created_at: "2024-01-01T00:00:00Z",
   graph: "default",
   metadata: {},

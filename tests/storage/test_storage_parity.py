@@ -310,6 +310,45 @@ class TestGraphNameValidation:
         assert store.current_database == name
 
 
+class TestTimelineReferenceTime:
+    """A timeline's `reference_time` is its "now" — and it must survive storage.
+
+    Unset is a distinct state from "set to the moment it was created": a real
+    timeline follows the wall clock, and storing a timestamp at creation would
+    silently freeze its present at whenever it was first written.
+    """
+
+    async def test_reference_time_round_trips(self, store):
+        when = datetime(1897, 5, 26, tzinfo=timezone.utc)
+        timeline = Timeline(name="Dracula", reference_time=when)
+        await store.store_timeline(timeline)
+
+        got = await store.get_timeline(timeline.id)
+        assert got is not None
+        assert got.reference_time == when
+
+    async def test_reference_time_defaults_to_unset(self, store):
+        timeline = Timeline(name="real world")
+        await store.store_timeline(timeline)
+
+        got = await store.get_timeline(timeline.id)
+        assert got is not None
+        assert got.reference_time is None
+
+    async def test_reference_time_can_be_cleared(self, store):
+        timeline = Timeline(
+            name="was fictional",
+            reference_time=datetime(1897, 5, 26, tzinfo=timezone.utc),
+        )
+        await store.store_timeline(timeline)
+
+        await store.store_timeline(timeline.model_copy(update={"reference_time": None}))
+
+        got = await store.get_timeline(timeline.id)
+        assert got is not None
+        assert got.reference_time is None
+
+
 class TestTimelineToolsPersist:
     """`add_timeline_timepoint` re-stores the whole timeline, so an insert-only
     backend drops every timepoint after the first — and `create_timelink` then

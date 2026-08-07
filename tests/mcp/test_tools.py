@@ -60,6 +60,7 @@ from epimemer.mcp.tools import (
     restore,
     search,
     segment_text,
+    set_reference_time,
     store_decomposition,
     supersede_by,
     update,
@@ -1177,6 +1178,61 @@ class TestTimelineTools:
         tl = await storage.get_timeline(result["timeline_id"])
         assert tl is not None
         assert tl.name == "AI History"
+
+    async def test_create_timeline_with_reference_time(self, storage):
+        """A fictional timeline's present is knowable at creation."""
+        when = datetime(1897, 5, 26, tzinfo=timezone.utc)
+        result, _ = await create_timeline("Dracula", storage, reference_time=when)
+
+        assert result["reference_time"] == when.isoformat()
+        assert (await storage.get_timeline(result["timeline_id"])).reference_time == when
+
+    async def test_reference_time_unset_by_default(self, storage):
+        result, _ = await create_timeline("real world", storage)
+
+        assert result["reference_time"] is None
+        assert (await storage.get_timeline(result["timeline_id"])).reference_time is None
+
+    async def test_set_reference_time_updates_and_clears(self, storage):
+        """Learned later, and revisable — a fiction's 'now' can be read wrong first."""
+        created, _ = await create_timeline("Dracula", storage)
+        tl_id = created["timeline_id"]
+        when = datetime(1897, 5, 26, tzinfo=timezone.utc)
+
+        result, meta = await set_reference_time(tl_id, storage, reference_time=when)
+        assert result["reference_time"] == when.isoformat()
+        assert meta.nodes_returned == 1
+        assert (await storage.get_timeline(tl_id)).reference_time == when
+
+        cleared, _ = await set_reference_time(tl_id, storage)
+        assert cleared["reference_time"] is None
+        assert (await storage.get_timeline(tl_id)).reference_time is None
+
+    async def test_set_reference_time_preserves_timepoints(self, storage):
+        """The whole timeline is re-stored, so its points must survive the write."""
+        created, _ = await create_timeline("Dracula", storage)
+        tl_id = created["timeline_id"]
+        await add_timeline_timepoint(
+            tl_id, storage, start=datetime(1897, 5, 26, tzinfo=timezone.utc),
+        )
+
+        await set_reference_time(
+            tl_id, storage, reference_time=datetime(1897, 6, 1, tzinfo=timezone.utc),
+        )
+
+        assert len((await storage.get_timeline(tl_id)).timepoints) == 1
+
+    async def test_set_reference_time_rejects_unknown_timeline(self, storage):
+        with pytest.raises(ValueError, match="no-such-timeline"):
+            await set_reference_time("no-such-timeline", storage)
+
+    async def test_query_timeline_reports_reference_time(self, storage):
+        when = datetime(1897, 5, 26, tzinfo=timezone.utc)
+        created, _ = await create_timeline("Dracula", storage, reference_time=when)
+
+        result, _ = await query_timeline(created["timeline_id"], storage)
+
+        assert result["reference_time"] == when.isoformat()
 
     async def test_add_timepoint(self, storage):
         result, _ = await create_timeline("test", storage)
