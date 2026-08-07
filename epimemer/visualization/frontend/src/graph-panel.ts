@@ -45,10 +45,15 @@ const EDGE_COLORS: Record<string, string> = {
   merged_into: "#6b7280",
 };
 
+// Everything that has left the active set fades the same way. The *reason* it
+// left (wrong, duplicated, or merely trivial) is not something a node's opacity
+// can carry, and an unlisted status falling through to 1.0 would draw a retired
+// node as a live one.
 const STATUS_OPACITY: Record<string, number> = {
   active: 1.0,
   superseded: 0.3,
   merged: 0.3,
+  archived: 0.3,
 };
 
 // --- Layout configs ---
