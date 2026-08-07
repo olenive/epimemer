@@ -195,6 +195,7 @@ class TestAnswersAreUnchanged:
             "enrichment_candidates",
             "contradictions",
             "pending_review",
+            "archival_candidates",
             "similar_relations",
         }
         assert meta.nodes_returned >= len(result["contradictions"])

@@ -754,6 +754,82 @@ class TestReflect:
         assert entry["node"]["node_type"] == "fact"
 
 
+    async def test_surfaces_archival_candidates(self, storage, embedding_provider):
+        """Hygiene is another arm of the same loop: a worklist, like pending_review."""
+        born = datetime.now(timezone.utc) - timedelta(days=30)
+        trivial = Fact(
+            content="a passing detail", source_id="s1", created_at=born,
+            value=ValueSignal(importance=0.2, last_reinforced=born),
+        )
+        await storage.store_node(trivial)
+
+        result, _ = await reflect(storage, embedding_provider)
+
+        entry = next(
+            c for c in result["archival_candidates"] if c["node_id"] == trivial.id
+        )
+        assert entry["reason"] == "never_reinforced"
+        assert entry["node_type"] == "fact"
+
+
+class TestApplyReflectionArchivals:
+    """Approval is the human's; this is only what happens after it.
+
+    Archive, never delete: the export comes back with the response so the
+    caller keeps a copy, and `restore` puts the node back.
+    """
+
+    async def _trivial_fact(self, storage, content="a passing detail"):
+        born = datetime.now(timezone.utc) - timedelta(days=30)
+        node = Fact(
+            content=content, source_id="s1", created_at=born,
+            value=ValueSignal(importance=0.2, last_reinforced=born),
+        )
+        await storage.store_node(node)
+        return node
+
+    async def test_archives_exactly_the_approved_ids(
+        self, storage, embedding_provider
+    ):
+        approved = await self._trivial_fact(storage, "approved for archival")
+        spared = await self._trivial_fact(storage, "not approved")
+
+        result, _ = await apply_reflection(
+            storage, embedding_provider, archivals=[approved.id],
+        )
+
+        assert result["nodes_archived"] == 1
+        assert (await storage.get_node(approved.id)).status == NodeStatus.ARCHIVED
+        assert (await storage.get_node(spared.id)).status == NodeStatus.ACTIVE
+
+        exported = {n["id"] for n in result["archive_data"]["nodes"]}
+        assert exported == {approved.id}
+
+    async def test_archived_node_can_be_restored(self, storage, embedding_provider):
+        node = await self._trivial_fact(storage)
+        result, _ = await apply_reflection(
+            storage, embedding_provider, archivals=[node.id],
+        )
+
+        await restore(result["archive_data"], storage)
+
+        assert (await storage.get_node(node.id)).status == NodeStatus.ACTIVE
+
+    async def test_skips_missing_and_already_archived_ids(
+        self, storage, embedding_provider
+    ):
+        """Same forgiveness as supersessions: a stale worklist partially applies."""
+        node = await self._trivial_fact(storage)
+        await apply_reflection(storage, embedding_provider, archivals=[node.id])
+
+        result, _ = await apply_reflection(
+            storage, embedding_provider, archivals=[node.id, "no-such-node"],
+        )
+
+        assert result["nodes_archived"] == 0
+        assert (await storage.get_node(node.id)).status == NodeStatus.ARCHIVED
+
+
 # --- Apply Reflection (merge) tests ---
 
 

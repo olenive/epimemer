@@ -144,8 +144,8 @@ useful:
 - `reflect` returns consolidation candidates (similar pairs, splits, enrichments —
   similar pairs also surface duplicate source/tag/entity Topics), same-frame
   contradiction candidates, `pending_review` — the worklist of nodes already
-  flagged for resolution — and `similar_relations`, likely-synonymous user
-  relationship labels.
+  flagged for resolution — `archival_candidates` (see below), and
+  `similar_relations`, likely-synonymous user relationship labels.
 - Apply your decisions with `apply_reflection`. To resolve flagged nodes in batch,
   pass `supersessions=[{old_id, by_id}]`. Resolving a loser automatically clears
   the winner's `contested` / `superseded_candidate` labels. Escalate anything you
@@ -155,6 +155,25 @@ useful:
 - **Relation consolidation**: for `similar_relations` you judge synonymous, pass
   `relation_merges=[{labels: ["written_by"], into: "authored_by"}]`. Every user-tier
   edge with a listed label is relabelled in place (edges aren't versioned).
+
+### Cleanup (archival_candidates → apply_reflection archivals)
+Trivial knowledge is the counterpart to *wrong* knowledge, and it is handled by
+the same loop: nomination proposes, you judge, the **user approves**.
+- `reflect` returns `archival_candidates`, each with a `reason`: `retired` (long
+  superseded or merged and unimportant), `evidence_stale` (an inference whose
+  basis changed), `never_reinforced` (an active node nothing has used, judged or
+  depended on since it was created).
+- Judge each one *with graph context* — triviality is only visible from the
+  neighbourhood. "Error message X" matters while the bug is open and stops
+  mattering once it is fixed. If a nominee turns out to matter, `reinforce` it
+  instead; that is the answer to a wrong nomination, not silence.
+- **Ask the user before archiving.** Surface the list, say why each was
+  nominated, and pass only the approved ids as
+  `apply_reflection(archivals=[...])`. Keep the `archive_data` it returns.
+- Nothing is deleted. Archived nodes leave search and every active query;
+  `restore` puts them back.
+- Never archive an inference on your own initiative. A stale inference is a
+  prompt to re-derive it, and inferences are the expensive layer to recreate.
 
 ### Metacontexts (epistemic frames)
 - Untagged knowledge is implicitly "The Real" — base physical reality.

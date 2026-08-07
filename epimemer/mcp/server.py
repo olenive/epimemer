@@ -723,6 +723,7 @@ async def memory_apply_reflection(
     enrichments: list[dict] | None = None,
     merges: list[dict] | None = None,
     supersessions: list[dict] | None = None,
+    archivals: list[str] | None = None,
     relation_merges: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
 ) -> str:
@@ -748,6 +749,13 @@ async def memory_apply_reflection(
             pending_review by superseding the outdated/losing node with an
             existing one. Each: {old_id: str, by_id: str}. Atomic; the winner is
             unchanged and dependent inferences are flagged evidence_stale.
+        archivals: Archive trivial nodes from reflect's archival_candidates, as
+            a list of node ids. **Ask the user before passing anything here** —
+            archival is a human-approved verdict, like resolving a
+            contradiction. Nothing is deleted: the response carries an
+            archive_data export, and `restore` puts a node back. Never archive
+            an inference on its own initiative; a flagged one means its evidence
+            changed, which is a reason to re-derive it.
         relation_merges: Consolidate synonymous user relationship labels from
             reflect's similar_relations. Each: {labels: [str], into: str}. Every
             user-tier edge with a listed label is relabelled to `into`, in place.
@@ -765,13 +773,15 @@ async def memory_apply_reflection(
             enrichments=enrichments,
             merges=merges,
             supersessions=supersessions,
+            archivals=archivals,
             relation_merges=relation_merges,
             merge_similarity_threshold=merge_similarity_threshold,
         ),
         ctx,
         f"parents={len(parents or [])} splits={len(splits or [])} "
         f"enrichments={len(enrichments or [])} merges={len(merges or [])} "
-        f"supersessions={len(supersessions or [])} relation_merges={len(relation_merges or [])}",
+        f"supersessions={len(supersessions or [])} archivals={len(archivals or [])} "
+        f"relation_merges={len(relation_merges or [])}",
         lambda r, m: f"applied={m.nodes_returned}",
     )
 

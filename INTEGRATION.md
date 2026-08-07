@@ -105,7 +105,7 @@ restate the count.
 |------|---------|
 | `reflect` | Analyse the graph for consolidation/decay candidates |
 | `configure_reflection` | Set (or clear) this graph's store threshold for suggesting a reflect |
-| `apply_reflection` | Apply agent decisions from a reflection |
+| `apply_reflection` | Apply agent decisions from a reflection (including user-approved archivals) |
 
 ### Temporal Access
 
@@ -119,7 +119,7 @@ restate the count.
 | Tool | Purpose |
 |------|---------|
 | `archive` | Export old superseded nodes for cold storage |
-| `restore` | Reimport archived nodes |
+| `restore` | Reimport archived nodes, and return archived ones to active |
 
 ### Timeline Operations
 

@@ -1269,6 +1269,7 @@ REFLECT_PHASES = (
     "enrichment_scan",
     "contradiction_detection",
     "pending_review",
+    "archival_nomination",
     "relation_consolidation",
 )
 
@@ -1290,6 +1291,7 @@ async def reflect(
     review and act on via memory.apply_reflection.
     """
     from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
+    from epimemer.pipelines.reflection.archival import nominate_archival_candidates
     from epimemer.pipelines.reflection.relation_consolidation import find_similar_relation_pairs
     from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
     from epimemer.pipelines.reflection.topic_enrichment import gather_associated_material, _should_enrich
@@ -1412,7 +1414,17 @@ async def reflect(
             for n, labels in await gather_pending_review(storage)
         ]
 
-    # 7. Find likely-synonymous user relationship labels (open vocabulary captured
+    # 7. Nominate archival candidates — the hygiene arm of the same loop, and a
+    #    worklist in the same shape as pending_review. Mechanical: no LLM, no
+    #    embeddings. The agent judges, the human approves, and
+    #    apply_reflection(archivals=[...]) applies.
+    async def _archival():
+        return [
+            c.model_dump(mode="json")
+            for c in await nominate_archival_candidates(storage)
+        ]
+
+    # 8. Find likely-synonymous user relationship labels (open vocabulary captured
     #    fast, organized slow). Applied via apply_reflection relation_merges.
     async def _relations():
         return await find_similar_relation_pairs(
@@ -1433,6 +1445,9 @@ async def reflect(
             "contradiction_detection", _contradictions, tokens=len
         )
         pending_review = await phase("pending_review", _pending_review, tokens=len)
+        archival_candidates = await phase(
+            "archival_nomination", _archival, tokens=len
+        )
         similar_relations = await phase(
             "relation_consolidation", _relations, tokens=len
         )
@@ -1444,13 +1459,15 @@ async def reflect(
         "enrichment_candidates": enrichment_candidates,
         "contradictions": contradictions,
         "pending_review": pending_review,
+        "archival_candidates": archival_candidates,
         "similar_relations": similar_relations,
     }
     meta = ResponseMeta(
         nodes_returned=(
             len(similar_pairs) + len(split_candidates)
             + len(enrichment_candidates) + len(contradictions)
-            + len(pending_review) + len(similar_relations)
+            + len(pending_review) + len(archival_candidates)
+            + len(similar_relations)
         ),
     )
     return result, meta
@@ -1468,6 +1485,7 @@ async def apply_reflection(
     enrichments: list[dict] | None = None,
     merges: list[dict] | None = None,
     supersessions: list[dict] | None = None,
+    archivals: list[str] | None = None,
     relation_merges: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
 ) -> tuple[dict, ResponseMeta]:
@@ -1488,6 +1506,12 @@ async def apply_reflection(
         node ``by_id``. Atomic: marks old superseded (lineage old → by), flags
         inferences that depended on old as evidence_stale, and clears any
         supersession candidacy on it. The winner is unchanged; no new node.
+    archivals: [node_id] — archive the approved nodes from reflect's
+        archival_candidates. Exports each node with its edges (returned as
+        ``archive_data`` — keep it; that copy is the archive) and atomically
+        flips them to ARCHIVED, which removes them from every active-status
+        query. Nothing is deleted, and ``restore`` reverses it. Unknown or
+        already-retired ids are skipped, as supersessions are.
     relation_merges: [{labels: [str], into: str}] — consolidate synonymous user
         relationship labels (from reflect's similar_relations). Every user-tier
         edge with a listed label is relabelled to ``into``, in place (edges are
@@ -1640,7 +1664,28 @@ async def apply_reflection(
         await supersede_by_existing(old_node, by_id, storage)
         supersessions_applied += 1
 
-    # 6. Consolidate synonymous user relationship labels: relabel edges in place
+    # 6. Archive the approved trivial nodes: export first, then one atomic flip.
+    #    Ordering matters — the export is the archive, so it must be taken
+    #    before anything about the nodes changes.
+    to_archive: list[EpistemicNode] = []
+    for node_id in (archivals or []):
+        node = await storage.get_node(node_id)
+        if node is None or node.status is not NodeStatus.ACTIVE:
+            continue
+        to_archive.append(node)
+
+    archive_data: dict = {"nodes": [], "edges": []}
+    if to_archive:
+        from epimemer.pipelines.reflection.archival import archive_nodes
+
+        archive_data = await archive_nodes(to_archive, storage)
+        await storage.set_node_status_tx(
+            to_archive,
+            status=NodeStatus.ARCHIVED,
+            retired_at=datetime.now(timezone.utc),
+        )
+
+    # 7. Consolidate synonymous user relationship labels: relabel edges in place
     #    (edges are not versioned).
     relations_consolidated = 0
     edges_relabeled = 0
@@ -1664,13 +1709,16 @@ async def apply_reflection(
         "topics_merged": topics_merged,
         "merges_rejected": merges_rejected,
         "supersessions_applied": supersessions_applied,
+        "nodes_archived": len(to_archive),
+        "archive_data": archive_data,
         "relations_consolidated": relations_consolidated,
         "edges_relabeled": edges_relabeled,
     }
     meta = ResponseMeta(
         nodes_returned=(
             parents_created + topics_split + topics_enriched
-            + topics_merged + supersessions_applied + relations_consolidated
+            + topics_merged + supersessions_applied + len(to_archive)
+            + relations_consolidated
         ),
     )
     return result, meta
