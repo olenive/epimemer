@@ -3,12 +3,12 @@
 Living issue tracker. **Last review: 2026-08-07.**
 
 Everything found so far is resolved except **14** and **16**, both deferred by
-design, and **34** and **37**, which are scoped and actionable (37 is the last
-unbuilt arm of the value model & graph hygiene plan, designed in
-`dev-docs/REVIEW_EPISTEMIC.md` §12). Resolved entries are **removed from this
-file** — their resolution lives in git history and the merged code. Issue numbers are
-stable IDs; the gaps (6–13, 15, 17–33) are deleted-resolved items, not missing
-work. New findings continue from **39**.
+design, and **34**, which is scoped and actionable. The value model & graph
+hygiene plan (`dev-docs/REVIEW_EPISTEMIC.md` §12) is **built** — 35, 36 and 37
+below. Resolved entries are **removed from this file** — their resolution lives
+in git history and the merged code. Issue numbers are stable IDs; the gaps
+(6–13, 15, 17–33) are deleted-resolved items, not missing work. New findings
+continue from **39**.
 
 The performance work (issues 28, 31, 32 and 33) is the exception worth knowing
 about: its entries are gone, but the measurements, the method and the reasoning
@@ -407,9 +407,56 @@ owned by the decay clock — a judgment written there silently decays back out.
 
 ---
 
-### Issue 37 — No hygiene path for trivial facts: active nodes accumulate forever
+### Issue 37 — No hygiene path for trivial facts: active nodes accumulate forever — ✅ RESOLVED
 
-**Status.** Open. Design: `dev-docs/REVIEW_EPISTEMIC.md` §12.3. **Depends on
+> **✅ Resolved 2026-08-07**, in three commits (parts 2 and 4 landed together —
+> see below). Built as an arm of the existing loop: nomination is the
+> candidate-generation stage, the worklist rides in `reflect` beside
+> `pending_review`, and the verdict is applied by `apply_reflection`.
+>
+> **Guarding tests.** Status + transaction:
+> `tests/storage/test_storage_parity.py::TestArchivalStatus` (3 tests, both
+> backends) and
+> `tests/storage/test_surrealdb_integration.py::test_archival_flip_rolls_back_over_a_real_connection`.
+> Restore: `tests/mcp/test_tools.py::TestRestore::test_restore_reactivates_an_archived_node`
+> and `::test_restore_leaves_a_superseded_node_retired`. Nomination:
+> `tests/pipelines/test_reflection.py::test_archival_nomination_ordering`,
+> `::test_archival_nomination_spares_used_and_supported_nodes`,
+> `::test_archival_nomination_respects_the_limit`,
+> `::test_archival_nomination_never_nominates_a_reinforced_node_by_default`,
+> `::test_archived_evidence_strands_its_inference`,
+> `::test_partly_archived_evidence_does_not_strand_an_inference`. Worklist and
+> resolution: `tests/mcp/test_tools.py::TestReflect::test_surfaces_archival_candidates`
+> and `::TestApplyReflectionArchivals` (5 tests, both backends).
+>
+> **Four things the entry did not anticipate.**
+>
+> 1. **The status flip is generic, not archival-specific.** It is
+>    `set_node_status_tx(nodes, status, retired_at)` because `restore` needs the
+>    same atomic operation in the other direction. One method, two call sites.
+> 2. **`restore` could not reverse archival by re-inserting.** `archive` never
+>    deletes, so the rows are still there and `write_batch_tx` is INSERT-shaped
+>    — a re-insert writes nothing on SurrealDB. `restore` now partitions its
+>    payload: genuinely absent records are inserted as before, records present
+>    and ARCHIVED are flipped back, and records present under any other status
+>    are left alone (restoring an archive must not resurrect something
+>    superseded for being *wrong*).
+> 3. **`last_reinforced == created_at` is never true.** The two are filled by
+>    separate `datetime.now()` calls, so a node that has never been touched has
+>    them microseconds apart. Exact equality would have spared every node in the
+>    graph; `never_reinforced` uses a one-second tolerance, with a test that
+>    pins it.
+> 4. **Segment anchors had to be excluded from in-degree.** Every extracted node
+>    carries exactly one `about`/`contains`/`implies` edge from its segment, so
+>    counting those would make knowledge in-degree a constant ≥ 1 and nominate
+>    nothing. New `SEGMENT_ANCHOR_EDGE_TYPES` in `core/types.py` names the set.
+>
+> Part 4 (the inference follow-on) is `archival.evidence_gone`, folded into the
+> nomination pass rather than built as a separate sweep: an inference whose
+> whole evidence set is non-ACTIVE is nominated with reason `evidence_stale`,
+> the same reason the review label produces. Flagged, never auto-archived.
+
+**Status.** Was open. Design: `dev-docs/REVIEW_EPISTEMIC.md` §12.3. **Depends on
 #36** (importance field); #35 makes nomination meaningfully better but is not
 a hard blocker. Build this as **one more arm of the existing review loop, not
 a new subsystem**: nomination = candidate generation, resolution through
@@ -543,7 +590,7 @@ What to pick up, and what has to be true first:
 | 1 | 34 (timepoint extraction) | Ready now. Settle the `write_batch_tx` atomicity question first, in its own commit |
 | ✅ done | 35 (retrieval reinforcement) | Resolved 2026-08-07. Re-benched: constant cost, no crossing moves |
 | ✅ done | 36 (importance + `reinforce`) | Resolved 2026-08-07. The parity round-trip test did fail first, as predicted |
-| 4 | 37 (archival arm) | After 36 (needs `importance`). `NodeStatus.ARCHIVED` + atomic flip is the foundation commit |
+| ✅ done | 37 (archival arm) | Resolved 2026-08-07. `NodeStatus.ARCHIVED` + the atomic flip was indeed the foundation commit |
 | ✅ done | 38 (mock embedding width) | Resolved 2026-08-07, before the rest — it changed what `make bench` measures, so the re-baseline had to land first or every later measurement would confound the two |
 | watch | reflect's O(F²) | **Not an issue yet — raise one when a real graph gets close.** It is the limiting operation on both backends (~2,900 nodes in-memory, ~1,400 on SurrealDB at a real 384 dimensions) and the only remaining cost that is genuine pairwise work rather than a fixable access pattern. Vectorizing `_cosine_similarity` buys a large constant factor, not an exponent |
 | watch | 14 (enrichment N+1) | The ~120 ms floor under every SurrealDB `search` is now per-result enrichment round-trips. Nothing fails because of it, so it stays deferred — but it is what a batched edge fetch would attack |

@@ -229,3 +229,39 @@ async def test_concurrent_supersede_distinct_nodes(surreal):
         assert await verifier.get_node(new_id) is not None
         lineage = await verifier.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)
         assert len(lineage) == 1 and lineage[0].dst_id == new_id
+
+
+async def test_archival_flip_rolls_back_over_a_real_connection(surreal):
+    """The archival flip's guard is SurrealQL that `mem://` alone cannot vouch for.
+
+    A missing row makes `UPDATE ... WHERE uid = $uid` a silent no-op, so the
+    transaction throws instead — and that THROW is parsed and executed by the
+    server, not the embedded engine. This is the test that says it works where
+    it actually runs.
+    """
+    from datetime import datetime, timezone
+
+    store = await surreal()
+    verifier = await surreal()
+
+    nodes = [Fact(content=f"trivial-{i}", source_id="s1") for i in range(3)]
+    for node in nodes:
+        await store.store_node(node)
+    missing = Fact(content="never stored", source_id="s1")
+
+    with pytest.raises(Exception):
+        await store.set_node_status_tx(
+            [*nodes, missing],
+            status=NodeStatus.ARCHIVED,
+            retired_at=datetime.now(timezone.utc),
+        )
+
+    for node in nodes:
+        assert (await verifier.get_node(node.id)).status == NodeStatus.ACTIVE
+
+    # ...and the same call without the missing node commits every flip.
+    await store.set_node_status_tx(
+        nodes, status=NodeStatus.ARCHIVED, retired_at=datetime.now(timezone.utc)
+    )
+    for node in nodes:
+        assert (await verifier.get_node(node.id)).status == NodeStatus.ARCHIVED

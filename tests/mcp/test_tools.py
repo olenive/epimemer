@@ -815,6 +815,67 @@ class TestApplyReflectionArchivals:
 
         assert (await storage.get_node(node.id)).status == NodeStatus.ACTIVE
 
+    async def test_archived_node_leaves_search(
+        self, storage, embedding_provider, config
+    ):
+        """The point of the status flip: retrieval stops returning it."""
+        seg_result, _ = await segment_text(
+            "One paragraph about kestrels.", storage, embedding_provider, config,
+        )
+        await store_decomposition(
+            document_id=seg_result["document_id"],
+            segments=[{
+                "segment_id": seg_result["segments"][0]["segment_id"],
+                "facts": ["Kestrels hover while hunting."],
+            }],
+            storage=storage,
+            embedding_provider=embedding_provider,
+        )
+        fact = (await storage.query_nodes(node_type=NodeType.FACT))[0]
+
+        found, _ = await search(
+            "Kestrels hover while hunting.", storage, embedding_provider,
+            k=5, graph_hops=0, reinforcement_boost=0.0,
+        )
+        assert fact.id in {n["id"] for n in found["nodes"]}
+
+        await apply_reflection(storage, embedding_provider, archivals=[fact.id])
+
+        after, _ = await search(
+            "Kestrels hover while hunting.", storage, embedding_provider,
+            k=5, graph_hops=0, reinforcement_boost=0.0,
+        )
+        assert fact.id not in {n["id"] for n in after["nodes"]}
+
+    async def test_inference_with_archived_evidence_returns_to_the_worklist(
+        self, storage, embedding_provider
+    ):
+        """Part of the same loop: archiving evidence re-nominates what rests on it."""
+        born = datetime.now(timezone.utc) - timedelta(days=30)
+        evidence = Fact(
+            content="a passing detail", source_id="s1", created_at=born,
+            value=ValueSignal(importance=0.2, last_reinforced=born),
+        )
+        inference = Inference(
+            content="rests entirely on that detail", source_id="s1",
+            created_at=born,
+            # High importance, so only the follow-on rule can nominate it.
+            value=ValueSignal(importance=0.9, last_reinforced=born),
+        )
+        await storage.store_node(evidence)
+        await storage.store_node(inference)
+        await storage.store_edge(NodeEdge(
+            src_id=inference.id, dst_id=evidence.id, type=EdgeType.DERIVED_FROM,
+        ))
+
+        await apply_reflection(storage, embedding_provider, archivals=[evidence.id])
+
+        result, _ = await reflect(storage, embedding_provider)
+        entry = next(
+            c for c in result["archival_candidates"] if c["node_id"] == inference.id
+        )
+        assert entry["reason"] == "evidence_stale"
+
     async def test_skips_missing_and_already_archived_ids(
         self, storage, embedding_provider
     ):

@@ -396,14 +396,18 @@ each step is independently reviewable.
 
 ---
 
-## 12. Value model & graph hygiene (designed 2026-08-07 — not built)
+## 12. Value model & graph hygiene (designed and built 2026-08-07)
 
 Phases 1–4 handle *wrong* knowledge — superseded, contradicted, evidentially
 stale. They do nothing about *trivial* knowledge: small decisions, transient
 error records, one-off details that were worth writing but not worth keeping.
 Under principle 2 these accumulate forever — active, retrievable, diluting
 every similarity search. This section extends the review loop with a hygiene
-arm. **Implementation plan: ISSUES.md #35–37.**
+arm. **Built 2026-08-07** — ISSUES.md #35–37 carry the implementation notes,
+including four things the plan below did not anticipate (a generic status-flip
+transaction rather than an archival-specific one; `restore` needing to flip
+rather than re-insert; `last_reinforced == created_at` never being exactly
+true; and segment anchors having to be excluded from structural in-degree).
 
 ### 12.1 The value model, revised
 
