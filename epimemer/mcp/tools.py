@@ -7,7 +7,7 @@ calls these and wraps the results.
 
 import asyncio
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Sequence
 
 from epimemer.core.types import (
@@ -29,7 +29,7 @@ from epimemer.core.types import (
     ValueSignal,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
-from epimemer.mcp.config import ServerConfig
+from epimemer.mcp.config import DEFAULT_REINFORCEMENT_BOOST, ServerConfig
 from epimemer.mcp.types import ResponseMeta
 from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment
 from epimemer.storage.protocol import (
@@ -531,6 +531,49 @@ async def topic_tree(
     return result, meta
 
 
+def reinforced_signal(value: ValueSignal, boost: float, at: datetime) -> ValueSignal:
+    """The value signal a node carries after being retrieved.
+
+    `relevance += boost × (1 − relevance)`: asymptotic, so a node hit
+    repeatedly approaches 1.0 instead of pinning there on the second hit.
+    Every other field is carried through unchanged — reinforcement records
+    *use*, and must not quietly restate a judgment held elsewhere in the
+    signal.
+    """
+    return value.model_copy(
+        update={
+            "relevance": value.relevance + boost * (1.0 - value.relevance),
+            "last_reinforced": at,
+        }
+    )
+
+
+async def _reinforce_retrieved(
+    nodes: Sequence[EpistemicNode], storage: StorageBackend, boost: float
+) -> None:
+    """Write retrieval reinforcement back for every node search returned.
+
+    This is the only automatic upward path on `relevance`; without it the
+    signal is a monotone function of age and says nothing about whether a node
+    is load-bearing — which is exactly the distinction archival candidacy
+    needs.
+
+    It deliberately does **not** feed ranking: results stay ordered by
+    similarity. The loop (retrieved → more relevant → retrieved) is benign at
+    archival granularity and compounds at ranking granularity, where popular
+    nodes would crowd out better matches. See
+    `dev-docs/REVIEW_EPISTEMIC.md` §12.4.
+    """
+    if boost <= 0.0:
+        return
+    at = datetime.now(timezone.utc)
+    for node in nodes:
+        node.value = reinforced_signal(node.value, boost, at)
+        # No backend shares object identity with its callers, so the mutation
+        # above is local until it is written back.
+        await storage.store_node(node)
+
+
 async def search(
     query: str,
     storage: StorageBackend,
@@ -541,6 +584,7 @@ async def search(
     graph_hops: int = 1,
     metacontext_id: str | None = None,
     cross_frame: bool = False,
+    reinforcement_boost: float = DEFAULT_REINFORCEMENT_BOOST,
     event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Search the memory graph via hybrid retrieval (vector + graph expansion).
@@ -553,6 +597,10 @@ async def search(
     included on returned nodes. Returned Topics that sit in a split hierarchy also
     carry `parents` / `subtopics` as id + preview, so the caller can drill via
     `topic_tree` instead of being handed the whole subtree.
+
+    Returned nodes are reinforced (`reinforcement_boost`, 0.0 disables): being
+    retrieved is what tells relevance apart from age. Ranking is unaffected —
+    see `_reinforce_retrieved`.
     """
     from epimemer.pipelines.query.types import QueryRequest
     from epimemer.pipelines.reflection.review import review_labels
@@ -581,6 +629,10 @@ async def search(
         nodes = query_result.nodes
 
     edges_data = [e.model_dump(mode="json") for e in query_result.edges]
+
+    # Reinforce before serializing, so the caller sees the signal the node now
+    # holds rather than the one it held a moment ago.
+    await _reinforce_retrieved(nodes, storage, reinforcement_boost)
 
     # Build node dicts with metacontext labels, computed review labels, and —
     # for topics in a split hierarchy — their neighbours, so the caller can

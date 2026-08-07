@@ -393,6 +393,7 @@ async def memory_search(
             graph_hops=graph_hops,
             metacontext_id=metacontext_id,
             cross_frame=cross_frame,
+            reinforcement_boost=deps["config"].reinforcement_boost,
             event_bus=deps.get("event_bus"),
         ),
         ctx,

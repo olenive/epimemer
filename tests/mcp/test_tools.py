@@ -270,6 +270,94 @@ class TestSearch:
         assert isinstance(meta.source_types, dict)
 
 
+# --- Retrieval reinforcement ---
+
+
+async def _value_signals(storage) -> dict[str, tuple[float, object]]:
+    """relevance + last_reinforced for every node, keyed by id."""
+    nodes = await storage.query_nodes(status=NodeStatus.ACTIVE)
+    return {n.id: (n.value.relevance, n.value.last_reinforced) for n in nodes}
+
+
+class TestSearchReinforcement:
+    """Retrieval is the one automatic upward path on `relevance`.
+
+    Without it relevance only ever decays, so it measures age rather than use
+    and cannot tell an old load-bearing node from an old dead one.
+    """
+
+    async def test_search_reinforces_returned_nodes(
+        self, storage, embedding_provider, config
+    ):
+        await _two_step_ingest(
+            "Machine learning models require large datasets.\n\n"
+            "Volcanoes erupt when magma reaches the surface.",
+            storage, embedding_provider, config,
+        )
+        before = await _value_signals(storage)
+
+        result, _ = await search(
+            "Machine learning models require large datasets.",
+            storage,
+            embedding_provider,
+            k=1,
+            graph_hops=0,
+            reinforcement_boost=0.2,
+        )
+        returned = {n["id"] for n in result["nodes"]}
+        assert returned, "need at least one returned node to reinforce"
+
+        after = await _value_signals(storage)
+        for node_id, (relevance, last_reinforced) in after.items():
+            old_relevance, old_last_reinforced = before[node_id]
+            if node_id in returned:
+                assert relevance > old_relevance
+                assert last_reinforced > old_last_reinforced
+            else:
+                assert relevance == old_relevance
+                assert last_reinforced == old_last_reinforced
+
+    async def test_reinforcement_saturates_rather_than_pinning(
+        self, storage, embedding_provider, config
+    ):
+        """Repeated hits approach 1.0 asymptotically and never exceed it."""
+        await _two_step_ingest(
+            "Machine learning models require large datasets.",
+            storage, embedding_provider, config,
+        )
+        for _ in range(20):
+            result, _ = await search(
+                "Machine learning models require large datasets.",
+                storage,
+                embedding_provider,
+                k=1,
+                graph_hops=0,
+                reinforcement_boost=0.5,
+            )
+        returned = {n["id"] for n in result["nodes"]}
+        after = await _value_signals(storage)
+        for node_id in returned:
+            assert after[node_id][0] < 1.0
+
+    async def test_search_reinforcement_disabled_at_zero_boost(
+        self, storage, embedding_provider, config
+    ):
+        await _two_step_ingest(
+            "Machine learning models require large datasets.",
+            storage, embedding_provider, config,
+        )
+        before = await _value_signals(storage)
+
+        await search(
+            "Machine learning models require large datasets.",
+            storage,
+            embedding_provider,
+            k=5,
+            reinforcement_boost=0.0,
+        )
+        assert await _value_signals(storage) == before
+
+
 # --- Link tests ---
 
 

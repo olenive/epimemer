@@ -426,3 +426,29 @@ docker run -d --rm --name bench-surreal -p 8001:8000 \
 EPIMEMER_BENCH_URL=ws://localhost:8001/rpc make bench BENCH_N=1000,2000
 docker stop bench-surreal
 ```
+
+---
+
+## 2026-08-07 (after the #35 change) — what retrieval reinforcement costs
+
+`search` now writes every returned node back with a bumped `relevance` and a
+fresh `last_reinforced` — k extra writes per call, on by default
+(`EPIMEMER_REINFORCEMENT_BOOST=0.2`). Measured against the 384-wide baseline
+above, same session, same container, `--skip-reflect`.
+
+| Nodes | Backend | search p50 before | after | delta |
+|---|---|---|---|---|
+| 1,000 | memory | 23.3 ms | 24.5 ms | +5% |
+| 2,000 | memory | 46.4 ms | 46.6 ms | +0.3% |
+| 1,000 | SurrealDB | 149 ms | 167 ms | +12% (+17 ms) |
+| 2,000 | SurrealDB | 180 ms | 194 ms | +8% (+14 ms) |
+
+**Cheap, and flat in graph size.** The cost is k writes, and k does not grow
+with the graph, so the delta is a constant — visible on SurrealDB where each
+write is a round-trip, near-invisible in-memory. It does not change any 30 s
+crossing.
+
+It lands on top of the ~120 ms enrichment floor #14 describes, and it is the
+same shape of cost: per-result round-trips. A batched write would remove it the
+way a batched edge fetch would remove the floor, and neither is worth doing
+before the other.

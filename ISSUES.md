@@ -3,10 +3,10 @@
 Living issue tracker. **Last review: 2026-08-07.**
 
 Everything found so far is resolved except **14** and **16**, both deferred by
-design, and **34–37**, which are scoped and actionable (35–37 are the value
-model & graph hygiene plan, designed in `dev-docs/REVIEW_EPISTEMIC.md` §12).
-Resolved entries are **removed from this file**
-— their resolution lives in git history and the merged code. Issue numbers are
+design, and **34**, **36** and **37**, which are scoped and actionable (36–37
+are the value model & graph hygiene plan, designed in
+`dev-docs/REVIEW_EPISTEMIC.md` §12). Resolved entries are **removed from this
+file** — their resolution lives in git history and the merged code. Issue numbers are
 stable IDs; the gaps (6–13, 15, 17–33) are deleted-resolved items, not missing
 work. New findings continue from **39**.
 
@@ -286,9 +286,25 @@ that is the first commit, not an afterthought.
 
 ---
 
-### Issue 35 — Value signal is write-only: decay has no upward counterpart and nothing reads the result
+### Issue 35 — Value signal is write-only: decay has no upward counterpart and nothing reads the result — ✅ RESOLVED
 
-**Status.** Open. Design: `dev-docs/REVIEW_EPISTEMIC.md` §12 (path 1 of §12.2).
+> **✅ Resolved 2026-08-07.** `search` reinforces every node it returns
+> (`_reinforce_retrieved` / `reinforced_signal` in `mcp/tools.py`), before
+> serializing so the caller sees the signal the node now holds. Boost comes
+> from `ServerConfig.reinforcement_boost` (`EPIMEMER_REINFORCEMENT_BOOST`,
+> default 0.2, shared with the tool default via
+> `config.DEFAULT_REINFORCEMENT_BOOST` so the two cannot drift). Tool-layer
+> only — no protocol change, and ranking is untouched.
+> **Guarding tests** (`tests/mcp/test_tools.py::TestSearchReinforcement`, both
+> backends): `test_search_reinforces_returned_nodes`,
+> `test_reinforcement_saturates_rather_than_pinning`,
+> `test_search_reinforcement_disabled_at_zero_boost`.
+>
+> **Cost measured:** +12% / +17 ms on SurrealDB at 1,000 nodes, +5% in-memory,
+> and flat in graph size (k writes, k does not grow). No 30 s crossing moves.
+> `dev-docs/BENCHMARKS.md` § *2026-08-07 (after the #35 change)*.
+
+**Status.** Was open. Design: `dev-docs/REVIEW_EPISTEMIC.md` §12 (path 1 of §12.2).
 Independent of #36/#37; smallest of the three — do it first.
 
 **Symptom.** `ValueSignal` (`epimemer/core/types.py:147`) has exactly three
@@ -500,7 +516,7 @@ What to pick up, and what has to be true first:
 | Order | Work | Trigger |
 |---|---|---|
 | 1 | 34 (timepoint extraction) | Ready now. Settle the `write_batch_tx` atomicity question first, in its own commit |
-| 2 | 35 (retrieval reinforcement) | Ready now; smallest, independent. Re-bench search after |
+| ✅ done | 35 (retrieval reinforcement) | Resolved 2026-08-07. Re-benched: constant cost, no crossing moves |
 | 3 | 36 (importance + `reinforce`) | Ready now; independent of 35. The parity round-trip test is the one to write first |
 | 4 | 37 (archival arm) | After 36 (needs `importance`). `NodeStatus.ARCHIVED` + atomic flip is the foundation commit |
 | ✅ done | 38 (mock embedding width) | Resolved 2026-08-07, before the rest — it changed what `make bench` measures, so the re-baseline had to land first or every later measurement would confound the two |
