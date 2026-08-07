@@ -311,8 +311,12 @@ async def memory_store_decomposition(
         segments: List of decomposed segments. Each entry:
             segment_id: str — from segment result
             topics/facts/inferences: each item is either a content string, or
-              an object {"content": str, "tags": ["billing", ...]} to attach
-              per-node tags.
+              an object {"content": str, "tags": ["billing", ...],
+              "importance": 0.8} to attach per-node tags and an optional
+              importance prior (0.0–1.0, default 0.5). Set it only when you
+              already know a node is unusually consequential or unusually
+              disposable — importance is properly judged at reflect time, and
+              `reinforce` is how it rises later.
         metacontext_id: Optional metacontext ID — all nodes will inherit this.
         tags: Optional document-level tag names applied to every node. Each tag
             becomes (or reuses) a Topic linked by a tagged_with edge. Every node

@@ -173,12 +173,21 @@ async def _upsert_entity_topic(
     return topic
 
 
-def _content_and_tags(entry) -> tuple[str, list[str]]:
-    """Extract (content, tag names) from a decomposition entry: a bare content
-    string, or {"content": str, "tags": [name, ...]} for per-node tags."""
+def _decomposition_entry(entry) -> tuple[str, list[str], float | None]:
+    """Unpack a decomposition entry: a bare content string, or
+    `{"content": str, "tags": [name, ...], "importance": float}`.
+
+    `importance` is a *prior*, not a verdict: triviality is only visible once
+    the neighbourhood exists, so the real judgment happens at reflect time.
+    Omitting it leaves the node at the `ValueSignal` default.
+    """
     if isinstance(entry, dict):
-        return entry["content"], list(entry.get("tags", []))
-    return entry, []
+        return (
+            entry["content"],
+            list(entry.get("tags", [])),
+            entry.get("importance"),
+        )
+    return entry, [], None
 
 
 async def store_decomposition(
@@ -196,7 +205,8 @@ async def store_decomposition(
     Each entry in segments should have:
         segment_id: str
         topics/facts/inferences: each a content string, or {"content": str,
-            "tags": [name, ...]} for per-node tags.
+            "tags": [name, ...], "importance": float} for per-node tags and an
+            optional importance prior (default 0.5).
 
     Every node gets a `sourced_from` edge to the originating document. `tags`
     (document-level) and per-node tags are resolved-or-created (by exact name) as
@@ -251,8 +261,15 @@ async def store_decomposition(
             (Inference, seg_data.get("inferences", []), inferences),
         ):
             for entry in entries:
-                content, node_tag_names = _content_and_tags(entry)
-                node = cls(content=content, source_id=segment_id, extraction_method="agent")
+                content, node_tag_names, importance = _decomposition_entry(entry)
+                value = (
+                    ValueSignal() if importance is None
+                    else ValueSignal(importance=importance)
+                )
+                node = cls(
+                    content=content, source_id=segment_id,
+                    value=value, extraction_method="agent",
+                )
                 bucket.append(node)
                 names = doc_tag_names + node_tag_names
                 if names:

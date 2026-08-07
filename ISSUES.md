@@ -3,8 +3,8 @@
 Living issue tracker. **Last review: 2026-08-07.**
 
 Everything found so far is resolved except **14** and **16**, both deferred by
-design, and **34**, **36** and **37**, which are scoped and actionable (36–37
-are the value model & graph hygiene plan, designed in
+design, and **34** and **37**, which are scoped and actionable (37 is the last
+unbuilt arm of the value model & graph hygiene plan, designed in
 `dev-docs/REVIEW_EPISTEMIC.md` §12). Resolved entries are **removed from this
 file** — their resolution lives in git history and the merged code. Issue numbers are
 stable IDs; the gaps (6–13, 15, 17–33) are deleted-resolved items, not missing
@@ -343,9 +343,34 @@ enrichment floor documented in #14. After landing, re-run
 
 ---
 
-### Issue 36 — No `importance` dimension and no agent-facing upward path for it
+### Issue 36 — No `importance` dimension and no agent-facing upward path for it — ✅ RESOLVED
 
-**Status.** Open. Design: `dev-docs/REVIEW_EPISTEMIC.md` §12 (§12.1–12.2).
+> **✅ Resolved 2026-08-07**, in three commits matching the three parts below.
+>
+> **Guarding tests.** Field:
+> `tests/storage/test_storage_parity.py::TestPayloadFidelity::test_value_signal_importance_round_trips`
+> and `::test_value_signal_importance_defaults_for_older_rows` (both backends);
+> `tests/pipelines/test_reflection.py::test_decay_leaves_importance_untouched`
+> and `::test_merge_carries_the_higher_importance`. Tool:
+> `tests/mcp/test_tools.py::TestReinforce` (5 tests, both backends). Prior:
+> `::TestStoreDecomposition::test_importance_prior_applied_per_entry` and
+> `::test_importance_prior_out_of_range_rejected`.
+>
+> **Two things the entry did not anticipate.** (1) *Merge* also had to carry
+> importance forward: both merge paths (`tools.apply_reflection`,
+> `topic_consolidation.merge_similar_topics`) build a fresh `ValueSignal`
+> field-by-field, so the new field would have been silently reset to 0.5 by any
+> merge. Both now take the max, as they already did for confidence and
+> relevance. `apply_decay` had the same shape and now copies-with-update
+> instead of rebuilding. (2) The importance prior is accepted on *any*
+> decomposition entry, not only facts — `_decomposition_entry` (renamed from
+> `_content_and_tags`) parses all three node types through one path, and
+> special-casing facts would have added a rule without adding a guarantee.
+>
+> `ServerConfig.importance_step` (`EPIMEMER_IMPORTANCE_STEP`, default 0.25)
+> shares `config.DEFAULT_IMPORTANCE_STEP` with the tool, as #35's boost does.
+
+**Status.** Was open. Design: `dev-docs/REVIEW_EPISTEMIC.md` §12 (§12.1–12.2).
 Independent of #35; **prerequisite for #37**.
 
 **Symptom.** An agent that learns something making an existing node more
@@ -517,7 +542,7 @@ What to pick up, and what has to be true first:
 |---|---|---|
 | 1 | 34 (timepoint extraction) | Ready now. Settle the `write_batch_tx` atomicity question first, in its own commit |
 | ✅ done | 35 (retrieval reinforcement) | Resolved 2026-08-07. Re-benched: constant cost, no crossing moves |
-| 3 | 36 (importance + `reinforce`) | Ready now; independent of 35. The parity round-trip test is the one to write first |
+| ✅ done | 36 (importance + `reinforce`) | Resolved 2026-08-07. The parity round-trip test did fail first, as predicted |
 | 4 | 37 (archival arm) | After 36 (needs `importance`). `NodeStatus.ARCHIVED` + atomic flip is the foundation commit |
 | ✅ done | 38 (mock embedding width) | Resolved 2026-08-07, before the rest — it changed what `make bench` measures, so the re-baseline had to land first or every later measurement would confound the two |
 | watch | reflect's O(F²) | **Not an issue yet — raise one when a real graph gets close.** It is the limiting operation on both backends (~2,900 nodes in-memory, ~1,400 on SurrealDB at a real 384 dimensions) and the only remaining cost that is genuine pairwise work rather than a fixable access pattern. Vectorizing `_cosine_similarity` buys a large constant factor, not an exponent |

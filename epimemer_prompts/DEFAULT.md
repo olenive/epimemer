@@ -12,6 +12,10 @@ the history linked. Your job is to write fast and organize deliberately.
 - Pass a `metacontext_id` when the information has a specific framing (fiction, a
   particular source, a perspective). Untagged knowledge is treated as base reality
   — "The Real" (see Metacontexts below).
+- An entry may carry an `importance` prior (`{"content": ..., "importance": 0.8}`)
+  when you already know it is unusually consequential or unusually disposable.
+  Usually leave it alone: importance is properly judged at reflect time, when the
+  surrounding graph exists to judge it against.
 
 ### Sources, tags, and relations (all nodes & edges, not strings)
 

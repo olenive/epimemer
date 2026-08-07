@@ -199,6 +199,53 @@ class TestStoreDecomposition:
         total_nodes = sum(store_result["nodes_created"].values())
         assert total_nodes == 3  # 1 topic + 1 fact + 1 inference
 
+    async def test_importance_prior_applied_per_entry(
+        self, storage, embedding_provider, config
+    ):
+        """An entry may carry an importance prior; anything else gets the default.
+
+        A prior only — real judgment happens at reflect time, once the
+        neighbourhood exists to judge triviality against.
+        """
+        seg_result, _ = await segment_text(
+            "One paragraph.", storage, embedding_provider, config,
+        )
+        segment_id = seg_result["segments"][0]["segment_id"]
+        await store_decomposition(
+            document_id=seg_result["document_id"],
+            segments=[{
+                "segment_id": segment_id,
+                "facts": [
+                    {"content": "load-bearing fact", "importance": 0.9},
+                    "ordinary fact",
+                ],
+            }],
+            storage=storage,
+            embedding_provider=embedding_provider,
+        )
+
+        facts = await storage.query_nodes(node_type=NodeType.FACT)
+        by_content = {f.content: f.value.importance for f in facts}
+        assert by_content["load-bearing fact"] == pytest.approx(0.9)
+        assert by_content["ordinary fact"] == pytest.approx(0.5)
+
+    async def test_importance_prior_out_of_range_rejected(
+        self, storage, embedding_provider, config
+    ):
+        seg_result, _ = await segment_text(
+            "One paragraph.", storage, embedding_provider, config,
+        )
+        with pytest.raises(ValueError):
+            await store_decomposition(
+                document_id=seg_result["document_id"],
+                segments=[{
+                    "segment_id": seg_result["segments"][0]["segment_id"],
+                    "facts": [{"content": "too important", "importance": 1.5}],
+                }],
+                storage=storage,
+                embedding_provider=embedding_provider,
+            )
+
     async def test_with_metacontext(
         self, storage, embedding_provider, config
     ):
