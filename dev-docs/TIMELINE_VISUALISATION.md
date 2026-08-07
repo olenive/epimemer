@@ -1,10 +1,21 @@
 # Timeline visualisation — plan of action
 
-A left-to-right timeline panel in the dashboard, showing events as marks on an
-axis, with hover detail, filtering, and per-timeline zoom.
+A timeline panel in the dashboard, showing events as marks on an axis, with
+hover detail, filtering, and zoom.
 
-Status: **built**, except §7 (extraction proposing timepoints), which stays open
-and is tracked in `ISSUES.md`.
+Status, in two parts:
+
+- **The horizontal panel is built**, except §7 (extraction proposing
+  timepoints), which stays open and is tracked in `ISSUES.md`.
+- **A vertical redesign is designed and not built.** §12 is its authoritative
+  description and **supersedes §4 (layout), §5.3 (zoom gestures) and §5.4
+  (vague timepoints)**. Its one backend prerequisite — `reference_time` — *is*
+  built (§6.4).
+
+Sections 2–11 describe the horizontal panel, which is the code that exists
+today. They are left standing rather than rewritten: until the vertical
+renderer lands, they are what the running dashboard does, and §12 says exactly
+which of them it replaces.
 
 This document is the design record. Where the build diverged from the plan, the
 plan has been corrected to describe what exists — §6.2 (one event, not two),
@@ -18,14 +29,30 @@ places that moved, and each says why.
 | Question | Decision |
 |---|---|
 | Which time axis? | **Both**, as two modes of one panel: *content time* and *record time* (§3). |
-| Panel placement | **Separate panel**, axis running left to right. Not folded into the graph panel. |
-| Vague timepoints | Positioned **below** the axis in a dedicated lane, in a defined order (§5.4). No fake coordinate on the axis. |
-| Large gaps | **Break the axis** where a gap is far above the local spacing, collapsing it into a marked break (§5.2). |
-| Zoom | Per-timeline zoom and pan, recomputing breaks from the visible domain (§5.3). |
+| Panel placement | **Separate panel**, axis running left to right. Not folded into the graph panel. → **superseded by §12**: vertical axis in a split pane. |
+| Vague timepoints | Positioned **below** the axis in a dedicated lane, in a defined order (§5.4). No fake coordinate on the axis. → **§12.6** keeps the rule, changes the place. |
+| Large gaps | **Break the axis** where a gap is far above the local spacing, collapsing it into a marked break (§5.2). Unchanged by §12. |
+| Zoom | Per-timeline zoom and pan, recomputing breaks from the visible domain (§5.3). → **§12.4** rebinds the gestures. |
 | Timepoint population | Extraction should **propose** timepoints, not only manual curation — but as a later phase (§7). |
-| Filters | Linked node type, node status, metacontext, date range, **plus free-text field filters** (§5.5). |
+| Filters | Linked node type, node status, metacontext, date range, **plus free-text field filters** (§5.5). Unchanged by §12. |
 
-## 2. What exists today
+Decisions added by the vertical redesign (§12), listed here so this table stays
+the single index of what was settled:
+
+| Question | Decision |
+|---|---|
+| Axis orientation | **Vertical**, past at the top and future at the bottom — chat-log convention (§12.1). |
+| How many timelines at once? | **One**, chosen from a selector. Comparing timelines is a different feature (§12.2). |
+| What does left/right mean? | Facts and topics **left**, inferences **right**, mixed marks **straddle** the axis (§12.3). |
+| Where is "now"? | A per-timeline `reference_time` stored **in the graph**, not the browser (§12.5, §6.4). |
+| Wheel gesture | Wheel **pans**; ⌘/ctrl-wheel zooms (§12.4). |
+| Panel placement | **Split pane** with a draggable vertical divider; either panel can take the full width (§12.7). |
+
+## 2. The starting point
+
+What existed when this plan was written, kept because it explains the phasing
+below. The frontend section is no longer true — §§3–11 were built — and §6.4
+records the one backend field added since.
 
 **Backend — the domain model is complete and unused by the frontend.**
 
@@ -43,7 +70,7 @@ places that moved, and each says why.
   `reorder_timepoints`, `_split_concrete_vague`
   (`epimemer/pipelines/timeline/functions.py`).
 - MCP tools: `create_timeline`, `add_timepoint`, `query_timeline`,
-  `create_timelink`.
+  `create_timelink`. (`set_reference_time` was added later — §6.4.)
 
 **Frontend — no timeline anything.**
 
@@ -287,6 +314,39 @@ key. Where a frame is still unresolvable the panel falls back to the raw id
 rather than dropping the association, so filtering stays correct even when the
 label is poor.
 
+### 6.4 `reference_time` — a timeline's own "now" (built)
+
+Added for the vertical redesign (§12.5) and useful on its own. `Timeline` gained
+`reference_time: datetime | None`, and it round-trips on both backends with no
+adapter change — the field travels inside the record the way every other
+`Timeline` field does.
+
+**`None` means "follow the wall clock", and is deliberately not the same as
+storing the current instant at creation.** A real-world timeline written with
+today's date would have its present frozen at the moment it was first saved,
+drifting further out of date every day it was used. Unset resolves to `now` at
+read time instead.
+
+**It lives in the graph, not in the browser.** A fictional timeline's present
+moment is a fact about that world ("the novel opens in May 1897"), so an agent
+that reads the source should be able to record it, every client should see the
+same answer, and it should survive a new machine. `localStorage` would have
+satisfied the renderer and none of that.
+
+Reachable three ways:
+
+- `create_timeline(name, reference_time=…)` — when it is known up front.
+- `set_reference_time(timeline_id, reference_time=…)` — separate because a
+  fiction's anchor is usually learned after ingesting enough of the source to
+  say, and is often read wrong first. Passing nothing **clears** it.
+- `query_timeline` reports it on every call, so a caller reading timepoints can
+  tell past from future without a second round trip.
+
+`TimelineView` carries it to the frontend as `reference_time: string | null`,
+resolved to real `now` at render rather than substituted on arrival — otherwise
+a long-lived browser session would pin the present to whenever the snapshot was
+assembled.
+
 ## 7. Extraction proposing timepoints
 
 Deliberately last. It is a backend change of a different character to the rest,
@@ -394,3 +454,182 @@ Following existing project conventions:
   rendering of the visible domain only. Worth measuring before optimising —
   every performance guess in this project so far has been overturned by the
   profile.
+
+---
+
+## 12. Vertical redesign (designed 2026-08-07 — not built)
+
+The horizontal panel works, and it is starved of the one dimension that
+matters. A mark's label competes with the axis for horizontal room, so marks
+carry a truncated title and everything else lives in the hover drawer. Turning
+the axis 90° trades a scarce dimension for an abundant one: time gets the
+scroll direction, which is unbounded, and text gets the width, which is what it
+needed.
+
+**This supersedes §4, §5.3 and §5.4.** Everything else in §§2–11 stands — the
+scale model (§5.1), the break heuristic (§5.2), the filters (§5.5), the read
+path and events (§6) are all orientation-agnostic and unchanged.
+
+```
+┌─ GRAPH ─────────────────┬─│─ TIMELINE  [History of AI ▾] [⌕] [content ▾] ─┐
+│                         │ │                                              │
+│                         │ │   1950 ┬                                     │
+│      (cytoscape)        │ │        │                                     │
+│                         │ │  Dartmouth workshop ●                        │
+│                         │ │  coins "AI"         │                        │
+│                         │ │                     │                        │
+│                         │ │                     ╪  ~40y                  │
+│                         │ │                     │                        │
+│                         │ │                     ●  the field had already │
+│                         │ │                     │  split by then         │
+│                         │ │                     │                        │
+│                         │ │  AlphaGo beats  ▐███████▌  a decisive result │
+│                         │ │  Lee Sedol          │      for deep learning │
+│                         │ │ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┼ ─ ─ ─ ─ ─  now  ─ ─ ─ ─│
+│                         │ │                     │                        │
+│                         │ │   2030 ┴                                     │
+│                         │ │  ┄ undated ┄  [during the boom] [later]      │
+└─────────────────────────┴─│──────────────────────────────────────────────┘
+        facts & topics ──────┘└────── inferences        ▐███▌ straddles both
+```
+
+Past at the top, future below. The dashed rule is the reference time (§12.5);
+`╪` is a collapsed gap (§5.2); the block crossing the axis is a timepoint
+holding both a fact and an inference (§12.3).
+
+### 12.1 Direction: past at the top
+
+Earlier time is higher on screen; scrolling down moves into the future. This is
+the chat-log convention, and it reads with the page rather than against it.
+
+It is also the cheaper of the two options. With past at the top, position along
+the axis increases with time exactly as the scale already computes it, so the
+renderer maps `y = pos` and **nothing inverts anywhere**. The scale stays
+monotonic, and the break, zoom and pan logic keep both their behaviour and
+their tests.
+
+(The first sketch of this redesign put the future at the top. It needed a flip
+at render time and gained nothing; the direction is recorded here because it is
+the kind of decision that gets relitigated.)
+
+### 12.2 One timeline at a time
+
+The panel shows a single timeline, chosen from a selector in its header.
+
+`buildContentRows` already returns one row per timeline, so the model keeps its
+shape and feeds the selector; only the renderer narrows. Record mode's three
+rows (topic / fact / inference) fold into §12.3's two sides and stop being rows
+at all.
+
+Comparing two timelines against each other is a real want and a different
+feature. The per-row independent domains of §4 exist because one graph can hold
+1400 AD and last Tuesday; with one timeline on screen that problem does not
+arise, and the ⌥-apply-to-all-rows gesture (§5.3) has nothing left to mean.
+
+### 12.3 Sides carry node type
+
+Facts and topics sit **left** of the axis, inferences **right**. Both sides get
+the full half-width for text, which is the point of the redesign.
+
+The split is not arbitrary: facts and topics are what the graph was told,
+inferences are what it worked out. Putting the derived layer on its own side
+makes "how much of this timeline is inferred?" answerable at a glance.
+
+**Mixed marks straddle the axis.** A content-mode mark is a *timepoint*, not a
+node, and `nodesForTimepoint` can return several nodes of different types — the
+existing `TimelineMark.nodeIds` is already a list. A timepoint holding both a
+fact and an inference is drawn as one wider block crossing the axis, listing
+its members. Splitting it into two marks was considered and rejected: one
+timepoint is one thing in the data, and splitting would invent a second.
+
+### 12.4 Gestures
+
+| Gesture | Action |
+|---|---|
+| Wheel | Pan through time |
+| ⌘/ctrl + wheel | Zoom, anchored at the pointer's time value |
+| Drag | Pan |
+| Shift-drag | Select a range to zoom into |
+| ⌥ + anything | *(dropped — there is only one timeline)* |
+
+Wheel-to-pan is what "scrolling" means once the axis is vertical, and it costs
+the wheel-to-zoom binding of §5.3. ⌘-wheel for zoom is the map and
+drawing-tool convention.
+
+**The viewport stays virtual — no native scrollbar.** A tall SVG in an
+`overflow-y` container would give free momentum, and it would break the model:
+the break heuristic recomputes from the *visible domain* (§5.2) and zoom is a
+domain transform (§5.3). Wheel events adjust the domain, exactly as the
+horizontal panel's drag-pan does today.
+
+### 12.5 Reference time
+
+The backend half is built and described in §6.4. What the panel does with it:
+
+1. **Initial position** — the view opens centred on the reference time, not at
+   either end. A timeline holding future events has no meaningful edge to start
+   at.
+2. **A marker rule** — a labelled horizontal line across the axis, so past and
+   future are readable without doing arithmetic.
+3. **A "jump to now" control** — the chat-app affordance for getting back after
+   scrolling away.
+
+Two things that must not be forgotten:
+
+- **The extent has to include it.** The domain is clamped to the data extent
+  (`paddedExtent`, `panDomain(…, extent)`), so a reference time outside the data
+  — an empty timeline, or one whose events are all in the past — cannot be
+  centred on under today's clamp. Fold the reference time into the extent
+  computation.
+- **Record mode ignores it.** Record time is wall-clock (`created_at`,
+  `last_reinforced`), so a fictional anchor is meaningless there; record mode
+  always marks real `now`, and the control is hidden. A setting that appears in
+  a mode where it cannot apply is worse than no setting.
+
+### 12.6 The undated tray
+
+§5.4's rule is unchanged — a timepoint with no `start` gets no coordinate, and
+authored order is the order. What changes is the place.
+
+"Below the axis" now means "later", so undated chips at the bottom would read
+as far-future. They move into a visually separate tray — its own bordered,
+labelled block outside the scrolling axis — rather than a lane positioned along
+it.
+
+### 12.7 Split pane
+
+The panel becomes the right half of a split pane with a draggable vertical
+divider, and either half can be collapsed so the graph or the timeline takes
+the full width.
+
+`split-pane.ts` did exactly this (88 lines: left/right panels, drag handle,
+per-panel toggles, collapse-to-full-width) and was removed when the layout was
+reworked. It is recoverable from commit `c94e5b5` and should be restored rather
+than rewritten.
+
+### 12.8 What each module costs
+
+| Module | Change |
+|---|---|
+| `timeline-filter.ts` | **None.** 180 lines, 31 tests, orientation-agnostic. |
+| `timeline-scale.ts` | **Rename only.** `timeToX`/`xToTime` → `timeToPos`/`posToTime`; the doc comments already describe an offset along a usable extent. No logic change, so the 34 tests keep their meaning. |
+| `timeline-model.ts` | Derive a `side` (left / right / straddle) per mark from its linked node types. Row-per-timeline stays, feeding the selector. |
+| `timeline-panel.ts` | The bulk: a new renderer, new gesture bindings, the reference-time marker, the undated tray. Most of its 23 jsdom tests are rewritten with it. |
+| `timeline-labels.ts` | **New**, and pure. Vertical de-collision — horizontal room does not stop two marks 3 px apart from overlapping — plus leader lines back to the tick. Testable exactly as the scale is. |
+| `index.html` / `main.ts` | Split-pane markup and wiring, replacing the toggled bottom strip. |
+
+### 12.9 Open risks
+
+- **Label layout is the unproven part.** Every other piece here is a
+  transposition of something that works. De-collision with leader lines is new
+  behaviour, it is the reason for the redesign, and it is where the design is
+  least certain — build it pure and test it first, before it is entangled in
+  the renderer.
+- **Truncate or wrap is still open.** Half a panel width is generous for a
+  timepoint label and thin for a fact's full content. Deciding needs real
+  graphs on screen, so it is deliberately left to the build.
+- **Dense clusters still defeat any layout.** Two hundred nodes ingested in
+  three minutes is a smear vertically just as it was horizontally. The break
+  heuristic handles empty stretches, not crowded ones; if this bites, the
+  answer is aggregation (a "12 marks" cluster that expands on zoom), which is
+  its own design.
