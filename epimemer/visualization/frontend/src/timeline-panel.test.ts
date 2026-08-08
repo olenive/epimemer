@@ -699,3 +699,113 @@ describe("gestures", () => {
     expect(firstMarkY()).not.toBe(panned);
   });
 });
+
+describe("expand on select", () => {
+  const loadOne = (): void => {
+    panel.loadSnapshot({
+      nodes: [
+        node({
+          node_id: "n1",
+          content:
+            "The SurrealDB container was recreated with an on-disk rocksdb " +
+            "backend on a named Docker volume, so its data survives a restart.",
+        }),
+        node({ node_id: "n2", created_at: "2024-02-01T00:00:00Z" }),
+      ],
+      edges: [],
+    });
+  };
+
+  const card = (): SVGTextElement | null =>
+    document.querySelector<SVGTextElement>("#body text.cursor-pointer tspan")
+      ?.parentElement as unknown as SVGTextElement | null;
+
+  it("shows one line per mark until something is selected", () => {
+    loadOne();
+    expect(document.querySelectorAll("#body tspan")).toHaveLength(0);
+  });
+
+  it("expands the selected mark's text in place", () => {
+    loadOne();
+    click(marks()[0]);
+
+    const lines = document.querySelectorAll("#body tspan");
+    expect(lines.length).toBeGreaterThan(1);
+    // The dates come with it — that is what the drawer was being opened for.
+    expect(card()?.textContent).toContain("created");
+  });
+
+  it("does not move any mark to make room", () => {
+    // The whole reason the card lives in the label column: position on the
+    // axis means time, and expanding there would put marks where their
+    // timestamps do not.
+    loadOne();
+    const before = marks().map((m) => m.getAttribute("cy") ?? m.getAttribute("y"));
+
+    click(marks()[0]);
+
+    expect(marks().map((m) => m.getAttribute("cy") ?? m.getAttribute("y"))).toEqual(
+      before,
+    );
+  });
+
+  it("collapses again when the same mark is clicked", () => {
+    loadOne();
+    click(marks()[0]);
+    expect(document.querySelectorAll("#body tspan").length).toBeGreaterThan(1);
+
+    click(marks()[0]);
+
+    expect(document.querySelectorAll("#body tspan")).toHaveLength(0);
+  });
+
+  it("keeps the selected card even when the column is full", () => {
+    // The card is passed to the layout first, which makes it the highest
+    // priority — the one label the reader asked for is never the one dropped.
+    panel.loadSnapshot({
+      nodes: Array.from({ length: 60 }, (_, i) =>
+        node({
+          node_id: `n${i}`,
+          created_at: new Date(Date.UTC(2024, 0, 1, 0, i)).toISOString(),
+          content: `node number ${i} with a reasonably long description`,
+        }),
+      ),
+      edges: [],
+    });
+    click(marks()[30]);
+
+    expect(document.querySelectorAll("#body tspan").length).toBeGreaterThan(1);
+    expect(el("body").textContent).toContain("labels hidden");
+  });
+});
+
+describe("the expanded card's geometry", () => {
+  it("stays inside the panel on either side", () => {
+    panel.loadSnapshot({
+      nodes: [
+        node({
+          node_id: "fact",
+          node_type: "fact",
+          content: "x".repeat(400),
+          created_at: "2024-01-01T00:00:00Z",
+        }),
+        node({
+          node_id: "inference",
+          node_type: "inference",
+          content: "y".repeat(400),
+          created_at: "2024-06-01T00:00:00Z",
+        }),
+      ],
+      edges: [],
+    });
+
+    for (const mark of [marks()[0], marks()[1]]) {
+      click(mark);
+      const card = document.querySelector<SVGRectElement>("#body rect[rx='3']")!;
+      const x = Number(card.getAttribute("x"));
+      expect(x).toBeGreaterThanOrEqual(0);
+      expect(x + Number(card.getAttribute("width"))).toBeLessThanOrEqual(600);
+      click(mark);
+    }
+  });
+});

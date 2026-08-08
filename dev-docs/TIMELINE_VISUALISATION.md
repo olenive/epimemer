@@ -644,7 +644,43 @@ change, not a rendering detail.
   aggregation answer (a "12 marks" cluster that expands on zoom) remains
   unbuilt and is still its own design.
 
-### 12.10 What building the label layout changed
+### 12.10 Expand on select
+
+Clicking a mark expands its text **in place**: the label becomes a bordered
+card of up to five wrapped lines carrying the timepoint's dates and content,
+and the neighbouring *labels* slide out of the way to make room.
+
+**The room is made in the label column, not on the axis.** The obvious reading
+of "expand the timeline to fit the text" is to insert height at that point on
+the axis — and that would break the one thing the axis is for. Position means
+time, so pushing later marks down puts them where their timestamps do not, and
+moves them relative to the reference-time rule, which is drawn at
+`timeToPos(now)`. The panel would start asserting things that are false. (The
+broken axis is not a counter-example: a break is *labelled* with the span it
+removed, so it states a fact about the data rather than about UI state.)
+
+Doing it in the label column costs almost nothing, because `timeline-labels`
+was already built for it: a `LabelRequest` carries its own height, and the
+layout's whole job is sliding labels apart without touching marks. The
+expansion is a taller request. Two details make it work:
+
+- **The card is passed to the layout first**, which makes it the highest
+  priority — the caller's order is the priority order (§12.11), so the
+  one label the reader deliberately asked for is never the one dropped.
+- **A straddling mark emits two requests**: the immovable block on the axis,
+  and a card in the left column with its own id. The block stays where its
+  timestamp puts it; the leader line ties the card back to it.
+
+`wrapText` lives in `timeline-labels.ts` rather than the panel because it is
+the other half of the same question — the layout needs a label's height before
+it can place it, and the height is however many lines the text wraps to.
+Existing newlines are kept as hard breaks, since a timepoint's detail is
+already structured as when / label / linked nodes.
+
+The hover-to-drawer preview stays. Hover is for skimming, the card is for
+reading, and the drawer holds text longer than five lines will ever show.
+
+### 12.11 What building the label layout changed
 
 `timeline-labels.ts` was written first and pure, as §12.9 advised, and the
 advice paid for itself immediately.

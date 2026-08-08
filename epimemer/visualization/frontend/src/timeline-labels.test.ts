@@ -5,6 +5,7 @@ import {
   labelCentre,
   layoutLabels,
   leaderPoints,
+  wrapText,
   type Bounds,
   type Column,
   type LabelRequest,
@@ -423,5 +424,56 @@ describe("layoutLabels — properties over random input", () => {
         }
       }
     }
+  });
+});
+
+describe("wrapText", () => {
+  it("packs words up to the budget", () => {
+    expect(wrapText("the quick brown fox jumps", 11, 4)).toEqual([
+      "the quick",
+      "brown fox",
+      "jumps",
+    ]);
+  });
+
+  it("keeps existing newlines as hard breaks", () => {
+    // A timepoint's detail is already structured as when / label / nodes;
+    // reflowing it into one paragraph would lose that.
+    expect(wrapText("1897-05-26\nthe journal opens", 40, 4)).toEqual([
+      "1897-05-26",
+      "the journal opens",
+    ]);
+  });
+
+  it("drops blank separator lines rather than spending a line on them", () => {
+    expect(wrapText("a\n\nb", 20, 4)).toEqual(["a", "b"]);
+  });
+
+  it("marks the last line when there is more text than lines", () => {
+    const lines = wrapText("one two three four five six seven", 9, 2);
+    expect(lines).toHaveLength(2);
+    expect(lines[1].endsWith("…")).toBe(true);
+  });
+
+  it("breaks a word longer than the budget instead of overflowing", () => {
+    expect(wrapText("supercalifragilistic", 8, 4)).toEqual([
+      "supercal",
+      "ifragili",
+      "stic",
+    ]);
+  });
+
+  it("never exceeds the budget", () => {
+    const text = "the quick brown fox jumps over the lazy dog repeatedly";
+    for (const width of [6, 10, 17, 40]) {
+      for (const line of wrapText(text, width, 5)) {
+        expect(line.length).toBeLessThanOrEqual(width);
+      }
+    }
+  });
+
+  it("returns nothing when there is no room", () => {
+    expect(wrapText("anything", 10, 0)).toEqual([]);
+    expect(wrapText("anything", 0, 3)).toEqual([]);
   });
 });

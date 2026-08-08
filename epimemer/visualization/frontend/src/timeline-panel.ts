@@ -27,7 +27,9 @@ import {
   labelCentre,
   layoutLabels,
   leaderPoints,
+  wrapText,
   type LabelRequest,
+  type PlacedLabel,
 } from "./timeline-labels";
 import {
   allMarks,
@@ -69,6 +71,14 @@ const INTERVAL_WIDTH = 9;
 const LABEL_HEIGHT = 15;
 /** Straddling blocks carry their own text, so they need more room. */
 const BLOCK_HEIGHT = 22;
+/** Rough width of a character at the label font size, for budgeting text. */
+const CHAR_WIDTH = 5.6;
+/** How many lines a selected mark's card may run to. */
+const CARD_LINES = 5;
+const CARD_LINE_HEIGHT = 12;
+const CARD_PADDING = 5;
+/** Selected cards are drawn in the left column when the mark straddles the axis. */
+const CARD_SUFFIX = ":card";
 /** One wheel notch while zooming. Below 1 zooms in. */
 const WHEEL_STEP = 0.85;
 /** One wheel notch while panning, as a fraction of the visible span. */
@@ -525,13 +535,29 @@ export const initTimelinePanel = (
     group.appendChild(label);
   };
 
+  /** Pixels available for a label in the given column, measured from its edge. */
+  const roomFor = (column: "left" | "right", axisX: number, width: number): number =>
+    column === "left" ? axisX - LABEL_INSET : width - axisX - LABEL_INSET - 4;
+
+  /** Characters that fit in one line of a label in the given column. */
+  const charBudget = (column: "left" | "right", axisX: number, width: number): number =>
+    // The card's padding comes out of the text budget, so a full-width line
+    // plus its border still fits inside the panel.
+    Math.max(8, Math.floor((roomFor(column, axisX, width) - CARD_PADDING * 2) / CHAR_WIDTH));
+
   /**
    * Place and draw the side text. Returns how many labels there was no room for.
    *
-   * Marks are handed to the layout in axis order, which makes that the priority
-   * order when the column is oversubscribed — see `timeline-labels`. A dropped
-   * label keeps its mark; only the text goes, and the count is surfaced so the
-   * panel never quietly shows less than it has.
+   * The selected mark's text expands in place: it asks the layout for a taller
+   * box holding several wrapped lines, and the layout slides its *neighbours'
+   * labels* out of the way. No mark moves. That distinction is the whole reason
+   * the expansion happens here rather than on the axis — position on the axis
+   * means time, so making room there would put marks where their timestamps do
+   * not, and quietly move "now" relative to them.
+   *
+   * The expanded card is passed first, which makes it the highest priority
+   * (`timeline-labels` treats the caller's order as priority) — so the one
+   * label the reader deliberately asked for is never the one dropped.
    */
   const renderLabels = (
     group: SVGGElement,
@@ -542,28 +568,53 @@ export const initTimelinePanel = (
     height: number,
   ): number => {
     const palette = currentPalette();
-    const requests: LabelRequest[] = marks.map((mark) => ({
-      id: mark.id,
-      anchor: timeToPos(scale, mark.start),
-      height: mark.side === "axis" ? BLOCK_HEIGHT : LABEL_HEIGHT,
-      column: mark.side,
-    }));
+    const byRequest = new Map<string, DatedMark>();
+    const cards = new Map<string, string[]>();
+    const expanded: LabelRequest[] = [];
+    const plain: LabelRequest[] = [];
+
+    for (const mark of marks) {
+      const anchor = timeToPos(scale, mark.start);
+      const isSelected = mark.id === state.selectedMarkId;
+
+      if (mark.side === "axis") {
+        // The block itself is immovable and carries no side text of its own.
+        plain.push({ id: mark.id, anchor, height: BLOCK_HEIGHT, column: "axis" });
+        if (!isSelected) continue;
+      }
+
+      // A straddling mark's card goes in the left column; it needs a distinct
+      // id so the block and the card are two requests, not one.
+      const column = mark.side === "axis" ? "left" : mark.side;
+      const id = mark.side === "axis" ? `${mark.id}${CARD_SUFFIX}` : mark.id;
+      byRequest.set(id, mark);
+
+      if (!isSelected) {
+        plain.push({ id, anchor, height: LABEL_HEIGHT, column });
+        continue;
+      }
+      const lines = wrapText(mark.detail, charBudget(column, axisX, width), CARD_LINES);
+      cards.set(id, lines);
+      expanded.push({
+        id,
+        anchor,
+        height: lines.length * CARD_LINE_HEIGHT + CARD_PADDING * 2,
+        column,
+      });
+    }
 
     const { placed, dropped } = layoutLabels(
-      requests,
+      [...expanded, ...plain],
       { top: 0, bottom: height },
       LABEL_GAP,
     );
-    const byId = new Map(marks.map((m) => [m.id, m]));
 
     for (const label of placed) {
-      const mark = byId.get(label.id);
-      // Straddling blocks carry their own text and are drawn with the mark.
+      const mark = byRequest.get(label.id);
       if (mark === undefined || label.column === "axis") continue;
 
       const isLeft = label.column === "left";
       const labelX = isLeft ? axisX - LABEL_INSET : axisX + LABEL_INSET;
-      const available = isLeft ? labelX : width - labelX - 4;
 
       const leader = leaderPoints(label, { axisX, labelX });
       if (leader.length > 0) {
@@ -578,6 +629,12 @@ export const initTimelinePanel = (
         );
       }
 
+      const lines = cards.get(label.id);
+      if (lines !== undefined) {
+        renderCard(group, label, mark, lines, labelX, isLeft, roomFor(label.column, axisX, width));
+        continue;
+      }
+
       const text = svg("text", {
         x: labelX,
         y: labelCentre(label) + 3.5,
@@ -585,12 +642,57 @@ export const initTimelinePanel = (
         "font-size": 10,
         "text-anchor": isLeft ? "end" : "start",
       });
-      // ~5.6px per character at this size; the half-width is the budget.
-      text.textContent = truncate(mark.title, Math.max(8, Math.floor(available / 5.6)));
+      text.textContent = truncate(mark.title, charBudget(label.column, axisX, width));
       bindMark(text, mark);
       group.appendChild(text);
     }
     return dropped.length;
+  };
+
+  /** The expanded panel for the selected mark: its dates and text, in place. */
+  const renderCard = (
+    group: SVGGElement,
+    label: PlacedLabel,
+    mark: DatedMark,
+    lines: readonly string[],
+    labelX: number,
+    isLeft: boolean,
+    room: number,
+  ): void => {
+    const palette = currentPalette();
+    const longest = lines.reduce((n, line) => Math.max(n, line.length), 0);
+    const cardWidth = Math.min(room, longest * CHAR_WIDTH + CARD_PADDING * 2);
+
+    const card = svg("rect", {
+      x: isLeft ? labelX - cardWidth : labelX,
+      y: label.top,
+      width: cardWidth,
+      height: label.height,
+      rx: 3,
+      fill: palette.breakBackground,
+      stroke: MARK_FILL_SELECTED,
+      "stroke-width": 1,
+      "stroke-opacity": 0.7,
+    });
+    group.appendChild(card);
+
+    const text = svg("text", {
+      x: isLeft ? labelX - CARD_PADDING : labelX + CARD_PADDING,
+      y: label.top + CARD_PADDING + CARD_LINE_HEIGHT - 3,
+      fill: palette.nodeLabel,
+      "font-size": 10,
+      "text-anchor": isLeft ? "end" : "start",
+    });
+    lines.forEach((line, index) => {
+      const span = svg("tspan", {
+        x: isLeft ? labelX - CARD_PADDING : labelX + CARD_PADDING,
+        dy: index === 0 ? 0 : CARD_LINE_HEIGHT,
+      });
+      span.textContent = line;
+      text.appendChild(span);
+    });
+    bindMark(text, mark);
+    group.appendChild(text);
   };
 
   /**

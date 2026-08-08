@@ -341,6 +341,76 @@ export const layoutLabels = (
   };
 };
 
+/**
+ * Break text into lines that fit a character budget.
+ *
+ * Lives here rather than in the panel because it is the other half of the same
+ * question: `layoutLabels` needs a label's *height* before it can place it, and
+ * a label's height is however many lines its text wraps to. Keeping the two
+ * together means the answer is computed once, purely, and testable.
+ *
+ * Existing newlines are honoured as hard breaks — a timepoint's detail is
+ * already laid out as "when, then label, then linked nodes", and reflowing that
+ * into a paragraph would lose the structure. A word longer than the budget is
+ * broken rather than allowed to overflow.
+ */
+export const wrapText = (
+  text: string,
+  maxChars: number,
+  maxLines: number,
+): string[] => {
+  if (maxLines < 1 || maxChars < 1) return [];
+
+  const lines: string[] = [];
+  let truncated = false;
+
+  for (const paragraph of text.split("\n")) {
+    if (lines.length >= maxLines) {
+      truncated = true;
+      break;
+    }
+    const words = paragraph.trim().split(/\s+/).filter(Boolean);
+    if (words.length === 0) {
+      // A blank line is a deliberate separator, but not worth a line of its
+      // own in a budget this small.
+      continue;
+    }
+    let current = "";
+    for (const word of words) {
+      for (const piece of word.length > maxChars ? chunk(word, maxChars) : [word]) {
+        const candidate = current === "" ? piece : `${current} ${piece}`;
+        if (candidate.length <= maxChars) {
+          current = candidate;
+          continue;
+        }
+        if (lines.length >= maxLines) {
+          truncated = true;
+          break;
+        }
+        lines.push(current);
+        current = piece;
+      }
+      if (truncated) break;
+    }
+    if (truncated) break;
+    if (current !== "" && lines.length < maxLines) lines.push(current);
+    else if (current !== "") truncated = true;
+  }
+
+  if (truncated && lines.length > 0) {
+    const last = lines[lines.length - 1];
+    lines[lines.length - 1] =
+      last.length >= maxChars ? `${last.slice(0, maxChars - 1)}…` : `${last}…`;
+  }
+  return lines;
+};
+
+const chunk = (word: string, size: number): string[] => {
+  const pieces: string[] = [];
+  for (let i = 0; i < word.length; i += size) pieces.push(word.slice(i, i + size));
+  return pieces;
+};
+
 export interface Point {
   x: number;
   y: number;
