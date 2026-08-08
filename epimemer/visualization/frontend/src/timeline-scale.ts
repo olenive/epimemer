@@ -11,6 +11,10 @@
  * wrong (where a break goes, where a zoom lands) are the parts worth testing
  * without a browser.
  *
+ * Positions are pixels along the axis, measured from its start — the module
+ * has no opinion about which way the axis runs. The panel draws them down the
+ * screen; nothing here would change if it drew them across.
+ *
  * All times are epoch milliseconds.
  */
 
@@ -32,12 +36,12 @@ export interface Gap {
   t1: number;
 }
 
-/** One linear piece of the axis: `[t0, t1]` maps onto `[x0, x1]`. */
+/** One linear piece of the axis: `[t0, t1]` maps onto `[p0, p1]`. */
 export interface Segment {
   t0: number;
   t1: number;
-  x0: number;
-  x1: number;
+  p0: number;
+  p1: number;
 }
 
 /** A rendered break marker, sitting between two segments. */
@@ -46,8 +50,8 @@ export interface Break {
   afterSegment: number;
   /** The collapsed time range — fed back in to keep breaks stable under zoom. */
   gap: Gap;
-  x0: number;
-  x1: number;
+  p0: number;
+  p1: number;
 }
 
 export interface Scale {
@@ -202,10 +206,10 @@ export const buildScale = (
   bounds.forEach((bound, i) => {
     const span = Math.max(0, bound.t1 - bound.t0);
     const w = totalSpan > 0 ? (span / totalSpan) * usable : usable / bounds.length;
-    segments.push({ t0: bound.t0, t1: bound.t1, x0: x, x1: x + w });
+    segments.push({ t0: bound.t0, t1: bound.t1, p0: x, p1: x + w });
     x += w;
     if (i < breakGaps.length) {
-      breaks.push({ afterSegment: i, gap: breakGaps[i], x0: x, x1: x + BREAK_PX });
+      breaks.push({ afterSegment: i, gap: breakGaps[i], p0: x, p1: x + BREAK_PX });
       x += BREAK_PX;
     }
   });
@@ -217,7 +221,7 @@ export const buildScale = (
  * Time → pixel. Times inside a collapsed gap land on the break marker's left
  * edge, and times outside the domain clamp to its ends.
  */
-export const timeToX = (scale: Scale, t: number): number => {
+export const timeToPos = (scale: Scale, t: number): number => {
   const { segments } = scale;
   if (segments.length === 0) return 0;
 
@@ -226,31 +230,31 @@ export const timeToX = (scale: Scale, t: number): number => {
     // Before this segment starts means inside the gap that precedes it (or
     // before the domain entirely). Either way there is no room to spread it
     // out — pin it to the edge, or a collapsed century draws off the axis.
-    if (t < segment.t0) return i > 0 ? segments[i - 1].x1 : segment.x0;
+    if (t < segment.t0) return i > 0 ? segments[i - 1].p1 : segment.p0;
     if (t <= segment.t1) {
       const span = segment.t1 - segment.t0;
-      if (span <= 0) return segment.x0;
-      return segment.x0 + ((t - segment.t0) / span) * (segment.x1 - segment.x0);
+      if (span <= 0) return segment.p0;
+      return segment.p0 + ((t - segment.t0) / span) * (segment.p1 - segment.p0);
     }
   }
-  return segments[segments.length - 1].x1;
+  return segments[segments.length - 1].p1;
 };
 
 /** Pixel → time. Inside a break marker, resolves to the gap's start. */
-export const xToTime = (scale: Scale, x: number): number => {
+export const posToTime = (scale: Scale, x: number): number => {
   const { segments, breaks } = scale;
   if (segments.length === 0) return scale.domain.t0;
-  if (x <= segments[0].x0) return segments[0].t0;
+  if (x <= segments[0].p0) return segments[0].t0;
 
   for (let i = 0; i < segments.length; i++) {
     const segment = segments[i];
-    if (x <= segment.x1) {
-      const px = segment.x1 - segment.x0;
+    if (x <= segment.p1) {
+      const px = segment.p1 - segment.p0;
       if (px <= 0) return segment.t0;
-      return segment.t0 + ((x - segment.x0) / px) * (segment.t1 - segment.t0);
+      return segment.t0 + ((x - segment.p0) / px) * (segment.t1 - segment.t0);
     }
     const brk = breaks.find((b) => b.afterSegment === i);
-    if (brk && x <= brk.x1) return brk.gap.t0;
+    if (brk && x <= brk.p1) return brk.gap.t0;
   }
   return segments[segments.length - 1].t1;
 };

@@ -13,8 +13,8 @@ import {
   panDomain,
   selectBreaks,
   ticksForSegment,
-  timeToX,
-  xToTime,
+  timeToPos,
+  posToTime,
   zoomDomain,
   type Domain,
   type Span,
@@ -166,8 +166,8 @@ describe("buildScale", () => {
 
     expect(scale.segments).toHaveLength(1);
     expect(scale.breaks).toEqual([]);
-    expect(scale.segments[0].x0).toBe(0);
-    expect(scale.segments[0].x1).toBeCloseTo(600);
+    expect(scale.segments[0].p0).toBe(0);
+    expect(scale.segments[0].p1).toBeCloseTo(600);
   });
 
   it("reserves fixed pixels per break and shares the rest by span", () => {
@@ -175,11 +175,11 @@ describe("buildScale", () => {
     const scale = buildScale(spans, domainOver(spans), 600);
 
     expect(scale.breaks).toHaveLength(1);
-    const drawn = scale.segments.reduce((sum, s) => sum + (s.x1 - s.x0), 0);
+    const drawn = scale.segments.reduce((sum, s) => sum + (s.p1 - s.p0), 0);
     expect(drawn).toBeCloseTo(600 - BREAK_PX);
     // Clusters span 3 days and 2 days, so the pixels divide 3:2 — each dense
     // region is drawn to its own scale, not squashed by the sparse one.
-    const [first, second] = scale.segments.map((s) => s.x1 - s.x0);
+    const [first, second] = scale.segments.map((s) => s.p1 - s.p0);
     expect(first / second).toBeCloseTo(3 / 2);
   });
 
@@ -188,35 +188,35 @@ describe("buildScale", () => {
     const scale = buildScale(spans, domainOver(spans), 600);
 
     const [brk] = scale.breaks;
-    expect(brk.x0).toBeCloseTo(scale.segments[0].x1);
-    expect(brk.x1).toBeCloseTo(scale.segments[1].x0);
-    expect(brk.x1 - brk.x0).toBe(BREAK_PX);
+    expect(brk.p0).toBeCloseTo(scale.segments[0].p1);
+    expect(brk.p1).toBeCloseTo(scale.segments[1].p0);
+    expect(brk.p1 - brk.p0).toBe(BREAK_PX);
   });
 });
 
-describe("timeToX / xToTime", () => {
+describe("timeToPos / posToTime", () => {
   const spans = atDays(0, 1, 2, 3, 400, 401, 402);
   const scale = buildScale(spans, domainOver(spans), 600);
 
   it("round-trips a time that is actually on the axis", () => {
     const t = 2 * DAY;
-    expect(xToTime(scale, timeToX(scale, t))).toBeCloseTo(t, -1);
+    expect(posToTime(scale, timeToPos(scale, t))).toBeCloseTo(t, -1);
   });
 
   it("maps the domain ends to the axis ends", () => {
-    expect(timeToX(scale, scale.domain.t0)).toBeCloseTo(0);
-    expect(timeToX(scale, scale.domain.t1)).toBeCloseTo(600);
+    expect(timeToPos(scale, scale.domain.t0)).toBeCloseTo(0);
+    expect(timeToPos(scale, scale.domain.t1)).toBeCloseTo(600);
   });
 
   it("clamps times outside the domain", () => {
-    expect(timeToX(scale, scale.domain.t0 - 10 * DAY)).toBe(0);
-    expect(timeToX(scale, scale.domain.t1 + 10 * DAY)).toBeCloseTo(600);
+    expect(timeToPos(scale, scale.domain.t0 - 10 * DAY)).toBe(0);
+    expect(timeToPos(scale, scale.domain.t1 + 10 * DAY)).toBeCloseTo(600);
   });
 
   it("does not spread collapsed time across the axis", () => {
     // Two instants deep inside the collapsed gap must not be drawn apart.
-    const a = timeToX(scale, 100 * DAY);
-    const b = timeToX(scale, 300 * DAY);
+    const a = timeToPos(scale, 100 * DAY);
+    const b = timeToPos(scale, 300 * DAY);
     expect(a).toBeCloseTo(b);
   });
 
@@ -227,7 +227,7 @@ describe("timeToX / xToTime", () => {
 
   it("resolves a pixel inside a break marker to the gap start", () => {
     const [brk] = scale.breaks;
-    expect(xToTime(scale, (brk.x0 + brk.x1) / 2)).toBe(brk.gap.t0);
+    expect(posToTime(scale, (brk.p0 + brk.p1) / 2)).toBe(brk.gap.t0);
   });
 });
 
@@ -311,14 +311,14 @@ describe("domainFromRange", () => {
 
 describe("ticksForSegment", () => {
   it("produces round times inside the segment", () => {
-    const ticks = ticksForSegment({ t0: 0, t1: 30 * DAY, x0: 0, x1: 600 }, 4);
+    const ticks = ticksForSegment({ t0: 0, t1: 30 * DAY, p0: 0, p1: 600 }, 4);
 
     expect(ticks.length).toBeGreaterThan(0);
     expect(ticks.every((t) => t >= 0 && t <= 30 * DAY)).toBe(true);
   });
 
   it("still labels a segment narrower than one step", () => {
-    expect(ticksForSegment({ t0: 5, t1: 6, x0: 0, x1: 10 })).toHaveLength(1);
+    expect(ticksForSegment({ t0: 5, t1: 6, p0: 0, p1: 10 })).toHaveLength(1);
   });
 });
 

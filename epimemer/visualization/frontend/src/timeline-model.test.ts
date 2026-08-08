@@ -5,6 +5,8 @@ import {
   buildContentRows,
   buildRecordRows,
   buildRows,
+  RECORD_ROW_ID,
+  sideForTypes,
   type SnapshotLike,
 } from "./timeline-model";
 import type { EdgeView, NodeView, TimelineView, TimepointView } from "./types";
@@ -310,16 +312,27 @@ describe("buildContentRows", () => {
 });
 
 describe("buildRecordRows", () => {
-  it("groups nodes by type and drops empty rows", () => {
+  it("puts every node on one row, with type carried by the side", () => {
+    // Node type used to be a row. It is now the side of the axis a mark sits
+    // on, so splitting rows as well would only hide nodes.
     const snapshot: SnapshotLike = {
       nodes: [
         node({ node_id: "n1", node_type: "fact" }),
         node({ node_id: "n2", node_type: "topic" }),
+        node({ node_id: "n3", node_type: "inference" }),
       ],
       edges: [],
     };
 
-    expect(buildRecordRows(snapshot).map((r) => r.id)).toEqual(["topic", "fact"]);
+    const rows = buildRecordRows(snapshot);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].dated.map((m) => m.id).sort()).toEqual(["n1", "n2", "n3"]);
+    expect(rows[0].dated.find((m) => m.id === "n3")!.side).toBe("right");
+    expect(rows[0].dated.find((m) => m.id === "n1")!.side).toBe("left");
+  });
+
+  it("has no row at all when the graph is empty", () => {
+    expect(buildRecordRows({ nodes: [], edges: [] })).toEqual([]);
   });
 
   it("places a node at its creation time", () => {
@@ -411,7 +424,7 @@ describe("buildRows", () => {
 
   it("dispatches on the mode", () => {
     expect(buildRows(snapshot, "content")[0].id).toBe("t1");
-    expect(buildRows(snapshot, "record")[0].id).toBe("fact");
+    expect(buildRows(snapshot, "record")[0].id).toBe(RECORD_ROW_ID);
   });
 });
 
@@ -432,5 +445,28 @@ describe("allMarks", () => {
     });
 
     expect(allMarks(rows).map((m) => m.id).sort()).toEqual(["p1", "p2"]);
+  });
+});
+
+describe("sideForTypes", () => {
+  it("puts what the graph was told on the left", () => {
+    expect(sideForTypes(["fact"])).toBe("left");
+    expect(sideForTypes(["topic"])).toBe("left");
+    expect(sideForTypes(["fact", "topic"])).toBe("left");
+  });
+
+  it("puts what the graph derived on the right", () => {
+    expect(sideForTypes(["inference"])).toBe("right");
+    expect(sideForTypes(["inference", "inference"])).toBe("right");
+  });
+
+  it("straddles the axis when a timepoint holds both", () => {
+    expect(sideForTypes(["fact", "inference"])).toBe("axis");
+    expect(sideForTypes(["inference", "topic"])).toBe("axis");
+  });
+
+  it("treats an unlinked timepoint as something we were told", () => {
+    // A bare authored label is not a derivation, and it has to go somewhere.
+    expect(sideForTypes([])).toBe("left");
   });
 });

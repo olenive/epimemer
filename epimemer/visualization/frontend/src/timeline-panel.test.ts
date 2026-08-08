@@ -5,7 +5,10 @@ import type { EventRouter } from "./events";
 import { paletteFor } from "./theme";
 import type { TimelineMark } from "./timeline-model";
 import {
+  centredOn,
+  extentIncluding,
   initTimelinePanel,
+  referenceTimeFor,
   type TimelinePanelControls,
   type TimelinePanelHandle,
 } from "./timeline-panel";
@@ -26,8 +29,11 @@ const MARKUP = `
   <input id="query" type="search" />
   <input id="range-start" type="date" />
   <input id="range-end" type="date" />
+  <select id="timeline-select"></select>
   <button id="reset"></button>
-  <div id="rows"></div>
+  <button id="now"></button>
+  <div id="body"></div>
+  <div id="undated" class="hidden"></div>
   <div id="empty" class="hidden"></div>
 `;
 
@@ -92,8 +98,11 @@ const graphEvent = (event_type: string, rest: Record<string, unknown>): AnyEvent
 const el = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 
 const controlsFromMarkup = (): TimelinePanelControls => ({
-  rows: el("rows"),
+  body: el("body"),
   empty: el("empty"),
+  undated: el("undated"),
+  timelineSelect: el("timeline-select"),
+  nowButton: el("now"),
   modeSelect: el("mode"),
   typeSelect: el("type"),
   statusSelect: el("status"),
@@ -111,8 +120,9 @@ let emit: (type: string, event: AnyEvent) => void;
 
 beforeEach(() => {
   document.body.innerHTML = MARKUP;
-  // jsdom lays nothing out, and a zero width means the panel draws no axis.
-  Object.defineProperty(el("rows"), "clientWidth", { value: 600, configurable: true });
+  // jsdom lays nothing out, and a zero size means the panel draws no axis.
+  Object.defineProperty(el("body"), "clientWidth", { value: 600, configurable: true });
+  Object.defineProperty(el("body"), "clientHeight", { value: 400, configurable: true });
 
   const handlers = new Map<string, ((e: AnyEvent) => void)[]>();
   const router = {
@@ -129,7 +139,12 @@ beforeEach(() => {
 });
 
 const marks = (): SVGElement[] => [
-  ...document.querySelectorAll<SVGElement>("#rows circle, #rows rect.cursor-pointer"),
+  ...document.querySelectorAll<SVGElement>("#body circle, #body rect.cursor-pointer"),
+];
+
+/** Side text is drawn as clickable <text>; tick and break labels are not. */
+const labels = (): SVGElement[] => [
+  ...document.querySelectorAll<SVGElement>("#body text.cursor-pointer"),
 ];
 
 const change = (element: HTMLElement): void => {
@@ -170,18 +185,26 @@ describe("empty states", () => {
 });
 
 describe("record mode", () => {
-  it("draws a row per node type", () => {
+  it("draws every node on one axis, split by side rather than by row", () => {
     panel.loadSnapshot({
       nodes: [
-        node({ node_id: "n1", node_type: "fact" }),
-        node({ node_id: "n2", node_type: "topic" }),
+        node({ node_id: "n1", node_type: "fact", content: "a told thing" }),
+        node({ node_id: "n2", node_type: "inference", content: "a derived thing" }),
       ],
       edges: [],
     });
 
-    expect(el("rows").textContent).toContain("Facts");
-    expect(el("rows").textContent).toContain("Topics");
     expect(marks()).toHaveLength(2);
+    // Facts left of the axis, inferences right of it.
+    const axisX = 300;
+    const xs = labels().map((t) => Number(t.getAttribute("x")));
+    expect(xs.some((x) => x < axisX)).toBe(true);
+    expect(xs.some((x) => x > axisX)).toBe(true);
+  });
+
+  it("has no timeline to choose between, so the selector is disabled", () => {
+    panel.loadSnapshot({ nodes: [node({ node_id: "n1" })], edges: [] });
+    expect((el("timeline-select") as HTMLSelectElement).disabled).toBe(true);
   });
 
   it("draws an axis with tick labels", () => {
@@ -193,13 +216,13 @@ describe("record mode", () => {
       edges: [],
     });
 
-    expect(document.querySelectorAll("#rows line").length).toBeGreaterThan(0);
-    expect(document.querySelectorAll("#rows text").length).toBeGreaterThan(0);
+    expect(document.querySelectorAll("#body line").length).toBeGreaterThan(0);
+    expect(document.querySelectorAll("#body text").length).toBeGreaterThan(0);
   });
 });
 
 describe("content mode", () => {
-  it("draws a row per timeline", () => {
+  it("draws the selected timeline", () => {
     panel.loadSnapshot({
       nodes: [],
       edges: [],
@@ -215,8 +238,40 @@ describe("content mode", () => {
     });
     useContentMode();
 
-    expect(el("rows").textContent).toContain("History of AI");
+    expect(el("timeline-select").textContent).toContain("History of AI");
     expect(marks()).toHaveLength(1);
+  });
+
+  it("shows one timeline at a time and switches on the selector", () => {
+    panel.loadSnapshot({
+      nodes: [],
+      edges: [],
+      timelines: [
+        timeline({
+          timeline_id: "t1",
+          name: "History of AI",
+          timepoints: [timepoint("p1", "1956-01-01T00:00:00Z", "Dartmouth")],
+        }),
+        timeline({
+          timeline_id: "t2",
+          name: "Renaissance",
+          timepoints: [
+            timepoint("p2", "1450-01-01T00:00:00Z", "printing press"),
+            timepoint("p3", "1500-01-01T00:00:00Z", "High Renaissance"),
+          ],
+        }),
+      ],
+    });
+    useContentMode();
+
+    expect(marks()).toHaveLength(1);
+
+    const select = el("timeline-select") as HTMLSelectElement;
+    expect(select.disabled).toBe(false);
+    select.value = "t2";
+    change(select);
+
+    expect(marks()).toHaveLength(2);
   });
 
   it("puts vague timepoints in the undated lane, not on the axis", () => {
@@ -233,8 +288,10 @@ describe("content mode", () => {
     useContentMode();
 
     expect(marks()).toHaveLength(0);
-    expect(el("rows").textContent).toContain("undated");
-    expect(el("rows").textContent).toContain("during the Renaissance");
+    // Its own tray, outside the axis: "below" now means "later", so a chip at
+    // the bottom of the axis would read as far-future.
+    expect(el("undated").classList.contains("hidden")).toBe(false);
+    expect(el("undated").textContent).toContain("during the Renaissance");
   });
 
   it("draws an interval timepoint as a bar", () => {
@@ -253,8 +310,8 @@ describe("content mode", () => {
     });
     useContentMode();
 
-    expect(document.querySelectorAll("#rows rect.cursor-pointer")).toHaveLength(1);
-    expect(document.querySelectorAll("#rows circle")).toHaveLength(1);
+    expect(document.querySelectorAll("#body rect.cursor-pointer")).toHaveLength(1);
+    expect(document.querySelectorAll("#body circle")).toHaveLength(1);
   });
 });
 
@@ -263,7 +320,7 @@ describe("theming", () => {
   // it — the palette has to be read at render time or the timeline stays dark
   // on a white page.
   const axisStroke = (): string | null =>
-    document.querySelector("#rows line")?.getAttribute("stroke") ?? null;
+    document.querySelector("#body line")?.getAttribute("stroke") ?? null;
 
   const twoNodes = {
     nodes: [
@@ -317,7 +374,6 @@ describe("filtering", () => {
     change(controls.typeSelect);
 
     expect(marks()).toHaveLength(1);
-    expect(el("rows").textContent).not.toContain("Topics");
   });
 
   it("narrows by free text", () => {
@@ -416,7 +472,7 @@ describe("selection", () => {
     });
     useContentMode();
 
-    click(document.querySelector("#rows button")!);
+    click(document.querySelector("#undated button")!);
 
     expect(selected.at(-1)?.id).toBe("p1");
   });
@@ -426,7 +482,7 @@ describe("live events", () => {
   it("adds a timeline that arrives after load", () => {
     panel.loadSnapshot({ nodes: [], edges: [], timelines: [] });
     useContentMode();
-    expect(el("rows").textContent).not.toContain("Late arrival");
+    expect(el("timeline-select").textContent).not.toContain("Late arrival");
 
     emit(
       "timeline_stored",
@@ -439,7 +495,7 @@ describe("live events", () => {
       }),
     );
 
-    expect(el("rows").textContent).toContain("Late arrival");
+    expect(el("timeline-select").textContent).toContain("Late arrival");
   });
 
   it("replaces a re-stored timeline rather than duplicating it", () => {
@@ -457,7 +513,7 @@ describe("live events", () => {
 
     emit("timeline_stored", graphEvent("timeline_stored", { timeline: withPoints(2) }));
 
-    expect(document.querySelectorAll("#rows > div")).toHaveLength(1);
+    expect(el("timeline-select").querySelectorAll("option")).toHaveLength(1);
     expect(marks()).toHaveLength(2);
   });
 
@@ -485,5 +541,161 @@ describe("live events", () => {
     emit("node_stored", graphEvent("node_stored", { node: node({ node_id: "n1" }) }));
 
     expect(marks()).toHaveLength(1);
+  });
+});
+
+describe("reference time", () => {
+  const withReference = (reference: string | null): void => {
+    panel.loadSnapshot({
+      nodes: [],
+      edges: [],
+      timelines: [
+        timeline({
+          timeline_id: "t1",
+          name: "Dracula",
+          reference_time: reference,
+          timepoints: [
+            timepoint("p1", "1897-05-26T00:00:00Z", "the journal opens"),
+            timepoint("p2", "1897-11-06T00:00:00Z", "the pursuit ends"),
+          ],
+        }),
+      ],
+    });
+    useContentMode();
+  };
+
+  it("draws a rule when the timeline's own now is in view", () => {
+    withReference("1897-08-01T00:00:00Z");
+    expect(el("body").textContent).toContain("now");
+  });
+
+  it("does not draw the rule when real time is nowhere near the data", () => {
+    // Unset means "follow the wall clock", which for an 1897 timeline is far
+    // below the visible window. Clamping it to an edge would put the present
+    // somewhere it is not.
+    withReference(null);
+    expect(el("body").textContent).not.toContain("now");
+  });
+});
+
+describe("referenceTimeFor", () => {
+  const snapshot = {
+    nodes: [],
+    edges: [],
+    timelines: [
+      timeline({ timeline_id: "t1", reference_time: "1897-05-26T00:00:00Z" }),
+      timeline({ timeline_id: "t2", reference_time: null }),
+    ],
+  };
+
+  it("uses the timeline's stated present in content mode", () => {
+    expect(referenceTimeFor(snapshot, "content", "t1", 999)).toBe(
+      Date.parse("1897-05-26T00:00:00Z"),
+    );
+  });
+
+  it("follows the clock when the timeline states nothing", () => {
+    expect(referenceTimeFor(snapshot, "content", "t2", 999)).toBe(999);
+  });
+
+  it("ignores a fictional present in record mode", () => {
+    // Record time is wall-clock: `created_at` is when the graph learned it, so
+    // an 1897 anchor would be measuring against the wrong thing entirely.
+    expect(referenceTimeFor(snapshot, "record", "t1", 999)).toBe(999);
+  });
+
+  it("falls back to the clock on an unparseable timestamp", () => {
+    const broken = {
+      nodes: [],
+      edges: [],
+      timelines: [timeline({ timeline_id: "t1", reference_time: "not a date" })],
+    };
+    expect(referenceTimeFor(broken, "content", "t1", 999)).toBe(999);
+  });
+});
+
+describe("extentIncluding", () => {
+  it("widens an extent that does not reach the reference time", () => {
+    // Otherwise centring on "now" is impossible and the view settles at an
+    // edge without saying so.
+    expect(extentIncluding({ t0: 0, t1: 100 }, 500)).toEqual({ t0: 0, t1: 500 });
+    expect(extentIncluding({ t0: 0, t1: 100 }, -500)).toEqual({ t0: -500, t1: 100 });
+  });
+
+  it("leaves an extent that already contains it alone", () => {
+    expect(extentIncluding({ t0: 0, t1: 100 }, 50)).toEqual({ t0: 0, t1: 100 });
+  });
+});
+
+describe("centredOn", () => {
+  const extent = { t0: 0, t1: 1000 };
+
+  it("centres the window on the instant, keeping its span", () => {
+    expect(centredOn({ t0: 0, t1: 100 }, 500, extent)).toEqual({ t0: 450, t1: 550 });
+  });
+
+  it("stops at the extent rather than scrolling past the data", () => {
+    expect(centredOn({ t0: 0, t1: 100 }, 0, extent)).toEqual({ t0: 0, t1: 100 });
+    expect(centredOn({ t0: 0, t1: 100 }, 1000, extent)).toEqual({ t0: 900, t1: 1000 });
+  });
+
+  it("keeps a window wider than the extent pinned to its start", () => {
+    expect(centredOn({ t0: 0, t1: 5000 }, 500, extent)).toEqual({ t0: 0, t1: 5000 });
+  });
+});
+
+describe("gestures", () => {
+  const loadTwoYears = (): void => {
+    panel.loadSnapshot({
+      nodes: [
+        node({ node_id: "n1", created_at: "2024-01-01T00:00:00Z" }),
+        node({ node_id: "n2", created_at: "2026-01-01T00:00:00Z" }),
+      ],
+      edges: [],
+    });
+  };
+
+  const wheel = (init: WheelEventInit): void => {
+    document.querySelector("#body svg")!.dispatchEvent(
+      new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init }),
+    );
+  };
+
+  /** Where the first mark sits, as a proxy for the visible window. */
+  const firstMarkY = (): number => Number(marks()[0].getAttribute("cy"));
+
+  it("pans on a bare wheel", () => {
+    loadTwoYears();
+    // Zoom in first: with the whole extent on screen there is nowhere to pan.
+    wheel({ deltaY: -120, metaKey: true });
+    const before = firstMarkY();
+
+    wheel({ deltaY: 120 });
+
+    expect(firstMarkY()).not.toBe(before);
+  });
+
+  it("zooms on ⌘-wheel, not pans", () => {
+    // The two are distinguishable: zooming in spreads the marks apart, panning
+    // slides them together.
+    loadTwoYears();
+    const spreadBefore = Number(marks()[1].getAttribute("cy")) - firstMarkY();
+
+    wheel({ deltaY: -120, metaKey: true });
+
+    const spreadAfter = Number(marks()[1].getAttribute("cy")) - firstMarkY();
+    expect(spreadAfter).toBeGreaterThan(spreadBefore);
+  });
+
+  it("returns to the reference time on demand", () => {
+    loadTwoYears();
+    wheel({ deltaY: -120, metaKey: true });
+    wheel({ deltaY: -600 });
+    const panned = firstMarkY();
+
+    click(el("now"));
+
+    // Real "now" is past the last node, so this scrolls to the recent end.
+    expect(firstMarkY()).not.toBe(panned);
   });
 });

@@ -13,6 +13,7 @@ import { fetchGraphs, fetchSessions, fetchSnapshot } from "./api";
 import { createEventRouter } from "./events";
 import { initGraphPanel } from "./graph-panel";
 import { initPipelineStrip } from "./pipeline-strip";
+import { initSplitPane } from "./split-pane";
 import { initTimelinePanel } from "./timeline-panel";
 import type { TimelineMark } from "./timeline-model";
 import {
@@ -129,15 +130,27 @@ const graphPanel = initGraphPanel(
   },
 );
 
-// --- Timeline panel ---
+// --- Split pane: the graph and the timeline share the width ---
 
-const timelineWrap = $("timeline-panel-wrap");
+initSplitPane({
+  container: $("split-container"),
+  left: $("split-left"),
+  right: $("split-right"),
+  divider: $("split-divider"),
+  toggleLeft: $("btn-toggle-graph"),
+  toggleRight: $("btn-toggle-timeline"),
+});
+
+// --- Timeline panel ---
 
 const timelinePanel = initTimelinePanel(
   router,
   {
-    rows: $("timeline-rows"),
+    body: $("timeline-body"),
     empty: $("timeline-empty"),
+    undated: $("timeline-undated"),
+    timelineSelect: $<HTMLSelectElement>("timeline-select"),
+    nowButton: $("timeline-now"),
     modeSelect: $<HTMLSelectElement>("timeline-mode"),
     typeSelect: $<HTMLSelectElement>("timeline-type"),
     statusSelect: $<HTMLSelectElement>("timeline-status"),
@@ -154,11 +167,7 @@ const timelinePanel = initTimelinePanel(
   },
 );
 
-$("btn-toggle-timeline").addEventListener("click", () => {
-  timelineWrap.classList.toggle("hidden");
-  // Rows are laid out from their measured width, which is zero while hidden.
-  if (!timelineWrap.classList.contains("hidden")) timelinePanel.refresh();
-});
+
 
 // --- Theme ---
 

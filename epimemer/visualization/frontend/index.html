@@ -51,15 +51,18 @@
           </div>
         </div>
         <div class="flex gap-2">
-          <button id="btn-toggle-timeline" class="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Toggle timeline panel">Timeline</button>
+          <button id="btn-toggle-graph" class="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Show or hide the graph">Graph</button>
+          <button id="btn-toggle-timeline" class="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Show or hide the timeline">Timeline</button>
           <button id="btn-toggle-pipeline" class="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Toggle pipeline strip">Pipelines</button>
           <span id="ws-status" class="px-2 py-1 text-xs rounded bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400">Disconnected</span>
           <button id="btn-toggle-theme" class="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Switch theme" aria-label="Switch theme">☾</button>
         </div>
       </header>
 
-      <!-- Knowledge graph (the star) — relative so the pipeline detail can overlay it -->
-      <div class="relative flex-1 min-h-0">
+      <!-- Graph and timeline share the width; either can take all of it. -->
+      <div id="split-container" class="flex flex-1 min-h-0 min-w-0">
+      <!-- Knowledge graph — relative so the pipeline detail can overlay it -->
+      <div id="split-left" class="relative min-h-0 min-w-0" style="flex: 0 0 55%">
         <div id="panel-graph" class="flex flex-col h-full min-w-0">
           <div class="flex items-center justify-between px-3 py-1.5 bg-gray-300 dark:bg-gray-900/50 border-b border-gray-400 dark:border-gray-800 shrink-0">
             <span class="text-xs font-medium text-gray-600 dark:text-gray-500 uppercase tracking-wider">Knowledge Graph</span>
@@ -89,6 +92,10 @@
         </div>
       </div>
 
+      <div id="split-divider" role="separator" aria-orientation="vertical" tabindex="0"
+           aria-label="Resize panels" aria-valuemin="15" aria-valuemax="85"
+           class="w-1.5 shrink-0 cursor-col-resize bg-gray-400 hover:bg-blue-400 dark:bg-gray-800 dark:hover:bg-blue-600 transition-colors"></div>
+
       <!-- Node detail drawer (graph node click) -->
       <div id="detail-drawer" class="hidden border-t border-gray-400 bg-gray-300 dark:border-gray-800 dark:bg-gray-900 shrink-0 max-h-48 overflow-auto">
         <div class="flex items-center justify-between px-3 py-1.5 border-b border-gray-400 dark:border-gray-800">
@@ -98,10 +105,11 @@
         <pre id="detail-content" class="px-3 py-2 text-xs text-gray-600 dark:text-gray-400 whitespace-pre-wrap"></pre>
       </div>
 
-      <!-- Timeline panel -->
-      <div id="timeline-panel-wrap" class="hidden shrink-0 border-t border-gray-400 bg-gray-300 dark:border-gray-800 dark:bg-gray-900">
-        <div class="flex items-center gap-2 flex-wrap px-3 py-1 border-b border-gray-400 dark:border-gray-800/50">
+      <!-- Timeline: vertical axis, past at the top (dev-docs §12) -->
+      <div id="split-right" class="flex flex-col min-h-0 min-w-0 bg-gray-200 dark:bg-gray-950" style="flex: 1 1 0%">
+        <div class="flex items-center gap-2 flex-wrap px-3 py-1 bg-gray-300 dark:bg-gray-900/50 border-b border-gray-400 dark:border-gray-800 shrink-0">
           <span class="text-xs font-medium text-gray-600 dark:text-gray-500 uppercase tracking-wider">Timeline</span>
+          <select id="timeline-select" class="text-xs bg-white text-gray-600 border-gray-400 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700 rounded px-1.5 py-0.5 border" title="Which timeline is on the axis"></select>
           <select id="timeline-mode" class="text-xs bg-white text-gray-600 border-gray-400 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700 rounded px-1.5 py-0.5 border" title="Which time the axis measures">
             <option value="record">Record time — when the graph learned it</option>
             <option value="content">Content time — when it happened</option>
@@ -117,22 +125,30 @@
             <option value="active">Active</option>
             <option value="superseded">Superseded</option>
             <option value="merged">Merged</option>
+            <option value="archived">Archived</option>
           </select>
           <select id="timeline-metacontext" class="text-xs bg-white text-gray-600 border-gray-400 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700 rounded px-1.5 py-0.5 border" title="Epistemic frame">
             <option value="all">All frames</option>
           </select>
-          <input id="timeline-query" type="search" placeholder="text, or source:BBC" class="text-xs bg-white text-gray-700 border-gray-400 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700 rounded px-1.5 py-0.5 border w-48" title="Free text. Prefix with type:, status:, mc:, source:, label: or content: to target one field; quote a phrase." />
+          <input id="timeline-query" type="search" placeholder="text, or source:BBC" class="text-xs bg-white text-gray-700 border-gray-400 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700 rounded px-1.5 py-0.5 border w-40" title="Free text. Prefix with type:, status:, mc:, source:, label: or content: to target one field; quote a phrase." />
           <div class="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-500">
             <input id="timeline-range-start" type="date" class="text-xs bg-white text-gray-600 border-gray-400 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700 rounded px-1 py-0.5 border" title="Show marks from" />
             <span>→</span>
             <input id="timeline-range-end" type="date" class="text-xs bg-white text-gray-600 border-gray-400 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700 rounded px-1 py-0.5 border" title="Show marks until" />
           </div>
-          <button id="timeline-reset-zoom" class="px-1.5 py-0.5 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Reset zoom on every row">Reset zoom</button>
-          <span class="text-[10px] text-gray-600">scroll to zoom · drag to pan · shift-drag to select · ⌥ for all rows</span>
+          <button id="timeline-now" class="px-1.5 py-0.5 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Scroll back to this timeline's reference time">Now</button>
+          <button id="timeline-reset-zoom" class="px-1.5 py-0.5 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Reset zoom">Reset zoom</button>
+          <span class="text-[10px] text-gray-600 dark:text-gray-500">scroll to move through time · ⌘-scroll to zoom · shift-drag to select</span>
         </div>
-        <div id="timeline-rows" class="overflow-y-auto" style="max-height: 15rem"></div>
-        <div id="timeline-empty" class="hidden px-3 py-4 text-xs text-gray-600"></div>
+        <div class="flex items-center justify-between px-3 py-0.5 text-[10px] text-gray-600 dark:text-gray-500 shrink-0">
+          <span>facts &amp; topics</span><span>past ↑ future ↓</span><span>inferences</span>
+        </div>
+        <div id="timeline-body" class="flex-1 min-h-0 overflow-hidden"></div>
+        <div id="timeline-undated" class="hidden flex flex-wrap items-center gap-1 px-3 py-1.5 border-t border-gray-400 dark:border-gray-800 shrink-0"></div>
+        <div id="timeline-empty" class="hidden px-3 py-4 text-xs text-gray-600 dark:text-gray-500"></div>
       </div>
+      </div>
+
 
       <!-- Pipeline strip (ambient awareness) -->
       <div id="pipeline-strip-wrap" class="shrink-0 border-t border-gray-400 bg-gray-300 dark:border-gray-800 dark:bg-gray-900">

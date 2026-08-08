@@ -23,8 +23,36 @@ import type {
 
 export type TimeMode = "content" | "record";
 
+/**
+ * Which side of the vertical axis a mark is drawn on.
+ *
+ * Facts and topics are what the graph was *told*; inferences are what it
+ * *worked out*. Separating them by side makes "how much of this timeline is
+ * derived?" answerable at a glance, and gives each half the full width for its
+ * text. `axis` is the mixed case: one timepoint holding both kinds is a single
+ * block straddling the line, because splitting it would invent a second mark
+ * where the data has one.
+ */
+export type Side = "left" | "right" | "axis";
+
+const INFERENCE = "inference";
+
+/**
+ * The side a mark belongs on, from the node types it stands for.
+ *
+ * A timepoint with nothing linked goes left: an author's bare label is
+ * something the graph was told, not something it derived.
+ */
+export const sideForTypes = (nodeTypes: readonly string[]): Side => {
+  const inferences = nodeTypes.filter((t) => t === INFERENCE).length;
+  if (inferences === 0) return "left";
+  if (inferences === nodeTypes.length) return "right";
+  return "axis";
+};
+
 export interface TimelineMark extends FilterableMark {
   id: string;
+  side: Side;
   /** Primary label, drawn beside the mark when there is room. */
   title: string;
   /** Long form for the detail drawer. */
@@ -183,6 +211,7 @@ const markForTimepoint = (
   const linked = nodesForTimepoint(resolver, edges, timeline.timeline_id, point.timepoint_id);
   return {
     id: point.timepoint_id,
+    side: sideForTypes(linked.map((n) => n.node_type)),
     start: parseTime(point.start),
     end: parseTime(point.end),
     title: timepointTitle(point, linked),
@@ -214,11 +243,8 @@ export const buildContentRows = (snapshot: SnapshotLike): TimelineRow[] => {
   });
 };
 
-const RECORD_ROWS: { id: string; name: string }[] = [
-  { id: "topic", name: "Topics" },
-  { id: "fact", name: "Facts" },
-  { id: "inference", name: "Inferences" },
-];
+/** The single record-time row's id. Record time has no timelines to choose between. */
+export const RECORD_ROW_ID = "record";
 
 const describeNode = (node: NodeView): string =>
   [
@@ -240,6 +266,7 @@ const markForNode = (resolver: Resolver, node: NodeView): DatedMark => {
   const reinforced = parseTime(node.last_reinforced);
   return {
     id: node.node_id,
+    side: sideForTypes([node.node_type]),
     start: created,
     end: reinforced !== null && reinforced > created ? reinforced : null,
     title: node.content,
@@ -250,7 +277,12 @@ const markForNode = (resolver: Resolver, node: NodeView): DatedMark => {
 };
 
 /**
- * Record-time rows: one per node type.
+ * Record time: one row holding every node.
+ *
+ * It used to be a row per node type. That split now lives in the *side* a mark
+ * is drawn on (`sideForTypes`), and keeping both would mean picking one type
+ * at a time from the timeline selector — which would hide two thirds of the
+ * graph to say something the layout already says.
  *
  * Only nodes present in the snapshot appear, and the snapshot carries active
  * nodes — so this shows what the graph currently holds and when it arrived,
@@ -258,15 +290,11 @@ const markForNode = (resolver: Resolver, node: NodeView): DatedMark => {
  */
 export const buildRecordRows = (snapshot: SnapshotLike): TimelineRow[] => {
   const resolver = makeResolver(snapshot);
-  return RECORD_ROWS.map(({ id, name }) => ({
-    id,
-    name,
-    dated: snapshot.nodes
-      .filter((n) => n.node_type === id)
-      .map((n) => markForNode(resolver, n))
-      .sort((a, b) => a.start - b.start),
-    undated: [],
-  })).filter((row) => row.dated.length > 0);
+  const dated = snapshot.nodes
+    .map((n) => markForNode(resolver, n))
+    .sort((a, b) => a.start - b.start);
+  if (dated.length === 0) return [];
+  return [{ id: RECORD_ROW_ID, name: "All nodes", dated, undated: [] }];
 };
 
 export const buildRows = (snapshot: SnapshotLike, mode: TimeMode): TimelineRow[] =>

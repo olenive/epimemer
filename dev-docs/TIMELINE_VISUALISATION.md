@@ -3,19 +3,15 @@
 A timeline panel in the dashboard, showing events as marks on an axis, with
 hover detail, filtering, and zoom.
 
-Status, in two parts:
+Status: **built**, except §7 (extraction proposing timepoints), which stays
+open and is tracked in `ISSUES.md`.
 
-- **The horizontal panel is built**, except §7 (extraction proposing
-  timepoints), which stays open and is tracked in `ISSUES.md`.
-- **A vertical redesign is designed and not built.** §12 is its authoritative
-  description and **supersedes §4 (layout), §5.3 (zoom gestures) and §5.4
-  (vague timepoints)**. Its one backend prerequisite — `reference_time` — *is*
-  built (§6.4).
-
-Sections 2–11 describe the horizontal panel, which is the code that exists
-today. They are left standing rather than rewritten: until the vertical
-renderer lands, they are what the running dashboard does, and §12 says exactly
-which of them it replaces.
+The panel was built horizontal (§§2–11) and then turned vertical (§12).
+Sections 2–11 are kept as the record of the first build and of the parts that
+did not change — the scale model (§5.1), the break heuristic (§5.2), the
+filters (§5.5) and the backend work (§6) are all still exactly as described.
+**§12 supersedes §4 (layout), §5.3 (zoom gestures) and §5.4 (vague
+timepoints)**, and each of those points at what replaced it.
 
 This document is the design record. Where the build diverged from the plan, the
 plan has been corrected to describe what exists — §6.2 (one event, not two),
@@ -457,7 +453,7 @@ Following existing project conventions:
 
 ---
 
-## 12. Vertical redesign (designed 2026-08-07 — not built)
+## 12. Vertical redesign (designed 2026-08-07, built 2026-08-08)
 
 The horizontal panel works, and it is starved of the one dimension that
 matters. A mark's label competes with the axis for horizontal room, so marks
@@ -604,32 +600,75 @@ the full width.
 
 `split-pane.ts` did exactly this (88 lines: left/right panels, drag handle,
 per-panel toggles, collapse-to-full-width) and was removed when the layout was
-reworked. It is recoverable from commit `c94e5b5` and should be restored rather
-than rewritten.
+reworked. It was recovered from commit `c94e5b5` rather than rewritten, and
+gained four things it needed: the split held as a *fraction* rather than pixels
+(so a window resize keeps the proportion instead of stranding a panel), arrow-key
+resizing on the focused divider, persistence in `localStorage`, and a refusal to
+collapse the last visible half — which would leave an empty window with no way
+back.
 
-### 12.8 What each module costs
+### 12.8 What each module cost
+
+Estimated before the build, and recorded after. The estimate held except for
+one thing it missed, noted below.
 
 | Module | Change |
 |---|---|
-| `timeline-filter.ts` | **None.** 180 lines, 31 tests, orientation-agnostic. |
-| `timeline-scale.ts` | **Rename only.** `timeToX`/`xToTime` → `timeToPos`/`posToTime`; the doc comments already describe an offset along a usable extent. No logic change, so the 34 tests keep their meaning. |
-| `timeline-model.ts` | Derive a `side` (left / right / straddle) per mark from its linked node types. Row-per-timeline stays, feeding the selector. |
-| `timeline-panel.ts` | The bulk: a new renderer, new gesture bindings, the reference-time marker, the undated tray. Most of its 23 jsdom tests are rewritten with it. |
-| `timeline-labels.ts` | **New**, and pure. Vertical de-collision — horizontal room does not stop two marks 3 px apart from overlapping — plus leader lines back to the tick. Testable exactly as the scale is. |
+| `timeline-filter.ts` | **None**, as predicted. 180 lines, 31 tests, orientation-agnostic. |
+| `timeline-scale.ts` | **Rename only**: `timeToX`/`xToTime` → `timeToPos`/`posToTime`, `x0`/`x1` → `p0`/`p1`. No logic change, so its 34 tests kept their meaning. |
+| `timeline-model.ts` | `sideForTypes` derives left / right / straddle per mark — **and record mode collapsed from three rows to one** (see below). |
+| `timeline-panel.ts` | The bulk, as expected: new renderer, new gestures, reference-time rule, undated tray, timeline selector. |
+| `timeline-labels.ts` | **New**, pure, 27 tests. Its story is §12.10. |
+| `split-pane.ts` | Restored from `c94e5b5` and given ratio state, keyboard resizing, persistence and 19 tests. |
 | `index.html` / `main.ts` | Split-pane markup and wiring, replacing the toggled bottom strip. |
 
-### 12.9 Open risks
+**What the estimate missed: record mode's rows had to go.** It had one row per
+node type (Topics / Facts / Inferences). Once node type is carried by the
+*side* a mark sits on, keeping the rows too would have meant choosing one type
+at a time from the timeline selector — hiding two thirds of the graph to say
+something the layout already says. `buildRecordRows` now returns a single row
+holding every node. §12.2 said this in a sentence; it turned out to be a code
+change, not a rendering detail.
 
-- **Label layout is the unproven part.** Every other piece here is a
-  transposition of something that works. De-collision with leader lines is new
-  behaviour, it is the reason for the redesign, and it is where the design is
-  least certain — build it pure and test it first, before it is entangled in
-  the renderer.
-- **Truncate or wrap is still open.** Half a panel width is generous for a
-  timepoint label and thin for a fact's full content. Deciding needs real
-  graphs on screen, so it is deliberately left to the build.
-- **Dense clusters still defeat any layout.** Two hundred nodes ingested in
-  three minutes is a smear vertically just as it was horizontally. The break
-  heuristic handles empty stretches, not crowded ones; if this bites, the
-  answer is aggregation (a "12 marks" cluster that expands on zoom), which is
-  its own design.
+### 12.9 Risks, and how they landed
+
+- **Label layout was the unproven part** — correctly identified, and it is the
+  one place the design actually changed. §12.10.
+- **Truncate or wrap** was left open and settled as **truncate**: one line per
+  label, budgeted from the half-width, with the full text in the hover detail.
+  Wrapping would make a label's height depend on its content, which the layout
+  would then have to solve against, and no graph seen so far needs it.
+- **Dense clusters still defeat any layout**, as expected. What the build adds
+  is that the panel now *says so*: labels that will not fit are counted and
+  reported ("+7 labels hidden — zoom in") rather than quietly overlapping. The
+  aggregation answer (a "12 marks" cluster that expands on zoom) remains
+  unbuilt and is still its own design.
+
+### 12.10 What building the label layout changed
+
+`timeline-labels.ts` was written first and pure, as §12.9 advised, and the
+advice paid for itself immediately.
+
+Its first version let an oversized stack of labels **spill** out of the space
+it had been given, on the reasoning that crowded text beats absent text. Every
+hand-written test passed. A seeded randomized property check — 300 cases,
+asserting only "no overlaps, no reordering" — failed on its first run: a stack
+crammed between two straddling blocks had overflowed and landed on a label
+sixty pixels away, belonging to a different part of the axis entirely.
+
+So the contract changed. Labels that do not fit are **dropped and reported**,
+never spilled:
+
+- What is dropped is a *label*, not a mark. The tick is still drawn, and the
+  count of suppressed labels is shown.
+- **The caller's order is the priority order.** The module holds no opinion
+  about which labels matter; the panel hands them over in axis order, and a
+  caller that wants something else (`importance`, say) can sort first.
+
+Two further things came out of verifying it. A mutation sweep (23 mutants, all
+killed after four rounds of fixing the *tests*) found that the "shares the
+displacement" test used identical anchors — so it could not tell a mean from a
+first or a last — and that nothing forced a label into the second free range.
+And a 5,000-case run showed the outer repeat-until-stable loop was dead: the
+inner merge loop already converges. It was removed rather than kept as
+untestable insurance.
