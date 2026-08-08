@@ -1,7 +1,9 @@
-# Visualization: Hub Architecture & Pipeline Strip Redesign
+# Visualization: Hub Architecture, Pipeline Strip, Colour Customisation
 
-Implementation plan, written 2026-07-24, **both parts now built and merged** —
-kept as the design record.
+Implementation plans. **Parts A and B are built and merged** (written
+2026-07-24) and are kept as the design record. **Part C — colour
+customisation — is designed and not built** (written 2026-08-08); it starts
+below Part B.
 
 The failure this was written to kill: a stale MCP process holds the fixed viz
 port, so the browser shows *its* empty in-memory store while the session the
@@ -554,3 +556,263 @@ Keep logic testable-by-inspection:
 3. Tiles + mini glyph rendering + live overlay.
 4. Detail view refactor (`pipeline-detail.ts`) + click/Esc wiring.
 5. Polish: collapse toggle, gap-staleness, failed-run styling; rebuild bundle.
+
+---
+
+# Part C — Colour customisation
+
+Designed 2026-08-08. **Not built.**
+
+Goal: a dropdown of colour pickers for the parts of the dashboard the user
+actually looks at — timeline text, detail text, and every background — with the
+choices persisted.
+
+## C.0 The problem this runs into immediately
+
+The dashboard has **three** colour systems, and the request lands across all of
+them.
+
+1. **Tailwind utility classes** — the chrome: header, toolbars, panels,
+   buttons, chips, the detail drawer. About **22 distinct grey classes over
+   ~230 occurrences** in `index.html` and the TS modules. These are compiled
+   into a stylesheet at build time. **A colour picker cannot touch them.**
+2. **The runtime `Palette`** (`theme.ts`) — 16 neutral fields read at render
+   time by the three *drawn* surfaces that Tailwind cannot reach: the cytoscape
+   canvas, the timeline SVG, and the graphviz DOT for the pipeline detail.
+   These *can* be changed live today.
+3. **Hard-coded hues** — node colours, edge colours, mark fills, pipeline
+   state colours. Deliberately outside the palette, because "fact green" must
+   mean the same thing in both themes.
+
+The two things asked for split across the hard boundary: timeline mark text is
+`palette.nodeLabel` (system 2, easy), and the timepoint detail text plus every
+background is Tailwind (system 1, needs the migration below).
+
+**So the bulk of this work is not the picker.** It is giving systems 1 and 2 a
+single source of truth. The picker is a couple of hundred lines on top.
+
+## C.1 Token model
+
+Replace the raw greys with **semantic tokens**, each backed by a CSS custom
+property. The 22 classes collapse to **nine tokens**, because most of the
+classes are the light and dark halves of the same idea:
+
+| Token | Today: light → dark | Used for |
+|---|---|---|
+| `--surface-page` | `gray-200` → `gray-950` | The page and the graph canvas |
+| `--surface-chrome` | `gray-300` → `gray-900` | Headers, toolbars, drawers, trays |
+| `--surface-raised` | `gray-100` → `gray-800` | Buttons, chips, selects |
+| `--surface-raised-hover` | `gray-50` → `gray-700` | Their hover state |
+| `--border` | `gray-400` → `gray-700/800` | Every divider and outline |
+| `--text-strong` | `gray-900` → `gray-200` | Headings, hovered controls |
+| `--text-primary` | `gray-700` → `gray-300` | Body text, node labels |
+| `--text-secondary` | `gray-600` → `gray-400` | Labels, captions, most chrome |
+| `--text-muted` | `gray-500` → `gray-500` | Hints, counts, disabled |
+
+Nine tokens is also about the right number of *knobs*: a picker per raw class
+would be 22 controls that mostly move together, which is a worse UI than the
+thing it replaces.
+
+**The drawn surfaces then derive from the same tokens.** `palette.nodeLabel` is
+`--text-primary`; `palette.breakBackground` is `--surface-chrome`;
+`palette.axis` and `palette.tick` are `--border` and `--text-muted`. That is a
+real simplification independent of the picker — those values are currently
+duplicated between `theme.ts` and the markup, and have already drifted once (the
+light-mode darkening pass had to fix the timeline axis separately from the
+chrome).
+
+Genuinely draw-only fields — `placeFill`, `transitionStroke`, `dotEdge` and the
+rest of the graphviz set — stay as a second group with their own tokens.
+
+## C.2 Mechanism
+
+Tailwind 3.4 with a JS config (`tailwind.config.js`), `darkMode: "class"`.
+
+```js
+theme: { extend: { colors: {
+  surface: { page: "var(--surface-page)", chrome: "var(--surface-chrome)", … },
+  content: { strong: "var(--text-strong)", primary: "var(--text-primary)", … },
+} } }
+```
+
+`bg-surface-chrome` then compiles to `background-color: var(--surface-chrome)`,
+and **the `dark:` variants disappear from the markup entirely** — the dark
+theme becomes a different set of values for the same variables, declared once:
+
+```css
+:root      { --surface-chrome: #d1d5db; … }
+.dark      { --surface-chrome: #111827; … }
+```
+
+That is a large but mechanical diff: ~230 class occurrences, roughly halved
+because each `x dark:y` pair becomes one class.
+
+**The one performance trap.** `currentPalette()` is called on every render, and
+the timeline re-renders on every frame of a pan. Reading nine-plus variables
+through `getComputedStyle` in that loop is exactly the kind of forced-reflow
+jank this codebase has so far avoided. **Read the variables once per theme or
+override change into a cached `Palette` object**, and invalidate on change —
+never per render. The cache belongs in `theme.ts`, which is already the single
+place the `dark` class is read and written.
+
+## C.3 Where the settings live
+
+**`localStorage`, keyed per theme** — not the backend.
+
+This is the opposite call from `reference_time` (`TIMELINE_VISUALISATION.md`
+§6.4), and deliberately so. A fictional timeline's present is a fact about the
+material, so it belongs in the graph where every client and the agent can see
+it. A colour preference is a property of the *viewer*: two people looking at
+the same graph should be able to disagree about it, and one of them changing it
+should not rewrite anything the other reads.
+
+**Overrides are stored per theme**, `{ light: {token: hex}, dark: {token: hex} }`.
+A single shared map would mean choosing a colour in dark mode silently
+destroying light mode — the user would have to notice, switch, and repair it.
+
+Shape, following the existing `epimemer.theme` / `epimemer.split` keys:
+
+```
+epimemer.palette → {"version":1,"light":{"--surface-chrome":"#e5e7eb"},"dark":{}}
+```
+
+Only overridden tokens are stored, so a default that changes later still
+reaches users who never touched it. `version` is there so a future rename can
+migrate rather than silently drop. Unreadable or unparseable storage falls back
+to defaults, as `theme.ts` and `split-pane.ts` already do.
+
+## C.4 The picker UI
+
+A dropdown from a paintbrush button beside the theme toggle, grouped by the
+table in C.1:
+
+```
+┌ Colours ───────────────────── [Reset all] ┐
+│ Surfaces                                  │
+│   Page          ▢ #e5e7eb   ⟲             │
+│   Panels        ▢ #d1d5db   ⟲             │
+│   Controls      ▢ #f3f4f6   ⟲             │
+│ Text                                      │
+│   Headings      ▢ #111827   ⟲  AA 12.6:1  │
+│   Body          ▢ #374151   ⟲  AA  8.9:1  │
+│   Captions      ▢ #4b5563   ⟲  ⚠ 3.2:1    │
+│ Graph & timeline                          │
+│   Topic / Fact / Inference   ▢ ▢ ▢        │
+│ ───────────────────────────────────────── │
+│ [Export]  [Import]                        │
+└───────────────────────────────────────────┘
+```
+
+Each row: a native `<input type="color">`, the hex, a per-token reset, and for
+text tokens a **live contrast ratio** against the surface it is drawn on.
+
+Native `<input type="color">` rather than a custom picker: it is one element,
+it is accessible, it gets the platform's eyedropper for free, and a
+hand-rolled HSV wheel is a lot of code that has nothing to do with this
+project.
+
+Changes apply **live on input**, and are persisted on `change` (commit), so
+dragging through a gradient does not write to storage on every frame.
+
+## C.5 Contrast, and the way back
+
+A colour picker over the whole UI can render the UI unusable — dark grey text
+on dark grey chrome, or a picker panel the same colour as its background.
+
+- **Live WCAG ratio** beside every text token, against the surface it sits on,
+  warning below **4.5:1** for small text. This project already reasons in these
+  numbers: the light-mode darkening pass was validated by computing them, and
+  found `text-gray-500` on `gray-300` at 3.28:1. The formula is a small pure
+  function and belongs in its own tested module.
+- **The reset control must not be themeable.** "Reset all" keeps hard-coded
+  inline colours, so it is legible no matter what the user has done. Otherwise
+  the escape hatch can be painted shut.
+- A **query parameter** (`?palette=reset`) as a second way back for the case
+  where the button is somehow unreachable.
+
+## C.6 What is not customisable, and why
+
+The semantic hues stay fixed in this phase: node types (topic indigo, fact
+green, inference amber), edge types, contradiction red, selection pink, and the
+pipeline's active/completed/failed colours.
+
+They are not decoration — they are how the graph says what kind of thing you
+are looking at, and the panels agree on them. Making them settable is a
+reasonable *later* phase (C4), but it needs an answer to "what happens when two
+of them are set to the same value", which is a different question from "let me
+darken this background".
+
+## C.7 File plan
+
+| File | Change |
+|---|---|
+| `src/tokens.css` | **New.** `:root` and `.dark` blocks declaring every token's default. The one place a default colour is written. |
+| `tailwind.config.js` | Extend `theme.colors` with the CSS-var-backed semantic names. |
+| `index.html` + all TS | Mechanical: `bg-gray-300 dark:bg-gray-900` → `bg-surface-chrome`. |
+| `src/theme.ts` | `Palette` derives from the tokens; cache per theme/override change (C.2). |
+| `src/palette-store.ts` | **New, pure.** Defaults, override merge, per-theme resolution, hex validation, serialize/parse, reset. |
+| `src/contrast.ts` | **New, pure.** Relative luminance and WCAG ratio. |
+| `src/palette-picker.ts` | **New.** The dropdown; DOM only, state from `palette-store`. |
+| `src/main.ts` | Wire the picker; re-render drawn panels on change, as the theme toggle already does. |
+
+## C.8 Tests
+
+Pure, and the bulk of the value:
+
+- `palette-store.test.ts` — defaults; a partial override merges rather than
+  replaces; overrides are per theme and do not leak across; invalid hex
+  rejected; corrupt or unavailable storage falls back to defaults; `version`
+  mismatch discards rather than misreads; reset restores exactly the defaults.
+- `contrast.test.ts` — known pairs (black on white 21:1, the 3.28:1 the
+  darkening pass found), symmetry, and the 4.5:1 boundary.
+
+jsdom:
+
+- `palette-picker.test.ts` — a change writes the CSS variable on `:root`;
+  live-on-input but persist-on-commit; per-token reset restores one token and
+  leaves the others; reset-all clears storage.
+- `theme.test.ts` — additions: the cached palette invalidates on theme change
+  and on override change, and **not** on every read.
+
+Structural, in `layout.test.ts` (which already guards markup):
+
+- No `bg-gray-*`, `text-gray-*` or `border-gray-*` class survives in
+  `index.html` or the TS modules. That is what stops the migration silently
+  rotting back — a new panel written the old way would still *look* right in
+  both themes while ignoring the user's settings entirely.
+
+## C.9 Phasing
+
+Each phase is shippable on its own.
+
+1. **C1 — Token migration.** No UI, no behaviour change: the dashboard looks
+   identical afterwards. The largest and riskiest diff, done alone so a
+   regression is unambiguous. Ends with the structural test in C.8.
+2. **C2 — Store and apply.** `palette-store.ts`, `contrast.ts`, persistence,
+   and applying overrides to `:root` at startup. Still no UI — verified by
+   tests and by setting `localStorage` by hand.
+3. **C3 — The picker.** The dropdown, live preview, contrast badges, resets.
+   This is where the user's original request is satisfied.
+4. **C4 — Later, if wanted.** Export/import, preset themes (high contrast,
+   solarized), and semantic hues (C.6).
+
+Doing C1 first is the point: it is what makes the timeline text, the detail
+text and every background settable *at all*, and it is worth landing even if
+the picker is never built, because it removes the duplication between
+`theme.ts` and the markup that has already drifted once.
+
+## C.10 Open questions
+
+1. **Does the timepoint detail card count as chrome or as a drawn surface?**
+   It is SVG inside the timeline (`renderCard`), so it reads the runtime
+   palette — but the *drawer* showing the same information is Tailwind. After
+   C1 both read the same tokens and the question disappears, which is another
+   argument for doing C1 first.
+2. **Should font size be in scope?** The same dropdown is the natural home for
+   it, and "make the labels bigger" is a more common request than "make them
+   green". It would change `CARD_LINE_HEIGHT`, `LABEL_HEIGHT` and the character
+   budget, which the label layout already takes as inputs — so it is cheaper
+   than it looks. Out of scope as written.
+3. **Per-graph palettes?** Colouring a fiction graph differently from a real
+   one is genuinely useful and would argue for the backend after all. Not
+   proposed here; it would supersede C.3.
