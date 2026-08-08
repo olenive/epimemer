@@ -97,14 +97,6 @@
            class="w-1.5 shrink-0 cursor-col-resize bg-gray-400 hover:bg-blue-400 dark:bg-gray-800 dark:hover:bg-blue-600 transition-colors"></div>
 
       <!-- Node detail drawer (graph node click) -->
-      <div id="detail-drawer" class="hidden border-t border-gray-400 bg-gray-300 dark:border-gray-800 dark:bg-gray-900 shrink-0 max-h-48 overflow-auto">
-        <div class="flex items-center justify-between px-3 py-1.5 border-b border-gray-400 dark:border-gray-800">
-          <span id="detail-title" class="text-xs font-medium text-gray-600 dark:text-gray-400"></span>
-          <button id="btn-close-detail" class="text-xs text-gray-600 dark:text-gray-500 hover:text-gray-900 dark:text-gray-600 dark:hover:text-gray-400">&times;</button>
-        </div>
-        <pre id="detail-content" class="px-3 py-2 text-xs text-gray-600 dark:text-gray-400 whitespace-pre-wrap"></pre>
-      </div>
-
       <!-- Timeline: vertical axis, past at the top (dev-docs §12) -->
       <div id="split-right" class="flex flex-col min-h-0 min-w-0 bg-gray-200 dark:bg-gray-950" style="flex: 1 1 0%">
         <div class="flex items-center gap-2 flex-wrap px-3 py-1 bg-gray-300 dark:bg-gray-900/50 border-b border-gray-400 dark:border-gray-800 shrink-0">
@@ -140,6 +132,7 @@
           <button id="timeline-reset-zoom" class="px-1.5 py-0.5 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Reset zoom">Reset zoom</button>
           <span class="text-[10px] text-gray-600 dark:text-gray-500">scroll to move through time · ⌘-scroll to zoom · shift-drag to select</span>
         </div>
+
         <div class="flex items-center justify-between px-3 py-0.5 text-[10px] text-gray-600 dark:text-gray-500 shrink-0">
           <span>facts &amp; topics</span><span>past ↑ future ↓</span><span>inferences</span>
         </div>
@@ -147,6 +140,19 @@
         <div id="timeline-undated" class="hidden flex flex-wrap items-center gap-1 px-3 py-1.5 border-t border-gray-400 dark:border-gray-800 shrink-0"></div>
         <div id="timeline-empty" class="hidden px-3 py-4 text-xs text-gray-600 dark:text-gray-500"></div>
       </div>
+      </div>
+
+      <!-- Node detail drawer — a bottom drawer of the whole layout.
+           Not a child of the split: as a flex item in a row it took its width
+           from its content, so every hover resized it and shoved the timeline
+           sideways. Fixed height for the same reason — a drawer that grows
+           with its text would re-lay the timeline out under the cursor. -->
+      <div id="detail-drawer" class="hidden border-t border-gray-400 bg-gray-300 dark:border-gray-800 dark:bg-gray-900 shrink-0 h-40 flex flex-col">
+        <div class="flex items-center justify-between px-3 py-1.5 border-b border-gray-400 dark:border-gray-800">
+          <span id="detail-title" class="text-xs font-medium text-gray-600 dark:text-gray-400"></span>
+          <button id="btn-close-detail" class="text-xs text-gray-600 dark:text-gray-500 hover:text-gray-900 dark:text-gray-600 dark:hover:text-gray-400">&times;</button>
+        </div>
+        <pre id="detail-content" class="flex-1 min-h-0 overflow-auto px-3 py-2 text-xs text-gray-600 dark:text-gray-400 whitespace-pre-wrap"></pre>
       </div>
 
 

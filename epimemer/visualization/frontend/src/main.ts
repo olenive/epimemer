@@ -83,6 +83,12 @@ const router = createEventRouter(wsUrl, (connected) => {
 });
 
 // --- Detail drawer ---
+//
+// A fixed-height strip that stays in the layout once opened. The timeline is a
+// hover target, and a drawer that appeared, grew or shrank with its text would
+// re-lay out the panel under the cursor — the mark you were reading moves away
+// from the pointer as you read it. Only the close button changes the layout,
+// because that is a deliberate act rather than a side effect of looking.
 
 const detailDrawer = $("detail-drawer");
 const detailTitle = $("detail-title");
@@ -94,7 +100,13 @@ const showDetail = (nodeId: string, content: string, nodeType: string): void => 
   detailDrawer.classList.remove("hidden");
 };
 
+const clearDetail = (): void => {
+  detailTitle.textContent = "";
+  detailContent.textContent = "";
+};
+
 $("btn-close-detail").addEventListener("click", () => {
+  clearDetail();
   detailDrawer.classList.add("hidden");
 });
 
