@@ -380,17 +380,30 @@ class StorageBackend(Protocol):
         nodes: Sequence[EpistemicNode] = (),
         edges: Sequence[NodeEdge] = (),
         embeddings: Sequence[EmbeddingRecord] = (),
+        timelines: Sequence[Timeline] = (),
     ) -> None:
-        """Atomically insert a batch of nodes, edges, and embeddings.
+        """Atomically insert a batch of nodes, edges, embeddings and timelines.
 
-        All-or-nothing pure insert (no status changes or deletes). Used by the
-        multi-write paths that compute their full output in Python before
-        persisting — ingest (``store_decomposition``) and parent/subtopic
-        synthesis — so a mid-operation failure cannot leave a partial graph.
+        All-or-nothing (no status changes or deletes). Used by the multi-write
+        paths that compute their full output in Python before persisting —
+        ingest (``store_decomposition``) and parent/subtopic synthesis — so a
+        mid-operation failure cannot leave a partial graph.
 
-        Unlike the `store_*` methods this is **insert-only, not upsert**: ids
-        are assumed new (these are freshly-created records). Re-writing an
-        existing id through this path is a caller error, not an update.
+        Unlike the `store_*` methods, nodes, edges and embeddings are
+        **insert-only, not upsert**: ids are assumed new (these are
+        freshly-created records). Re-writing an existing id through this path is
+        a caller error, not an update.
+
+        **`timelines` is the exception: it upserts.** A timeline is one record
+        holding a list of timepoints, so adding a timepoint is a replacement of
+        that record — there is no insert-shaped way to express it. Extraction
+        needs both in one batch: a `TIMELINK` edge naming a timeline that was
+        never stored resolves to an empty row rather than an error, so the
+        failure is silent. Rolling back an upsert therefore means restoring the
+        row's *previous* content, not deleting it.
+
+        Read-modify-write of a shared timeline is last-writer-wins across
+        concurrent callers, exactly as `add_timeline_timepoint` already is.
         """
         ...
 

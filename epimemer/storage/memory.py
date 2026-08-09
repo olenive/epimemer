@@ -534,12 +534,16 @@ class InMemoryStorage:
         nodes: Sequence[EpistemicNode] = (),
         edges: Sequence[NodeEdge] = (),
         embeddings: Sequence[EmbeddingRecord] = (),
+        timelines: Sequence[Timeline] = (),
     ) -> None:
         # Pure inserts with new ids → track and undo on failure (cheaper than a
-        # full-graph snapshot).
+        # full-graph snapshot). Timelines upsert, so undoing one means putting
+        # back what was there rather than removing it: `None` records "there was
+        # no row here", which is the same thing said about a fresh timeline.
         added_nodes: list[str] = []
         added_edges: list[str] = []
         added_embeddings: list[str] = []
+        replaced_timelines: list[tuple[str, Timeline | None]] = []
         try:
             for node in nodes:
                 self._g.nodes[node.id] = _store(node)
@@ -547,6 +551,9 @@ class InMemoryStorage:
             for edge in edges:
                 _put_edge(self._g, _store(edge))
                 added_edges.append(edge.id)
+            for timeline in timelines:
+                replaced_timelines.append((timeline.id, self._g.timelines.get(timeline.id)))
+                self._g.timelines[timeline.id] = _store(timeline)
             for embedding in embeddings:
                 self._g.embeddings[embedding.id] = _store(embedding)
                 added_embeddings.append(embedding.id)
@@ -557,6 +564,13 @@ class InMemoryStorage:
                 _drop_edge(self._g, edge_id)
             for embedding_id in added_embeddings:
                 self._g.embeddings.pop(embedding_id, None)
+            # Reversed: an id written twice in one batch must end up holding
+            # what it held before the batch, not what it held mid-batch.
+            for timeline_id, previous in reversed(replaced_timelines):
+                if previous is None:
+                    self._g.timelines.pop(timeline_id, None)
+                else:
+                    self._g.timelines[timeline_id] = previous
             raise
 
     # --- Embeddings ---

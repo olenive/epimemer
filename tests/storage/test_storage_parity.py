@@ -15,9 +15,11 @@ from datetime import datetime, timezone
 import pytest
 
 from epimemer.core.types import (
+    EdgeType,
     EmbeddingRecord,
     Fact,
     Metacontext,
+    NodeEdge,
     NodeStatus,
     NodeType,
     RawDocument,
@@ -378,6 +380,108 @@ class TestTimelineToolsPersist:
         )
         returned_ids = {tp["id"] for tp in queried["timepoints"]}
         assert returned_ids == {first["timepoint_id"], second["timepoint_id"]}
+
+
+class TestWriteBatchTxTimelines:
+    """A `TIMELINK` edge is only meaningful if the timeline it names exists.
+
+    Ingestion is atomic *because* everything goes through `write_batch_tx`. Once
+    extraction proposes timepoints, a timeline written outside that batch means
+    a mid-document failure can leave `TIMELINK` edges pointing at a timeline
+    that was never stored — an edge to nothing, which the viz read path resolves
+    to an empty row rather than an error, so it fails silently.
+
+    Timelines are the one **upsert** in an otherwise insert-only batch: a
+    timeline is a single record holding a list of timepoints, so appending a
+    timepoint is a record replacement. There is no insert-shaped way to say it.
+    """
+
+    async def test_timeline_and_timelink_commit_together(self, store):
+        node = Fact(content="the siege began", source_id="s1")
+        timeline, point = add_timepoint(
+            Timeline(name="Extracted"), start=datetime(1897, 5, 1, tzinfo=timezone.utc)
+        )
+        link = NodeEdge(
+            src_id=node.id,
+            dst_id=timeline.id,
+            type=EdgeType.TIMELINK,
+            metadata={"timepoint_id": point.id},
+        )
+
+        await store.write_batch_tx(nodes=[node], edges=[link], timelines=[timeline])
+
+        stored = await store.get_timeline(timeline.id)
+        assert stored is not None
+        assert [tp.id for tp in stored.timepoints] == [point.id]
+        assert len(await store.get_edges_from(node.id, edge_type=EdgeType.TIMELINK)) == 1
+
+    async def test_a_failed_batch_leaves_neither(self, store):
+        node = Fact(content="the siege began", source_id="s1")
+        timeline, point = add_timepoint(
+            Timeline(name="Extracted"), start=datetime(1897, 5, 1, tzinfo=timezone.utc)
+        )
+        link = NodeEdge(
+            src_id=node.id,
+            dst_id=timeline.id,
+            type=EdgeType.TIMELINK,
+            metadata={"timepoint_id": point.id},
+        )
+
+        def boom_embeddings():
+            raise RuntimeError("injected failure")
+            yield  # pragma: no cover - generator body, never reached
+
+        with pytest.raises(RuntimeError, match="injected failure"):
+            await store.write_batch_tx(
+                nodes=[node],
+                edges=[link],
+                timelines=[timeline],
+                embeddings=boom_embeddings(),
+            )
+
+        assert await store.get_timeline(timeline.id) is None
+        assert await store.get_node(node.id) is None
+        assert await store.get_edges_from(node.id) == []
+
+    async def test_appending_to_an_existing_timeline_keeps_the_earlier_points(self, store):
+        """The second document into a named timeline must not erase the first."""
+        original, first = add_timepoint(
+            Timeline(name="Extracted"), start=datetime(1897, 5, 1, tzinfo=timezone.utc)
+        )
+        await store.store_timeline(original)
+
+        appended, second = add_timepoint(
+            original, start=datetime(1897, 9, 1, tzinfo=timezone.utc)
+        )
+        await store.write_batch_tx(timelines=[appended])
+
+        stored = await store.get_timeline(original.id)
+        assert stored is not None
+        assert [tp.id for tp in stored.timepoints] == [first.id, second.id]
+
+    async def test_a_failed_batch_leaves_an_existing_timeline_as_it_was(self, store):
+        """Rolling back an upsert means restoring the old row, not dropping it."""
+        original, first = add_timepoint(
+            Timeline(name="Extracted"), start=datetime(1897, 5, 1, tzinfo=timezone.utc)
+        )
+        await store.store_timeline(original)
+
+        appended, _ = add_timepoint(
+            original, start=datetime(1897, 9, 1, tzinfo=timezone.utc)
+        )
+
+        def boom_embeddings():
+            raise RuntimeError("injected failure")
+            yield  # pragma: no cover - generator body, never reached
+
+        with pytest.raises(RuntimeError, match="injected failure"):
+            await store.write_batch_tx(
+                timelines=[appended], embeddings=boom_embeddings()
+            )
+
+        stored = await store.get_timeline(original.id)
+        assert stored is not None
+        assert [tp.id for tp in stored.timepoints] == [first.id]
 
 
 class TestVizListTimelines:

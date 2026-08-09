@@ -170,7 +170,7 @@ async def _ranked_active_items(
     return [(r["item_id"], r["score"]) for r in rows]
 
 
-def _upsert(table: str) -> str:
+def _upsert(table: str, *, data: str = "data", uid: str = "uid") -> str:
     """SurrealQL to upsert a row keyed on the application id (``uid``).
 
     `INSERT INTO` is *silently ignored* when the UNIQUE index on `uid` is
@@ -178,8 +178,11 @@ def _upsert(table: str) -> str:
     `UPSERT ... WHERE` inserts when nothing matches and replaces the content
     when a row does, keeping the generated record id stable so records written
     before this changed keep working.
+
+    `data`/`uid` name the bind parameters, so a batch that upserts several rows
+    of one table in a single transaction can give each statement its own.
     """
-    return f"UPSERT {table} CONTENT $data WHERE uid = $uid"
+    return f"UPSERT {table} CONTENT ${data} WHERE uid = ${uid}"
 
 
 # --- Reflection bookkeeping ---
@@ -923,6 +926,7 @@ class SurrealDBStorage:
         nodes: Sequence[EpistemicNode] = (),
         edges: Sequence[NodeEdge] = (),
         embeddings: Sequence[EmbeddingRecord] = (),
+        timelines: Sequence[Timeline] = (),
     ) -> None:
         statements: list[str] = []
         params: dict = {}
@@ -944,6 +948,16 @@ class SurrealDBStorage:
                 edge_rows.append(row)
             statements.append("INSERT INTO node_edge $edge_rows")
             params["edge_rows"] = edge_rows
+
+        # Timelines upsert rather than insert (see the protocol docstring), so
+        # they get one statement each: `UPSERT ... WHERE uid` matches a single
+        # row and cannot be expressed as a bulk insert of rows.
+        for i, timeline in enumerate(timelines):
+            statements.append(
+                _upsert("timeline", data=f"timeline_{i}", uid=f"timeline_uid_{i}")
+            )
+            params[f"timeline_{i}"] = _serialize(timeline)
+            params[f"timeline_uid_{i}"] = timeline.id
 
         if embeddings:
             statements.append("INSERT INTO embedding $embedding_rows")

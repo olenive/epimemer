@@ -315,8 +315,11 @@ class InstrumentedStorage:
         nodes: Sequence[EpistemicNode] = (),
         edges: Sequence[NodeEdge] = (),
         embeddings: Sequence[EmbeddingRecord] = (),
+        timelines: Sequence[Timeline] = (),
     ) -> None:
-        await self._inner.write_batch_tx(nodes=nodes, edges=edges, embeddings=embeddings)
+        await self._inner.write_batch_tx(
+            nodes=nodes, edges=edges, embeddings=embeddings, timelines=timelines
+        )
         # The write above is already committed. Event emission is best-effort
         # observability and must never turn a committed write into a reported
         # failure — otherwise a retrying caller duplicates every node.
@@ -331,6 +334,10 @@ class InstrumentedStorage:
                     item_id=embedding.item_id,
                     model_id=embedding.model_id,
                     dimensions=len(embedding.vector),
+                ))
+            for timeline in timelines:
+                await self._bus.publish(TimelineStored(
+                    graph=graph, timeline=timeline_to_view(timeline, graph),
                 ))
         except Exception:
             logger.exception("write_batch_tx event emission failed; write already committed")

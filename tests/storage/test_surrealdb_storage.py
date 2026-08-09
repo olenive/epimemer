@@ -17,6 +17,7 @@ from epimemer.core.types import (
     NodeType,
     RawDocument,
     Segment,
+    Timeline,
     Topic,
 )
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
@@ -288,6 +289,37 @@ class TestAtomicOperations:
 
         # The fresh node never landed.
         assert await store.get_node(fresh.id) is None
+
+    async def test_write_batch_tx_rolls_back_a_timeline_upsert(self, store):
+        """The parity test cannot reach this path.
+
+        SurrealDB builds every statement before running any of them, so a
+        failure injected in Python aborts before the transaction opens — which
+        proves nothing about the database rolling an `UPSERT` back. Colliding
+        inside the transaction is what actually exercises it, and the collision
+        has to come *after* the upsert in statement order (embeddings do) or the
+        transaction aborts before ever reaching it.
+        """
+        from epimemer.pipelines.timeline.functions import add_timepoint
+
+        original, first = add_timepoint(
+            Timeline(name="tl"), start=datetime(1897, 5, 1, tzinfo=timezone.utc)
+        )
+        await store.store_timeline(original)
+
+        appended, _ = add_timepoint(
+            original, start=datetime(1897, 9, 1, tzinfo=timezone.utc)
+        )
+        collide = EmbeddingRecord(item_id="x", model_id="m", vector=[1.0])
+        await store.store_embedding(
+            EmbeddingRecord(id=collide.id, item_id="squatter", model_id="m", vector=[0.0])
+        )
+
+        with pytest.raises(Exception):
+            await store.write_batch_tx(timelines=[appended], embeddings=[collide])
+
+        stored = await store.get_timeline(original.id)
+        assert [tp.id for tp in stored.timepoints] == [first.id]
 
     async def test_supersede_by_existing_tx_flags_and_clears(self, store):
         fact = Fact(content="old", source_id="s1")
