@@ -3,11 +3,12 @@
 Living issue tracker. **Last review: 2026-08-10.**
 
 Everything found so far is resolved except **14** and **16**, both deferred by
-design, and **39**, which is scoped and actionable. **34**, **40** and **41** are
-resolved but not yet merged, so their entries are still here. Resolved entries
-are **removed from this file** — their resolution lives in git history and the
-merged code. Issue numbers are stable IDs; the gaps (6–13, 15, 17–33, 35–38) are
-deleted-resolved items, not missing work. New findings continue from **42**.
+design, and **39**, **42** and **43**, which are scoped and actionable (**43**
+blocks **42**). **34**, **40** and **41** are resolved but not yet merged, so
+their entries are still here. Resolved entries are **removed from this file** —
+their resolution lives in git history and the merged code. Issue numbers are
+stable IDs; the gaps (6–13, 15, 17–33, 35–38) are deleted-resolved items, not
+missing work. New findings continue from **44**.
 
 35–38 were the value model & graph hygiene plan
 (`dev-docs/REVIEW_EPISTEMIC.md` §12, which records what the plan did not
@@ -507,6 +508,302 @@ decisions; `main.ts` keeps only the DOM:
 
 ---
 
+### Issue 42 — `importance` only moves up, and a stale judgment protects a node forever
+
+**Status.** Open, scoped. **Blocked on #43**, whose judgment timestamp half of
+this reads. Rewritten 2026-08-10 after the design discussion recorded below; the
+first draft proposed a `deprioritize` tool alongside `reinforce`, and considered
+decaying `importance` on a clock. Both were wrong, for reasons kept here because
+they are the reasons the shape below is right.
+
+**Symptom.** Two halves of one hole.
+
+1. `ValueSignal.importance` has exactly one deliberate mutator — `reinforce`
+   (`epimemer/mcp/tools.py:1100`) — and it only raises. Nothing lowers it
+   anywhere: `apply_decay` touches `relevance` only and says why
+   (`pipelines/reflection/value_decay.py:44-48`), `update` carries the signal
+   forward verbatim (`tools.py:1069`), topic merge takes `max()` of its sources
+   (`tools.py:1710`), and `config.py:52` states the rule outright — "nothing
+   lowers importance on a clock." Each is correct in isolation. Together they
+   mean *judgment* has no downward path, on the axis that exists to carry
+   judgment.
+2. `nominate_archival_candidates` skips anything with
+   `importance > importance_ceiling` (0.5) (`archival.py:234,243`). So one
+   `reinforce` call removes a node from the cheap nomination tier
+   **permanently**. Cleanup does not get it wrong later — cleanup never looks
+   again.
+
+`REVIEW_EPISTEMIC.md` §12.3 gives the example itself: "error message X matters
+until the bug is fixed, then doesn't." The upward half of that sentence is
+implemented; the downward half is not.
+
+**Why archival does not already cover it.** Three reasons, in increasing order of
+what they cost:
+
+1. **Different verdict.** Archival is an all-or-nothing status flip that per §7
+   wants human approval; a change of degree is something the agent may conclude
+   alone. Forcing the first to express the second overstates what was concluded.
+2. **The middle case has no expression.** Still worth keeping, no longer worth
+   the earlier assessment, is neither important nor archivable. Today the only
+   way to record it is to leave the stale number in place.
+3. **Re-nomination**, above: the mechanical tier goes blind, so the agent would
+   have to carry the re-assessment out of band — precisely the job this system
+   exists to do.
+
+---
+
+#### Fix, part 1 — judgment moves both ways
+
+`reinforce` becomes `judge_importance(node_id, direction, reason, related_id=None)`.
+
+**The rename is not cosmetic.** "Reinforcement" is the right word for the
+*retrieval* mechanism: it is the memory-science term, and that mechanism
+genuinely only goes up, with decay as its counterweight on a clock. It is the
+wrong word for a judgment that can go either way, and keeping it would have
+forced the incoherent `reinforce(direction="down")`. Naming the tool for the
+**act** rather than the outcome makes the argument coherent — and `direction` is
+not ceremony wrapped around the judgment, it *is* the judgment: "this matters
+more than the graph currently thinks", or less.
+
+**Steps rather than a setter**, which §12.4 already decided and the discussion
+sharpened:
+
+- an agent setting `0.7` has not seen any other node's value and is guessing at a
+  scale it cannot see; "more than the graph thinks" is a judgment it can make
+  well;
+- a setter is last-writer-wins — three judgments that took a node to 0.85 are
+  erased by one agent typing 0.6 six months later on one conversation's context.
+  Steps compose; setters overwrite.
+
+The one moment a setter is safe already exists: `store_decomposition`'s ingest
+prior, applied at creation before there is anything to overwrite. Set at birth,
+nudge thereafter.
+
+The down step mirrors the up step in form:
+
+```
+up:    importance += step × (1 − importance)     # asymptotic to 1.0
+down:  importance -= step × importance           # asymptotic to 0.0
+```
+
+Both close the gap to their bound by the same fraction. Neither reaches its
+bound, so arithmetic can never judge a node out of existence and neither needs a
+clamp.
+
+**They are mirrors, not inverses — say so in the docstring.** Up-then-down does
+not return home: from 0.5 at the default step of 0.25, up gives 0.625 and down
+gives 0.469. Repeated alternation settles into a **2-cycle**, `{0.4286, 0.5714}`,
+straddling 0.5 almost exactly — up from 0.4286 gives 0.5714, down from 0.5714
+gives 0.4286, and neither side wins. Two agents in sustained disagreement
+therefore park the node at the un-judged default, oscillating across the 0.5
+nomination ceiling, so whether it is nominatable depends on which judgment came
+last. That is the right terminal state: the most recent assessment governs, and
+neither side can lock it permanently.
+
+**Why not an exactly invertible form.** Two exist and both were rejected.
+`(i − step)/(1 − step)` returns home but goes negative below the step size and
+needs a clamp — so it is invertible in the mid-range, where nothing depends on
+it, and lossy near the floor, where the nomination ceiling sits and the
+consequences land. Log-odds (`sigmoid(logit(i) ± k)`) is genuinely both
+invertible and asymptotic, and is the stronger of the two, but it costs the
+settable knob (`EPIMEMER_IMPORTANCE_STEP = 0.25` means "close a quarter of the
+remaining gap"; `k` is in log-odds units nobody sets by intuition), needs input
+clamping anyway because `logit(0)` and `logit(1)` are infinite, and trades a
+one-line formula for one that has to be explained.
+
+All of that buys **invertibility, which nothing here consumes.** A later downward
+judgment is not an undo — it is a new judgment on new information, and the
+provenance trail keeps both entries deliberately. If undo were ever wanted, the
+honest implementation restores the recorded prior value from that trail rather
+than hoping the arithmetic reverses.
+
+The asymptote, by contrast, is load-bearing. Reaching 1.0 would mean "maximally
+important, and no future judgment can raise this further"; reaching 0 would mean
+"worthless, full stop". Arithmetic must not manufacture certainty on the agent's
+behalf — the same commitment as archive-never-delete, expressed on the number
+line.
+
+**Deferred: a `strength` modifier.** `strength="slight"|"normal"|"strong"` as a
+multiplier on the step is about ten lines and a constant table. Deferred on three
+grounds: an *optional* parameter with a default is a non-breaking addition
+whenever it arrives, so waiting locks nothing in; there is no evidence yet for
+what the multipliers should be, and inventing three magic numbers is how a knob
+acquires a wrong default nobody revisits; and each extra knob needs a decision
+rule in `DEFAULT.md` or agents pick the strongest option by default and the
+gradations mean nothing. Trigger to revisit: one step proving too coarse in
+practice — measurable, unlike taste.
+
+---
+
+#### Fix, part 2 — a stale judgment stops protecting
+
+Given #43's `importance_judged_at`, nomination reads the **pair** rather than the
+number: "rated important, judged six months ago, never since" is a re-review
+candidate. `nominate_archival_candidates` gains a `judgment_max_age_days` in the
+shape of its existing `max_age_days=90`.
+
+**No decay on `importance`, deliberately.** The first draft of this issue
+considered it and it is wrong. A decayed importance is a *fabricated* assessment
+— nobody judged that node 0.6, the clock invented it — and the provenance trail
+would read "judged 0.85, reason X" beside a field saying 0.6, with nothing
+accounting for the gap. That is exactly the unattributable number §12.4's
+no-raw-setter rule exists to prevent, arriving through the back door. Staleness
+gets the same effect honestly: the recorded judgment stays exactly as recorded,
+and what ages is confidence in its *currency* — which is what a timestamp
+expresses and a number cannot.
+
+---
+
+#### Two constraints carried over
+
+**One provenance trail, not two.** Keep appending to
+`metadata["reinforcements"]` with a `"direction"` field; **absent means up**, so
+records written before this change keep their meaning. A reviewer wants a bump
+and its later reversal in order, with both reasons — two lists split a story
+whose only value is that it is chronological. The key name outlives its accuracy
+here; renaming it is a data migration for a cosmetic gain, and #43 already spends
+the migration budget.
+
+**Merge still takes `max()`.** A node judged down, then merged with an un-judged
+duplicate, comes back up. Correct — merge must not discard the *other* source's
+judgment — but it means a downward judgment is not durable across a merge. Noted,
+not fixed: changing it needs an argument about whose judgment wins.
+
+---
+
+**Failing test first.** The mirror tests are the cheap half; the one that
+justifies the issue is re-nomination, and it fails today for want of any
+mechanism at all.
+
+- `tests/pipelines/test_reflection.py` — a fact judged above the ceiling drops
+  out of `nominate_archival_candidates`; after a downward judgment it is
+  nominated again. **This is the assertion the issue is about.** Second case: a
+  fact still above the ceiling, but whose `importance_judged_at` is older than
+  `judgment_max_age_days`, is nominated for re-review.
+- `tests/mcp/test_tools.py::TestJudgeImportance` — mirroring the existing
+  `TestReinforce` (`test_tools.py:635`): the down step lowers asymptotically and
+  repeated calls approach but never reach 0.0; `relevance` and `retrieved_at` are
+  untouched while `importance_judged_at` moves; entries append rather than
+  replace, and an up interleaved with a down keeps both in order with their
+  directions intact; unknown `node_id` and unknown `related_id` are rejected.
+- The 2-cycle earns its own named test rather than a comment: up-then-down lands
+  below the start, and repeated alternation settles on `{0.4286, 0.5714}` at the
+  default step rather than drifting to a bound. A future change to the step form
+  that breaks this should have to argue with a test, not discover it in a graph.
+
+These take the `storage` fixture, so they run against both backends per the
+parity rule; the write goes through `store_node` and needs no protocol change.
+
+**Two commits.**
+
+1. The tool — rename, direction, down step — with its tests and the doc updates:
+   `INTEGRATION.md:63`'s tool count (34, enforced by
+   `test_tool_count_matches_integration_doc`; a *rename* leaves the count alone,
+   which is worth confirming rather than assuming), `README.md:132`'s tool list
+   and its `EPIMEMER_IMPORTANCE_STEP` row, `epimemer_prompts/DEFAULT.md`
+   §"Recording that something matters" — the agent needs telling *when* to judge
+   downward, not merely that it can — and `REVIEW_EPISTEMIC.md` §12.2/§12.4,
+   where the upward paths are enumerated and "there is no raw setter" is decided.
+   That decision survives intact; it just stops being the whole story.
+2. Nomination reading judgment staleness, plus
+   **`apply_reflection(judgments=[...])`**. §12.3 lets the agent `reinforce` a
+   nominee instead of letting it go, but has no way to say "keep it, and stop
+   treating it as important" — the verdict most likely to be right about a node
+   reinforced once and never revisited.
+
+---
+
+### Issue 43 — `last_reinforced` names the wrong mechanism, and a judgment leaves no timestamp
+
+**Status.** Open, ready, mechanical. **#42 depends on it.** Found 2026-08-10
+while writing #42: the question "should `reinforce` set `last_reinforced`?" has no
+good answer, because the field's name spans two mechanisms that are deliberately
+separated everywhere else in the design.
+
+**Symptom.** Three things move a node's value, on two clocks, and only one writes
+a timestamp:
+
+| Mechanism | Trigger | Moves | Timestamp |
+|---|---|---|---|
+| Retrieval reinforcement (`reinforced_signal`, `tools.py:624`) | automatic, every `search` hit | `relevance` ↑ | sets `last_reinforced` |
+| Decay (`apply_decay`) | `reflect` | `relevance` ↓ | — |
+| `reinforce` tool (`tools.py:1100`) | agent judgment | `importance` ↑ | **nothing** |
+
+`last_reinforced` is written in exactly one place (retrieval, `tools.py:636`) and
+read for logic in exactly one (`never_reinforced`, `archival.py:159`). It records
+the *passive* mechanism under a name that reads like the *deliberate* one — so
+`never_reinforced`'s docstring, "nothing has touched this node since it was
+created", is false: an agent can deliberately judge a node important and it still
+reads as untouched.
+
+§12.2 separates "is this being used?" from "does this matter?" everywhere except
+in the vocabulary, which is where a reader meets it first.
+
+**Why this is not just tidiness.** Nomination can ask *was this ever used*. It
+cannot ask *when was this last judged*, because nothing records it. So a judgment
+can never go stale — which is half of #42, and the half no tool can fix, because
+the information was never written down.
+
+**The change.**
+
+| Now | After | Why |
+|---|---|---|
+| `last_reinforced: datetime`, default `_now` | `retrieved_at: datetime \| None`, default `None` | Names the mechanism that actually writes it |
+| — | `importance_judged_at: datetime \| None`, default `None` | The judgment clock, which does not exist today |
+| `never_reinforced()` | `never_retrieved()` | What it already computes |
+| `_NEVER_REINFORCED_TOLERANCE` | deleted | It exists only because `default_factory=_now` makes "never" and "just now" indistinguishable (`archival.py:121-124`). `None` says it directly |
+
+Nullability is the substantive half, not a style choice: "never retrieved" and
+"never judged" are real states that a `_now` default fabricates.
+
+**The ingest prior stays un-stamped.** `store_decomposition`'s optional
+`importance` is "a prior, not a verdict" (§12.4) — importance is properly judged
+at reflect time. A prior that stamped `importance_judged_at` would masquerade as
+a judgment and buy itself the full staleness window before anyone looked. It
+leaves the field `None`, which is both true and immediately eligible for review.
+
+**Migration.** `ValueSignal` persists inside the node via
+`model_dump(mode="json")` and returns through `model_validate`, so an old record
+simply lacks the new keys and takes the defaults. With `None` that means every
+pre-existing node reads as never retrieved and never judged, so class-3
+nomination *proposes* them. That is the right direction — nomination is a
+proposal the agent judges with graph context, never a verdict — and it is the
+opposite of what a `_now` default would do, which is to mark every old node as
+freshly retrieved and silently exempt whole graphs from cleanup. Worth saying in
+the commit message: the first `reflect` after this lands will have more to say
+than usual on an existing graph.
+
+**Frontend.** `NodeView` carries the field to the browser (`events.py:51`,
+`frontend/src/types.ts:65`), where record-time marks draw `created_at →
+last_reinforced` as the span over which a node stayed relevant
+(`timeline-model.ts:259-275`). The null case already behaves correctly — `end` is
+already conditional, and the docstring already says "a node never reinforced
+since creation is a plain point" — so this is a type change plus `parseTime`
+tolerating `null`, and it makes an existing intent literal rather than
+incidental.
+
+**Failing test first.**
+
+- `tests/pipelines/test_reflection.py` — a node whose `retrieved_at` is `None` is
+  treated as never retrieved, with no tolerance window in play. Today the
+  equivalent case passes only because two clock reads land a millisecond apart.
+- `tests/mcp/test_tools.py` — a judgment sets `importance_judged_at` and leaves
+  `retrieved_at` alone; `search` reinforcement sets `retrieved_at` and leaves
+  `importance_judged_at` alone. The two clocks being independent is the whole
+  point of the split, and nothing asserts it today.
+- `tests/core/test_types.py` — a fresh `ValueSignal` has both timestamps `None`,
+  and one parsed from a dict missing both keys does too. That second case is the
+  migration.
+- `frontend/src/timeline-model.test.ts` — a node with `retrieved_at: null`
+  renders as a point, not a zero-length span and not a crash.
+
+**Also touches.** `SUMMARY.md:129,221,281`, `README.md:219`,
+`REVIEW_EPISTEMIC.md` §12.1–12.2 where the signal is enumerated,
+`epimemer_prompts/DEFAULT.md`, and the five Python test modules plus three
+frontend ones that name the field.
+
+---
+
 ## Older carry-overs (open, low priority)
 
 From the original live-graph walkthrough (issues 1–5, otherwise resolved or kept
@@ -525,7 +822,10 @@ it lives in README → *Not yet built*.
 **#40 and #41 are done** — the pair from 2026-08-10, the only entries here that
 had actually broken a running system. #40 did it in a way nothing in the default
 suite could have caught, because that suite never holds a connection long enough
-to lose one. **#39 is what is left.**
+to lose one. **#39, #43 and #42 are what is left** — #39 because it fails now,
+and #43 → #42 because the value model is one-way: every `reinforce` call ever
+made has permanently removed a node from the cheap archival tier, so the cost
+accrues whether or not anyone is looking.
 #14/#16 are deferred by
 design with stated triggers, and the earlier performance work is done: `reflect` went
 cubic → quadratic, in-memory edge lookups are indexed, and SurrealDB's `search`
@@ -540,6 +840,8 @@ What to pick up, and what has to be true first:
 | ✅ | 40 (SurrealDB reconnect) | Done. A container restart on 2026-08-10 wedged two live MCP servers until they were killed; the adapter now rebuilds a dropped connection |
 | ✅ | 41 (viz surfaces a dead session) | Done. #40 makes a wedged session rare, not impossible, and this is what made an hour's debugging necessary |
 | 1 | 39 (reflect's O(F²)) | Ready now, and the nearest thing to a live failure: `reflect` crosses the 30 s tool timeout at ~1,400 nodes on SurrealDB. Try vectorizing before anything cleverer |
+| 2 | 43 (value vocabulary & judgment timestamp) | Ready now, mechanical, and #42 cannot be done without it. Also the cheapest moment to do it: the rename gets more expensive with every graph written |
+| 3 | 42 (importance moves one way only) | After 43. Nothing fails today, but every `reinforce` call permanently removes a node from the cheap archival tier, so the cost accumulates unobserved |
 | watch | 14 (enrichment N+1) | The ~120 ms floor under every SurrealDB `search` is now per-result enrichment round-trips. Nothing fails because of it, so it stays deferred — but it is what a batched edge fetch would attack |
 | deferred | 16 | The server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`) |
 | deferred | 14 (rest) | Batched edge fetch + aggregate queries: a protocol change on both backends, and the `asyncio.gather` prong is blocked by #16 |
