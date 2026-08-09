@@ -1,3 +1,4 @@
+LICENSE-MIT
 README.md
 SUMMARY.md
 pyproject.toml
@@ -8,3 +9,4 @@ epimemer.egg-info/dependency_links.txt
 epimemer.egg-info/entry_points.txt
 epimemer.egg-info/requires.txt
 epimemer.egg-info/top_level.txt
+tests/test_bench_smoke.py

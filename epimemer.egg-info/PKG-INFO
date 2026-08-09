@@ -4,7 +4,9 @@ Version: 0.1.0
 Summary: Layered epistemic memory system
 Requires-Python: >=3.14
 Description-Content-Type: text/markdown
+License-File: LICENSE-MIT
 Requires-Dist: petritype
+Requires-Dist: numpy>=2.0
 Requires-Dist: pydantic>=2.12.5
 Requires-Dist: pydantic-ai>=1.70.0
 Requires-Dist: surrealdb>=1.0.8
@@ -18,6 +20,7 @@ Requires-Dist: aiohttp>=3.10.0
 Provides-Extra: dev
 Requires-Dist: pytest>=9.0.2; extra == "dev"
 Requires-Dist: pytest-asyncio>=1.3.0; extra == "dev"
+Dynamic: license-file
 
 # Epimemer: Layered Epistemic Memory System
 
@@ -330,7 +333,7 @@ Memory is exposed as tools, not as a raw database. Claude Code auto-prefixes the
 
 Ingestion is a two-step process: `segment` breaks text into chunks, then the agent extracts topics/facts/inferences and passes them to `store_decomposition`. Epimemer does not decompose text itself — that is the calling agent's job.
 
-The tools group into: **core memory** (`segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`); **discovery & stats** (`query_graph`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`); **conflict handling** (`check_conflicts`, `record_contradiction`, `record_variant`); **reflection** (`reflect`, `apply_reflection`); **temporal access** (`as_of`, `query_changes`); **archival** (`archive`, `restore`); **timelines** (`create_timeline`, `add_timepoint`, `query_timeline`, `create_timelink`); **metacontexts** (`create_metacontext`, `get_metacontexts`); and **graph management** (`list_graphs`, `use_graph`, `delete_graph`).
+The tools group into: **core memory** (`segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`); **discovery & stats** (`query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`); **conflict handling** (`check_conflicts`, `record_contradiction`, `record_variant`); **reflection** (`reflect`, `configure_reflection`, `apply_reflection`); **temporal access** (`as_of`, `query_changes`); **archival** (`archive`, `restore`); **timelines** (`create_timeline`, `add_timepoint`, `query_timeline`, `create_timelink`); **metacontexts** (`create_metacontext`, `get_metacontexts`); and **graph management** (`list_graphs`, `use_graph`, `delete_graph`).
 
 See [INTEGRATION.md](INTEGRATION.md#available-tools) for the canonical table with one-line descriptions and the authoritative tool count — this document intentionally does not restate the count so it can only drift in one place.
 
@@ -346,7 +349,19 @@ All backends support multiple named graphs. The `StorageBackend` protocol requir
 
 ### Scaling Limits
 
-Several read paths are currently O(N) in the number of active nodes and do per-node edge fetches: `list_sources` / `list_relations`, `reflect`'s pending-review gather and split/enrichment loops, and `search`'s per-node frame/label enrichment. This is fine in-memory, but over a websocket to SurrealDB each item is a round-trip, so these do not yet scale to a large persistent graph. The fix direction (aggregate queries, batched edge fetches, and `asyncio.gather` for per-node enrichment) is a known, documented ceiling rather than a defect — don't point a large graph at it unwarned.
+Several read paths are O(N) in the number of active nodes and do per-node edge fetches: `list_sources` / `list_relations`, `reflect`'s pending-review gather and split/enrichment loops, and `search`'s per-node frame/label enrichment. Over a websocket to SurrealDB each item is a round-trip.
+
+These limits are now **measured** rather than estimated — see [dev-docs/BENCHMARKS.md](dev-docs/BENCHMARKS.md) for data and ISSUES.md #14 for the analysis. Against the 30 s default tool timeout (`EPIMEMER_TOOL_TIMEOUT_SECONDS`), the operations fail at roughly:
+
+| Operation | in-memory | SurrealDB (loopback) |
+|---|---|---|
+| `search` | ~10M nodes | not reachable (flat, ~135 ms) |
+| `reflect` | ~7,400 nodes | **~3,200 nodes** |
+| `list_sources` | ~1M nodes | ~29,000 nodes |
+
+So: `reflect` is the limiting operation on both backends, and everything else has been pushed past any size worth quoting. Ingest is flat and not a concern. Don't point a large persistent graph at this unwarned.
+
+These figures depend on two optimisations worth knowing about, because the naive form of each is what a reader would otherwise expect: in-memory edge lookups go through endpoint indexes (`by_src` / `by_dst` in `storage/memory.py`) rather than scanning the edge set, and SurrealDB's `vector_search` ranks before filtering by status rather than filtering inside the ranking query — SurrealDB re-runs such a subquery per row, which cost `search` two orders of magnitude. What remains under `search` on SurrealDB is ~120 ms of per-result enrichment round-trips, the N+1 pattern ISSUES.md #14 tracks.
 
 ## Update Behaviours
 

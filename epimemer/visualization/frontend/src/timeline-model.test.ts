@@ -20,7 +20,7 @@ const node = (over: Partial<NodeView> & { node_id: string }): NodeView => ({
   novelty: 0.5,
   confidence: 0.9,
   relevance: 0.5,
-  last_reinforced: "2024-01-01T00:00:00Z",
+  retrieved_at: "2024-01-01T00:00:00Z",
   created_at: "2024-01-01T00:00:00Z",
   graph: "default",
   metadata: {},
@@ -346,13 +346,13 @@ describe("buildRecordRows", () => {
     );
   });
 
-  it("draws a reinforced node as an interval up to its last reinforcement", () => {
+  it("draws a retrieved node as an interval up to its last retrieval", () => {
     const snapshot: SnapshotLike = {
       nodes: [
         node({
           node_id: "n1",
           created_at: "2024-01-01T00:00:00Z",
-          last_reinforced: "2024-06-01T00:00:00Z",
+          retrieved_at: "2024-06-01T00:00:00Z",
         }),
       ],
       edges: [],
@@ -362,19 +362,32 @@ describe("buildRecordRows", () => {
     expect(mark.end).toBe(Date.parse("2024-06-01T00:00:00Z"));
   });
 
-  it("draws a never-reinforced node as an instant", () => {
+  it("draws a never-retrieved node as an instant", () => {
+    // `retrieved_at` is null until a search returns the node — the state the
+    // backend used to fake by defaulting the timestamp to creation time.
     const snapshot: SnapshotLike = {
       nodes: [
         node({
           node_id: "n1",
           created_at: "2024-01-01T00:00:00Z",
-          last_reinforced: "2024-01-01T00:00:00Z",
+          retrieved_at: null,
         }),
       ],
       edges: [],
     };
 
     expect(buildRecordRows(snapshot)[0].dated[0].end).toBeNull();
+  });
+
+  it("says so in the detail rather than printing null", () => {
+    const snapshot: SnapshotLike = {
+      nodes: [
+        node({ node_id: "n1", created_at: "2024-01-01T00:00:00Z", retrieved_at: null }),
+      ],
+      edges: [],
+    };
+
+    expect(buildRecordRows(snapshot)[0].dated[0].detail).toContain("never");
   });
 
   it("orders each row by creation time", () => {

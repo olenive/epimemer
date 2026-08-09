@@ -3,23 +3,25 @@
 Living issue tracker. **Last review: 2026-08-10.**
 
 Everything found so far is resolved except **14** and **16**, both deferred by
-design, and **39**, **42** and **43**, which are scoped and actionable (**43**
-blocks **42**). **34**, **40** and **41** are resolved but not yet merged, so
-their entries are still here. Resolved entries are **removed from this file** —
-their resolution lives in git history and the merged code. Issue numbers are
-stable IDs; the gaps (6–13, 15, 17–33, 35–38) are deleted-resolved items, not
-missing work. New findings continue from **44**.
+design, and **14**, whose first two steps are now actionable — the deferral
+rested on "nothing fails because of it", and #39 ended that. **39**, **42** and
+**43** are resolved but not yet merged, so their entries are still here.
+Resolved entries are **removed from this file** once merged — their resolution
+lives in git history and the merged code. Issue numbers are stable IDs; the gaps
+(6–13, 15, 17–38, 40, 41) are deleted-resolved items, not missing work, and code
+comments citing a number no longer listed here are pointing at one of them. New
+findings continue from **44**.
 
 35–38 were the value model & graph hygiene plan
 (`dev-docs/REVIEW_EPISTEMIC.md` §12, which records what the plan did not
-anticipate) plus the mock-embedding width fix. Merged 2026-08-07; their entries
-are gone, and #39 below exists because fixing the width changed what the
-benchmarks measure.
+anticipate) plus the mock-embedding width fix.
 
-The performance work (issues 28, 31, 32 and 33) is the exception worth knowing
-about: its entries are gone, but the measurements, the method and the reasoning
-survive in **`dev-docs/BENCHMARKS.md`**, which is written to be read on its own.
-#14 below depends on it.
+The performance work (issues 28, 31, 32 and 33) is resolved and its entries are
+gone. **`dev-docs/BENCHMARKS.md`** carries the state those fixes left the system
+in and the conclusions still worth acting on, but not the runs themselves — it
+describes where things stand, not how they got there, and superseded
+measurements are deleted rather than kept. The blow-by-blow is in `git log`.
+#14 below depends on the current numbers.
 
 **Workflow (required for every fix):**
 
@@ -49,116 +51,72 @@ is entirely sequential.
 
 ## Open issues
 
-### Issue 14 — Full-scan / N+1 query patterns — ⏸ DEFERRED, triggers now measured
+### Issue 14 — Full-scan / N+1 query patterns — ▶ ACTIONABLE (steps 1–2); step 3 still blocked
 
-**Status.** Still deferred, but no longer on a guess: `scripts/bench.py`
-(`make bench`) has measured both backends, and three fixes have since removed
+**Status.** Actionable for the first time: `scripts/bench.py`
+(`make bench`) has measured both backends, and four fixes have since removed
 every part that had actually broken — `reflect`'s cubic frame lookups, the
-in-memory edge scan, and SurrealDB's correlated status filter. What remains is
-real but not yet reached. **Full data, method and the history of those three
-fixes: `dev-docs/BENCHMARKS.md`**, which is the durable record now that their
-issue entries have been deleted.
+in-memory edge scan, SurrealDB's correlated status filter, and the pairwise
+Python in the contradiction phase (#39). **The current numbers and the method
+are in `dev-docs/BENCHMARKS.md`**, which carries where those fixes left the
+system rather than the runs that produced them; the runs are in `git log`.
 
-**Why it is deferred and not closed.** The fix is a storage-protocol change
-(aggregate queries, batched edge fetch) plus concurrency, and one prong —
-`asyncio.gather` on enrichment — is blocked by **#16**'s shared-connection
-hazard. It should be driven by a graph that actually hurts, not landed
-speculatively. Nothing here is near the sizes below.
+**Update 2026-08-10 (#39 promoted this).** With the pairwise arithmetic
+vectorized, `reflect` on SurrealDB barely moved — 1.36× against in-memory's 4.6×
+— because that backend's time goes on sequential round-trips: one
+`get_embeddings_for_item` per fact, then two edge queries per fact to build the
+already-linked set. **That is this issue, and it is now what fails first on
+SurrealDB**, at ~2,000 nodes against in-memory's ~6,700. The deferral stands —
+the fix is still a protocol change on both backends and the `asyncio.gather`
+prong is still blocked by #16 — but the *grounds* have changed. This entry no
+longer rests on "nothing fails because of it", and the first candidate is the
+batched edge fetch in step 1 below, now with a concrete graph size attached.
+See `dev-docs/BENCHMARKS.md`.
 
----
+**Promoted 2026-08-10.** This entry was deferred for months on one sentence —
+"nothing fails because of it" — and that sentence stopped being true when #39
+landed. `reflect` on SurrealDB is now round-trip bound and crosses the 30 s tool
+timeout at **~2,000 nodes**, roughly 100 documents of five segments. It is the
+only thing in the system that fails at a size real use reaches.
 
-#### The measurements
+The deferral was also broader than the blocker justified. Only **step 3**
+(`asyncio.gather` on enrichment) is blocked by #16's shared-connection hazard.
+**Steps 1 and 2 are unblocked**, and step 1 is the one that helps every N+1 site
+at once — including `_hierarchy_annotations` (`mcp/tools.py`), which was
+deliberately left waiting for it.
 
-`EPIMEMER_TOOL_TIMEOUT_SECONDS` defaults to **30 s**, so "crossing" below means
-*the tool call fails*, not *feels slow*.
-
-**The two tables below are 32-wide** (see the caveats at the end of this issue);
-the 384-wide replacements are in `dev-docs/BENCHMARKS.md` § *2026-08-07*. They
-are kept because the *relative* story they tell — which operation dominates,
-and which fix moved what — is unchanged by the width. The crossings table after
-them is the corrected one.
-
-In-memory (`mem://`), current code, mocked embeddings, Apple M4 Max. Bracketed
-figures are from before edge lookups were indexed — they are what made the
-in-memory backend look like the problem:
-
-| Nodes | search p50 | `list_sources` | `reflect` |
-|---|---|---|---|
-| 1,000 | 3.6 ms *(21)* | 27 ms *(203)* | 559 ms *(1,204)* |
-| 3,000 | 8.9 ms *(64)* | 85 ms *(1,740)* | 4,402 ms *(10,554)* |
-| 10,000 | 27.9 ms *(214)* | 278 ms *(18,757)* | 54,579 ms *(125,180)* |
-
-SurrealDB over `ws://` (**loopback** — a remote server is worse). Bracketed
-`search` figures are from before ranking was separated from the status filter:
-
-| Nodes | search p50 | `list_sources` | `reflect` |
-|---|---|---|---|
-| 1,000 | 118 ms *(1,515)* | 857 ms | 6,060 ms |
-| 2,000 | 131 ms *(5,875)* | 1,818 ms | 15,679 ms |
-| 4,000 | 136 ms | 3,743 ms | not run |
-
-30 s crossings, at a real 384 dimensions (2026-08-07 re-baseline):
-
-| Operation | in-memory | SurrealDB (loopback) |
-|---|---|---|
-| `search` | ~1.3M (linear) | not reachable (flat) |
-| `reflect` | ~2,900 | **~1,400** |
-| `list_sources` | ~1M (linear) | ~30,000 |
-
-**`reflect` is now the limiting operation on both backends** — ~2,900 nodes
-in-memory, ~1,400 on SurrealDB — and it is the one whose residual cost is
-genuine O(F²) work rather than a fixable access pattern. That part is **#39**,
-not this issue. Everything else has been pushed past any size worth quoting.
-
-`list_sources` and `reflect` in the SurrealDB table predate the `search` fix
-but are unaffected by it — `list_sources` was re-measured alongside `search` as
-a control and moved by less than run-to-run noise. The in-memory and SurrealDB
-columns never confound each other: the backends share call sites at the tool
-layer and no implementation, so a fix to one cannot move the other.
+So: steps 1–2 are the next work in this file. Step 3 keeps #16's trigger.
 
 ---
 
-#### Per-operation analysis
+#### Where this issue stands
 
-**`search` — was the urgent one, now the cheapest.** In-memory it was always
-linear and healthy (28 ms at 10k). Over a websocket it was **two orders of
-magnitude slower and superlinear** (exponent 1.96 per doubling), crossing 30 s
-at ~5,100 nodes on the most frequently called tool in the system.
+`EPIMEMER_TOOL_TIMEOUT_SECONDS` defaults to **30 s**, so "crossing" means *the
+tool call fails*, not *feels slow*. **The numbers live in
+`dev-docs/BENCHMARKS.md`** and are not duplicated here — a second copy is a
+second thing to keep true, and this entry has already outlived four rounds of
+them.
 
-**Fixed 2026-07-29, and the profile redirected it** — both candidate
-explanations this issue named (per-item embedding fetches, per-node enrichment
-round-trips) were **wrong**. A component breakdown put 99% of the call in the
-single `vector_search` SurrealQL query, whose status filter SurrealDB re-ran
-per embedding row. Ranking before filtering made it flat: 118/131/136 ms at
-1k/2k/4k nodes, exponent 0.10. The ~120 ms that remains is the per-result
-enrichment — the N+1 pattern that *is* this issue's, and the floor any further
-work here would have to attack.
+What matters for this issue: **`reflect` is the limiting operation on both
+backends, and on SurrealDB the limit is now this issue rather than arithmetic.**
+Three live N+1 sites, worst first:
 
-**`reflect` — fixed twice, now the limiting operation.** Caching frame
-lookups per pass made it quadratic (it was cubic), moving the in-memory
-crossing from ~1,800 to ~5,000 nodes; indexing edge lookups bought a further
-2.3× for ~7,400 — both figures at the old 32-wide vectors. At a real 384 it
-crosses at **~2,900** in-memory and **~1,400** on SurrealDB. What remains is
-dominated by `_cosine_similarity` in `detect_contradictions` — 280k
-pure-Python pairwise comparisons at 1,500 nodes, and now over 384-component
-vectors rather than 32. That is **genuine O(F²) work, not redundancy**;
-vectorizing it (numpy) would buy a large constant factor but not change the
-exponent. **Now filed as #39** — the width correction is what made it worth
-filing, by halving the graph size at which it fails.
+1. **`detect_contradictions` fetches per fact** — one
+   `get_embeddings_for_item`, then `get_edges_from` and `get_edges_to` to build
+   the already-linked set, all sequential. On SurrealDB this is what puts
+   `reflect`'s crossing at ~2,000 nodes against in-memory's ~6,700. It is the
+   first thing that fails on a networked backend.
+2. **Per-result enrichment under `search`** — the ~120 ms floor that remains
+   after ranking was separated from the status filter. Nothing fails because of
+   it; it is simply the floor any further `search` work would have to attack.
+3. **`list_sources` / `list_relations`** iterate every active node and fetch that
+   node's edges: O(N) queries per call. Linear on both backends and far from any
+   crossing. The call pattern is this issue's, but in-memory it now costs a dict
+   lookup per node rather than a full scan (`by_src` / `by_dst` endpoint
+   indexes), so it is not worth attacking on its own.
 
-**`list_sources` / `list_relations` — least urgent, and the in-memory half was
-a different bug.** `mcp/tools.py` iterates every active node and fetches that
-node's edges: O(N) queries per call. On SurrealDB that is linear with a
-round-trip constant (~29k crossing). In-memory it measured *quadratic* — worse
-than the networked backend past ~10k — because `InMemoryStorage.get_edges_from`
-/ `get_edges_to` scanned the whole edge set per call. Endpoint indexes
-(`by_src` / `by_dst`) fixed that: 67× at 10k and linear, crossing pushed to
-~1M nodes. The N+1 *call pattern* is still here and still this issue's, but it
-now costs a dict lookup per node rather than a full scan, so in-memory it is no
-longer worth attacking on its own.
-
-**Ingest — not a problem.** Flat at ~30k docs/min in-memory across every size
-measured, ~2k docs/min on SurrealDB. The write path is fine.
+Ingest is flat on both backends at every size measured; the write path has never
+been the ceiling.
 
 ---
 
@@ -166,9 +124,9 @@ measured, ~2k docs/min on SurrealDB. The write path is fine.
 
 Two earlier steps are already done and are not repeated here: indexing
 in-memory edge lookups, and separating ranking from the status filter in
-SurrealDB's `vector_search`. Both are written up in `dev-docs/BENCHMARKS.md`,
-and both are worth reading first — in each case the fix the issue predicted was
-not the fix the profile found.
+SurrealDB's `vector_search`. `dev-docs/BENCHMARKS.md` records what
+they left behind, and its standing warning applies to anything attempted here:
+in each case the fix the issue predicted was not the fix the profile found.
 
 1. **Batched edge fetch in the protocol.** `get_edges_for(node_ids, edge_type)`
    returning a map, implemented on **both** backends per the parity rule. This
@@ -182,33 +140,14 @@ not the fix the profile found.
 
 ---
 
-#### How to reproduce
+#### Before touching any of it
 
-```bash
-make bench BENCH_N=1000,3000                      # in-memory
-docker run -d --rm --name bench-surreal -p 8001:8000 \
-  surrealdb/surrealdb:latest start --user root --pass root memory
-EPIMEMER_BENCH_URL=ws://localhost:8001/rpc make bench BENCH_N=1000,2000
-```
-
-The profiling recipe that found `reflect`'s real cause: seed via
-`bench._seed`, wrap one `await reflect(...)` in `cProfile`, sort by cumulative
-time. Do this before optimizing anything here — every performance fix in this
-project so far has overturned the cause its issue predicted.
-
-#### Caveats on every number above
-
-- **The synthetic corpus is unrealistically self-similar** — a 17-word
-  vocabulary, so most fact pairs clear the 0.80 contradiction threshold (19%
-  under the mock, 49% under the real model on templated text). Anything scaling
-  with *surviving candidate pairs* is overstated. Node- and edge-scaled costs
-  are not.
-- **Every number above was measured at 32 vector dimensions, not 384** — the
-  mock provider truncated its SHA-256 source (**#38**, fixed 2026-08-07). The
-  384-wide re-baseline is in `dev-docs/BENCHMARKS.md`; the crossings it
-  supersedes are corrected in the table above.
-- **All network numbers are loopback.** A remote SurrealDB is worse by the RTT
-  difference times the round-trip count.
+`dev-docs/BENCHMARKS.md` carries the reproduction commands, the caveats that
+qualify every number (mocked embeddings, a self-similar synthetic corpus,
+loopback-only networking), and the profiling recipe. Its standing warning is the
+one that matters here: **profile first** — every performance fix in this project
+so far has overturned the cause its issue predicted, including twice on this
+issue's own candidate explanations.
 
 ---
 
@@ -259,71 +198,72 @@ while the server is single-client stdio; keep this issue open as the reminder.
 
 ---
 
-### Issue 34 — Extraction never proposes timepoints, so content-time is empty by default
+### Issue 39 — `reflect` is the nearest real failure: O(F²) cosine similarity in pure Python
 
-**Status.** ✅ RESOLVED. `dev-docs/TIMELINE_VISUALISATION.md` §7 records what was
-built, including two departures from the design sketched there.
+**Status.** ✅ RESOLVED 2026-08-10 by vectorizing, which was step 1 of the two
+the issue proposed. Step 2 (cutting the candidate set) was **not needed and not
+done**: the measurement said so, which is what it was there for.
+
+**What it bought.** `reflect` went 4.1× faster at 1,000 nodes in-memory and 4.6×
+at 3,000, moving the 30 s crossing from ~2,970 to **~6,700** nodes. The exponent
+is essentially unchanged (1.99 → 1.87), exactly as this issue predicted — a
+constant factor moves a quadratic crossing by roughly its square root, √4.6 =
+2.14 against 2.26 observed. Full data, controls and method:
+`dev-docs/BENCHMARKS.md`.
+
+**What it did not buy, and this is the finding.** SurrealDB moved only 1.27–1.36×,
+to a crossing of ~2,000. The pairwise arithmetic was never that backend's
+bottleneck: `reflect` there is dominated by sequential round-trips — one
+`get_embeddings_for_item` per fact, then two edge queries per fact to build the
+already-linked set — which is **#14's N+1 pattern**. So SurrealDB is now the
+limiting backend by 3.3× rather than 1.8×, and the thing that fails first on it
+is #14 rather than this issue. #14 stays deferred (its fix is a protocol change
+on both backends, and one prong is blocked by #16), but the grounds for
+deferring it — "nothing fails because of it" — are weaker than they were. Noted
+in #14 and in the benchmark section.
 
 **Guarding tests.**
-- `tests/storage/test_storage_parity.py::TestWriteBatchTxTimelines` — a timeline
-  and its `TIMELINK` commit together; a failed batch leaves neither, and leaves
-  an *existing* timeline as it was.
-- `tests/storage/test_surrealdb_storage.py::TestAtomicOperations::test_write_batch_tx_rolls_back_a_timeline_upsert`
-  — the parity test cannot reach this: SurrealDB builds every statement before
-  running any, so a Python-injected failure aborts before the transaction opens.
-  This one collides inside it, after the upsert in statement order.
-- `tests/pipelines/test_temporal.py` — 50 tests over the detector, half of them
-  `TestWhatItRefusesToMatch`: the expensive error here is an invented date, not
-  a missed one.
-- `tests/mcp/test_tools.py::TestTimepointProposal` — concrete dates become dated
-  timepoints, vague ones stay undated, text with no temporal expression creates
-  no timeline, repeats collapse to one timepoint, a second document appends to
-  the same timeline.
+- `tests/pipelines/reflection/test_similarity_scoring.py` — 13 tests over the new
+  pure `similar_pairs`, most of them checked against the loop it replaced, which
+  is kept in the test file as the oracle. The two failure modes a batched
+  implementation has and a loop does not get their own classes: **blocking** (a
+  pair straddling a block seam, the diagonal appearing in every block, every
+  block size agreeing) and **normalization** (a zero vector taking a whole row to
+  NaN, which would compare false against the threshold and silently switch
+  detection off).
+- `tests/pipelines/reflection/test_reflect_scaling.py::TestContradictionScoringIsBatched`
+  — the regression guard, in the shape that module already uses: no per-pair
+  Python call survives, and the whole set is scored in exactly one call whether
+  there are 12 facts or 24. Before the fix the first of these reported *66
+  per-pair Python calls* for 12 facts, on both backends.
+- `TestAnswersAreUnchanged` in the same module still passes untouched, which was
+  the issue's condition: this is a speed fix, and the pairs found must be
+  identical. Ordering is part of that — `similar_pairs` returns pairs in index
+  order so that the caller's stable sort leaves tied pairs in the sequence the
+  loop produced.
 
-**Resolution.** `write_batch_tx` now takes `timelines`, upserting them (a
-timeline is one record holding a list of timepoints, so appending is a
-replacement — there is no insert-shaped way to say it). Ingestion detects
-temporal expressions in **node content** rather than segment text, because a
-mark needs a node to hang on, and proposes onto **one shared timeline per
-graph** rather than one per document, because the panel shows one timeline at a
-time. Both departures are argued in §7.2.
+**Three things the fix had to decide that the issue did not anticipate.**
+- **Blocking is not optional.** The naive vectorization allocates an F×F matrix:
+  800 MB of float64 at 10,000 facts, which trades a timeout for an allocation
+  failure. Scoring proceeds in blocks of 512 rows, so peak memory is block ×
+  facts.
+- **float64, not float32.** Half the memory and roughly twice the speed, but the
+  issue's own condition is that the pairs found be identical, and float32 puts
+  ~1e-7 of slack on a comparison against a 0.80 threshold. Not worth it.
+- **Ragged vectors had to be given a defined behaviour.** A matrix cannot be
+  built from mixed widths, so facts whose stored vector differs from the first
+  one's width are dropped, exactly as facts with no embedding already were. The
+  loop did not fail on this case — it `zip`ped the vectors together, silently
+  truncating to the shorter and scoring the pair on a prefix. Dropping is the
+  quieter of two quiet behaviours, and the honest one.
+
+`numpy` was already installed as a transitive dependency of
+`sentence-transformers` and is now declared directly in `pyproject.toml`, since
+the code imports it.
 
 ---
 
 *Original report:*
-
-**Symptom.** The timeline panel's *content time* mode plots `Timeline` /
-`Timepoint` data, but nothing in ingestion creates a timeline: `TIMELINK` is
-written in exactly one place, the `create_timelink` tool
-(`epimemer/mcp/tools.py`). So the mode is empty on any graph where an agent has
-not deliberately curated a timeline, and the panel says so rather than showing
-anything. Record-time mode is unaffected — it needs no curation.
-
-**Fix.** During decomposition, detect temporal expressions in segment text and
-propose `Timepoint`s: a resolved `start`/`end` where the expression is concrete,
-`label` only where it is not. "During the Renaissance" must stay vague rather
-than being guessed into 1500-01-01 — the panel has an undated lane precisely so
-that an unresolvable date is never invented.
-
-**Blocker to settle first.** `write_batch_tx`
-(`epimemer/storage/protocol.py`) takes `nodes`, `edges` and `embeddings` only.
-Ingestion is atomic *because* everything goes through it. If extraction writes
-timelines, either they join that batch or a mid-document failure can leave
-`TIMELINK` edges pointing at a timeline that was never stored. Extending the
-batch is the right fix and touches both backends and their rollback paths — so
-that is the first commit, not an afterthought.
-
-**Failing test first.**
-- `tests/storage/test_storage_parity.py::TestWriteBatchTxTimelines` — a batch
-  containing a timeline plus a `TIMELINK` edge commits both; a batch that raises
-  part-way leaves neither. Must run against both backends.
-- Then extraction: given a segment with a concrete date, `store_decomposition`
-  produces a timepoint with a `start`; given a vague expression, one with a
-  `label` and no `start`.
-
----
-
-### Issue 39 — `reflect` is the nearest real failure: O(F²) cosine similarity in pure Python
 
 **Status.** Open, and newly worth filing. It sat as a "watch" row for weeks on
 the strength of a crossing at ~7,400 nodes. The 2026-08-07 re-baseline at a real
@@ -372,143 +312,48 @@ measurement, not an assertion about a wrong answer:
 
 ---
 
-### Issue 40 — A dropped SurrealDB connection is never re-established, so the process wedges permanently
-
-**Status.** ✅ RESOLVED. Found live on 2026-08-10: restarting the SurrealDB
-container left every MCP tool call in an already-running server returning
-
-```
-sent 1011 (internal error) keepalive ping timeout; no close frame received
-```
-
-and it never recovered. The visualization UI showed this as a permanent
-"Loading…" (see #41 for that half).
-
-**Symptom.** `SurrealDBStorage.connect()`
-(`epimemer/storage/surrealdb_adapter.py`) assigns `self._db` once and nothing
-ever rebuilds it. The `db` property only guards `None`, which happens on a
-*never-connected* store, not a *disconnected* one. So after the websocket
-underneath drops, all 60-odd `self.db.query(...)` call sites raise for the rest
-of the process's life.
-
-**Why the SDK does not save us.** `AsyncWsSurrealConnection.connect()` returns
-early when `self.socket` is truthy, and `self.socket` is never cleared on a drop
-— `_recv_task` swallows `ConnectionClosed`, cancels the pending futures and
-exits, leaving the object looking connected. The next `_send` calls
-`await self.connect()` (a no-op) and then `socket.send(...)`, which raises
-`ConnectionClosed`. The SDK's own docstring says the connection is "to be used
-once and discarded", so reconnection is the caller's job.
-
-**Causes seen or expected.** A server restart (the observed one), a container
-`docker restart`, a network blip, and laptop sleep — the last is the nastiest,
-because the keepalive deadline expires while both ends are frozen and the
-connection is torn down on wake, at the exact moment a user resumes work.
-
-**Fix.** Retry once on a connection-level error: rebuild the connection
-(reconnect, re-signin, re-select the database that was selected, re-run the
-idempotent schema setup) and re-run the operation.
-
-Three constraints the fix has to respect:
-- **Never reconnect an embedded engine.** `mem://`, `memory`, `file://` and
-  `surrealkv://` map to `AsyncEmbeddedSurrealConnection`, which *holds the data
-  in the connection object*. Reconnecting one would silently hand back an empty
-  graph instead of restoring anything. Such a connection also cannot raise
-  `ConnectionClosed`, so the guard is belt-and-braces — but the failure it
-  prevents is silent data loss, which earns it.
-- **Re-select the database that was actually selected**, not the home one. The
-  viz reads (`viz_list_nodes` and friends) temporarily `use()` another database
-  and restore it in a `finally`; a reconnect during that window must come back
-  pointed where the caller thinks it is.
-- **One reconnect for concurrent callers.** Several in-flight operations will
-  fail together. Serialize on a lock and let the losers notice the connection
-  was already rebuilt, rather than each building their own and leaking all but
-  the last.
-
-Retrying the operation is safe here, and that is a property of this schema
-rather than a general truth: every write is either an `UPSERT ... WHERE uid` or
-an `INSERT INTO` guarded by a `UNIQUE` index on `uid` — which SurrealDB silently
-ignores on collision — and the multi-statement writes are transactional, so a
-connection lost mid-flight aborts them server-side. A retry is therefore a
-no-op or a repeat of an idempotent write.
-
-Out of scope: retrying the operation that was *in flight* when the socket died.
-The SDK cancels its pending futures, so that caller sees `CancelledError`;
-distinguishing "cancelled by us" from "cancelled by a dead socket" is not worth
-the ambiguity. That one call fails, and the next one reconnects.
-
-**Guarding tests.**
-- `tests/storage/test_surrealdb_storage.py::TestReconnection` — four tests
-  against a stand-in connection, because a real drop is not something the
-  default suite can stage: a dropped connection is rebuilt and the query
-  retried; an *embedded* connection is never rebuilt (the error propagates
-  instead, since reconnecting would return an empty engine); the reconnect
-  restores the database that was actually selected, not the home one;
-  concurrent callers share one reconnect rather than building five.
-- `tests/storage/test_surrealdb_persistence.py::test_storage_recovers_after_server_restart`
-  — the real-world proof, opt-in via `make test-integration`. It keeps *the
-  same* `SurrealDBStorage` across a `docker restart` and asserts the next call
-  succeeds. Verified to fail without the fix, with the same
-  `ConnectionClosedError` seen live.
-
-**What the shape of the fix cost.** All 60-odd call sites now go through
-`_query`/`_use` rather than `self.db.query`/`self.db.use`, and the three
-module-level ranking helpers take that wrapper instead of the connection.
-`_setup_schema` is the one deliberate exception — it runs inside `connect()`, so
-retrying there would re-enter `connect()` while `_reconnect` holds its lock.
-
----
-
-### Issue 41 — A failed session RPC leaves the viz UI on "Loading…" with a green Connected badge
-
-**Status.** ✅ RESOLVED. Uncovered by #40, and cosmetic next to it — but it is
-the reason the failure read as "the frontend is broken" for an hour.
-
-**Symptom.** `selectSession` (`epimemer/visualization/frontend/src/main.ts`)
-awaits `fetchGraphs`. When the hub answers 502 because the session's storage is
-unreachable, the `catch` only does `console.error`, so:
-- the graph selector keeps the `<option>Loading...</option>` placeholder from
-  `index.html` — forever, with no timeout and no retry;
-- both panels stay empty, with no indication why;
-- the `Connected` badge stays green, because it reports the *browser↔hub*
-  socket, which is genuinely fine.
-
-Nothing on screen distinguishes "still loading" from "this session's backend is
-dead", and the one place the reason exists is the browser console.
-
-**What was done.** A new pure module, `src/session-select.ts`, holds the three
-decisions; `main.ts` keeps only the DOM:
-- the graph selector is now a state (`loading` / `ready` / `unavailable`) rather
-  than a placeholder that happens to get overwritten. `unavailable` carries the
-  hub's own words in the `title`;
-- `api.ts` reads the error body, so that reason survives the fetch. `502` was a
-  shrug; `sent 1011 (internal error) keepalive ping timeout` was the diagnosis,
-  and it was being discarded one line after it arrived;
-- session ranking is *answers > listed but not answering > gone*, most recent
-  first within a rank. Recency alone picked the session you used last, which is
-  the one you most recently broke. `selectFirstWorkingSession` walks that order
-  until one answers, so a wedged backend no longer blanks a UI that had a
-  healthy session two rows down;
-- "unreachable" is a third session state, distinct from disconnected, shown in
-  the session selector. Only asking reveals it — from the hub's side the session
-  *is* connected — so the browser accumulates it, and clears it when a session
-  re-registers or answers again;
-- the status badge now reads "Hub connected", since that is all it ever meant.
-
-**Guarding tests.**
-- `src/session-select.test.ts` — 13 tests: a reachable session is preferred to a
-  more recent unreachable one; the old recency behaviour survives when nothing
-  is known to be unreachable; an unreachable session still beats a disconnected
-  one and is still selectable (that is how its reason reaches the screen); the
-  selector says "unavailable" rather than "loading" and puts the reason in the
-  title.
-- `src/api.test.ts` — the hub's reason survives the fetch, with the status code
-  as the fallback when the body carries none.
-
-`main.ts` stays untested by choice, as the other DOM modules do; `tsc` covers it.
-
----
-
 ### Issue 42 — `importance` only moves up, and a stale judgment protects a node forever
+
+**Status.** ✅ RESOLVED 2026-08-10, in the two commits the issue proposed.
+`reinforce` is now `judge_importance(node_id, direction, reason)` with the
+mirrored down step, and nomination reads the `(importance, importance_judged_at)`
+pair so an assessment nobody has revisited stops protecting a node.
+
+**Guarding tests.**
+- `tests/pipelines/test_reflection.py::TestJudgmentStaleness` — the assertions
+  this issue exists for: a judgment nobody has revisited in `judgment_max_age_days`
+  comes back as a `stale_judgment` nominee; a recent one is left alone; and three
+  downward judgments return a node to the cheap tier under its own steam.
+- `tests/mcp/test_tools.py::TestJudgeImportanceDownward` — the down step lowers
+  by the mirrored fraction; 50 judgments approach 0 without reaching it;
+  up-then-down lands at 0.46875 rather than home; **40 alternating judgments
+  settle on the two-cycle {3/7, 4/7}**; both directions share one ordered
+  provenance trail; the judgment clock moves and the retrieval clock does not;
+  an unknown direction is refused before anything is written.
+- `tests/mcp/test_tools.py::TestApplyReflectionJudgments` — a downward judgment
+  applies through `apply_reflection`; **judging back up also clears the
+  staleness**, which is what stops a re-confirmed nominee returning forever;
+  unknown ids are skipped as supersessions are.
+- `TestJudgeImportanceUpward` (the former `TestReinforce`) still passes with
+  `direction="up"` — the upward behaviour is unchanged, which was the condition.
+
+**Two decisions taken while building it.**
+- **`judgment_max_age_days` defaults to 180**, not the 90 of `max_age_days`. A
+  judgment should outlive the retirement window: re-reviewing every judged node
+  quarterly is noise, and the target is assessments that have quietly expired,
+  not recent ones.
+- **`stale_judgment` sorts last** in `_REASON_ORDER` and is documented as *not*
+  an archival claim. It asks the agent to re-confirm or lower an assessment, and
+  judging the node back up is a correct answer that needs no human approval —
+  it changes a degree, not a status.
+
+**The provenance key stayed `reinforcements`.** Renaming it is a data migration
+for a cosmetic gain. Entries now carry `direction`; **an entry without one
+predates this tool and means "up"**, which is documented on `judge_importance`.
+
+---
+
+*Original report:*
 
 **Status.** Open, scoped. **Blocked on #43**, whose judgment timestamp half of
 this reads. Rewritten 2026-08-10 after the design discussion recorded below; the
@@ -715,6 +560,45 @@ parity rule; the write goes through `store_node` and needs no protocol change.
 
 ### Issue 43 — `last_reinforced` names the wrong mechanism, and a judgment leaves no timestamp
 
+**Status.** ✅ RESOLVED 2026-08-10. `retrieved_at` and `importance_judged_at`
+replace `last_reinforced`, both nullable and both defaulting to `None`;
+`never_reinforced()` is `never_retrieved()` and reads the null directly;
+`_NEVER_REINFORCED_TOLERANCE` is gone. **#42 is unblocked.**
+
+**Guarding tests.**
+- `tests/core/test_types.py::TestValueSignal` — both clocks start unset, and a
+  `ValueSignal` parsed from a dict carrying neither key reads as unset rather
+  than as freshly touched. That second one is the migration.
+- `tests/mcp/test_tools.py::TestReinforce::test_reinforce_stamps_the_judgment_clock_and_only_that_one`
+  — the two clocks are independent, which is the entire point of having two.
+  `TestSearchReinforcement` covers the other direction: retrieval stamps
+  `retrieved_at` and leaves the judgment clock alone.
+- `tests/pipelines/test_reflection.py` — a node no search has returned is
+  nominated; a retrieved one is spared *however recently it was created*. The
+  second case is what the old tolerance window got wrong: it asked "were these
+  two timestamps written close together" rather than "did anything happen".
+- `frontend/src/timeline-model.test.ts` — a node with `retrieved_at: null`
+  renders as a point, and the detail says "never" rather than printing null.
+
+**One decision beyond what the issue specified.** The `ArchivalReason` literal
+`"never_reinforced"` was renamed to `"never_retrieved"` as well. It is
+agent-facing — it appears in `reflect`'s output and in
+`epimemer_prompts/DEFAULT.md` — so leaving it would have preserved the exact
+naming lie this issue exists to remove, in the one place an agent actually reads.
+Nothing persists it (candidates are computed per call), so there was no migration
+cost.
+
+**What it cost.** Both timestamps are nullable, so the fixtures that used to
+construct "never used" out of two pinned timestamps now just omit the field —
+`ValueSignal(importance=0.3)` says it. The frontend needed a type change and
+nothing else: `parseTime` already accepted `null`, and the record-time mark's
+`end` was already conditional, so the null case was correct by construction
+before it was reachable.
+
+---
+
+*Original report:*
+
 **Status.** Open, ready, mechanical. **#42 depends on it.** Found 2026-08-10
 while writing #42: the question "should `reinforce` set `last_reinforced`?" has no
 good answer, because the field's name spans two mechanisms that are deliberately
@@ -819,29 +703,27 @@ it lives in README → *Not yet built*.
 
 ## Recommended order
 
-**#40 and #41 are done** — the pair from 2026-08-10, the only entries here that
-had actually broken a running system. #40 did it in a way nothing in the default
-suite could have caught, because that suite never holds a connection long enough
-to lose one. **#39, #43 and #42 are what is left** — #39 because it fails now,
-and #43 → #42 because the value model is one-way: every `reinforce` call ever
-made has permanently removed a node from the cheap archival tier, so the cost
-accrues whether or not anyone is looking.
-#14/#16 are deferred by
-design with stated triggers, and the earlier performance work is done: `reflect` went
-cubic → quadratic, in-memory edge lookups are indexed, and SurrealDB's `search`
-went quadratic → flat. `dev-docs/BENCHMARKS.md` has the data; #14 above has the
-analysis.
+**#14 steps 1–2 are what is left**, and they are no longer speculative: with the
+pairwise arithmetic vectorized, `reflect` on SurrealDB is round-trip bound and
+fails at ~2,000 nodes. #39, #42 and #43 are done and unmerged — the value model
+now moves in both directions, and a judgment nobody revisits stops protecting a
+node.
+
+Work that does not exist yet, as opposed to work that is wrong, lives in
+`dev-docs/PROPOSED_FEATURES.md`.
+
+**#14 and #16 stay deferred**, with stated triggers — but #14's grounds weakened
+when #39 landed. Vectorizing the contradiction phase left `reflect` on SurrealDB
+round-trip bound, so "nothing fails because of it" no longer holds there.
+`dev-docs/BENCHMARKS.md` has the numbers; #14 above has the analysis.
 
 What to pick up, and what has to be true first:
 
 | Order | Work | Trigger |
 |---|---|---|
-| ✅ | 34 (timepoint extraction) | Done. `write_batch_tx` carries timelines, as its own commit |
-| ✅ | 40 (SurrealDB reconnect) | Done. A container restart on 2026-08-10 wedged two live MCP servers until they were killed; the adapter now rebuilds a dropped connection |
-| ✅ | 41 (viz surfaces a dead session) | Done. #40 makes a wedged session rare, not impossible, and this is what made an hour's debugging necessary |
-| 1 | 39 (reflect's O(F²)) | Ready now, and the nearest thing to a live failure: `reflect` crosses the 30 s tool timeout at ~1,400 nodes on SurrealDB. Try vectorizing before anything cleverer |
-| 2 | 43 (value vocabulary & judgment timestamp) | Ready now, mechanical, and #42 cannot be done without it. Also the cheapest moment to do it: the rename gets more expensive with every graph written |
-| 3 | 42 (importance moves one way only) | After 43. Nothing fails today, but every `reinforce` call permanently removes a node from the cheap archival tier, so the cost accumulates unobserved |
-| watch | 14 (enrichment N+1) | The ~120 ms floor under every SurrealDB `search` is now per-result enrichment round-trips. Nothing fails because of it, so it stays deferred — but it is what a batched edge fetch would attack |
+| ✅ | 39 (reflect's O(F²)) | Done, unmerged. Vectorized; the in-memory crossing moved ~2,970 → ~6,700. Step 2 (cutting the candidate set) proved unnecessary and was not done |
+| ✅ | 43 (value vocabulary & judgment timestamp) | Done, unmerged. `retrieved_at` + `importance_judged_at`, both nullable; the tolerance window is gone |
+| ✅ | 42 (importance moves one way only) | Done, unmerged. `judge_importance` carries a direction, and nomination reads the judgment clock so an unrevisited assessment stops protecting a node |
+| 1 | 14 steps 1–2 (batched edge fetch, aggregate queries) | **Ready now.** `reflect` on SurrealDB crosses 30 s at ~2,000 nodes and the cause is this issue's N+1 pattern. A protocol change on both backends per the parity rule; step 1 helps every N+1 site at once |
 | deferred | 16 | The server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`) |
-| deferred | 14 (rest) | Batched edge fetch + aggregate queries: a protocol change on both backends, and the `asyncio.gather` prong is blocked by #16 |
+| deferred | 14 step 3 | `asyncio.gather` on per-node enrichment — blocked by #16's shared-connection hazard, and the only part of #14 that is |

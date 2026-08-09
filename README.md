@@ -116,7 +116,7 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_SIMILARITY_THRESHOLD` | `0.75` | Similarity threshold for search |
 | `EPIMEMER_REFLECT_THRESHOLD` | `10` | Server-wide default: stores in a graph before suggesting reflection (counted per graph, in storage; reported with the count by `graph_stats`, and overridable per graph via `configure_reflection`) |
 | `EPIMEMER_REINFORCEMENT_BOOST` | `0.2` | How much of the gap to 1.0 a retrieved node's `relevance` closes. `0.0` disables retrieval reinforcement; ranking is never affected either way |
-| `EPIMEMER_IMPORTANCE_STEP` | `0.25` | How much of the gap to 1.0 one `reinforce` call adds to a node's `importance`. Never moved by decay |
+| `EPIMEMER_IMPORTANCE_STEP` | `0.25` | How much of the gap to its bound one `judge_importance` call closes, up or down. Never moved by decay |
 | `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
 | `EPIMEMER_VIZ_ENABLED` | `true` | Publish visualization events to the hub |
 | `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Visualization hub host |
@@ -129,7 +129,7 @@ All configuration is via `EPIMEMER_` environment variables:
 
 Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<name>` by Claude Code), grouped by purpose:
 
-- **Core memory**: `segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`, `reinforce`
+- **Core memory**: `segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`, `judge_importance`
 - **Discovery & stats**: `query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`
 - **Conflict handling**: `check_conflicts`, `record_contradiction`, `record_variant`
 - **Reflection**: `reflect`, `configure_reflection`, `apply_reflection`
@@ -216,7 +216,7 @@ both themes.
   inferences to the right; selecting a mark expands its text in place. Two
   modes:
   - *record time*, the default: when the graph learned each node, drawn from
-    `created_at` out to `last_reinforced`. Always populated.
+    `created_at` out to `retrieved_at`, or a point when that is null.
   - *content time*: `Timeline`/`Timepoint` data — when the described events
     happened. Ingestion proposes timepoints from dates stated in the text, so
     this is populated by default; `create_timeline`, `add_timepoint` and
@@ -291,37 +291,15 @@ make test-frontend      # npm run typecheck && npm test, in the frontend directo
 
 ## Not yet built
 
-Designed but unimplemented, in rough priority order. Known bugs and deferred
-fixes live in [ISSUES.md](ISSUES.md) instead.
-
-- **Specialized timelines.** Only the base `Timeline`/`Timepoint` exists.
-  `PreciseTimeline` (datetime interval index for range and proximity queries),
-  `VagueTimeline` (labelled points with relative before/after ordering), and
-  `CyclicalTimeline` (templates like "every Monday", mapped to concrete
-  instances on link) are described in SUMMARY.md → *Timelines* → *Multiple
-  Implementations*. Each needs add/remove/reorder with stable UUIDs, proximity
-  search, overlap detection, and storage round-trip.
-- **Benchmarking beyond scaling.** `scripts/bench.py` (`make bench`) measures
-  ingest throughput, search p50/p95, `list_sources` and `reflect` against graph
-  size — see [dev-docs/BENCHMARKS.md](dev-docs/BENCHMARKS.md) for baselines.
-  Still unmeasured: embedding throughput on its own, and a SurrealDB-over-`ws://`
-  run (the case that matters most, since it multiplies the per-node queries).
-- **Notebooks.** `notebooks/00_foundation.py` (storage + vector search + type
-  diagrams), `07_timelines_metacontext.py`, and `08_orchestration.py` are
-  missing.
-- **LLM-guided and hybrid segmentation.** Both need an LLM; the server makes no
-  LLM calls of its own (SUMMARY.md → *Epimemer makes no LLM calls*), so this
-  means either delegating the split to the calling agent or re-introducing a
-  provider abstraction. Paragraph and semantic-similarity segmentation cover
-  the current use cases.
-- **Merge is Topic-only on the wired path.** `merge_nodes` is type-agnostic but
-  `apply_reflection merges` accepts Topics only; extending to Facts and
-  Inferences is undecided (Inferences are meant to let competing derivations
-  coexist).
+Proposed work — what it is, why, roughly what it costs, and what has to be true
+before it can start — lives in
+[dev-docs/PROPOSED_FEATURES.md](dev-docs/PROPOSED_FEATURES.md). Known bugs and
+deferred fixes are separate, in [dev-docs/ISSUES.md](dev-docs/ISSUES.md).
 
 ## Documentation
 
 - [SUMMARY.md](SUMMARY.md) — Architectural design
-- [ISSUES.md](ISSUES.md) — Known issues and deferred fixes
+- [dev-docs/ISSUES.md](dev-docs/ISSUES.md) — Known issues and deferred fixes
+- [dev-docs/PROPOSED_FEATURES.md](dev-docs/PROPOSED_FEATURES.md) — Backlog of work not yet built
 - [INTEGRATION.md](INTEGRATION.md) — Claude Code integration guide
-- [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) — Development and debugging guide
+- [dev-docs/DEVELOPER_GUIDE.md](dev-docs/DEVELOPER_GUIDE.md) — Development and debugging guide

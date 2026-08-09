@@ -163,6 +163,12 @@ class ValueSignal(BaseModel):
     retrieval), importance is "does this matter?" (judgment only). Keeping them
     apart is what stops decay from quietly eroding an assessment an agent or a
     human deliberately recorded.
+
+    Each has its own timestamp, and the names say which mechanism writes them.
+    One shared `last_reinforced` could not: retrieval is passive and automatic
+    while a judgment is deliberate and rare, so a single field either conflated
+    them or — as it did — silently recorded only the passive one under a name
+    that read like the other.
     """
     novelty: float = Field(default=1.0, ge=0.0, le=1.0)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -170,7 +176,13 @@ class ValueSignal(BaseModel):
     # Never moved by `apply_decay`. Raised only by judgment — the `reinforce`
     # tool, or a prior supplied at ingest.
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
-    last_reinforced: datetime = Field(default_factory=_now)
+    # Both are None until the thing they name actually happens. "Never
+    # retrieved" and "never judged" are states worth distinguishing from
+    # "happened just now", and a `now` default cannot express either: it made a
+    # node nothing had ever touched look freshly used, which is why archival
+    # nomination had to compare two clock reads with a tolerance window.
+    retrieved_at: datetime | None = None
+    importance_judged_at: datetime | None = None
 
 
 # --- Documents and Segments ---

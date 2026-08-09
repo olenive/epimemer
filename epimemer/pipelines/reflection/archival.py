@@ -109,21 +109,26 @@ async def archive_nodes(
 # approved by a human before `apply_reflection` acts on it.
 
 
-ArchivalReason = Literal["retired", "evidence_stale", "never_reinforced"]
+ArchivalReason = Literal[
+    "retired", "evidence_stale", "never_retrieved", "stale_judgment"
+]
 
 # Priority order, worst first. A retired node has already been replaced; a stale
-# inference has lost its basis; an unused fact is merely unloved, which is the
-# weakest of the three claims and so goes last.
+# inference has lost its basis; an unused fact is merely unloved. A stale
+# judgment is last and is not really an archival claim at all — it asks the
+# agent to re-confirm or lower an assessment nobody has revisited, which may
+# well end in judging the node back up.
 _REASON_ORDER: tuple[ArchivalReason, ...] = (
-    "retired", "evidence_stale", "never_reinforced",
+    "retired", "evidence_stale", "never_retrieved", "stale_judgment",
 )
 
-# `created_at` and `last_reinforced` are filled by two separate clock reads, so
-# a node that has never been touched still has them microseconds apart. The rule
-# is "not used since creation", and this is how much slack that costs.
-_NEVER_REINFORCED_TOLERANCE = timedelta(seconds=1)
-
 DEFAULT_NOMINATION_LIMIT = 20
+
+# How long an upward judgment protects a node before it is worth re-confirming.
+# Longer than the 90-day retirement window on purpose: re-reviewing every judged
+# node quarterly is noise, and the point is to catch assessments that have
+# quietly expired, not to re-litigate recent ones.
+DEFAULT_JUDGMENT_MAX_AGE_DAYS = 180
 
 
 class ArchivalCandidate(BaseModel):
@@ -154,9 +159,34 @@ def _candidate(node: EpistemicNode, reason: ArchivalReason) -> ArchivalCandidate
     )
 
 
-def never_reinforced(node: EpistemicNode) -> bool:
-    """True when nothing has touched this node since it was created."""
-    return node.value.last_reinforced - node.created_at < _NEVER_REINFORCED_TOLERANCE
+def judgment_is_stale(node: EpistemicNode, cutoff: datetime) -> bool:
+    """True when an upward judgment is old enough to be worth re-confirming.
+
+    Reads the *pair* — importance and the clock — rather than the number. An
+    unjudged node (`importance_judged_at is None`) is not stale; it was never
+    judged, so there is nothing to have expired, and the other nomination
+    classes already cover it.
+
+    This is why `importance` has no decay. A decayed importance would be a
+    number nobody judged, sitting beside a trail that says otherwise; here the
+    recorded assessment stays exactly as recorded and what ages is confidence in
+    its currency, which is what a timestamp expresses and a number cannot.
+    """
+    judged_at = node.value.importance_judged_at
+    return judged_at is not None and judged_at <= cutoff
+
+
+def never_retrieved(node: EpistemicNode) -> bool:
+    """True when the node has never been returned by a search.
+
+    Says what it checks. The predicate used to compare `last_reinforced`
+    against `created_at` within a second's tolerance and call the result "never
+    touched" — which was false twice over: the slack existed only because the
+    timestamp defaulted to creation time, and an agent's explicit judgment
+    never moved that field at all, so a deliberately-judged node still read as
+    untouched.
+    """
+    return node.value.retrieved_at is None
 
 
 async def knowledge_in_degree(node_id: str, storage: StorageBackend) -> int:
@@ -205,6 +235,7 @@ async def nominate_archival_candidates(
     *,
     max_age_days: int = 90,
     importance_ceiling: float = 0.5,
+    judgment_max_age_days: int = DEFAULT_JUDGMENT_MAX_AGE_DAYS,
     limit: int = DEFAULT_NOMINATION_LIMIT,
 ) -> list[ArchivalCandidate]:
     """Propose nodes worth archiving, worst first.
@@ -217,14 +248,21 @@ async def nominate_archival_candidates(
        those whose entire evidence set has since been archived (the follow-on
        to class 1 and 3). Their basis changed; they are the
        expensive-to-recreate layer, so they are flagged rather than swept.
-    3. **never_reinforced** — active facts never used since creation, not judged
+    3. **never_retrieved** — active facts never returned by a search, not judged
        important, and with nothing depending on them.
+    4. **stale_judgment** — active nodes held above the ceiling by an upward
+       judgment older than `judgment_max_age_days` that nobody has revisited.
+       Not an archival claim: importance protects a node from every class above,
+       so without this an assessment that has since expired protects it forever
+       and the cheap tier never looks at the node again.
 
     `importance_ceiling` is inclusive of the default (0.5) on purpose: an
     un-judged node is not a node judged worth keeping, and nomination is a
     proposal, not a verdict.
     """
     from epimemer.pipelines.reflection.review import review_labels
+
+    judgment_cutoff = datetime.now(timezone.utc) - timedelta(days=judgment_max_age_days)
 
     candidates: dict[ArchivalReason, list[ArchivalCandidate]] = {
         reason: [] for reason in _REASON_ORDER
@@ -240,10 +278,14 @@ async def nominate_archival_candidates(
             if "evidence_stale" in labels or await evidence_gone(node, storage):
                 candidates["evidence_stale"].append(_candidate(node, "evidence_stale"))
             continue
-        if node.value.importance > importance_ceiling or not never_reinforced(node):
+        if node.value.importance > importance_ceiling:
+            if judgment_is_stale(node, judgment_cutoff):
+                candidates["stale_judgment"].append(_candidate(node, "stale_judgment"))
+            continue
+        if not never_retrieved(node):
             continue
         if await knowledge_in_degree(node.id, storage) == 0:
-            candidates["never_reinforced"].append(_candidate(node, "never_reinforced"))
+            candidates["never_retrieved"].append(_candidate(node, "never_retrieved"))
 
     ordered = [c for reason in _REASON_ORDER for c in candidates[reason]]
     return ordered[:limit]

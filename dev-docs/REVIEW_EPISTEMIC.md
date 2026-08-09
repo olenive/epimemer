@@ -407,12 +407,13 @@ arm. **Built 2026-08-07** — ISSUES.md #35–37 carry the implementation notes,
 including four things the plan below did not anticipate (a generic status-flip
 transaction rather than an archival-specific one; `restore` needing to flip
 rather than re-insert; `last_reinforced == created_at` never being exactly
-true; and segment anchors having to be excluded from structural in-degree).
+true (since removed — the two clocks are now nullable and named for what
+writes them); and segment anchors having to be excluded from structural in-degree).
 
 ### 12.1 The value model, revised
 
 `ValueSignal` exists on every node (`novelty` / `confidence` / `relevance` /
-`last_reinforced`, `core/types.py`) but is write-only today. Its only writers
+`retrieved_at`, `core/types.py`) but is write-only today. Its only writers
 are creation defaults, `apply_decay` (down only, uniform across all active
 nodes), and topic-merge; nothing reinforces it and nothing reads it — not
 retrieval ranking, not archival candidacy. Relevance is therefore a monotone
@@ -423,7 +424,7 @@ The revision splits value into two dimensions with different dynamics:
 | Dimension | Moves down | Moves up | Answers |
 | --- | --- | --- | --- |
 | `relevance` (existing) | decay (existing) | automatic reinforcement on retrieval | "is this being used?" |
-| `importance` (new) | judgment only — never the decay clock | explicit judgment: agent `reinforce` tool, human review | "does this matter?" |
+| `importance` (new) | judgment only — never the decay clock | explicit judgment: agent `judge_importance` tool, human review | "does this matter?" |
 
 Decay must never erode a judgment: an agent that marks a node important is
 recording an assessment, not starting a timer. That is why importance is a
@@ -443,11 +444,12 @@ rewrite.
 ### 12.2 Upward paths
 
 1. **Usage reinforcement (automatic).** A node returned by `search` gets
-   `last_reinforced = now` and a partial relevance restore
+   `retrieved_at = now` and a partial relevance restore
    (`relevance += boost × (1 − relevance)`). System-driven, no judgment; the
    asymptotic form means repeated hits saturate rather than pin at 1.0.
 2. **Agent judgment (explicit).** New tool
-   `reinforce(node_id, reason, related_id=None)`: raises `importance` and
+   `judge_importance(node_id, direction, reason, related_id=None)`: moves
+   `importance` up or down and
    records *why* — and optionally *which* new node triggered the
    re-assessment. Deliberately **not** a raw setter: every bump leaves an
    auditable trace, so a human reviewing a trivial-looking fact rated high can
@@ -471,13 +473,13 @@ judgment → human approval. Cost stays proportional to the junk, not the graph.
 - **Nominate (mechanical, no LLM):** in priority order — superseded/merged
   nodes with low importance (the existing age-based candidates, now
   value-aware); then `evidence_stale` inferences; then *active* facts never
-  reinforced since creation (`last_reinforced == created_at`) with low
+  retrieved since creation (`retrieved_at is None`) with low
   importance and zero knowledge in-degree. `source_type` may weight the
   ordering (chat/error-log before document).
 - **Judge (agent):** the LLM reviews the nominated set *with graph context*.
   Importance is judged at reflect time, not ingest time — triviality is only
   visible once the neighbourhood exists ("error message X" matters until the
-  bug is fixed, then doesn't). The agent may `reinforce` a nominee instead of
+  bug is fixed, then doesn't). The agent may judge a nominee up instead of
   letting it go.
 - **Approve (human, in-conversation):** `reflect` surfaces an
   `archival_candidates` worklist (exactly like `pending_review`);
@@ -505,7 +507,8 @@ are the expensive-to-recreate layer.
 - Importance is judged **at reflect time**; `store_decomposition` *may* accept
   an optional per-fact importance as a prior (default 0.5).
 - Cleanup is **archive-only**. Deletion stays out of the system.
-- `reinforce` records provenance for every bump; there is no raw setter.
+- `judge_importance` records provenance for every judgment, in both
+  directions; there is no raw setter.
 - **Value signals do not feed search ranking.** Retrieval reinforcement creates
   a feedback loop (retrieved → higher relevance → retrieved). At archival
   granularity that loop is benign — it only protects used nodes from cleanup.

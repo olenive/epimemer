@@ -42,6 +42,7 @@ from epimemer.pipelines.reflection.topic_consolidation import (
     merge_similar_topics,
 )
 from epimemer.pipelines.reflection.value_decay import apply_decay
+from epimemer.mcp.tools import judge_importance
 from epimemer.storage.memory import InMemoryStorage
 
 
@@ -730,9 +731,9 @@ async def storage_for_nomination():
     born = now - timedelta(days=200)
 
     def untouched(importance: float) -> ValueSignal:
-        # last_reinforced == created_at is the "never used" signal; both are
-        # pinned here so the fixture states it rather than relying on defaults.
-        return ValueSignal(importance=importance, last_reinforced=born)
+        # `retrieved_at` defaults to None, which *is* the "never used" signal —
+        # no longer something the fixture has to construct out of timestamps.
+        return ValueSignal(importance=importance)
 
     retired = Fact(
         id="fact-retired", content="retired and unimportant", source_id="seg-1",
@@ -755,7 +756,7 @@ async def storage_for_nomination():
     reinforced = Fact(
         id="fact-reinforced", content="used since creation", source_id="seg-1",
         created_at=born,
-        value=ValueSignal(importance=0.3, last_reinforced=now - timedelta(days=1)),
+        value=ValueSignal(importance=0.3, retrieved_at=now - timedelta(days=1)),
     )
     supported = Fact(
         id="fact-supported", content="something depends on this", source_id="seg-1",
@@ -799,7 +800,7 @@ async def test_archival_nomination_ordering(storage_for_nomination):
         "fact-retired", "inference-stale", "fact-trivial",
     ]
     assert [c.reason for c in candidates] == [
-        "retired", "evidence_stale", "never_reinforced",
+        "retired", "evidence_stale", "never_retrieved",
     ]
 
 
@@ -825,21 +826,101 @@ async def test_archival_nomination_respects_the_limit(storage_for_nomination):
     assert [c.node_id for c in candidates] == ["fact-retired", "inference-stale"]
 
 
-async def test_archival_nomination_never_nominates_a_reinforced_node_by_default():
-    """A node created moments ago is 'never reinforced' — but only just.
+async def test_a_node_no_search_has_returned_is_nominated():
+    """"Never retrieved" is now a state, not an inference from two timestamps.
 
-    `created_at` and `last_reinforced` are filled by two separate clock reads,
-    so they are never exactly equal on a freshly created node. Comparing them
-    for equality would spare every node ever written; the tolerance is what
-    makes the rule mean 'not used since creation'.
+    This used to need a one-second tolerance window: `retrieved_at` defaulted to
+    creation time, so "never touched" had to be read as "these two clock reads
+    are close together". A null says it outright, and the window is gone.
     """
     storage = InMemoryStorage()
     fresh = Fact(content="just created", source_id="seg-1")
     await storage.store_node(fresh)
+    assert fresh.value.retrieved_at is None
 
     candidates = await nominate_archival_candidates(storage, max_age_days=90)
 
     assert [c.node_id for c in candidates] == [fresh.id]
+
+
+class TestJudgmentStaleness:
+    """A judgment protects a node, but not forever (#42).
+
+    Importance is what keeps a node out of the cheap nomination tier. Before
+    this, one upward judgment removed it permanently — cleanup did not get the
+    node wrong later, it never looked again — so an assessment that had since
+    expired went on protecting it with nobody able to notice.
+
+    Staleness rather than decay, deliberately: a decayed importance would be a
+    number nobody judged, sitting beside a provenance trail that says otherwise.
+    Here the recorded judgment stays exactly as recorded, and what ages is
+    confidence in its currency.
+    """
+
+    async def _judged(self, importance: float, judged_days_ago: int | None):
+        storage = InMemoryStorage()
+        at = (
+            None if judged_days_ago is None
+            else datetime.now(timezone.utc) - timedelta(days=judged_days_ago)
+        )
+        node = Fact(
+            id="fact-judged", content="judged important once", source_id="seg-1",
+            value=ValueSignal(importance=importance, importance_judged_at=at),
+        )
+        await storage.store_node(node)
+        return storage
+
+    async def test_a_recently_judged_node_is_left_alone(self):
+        storage = await self._judged(0.9, judged_days_ago=10)
+        assert await nominate_archival_candidates(storage, judgment_max_age_days=180) == []
+
+    async def test_a_judgment_nobody_has_revisited_comes_back_for_review(self):
+        """The assertion this issue is about."""
+        storage = await self._judged(0.9, judged_days_ago=400)
+
+        candidates = await nominate_archival_candidates(
+            storage, judgment_max_age_days=180
+        )
+
+        assert [(c.node_id, c.reason) for c in candidates] == [
+            ("fact-judged", "stale_judgment")
+        ]
+
+    async def test_a_downward_judgment_returns_a_node_to_the_cheap_tier(self):
+        """The other route back, and the one an agent drives directly."""
+        storage = await self._judged(0.9, judged_days_ago=1)
+        node = await storage.get_node("fact-judged")
+        assert await nominate_archival_candidates(storage) == []
+
+        for _ in range(3):
+            await judge_importance(
+                node.id, direction="down", reason="the bug was fixed",
+                storage=storage, importance_step=0.25,
+            )
+
+        candidates = await nominate_archival_candidates(storage)
+        assert [c.node_id for c in candidates] == ["fact-judged"]
+        assert candidates[0].reason == "never_retrieved"
+
+
+async def test_a_retrieved_node_is_spared_however_recently_it_was_created():
+    """The other half: one search hit takes a node out of the cheap tier.
+
+    Under the old tolerance rule a node retrieved within a second of being
+    created was still 'never used', because the check was a duration rather
+    than a fact about what happened.
+    """
+    storage = InMemoryStorage()
+    used = Fact(
+        content="returned by a search",
+        source_id="seg-1",
+        value=ValueSignal(retrieved_at=datetime.now(timezone.utc)),
+    )
+    await storage.store_node(used)
+
+    candidates = await nominate_archival_candidates(storage, max_age_days=90)
+
+    assert candidates == []
 
 
 async def test_archived_evidence_strands_its_inference():

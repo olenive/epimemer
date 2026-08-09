@@ -1,454 +1,177 @@
 # Benchmarks
 
-Measurements from `scripts/bench.py` (`make bench`). This file, not the script,
-is what makes ISSUES.md **#14**'s deferral condition checkable: #14 says the
-full-scan / N+1 patterns get fixed when "latency is felt", and these are the
+Measurements from `scripts/bench.py` (`make bench`). This file describes **where
+the system stands now**, not how it got here — superseded runs are deleted rather
+than kept, and `git log` holds them if a comparison is ever wanted.
+
+It is what makes ISSUES.md **#14**'s deferral condition checkable: #14 says the
+full-scan / N+1 patterns get fixed when latency is felt, and these are the
 numbers that say when.
 
-Re-run and append a new section rather than editing an old one — a baseline is
-only useful next to the one before it.
-
-**This file is the durable record for the performance work.** Issues 28, 31, 32
-and 33 have been resolved and their ISSUES.md entries deleted per that file's
-workflow, so the sections below — with their issue numbers kept as historical
-labels, findable in `git log` — are where the measurements, the method and the
-reasoning now live. Each is written to be read without its issue.
+**When a change moves one of these numbers, measure before *and* after on the
+same machine in the same session, then replace the numbers here with the new
+ones.** Machine state matters more than it looks — a run taken against a
+previously recorded baseline on a busier box produced a 40% discrepancy on a
+metric the change could not touch. A same-session pair with unchanged controls is
+trustworthy; a cross-run comparison is not.
 
 ## How to read these
 
-- **Embeddings are mocked.** Model inference is a constant per text that would
-  dominate and hide the graph costs this exists to expose. Every number here is
-  therefore a **floor** — real ingest is slower by the embedding time, real
-  search by roughly one query embedding.
-  **Width, and a break in the series (2026-08-07).** Everything measured before
-  this date ran at **32 dimensions, not the 384 it reported**:
-  `MockEmbeddingProvider` truncated a single SHA-256 digest while its
-  `dimension` property returned what was asked for (ISSUES.md #38, now fixed by
-  stretching the hash across blocks). Vector-scan cost in every section dated
-  2026-07-29 is therefore understated. **Do not compare those numbers with
-  anything measured after the fix** — see the 2026-08-07 re-baseline below for
-  the like-for-like replacement.
+- **Embeddings are mocked** (`mock-384`, genuinely 384-wide). Model inference is
+  a constant per text that would dominate and hide the graph costs this exists to
+  expose. Every number here is therefore a **floor** — real ingest is slower by
+  the embedding time, real search by roughly one query embedding.
 - **The synthetic corpus is unrealistically self-similar.** Documents are drawn
   from a 17-word vocabulary, so most fact pairs clear the 0.80 contradiction
-  threshold. Measured: 19% of unrelated pairs under the mock, and 49% under real
-  `all-MiniLM-L6-v2` on similarly templated text. Anything whose cost scales
-  with *surviving candidate pairs* (the contradiction phase of `reflect`) is
-  therefore overstated here relative to a diverse real corpus. Costs that scale
-  with node or edge counts are not affected.
-- Node counts are exact (the synthetic corpus is 4 nodes per segment, 5
-  segments per document).
-- `mem://` measures the algorithms without network cost. A SurrealDB run over
-  `ws://` adds a round-trip to every one of the per-node queries, so the N+1
-  operations degrade much faster there. Add it with `EPIMEMER_BENCH_URL`.
-
----
-
-## 2026-07-29 — first baseline
+  threshold. Measured: 19% of unrelated pairs under the mock, 49% under real
+  `all-MiniLM-L6-v2` on similarly templated text. Anything scaling with
+  *surviving candidate pairs* — the contradiction phase of `reflect` — is
+  overstated here relative to a diverse corpus. Node- and edge-scaled costs are
+  not affected.
+- **Node counts are exact**: 4 nodes per segment, 5 segments per document.
+- **All network numbers are loopback.** A remote SurrealDB is worse by the RTT
+  difference times the round-trip count.
+- **Absolute SurrealDB figures are soft.** They move with whatever else the
+  machine is doing; the shapes and the ratios are the durable part.
 
 **Machine:** Apple M4 Max, macOS 26.4.1, arm64, Python 3.14.0.
-**Commit:** `b95fc16`. **Backend:** `InMemoryStorage`. **Embeddings:** mock-384.
-
-| Nodes | Edges | Ingest (docs/min) | search p50 | search p95 | list_sources | reflect |
-|---|---|---|---|---|---|---|
-| 100 | 325 | 26,153 | 2.9 ms | 5.3 ms | 4.6 ms | 25.7 ms |
-| 1,000 | 3,250 | 32,007 | 21.3 ms | 22.4 ms | 208 ms | 5,412 ms |
-| 10,000 | 32,500 | 30,742 | 212 ms | 222 ms | **18,066 ms** | **>19 min** (abandoned) |
-
-### What this says
-
-**Ingest is flat** (~30k docs/min) and does not degrade with graph size — the
-write path is not where the ceiling is.
-
-**`search` is linear** in node count: 10× the graph, ~10× the latency
-(2.9 → 21.3 → 212 ms). Linear is expected — the vector scan is exhaustive — and
-at 10k nodes a fifth of a second is still usable. This is the least urgent part
-of #14.
-
-**`list_sources` is quadratic** — 4.6 ms →
-208 ms → **18 seconds**. Each 10× of data costs ~45× then ~87×. It iterates
-every active node and fetches that node's edges (`mcp/tools.py`), so both the
-outer loop and the work per iteration grow together. (Read the later section
-first: this is the biggest single number here, but `reflect` is the operation
-that actually breaks, and it breaks far sooner.)
-
-**`reflect` was already 5.4 s at 1,000 nodes**, up from 25.7 ms at 100 — ~210×
-for 10× the data. At 10,000 it was **still running after 19 minutes** and was
-abandoned, so that figure is a lower bound, not a measurement. Extrapolating the
-observed growth puts it in the hours.
-
-### The consequence #14 did not state
-
-`EPIMEMER_TOOL_TIMEOUT_SECONDS` defaults to **30 s**. At 10k nodes
-`list_sources` takes 18 s of that budget on the fastest available hardware, with
-mocked embeddings and no network. On a SurrealDB backend over a websocket, where
-each of those per-node edge fetches becomes a round-trip, both `list_sources` and
-`reflect` will **exceed the timeout and fail** rather than merely feel slow.
-
-So #14's trigger should be read as: **~10k nodes on `mem://`, and considerably
-fewer on SurrealDB.** A persistent graph approaching that size is not a
-"performance ceiling" — it is a broken tool call.
-
-> **Superseded by the next section (same day).** The follow-up run across
-> 1.5k–3k shows `reflect` crossing 30 s at **~1,800 nodes**, not 10k — it is
-> cubic, and it is the operation that breaks first by a wide margin.
+**SurrealDB:** `surrealdb/surrealdb:latest start … memory`, loopback container.
 
 ---
 
-## 2026-07-29 (later) — the 1.5k–3k range
+## Where things stand
 
-Run to test an extrapolation from the baseline above, which put `reflect`'s
-30 s crossing at ~2,100 nodes. Same machine and commit lineage; `reflect`
-measured on every point.
+| Nodes | Backend | ingest (docs/min) | search p50 | `list_sources` | `reflect` |
+|---|---|---|---|---|---|
+| 1,000 | memory | 19,158 | 23.0 ms | 29 ms | 851 ms |
+| 3,000 | memory | 18,758 | 66.9 ms | 87 ms | 6,665 ms |
+| 1,000 | SurrealDB | 3,951 | 214 ms | 1,080 ms | 10,284 ms |
+| 2,000 | SurrealDB | 3,829 | 283 ms | 2,013 ms | 29,946 ms |
 
-| Nodes | search p50 | list_sources | reflect |
+### The 30 s crossings
+
+`EPIMEMER_TOOL_TIMEOUT_SECONDS` defaults to **30 s**, so "crossing" means *the
+tool call fails*, not *feels slow*.
+
+| Operation | in-memory | SurrealDB (loopback) | shape |
 |---|---|---|---|
-| 1,000 | 21.3 ms | 208 ms | 5,412 ms |
-| 1,500 | 31.8 ms | 446 ms | 16,397 ms |
-| 2,000 | 43.4 ms | 796 ms | **40,203 ms** |
-| 2,500 | 54.2 ms | 1,264 ms | 81,443 ms |
-| 3,000 | 69.2 ms | 1,898 ms | 138,449 ms |
+| `search` | ~1.6M | not reachable | linear in-memory, flat on SurrealDB |
+| `list_sources` | ~1M | ~28,000 | linear on both |
+| **`reflect`** | **~6,700** | **~2,000** | quadratic (exp. 1.87 / 1.54) |
+| ingest | not reachable | not reachable | flat |
 
-### `reflect` is cubic, not quadratic
-
-Fitted exponents between adjacent points: **2.73, 3.12, 3.16, 2.91** — call it
-N³. The earlier two-point estimate of N^2.3 across one decade was optimistic;
-five points over the range that matters say otherwise.
-
-**`reflect` exceeds the 30 s default tool timeout at ~1,800 nodes**, and at
-2,000 it takes 40 s. That is not a future ceiling — a graph of 2,000 nodes is
-about 100 documents of five segments, and on such a graph `reflect` **fails
-today** with `EPIMEMER_TOOL_TIMEOUT_SECONDS` at its default. With real
-embeddings it is worse: the split and enrichment phases embed every topic's
-material on every call.
-
-By contrast `list_sources` fits **1.88, 2.01, 2.07, 2.23** — quadratic — and
-does not cross 30 s until ~11k nodes. It is the more dramatic single number at
-10k but the less urgent problem, and the baseline section above overstates its
-importance relative to `reflect`.
-
-`search` remains linear (21 → 69 ms across 3×) and is not a concern.
+**`reflect` is the limiting operation on both backends**, and SurrealDB is the
+limiting backend by 3.3×. Nothing else is within two orders of magnitude of
+failing.
 
 ---
 
-## 2026-07-29 (after the #31 fix) — `reflect` is quadratic
+## What each operation's cost is made of
 
-Two changes: frame resolution is cached per pass (`frame_resolver`), and each
-topic's material is gathered once instead of once per phase. Same machine and
-corpus as the runs above.
+**Ingest — not a problem.** Flat across every size measured on both backends. The
+write path has never been the ceiling.
 
-| Nodes | reflect before | reflect after | speedup |
-|---|---|---|---|
-| 1,500 | 16,397 ms | **2,620 ms** | 6.3× |
-| 2,000 | 40,203 ms | 4,979 ms | 8.1× |
-| 3,000 | 138,449 ms | **10,584 ms** | 13.1× |
-| 5,000 | (not run) | 30,066 ms | — |
+**`search` — the cheapest of the three, on both backends.** In-memory it is
+linear and always was. On SurrealDB it is **flat**: ranking happens before the
+status filter, because SurrealDB re-runs such a subquery per embedding row and
+that cost two orders of magnitude when it was inside the ranking query. What
+remains is a **~120 ms floor of per-result enrichment round-trips** — one
+`get_node` and per-result annotation per hit. That floor is #14's N+1 pattern and
+is what a batched edge fetch would attack.
 
-**The cubic term is gone.** The fitted exponent between 1,500 and 3,000 is
-**2.03** — quadratic. The 30 s crossing moves from ~1,800 nodes to **~5,000**,
-predicted at 4,880 from the fit and measured at 30,066 ms at 5,000.
+**`list_sources` / `list_relations` — linear, and not urgent.** `mcp/tools.py`
+iterates every active node and fetches that node's edges: O(N) queries per call.
+In-memory that is now a dict lookup per node rather than a full scan, because
+`InMemoryStorage` keeps endpoint indexes (`by_src` / `by_dst`) beside `edges`.
+The N+1 *call pattern* remains and is #14's, but in-memory it is no longer worth
+attacking on its own.
 
-### What the profile said, and what it cost
+**`reflect` — the one that fails.** Two different stories per backend, and the
+difference is the whole diagnosis:
 
-Profiling at 1,500 nodes put **88% of the wall clock** (17.0 s of 19.4 s) in
-`same_frame` → `frames_of` → `get_edges_from`: 105,056 calls to resolve the
-frames of at most 1,500 distinct nodes, each one a full scan of the edge set.
-Candidate pairs are quadratic in facts and the scan is linear in edges, so that
-product was the cubic term. Caching frame lookups per pass removed it.
+- **In-memory it is arithmetic-bound and quadratic.** The contradiction phase
+  compares every surviving candidate fact pair. That work is genuine, not
+  redundant, so it was made fast rather than removed: `similar_pairs`
+  (`pipelines/reflection/contradiction_detection.py`) stacks the vectors and
+  takes a matrix product per 512-row block instead of one Python call per pair.
+  That bought 4.1–4.6× and moved the crossing to ~6,700, with the exponent
+  essentially unchanged — a constant factor moves a quadratic crossing by roughly
+  its square root.
+- **On SurrealDB it is round-trip bound**, which is why the same change bought
+  only 1.27–1.36× there. `detect_contradictions` issues one
+  `get_embeddings_for_item` per fact, then two edge queries per fact to build the
+  already-linked set, all sequential. **That is #14, and it is now what fails
+  first on that backend**, at ~2,000 nodes. The next real gain on the networked
+  path is batching, not arithmetic.
 
-Gathering each topic's material once rather than twice was worth a further
-4–5% — real, but small next to the first change. Note that neither fix is what
-Issue #31 originally proposed as most promising; the profile redirected it.
+### What retrieval reinforcement costs
 
-After both, the remaining cost is dominated by `_cosine_similarity` in
-`detect_contradictions` — 280,875 pairwise comparisons in pure Python, ~3 s of
-the remaining 5.8 s at 1,500 nodes. That is **genuine O(F²) work, not
-redundancy**. Vectorizing it would buy a large constant factor but not change
-the exponent, and it is not currently on the issue list.
+`search` writes every returned node back with a bumped `relevance` and a fresh
+timestamp — k extra writes per call, on by default
+(`EPIMEMER_REINFORCEMENT_BOOST=0.2`). Measured with `--skip-reflect` against the
+same container: **+5% in-memory, +8–12% on SurrealDB** (+14–17 ms).
+
+Cheap, and **flat in graph size**: k does not grow with the graph, so the cost is
+a constant — visible on SurrealDB where each write is a round-trip, near-invisible
+in-memory. It changes no crossing. It lands on top of the ~120 ms enrichment
+floor and is the same shape of cost, so a batched write and a batched edge fetch
+would be one piece of work.
 
 ---
 
-## 2026-07-29 — SurrealDB over `ws://`
+## Before optimizing anything here
 
-The measurement every earlier section listed as missing. Throwaway container
-(`surrealdb/surrealdb:latest start --user root --pass root memory`) on
-localhost, so this is a **loopback** round-trip — a remote server would be
-worse. Post-#31 code.
+**Profile first. Every performance fix in this project so far has overturned the
+cause its issue predicted** — the candidate explanations were wrong four times
+running, and in each case a profile redirected the work to something the issue
+had not mentioned. The recipe: seed via `bench._seed`, wrap one `await
+reflect(...)` in `cProfile`, sort by cumulative time.
 
-| Nodes | ingest (s) | search p50 | list_sources | reflect |
-|---|---|---|---|---|
-| 100 | 0.067 | 126 ms | 91 ms | 463 ms |
-| 500 | 0.243 | 447 ms | 465 ms | 2,720 ms |
-| 1,000 | 0.504 | 1,443 ms | 911 ms | 6,060 ms |
-| 2,000 | 0.999 | **5,284 ms** | 1,870 ms | 15,679 ms |
+Two implementation notes that outlived the measurements that produced them:
 
-Ratio to in-memory at 1,000 nodes: **search 68×**, `list_sources` 4.4×,
-`reflect` 1.1×.
+- **A single `LET $active = (…); SELECT …` call does not work through the
+  SurrealDB driver.** `db.query` returns the *first* statement's result, so the
+  select's rows are discarded and `LET`'s `None` comes back in their place —
+  silently. `search`'s exact fallback is therefore two calls. Verified with
+  `query_raw`, which does return every statement's result.
+- **`vector_search`'s over-fetch is not merely an optimisation.** Ranking `k`
+  rows and filtering afterwards returns fewer than `k` results on any graph with
+  history at the top of the ranking — retrieval would quietly go blind on the
+  oldest graphs. That is why the escalation and the exact fallback both exist,
+  and why the tests pin *which path* answered rather than only what it returned.
+- **In-memory endpoint indexes cost ~102 bytes per edge** (3.2 MiB at 32,500
+  edges, measured with `sys.getsizeof` over both index dicts and their sets).
+  Roughly what the `edges` dict's own table and keys cost, and small next to the
+  `NodeEdge` objects being indexed.
 
-### `search` is the urgent one, and that was not the expectation
+---
 
-Everything before this treated `search` as the healthy operation — linear
-in-memory, 212 ms at 10k nodes. Over a websocket it is **68× slower and
-superlinear** (exponent 1.87 between 1,000 and 2,000), crossing the 30 s tool
-timeout at **~5,100 nodes**. At 1,000 nodes it is already 1.4 s per call.
+## Not yet measured
 
-That matters more than the raw number suggests: `search` is the most frequently
-called tool in the system, where `list_sources` and `reflect` are occasional.
-A 1.4 s search on a 1,000-node graph is a bad interactive experience well
-before anything fails.
-
-### `list_sources` is *linear* here, and quadratic in-memory
-
-The reversal is the useful clue. `InMemoryStorage.get_edges_from` /
-`get_edges_to` scanned the entire edge set on every call (`storage/memory.py`);
-SurrealDB has an index. So the in-memory backend paid O(E) per edge lookup where
-SurrealDB pays one round-trip, and the in-memory quadratic curve was an artefact
-of a missing index rather than of the N+1 call pattern.
-
-At 10k nodes the two crossed over: in-memory `list_sources` (18 s) was already
-worse than SurrealDB's projection (~9 s), despite having no network at all.
-
-That diagnosis was acted on as #32 — see the last section, where the in-memory
-curve becomes linear and this reversal disappears.
-
-### 30 s crossings, both backends
-
-| Operation | in-memory | SurrealDB (loopback) |
-|---|---|---|
-| `search` | ~140k (linear, 212 ms at 10k) | **~5,100** |
-| `reflect` | ~5,000 | ~3,200 |
-| `list_sources` | ~11,000 | ~29,000 |
-
-### Not yet measured
-
-- ~~**SurrealDB over `ws://`.**~~ Measured — see below.
-- ~~**`reflect` at 10k, to completion.**~~ Measured in the #32 section: 125 s
-  before that change, 55 s after. Both past the tool timeout.
-- **The in-memory crossings in the table above are superseded** by the #32
-  section — `list_sources` ~11,000 and `search` ~140k were measured before edge
-  lookups were indexed.
-- **A remote (non-loopback) SurrealDB.** Every network number here is over
-  localhost, so real deployments are worse by the RTT difference multiplied by
-  the round-trip count.
-- **A diverse corpus.** See the caveat above: the 17-word synthetic vocabulary
-  inflates anything that scales with surviving candidate pairs.
+- **A remote (non-loopback) SurrealDB.** Every network number here is localhost.
+- **A diverse corpus.** The 17-word synthetic vocabulary inflates anything
+  scaling with surviving candidate pairs.
 - **Real embeddings.** `--real-embeddings` adds the constant this deliberately
   omits, for an end-to-end figure.
+- **Embedding throughput on its own**, separated from ingest.
 
 ---
 
-## 2026-07-29 (after the #32 fix) — in-memory edge lookups are indexed
-
-`InMemoryStorage` now keeps two endpoint indexes beside `edges` (`by_src`,
-`by_dst`: node id → edge ids) instead of filtering the whole edge set on every
-`get_edges_from` / `get_edges_to`.
-
-Before and after were measured back-to-back on the same machine in the same
-session, `main` code vs. the change, mock embeddings, same corpus and seed.
-
-| Nodes | `list_sources` before → after | `search` p50 | `reflect` |
-|---|---|---|---|
-| 1,000 | 203 ms → **27 ms** (7.4×) | 21.0 → 3.6 ms | 1,204 → 559 ms |
-| 3,000 | 1,740 ms → **85 ms** (20.5×) | 63.7 → 8.9 ms | 10,554 → 4,402 ms |
-| 10,000 | 18,757 ms → **278 ms** (67.5×) | 214.4 → 27.9 ms | 125,180 → 54,579 ms |
-
-**`list_sources` is linear now.** Its fitted exponent over 1k → 10k falls from
-**1.97 to 1.01**; the 3× steps cost 3.09× and 3.28×. The 30 s crossing moves
-from ~11,000 nodes to **~1,000,000**, which is another way of saying this
-operation is no longer a scaling concern in-memory.
-
-### Two operations improved that were not the target
-
-- **`search` — 7.7× faster** and still linear. It was never the *shape* of the
-  problem in-memory (212 ms at 10k), but its per-result enrichment
-  (`frames_of`, `review_labels`, `_hierarchy_annotations`) does several edge
-  lookups per hit, each of which was a full scan. Its crossing goes from ~140k
-  to ~10M nodes.
-- **`reflect` — 2.3× faster**, exponent unchanged at 2.09. #31 removed the
-  *redundant* frame lookups; the ones that remain are now cheap individually.
-  The 30 s crossing moves from ~5,000 nodes to **~7,400**.
-
-This is the same pattern as #31: the fix was aimed at one operation and paid out
-across every caller that walks nodes and asks for their edges, because that
-access pattern is everywhere in this codebase.
-
-### `reflect` at 10,000 nodes, to completion
-
-Listed as missing in every earlier section, now run twice: **125,180 ms** before
-this change, **54,579 ms** after. Both are far past the 30 s tool timeout —
-`reflect` remains the operation that fails first in-memory, and its residual
-cost is the genuine O(F²) `_cosine_similarity` work described in the #31
-section, not redundancy.
-
-### What the index costs
-
-~102 bytes per edge (3.2 MiB at 32,500 edges), measured with
-`sys.getsizeof` over both index dicts and their sets. That is roughly what the
-`edges` dict's own table and keys cost, and small next to the `NodeEdge` objects
-being indexed. Nothing here trades meaningful memory for the speed.
-
-### Reproduction
+## Reproduction
 
 ```bash
-uv run python scripts/bench.py --n 1000,3000   # ~1 min
-uv run python scripts/bench.py --n 10000       # ~2 min, dominated by reflect
-```
+make bench BENCH_N=1000,3000                      # in-memory
 
----
-
-## 2026-07-29 (after the #33 fix) — `search` on SurrealDB is flat
-
-`vector_search` no longer filters by status inside the ranking query. It ranks
-`k × 3` rows unfiltered, checks that handful of ids against the node tables,
-and reaches further (`k × 10`) only if too few survive; past that it falls back
-to fetching the active ids and binding them as a parameter.
-
-Fresh before-run on `main` in the same session, same throwaway container
-(`surrealdb/surrealdb:latest` on `ws://localhost:8001/rpc`), mock embeddings.
-
-| Nodes | `search` p50 before → after | `list_sources` (control) |
-|---|---|---|
-| 1,000 | 1,515 ms → **118 ms** (12.8×) | 878 → 857 ms |
-| 2,000 | 5,875 ms → **131 ms** (44.9×) | 1,712 → 1,818 ms |
-| 4,000 | (not run) → **136 ms** | 3,743 ms |
-
-**The quadratic term is gone, and what is left is flat.** `search` grew 3.88×
-per doubling before (exponent 1.96); after, it grows **1.15× over a 4× increase
-in nodes** — exponent 0.10. At 4,000 nodes it costs less than it did at 100
-before the fix (126 ms). This is the enrichment-dominated floor the profile
-predicted: ~120 ms of `get_node` and per-result annotation round-trips, plus a
-residual unfiltered scan of about 6 µs per node.
-
-`list_sources` is untouched by this change and was measured alongside as a
-control — it moves by less than run-to-run noise at 1k and 2k.
-
-### What is now the nearest failure on SurrealDB
-
-| Operation | 30 s crossing | shape |
-|---|---|---|
-| `reflect` | ~3,200 nodes | quadratic |
-| `list_sources` | ~29,000 nodes | linear |
-| `search` | not reachable at any size worth quoting | flat + ~6 µs/node |
-
-`search` was the urgent one for a day. It is now the cheapest of the three, and
-`reflect` — already known, already fixed twice, and still genuinely O(F²) —
-inherits the position.
-
-### Two notes for anyone extending this
-
-- **A single `LET $active = (…); SELECT …` call does not work through this
-  driver.** `db.query` returns the *first* statement's result, so the select's
-  rows are discarded and `LET`'s `None` comes back in their place — silently.
-  The exact fallback is therefore two calls. Verified with `query_raw`, which
-  does return every statement's result.
-- **The over-fetch is not merely an optimisation.** Ranking `k` rows and
-  filtering afterwards returns fewer than `k` results on any graph with history
-  at the top of the ranking — retrieval would quietly go blind on the oldest
-  graphs. That is why the escalation and the exact fallback both exist, and why
-  the tests pin *which path* answered rather than only what it returned.
-
-### Reproduction
-
-```bash
-docker run -d --rm --name bench-surreal -p 8001:8000 \
-  surrealdb/surrealdb:latest start --user root --pass root memory
-EPIMEMER_BENCH_URL=ws://localhost:8001/rpc \
-  uv run python scripts/bench.py --n 1000,2000,4000 --skip-reflect
-docker stop bench-surreal
-```
-
----
-
-## 2026-08-07 (after the #38 fix) — re-baseline at a real 384 dimensions
-
-**Every section above measured 32-wide vectors while reporting 384.** #38
-stretched the mock's SHA-256 source across blocks, so `make bench` now measures
-the width it always claimed. This section re-establishes the baseline; it is
-the one to compare future runs against, and the *only* one that may be compared
-with a run made after 2026-08-07.
-
-**Machine:** Apple M4 Max, macOS 26.4.1, arm64, Python 3.14.0.
-**Commit:** `183bc39` + the #38 fix. **Embeddings:** mock-384 (genuinely 384).
-SurrealDB is the same throwaway loopback container as the section above.
-
-| Nodes | Backend | search p50 | `list_sources` | `reflect` |
-|---|---|---|---|---|
-| 1,000 | memory | 23.3 ms | 30 ms | 3,568 ms |
-| 2,000 | memory | 46.4 ms | 61 ms | 14,229 ms |
-| 3,000 | memory | 68.7 ms | 101 ms | 31,612 ms |
-| 1,000 | SurrealDB | 149 ms | 968 ms | 17,128 ms |
-| 2,000 | SurrealDB | 180 ms | 1,966 ms | 59,786 ms |
-
-Ingest: **19,700 docs/min** in-memory (was ~30,700 at 32-wide), **3,500
-docs/min** on SurrealDB (was ~5,950). The mock now computes twelve SHA-256
-blocks per text instead of one, so part of that is the mock itself — a cost a
-real provider pays many times over.
-
-### What the width was hiding
-
-| Operation | 32-wide | 384-wide | factor |
-|---|---|---|---|
-| memory `search` p50 @1k | 3.6 ms | 23.3 ms | 6.5× |
-| memory `reflect` @1k | 559 ms | 3,568 ms | 6.4× |
-| memory `reflect` @3k | 4,402 ms | 31,612 ms | 7.2× |
-| SurrealDB `search` p50 @1k | 118 ms | 149 ms | 1.27× |
-| SurrealDB `reflect` @1k | 6,060 ms | 17,128 ms | 2.8× |
-
-The pattern is exactly what a 12× wider vector predicts: operations dominated
-by pairwise float work in Python pay most of it, operations dominated by
-round-trips barely notice. `list_sources` touches no vectors and did not move
-(30 vs 27 ms in-memory; within noise on SurrealDB).
-
-### The 30 s crossings all move, and `reflect` moves a lot
-
-| Operation | in-memory | SurrealDB (loopback) |
-|---|---|---|
-| `search` | ~1.3M (linear, exponent 0.98) | not reachable (exponent 0.27) |
-| `reflect` | **~2,900** (was ~7,400) | **~1,400** (was ~3,200) |
-| `list_sources` | ~1M (linear) | ~30,000 (linear) |
-
-`reflect`'s *shape* is unchanged — in-memory it still fits an exponent of 1.99,
-quadratic, as it has since the #31 fix. Only the constant grew, and it grew
-enough to halve the graph size at which the tool call fails. At 3,000 nodes
-in-memory `reflect` now exceeds the 30 s default timeout outright (31.6 s).
-
-That is a correction to the record rather than a regression: these are the
-numbers that were always true of a 384-dim model, and #14's residual
-`_cosine_similarity` cost — genuine O(F²) work over 384-component vectors
-rather than 32 — is 12× more of the profile than the earlier sections implied.
-It strengthens the case for vectorizing it, which remains unraised as an issue.
-
-### Reproduction
-
-```bash
-make bench BENCH_N=1000,3000
 docker run -d --rm --name bench-surreal -p 8001:8000 \
   surrealdb/surrealdb:latest start --user root --pass root memory
 EPIMEMER_BENCH_URL=ws://localhost:8001/rpc make bench BENCH_N=1000,2000
-docker stop bench-surreal
+docker rm -f bench-surreal
 ```
 
----
+`--skip-reflect` drops the slowest step when only `search` and `list_sources`
+are of interest. `BENCH_N=10000` is about two minutes, dominated by `reflect`.
 
-## 2026-08-07 (after the #35 change) — what retrieval reinforcement costs
-
-`search` now writes every returned node back with a bumped `relevance` and a
-fresh `last_reinforced` — k extra writes per call, on by default
-(`EPIMEMER_REINFORCEMENT_BOOST=0.2`). Measured against the 384-wide baseline
-above, same session, same container, `--skip-reflect`.
-
-| Nodes | Backend | search p50 before | after | delta |
-|---|---|---|---|---|
-| 1,000 | memory | 23.3 ms | 24.5 ms | +5% |
-| 2,000 | memory | 46.4 ms | 46.6 ms | +0.3% |
-| 1,000 | SurrealDB | 149 ms | 167 ms | +12% (+17 ms) |
-| 2,000 | SurrealDB | 180 ms | 194 ms | +8% (+14 ms) |
-
-**Cheap, and flat in graph size.** The cost is k writes, and k does not grow
-with the graph, so the delta is a constant — visible on SurrealDB where each
-write is a round-trip, near-invisible in-memory. It does not change any 30 s
-crossing.
-
-It lands on top of the ~120 ms enrichment floor #14 describes, and it is the
-same shape of cost: per-result round-trips. A batched write would remove it the
-way a batched edge fetch would remove the floor, and neither is worth doing
-before the other.
+To measure a change against its own baseline, stash the changed file rather than
+checking out an older commit — the test suite may reference symbols the benchmark
+does not, so `git stash push <file>` gives a clean baseline with everything else
+identical.

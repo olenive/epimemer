@@ -24,6 +24,7 @@ from epimemer.core.types import (
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.tools import reflect
+from epimemer.pipelines.reflection import contradiction_detection
 from epimemer.pipelines.reflection.review import frames_of, same_frame
 
 
@@ -101,6 +102,73 @@ class TestFrameResolutionScales:
         # 8 → 16 facts: pairs go 28 → 120, so a per-pair implementation would
         # grow ~4×. Per-node growth is bounded well below that.
         assert large_total < small_total * 3
+
+
+class TestContradictionScoringIsBatched:
+    """Scoring must cost one matrix product, not one Python call per pair (#39).
+
+    This is the phase that crosses the 30 s tool timeout — at ~1,400 nodes on
+    SurrealDB and ~2,900 in-memory, which is around 70 documents. Unlike every
+    earlier `reflect` fix there is no redundancy left to remove here: the
+    comparisons are genuine work, and what these tests pin is that the work
+    happens in bulk. The exponent is unchanged either way, so neither test
+    asserts a duration — that measurement belongs in `make bench`, as the
+    module docstring above says.
+    """
+
+    async def test_no_python_cosine_call_per_pair(
+        self, storage, embedding_provider, monkeypatch
+    ):
+        """12 mutually-similar facts are 66 pairs, and 66 Python calls.
+
+        In production each of those calls walks a 384-component vector twice to
+        re-derive norms that do not change between pairs.
+        """
+        await _facts_that_look_alike(storage, embedding_provider, 12)
+
+        calls = 0
+
+        def counted(*_vectors):
+            nonlocal calls
+            calls += 1
+            return 0.0  # below any threshold, so nothing downstream shifts
+
+        monkeypatch.setattr(
+            contradiction_detection, "_cosine_similarity", counted, raising=False
+        )
+
+        await reflect(storage, embedding_provider)
+
+        assert calls == 0, (
+            f"pairwise scoring made {calls} per-pair Python calls; it must score "
+            "the set in one batched operation"
+        )
+
+    async def test_the_whole_set_is_scored_in_one_call(
+        self, storage, embedding_provider, monkeypatch
+    ):
+        """One batched call per `reflect`, whatever the fact count.
+
+        Doubling the facts quadruples the pairs. If the call count moves at all
+        with size, scoring has been split back up per pair or per row.
+        """
+        sizes: list[int] = []
+        original = contradiction_detection.similar_pairs
+
+        def counted(vectors, threshold, **kwargs):
+            sizes.append(len(vectors))
+            return original(vectors, threshold, **kwargs)
+
+        monkeypatch.setattr(contradiction_detection, "similar_pairs", counted)
+
+        await _facts_that_look_alike(storage, embedding_provider, 12)
+        await reflect(storage, embedding_provider)
+        assert sizes == [12]
+
+        await _facts_that_look_alike(storage, embedding_provider, 12)
+        sizes.clear()
+        await reflect(storage, embedding_provider)
+        assert sizes == [24], "the pair count quadrupled; the call count must not move"
 
 
 class TestMaterialIsGatheredOnce:

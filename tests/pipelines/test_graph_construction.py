@@ -6,7 +6,7 @@ Covers:
 - Edge creation: Petri net tokens flow correctly
 - Value updates: confidence increases on supporting evidence
 - Value updates: novelty increases on contradiction
-- Value updates: reinforcement updates last_reinforced timestamp
+- Value updates: retrieval reinforcement stamps retrieved_at
 - Persist: all nodes and edges stored in storage after persist call
 - Versioning: supersede creates new node, marks old as superseded, creates edge
 - Versioning: merge marks all sources as merged, creates merged_into edges

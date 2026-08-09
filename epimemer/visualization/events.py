@@ -48,7 +48,7 @@ class NodeView(BaseModel):
     novelty: float
     confidence: float
     relevance: float
-    last_reinforced: datetime
+    retrieved_at: datetime | None      # None until a search has returned it
     created_at: datetime
     graph: str
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -133,7 +133,7 @@ def node_to_view(node: EpistemicNode, graph: str) -> NodeView:
         novelty=node.value.novelty,
         confidence=node.value.confidence,
         relevance=node.value.relevance,
-        last_reinforced=node.value.last_reinforced,
+        retrieved_at=node.value.retrieved_at,
         created_at=node.created_at,
         graph=graph,
         metadata=node.metadata,

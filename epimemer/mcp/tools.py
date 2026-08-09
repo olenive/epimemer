@@ -8,7 +8,7 @@ calls these and wraps the results.
 import asyncio
 
 from datetime import datetime, timezone
-from typing import Sequence
+from typing import Literal, Sequence
 
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
@@ -628,12 +628,13 @@ def reinforced_signal(value: ValueSignal, boost: float, at: datetime) -> ValueSi
     repeatedly approaches 1.0 instead of pinning there on the second hit.
     Every other field is carried through unchanged — reinforcement records
     *use*, and must not quietly restate a judgment held elsewhere in the
-    signal.
+    signal. `importance_judged_at` is part of that: being read is not being
+    judged.
     """
     return value.model_copy(
         update={
             "relevance": value.relevance + boost * (1.0 - value.relevance),
-            "last_reinforced": at,
+            "retrieved_at": at,
         }
     )
 
@@ -1097,26 +1098,83 @@ async def update(
     return result, meta
 
 
-async def reinforce(
+JudgmentDirection = Literal["up", "down"]
+
+
+def judged_importance(
+    importance: float, direction: JudgmentDirection, step: float
+) -> float:
+    """`importance` after one judgment in `direction`.
+
+    ::
+
+        up:    importance += step * (1 - importance)     # asymptotic to 1.0
+        down:  importance -= step * importance           # asymptotic to 0.0
+
+    Each closes the gap to *its own* bound by the same fraction, so the two are
+    mirrors — and deliberately **not** inverses. Up-then-down does not return
+    home (0.5 -> 0.625 -> 0.469), and repeated alternation settles into a
+    two-cycle straddling 0.5: {3/7, 4/7} at the default step. Neither side
+    wins, so a node two agents disagree about parks at the un-judged default,
+    with the most recent judgment deciding which side of the nomination ceiling
+    it currently sits on.
+
+    An exactly invertible form was considered and rejected twice over.
+    ``(i - step)/(1 - step)`` returns home but goes negative below the step size
+    and needs a clamp — invertible in the mid-range where nothing needs it,
+    lossy near the floor where the nomination ceiling sits. Log-odds is
+    genuinely both invertible and asymptotic, but costs the settable knob
+    (``EPIMEMER_IMPORTANCE_STEP`` means "close a quarter of the remaining gap";
+    a log-odds constant means nothing to anyone) and needs input clamping
+    anyway. Both buy invertibility, which nothing here consumes: a later
+    downward judgment is a new assessment on new information, not an undo, and
+    the provenance trail keeps both entries deliberately.
+
+    Neither direction reaches its bound, so arithmetic can never judge a node
+    into certainty or out of existence.
+    """
+    if direction == "up":
+        return importance + step * (1.0 - importance)
+    if direction == "down":
+        return importance - step * importance
+    raise ValueError(f"Unknown direction '{direction}' - expected 'up' or 'down'")
+
+
+async def judge_importance(
     node_id: str,
+    direction: JudgmentDirection,
     reason: str,
     storage: StorageBackend,
     *,
     related_id: str | None = None,
     importance_step: float = DEFAULT_IMPORTANCE_STEP,
 ) -> tuple[dict, ResponseMeta]:
-    """Raise a node's `importance` and record why.
+    """Move a node's `importance` by one judgment, and record why.
 
-    The explicit upward path: an agent that learns something making an existing
-    node matter more has nowhere else to put that. `relevance` is owned by the
-    decay clock, so a judgment written there quietly decays back out.
+    The explicit path, in both directions: an agent that learns something making
+    an existing node matter more — or less — has nowhere else to put it.
+    `relevance` is owned by the decay clock, so a judgment written there quietly
+    decays back out.
 
-    Not a raw setter, deliberately. Every bump appends
-    `{at, reason, related_id}` to `metadata["reinforcements"]`, so a human
-    reviewing a trivial-looking node rated highly can see the justification
-    rather than an unattributable number. The step is asymptotic
-    (`importance += step × (1 − importance)`), so repeated reinforcement
-    approaches 1.0 instead of pinning there on the second call.
+    Named for the act rather than the outcome, which is what lets one tool carry
+    both directions. `direction` is not ceremony wrapped around the judgment; it
+    *is* the judgment — "this matters more than the graph currently thinks", or
+    less.
+
+    Not a raw setter, deliberately, and for two reasons beyond auditability. An
+    agent setting `0.7` has not seen any other node's value and is guessing at a
+    scale it cannot see, while "more than the graph thinks" is a judgment it can
+    make well. And a setter is last-writer-wins: three judgments that took a
+    node to 0.85 would be erased by one agent typing 0.6 six months later on a
+    single conversation's context. Steps compose. (The one moment a setter is
+    safe already exists — `store_decomposition`'s ingest prior, applied at
+    creation before there is anything to overwrite.)
+
+    Every judgment appends `{at, reason, related_id, direction}` to
+    `metadata["reinforcements"]` — one chronological trail, because a reviewer
+    wants a bump and its later reversal in sequence with both reasons. The key
+    keeps its original name: renaming it is a data migration for a cosmetic
+    gain. **An entry carrying no `direction` predates this tool and means "up".**
 
     `related_id` is validated rather than trusted: a dangling reference in a
     provenance trail is worse than no reference, because it reads as evidence.
@@ -1128,16 +1186,28 @@ async def reinforce(
     if related_id is not None and await storage.get_node(related_id) is None:
         raise ValueError(f"Related node '{related_id}' not found")
 
+    # Computed before any write, so an unknown direction leaves the node as it
+    # was rather than half-judged.
+    importance = judged_importance(node.value.importance, direction, importance_step)
+
     at = datetime.now(timezone.utc)
     node.value = node.value.model_copy(update={
-        "importance": node.value.importance
-        + importance_step * (1.0 - node.value.importance),
+        "importance": importance,
+        # The judgment clock, and only that one. `retrieved_at` belongs to
+        # retrieval: an assessment is not traffic, and archival nomination
+        # reads the two for different reasons.
+        "importance_judged_at": at,
     })
     node.metadata = {
         **node.metadata,
         "reinforcements": [
             *node.metadata.get("reinforcements", []),
-            {"at": at.isoformat(), "reason": reason, "related_id": related_id},
+            {
+                "at": at.isoformat(),
+                "reason": reason,
+                "related_id": related_id,
+                "direction": direction,
+            },
         ],
     }
     await storage.store_node(node)
@@ -1145,7 +1215,8 @@ async def reinforce(
     result = {
         "node_id": node.id,
         "importance": node.value.importance,
-        "reinforcements": len(node.metadata["reinforcements"]),
+        "direction": direction,
+        "judgments": len(node.metadata["reinforcements"]),
     }
     return result, ResponseMeta(nodes_returned=1)
 
@@ -1555,6 +1626,7 @@ async def apply_reflection(
     merges: list[dict] | None = None,
     supersessions: list[dict] | None = None,
     archivals: list[str] | None = None,
+    judgments: list[dict] | None = None,
     relation_merges: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
 ) -> tuple[dict, ResponseMeta]:
@@ -1581,6 +1653,14 @@ async def apply_reflection(
         flips them to ARCHIVED, which removes them from every active-status
         query. Nothing is deleted, and ``restore`` reverses it. Unknown or
         already-retired ids are skipped, as supersessions are.
+    judgments: [{node_id: str, direction: "up"|"down", reason: str,
+        related_id: str | None}] — re-judge a node's importance, typically a
+        `stale_judgment` nominee from reflect's archival_candidates. The verdict
+        that has no other expression: "keep it, and stop treating it as
+        important" — or, just as often, "still important, and now recently
+        confirmed". Either way the node leaves the stale set, because the clock
+        moves whichever direction the judgment goes. Unknown ids are skipped, as
+        supersessions and archivals are.
     relation_merges: [{labels: [str], into: str}] — consolidate synonymous user
         relationship labels (from reflect's similar_relations). Every user-tier
         edge with a listed label is relabelled to ``into``, in place (edges are
@@ -1754,7 +1834,24 @@ async def apply_reflection(
             retired_at=datetime.now(timezone.utc),
         )
 
-    # 7. Consolidate synonymous user relationship labels: relabel edges in place
+    # 7. Re-judge importance. Separate from archivals on purpose: archiving is a
+    #    status verdict wanting human approval, while a change of degree is
+    #    something the agent may conclude on its own.
+    judgments_applied = 0
+    for spec in (judgments or []):
+        try:
+            await judge_importance(
+                spec["node_id"],
+                direction=spec["direction"],
+                reason=spec["reason"],
+                storage=storage,
+                related_id=spec.get("related_id"),
+            )
+        except ValueError:
+            continue        # unknown node or related id — skipped, as above
+        judgments_applied += 1
+
+    # 8. Consolidate synonymous user relationship labels: relabel edges in place
     #    (edges are not versioned).
     relations_consolidated = 0
     edges_relabeled = 0
@@ -1780,6 +1877,7 @@ async def apply_reflection(
         "supersessions_applied": supersessions_applied,
         "nodes_archived": len(to_archive),
         "archive_data": archive_data,
+        "judgments_applied": judgments_applied,
         "relations_consolidated": relations_consolidated,
         "edges_relabeled": edges_relabeled,
     }
@@ -1787,7 +1885,7 @@ async def apply_reflection(
         nodes_returned=(
             parents_created + topics_split + topics_enriched
             + topics_merged + supersessions_applied + len(to_archive)
-            + relations_consolidated
+            + judgments_applied + relations_consolidated
         ),
     )
     return result, meta

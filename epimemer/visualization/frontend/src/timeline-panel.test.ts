@@ -48,7 +48,7 @@ const node = (over: Partial<NodeView> & { node_id: string }): NodeView => ({
   novelty: 0.5,
   confidence: 0.9,
   relevance: 0.5,
-  last_reinforced: "2024-01-01T00:00:00Z",
+  retrieved_at: "2024-01-01T00:00:00Z",
   created_at: "2024-01-01T00:00:00Z",
   graph: "default",
   metadata: {},

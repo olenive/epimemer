@@ -50,7 +50,7 @@ the knowledge graph and pipeline execution in real time.
 | `EPIMEMER_EMBEDDING_MODEL_ID` | `all-MiniLM-L6-v2` | Any sentence-transformers model |
 | `EPIMEMER_SEGMENTATION_STRATEGY` | `paragraph` | `paragraph`, `semantic` |
 | `EPIMEMER_REINFORCEMENT_BOOST` | `0.2` | Relevance restored per retrieval; `0.0` disables |
-| `EPIMEMER_IMPORTANCE_STEP` | `0.25` | Importance gained per `reinforce` call |
+| `EPIMEMER_IMPORTANCE_STEP` | `0.25` | Fraction of the gap to the bound closed by one `judge_importance` call, in either direction |
 | `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
 | `EPIMEMER_VIZ_ENABLED` | `true` | `true`, `false` |
 | `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Any bind address |
@@ -78,7 +78,7 @@ restate the count.
 | `link` | Create typed edges between nodes |
 | `update` | Create a new node version (immutable history) |
 | `supersede_by` | Retire a node in favour of an already-existing one |
-| `reinforce` | Raise a node's importance and record why (protects it from archival) |
+| `judge_importance` | Raise or lower a node's importance and record why (importance protects it from archival) |
 
 ### Discovery & Stats
 

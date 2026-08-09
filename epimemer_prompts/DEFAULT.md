@@ -124,18 +124,28 @@ useful:
   basis changed and it may need re-deriving.
 - `contested` → an unresolved same-frame contradiction; do not trust it blindly.
 
-### Recording that something matters (reinforce)
+### Recording that something matters (judge_importance)
 - Two value dimensions move independently. `relevance` answers "is this being
   used?" and maintains itself — retrieval restores it, time decays it, you never
   touch it. `importance` answers "does this matter?" and only moves when someone
   judges that it does.
-- `reinforce(node_id, reason, related_id=None)` is that judgment. Use it when new
-  knowledge raises an existing node's standing: evidence arrives supporting it, a
-  decision turns out to hinge on it, it keeps proving load-bearing. Pass
-  `related_id` when a specific new node triggered the reassessment.
-- Don't reinforce a node just because you read it — retrieval already did that.
+- `judge_importance(node_id, direction, reason, related_id=None)` is that
+  judgment, in both directions. Pass `related_id` when a specific new node
+  triggered the reassessment.
+- **`direction="up"`** when new knowledge raises a node's standing: evidence
+  arrives supporting it, a decision turns out to hinge on it, it keeps proving
+  load-bearing.
+- **`direction="down"`** when a node's importance has expired rather than its
+  truth — an error record that mattered until the bug was fixed, a decision
+  overtaken by events. This matters more than it sounds: importance is what
+  protects a node from the archival sweep, so a judgment nobody revisits keeps
+  junk alive forever. Judging down hands the node back to review without
+  claiming it should be archived outright, which is a stronger claim you may
+  not be entitled to make.
+- Don't judge a node up just because you read it — retrieval already did that.
 - `reason` is read by whoever later reviews the judgment, so write it for them.
-  There is no way to set importance directly; every bump keeps its reason.
+  There is no way to set importance directly; every judgment keeps its reason,
+  and a raw value would silently overwrite every judgment before it.
 
 ### When to reflect (reflect)
 - After ingesting several documents (the system auto-suggests reflect after the
@@ -161,11 +171,20 @@ Trivial knowledge is the counterpart to *wrong* knowledge, and it is handled by
 the same loop: nomination proposes, you judge, the **user approves**.
 - `reflect` returns `archival_candidates`, each with a `reason`: `retired` (long
   superseded or merged and unimportant), `evidence_stale` (an inference whose
-  basis changed), `never_reinforced` (an active node nothing has used, judged or
-  depended on since it was created).
+  basis changed), `never_retrieved` (an active node no search has ever returned,
+  judged or depended on since it was created), and `stale_judgment` (a node held
+  above the importance ceiling by an upward judgment nobody has revisited in
+  months).
+- **`stale_judgment` is not an archival proposal.** It asks you to re-confirm or
+  lower an assessment that may have expired — importance is what protects a node
+  from every other class here, so a judgment left unrevisited protects it
+  forever. Answer it with `apply_reflection(judgments=[...])`, in whichever
+  direction the graph now supports. Judging it back *up* is a perfectly good
+  answer and needs no user approval, because it changes a degree rather than a
+  status.
 - Judge each one *with graph context* — triviality is only visible from the
   neighbourhood. "Error message X" matters while the bug is open and stops
-  mattering once it is fixed. If a nominee turns out to matter, `reinforce` it
+  mattering once it is fixed. If a nominee turns out to matter, judge it up
   instead; that is the answer to a wrong nomination, not silence.
 - **Ask the user before archiving.** Surface the list, say why each was
   nominated, and pass only the approved ids as

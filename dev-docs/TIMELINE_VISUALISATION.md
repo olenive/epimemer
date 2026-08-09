@@ -3,8 +3,8 @@
 A timeline panel in the dashboard, showing events as marks on an axis, with
 hover detail, filtering, and zoom.
 
-Status: **built**, except §7 (extraction proposing timepoints), which stays
-open and is tracked in `ISSUES.md`.
+Status: **built**, including §7 (extraction proposing timepoints), which landed
+last with two departures from the design sketched there — both argued in §7.2.
 
 The panel was built horizontal (§§2–11) and then turned vertical (§12).
 Sections 2–11 are kept as the record of the first build and of the parts that
@@ -87,9 +87,9 @@ The panel plots marks on a horizontal axis. What the axis *means* is the mode.
 ### 3.1 Record time — "when did the graph learn this?"
 
 Derived entirely from fields already present on `NodeView`: `created_at` and
-`last_reinforced`. A node is drawn as an interval from its creation to its last
-reinforcement — the span over which it stayed relevant — collapsing to a point
-when it was never reinforced.
+`retrieved_at`. A node is drawn as an interval from its creation to its last
+retrieval — the span over which it stayed in use — collapsing to a point when no
+search has ever returned it (`retrieved_at` is null).
 
 **This mode needs no backend change at all.** The snapshot the frontend already
 fetches contains everything required. That makes it the right thing to build
@@ -641,7 +641,7 @@ Two things that must not be forgotten:
   centred on under today's clamp. Fold the reference time into the extent
   computation.
 - **Record mode ignores it.** Record time is wall-clock (`created_at`,
-  `last_reinforced`), so a fictional anchor is meaningless there; record mode
+  `retrieved_at`), so a fictional anchor is meaningless there; record mode
   always marks real `now`, and the control is hidden. A setting that appears in
   a mode where it cannot apply is worse than no setting.
 

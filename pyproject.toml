@@ -6,6 +6,7 @@ readme = "SUMMARY.md"
 requires-python = ">=3.14"
 dependencies = [
     "petritype",
+    "numpy>=2.0",
     "pydantic>=2.12.5",
     "pydantic-ai>=1.70.0",
     "surrealdb>=1.0.8",

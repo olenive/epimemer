@@ -56,7 +56,7 @@ from epimemer.mcp.tools import (
     record_contradiction,
     record_variant,
     reflect,
-    reinforce,
+    judge_importance,
     restore,
     search,
     segment_text,
@@ -66,6 +66,7 @@ from epimemer.mcp.tools import (
     update,
 )
 from epimemer.mcp import tools
+from epimemer.pipelines.reflection.archival import judgment_is_stale
 from epimemer.mcp.tools import _node_to_dict
 from epimemer.mcp.server import _resolve_windows
 from epimemer.storage.memory import InMemoryStorage
@@ -545,9 +546,9 @@ class TestSearch:
 
 
 async def _value_signals(storage) -> dict[str, tuple[float, object]]:
-    """relevance + last_reinforced for every node, keyed by id."""
+    """relevance + retrieved_at for every node, keyed by id."""
     nodes = await storage.query_nodes(status=NodeStatus.ACTIVE)
-    return {n.id: (n.value.relevance, n.value.last_reinforced) for n in nodes}
+    return {n.id: (n.value.relevance, n.value.retrieved_at) for n in nodes}
 
 
 class TestSearchReinforcement:
@@ -579,14 +580,15 @@ class TestSearchReinforcement:
         assert returned, "need at least one returned node to reinforce"
 
         after = await _value_signals(storage)
-        for node_id, (relevance, last_reinforced) in after.items():
-            old_relevance, old_last_reinforced = before[node_id]
+        for node_id, (relevance, retrieved_at) in after.items():
+            old_relevance, old_retrieved_at = before[node_id]
             if node_id in returned:
                 assert relevance > old_relevance
-                assert last_reinforced > old_last_reinforced
+                # Freshly ingested, so this is the first retrieval: None → a time.
+                assert retrieved_at is not None
             else:
                 assert relevance == old_relevance
-                assert last_reinforced == old_last_reinforced
+                assert retrieved_at == old_retrieved_at
 
     async def test_reinforcement_saturates_rather_than_pinning(
         self, storage, embedding_provider, config
@@ -632,11 +634,145 @@ class TestSearchReinforcement:
 # --- Explicit reinforcement (importance) ---
 
 
-class TestReinforce:
-    """`reinforce` is the only agent-facing upward path on `importance`.
+class TestJudgeImportanceDownward:
+    """Judgment moves both ways, and the two directions are mirrors.
 
-    It is deliberately not a raw setter: every bump leaves a trace, so a human
-    reviewing a trivial-looking node rated highly can see the justification.
+    `importance` used to have exactly one deliberate mutator and it only
+    raised, so a node judged important once left the cheap archival tier
+    permanently — cleanup never looked at it again. The step form is the
+    interesting part: up and down close the gap to *their own* bound by the
+    same fraction, which makes them symmetric in shape but not inverses.
+    """
+
+    async def test_a_downward_judgment_lowers_by_the_mirrored_step(self, storage):
+        node = Fact(content="mattered once", source_id="s1")
+        await storage.store_node(node)
+
+        await judge_importance(
+            node.id, direction="down", reason="the bug was fixed",
+            storage=storage, importance_step=0.25,
+        )
+
+        stored = await storage.get_node(node.id)
+        # 0.5 × (1 − 0.25). One step takes an un-judged node under the 0.5
+        # nomination ceiling, which is the point of the whole issue.
+        assert stored.value.importance == pytest.approx(0.375)
+
+    async def test_repeated_downward_judgments_approach_zero_without_reaching(
+        self, storage
+    ):
+        """Arithmetic must never judge a node out of existence.
+
+        The mirror of the upward asymptote, and the same commitment as
+        archive-never-delete expressed on the number line.
+        """
+        node = Fact(content="fading", source_id="s1")
+        await storage.store_node(node)
+
+        for _ in range(50):
+            await judge_importance(
+                node.id, direction="down", reason="less",
+                storage=storage, importance_step=0.25,
+            )
+
+        stored = await storage.get_node(node.id)
+        assert 0.0 < stored.value.importance < 1e-6
+
+    async def test_up_then_down_does_not_return_home(self, storage):
+        """Mirrors, not inverses — and the docstring has to say so."""
+        node = Fact(content="contested", source_id="s1")
+        await storage.store_node(node)
+
+        await judge_importance(node.id, direction="up", reason="u",
+                               storage=storage, importance_step=0.25)
+        after_up = (await storage.get_node(node.id)).value.importance
+        await judge_importance(node.id, direction="down", reason="d",
+                               storage=storage, importance_step=0.25)
+        after_down = (await storage.get_node(node.id)).value.importance
+
+        assert after_up == pytest.approx(0.625)
+        assert after_down == pytest.approx(0.46875)
+        assert after_down < 0.5, "a reversed judgment lands below where it started"
+
+    async def test_alternating_judgments_settle_into_a_two_cycle(self, storage):
+        """Sustained disagreement parks the node at the un-judged default.
+
+        Neither side wins: the orbit converges on {0.4286, 0.5714}, straddling
+        0.5, so whether the node is nominatable depends on which judgment came
+        last. That is the right terminal state — the most recent assessment
+        governs and neither agent can lock it.
+        """
+        node = Fact(content="two agents disagree", source_id="s1")
+        await storage.store_node(node)
+
+        for i in range(40):
+            await judge_importance(
+                node.id, direction="up" if i % 2 == 0 else "down",
+                reason="disagreement", storage=storage, importance_step=0.25,
+            )
+
+        after_down = (await storage.get_node(node.id)).value.importance
+        assert after_down == pytest.approx(3 / 7, abs=1e-6)   # 0.42857…
+        await judge_importance(node.id, direction="up", reason="u",
+                               storage=storage, importance_step=0.25)
+        after_up = (await storage.get_node(node.id)).value.importance
+        assert after_up == pytest.approx(4 / 7, abs=1e-6)     # 0.57142…
+
+    async def test_both_directions_share_one_provenance_trail_in_order(self, storage):
+        """One chronological story, with each entry's direction on it.
+
+        A reviewer wants to see a bump and its later reversal in sequence, with
+        both reasons. Two lists would split exactly what makes the trail useful.
+        """
+        node = Fact(content="judged twice", source_id="s1")
+        await storage.store_node(node)
+
+        await judge_importance(node.id, direction="up", reason="cited",
+                               storage=storage)
+        await judge_importance(node.id, direction="down", reason="obsolete",
+                               storage=storage)
+
+        trail = (await storage.get_node(node.id)).metadata["reinforcements"]
+        assert [(e["direction"], e["reason"]) for e in trail] == [
+            ("up", "cited"), ("down", "obsolete"),
+        ]
+
+    async def test_a_downward_judgment_stamps_the_judgment_clock_only(self, storage):
+        node = Fact(content="downgraded", source_id="s1")
+        await storage.store_node(node)
+
+        await judge_importance(node.id, direction="down", reason="less",
+                               storage=storage)
+
+        stored = await storage.get_node(node.id)
+        assert stored.value.importance_judged_at is not None
+        assert stored.value.retrieved_at is None
+        assert stored.value.relevance == pytest.approx(0.5)
+
+    async def test_an_unknown_direction_is_refused(self, storage):
+        node = Fact(content="real", source_id="s1")
+        await storage.store_node(node)
+        with pytest.raises(ValueError, match="direction"):
+            await judge_importance(node.id, direction="sideways", reason="r",
+                                   storage=storage)
+
+    async def test_rejects_unknown_node_and_unknown_related_id(self, storage):
+        with pytest.raises(ValueError, match="nope"):
+            await judge_importance("nope", direction="up", reason="r",
+                                   storage=storage)
+        node = Fact(content="real", source_id="s1")
+        await storage.store_node(node)
+        with pytest.raises(ValueError, match="ghost"):
+            await judge_importance(node.id, direction="up", reason="r",
+                                   storage=storage, related_id="ghost")
+
+
+class TestJudgeImportanceUpward:
+    """`judge_importance` is the only agent-facing path on `importance`.
+
+    It is deliberately not a raw setter: every judgment leaves a trace, so a
+    human reviewing a trivial-looking node rated highly can see the
+    justification. These cover the upward direction.
     """
 
     async def test_reinforce_bumps_and_records_provenance(self, storage):
@@ -645,8 +781,9 @@ class TestReinforce:
         await storage.store_node(node)
         await storage.store_node(trigger)
 
-        result, meta = await reinforce(
+        result, meta = await judge_importance(
             node.id,
+            direction="up",
             reason="cited by the incident review",
             storage=storage,
             related_id=trigger.id,
@@ -668,8 +805,10 @@ class TestReinforce:
         node = Fact(content="reinforced twice", source_id="s1")
         await storage.store_node(node)
 
-        await reinforce(node.id, reason="first", storage=storage, importance_step=0.25)
-        await reinforce(node.id, reason="second", storage=storage, importance_step=0.25)
+        await judge_importance(node.id, direction="up", reason="first",
+                               storage=storage, importance_step=0.25)
+        await judge_importance(node.id, direction="up", reason="second",
+                               storage=storage, importance_step=0.25)
 
         stored = await storage.get_node(node.id)
         # Asymptotic: 0.5 → 0.625 → 0.71875, approaching 1.0 without reaching it.
@@ -687,22 +826,41 @@ class TestReinforce:
         )
         await storage.store_node(node)
 
-        await reinforce(node.id, reason="matters", storage=storage)
+        await judge_importance(node.id, direction="up", reason="matters", storage=storage)
 
         stored = await storage.get_node(node.id)
         assert stored.value.relevance == pytest.approx(0.3)
 
+    async def test_reinforce_stamps_the_judgment_clock_and_only_that_one(
+        self, storage
+    ):
+        """The two clocks are independent, which is the point of having two.
+
+        A judgment is not a use. Stamping the retrieval clock here would make an
+        agent's assessment look like traffic, and archival nomination reads that
+        clock to decide whether anything has ever touched the node.
+        """
+        node = Fact(content="judged but never read", source_id="s1")
+        await storage.store_node(node)
+
+        await judge_importance(node.id, direction="up", reason="matters", storage=storage)
+
+        stored = await storage.get_node(node.id)
+        assert stored.value.importance_judged_at is not None
+        assert stored.value.retrieved_at is None
+
     async def test_reinforce_rejects_unknown_node(self, storage):
         with pytest.raises(ValueError, match="nope"):
-            await reinforce("nope", reason="r", storage=storage)
+            await judge_importance("nope", direction="up", reason="r", storage=storage)
 
     async def test_reinforce_rejects_unknown_related_id(self, storage):
         node = Fact(content="real", source_id="s1")
         await storage.store_node(node)
 
         with pytest.raises(ValueError, match="ghost"):
-            await reinforce(
-                node.id, reason="r", storage=storage, related_id="ghost"
+            await judge_importance(
+                node.id, direction="up", reason="r", storage=storage,
+                related_id="ghost",
             )
 
         # ...and the rejected call left nothing behind.
@@ -980,7 +1138,7 @@ class TestReflect:
         born = datetime.now(timezone.utc) - timedelta(days=30)
         trivial = Fact(
             content="a passing detail", source_id="s1", created_at=born,
-            value=ValueSignal(importance=0.2, last_reinforced=born),
+            value=ValueSignal(importance=0.2),
         )
         await storage.store_node(trivial)
 
@@ -989,8 +1147,88 @@ class TestReflect:
         entry = next(
             c for c in result["archival_candidates"] if c["node_id"] == trivial.id
         )
-        assert entry["reason"] == "never_reinforced"
+        assert entry["reason"] == "never_retrieved"
         assert entry["node_type"] == "fact"
+
+
+class TestApplyReflectionJudgments:
+    """The verdict that had no expression: keep it, stop treating it as important.
+
+    Separate from `archivals` on purpose. Archival is an all-or-nothing status
+    flip that wants human approval; a change of degree is something the agent
+    may conclude alone, and forcing the first to express the second overstates
+    what was concluded.
+    """
+
+    async def _judged_long_ago(self, storage):
+        node = Fact(
+            content="mattered during the incident", source_id="s1",
+            value=ValueSignal(
+                importance=0.9,
+                importance_judged_at=datetime.now(timezone.utc) - timedelta(days=400),
+            ),
+        )
+        await storage.store_node(node)
+        return node
+
+    async def test_a_downward_judgment_lowers_importance_and_moves_the_clock(
+        self, storage, embedding_provider
+    ):
+        node = await self._judged_long_ago(storage)
+        before = node.value.importance_judged_at
+
+        result, _ = await apply_reflection(
+            storage, embedding_provider,
+            judgments=[{
+                "node_id": node.id,
+                "direction": "down",
+                "reason": "the incident closed a year ago",
+            }],
+        )
+
+        stored = await storage.get_node(node.id)
+        assert result["judgments_applied"] == 1
+        assert stored.value.importance < 0.9
+        assert stored.value.importance_judged_at > before
+
+    async def test_judging_back_up_also_clears_the_staleness(
+        self, storage, embedding_provider
+    ):
+        """Re-confirming is a real answer to the nomination, not a no-op.
+
+        Whichever way the judgment goes, the clock moves and the node leaves the
+        stale set — which is what stops the same nominee coming back forever.
+        """
+        node = await self._judged_long_ago(storage)
+
+        await apply_reflection(
+            storage, embedding_provider,
+            judgments=[{
+                "node_id": node.id, "direction": "up",
+                "reason": "still load-bearing",
+            }],
+        )
+
+        stored = await storage.get_node(node.id)
+        assert stored.value.importance > 0.9
+        assert not judgment_is_stale(
+            stored, datetime.now(timezone.utc) - timedelta(days=180)
+        )
+
+    async def test_unknown_ids_are_skipped_as_supersessions_are(
+        self, storage, embedding_provider
+    ):
+        node = await self._judged_long_ago(storage)
+
+        result, _ = await apply_reflection(
+            storage, embedding_provider,
+            judgments=[
+                {"node_id": "ghost", "direction": "down", "reason": "r"},
+                {"node_id": node.id, "direction": "down", "reason": "r"},
+            ],
+        )
+
+        assert result["judgments_applied"] == 1
 
 
 class TestApplyReflectionArchivals:
@@ -1004,7 +1242,7 @@ class TestApplyReflectionArchivals:
         born = datetime.now(timezone.utc) - timedelta(days=30)
         node = Fact(
             content=content, source_id="s1", created_at=born,
-            value=ValueSignal(importance=0.2, last_reinforced=born),
+            value=ValueSignal(importance=0.2),
         )
         await storage.store_node(node)
         return node
@@ -1075,13 +1313,13 @@ class TestApplyReflectionArchivals:
         born = datetime.now(timezone.utc) - timedelta(days=30)
         evidence = Fact(
             content="a passing detail", source_id="s1", created_at=born,
-            value=ValueSignal(importance=0.2, last_reinforced=born),
+            value=ValueSignal(importance=0.2),
         )
         inference = Inference(
             content="rests entirely on that detail", source_id="s1",
             created_at=born,
             # High importance, so only the follow-on rule can nominate it.
-            value=ValueSignal(importance=0.9, last_reinforced=born),
+            value=ValueSignal(importance=0.9),
         )
         await storage.store_node(evidence)
         await storage.store_node(inference)

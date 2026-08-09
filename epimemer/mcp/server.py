@@ -525,45 +525,57 @@ async def memory_supersede_by(
     )
 
 
-@mcp.tool(name="reinforce")
-async def memory_reinforce(
+@mcp.tool(name="judge_importance")
+async def memory_judge_importance(
     node_id: str,
+    direction: str,
     reason: str,
     ctx: Context,
     related_id: str | None = None,
 ) -> str:
-    """Record that a node matters more than its current importance says.
+    """Record that a node matters more — or less — than its importance says.
 
-    Use when you learn something that raises an existing node's standing — new
-    evidence supporting it, a decision that turned out to hinge on it, a fact
-    that keeps proving load-bearing. Importance is what protects a node from
-    the archival sweep; retrieval already maintains relevance on its own, so
-    there is no need to reinforce a node merely because you read it.
+    Judge **up** when you learn something raising an existing node's standing:
+    new evidence supporting it, a decision that turned out to hinge on it, a
+    fact that keeps proving load-bearing.
 
-    Each call raises importance asymptotically (repeated calls approach 1.0,
-    they do not pin it) and appends the reason to the node's reinforcement
-    trail — there is no way to set the number directly, because an
-    unattributable judgment cannot be reviewed later.
+    Judge **down** when a node's importance has expired rather than its truth —
+    an error record that mattered until the bug was fixed, a decision that has
+    since been superseded by circumstances. Importance is what protects a node
+    from the archival sweep, so a stale high judgment keeps junk alive
+    indefinitely; judging it down is how you hand it back to review without
+    asserting it should be archived outright.
+
+    Retrieval already maintains relevance on its own, so there is no need to
+    judge a node up merely because you read it.
+
+    Each call moves importance asymptotically toward its bound — repeated calls
+    approach 1.0 or 0.0 without reaching either — and appends the reason to the
+    node's judgment trail. There is no way to set the number directly, because
+    an unattributable judgment cannot be reviewed later, and because a raw value
+    would overwrite every judgment that came before it.
 
     Args:
-        node_id: The node whose importance rises.
-        reason: Why it matters — this is read by whoever reviews the judgment.
+        node_id: The node being judged.
+        direction: "up" or "down".
+        reason: Why — this is read by whoever reviews the judgment.
         related_id: Optional — the node whose arrival triggered the
             reassessment.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
-        "epimemer.reinforce",
-        lambda: tools.reinforce(
+        "epimemer.judge_importance",
+        lambda: tools.judge_importance(
             node_id=node_id,
+            direction=direction,
             reason=reason,
             storage=deps["storage"],
             related_id=related_id,
             importance_step=deps["config"].importance_step,
         ),
         ctx,
-        f"node={node_id} related={related_id}",
-        lambda r, m: f"importance={r['importance']:.3f} bumps={r['reinforcements']}",
+        f"node={node_id} direction={direction} related={related_id}",
+        lambda r, m: f"importance={r['importance']:.3f} judgments={r['judgments']}",
     )
 
 
@@ -736,6 +748,7 @@ async def memory_apply_reflection(
     merges: list[dict] | None = None,
     supersessions: list[dict] | None = None,
     archivals: list[str] | None = None,
+    judgments: list[dict] | None = None,
     relation_merges: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
 ) -> str:
@@ -768,6 +781,14 @@ async def memory_apply_reflection(
             archive_data export, and `restore` puts a node back. Never archive
             an inference on its own initiative; a flagged one means its evidence
             changed, which is a reason to re-derive it.
+        judgments: Re-judge importance, typically for `stale_judgment` nominees
+            from reflect's archival_candidates. Each: {node_id: str, direction:
+            "up"|"down", reason: str, related_id: str | None}. Unlike archivals
+            this is yours to decide — a change of degree, not a status verdict —
+            and it is the right answer whenever a nominee should be kept but no
+            longer treated as important. Judging it up is equally valid and
+            equally useful: either way the judgment clock moves and the node
+            leaves the stale set.
         relation_merges: Consolidate synonymous user relationship labels from
             reflect's similar_relations. Each: {labels: [str], into: str}. Every
             user-tier edge with a listed label is relabelled to `into`, in place.
@@ -786,6 +807,7 @@ async def memory_apply_reflection(
             merges=merges,
             supersessions=supersessions,
             archivals=archivals,
+            judgments=judgments,
             relation_merges=relation_merges,
             merge_similarity_threshold=merge_similarity_threshold,
         ),
@@ -793,6 +815,7 @@ async def memory_apply_reflection(
         f"parents={len(parents or [])} splits={len(splits or [])} "
         f"enrichments={len(enrichments or [])} merges={len(merges or [])} "
         f"supersessions={len(supersessions or [])} archivals={len(archivals or [])} "
+        f"judgments={len(judgments or [])} "
         f"relation_merges={len(relation_merges or [])}",
         lambda r, m: f"applied={m.nodes_returned}",
     )

@@ -57,7 +57,34 @@ class TestValueSignal:
         assert v.novelty == 1.0
         assert v.confidence == 0.5
         assert v.relevance == 0.5
-        assert v.last_reinforced is not None
+        assert v.importance == 0.5
+
+    def test_both_clocks_start_unset(self):
+        """"Never retrieved" and "never judged" are real states, not fictions.
+
+        Defaulting these to `now` would make a node that nothing has ever
+        touched indistinguishable from one touched a moment ago — which is what
+        forced archival nomination to compare timestamps with a one-second
+        tolerance and call the result "never used".
+        """
+        v = ValueSignal()
+        assert v.retrieved_at is None
+        assert v.importance_judged_at is None
+
+    def test_a_record_written_before_these_fields_existed_reads_as_unset(self):
+        """The migration case, and the reason `None` is the right default.
+
+        `ValueSignal` is persisted inside its node as JSON, so a record written
+        earlier simply lacks both keys. Defaulting to `now` would load every
+        pre-existing node as freshly retrieved, silently exempting whole graphs
+        from cleanup; `None` loads them as never touched, which merely proposes
+        them for review.
+        """
+        v = ValueSignal.model_validate(
+            {"novelty": 1.0, "confidence": 0.5, "relevance": 0.5, "importance": 0.5}
+        )
+        assert v.retrieved_at is None
+        assert v.importance_judged_at is None
 
     def test_custom_values(self):
         v = ValueSignal(novelty=0.3, confidence=0.9, relevance=0.1)

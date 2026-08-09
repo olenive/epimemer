@@ -62,7 +62,7 @@ export interface NodeView {
   novelty: number;
   confidence: number;
   relevance: number;
-  last_reinforced: string;
+  retrieved_at: string | null;   // null until a search has returned it
   created_at: string;
   graph: string;
   metadata: Record<string, unknown>;

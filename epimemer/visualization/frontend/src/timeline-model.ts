@@ -252,23 +252,23 @@ const describeNode = (node: NodeView): string =>
     node.content,
     "",
     `created   ${node.created_at}`,
-    `reinforced ${node.last_reinforced}`,
+    `retrieved  ${node.retrieved_at ?? "never"}`,
     `confidence ${node.confidence.toFixed(2)}  novelty ${node.novelty.toFixed(2)}`,
   ].join("\n");
 
 /**
  * Record-time mark for one node: born at `created_at`, drawn as an interval
- * out to `last_reinforced` so the span over which it stayed relevant is
- * visible. A node never reinforced since creation is a plain point.
+ * out to `retrieved_at` so the span over which it stayed in use is visible. A
+ * node no search has ever returned has no span, and is drawn as a plain point.
  */
 const markForNode = (resolver: Resolver, node: NodeView): DatedMark => {
   const created = parseTime(node.created_at) ?? 0;
-  const reinforced = parseTime(node.last_reinforced);
+  const retrieved = parseTime(node.retrieved_at);
   return {
     id: node.node_id,
     side: sideForTypes([node.node_type]),
     start: created,
-    end: reinforced !== null && reinforced > created ? reinforced : null,
+    end: retrieved !== null && retrieved > created ? retrieved : null,
     title: node.content,
     detail: describeNode(node),
     nodeIds: [node.node_id],
