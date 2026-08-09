@@ -123,6 +123,37 @@ async def _two_step_ingest(
     return seg_result, store_result
 
 
+async def _ingest_facts(
+    facts: list[str],
+    storage: StorageBackend,
+    embedding_provider: MockEmbeddingProvider,
+    config: ServerConfig,
+    **kwargs,
+) -> dict:
+    """Ingest one segment whose facts are exactly `facts`.
+
+    Timepoint proposal reads node content, so the tests need to say what that
+    content is rather than let the helper invent it.
+    """
+    seg_result, _ = await segment_text(
+        " ".join(facts) or "placeholder", storage, embedding_provider, config
+    )
+    store_result, _ = await store_decomposition(
+        document_id=seg_result["document_id"],
+        segments=[{"segment_id": seg_result["segments"][0]["segment_id"], "facts": facts}],
+        storage=storage,
+        embedding_provider=embedding_provider,
+        **kwargs,
+    )
+    return store_result
+
+
+async def _only_timeline(storage: StorageBackend):
+    timelines = await storage.query_timelines()
+    assert len(timelines) == 1, f"expected one timeline, got {timelines}"
+    return timelines[0]
+
+
 # --- Segment tests ---
 
 
@@ -159,6 +190,195 @@ class TestSegment:
             storage, embedding_provider, config,
         )
         assert len(result["segments"]) == 1
+
+
+# --- Timepoint proposal tests ---
+
+
+class TestTimepointProposal:
+    """Ingestion proposes timepoints, so content-time mode is not empty on a
+    graph nobody has hand-curated (ISSUES.md #34).
+
+    The proposals ride in the same `write_batch_tx` as everything else: a
+    `TIMELINK` naming a timeline that was never stored resolves to an empty row
+    rather than an error, so a partial write would fail silently.
+    """
+
+    async def test_a_concrete_date_becomes_a_dated_timepoint(
+        self, storage, embedding_provider, config
+    ):
+        await _ingest_facts(
+            ["The treaty was signed on 12 March 1997."],
+            storage, embedding_provider, config,
+        )
+
+        timeline = await _only_timeline(storage)
+        assert len(timeline.timepoints) == 1
+        assert timeline.timepoints[0].start == datetime(1997, 3, 12, tzinfo=timezone.utc)
+
+    async def test_the_node_is_linked_to_its_timepoint(
+        self, storage, embedding_provider, config
+    ):
+        await _ingest_facts(
+            ["The treaty was signed on 12 March 1997."],
+            storage, embedding_provider, config,
+        )
+
+        timeline = await _only_timeline(storage)
+        fact = (await storage.query_nodes(node_type=NodeType.FACT))[0]
+        links = await storage.get_edges_from(fact.id, edge_type=EdgeType.TIMELINK)
+        assert [e.dst_id for e in links] == [timeline.id]
+        assert links[0].metadata["timepoint_id"] == timeline.timepoints[0].id
+
+    async def test_a_vague_expression_stays_undated(
+        self, storage, embedding_provider, config
+    ):
+        """The undated lane exists so this never has to become a date."""
+        await _ingest_facts(
+            ["Trade grew during the Renaissance."],
+            storage, embedding_provider, config,
+        )
+
+        point = (await _only_timeline(storage)).timepoints[0]
+        assert point.start is None
+        assert point.label == "during the Renaissance"
+
+    async def test_text_with_no_temporal_expression_creates_no_timeline(
+        self, storage, embedding_provider, config
+    ):
+        """An empty timeline in the panel's selector is worse than no timeline:
+        it looks like data that failed to load."""
+        await _ingest_facts(
+            ["The room was quiet and the door was shut."],
+            storage, embedding_provider, config,
+        )
+
+        assert await storage.query_timelines() == []
+
+    async def test_one_date_in_two_nodes_is_one_timepoint(
+        self, storage, embedding_provider, config
+    ):
+        """Two mentions of an instant are one point in time with two things
+        said about it, not two coincident marks."""
+        await _ingest_facts(
+            ["The siege began in 1897.", "The harvest failed in 1897."],
+            storage, embedding_provider, config,
+        )
+
+        timeline = await _only_timeline(storage)
+        assert len(timeline.timepoints) == 1
+        links = [
+            edge
+            for node in await storage.query_nodes(node_type=NodeType.FACT)
+            for edge in await storage.get_edges_from(node.id, edge_type=EdgeType.TIMELINK)
+        ]
+        assert len(links) == 2
+
+    async def test_a_second_document_appends_to_the_same_timeline(
+        self, storage, embedding_provider, config
+    ):
+        """One timeline per graph, not per document: the panel shows one
+        timeline at a time, so a timeline per document buries every mark."""
+        await _ingest_facts(
+            ["The siege began in 1897."], storage, embedding_provider, config
+        )
+        await _ingest_facts(
+            ["The siege was lifted in 1901."], storage, embedding_provider, config
+        )
+
+        timeline = await _only_timeline(storage)
+        assert [p.start.year for p in timeline.timepoints] == [1897, 1901]
+
+    async def test_a_repeated_date_reuses_the_existing_timepoint(
+        self, storage, embedding_provider, config
+    ):
+        await _ingest_facts(
+            ["The siege began in 1897."], storage, embedding_provider, config
+        )
+        await _ingest_facts(
+            ["The harvest failed in 1897."], storage, embedding_provider, config
+        )
+
+        assert len((await _only_timeline(storage)).timepoints) == 1
+
+    async def test_proposals_go_to_a_named_timeline_when_asked(
+        self, storage, embedding_provider, config
+    ):
+        created, _ = await create_timeline("Novel", storage)
+        await _ingest_facts(
+            ["The siege began in 1897."],
+            storage, embedding_provider, config,
+            timeline_id=created["timeline_id"],
+        )
+
+        timeline = await storage.get_timeline(created["timeline_id"])
+        assert len(timeline.timepoints) == 1
+
+    async def test_an_unknown_timeline_is_an_error_not_a_new_one(
+        self, storage, embedding_provider, config
+    ):
+        """Silently creating it would put the document on a timeline the caller
+        cannot find, under a name they did not choose."""
+        with pytest.raises(ValueError, match="nonexistent"):
+            await _ingest_facts(
+                ["The siege began in 1897."],
+                storage, embedding_provider, config,
+                timeline_id="nonexistent",
+            )
+
+    async def test_proposals_can_be_switched_off(
+        self, storage, embedding_provider, config
+    ):
+        await _ingest_facts(
+            ["The siege began in 1897."],
+            storage, embedding_provider, config,
+            propose_timepoints=False,
+        )
+
+        assert await storage.query_timelines() == []
+
+    async def test_the_result_reports_what_was_proposed(
+        self, storage, embedding_provider, config
+    ):
+        result = await _ingest_facts(
+            ["The siege began in 1897.", "Trade grew during the Renaissance."],
+            storage, embedding_provider, config,
+        )
+        assert result["timepoints_proposed"] == 2
+
+    async def test_the_surface_form_is_kept_on_a_dated_timepoint(
+        self, storage, embedding_provider, config
+    ):
+        """A resolved date needs no label — it would only repeat the date — but
+        what the text actually said is worth keeping, for anyone auditing a
+        proposal that looks wrong."""
+        await _ingest_facts(
+            ["The treaty was signed on 12 March 1997."],
+            storage, embedding_provider, config,
+        )
+
+        point = (await _only_timeline(storage)).timepoints[0]
+        assert point.label is None
+        assert point.metadata["detected_from"] == "12 March 1997"
+
+    async def test_topics_and_inferences_are_proposed_from_too(
+        self, storage, embedding_provider, config
+    ):
+        seg_result, _ = await segment_text(
+            "Anything.", storage, embedding_provider, config
+        )
+        await store_decomposition(
+            document_id=seg_result["document_id"],
+            segments=[{
+                "segment_id": seg_result["segments"][0]["segment_id"],
+                "topics": ["The siege that began in 1897"],
+                "inferences": ["The siege probably ended in 1901."],
+            }],
+            storage=storage,
+            embedding_provider=embedding_provider,
+        )
+
+        assert len((await _only_timeline(storage)).timepoints) == 2
 
 
 # --- Store Decomposition tests ---

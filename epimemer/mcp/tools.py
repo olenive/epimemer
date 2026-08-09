@@ -190,6 +190,39 @@ def _decomposition_entry(entry) -> tuple[str, list[str], float | None]:
     return entry, [], None
 
 
+EXTRACTED_TIMELINE_NAME = "Extracted"
+
+
+async def _extraction_timeline(
+    storage: StorageBackend, timeline_id: str | None
+) -> Timeline:
+    """The timeline extraction should propose onto.
+
+    One shared timeline per graph rather than one per document. The panel shows
+    a single timeline at a time (`dev-docs/TIMELINE_VISUALISATION.md` §12.2), so
+    a timeline per document turns every ingest into another near-empty entry in
+    the selector and buries the marks. Provenance is not lost by sharing:
+    every node carries a `sourced_from` edge to its document.
+
+    A named timeline must already exist. Creating one silently would put the
+    document on a timeline the caller cannot find, under a name they never
+    chose — `create_timeline` is how a name comes into being.
+    """
+    if timeline_id is not None:
+        timeline = await storage.get_timeline(timeline_id)
+        if timeline is None:
+            raise ValueError(f"Timeline '{timeline_id}' not found")
+        return timeline
+
+    for timeline in await storage.query_timelines():
+        if timeline.name == EXTRACTED_TIMELINE_NAME:
+            return timeline
+    return Timeline(
+        name=EXTRACTED_TIMELINE_NAME,
+        description="Timepoints proposed from ingested text.",
+    )
+
+
 async def store_decomposition(
     document_id: str,
     segments: list[dict],
@@ -198,6 +231,8 @@ async def store_decomposition(
     *,
     metacontext_id: str | None = None,
     tags: list[str] | None = None,
+    timeline_id: str | None = None,
+    propose_timepoints: bool = True,
     event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Store agent-provided decomposition: topics, facts, inferences per segment.
@@ -212,8 +247,17 @@ async def store_decomposition(
     (document-level) and per-node tags are resolved-or-created (by exact name) as
     Topics linked by `tagged_with` edges, so a repeated tag reuses one Topic.
     Everything is persisted in one atomic write.
+
+    Temporal expressions in node content become timepoints on a timeline
+    (`timeline_id`, or the shared extracted one), linked by `TIMELINK`. Only
+    what the text states is resolved: "during the Renaissance" stays undated
+    rather than being guessed into a date. Pass `propose_timepoints=False` to
+    skip it entirely.
     """
     from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment, edge_creation_net
+    # Imported as a module: the `propose_timepoints` flag above would otherwise
+    # shadow the function of the same name.
+    from epimemer.pipelines.timeline import functions as timeline_functions
 
     # Accumulate the whole document's writes, then persist them atomically so a
     # mid-document failure cannot leave a partial graph.
@@ -227,6 +271,10 @@ async def store_decomposition(
     total_topics = total_facts = total_inferences = 0
     doc_tag_names = list(tags or [])
     tag_cache: dict[str, Topic] = {}
+    # Tag Topics are excluded: a tag is a name, not a statement, and a tag that
+    # happens to read as a date would put a mark on the timeline for every node
+    # carrying it.
+    datable: list[tuple[str, str]] = []
 
     async def _tag_topic(name: str) -> Topic:
         """Resolve-or-create a tag Topic, adding new ones to the batch."""
@@ -285,6 +333,7 @@ async def store_decomposition(
         seg_nodes: list[EpistemicNode] = [*topics, *facts, *inferences]
         batch_nodes.extend(seg_nodes)
         batch_edges.extend(edges)
+        datable.extend((node.id, node.content) for node in seg_nodes)
 
         if seg_nodes:
             vectors = await embedding_provider.embed([n.content for n in seg_nodes])
@@ -316,9 +365,28 @@ async def store_decomposition(
         total_facts += len(facts)
         total_inferences += len(inferences)
 
+    # Timepoints ride in the same write: a TIMELINK naming a timeline that was
+    # never stored resolves to an empty row rather than an error, so a partial
+    # write would fail silently.
+    batch_timelines: list[Timeline] = []
+    timepoints_proposed = 0
+    if propose_timepoints:
+        timeline = await _extraction_timeline(storage, timeline_id)
+        timeline, timelinks, timepoints_proposed = timeline_functions.propose_timepoints(
+            datable, timeline
+        )
+        batch_edges.extend(timelinks)
+        # An unchanged timeline needs no write; a timeline nobody added a point
+        # to was never stored in the first place.
+        if timepoints_proposed:
+            batch_timelines.append(timeline)
+
     # One atomic write for the entire document.
     await storage.write_batch_tx(
-        nodes=batch_nodes, edges=batch_edges, embeddings=batch_embeddings,
+        nodes=batch_nodes,
+        edges=batch_edges,
+        embeddings=batch_embeddings,
+        timelines=batch_timelines,
     )
 
     nodes_created = {
@@ -330,6 +398,7 @@ async def store_decomposition(
         "document_id": document_id,
         "nodes_created": nodes_created,
         "edges_created": len(batch_edges),
+        "timepoints_proposed": timepoints_proposed,
     }
     meta = ResponseMeta(
         nodes_returned=total_topics + total_facts + total_inferences,

@@ -7,8 +7,10 @@ The implementation is swappable later without changing the interface.
 
 from bisect import bisect_left, insort_left
 from datetime import datetime
+from typing import Sequence
 
-from epimemer.core.types import Timeline, Timepoint
+from epimemer.core.types import EdgeType, NodeEdge, Timeline, Timepoint
+from epimemer.pipelines.timeline.temporal import detect_temporal_expressions
 
 
 def add_timepoint(
@@ -149,3 +151,63 @@ def _split_concrete_vague(
     concrete = [tp for tp in timepoints if tp.start is not None]
     vague = [tp for tp in timepoints if tp.start is None]
     return concrete, vague
+
+
+# --- Proposing timepoints from node content ---
+
+
+def _timepoint_key(tp: Timepoint) -> tuple:
+    """What makes two timepoints the same point in time.
+
+    The id cannot do this job: the whole purpose is to recognise that a
+    timepoint proposed now is the one already on the timeline.
+    """
+    return (tp.start, tp.end, tp.label)
+
+
+def propose_timepoints(
+    nodes: Sequence[tuple[str, str]],
+    timeline: Timeline,
+) -> tuple[Timeline, list[NodeEdge], int]:
+    """Read `(node_id, content)` pairs and link them to timepoints they name.
+
+    Returns the extended timeline, the `TIMELINK` edges to write, and how many
+    timepoints are new. All three belong to the same atomic write: an edge whose
+    timepoint was never stored is a dangling reference the read path resolves to
+    an empty row rather than an error.
+
+    Timepoints are deduplicated by their resolved value, both against each other
+    and against what the timeline already holds — two nodes naming 1897 are two
+    things said about one point in time, not two coincident marks. This is also
+    what makes re-ingesting a document idempotent as to timepoints.
+    """
+    known = {_timepoint_key(tp): tp.id for tp in timeline.timepoints}
+    edges: list[NodeEdge] = []
+    added = 0
+
+    for node_id, content in nodes:
+        for found in detect_temporal_expressions(content):
+            key = (found.start, found.end, found.label)
+            timepoint_id = known.get(key)
+            if timepoint_id is None:
+                timeline, timepoint = add_timepoint(
+                    timeline,
+                    start=found.start,
+                    end=found.end,
+                    label=found.label,
+                    # What the text said, kept for anyone auditing a proposal
+                    # that looks wrong. A resolved date needs no label — it
+                    # would only repeat the date — so this is not one.
+                    metadata={"detected_from": found.text, "proposed_by": "extraction"},
+                )
+                timepoint_id = timepoint.id
+                known[key] = timepoint_id
+                added += 1
+            edges.append(NodeEdge(
+                src_id=node_id,
+                dst_id=timeline.id,
+                type=EdgeType.TIMELINK,
+                metadata={"timepoint_id": timepoint_id},
+            ))
+
+    return timeline, edges, added

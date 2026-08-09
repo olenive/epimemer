@@ -295,6 +295,8 @@ async def memory_store_decomposition(
     ctx: Context,
     metacontext_id: str | None = None,
     tags: list[str] | None = None,
+    timeline_id: str | None = None,
+    propose_timepoints: bool = True,
 ) -> str:
     """Store your decomposition of segments into topics, facts, and inferences.
 
@@ -321,6 +323,14 @@ async def memory_store_decomposition(
         tags: Optional document-level tag names applied to every node. Each tag
             becomes (or reuses) a Topic linked by a tagged_with edge. Every node
             also gets a sourced_from edge to the document.
+        timeline_id: Optional timeline to propose timepoints onto — use it when
+            the document belongs to a timeline you have already created (a
+            novel's chronology, a project history). It must exist. Omitted,
+            proposals go to the shared "Extracted" timeline.
+        propose_timepoints: Dates stated in node content ("on 12 March 1997",
+            "the 1990s") become timepoints linked by TIMELINK, so content-time
+            mode has something to show. Vague expressions stay undated rather
+            than being guessed at. Set false to skip.
     """
     deps = ctx.lifespan_context
 
@@ -332,6 +342,8 @@ async def memory_store_decomposition(
             embedding_provider=deps["embedding_provider"],
             metacontext_id=metacontext_id,
             tags=tags,
+            timeline_id=timeline_id,
+            propose_timepoints=propose_timepoints,
             event_bus=deps.get("event_bus"),
         )
         count = await deps["storage"].bump_reflect_counter()
@@ -349,7 +361,7 @@ async def memory_store_decomposition(
         _do,
         ctx,
         f"doc={document_id} segments={len(segments)}",
-        lambda r, m: f"nodes={m.nodes_returned} edges={r['edges_created']} reflect={r['stores_since_reflect']}/{r['reflect_threshold']}",
+        lambda r, m: f"nodes={m.nodes_returned} edges={r['edges_created']} timepoints={r['timepoints_proposed']} reflect={r['stores_since_reflect']}/{r['reflect_threshold']}",
     )
 
 

@@ -211,19 +211,22 @@ both themes.
 
 - **Knowledge graph** — nodes and edges, force or hierarchy layout.
 - **Pipelines** — Petri net execution, live.
-- **Timeline** — marks on a left-to-right axis, one row per timeline, with hover
-  detail, filters and per-row zoom. Two modes:
+- **Timeline** — one timeline at a time on a vertical axis, past at the top,
+  read like a chat log. Facts and topics sit to the left of the line,
+  inferences to the right; selecting a mark expands its text in place. Two
+  modes:
   - *record time*, the default: when the graph learned each node, drawn from
     `created_at` out to `last_reinforced`. Always populated.
   - *content time*: `Timeline`/`Timepoint` data — when the described events
-    happened. Populated only when an agent calls `create_timeline`,
-    `add_timepoint` and `create_timelink`.
+    happened. Ingestion proposes timepoints from dates stated in the text, so
+    this is populated by default; `create_timeline`, `add_timepoint` and
+    `create_timelink` are how an agent curates one deliberately.
 
-  Where a row's data has a gap far larger than its local spacing — a graph idle
+  Where the data has a gap far larger than its local spacing — a graph idle
   for days between bursts, or a timeline jumping centuries — the axis **breaks**
   and collapses the gap to a labelled marker, so dense clusters stay legible.
   Zooming into a cluster dissolves the break. Vague timepoints ("during the
-  Renaissance") have no coordinate and sit in an *undated* lane below the axis
+  Renaissance") have no coordinate and sit in an *undated* tray beside the axis
   rather than being given an invented date.
 
   Filter by linked node type, status, epistemic frame, date range, or free text.
