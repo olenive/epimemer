@@ -43,7 +43,10 @@
           </div>
           <div class="flex items-center gap-1.5 text-xs">
             <span class="text-gray-600 dark:text-gray-500">Viewing:</span>
-            <select id="graph-selector" class="text-xs bg-white text-gray-700 border-gray-400 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700 rounded px-1.5 py-0.5 border">
+            <select id="graph-selector" class="text-xs bg-white text-gray-700 border-gray-400 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700 rounded px-1.5 py-0.5 border" title="loading graphs...">
+              <!-- Replaced on first render, including by an "unavailable" that
+                   carries the reason in the title. Nothing else may leave this
+                   placeholder standing. -->
               <option value="">Loading...</option>
             </select>
             <span id="view-mode-badge" class="px-1.5 py-0.5 rounded text-xs bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-400">-</span>
@@ -54,7 +57,7 @@
           <button id="btn-toggle-graph" class="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Show or hide the graph">Graph</button>
           <button id="btn-toggle-timeline" class="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Show or hide the timeline">Timeline</button>
           <button id="btn-toggle-pipeline" class="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Toggle pipeline strip">Pipelines</button>
-          <span id="ws-status" class="px-2 py-1 text-xs rounded bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400">Disconnected</span>
+          <span id="ws-status" class="px-2 py-1 text-xs rounded bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400" title="this browser's socket to the visualization hub — it says nothing about whether a session can answer">Hub disconnected</span>
           <button id="btn-toggle-theme" class="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Switch theme" aria-label="Switch theme">☾</button>
         </div>
       </header>

@@ -1,13 +1,13 @@
 # Epimemer — Known Issues
 
-Living issue tracker. **Last review: 2026-08-07.**
+Living issue tracker. **Last review: 2026-08-10.**
 
 Everything found so far is resolved except **14** and **16**, both deferred by
-design, and **39**, which is scoped and actionable. **34** is resolved but not
-yet merged, so its entry is still here. Resolved entries
+design, and **39**, which is scoped and actionable. **34**, **40** and **41** are
+resolved but not yet merged, so their entries are still here. Resolved entries
 are **removed from this file** — their resolution lives in git history and the
 merged code. Issue numbers are stable IDs; the gaps (6–13, 15, 17–33, 35–38) are
-deleted-resolved items, not missing work. New findings continue from **40**.
+deleted-resolved items, not missing work. New findings continue from **42**.
 
 35–38 were the value model & graph hygiene plan
 (`dev-docs/REVIEW_EPISTEMIC.md` §12, which records what the plan did not
@@ -371,6 +371,142 @@ measurement, not an assertion about a wrong answer:
 
 ---
 
+### Issue 40 — A dropped SurrealDB connection is never re-established, so the process wedges permanently
+
+**Status.** ✅ RESOLVED. Found live on 2026-08-10: restarting the SurrealDB
+container left every MCP tool call in an already-running server returning
+
+```
+sent 1011 (internal error) keepalive ping timeout; no close frame received
+```
+
+and it never recovered. The visualization UI showed this as a permanent
+"Loading…" (see #41 for that half).
+
+**Symptom.** `SurrealDBStorage.connect()`
+(`epimemer/storage/surrealdb_adapter.py`) assigns `self._db` once and nothing
+ever rebuilds it. The `db` property only guards `None`, which happens on a
+*never-connected* store, not a *disconnected* one. So after the websocket
+underneath drops, all 60-odd `self.db.query(...)` call sites raise for the rest
+of the process's life.
+
+**Why the SDK does not save us.** `AsyncWsSurrealConnection.connect()` returns
+early when `self.socket` is truthy, and `self.socket` is never cleared on a drop
+— `_recv_task` swallows `ConnectionClosed`, cancels the pending futures and
+exits, leaving the object looking connected. The next `_send` calls
+`await self.connect()` (a no-op) and then `socket.send(...)`, which raises
+`ConnectionClosed`. The SDK's own docstring says the connection is "to be used
+once and discarded", so reconnection is the caller's job.
+
+**Causes seen or expected.** A server restart (the observed one), a container
+`docker restart`, a network blip, and laptop sleep — the last is the nastiest,
+because the keepalive deadline expires while both ends are frozen and the
+connection is torn down on wake, at the exact moment a user resumes work.
+
+**Fix.** Retry once on a connection-level error: rebuild the connection
+(reconnect, re-signin, re-select the database that was selected, re-run the
+idempotent schema setup) and re-run the operation.
+
+Three constraints the fix has to respect:
+- **Never reconnect an embedded engine.** `mem://`, `memory`, `file://` and
+  `surrealkv://` map to `AsyncEmbeddedSurrealConnection`, which *holds the data
+  in the connection object*. Reconnecting one would silently hand back an empty
+  graph instead of restoring anything. Such a connection also cannot raise
+  `ConnectionClosed`, so the guard is belt-and-braces — but the failure it
+  prevents is silent data loss, which earns it.
+- **Re-select the database that was actually selected**, not the home one. The
+  viz reads (`viz_list_nodes` and friends) temporarily `use()` another database
+  and restore it in a `finally`; a reconnect during that window must come back
+  pointed where the caller thinks it is.
+- **One reconnect for concurrent callers.** Several in-flight operations will
+  fail together. Serialize on a lock and let the losers notice the connection
+  was already rebuilt, rather than each building their own and leaking all but
+  the last.
+
+Retrying the operation is safe here, and that is a property of this schema
+rather than a general truth: every write is either an `UPSERT ... WHERE uid` or
+an `INSERT INTO` guarded by a `UNIQUE` index on `uid` — which SurrealDB silently
+ignores on collision — and the multi-statement writes are transactional, so a
+connection lost mid-flight aborts them server-side. A retry is therefore a
+no-op or a repeat of an idempotent write.
+
+Out of scope: retrying the operation that was *in flight* when the socket died.
+The SDK cancels its pending futures, so that caller sees `CancelledError`;
+distinguishing "cancelled by us" from "cancelled by a dead socket" is not worth
+the ambiguity. That one call fails, and the next one reconnects.
+
+**Guarding tests.**
+- `tests/storage/test_surrealdb_storage.py::TestReconnection` — four tests
+  against a stand-in connection, because a real drop is not something the
+  default suite can stage: a dropped connection is rebuilt and the query
+  retried; an *embedded* connection is never rebuilt (the error propagates
+  instead, since reconnecting would return an empty engine); the reconnect
+  restores the database that was actually selected, not the home one;
+  concurrent callers share one reconnect rather than building five.
+- `tests/storage/test_surrealdb_persistence.py::test_storage_recovers_after_server_restart`
+  — the real-world proof, opt-in via `make test-integration`. It keeps *the
+  same* `SurrealDBStorage` across a `docker restart` and asserts the next call
+  succeeds. Verified to fail without the fix, with the same
+  `ConnectionClosedError` seen live.
+
+**What the shape of the fix cost.** All 60-odd call sites now go through
+`_query`/`_use` rather than `self.db.query`/`self.db.use`, and the three
+module-level ranking helpers take that wrapper instead of the connection.
+`_setup_schema` is the one deliberate exception — it runs inside `connect()`, so
+retrying there would re-enter `connect()` while `_reconnect` holds its lock.
+
+---
+
+### Issue 41 — A failed session RPC leaves the viz UI on "Loading…" with a green Connected badge
+
+**Status.** ✅ RESOLVED. Uncovered by #40, and cosmetic next to it — but it is
+the reason the failure read as "the frontend is broken" for an hour.
+
+**Symptom.** `selectSession` (`epimemer/visualization/frontend/src/main.ts`)
+awaits `fetchGraphs`. When the hub answers 502 because the session's storage is
+unreachable, the `catch` only does `console.error`, so:
+- the graph selector keeps the `<option>Loading...</option>` placeholder from
+  `index.html` — forever, with no timeout and no retry;
+- both panels stay empty, with no indication why;
+- the `Connected` badge stays green, because it reports the *browser↔hub*
+  socket, which is genuinely fine.
+
+Nothing on screen distinguishes "still loading" from "this session's backend is
+dead", and the one place the reason exists is the browser console.
+
+**What was done.** A new pure module, `src/session-select.ts`, holds the three
+decisions; `main.ts` keeps only the DOM:
+- the graph selector is now a state (`loading` / `ready` / `unavailable`) rather
+  than a placeholder that happens to get overwritten. `unavailable` carries the
+  hub's own words in the `title`;
+- `api.ts` reads the error body, so that reason survives the fetch. `502` was a
+  shrug; `sent 1011 (internal error) keepalive ping timeout` was the diagnosis,
+  and it was being discarded one line after it arrived;
+- session ranking is *answers > listed but not answering > gone*, most recent
+  first within a rank. Recency alone picked the session you used last, which is
+  the one you most recently broke. `selectFirstWorkingSession` walks that order
+  until one answers, so a wedged backend no longer blanks a UI that had a
+  healthy session two rows down;
+- "unreachable" is a third session state, distinct from disconnected, shown in
+  the session selector. Only asking reveals it — from the hub's side the session
+  *is* connected — so the browser accumulates it, and clears it when a session
+  re-registers or answers again;
+- the status badge now reads "Hub connected", since that is all it ever meant.
+
+**Guarding tests.**
+- `src/session-select.test.ts` — 13 tests: a reachable session is preferred to a
+  more recent unreachable one; the old recency behaviour survives when nothing
+  is known to be unreachable; an unreachable session still beats a disconnected
+  one and is still selectable (that is how its reason reaches the screen); the
+  selector says "unavailable" rather than "loading" and puts the reason in the
+  title.
+- `src/api.test.ts` — the hub's reason survives the fetch, with the status code
+  as the fallback when the body carries none.
+
+`main.ts` stays untested by choice, as the other DOM modules do; `tsc` covers it.
+
+---
+
 ## Older carry-overs (open, low priority)
 
 From the original live-graph walkthrough (issues 1–5, otherwise resolved or kept
@@ -386,7 +522,11 @@ it lives in README → *Not yet built*.
 
 ## Recommended order
 
-**#39 is the actionable one** now that #34 is built. #14/#16 are deferred by
+**#40 and #41 are done** — the pair from 2026-08-10, the only entries here that
+had actually broken a running system. #40 did it in a way nothing in the default
+suite could have caught, because that suite never holds a connection long enough
+to lose one. **#39 is what is left.**
+#14/#16 are deferred by
 design with stated triggers, and the earlier performance work is done: `reflect` went
 cubic → quadratic, in-memory edge lookups are indexed, and SurrealDB's `search`
 went quadratic → flat. `dev-docs/BENCHMARKS.md` has the data; #14 above has the
@@ -397,6 +537,8 @@ What to pick up, and what has to be true first:
 | Order | Work | Trigger |
 |---|---|---|
 | ✅ | 34 (timepoint extraction) | Done. `write_batch_tx` carries timelines, as its own commit |
+| ✅ | 40 (SurrealDB reconnect) | Done. A container restart on 2026-08-10 wedged two live MCP servers until they were killed; the adapter now rebuilds a dropped connection |
+| ✅ | 41 (viz surfaces a dead session) | Done. #40 makes a wedged session rare, not impossible, and this is what made an hour's debugging necessary |
 | 1 | 39 (reflect's O(F²)) | Ready now, and the nearest thing to a live failure: `reflect` crosses the 30 s tool timeout at ~1,400 nodes on SurrealDB. Try vectorizing before anything cleverer |
 | watch | 14 (enrichment N+1) | The ~120 ms floor under every SurrealDB `search` is now per-result enrichment round-trips. Nothing fails because of it, so it stays deferred — but it is what a batched edge fetch would attack |
 | deferred | 16 | The server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`) |

@@ -34,6 +34,14 @@ import {
   seedReflectState,
   unknownReflectState,
 } from "./reflect-badge";
+import {
+  graphSelectorOptions,
+  graphSelectorTitle,
+  hubErrorText,
+  pickDefaultSession,
+  sessionLabel,
+  type GraphListState,
+} from "./session-select";
 import type {
   AnyEvent,
   GraphSwitched,
@@ -57,6 +65,9 @@ let selectedSession: string | null = null;
 let viewedGraph = "";
 let mcpActiveGraph = "";
 let mcpBackend = "";
+// Sessions the hub lists as connected but which cannot answer — see
+// `session-select.ts`. Only asking reveals this, so it accumulates here.
+const unreachable = new Set<string>();
 
 // --- Initialize ---
 
@@ -70,8 +81,11 @@ const viewModeBadge = $("view-mode-badge");
 const reflectBadge = $("reflect-badge");
 const btnRefresh = $("btn-refresh");
 
+// "Hub", not "Connected": this badge reports the browser's socket to the hub and
+// nothing else. Green here while every panel sits empty is exactly what made the
+// 2026-08-10 failure read as a frontend bug.
 const router = createEventRouter(wsUrl, (connected) => {
-  wsStatus.textContent = connected ? "Connected" : "Disconnected";
+  wsStatus.textContent = connected ? "Hub connected" : "Hub disconnected";
   wsStatus.className = connected
     ? "px-2 py-1 text-xs rounded bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400"
     : "px-2 py-1 text-xs rounded bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400";
@@ -259,8 +273,14 @@ const loadGraphSnapshot = async (graph: string): Promise<void> => {
       metacontexts: snapshot.metacontexts,
     });
     btnRefresh.classList.remove("ring-2", "ring-amber-500");
+    unreachable.delete(selectedSession);
   } catch (err) {
     console.error("Failed to load snapshot:", err);
+    // Empty panels with no explanation is the failure this issue is about, so a
+    // session that cannot produce a snapshot is labelled like one that cannot
+    // list its graphs.
+    unreachable.add(selectedSession);
+    populateSessionSelector();
   }
 };
 
@@ -273,20 +293,17 @@ const switchViewedGraph = async (graph: string): Promise<void> => {
 
 // --- Selectors ---
 
-const populateGraphSelector = (graphs: string[], activeGraph: string): void => {
+const renderGraphList = (state: GraphListState): void => {
   graphSelector.innerHTML = "";
-  for (const g of graphs) {
+  for (const { value, label } of graphSelectorOptions(state)) {
     const opt = document.createElement("option");
-    opt.value = g;
-    opt.textContent = g;
+    opt.value = value;
+    opt.textContent = label;
     graphSelector.appendChild(opt);
   }
-  graphSelector.value = activeGraph;
-};
-
-const sessionLabel = (s: SessionInfo): string => {
-  const base = `${s.backend}:${s.active_graph} (pid ${s.pid})`;
-  return s.connected ? base : `${base} — disconnected`;
+  graphSelector.value = state.kind === "ready" ? state.active : "";
+  graphSelector.title = graphSelectorTitle(state);
+  graphSelector.disabled = state.kind !== "ready";
 };
 
 const populateSessionSelector = (): void => {
@@ -301,36 +318,31 @@ const populateSessionSelector = (): void => {
   for (const s of sessions) {
     const opt = document.createElement("option");
     opt.value = s.session_id;
-    opt.textContent = sessionLabel(s);
+    opt.textContent = sessionLabel(s, unreachable.has(s.session_id));
+    // A disconnected session has nothing to say. An unreachable one stays
+    // selectable: it may recover, and picking it is how its reason is shown.
     opt.disabled = !s.connected;
     if (!s.connected) opt.className = "text-gray-400 dark:text-gray-600";
+    else if (unreachable.has(s.session_id)) {
+      opt.className = "text-amber-700 dark:text-amber-500";
+    }
     sessionSelector.appendChild(opt);
   }
   if (selectedSession) sessionSelector.value = selectedSession;
 };
 
-const pickDefaultSession = (): string | null => {
-  const connected = sessions.filter((s) => s.connected);
-  const pool = connected.length > 0 ? connected : sessions;
-  if (pool.length === 0) return null;
-  // Most recently active first.
-  const sorted = [...pool].sort((a, b) => {
-    const ta = a.last_event_at ? Date.parse(a.last_event_at) : 0;
-    const tb = b.last_event_at ? Date.parse(b.last_event_at) : 0;
-    return tb - ta;
-  });
-  return sorted[0].session_id;
-};
-
 // --- Session selection ---
 
-const selectSession = async (sessionId: string): Promise<void> => {
+/** Show a session, reporting `false` if it could not answer. */
+const selectSession = async (sessionId: string): Promise<boolean> => {
   // A different session has its own pipelines — start its strip fresh.
   if (sessionId !== selectedSession) pipelineStrip.clearAll();
   selectedSession = sessionId;
   sessionSelector.value = sessionId;
+  renderGraphList({ kind: "loading" });
   try {
     const { graphs, active_graph, backend, reflect } = await fetchGraphs(sessionId);
+    unreachable.delete(sessionId);
     mcpActiveGraph = active_graph;
     mcpBackend = backend;
     updateMcpLabel();
@@ -338,10 +350,40 @@ const selectSession = async (sessionId: string): Promise<void> => {
     // from here.
     reflectState = seedReflectState(reflect);
     renderReflectBadge();
-    populateGraphSelector(graphs, active_graph);
+    renderGraphList({ kind: "ready", graphs, active: active_graph });
     await switchViewedGraph(active_graph);
+    return true;
   } catch (err) {
+    // Say so on screen. The console is where this used to stop, which is why a
+    // dead backend was indistinguishable from a slow one for an hour.
     console.error("Failed to select session:", err);
+    unreachable.add(sessionId);
+    viewedGraph = "";
+    mcpActiveGraph = "";
+    mcpBackend = "";
+    updateMcpLabel();
+    reflectState = unknownReflectState();
+    renderReflectBadge();
+    renderGraphList({ kind: "unavailable", reason: hubErrorText(err) });
+    populateSessionSelector();
+    return false;
+  }
+};
+
+/**
+ * Select the best session that will actually answer.
+ *
+ * Each failure demotes its session, so the next round picks a different one;
+ * `tried` guarantees termination when every session is equally broken, and the
+ * last attempt stays selected so its reason is on screen.
+ */
+const selectFirstWorkingSession = async (): Promise<void> => {
+  const tried = new Set<string>();
+  for (;;) {
+    const next = pickDefaultSession(sessions, unreachable);
+    if (next === null || tried.has(next)) return;
+    tried.add(next);
+    if (await selectSession(next)) return;
   }
 };
 
@@ -360,9 +402,8 @@ const refreshSessions = async (): Promise<void> => {
   }
   // Keep the current selection if it still exists; otherwise pick a default.
   if (!selectedSession || !sessions.some((s) => s.session_id === selectedSession)) {
-    const next = pickDefaultSession();
     populateSessionSelector();
-    if (next) await selectSession(next);
+    await selectFirstWorkingSession();
   } else {
     populateSessionSelector();
     // Reload the selected session's snapshot in case we missed events while away.
@@ -393,6 +434,9 @@ router.onGapDetected(() => {
 router.onSystemMessage((msg: SystemMessage) => {
   if (msg.type === "session_connected") {
     upsertSession(msg.session);
+    // A re-register is a fresh process, or one that reconnected its storage —
+    // either way, whatever we learned about it failing no longer applies.
+    unreachable.delete(msg.session.session_id);
     if (!selectedSession) {
       populateSessionSelector();
       selectSession(msg.session.session_id);
@@ -405,11 +449,11 @@ router.onSystemMessage((msg: SystemMessage) => {
     populateSessionSelector();
   } else if (msg.type === "session_dropped") {
     sessions = sessions.filter((x) => x.session_id !== msg.session_id);
+    unreachable.delete(msg.session_id);
     if (selectedSession === msg.session_id) {
       selectedSession = null;
-      const next = pickDefaultSession();
       populateSessionSelector();
-      if (next) selectSession(next);
+      selectFirstWorkingSession();
     } else {
       populateSessionSelector();
     }
@@ -435,7 +479,7 @@ router.subscribe("graph_switched", (event: AnyEvent) => {
   if (!selectedSession) return;
   fetchGraphs(selectedSession)
     .then(({ graphs, reflect }) => {
-      populateGraphSelector(graphs, viewedGraph);
+      renderGraphList({ kind: "ready", graphs, active: viewedGraph });
       // The counter belongs to the graph, so a switch changes it — re-seed
       // rather than leaving the old graph's number on screen.
       reflectState = seedReflectState(reflect);

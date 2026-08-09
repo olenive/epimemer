@@ -73,6 +73,24 @@ describe("fetchGraphs", () => {
 
     await expect(fetchGraphs("session-a")).rejects.toThrow("404");
   });
+
+  it("carries the hub's reason rather than the status code", async () => {
+    // A 502 means the session answered badly or not at all, and the hub puts
+    // why in the body. That string is the whole diagnosis — "502" is a shrug.
+    respondWith(
+      { error: "sent 1011 (internal error) keepalive ping timeout" },
+      false,
+      502,
+    );
+
+    await expect(fetchGraphs("session-a")).rejects.toThrow("keepalive ping timeout");
+  });
+
+  it("falls back to the status when the body carries no reason", async () => {
+    respondWith("not json at all", false, 502);
+
+    await expect(fetchGraphs("session-a")).rejects.toThrow("502");
+  });
 });
 
 describe("fetchSnapshot", () => {

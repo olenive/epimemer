@@ -32,15 +32,31 @@ export interface SnapshotResponse {
   metacontexts?: MetacontextView[];
 }
 
+/**
+ * Fail with the hub's reason rather than the status code.
+ *
+ * A 502 here means the session answered badly, or not at all, and the hub puts
+ * *why* in the body — `{"error": "sent 1011 (internal error) keepalive ping
+ * timeout"}` is the difference between a diagnosis and a shrug. Discarding it
+ * left the status bar with nothing to say.
+ */
+const failure = async (resp: Response, what: string): Promise<Error> => {
+  const detail = await resp
+    .json()
+    .then((body) => (typeof body?.error === "string" ? body.error : ""))
+    .catch(() => "");
+  return new Error(`${what}: ${detail || resp.status}`);
+};
+
 export const fetchSessions = async (): Promise<SessionInfo[]> => {
   const resp = await fetch("/api/sessions");
-  if (!resp.ok) throw new Error(`Failed to fetch sessions: ${resp.status}`);
+  if (!resp.ok) throw await failure(resp, "Failed to fetch sessions");
   return resp.json();
 };
 
 export const fetchGraphs = async (session: string): Promise<GraphListResponse> => {
   const resp = await fetch(`/api/graphs?session=${encodeURIComponent(session)}`);
-  if (!resp.ok) throw new Error(`Failed to fetch graphs: ${resp.status}`);
+  if (!resp.ok) throw await failure(resp, "Failed to fetch graphs");
   return resp.json();
 };
 
@@ -51,6 +67,6 @@ export const fetchSnapshot = async (
   const resp = await fetch(
     `/api/snapshot?session=${encodeURIComponent(session)}&graph=${encodeURIComponent(graph)}`,
   );
-  if (!resp.ok) throw new Error(`Failed to fetch snapshot for '${graph}': ${resp.status}`);
+  if (!resp.ok) throw await failure(resp, `Failed to fetch snapshot for '${graph}'`);
   return resp.json();
 };

@@ -324,5 +324,9 @@ parameterizes `storage` over `InMemoryStorage` and `SurrealDBStorage("mem://")`.
    - Core storage operations (documents, segments, nodes, edges, embeddings, timelines, metacontexts)
    - Multi-graph interface: `current_database`, `list_databases()`, `switch_database()`, `delete_database()` — both existing backends support multiple named graphs (default `"default"`); see `InMemoryStorage` for the in-process pattern
    - Apply `normalize_for_storage` on write so `None`-valued dict keys round-trip identically across backends
+   - If the backend talks over a socket, it owns reconnection. An MCP server
+     outlives the databases it talks to, so a dropped connection has to be
+     rebuilt rather than raised forever — see `_reconnect` in
+     `surrealdb_adapter.py`, and the constraints in its comment
 2. Add tests in `tests/storage/test_your_backend.py`, and add the backend to the parity fixtures in `tests/conftest.py`
 3. Add a factory branch in `epimemer/mcp/config.py`

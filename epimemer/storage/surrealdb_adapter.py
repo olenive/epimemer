@@ -7,10 +7,13 @@ Note: We use 'uid' as our application-level ID field to avoid conflicts
 with SurrealDB's built-in 'id' field (which uses RecordID type).
 """
 
+import asyncio
+import contextlib
 from datetime import datetime
-from typing import Sequence
+from typing import Any, Awaitable, Callable, Sequence
 
 from surrealdb import AsyncSurreal
+from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from epimemer.core.types import (
     NON_KNOWLEDGE_EDGE_TYPES,
@@ -30,6 +33,19 @@ from epimemer.core.types import (
     migration_excluded,
 )
 from epimemer.storage.protocol import drop_none_values, validate_graph_name
+
+
+# Schemes the SDK maps to `AsyncEmbeddedSurrealConnection`, which is not a
+# connection to anything: the engine, and therefore the whole graph, lives inside
+# the object. Rebuilding one hands back an empty database dressed up as a
+# recovery, so the reconnect path must never touch them. (Such a connection also
+# has no socket to lose, so this guard is belt-and-braces — but the failure it
+# prevents is silent data loss.)
+_EMBEDDED_SCHEMES = ("mem://", "memory", "file://", "surrealkv://")
+
+
+def _is_embedded(url: str) -> bool:
+    return url.startswith(_EMBEDDED_SCHEMES)
 
 
 _NODE_TYPE_TO_TABLE = {
@@ -77,14 +93,14 @@ _OVERFETCH_FACTORS = (3, 10)
 
 
 async def _ranked_items(
-    db, query_vector: list[float], model_id: str, limit: int
+    query, query_vector: list[float], model_id: str, limit: int
 ) -> list[tuple[str, float]]:
     """Top `limit` embeddings by cosine similarity, with no status filter.
 
     Cheap and linear: one pass over the embeddings for a model. Everything
     expensive about this query historically came from the filter, not the scan.
     """
-    rows = await db.query(
+    rows = await query(
         """
         SELECT
             item_id,
@@ -100,7 +116,7 @@ async def _ranked_items(
 
 
 async def _active_ids(
-    db, node_type: NodeType | None, *, among: list[str] | None = None
+    query, node_type: NodeType | None, *, among: list[str] | None = None
 ) -> list[str]:
     """Uids of active nodes — all of them, or only those in `among`.
 
@@ -111,12 +127,12 @@ async def _active_ids(
     tables = _node_tables(node_type)
     if among is None:
         return list(
-            await db.query(f"SELECT VALUE uid FROM {tables} WHERE status = 'active'")
+            await query(f"SELECT VALUE uid FROM {tables} WHERE status = 'active'")
         )
     if not among:
         return []
     return list(
-        await db.query(
+        await query(
             f"SELECT VALUE uid FROM {tables} WHERE status = 'active' AND uid IN $ids",
             {"ids": among},
         )
@@ -124,7 +140,7 @@ async def _active_ids(
 
 
 async def _ranked_active_items(
-    db,
+    query,
     query_vector: list[float],
     model_id: str,
     k: int,
@@ -147,10 +163,10 @@ async def _ranked_active_items(
     driver returns the *first* statement's result, so the select's rows would be
     thrown away and `LET`'s `None` returned in their place.)
     """
-    active = await _active_ids(db, node_type)
+    active = await _active_ids(query, node_type)
     if not active:
         return []
-    rows = await db.query(
+    rows = await query(
         """
         SELECT
             item_id,
@@ -290,14 +306,75 @@ class SurrealDBStorage:
         self._namespace = namespace
         self._database = database
         self._db: AsyncSurreal | None = None
+        # The database actually selected on the wire. Equal to `_database` except
+        # inside a viz read, which points the connection at another graph and
+        # restores it in a `finally` — a reconnect in that window has to come
+        # back pointed where the caller believes it is.
+        self._selected = database
+        self._reconnect_lock = asyncio.Lock()
 
     async def connect(self) -> None:
         self._db = AsyncSurreal(self._url)
         await self._db.connect(self._url)
-        if not self._url.startswith("mem://"):
+        if not _is_embedded(self._url):
             await self._db.signin({"username": self._user, "password": self._password})
-        await self._db.use(self._namespace, self._database)
+        await self._db.use(self._namespace, self._selected)
         await self._setup_schema()
+
+    # --- Surviving a dropped connection ---
+    #
+    # The SDK does not reconnect, and worse, does not admit to being
+    # disconnected: `AsyncWsSurrealConnection.connect()` returns early whenever
+    # `self.socket` is truthy, and nothing clears `socket` when the connection
+    # drops — the receive task swallows the `ConnectionClosed` and exits. So a
+    # server restart, a network blip or a laptop sleep leaves an object that
+    # looks connected while every send raises, for the life of the process.
+    #
+    # Retrying the operation is safe *here*, which is a property of this schema
+    # rather than a general truth: every write is an `UPSERT ... WHERE uid` or an
+    # `INSERT INTO` under a UNIQUE `uid` index (silently ignored on collision),
+    # and multi-statement writes are transactional, so a connection lost in
+    # flight aborts them server-side. A retry is a no-op or an idempotent repeat.
+    #
+    # Not covered: the operation already in flight when the socket died. The SDK
+    # cancels its pending futures, so that caller sees `CancelledError`, and
+    # telling that apart from a real cancellation is not worth the ambiguity.
+    # That one call fails; the next one reconnects.
+
+    async def _reconnect(self, stale: AsyncSurreal) -> None:
+        """Rebuild a connection whose socket has gone.
+
+        Serialized, because everything in flight fails together and each caller
+        lands here: whoever takes the lock first rebuilds, and the rest find
+        `_db` already replaced and go straight to their retry.
+        """
+        async with self._reconnect_lock:
+            if self._db is not stale:
+                return
+            self._db = None
+            with contextlib.suppress(Exception):
+                await stale.close()
+            await self.connect()
+
+    async def _call(self, operation: Callable[[AsyncSurreal], Awaitable[Any]]) -> Any:
+        conn = self.db
+        try:
+            return await operation(conn)
+        except (ConnectionClosed, WebSocketException):
+            if _is_embedded(self._url):
+                raise
+            await self._reconnect(conn)
+            return await operation(self.db)
+
+    async def _query(self, query: str, params: dict | None = None) -> Any:
+        return await self._call(lambda conn: conn.query(query, params))
+
+    async def _query_raw(self, query: str, params: dict | None = None) -> Any:
+        return await self._call(lambda conn: conn.query_raw(query, params))
+
+    async def _use(self, database: str) -> None:
+        await self._call(lambda conn: conn.use(self._namespace, database))
+        self._selected = database
 
     @property
     def backend_name(self) -> str:
@@ -313,7 +390,7 @@ class SurrealDBStorage:
 
     async def list_databases(self) -> list[str]:
         """List all databases in the current namespace."""
-        result = await self.db.query("INFO FOR NS;")
+        result = await self._query("INFO FOR NS;")
         # SurrealDB returns a dict with "databases" key
         databases = result.get("databases", {}) if isinstance(result, dict) else {}
         return sorted(databases.keys())
@@ -321,7 +398,7 @@ class SurrealDBStorage:
     async def switch_database(self, database: str) -> None:
         """Switch to a different database and set up its schema."""
         validate_graph_name(database)
-        await self.db.use(self._namespace, database)
+        await self._use(database)
         self._database = database
         await self._setup_schema()
 
@@ -334,7 +411,7 @@ class SurrealDBStorage:
         inside the backticks.
         """
         validate_graph_name(database)
-        await self.db.query(f"REMOVE DATABASE IF EXISTS `{database}`;")
+        await self._query(f"REMOVE DATABASE IF EXISTS `{database}`;")
 
     # --- Viz reads (cross-graph, no switching of active state) ---
 
@@ -351,32 +428,32 @@ class SurrealDBStorage:
         viz server should serialize snapshot reads or use a separate connection
         for production deployments.
         """
-        original_db = self._database
+        original_db = self._selected
         try:
-            await self.db.use(self._namespace, database)
+            await self._use(database)
             results = []
             for table in ("topic", "fact", "inference"):
-                rows = await self.db.query(
+                rows = await self._query(
                     f"SELECT * FROM {table} WHERE status = $status",
                     {"status": historical_status.value},
                 )
                 results.extend(_record_to_node(table, r) for r in rows)
             return results
         finally:
-            await self.db.use(self._namespace, original_db)
+            await self._use(original_db)
 
     async def viz_list_edges(
         self,
         database: str,
     ) -> Sequence[NodeEdge]:
         """List all edges in a graph for visualization snapshot."""
-        original_db = self._database
+        original_db = self._selected
         try:
-            await self.db.use(self._namespace, database)
-            rows = await self.db.query("SELECT * FROM node_edge")
+            await self._use(database)
+            rows = await self._query("SELECT * FROM node_edge")
             return [NodeEdge.model_validate(_clean_record(r)) for r in rows]
         finally:
-            await self.db.use(self._namespace, original_db)
+            await self._use(original_db)
 
     async def viz_list_timelines(
         self,
@@ -387,55 +464,65 @@ class SurrealDBStorage:
         Timepoints come back embedded, as they are stored — a timeline is one
         record, not a parent with child rows.
         """
-        original_db = self._database
+        original_db = self._selected
         try:
-            await self.db.use(self._namespace, database)
-            rows = await self.db.query("SELECT * FROM timeline")
+            await self._use(database)
+            rows = await self._query("SELECT * FROM timeline")
             return [Timeline.model_validate(_clean_record(r)) for r in rows]
         finally:
-            await self.db.use(self._namespace, original_db)
+            await self._use(original_db)
 
     async def viz_list_metacontexts(
         self,
         database: str,
     ) -> Sequence[Metacontext]:
         """List all active metacontexts in a graph for visualization."""
-        original_db = self._database
+        original_db = self._selected
         try:
-            await self.db.use(self._namespace, database)
-            rows = await self.db.query(
+            await self._use(database)
+            rows = await self._query(
                 "SELECT * FROM metacontext WHERE status = $status",
                 {"status": NodeStatus.ACTIVE.value},
             )
             return [Metacontext.model_validate(_clean_record(r)) for r in rows]
         finally:
-            await self.db.use(self._namespace, original_db)
+            await self._use(original_db)
 
     async def close(self) -> None:
         if self._db is not None:
             await self._db.close()
             self._db = None
+        # A viz read that died before its `finally` could leave the selection
+        # pointed elsewhere; a later `connect()` must not inherit that.
+        self._selected = self._database
 
     async def _setup_schema(self) -> None:
-        """Define tables and indexes. Idempotent."""
-        await self.db.query("""
+        """Define tables and indexes. Idempotent.
+
+        Issued straight at the connection rather than through `_query`, which is
+        deliberate: this runs *inside* `connect()`, so a retry here would re-enter
+        `connect()` while `_reconnect` still holds its lock. A schema that cannot
+        be set up is a failed connection, and the caller should hear about it.
+        """
+        query = self.db.query
+        await query("""
             DEFINE TABLE IF NOT EXISTS document SCHEMALESS;
             DEFINE INDEX IF NOT EXISTS idx_document_uid ON document FIELDS uid UNIQUE;
         """)
-        await self.db.query("""
+        await query("""
             DEFINE TABLE IF NOT EXISTS segment SCHEMALESS;
             DEFINE INDEX IF NOT EXISTS idx_segment_uid ON segment FIELDS uid UNIQUE;
             DEFINE INDEX IF NOT EXISTS idx_segment_source ON segment FIELDS source_id;
         """)
 
         for table in ("topic", "fact", "inference"):
-            await self.db.query(f"""
+            await query(f"""
                 DEFINE TABLE IF NOT EXISTS {table} SCHEMALESS;
                 DEFINE INDEX IF NOT EXISTS idx_{table}_uid ON {table} FIELDS uid UNIQUE;
                 DEFINE INDEX IF NOT EXISTS idx_{table}_status ON {table} FIELDS status;
             """)
 
-        await self.db.query("""
+        await query("""
             DEFINE TABLE IF NOT EXISTS node_edge SCHEMALESS;
             DEFINE INDEX IF NOT EXISTS idx_edge_uid ON node_edge FIELDS uid UNIQUE;
             DEFINE INDEX IF NOT EXISTS idx_edge_src ON node_edge FIELDS src_id;
@@ -444,19 +531,19 @@ class SurrealDBStorage:
             DEFINE INDEX IF NOT EXISTS idx_edge_dst_type ON node_edge FIELDS dst_id, type;
         """)
 
-        await self.db.query("""
+        await query("""
             DEFINE TABLE IF NOT EXISTS embedding SCHEMALESS;
             DEFINE INDEX IF NOT EXISTS idx_emb_uid ON embedding FIELDS uid UNIQUE;
             DEFINE INDEX IF NOT EXISTS idx_emb_item ON embedding FIELDS item_id;
             DEFINE INDEX IF NOT EXISTS idx_emb_model ON embedding FIELDS model_id;
         """)
 
-        await self.db.query("""
+        await query("""
             DEFINE TABLE IF NOT EXISTS timeline SCHEMALESS;
             DEFINE INDEX IF NOT EXISTS idx_timeline_uid ON timeline FIELDS uid UNIQUE;
         """)
 
-        await self.db.query("""
+        await query("""
             DEFINE TABLE IF NOT EXISTS metacontext SCHEMALESS;
             DEFINE INDEX IF NOT EXISTS idx_mc_uid ON metacontext FIELDS uid UNIQUE;
             DEFINE INDEX IF NOT EXISTS idx_mc_status ON metacontext FIELDS status;
@@ -464,7 +551,7 @@ class SurrealDBStorage:
 
         # Per-graph bookkeeping (reflection counter). Addressed by fixed record
         # id, so it needs no uid index.
-        await self.db.query("""
+        await query("""
             DEFINE TABLE IF NOT EXISTS graph_state SCHEMALESS;
         """)
 
@@ -478,11 +565,11 @@ class SurrealDBStorage:
 
     async def store_document(self, doc: RawDocument) -> str:
         data = _serialize(doc)
-        await self.db.query(_upsert("document"), {"data": data, "uid": doc.id})
+        await self._query(_upsert("document"), {"data": data, "uid": doc.id})
         return doc.id
 
     async def get_document(self, doc_id: str) -> RawDocument | None:
-        rows = await self.db.query(
+        rows = await self._query(
             "SELECT * FROM document WHERE uid = $uid LIMIT 1",
             {"uid": doc_id},
         )
@@ -491,7 +578,7 @@ class SurrealDBStorage:
         return RawDocument.model_validate(_clean_record(rows[0]))
 
     async def get_document_by_source(self, source: str) -> RawDocument | None:
-        rows = await self.db.query(
+        rows = await self._query(
             "SELECT * FROM document WHERE source = $source LIMIT 1",
             {"source": source},
         )
@@ -503,11 +590,11 @@ class SurrealDBStorage:
 
     async def store_segment(self, segment: Segment) -> str:
         data = _serialize(segment)
-        await self.db.query(_upsert("segment"), {"data": data, "uid": segment.id})
+        await self._query(_upsert("segment"), {"data": data, "uid": segment.id})
         return segment.id
 
     async def get_segments_for_document(self, doc_id: str) -> Sequence[Segment]:
-        rows = await self.db.query(
+        rows = await self._query(
             "SELECT * FROM segment WHERE source_id = $source_id ORDER BY span_start",
             {"source_id": doc_id},
         )
@@ -518,12 +605,12 @@ class SurrealDBStorage:
     async def store_node(self, node: EpistemicNode) -> str:
         table = _node_to_table(node)
         data = _serialize(node)
-        await self.db.query(_upsert(table), {"data": data, "uid": node.id})
+        await self._query(_upsert(table), {"data": data, "uid": node.id})
         return node.id
 
     async def get_node(self, node_id: str) -> EpistemicNode | None:
         for table in ("topic", "fact", "inference"):
-            rows = await self.db.query(
+            rows = await self._query(
                 f"SELECT * FROM {table} WHERE uid = $uid LIMIT 1",
                 {"uid": node_id},
             )
@@ -543,12 +630,12 @@ class SurrealDBStorage:
 
         for table in tables:
             if at_time is None:
-                rows = await self.db.query(
+                rows = await self._query(
                     f"SELECT * FROM {table} WHERE status = $status",
                     {"status": status.value},
                 )
             else:
-                rows = await self.db.query(
+                rows = await self._query(
                     f"SELECT * FROM {table} WHERE created_at <= $at_time "
                     f"AND (superseded_at IS NONE OR superseded_at > $at_time)",
                     {"at_time": at_time.isoformat()},
@@ -567,7 +654,7 @@ class SurrealDBStorage:
         """First active node with exactly this content (for exact-name upsert)."""
         tables = [_NODE_TYPE_TO_TABLE[node_type]] if node_type else ["topic", "fact", "inference"]
         for table in tables:
-            rows = await self.db.query(
+            rows = await self._query(
                 f"SELECT * FROM {table} WHERE content = $content AND status = $status LIMIT 1",
                 {"content": content, "status": status.value},
             )
@@ -590,7 +677,7 @@ class SurrealDBStorage:
         # alike) within the window. Timestamps are uniform UTC ISO-8601 strings,
         # so the string comparison is chronologically correct.
         for table in tables:
-            rows = await self.db.query(
+            rows = await self._query(
                 f"SELECT * FROM {table} WHERE "
                 f"(created_at >= $start AND created_at < $end) "
                 f"OR (superseded_at != NONE AND superseded_at >= $start "
@@ -608,7 +695,7 @@ class SurrealDBStorage:
         superseded_at: datetime | None = None,
     ) -> None:
         for table in ("topic", "fact", "inference"):
-            rows = await self.db.query(
+            rows = await self._query(
                 f"UPDATE {table} SET status = $status, superseded_at = $superseded_at WHERE uid = $uid",
                 {
                     "uid": node_id,
@@ -622,7 +709,7 @@ class SurrealDBStorage:
 
     async def relabel_edges(self, old_label: str, new_label: str) -> int:
         """Rewrite the label on user-tier edges (in place; edges are not versioned)."""
-        rows = await self.db.query(
+        rows = await self._query(
             "UPDATE node_edge SET label = $new WHERE type = $related AND label = $old "
             "RETURN BEFORE",
             {"new": new_label, "old": old_label, "related": EdgeType.RELATED.value},
@@ -630,7 +717,7 @@ class SurrealDBStorage:
         return len(rows)
 
     async def get_relation_kind(self, label: str) -> str | None:
-        rows = await self.db.query(
+        rows = await self._query(
             "SELECT kind FROM node_edge WHERE type = $related AND label = $label LIMIT 1",
             {"related": EdgeType.RELATED.value, "label": label},
         )
@@ -643,7 +730,7 @@ class SurrealDBStorage:
     ) -> dict[NodeType, int]:
         counts = {nt: 0 for nt in NodeType}
         for node_type, table in _NODE_TYPE_TO_TABLE.items():
-            rows = await self.db.query(
+            rows = await self._query(
                 f"SELECT count() AS c FROM {table} WHERE status = $status GROUP ALL",
                 {"status": status.value},
             )
@@ -655,11 +742,11 @@ class SurrealDBStorage:
     async def store_edge(self, edge: NodeEdge) -> str:
         data = _serialize(edge)
         data["type"] = edge.type.value
-        await self.db.query(_upsert("node_edge"), {"data": data, "uid": edge.id})
+        await self._query(_upsert("node_edge"), {"data": data, "uid": edge.id})
         return edge.id
 
     async def delete_edge(self, edge_id: str) -> None:
-        await self.db.query(
+        await self._query(
             "DELETE node_edge WHERE uid = $uid",
             {"uid": edge_id},
         )
@@ -668,12 +755,12 @@ class SurrealDBStorage:
         self, node_id: str, *, edge_type: EdgeType | None = None
     ) -> Sequence[NodeEdge]:
         if edge_type is None:
-            rows = await self.db.query(
+            rows = await self._query(
                 "SELECT * FROM node_edge WHERE src_id = $src_id",
                 {"src_id": node_id},
             )
         else:
-            rows = await self.db.query(
+            rows = await self._query(
                 "SELECT * FROM node_edge WHERE src_id = $src_id AND type = $type",
                 {"src_id": node_id, "type": edge_type.value},
             )
@@ -683,12 +770,12 @@ class SurrealDBStorage:
         self, node_id: str, *, edge_type: EdgeType | None = None
     ) -> Sequence[NodeEdge]:
         if edge_type is None:
-            rows = await self.db.query(
+            rows = await self._query(
                 "SELECT * FROM node_edge WHERE dst_id = $dst_id",
                 {"dst_id": node_id},
             )
         else:
-            rows = await self.db.query(
+            rows = await self._query(
                 "SELECT * FROM node_edge WHERE dst_id = $dst_id AND type = $type",
                 {"dst_id": node_id, "type": edge_type.value},
             )
@@ -696,7 +783,7 @@ class SurrealDBStorage:
 
     async def count_edges_by_type(self) -> dict[EdgeType, int]:
         counts = {et: 0 for et in EdgeType}
-        rows = await self.db.query(
+        rows = await self._query(
             "SELECT type, count() AS c FROM node_edge GROUP BY type"
         )
         for row in rows or []:
@@ -719,7 +806,7 @@ class SurrealDBStorage:
         parse errors and reports runtime errors per statement, so we check both.
         """
         sql = "BEGIN TRANSACTION;\n" + ";\n".join(statements) + ";\nCOMMIT TRANSACTION;"
-        resp = await self.db.query_raw(sql, params)
+        resp = await self._query_raw(sql, params)
 
         if isinstance(resp, dict) and resp.get("error") is not None:
             raise RuntimeError(f"Transaction failed: {resp['error']}")
@@ -971,19 +1058,19 @@ class SurrealDBStorage:
 
     async def store_embedding(self, embedding: EmbeddingRecord) -> str:
         data = _serialize(embedding)
-        await self.db.query(_upsert("embedding"), {"data": data, "uid": embedding.id})
+        await self._query(_upsert("embedding"), {"data": data, "uid": embedding.id})
         return embedding.id
 
     async def get_embeddings_for_item(
         self, item_id: str, model_id: str | None = None
     ) -> Sequence[EmbeddingRecord]:
         if model_id is None:
-            rows = await self.db.query(
+            rows = await self._query(
                 "SELECT * FROM embedding WHERE item_id = $item_id",
                 {"item_id": item_id},
             )
         else:
-            rows = await self.db.query(
+            rows = await self._query(
                 "SELECT * FROM embedding WHERE item_id = $item_id AND model_id = $model_id",
                 {"item_id": item_id, "model_id": model_id},
             )
@@ -1020,10 +1107,10 @@ class SurrealDBStorage:
         """
         for factor in _OVERFETCH_FACTORS:
             limit = k * factor
-            candidates = await _ranked_items(self.db, query_vector, model_id, limit)
+            candidates = await _ranked_items(self._query, query_vector, model_id, limit)
             keep = set(
                 await _active_ids(
-                    self.db, node_type, among=[item_id for item_id, _ in candidates]
+                    self._query, node_type, among=[item_id for item_id, _ in candidates]
                 )
             )
             active = [(i, score) for i, score in candidates if i in keep]
@@ -1032,18 +1119,18 @@ class SurrealDBStorage:
             if len(active) >= k or len(candidates) < limit:
                 return active[:k]
         return await _ranked_active_items(
-            self.db, query_vector, model_id, k, node_type
+            self._query, query_vector, model_id, k, node_type
         )
 
     # --- Timelines ---
 
     async def store_timeline(self, timeline: Timeline) -> str:
         data = _serialize(timeline)
-        await self.db.query(_upsert("timeline"), {"data": data, "uid": timeline.id})
+        await self._query(_upsert("timeline"), {"data": data, "uid": timeline.id})
         return timeline.id
 
     async def get_timeline(self, timeline_id: str) -> Timeline | None:
-        rows = await self.db.query(
+        rows = await self._query(
             "SELECT * FROM timeline WHERE uid = $uid LIMIT 1",
             {"uid": timeline_id},
         )
@@ -1052,18 +1139,18 @@ class SurrealDBStorage:
         return Timeline.model_validate(_clean_record(rows[0]))
 
     async def query_timelines(self) -> Sequence[Timeline]:
-        rows = await self.db.query("SELECT * FROM timeline")
+        rows = await self._query("SELECT * FROM timeline")
         return [Timeline.model_validate(_clean_record(r)) for r in rows]
 
     # --- Metacontexts ---
 
     async def store_metacontext(self, mc: Metacontext) -> str:
         data = _serialize(mc)
-        await self.db.query(_upsert("metacontext"), {"data": data, "uid": mc.id})
+        await self._query(_upsert("metacontext"), {"data": data, "uid": mc.id})
         return mc.id
 
     async def get_metacontext(self, mc_id: str) -> Metacontext | None:
-        rows = await self.db.query(
+        rows = await self._query(
             "SELECT * FROM metacontext WHERE uid = $uid LIMIT 1",
             {"uid": mc_id},
         )
@@ -1076,7 +1163,7 @@ class SurrealDBStorage:
         *,
         status: NodeStatus = NodeStatus.ACTIVE,
     ) -> Sequence[Metacontext]:
-        rows = await self.db.query(
+        rows = await self._query(
             "SELECT * FROM metacontext WHERE status = $status",
             {"status": status.value},
         )
@@ -1085,20 +1172,20 @@ class SurrealDBStorage:
     # --- Reflection bookkeeping ---
 
     async def get_reflect_counter(self) -> int:
-        rows = await self.db.query(_REFLECT_GET)
+        rows = await self._query(_REFLECT_GET)
         return _reflect_count(rows)
 
     async def bump_reflect_counter(self) -> int:
-        rows = await self.db.query(_REFLECT_BUMP)
+        rows = await self._query(_REFLECT_BUMP)
         return _reflect_count(rows)
 
     async def reset_reflect_counter(self) -> int:
-        rows = await self.db.query(_REFLECT_RESET)
+        rows = await self._query(_REFLECT_RESET)
         return _reflect_count(rows)
 
     async def get_reflect_threshold_override(self) -> int | None:
-        rows = await self.db.query(_THRESHOLD_GET)
+        rows = await self._query(_THRESHOLD_GET)
         return _threshold_override(rows)
 
     async def set_reflect_threshold_override(self, threshold: int | None) -> None:
-        await self.db.query(_THRESHOLD_SET, {"threshold": threshold})
+        await self._query(_THRESHOLD_SET, {"threshold": threshold})

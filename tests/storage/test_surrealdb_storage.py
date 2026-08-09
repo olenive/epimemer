@@ -3,10 +3,14 @@
 Uses mem:// (embedded) mode so no external SurrealDB instance is needed.
 """
 
+import asyncio
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
+from websockets.exceptions import ConnectionClosedError
 
+from epimemer.storage import surrealdb_adapter
 from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
@@ -709,3 +713,134 @@ class TestVectorSearchOverFetch:
         )
 
         assert [i for i, _ in results] == [topic.id]
+
+
+class TestReconnection:
+    """A websocket that dies underneath the adapter must not wedge it forever.
+
+    The SDK does not help here: `AsyncWsSurrealConnection.connect()` returns
+    early whenever `self.socket` is truthy, and nothing clears `socket` when the
+    connection drops — `_recv_task` swallows the `ConnectionClosed`, cancels the
+    pending futures and exits. The object therefore looks connected while every
+    send raises. Its own docstring calls a connection "to be used once and
+    discarded", so rebuilding one is this adapter's job.
+
+    These tests drive a stand-in connection rather than a server, because the
+    property under test is what happens *after* a drop, and a real drop is not
+    something the default suite can stage. `test_surrealdb_persistence.py` proves
+    the same behaviour against a real server being restarted.
+    """
+
+    def _factory(self, built: list):
+        """Stand in for `AsyncSurreal`, recording every connection handed out.
+
+        Each fake answers the calls `connect()` makes and returns empty result
+        sets. Setting `fake.fails = True` arms the drop: from then on the fake
+        raises exactly what the real SDK raises once its socket is gone.
+        """
+
+        def build(url: str):
+            fake = SimpleNamespace(
+                url=url, fails=False, closed=False, queries=[], used=[]
+            )
+
+            async def connect(target: str | None = None) -> None:
+                return None
+
+            async def signin(_credentials: dict) -> None:
+                return None
+
+            async def use(namespace: str, database: str) -> None:
+                if fake.fails:
+                    raise ConnectionClosedError(None, None)
+                fake.used.append(database)
+
+            async def query(sql: str, params: dict | None = None) -> list:
+                if fake.fails:
+                    raise ConnectionClosedError(None, None)
+                fake.queries.append(sql)
+                return []
+
+            async def close() -> None:
+                fake.closed = True
+
+            fake.connect = connect
+            fake.signin = signin
+            fake.use = use
+            fake.query = query
+            fake.close = close
+            built.append(fake)
+            return fake
+
+        return build
+
+    async def _connected(self, monkeypatch, built: list, url: str):
+        monkeypatch.setattr(
+            surrealdb_adapter, "AsyncSurreal", self._factory(built)
+        )
+        store = SurrealDBStorage(url=url, database="main")
+        await store.connect()
+        return store
+
+    async def test_a_dropped_connection_is_rebuilt_and_the_query_retried(
+        self, monkeypatch
+    ):
+        built: list = []
+        store = await self._connected(monkeypatch, built, "ws://127.0.0.1:8000/rpc")
+        assert len(built) == 1
+
+        built[0].fails = True  # the socket goes while the store sits idle
+
+        assert await store.get_node("anything") is None  # must not raise
+        assert len(built) == 2, "no replacement connection was built"
+        assert built[0].closed, "the dead connection was left open"
+
+    async def test_an_embedded_connection_is_never_rebuilt(self, monkeypatch):
+        """`mem://` holds the graph *inside* the connection object.
+
+        Rebuilding one would hand back an empty database dressed up as a
+        recovery, so the error has to propagate instead. A real embedded engine
+        cannot raise `ConnectionClosed` at all — this pins the guard that keeps
+        it that way.
+        """
+        built: list = []
+        store = await self._connected(monkeypatch, built, "mem://")
+        built[0].fails = True
+
+        with pytest.raises(ConnectionClosedError):
+            await store.get_node("anything")
+        assert len(built) == 1, "an embedded engine was silently replaced"
+
+    async def test_the_reconnect_restores_the_selected_database(self, monkeypatch):
+        """A viz read points the connection elsewhere and restores it after.
+
+        A reconnect inside that window must come back pointed where the caller
+        believes it is, not at the store's home database.
+        """
+        built: list = []
+        store = await self._connected(monkeypatch, built, "ws://127.0.0.1:8000/rpc")
+
+        async def drop_once(sql, params=None):
+            built[0].fails = True
+            raise ConnectionClosedError(None, None)
+
+        built[0].query = drop_once  # dies mid-read, once "other" is selected
+
+        assert await store.viz_list_nodes("other") == []
+
+        assert built[1].used[0] == "other", "reconnected pointed at the wrong database"
+        assert built[1].used[-1] == "main", "the read did not restore the home database"
+        assert store.current_database == "main"
+
+    async def test_concurrent_callers_share_one_reconnect(self, monkeypatch):
+        """Everything in flight fails together; only one rebuild should follow."""
+        built: list = []
+        store = await self._connected(monkeypatch, built, "ws://127.0.0.1:8000/rpc")
+        built[0].fails = True
+
+        results = await asyncio.gather(
+            *[store.get_node(f"n{i}") for i in range(5)]
+        )
+
+        assert results == [None] * 5
+        assert len(built) == 2, f"{len(built) - 1} connections built for one drop"
