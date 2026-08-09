@@ -3,7 +3,8 @@
 Living issue tracker. **Last review: 2026-08-07.**
 
 Everything found so far is resolved except **14** and **16**, both deferred by
-design, and **34** and **39**, which are scoped and actionable. Resolved entries
+design, and **39**, which is scoped and actionable. **34** is resolved but not
+yet merged, so its entry is still here. Resolved entries
 are **removed from this file** — their resolution lives in git history and the
 merged code. Issue numbers are stable IDs; the gaps (6–13, 15, 17–33, 35–38) are
 deleted-resolved items, not missing work. New findings continue from **40**.
@@ -26,7 +27,10 @@ survive in **`dev-docs/BENCHMARKS.md`**, which is written to be read on its own.
    for the reason described, then pass after the fix.
 2. Fix the bug. Keep the fix scoped to the issue.
 3. Run the whole suite: `uv run python -m pytest tests/ -q` (and
-   `make test-integration` when the change touches storage/concurrency).
+   `make test-integration` when the change touches storage/concurrency — add
+   `SURREAL_PORT=8123` if the target reports 8000 in use). Both opt-in suites
+   skip themselves when they cannot reach a server, and pytest calls that a
+   pass, so read the counts rather than the exit code.
 4. Update this file: mark the issue ✅ RESOLVED with the guarding test name(s);
    **once it is merged to `main`, delete the entry** — git history and the code
    are the durable record.
@@ -256,8 +260,36 @@ while the server is single-client stdio; keep this issue open as the reminder.
 
 ### Issue 34 — Extraction never proposes timepoints, so content-time is empty by default
 
-**Status.** Open. Scoped, not started. This is the only unbuilt part of
-`dev-docs/TIMELINE_VISUALISATION.md` (§7 there has the design).
+**Status.** ✅ RESOLVED. `dev-docs/TIMELINE_VISUALISATION.md` §7 records what was
+built, including two departures from the design sketched there.
+
+**Guarding tests.**
+- `tests/storage/test_storage_parity.py::TestWriteBatchTxTimelines` — a timeline
+  and its `TIMELINK` commit together; a failed batch leaves neither, and leaves
+  an *existing* timeline as it was.
+- `tests/storage/test_surrealdb_storage.py::TestAtomicOperations::test_write_batch_tx_rolls_back_a_timeline_upsert`
+  — the parity test cannot reach this: SurrealDB builds every statement before
+  running any, so a Python-injected failure aborts before the transaction opens.
+  This one collides inside it, after the upsert in statement order.
+- `tests/pipelines/test_temporal.py` — 50 tests over the detector, half of them
+  `TestWhatItRefusesToMatch`: the expensive error here is an invented date, not
+  a missed one.
+- `tests/mcp/test_tools.py::TestTimepointProposal` — concrete dates become dated
+  timepoints, vague ones stay undated, text with no temporal expression creates
+  no timeline, repeats collapse to one timepoint, a second document appends to
+  the same timeline.
+
+**Resolution.** `write_batch_tx` now takes `timelines`, upserting them (a
+timeline is one record holding a list of timepoints, so appending is a
+replacement — there is no insert-shaped way to say it). Ingestion detects
+temporal expressions in **node content** rather than segment text, because a
+mark needs a node to hang on, and proposes onto **one shared timeline per
+graph** rather than one per document, because the panel shows one timeline at a
+time. Both departures are argued in §7.2.
+
+---
+
+*Original report:*
 
 **Symptom.** The timeline panel's *content time* mode plots `Timeline` /
 `Timepoint` data, but nothing in ingestion creates a timeline: `TIMELINK` is
@@ -354,8 +386,8 @@ it lives in README → *Not yet built*.
 
 ## Recommended order
 
-**#34 and #39 are the actionable ones.** #14/#16 are deferred by design with
-stated triggers, and the earlier performance work is done: `reflect` went
+**#39 is the actionable one** now that #34 is built. #14/#16 are deferred by
+design with stated triggers, and the earlier performance work is done: `reflect` went
 cubic → quadratic, in-memory edge lookups are indexed, and SurrealDB's `search`
 went quadratic → flat. `dev-docs/BENCHMARKS.md` has the data; #14 above has the
 analysis.
@@ -364,8 +396,8 @@ What to pick up, and what has to be true first:
 
 | Order | Work | Trigger |
 |---|---|---|
-| 1 | 34 (timepoint extraction) | Ready now. Settle the `write_batch_tx` atomicity question first, in its own commit |
-| 2 | 39 (reflect's O(F²)) | Ready now, and the nearest thing to a live failure: `reflect` crosses the 30 s tool timeout at ~1,400 nodes on SurrealDB. Try vectorizing before anything cleverer |
+| ✅ | 34 (timepoint extraction) | Done. `write_batch_tx` carries timelines, as its own commit |
+| 1 | 39 (reflect's O(F²)) | Ready now, and the nearest thing to a live failure: `reflect` crosses the 30 s tool timeout at ~1,400 nodes on SurrealDB. Try vectorizing before anything cleverer |
 | watch | 14 (enrichment N+1) | The ~120 ms floor under every SurrealDB `search` is now per-result enrichment round-trips. Nothing fails because of it, so it stays deferred — but it is what a batched edge fetch would attack |
 | deferred | 16 | The server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`) |
 | deferred | 14 (rest) | Batched edge fetch + aggregate queries: a protocol change on both backends, and the `asyncio.gather` prong is blocked by #16 |

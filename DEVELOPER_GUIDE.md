@@ -31,6 +31,23 @@ uv run python -m pytest tests/mcp/test_tools.py::TestIngest -v
 uv run python -m pytest tests/pipelines/test_orchestration.py -v -s
 ```
 
+### Against a real SurrealDB (opt-in, needs Docker)
+
+The default suite is embedded and sequential. Two properties it cannot reach —
+cross-connection atomicity and surviving a restart — live in opt-in suites that
+skip themselves otherwise. Run both:
+
+```bash
+make test-integration
+
+# Port 8000 taken? The target says so, and names the process. Then:
+make test-integration SURREAL_PORT=8123
+```
+
+Run this when a change touches storage or concurrency. Either suite skipping is
+reported as a pass by pytest, so check the counts — `5 passed` and `1 passed`,
+not `5 skipped`.
+
 ## Debugging Individual Sections
 
 Each pipeline is independently testable. The key to debugging is understanding that every pipeline is a Petri net with typed places and transitions.

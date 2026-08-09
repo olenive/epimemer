@@ -5,7 +5,11 @@ connection/auth, and transaction atomicity under *genuine* concurrency (separate
 ws connections issuing transactions at the same time). They are SKIPPED unless a
 server is reachable — they are not a CI gate.
 
-To run, start a server and point the env var at it:
+Normally you want ``make test-integration``, which starts a server, waits for
+it, runs this module and the durability one, and tears the server down. Add
+``SURREAL_PORT=8123`` if it reports port 8000 in use.
+
+To drive it by hand, start a server and point the env var at it:
 
     # native:
     #   surreal start --user root --pass root memory
@@ -13,11 +17,14 @@ To run, start a server and point the env var at it:
     #   docker run --rm -p 8000:8000 surrealdb/surrealdb:latest \
     #     start --user root --pass root memory
 
-    EPIMEMER_SURREAL_WS_URL=ws://localhost:8000/rpc \
+    EPIMEMER_SURREAL_WS_URL=ws://127.0.0.1:8000/rpc \
         uv run pytest tests/storage/test_surrealdb_integration.py
 
 If ``EPIMEMER_SURREAL_WS_URL`` is unset or the server is unreachable, the whole
-module is skipped (no connection is attempted by default).
+module is skipped (no connection is attempted by default) — and pytest reports
+skips as success, so check for ``5 passed`` rather than trusting the exit code.
+A server that accepts connections without answering (another Docker/Colima
+profile holding the port, or a wedged container) reads as unreachable here.
 """
 
 import asyncio

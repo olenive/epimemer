@@ -15,6 +15,10 @@ bare ``pytest`` never spins up a container:
 
     EPIMEMER_SURREAL_PERSIST_TEST=1 \
         uv run pytest tests/storage/test_surrealdb_persistence.py
+
+``make test-integration`` runs it alongside the ws:// suite. This module picks a
+free port for its own container, so it is unaffected by anything already holding
+8000.
 """
 
 import asyncio

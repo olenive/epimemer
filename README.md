@@ -248,15 +248,34 @@ make test          # or: uv run python -m pytest tests/ -q
 Most storage and MCP tests run against **both** backends (a `conftest.py` fixture
 parameterizes over `InMemoryStorage` and `SurrealDBStorage("mem://")`).
 
-The embedded `mem://` backend cannot model two real connections, so there is a
-separate **opt-in** suite (`tests/storage/test_surrealdb_integration.py`) for
-real ws:// connection/auth and cross-connection transaction atomicity. It
-**skips itself** when `EPIMEMER_SURREAL_WS_URL` is unset — so a bare `pytest`
-never runs it and never signals that it exists. Run it via Docker:
+Two things `mem://` cannot model — two real connections, and surviving a
+restart — have their own **opt-in** suites:
+
+- `tests/storage/test_surrealdb_integration.py` — real ws:// connection/auth and
+  cross-connection transaction atomicity, against an already-running server.
+  Skips itself when `EPIMEMER_SURREAL_WS_URL` is unset.
+- `tests/storage/test_surrealdb_persistence.py` — rocksdb-backed data surviving a
+  full server restart. Controls its own throwaway container, so it skips unless
+  `EPIMEMER_SURREAL_PERSIST_TEST=1`.
+
+Neither runs — nor signals that it exists — under a bare `pytest`. One target
+runs both, spinning up SurrealDB, waiting for it, and tearing it down:
 
 ```bash
-make test-integration   # spins up SurrealDB, waits for it, runs the suite, tears it down
+make test-integration
 ```
+
+**If port 8000 is taken**, the target stops before starting anything and names
+the process holding it. Re-run on another port:
+
+```bash
+make test-integration SURREAL_PORT=8123
+```
+
+That check is worth its keep. A process that *accepts* connections on the port
+without answering — another Colima/Docker profile forwarding it, or a wedged
+container — leaves Docker's publish silently unreachable, and the symptom is a
+target that hangs before the first test rather than one that fails.
 
 The visualization frontend has its own suite (vitest) covering the
 event-reduction logic — pipeline run state, the WebSocket event router, the hub

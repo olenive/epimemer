@@ -343,28 +343,91 @@ resolved to real `now` at render rather than substituted on arrival — otherwis
 a long-lived browser session would pin the present to whenever the snapshot was
 assembled.
 
-## 7. Extraction proposing timepoints
+## 7. Extraction proposing timepoints (built 2026-08-09)
 
 Deliberately last. It is a backend change of a different character to the rest,
 and the panel must exist first to make its output inspectable.
 
-Sketch: during decomposition, detect temporal expressions in segment text and
-propose `Timepoint`s with a resolved `start`/`end` where the expression is
-concrete, or `label` only where it is not — "during the Renaissance" resolves to
-nothing and should stay vague rather than being guessed into 1500-01-01.
-Proposals attach to a per-document timeline, or to a named one when the agent
-supplies it.
+During decomposition, temporal expressions in node content become `Timepoint`s:
+a resolved `start`/`end` where the expression is concrete, `label` only where it
+is not — "during the Renaissance" resolves to nothing and stays vague rather
+than being guessed into 1500-01-01. Each proposing node gets a `TIMELINK` to the
+timepoint, which is what puts a mark on the axis.
 
-**Blocker to resolve first:** `write_batch_tx`
-(`epimemer/storage/protocol.py:355`) takes `nodes`, `edges`, and `embeddings`
-only. Ingestion is atomic today precisely because everything goes through it. If
-extraction writes timelines, either they join that batch or a mid-document
-failure can leave `TIMELINK` edges pointing at a timeline that was never stored.
-Extending the batch is the right fix; it touches both backends and their
-rollback paths.
+`detect_temporal_expressions` (`pipelines/timeline/temporal.py`) is a pure
+function over text, and `propose_timepoints` (`pipelines/timeline/functions.py`)
+turns its output into a timeline and edges. Neither touches storage, so both are
+tested without a backend.
 
-That makes §7 its own issue, sequenced after §6, and not to be started until the
-batch question is settled.
+### 7.1 The batch question, settled
+
+`write_batch_tx` took `nodes`, `edges` and `embeddings` only. Ingestion is
+atomic *because* everything goes through it, so a timeline written outside the
+batch meant a mid-document failure could leave `TIMELINK` edges pointing at a
+timeline that was never stored — and the read path resolves a dangling
+`TIMELINK` to an empty row rather than an error, so that failure is silent.
+
+It now takes `timelines`, and they are the one **upsert** in an otherwise
+insert-only batch. Not a compromise: a timeline is a single record holding a
+list of timepoints, so appending a timepoint *is* a replacement of that record.
+There is no insert-shaped way to say it. The consequence is in the rollback
+path — undoing an upsert means restoring the row's previous content, not
+deleting the row — which the in-memory backend now does explicitly and
+SurrealDB gets from its transaction.
+
+Testing that is asymmetric, and the parity suite alone would have been
+misleading. SurrealDB builds every statement before running any of them, so a
+failure injected from Python aborts before the transaction opens: the parity
+test proves the observable ("the old timeline is intact") on both backends but
+only exercises the in-memory restore. `test_write_batch_tx_rolls_back_a_timeline_upsert`
+in `test_surrealdb_storage.py` collides *inside* the transaction, after the
+upsert in statement order, which is what actually proves the database rolls it
+back.
+
+### 7.2 Two departures from the sketch above
+
+**Detection reads node content, not segment text.** A mark needs a node to hang
+on. A date found in segment text leaves "which of this segment's nodes is this
+about?" unanswerable, and any answer is a guess; a date found in a fact's own
+content belongs to that fact. The cost is that a date stated in a segment but
+dropped by the agent's decomposition is not proposed — which is correct, since
+nothing in the graph claims it.
+
+**One shared timeline per graph, not one per document.** The sketch said
+per-document. §12.2 then decided the panel shows one timeline at a time, and the
+two do not fit: a timeline per document turns every ingest into another
+near-empty entry in the selector, and the marks that would make a chronology
+legible are spread across all of them. Provenance is not lost by sharing — every
+node keeps its `sourced_from` edge — and `timeline_id` still routes a document
+onto a curated timeline when the agent has one. That named timeline must already
+exist; creating one silently would put the document somewhere the caller cannot
+find, under a name they never chose.
+
+### 7.3 What the detector will not do
+
+The asymmetry is the whole design: *a missed expression costs a mark on the
+timeline; an invented one is indistinguishable from evidence once stored.* So it
+resolves only what the text states — a day, a month, a year, a decade, a century
+are all intervals, differing in width but not in kind — and everything else that
+reads as temporal comes back as a label with no dates.
+
+Concretely out of scope, and left that way on purpose:
+
+- **Relative expressions** ("three years later", "the following spring"). They
+  need a document-level anchor this function does not have.
+  `Timeline.reference_time` (§6.4) is where one would come from; resolving
+  against it is separate work.
+- **`of` as a temporal framing.** "The winter of 1897" would be worth having,
+  but "a group of 1500 people" is the same shape and the cost is not symmetric.
+- **Clock times**, and anything needing the reader's present.
+
+Two guards were worth more than they look. A bare four-digit number is a year
+only when a preposition frames it, or a date pattern surrounds it — otherwise
+`3000 troops` and `error code 1997` become dates. And the preposition needs a
+word boundary in front of it: without one, "versi*on* 2024" reads as "on 2024"
+and ships a date. Running the detector over ordinary prose is what found that,
+along with the mirror-image bug: the guard against `1897.5` was rejecting every
+year followed by a full stop, which is exactly where years sit.
 
 ## 8. Modules
 
@@ -401,8 +464,8 @@ The panel itself is covered separately under jsdom.
    live updates without a refresh.
 5. ✅ **Graph-panel cross-highlighting** — `highlightNodes` on the graph panel
    handle, driven by the selected mark's linked node ids.
-6. ⏳ **Extraction proposes timepoints** — open, gated on the `write_batch_tx`
-   question in §7.
+6. ✅ **Extraction proposes timepoints** — `write_batch_tx` carries timelines,
+   a pure detector over node content, one shared timeline per graph (§7).
 
 ## 10. Testing
 
