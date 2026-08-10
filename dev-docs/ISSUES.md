@@ -2,9 +2,10 @@
 
 Living issue tracker. **Last review: 2026-08-10.**
 
-Everything found so far is resolved except **14** and **16**, both deferred by
-design — though **14**'s first two steps are now actionable, because the
-deferral rested on "nothing fails because of it" and #39 ended that.
+Everything found so far is resolved except **14** and **16**. **14**'s first two
+steps are done; what remains is step 4, which the work on steps 1–2 discovered
+and which is where `reflect`'s cost actually sits. **16** stays deferred by
+design.
 Resolved entries are **removed from this file** once merged — their resolution
 lives in git history and the merged code. Issue numbers are stable IDs; the gaps
 (6–13, 15, 17–43) are deleted-resolved items, not missing work, and code
@@ -50,103 +51,97 @@ is entirely sequential.
 
 ## Open issues
 
-### Issue 14 — Full-scan / N+1 query patterns — ▶ ACTIONABLE (steps 1–2); step 3 still blocked
+### Issue 14 — Full-scan / N+1 query patterns — ▶ ACTIONABLE (steps 1–2 done; step 4 is the new front)
 
-**Status.** Actionable for the first time: `scripts/bench.py`
-(`make bench`) has measured both backends, and four fixes have since removed
-every part that had actually broken — `reflect`'s cubic frame lookups, the
-in-memory edge scan, SurrealDB's correlated status filter, and the pairwise
-Python in the contradiction phase (#39). **The current numbers and the method
-are in `dev-docs/BENCHMARKS.md`**, which carries where those fixes left the
-system rather than the runs that produced them; the runs are in `git log`.
+**Status.** Steps 1 and 2 are **done and merged**: `get_edges_for` exists on both
+backends and every N+1 *edge* site in the system now uses it. Step 3 stays
+blocked by #16 — and is now moot, see below. Step 4 is new, and it is what
+actually holds `reflect` at the timeout.
 
-**Update 2026-08-10 (#39 promoted this).** With the pairwise arithmetic
-vectorized, `reflect` on SurrealDB barely moved — 1.36× against in-memory's 4.6×
-— because that backend's time goes on sequential round-trips: one
-`get_embeddings_for_item` per fact, then two edge queries per fact to build the
-already-linked set. **That is this issue, and it is now what fails first on
-SurrealDB**, at ~2,000 nodes against in-memory's ~6,700. The deferral stands —
-the fix is still a protocol change on both backends and the `asyncio.gather`
-prong is still blocked by #16 — but the *grounds* have changed. This entry no
-longer rests on "nothing fails because of it", and the first candidate is the
-batched edge fetch in step 1 below, now with a concrete graph size attached.
-See `dev-docs/BENCHMARKS.md`.
+**Guarded by** `tests/storage/test_storage_parity.py::TestBatchedEdgeFetch` and
+`tests/pipelines/reflection/test_reflect_scaling.py::TestEdgeFetchesDoNotScaleWithTheGraph`.
 
-**Promoted 2026-08-10.** This entry was deferred for months on one sentence —
-"nothing fails because of it" — and that sentence stopped being true when #39
-landed. `reflect` on SurrealDB is now round-trip bound and crosses the 30 s tool
-timeout at **~2,000 nodes**, roughly 100 documents of five segments. It is the
-only thing in the system that fails at a size real use reaches.
+#### What steps 1–2 bought
 
-The deferral was also broader than the blocker justified. Only **step 3**
-(`asyncio.gather` on enrichment) is blocked by #16's shared-connection hazard.
-**Steps 1 and 2 are unblocked**, and step 1 is the one that helps every N+1 site
-at once — including `_hierarchy_annotations` (`mcp/tools.py`), which was
-deliberately left waiting for it.
+Measured before and after on the same machine in the same session, with
+`store_decomposition` flat to three significant figures as the control:
 
-So: steps 1–2 are the next work in this file. Step 3 keeps #16's trigger.
+| backend | operation | 1,000 nodes | 2,000 nodes |
+|---|---|---|---|
+| surrealdb | `list_sources` | 1,133 → **275** ms (4.12×) | 2,343 → **862** ms (2.72×) |
+| surrealdb | `search` | 230 → **164** ms (1.40×) | 296 → **246** ms (1.20×) |
+| surrealdb | `reflect` | 11,165 → **8,107** ms (1.38×) | 34,695 → **29,056** ms (1.19×) |
+| memory | `list_sources` | 28 → **16** ms (1.79×) | 58 → **31** ms (1.85×) |
+| memory | `reflect` | 856 → **787** ms (1.09×) | 3,038 → **2,913** ms (1.04×) |
+
+Round-trips at 400 nodes, which is the number the fix actually targets:
+`reflect` 5,144 → **1,448**, `search` 319 → **141**, `list_sources` 883 → **87**,
+`list_relations` 803 → **7**.
+
+#### What it did not buy, and why
+
+**`reflect` on SurrealDB is still at the 30 s timeout at ~2,000 nodes.** The
+prediction in the previous version of this entry — that the batched edge fetch
+was what stood between `reflect` and the crossing — was wrong, which is the
+fifth time in a row this project's predicted cause has not survived a profile.
+
+Attribution after the fix, at 400 nodes: of the storage reads `reflect` still
+issues per node, **none are edge fetches**. What is left is
+
+- `get_node` per neighbour (300 of 600 reads, all in `topic_enrichment`, which
+  fetches each fact/inference body just to read `.content`),
+- `get_embeddings_for_item` per fact and per topic (300, split between
+  contradiction detection and topic consolidation),
+- and, outside the read count, one `UPSERT` per node from value decay.
+
+Edge batching removed 72% of the round-trips and moved the wall clock 19%,
+because the traffic that remains is the expensive part.
+
+#### What to fix, in order
+
+Two earlier steps predate this list and are not repeated: indexing in-memory
+edge lookups, and separating ranking from the status filter in SurrealDB's
+`vector_search`.
+
+1. ~~**Batched edge fetch in the protocol.**~~ **Done.**
+   `get_edges_for(node_ids, *, direction, edge_type)` returning a map, on both
+   backends. Every N+1 edge site uses it, including `_hierarchy_annotations`,
+   which had been left waiting for exactly this.
+2. ~~**Aggregate queries for the listing tools.**~~ **Done, by step 1 rather
+   than by aggregation.** A `GROUP BY` over `node_edge` would have counted
+   labels belonging to archived and superseded endpoints, since edges outlive
+   their nodes — it would have been one query and the wrong answer. Scoping to
+   active nodes needs their ids anyway, so the batched fetch gets the same
+   result honestly: `list_relations` went 803 queries → 7.
+3. **`asyncio.gather` on per-node enrichment** — **blocked by #16, and no longer
+   wanted.** The one place this pattern had already been used (`_in_frame_nodes`)
+   is now a single batched query: sequential *and* faster, so the concurrency
+   that #16 makes unsafe buys nothing. Prefer batching over gathering anywhere
+   this comes up again.
+4. **Batched node and embedding reads — the new front.** `get_nodes(ids)` and
+   `get_embeddings_for_items(ids, model_id)`, same shape as `get_edges_for` and
+   the same parity obligation, plus a batched write for value decay. This is
+   what `reflect`'s 30 s crossing is made of now, on the evidence above rather
+   than on prediction. Profile again before assuming the mix stays as measured.
 
 ---
 
 #### Where this issue stands
 
 `EPIMEMER_TOOL_TIMEOUT_SECONDS` defaults to **30 s**, so "crossing" means *the
-tool call fails*, not *feels slow*. **The numbers live in
-`dev-docs/BENCHMARKS.md`** and are not duplicated here — a second copy is a
-second thing to keep true, and this entry has already outlived four rounds of
-them.
-
-What matters for this issue: **`reflect` is the limiting operation on both
-backends, and on SurrealDB the limit is now this issue rather than arithmetic.**
-Three live N+1 sites, worst first:
-
-1. **`detect_contradictions` fetches per fact** — one
-   `get_embeddings_for_item`, then `get_edges_from` and `get_edges_to` to build
-   the already-linked set, all sequential. On SurrealDB this is what puts
-   `reflect`'s crossing at ~2,000 nodes against in-memory's ~6,700. It is the
-   first thing that fails on a networked backend.
-2. **Per-result enrichment under `search`** — the ~120 ms floor that remains
-   after ranking was separated from the status filter. Nothing fails because of
-   it; it is simply the floor any further `search` work would have to attack.
-3. **`list_sources` / `list_relations`** iterate every active node and fetch that
-   node's edges: O(N) queries per call. Linear on both backends and far from any
-   crossing. The call pattern is this issue's, but in-memory it now costs a dict
-   lookup per node rather than a full scan (`by_src` / `by_dst` endpoint
-   indexes), so it is not worth attacking on its own.
+tool call fails*, not *feels slow*. `reflect` on SurrealDB is the only operation
+in the system that fails at a size real use reaches — ~2,000 nodes, roughly 100
+documents of five segments. `search` and the listing tools are now far from any
+crossing on both backends.
 
 Ingest is flat on both backends at every size measured; the write path has never
 been the ceiling.
 
----
-
-#### What to fix, in order
-
-Two earlier steps are already done and are not repeated here: indexing
-in-memory edge lookups, and separating ranking from the status filter in
-SurrealDB's `vector_search`. `dev-docs/BENCHMARKS.md` records what
-they left behind, and its standing warning applies to anything attempted here:
-in each case the fix the issue predicted was not the fix the profile found.
-
-1. **Batched edge fetch in the protocol.** `get_edges_for(node_ids, edge_type)`
-   returning a map, implemented on **both** backends per the parity rule. This
-   is the one change that helps every N+1 site at once, and it is what
-   `_hierarchy_annotations` (`mcp/tools.py`) was deliberately left waiting for.
-2. **Aggregate queries** for the listing tools: count edges grouped by `dst`
-   for `sourced_from`; distinct label+kind for `RELATED`.
-3. **`asyncio.gather` on per-node enrichment** — **blocked by #16**. Do not
-   introduce concurrent storage access while the SurrealDB connection is
-   shared and `use()`-switched.
-
----
-
-#### Before touching any of it
-
 `dev-docs/BENCHMARKS.md` carries the reproduction commands, the caveats that
 qualify every number (mocked embeddings, a self-similar synthetic corpus,
 loopback-only networking), and the profiling recipe. Its standing warning is the
-one that matters here: **profile first** — every performance fix in this project
-so far has overturned the cause its issue predicted, including twice on this
-issue's own candidate explanations.
+one that matters here, and step 1 above is the latest evidence for it:
+**profile first.**
 
 ---
 
@@ -212,14 +207,15 @@ it lives in README → *Not yet built*.
 
 ## Recommended order
 
-**#14 steps 1–2 are what is left**, and they are no longer speculative: with the
-contradiction phase vectorized, `reflect` on SurrealDB is round-trip bound and
-fails at ~2,000 nodes. That is the only thing in the system that breaks at a size
-real use reaches. `dev-docs/BENCHMARKS.md` has the numbers; #14 above has the
-analysis.
+**#14 step 4 is what is left**, and it is the only thing in the system that
+breaks at a size real use reaches: `reflect` on SurrealDB still crosses 30 s at
+~2,000 nodes. Steps 1–2 took 72% of its round-trips out and moved the wall clock
+19%, which is what established that the remaining cost is per-node *node and
+embedding* reads rather than edges. #14 above has the measurements.
 
-**#16 stays deferred**, with its trigger stated. So does **#14 step 3**, which is
-the one prong #16 actually blocks.
+**#16 stays deferred**, with its trigger stated. **#14 step 3** is dropped
+rather than deferred — batching turned out to beat gathering, so the prong #16
+blocked is one nobody wants.
 
 Work that does not exist yet, as opposed to work that is wrong, lives in
 `dev-docs/PROPOSED_FEATURES.md`.
@@ -228,6 +224,5 @@ What to pick up, and what has to be true first:
 
 | Order | Work | Trigger |
 |---|---|---|
-| 1 | 14 steps 1–2 (batched edge fetch, aggregate queries) | **Ready now.** `reflect` on SurrealDB crosses 30 s at ~2,000 nodes and the cause is this issue's N+1 pattern. A protocol change on both backends per the parity rule; step 1 helps every N+1 site at once |
+| 1 | 14 step 4 (batched node + embedding reads, batched decay write) | **Ready now**, and measured rather than predicted: after steps 1–2 every per-node read left in `reflect` is a `get_node` or a `get_embeddings_for_item`. A protocol change on both backends per the parity rule, same shape as `get_edges_for` |
 | deferred | 16 | The server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`) |
-| deferred | 14 step 3 | `asyncio.gather` on per-node enrichment — blocked by #16's shared-connection hazard, and the only part of #14 that is |

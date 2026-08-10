@@ -6,7 +6,7 @@ suitable for cold storage.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Literal, Sequence
 
 from pydantic import BaseModel
 
@@ -75,24 +75,20 @@ async def archive_nodes(
     Returns:
         A dict with 'nodes' (list of node dicts) and 'edges' (list of edge dicts).
     """
-    archived_nodes: list[dict] = []
+    node_ids = [node.id for node in nodes]
+    outgoing = await storage.get_edges_for(node_ids, direction="from")
+    incoming = await storage.get_edges_for(node_ids, direction="to")
+
     archived_edges: list[dict] = []
     seen_edge_ids: set[str] = set()
-
-    for node in nodes:
-        archived_nodes.append(node.model_dump(mode="json"))
-
-        # Collect all edges connected to this node
-        edges_from = await storage.get_edges_from(node.id)
-        edges_to = await storage.get_edges_to(node.id)
-
-        for edge in list(edges_from) + list(edges_to):
+    for node_id in node_ids:
+        for edge in list(outgoing[node_id]) + list(incoming[node_id]):
             if edge.id not in seen_edge_ids:
                 seen_edge_ids.add(edge.id)
                 archived_edges.append(edge.model_dump(mode="json"))
 
     return {
-        "nodes": archived_nodes,
+        "nodes": [node.model_dump(mode="json") for node in nodes],
         "edges": archived_edges,
     }
 
@@ -189,8 +185,10 @@ def never_retrieved(node: EpistemicNode) -> bool:
     return node.value.retrieved_at is None
 
 
-async def knowledge_in_degree(node_id: str, storage: StorageBackend) -> int:
-    """How many nodes depend on this one — its *structural* importance.
+async def knowledge_in_degree_for(
+    node_ids: Sequence[str], storage: StorageBackend
+) -> dict[str, int]:
+    """How many nodes depend on each of these — their *structural* importance.
 
     Computed live rather than stored: "new information makes X more important"
     usually arrives as an edge, so the graph already holds the evidence, and a
@@ -200,16 +198,21 @@ async def knowledge_in_degree(node_id: str, storage: StorageBackend) -> int:
     dependence, and segment anchors, which every extracted node has exactly one
     of — counting those would make the number constant and the test vacuous.
     """
-    edges = await storage.get_edges_to(node_id)
-    return sum(
-        1 for edge in edges
-        if edge.type not in NON_KNOWLEDGE_EDGE_TYPES
-        and edge.type not in SEGMENT_ANCHOR_EDGE_TYPES
-    )
+    incoming = await storage.get_edges_for(node_ids, direction="to")
+    return {
+        node_id: sum(
+            1 for edge in edges
+            if edge.type not in NON_KNOWLEDGE_EDGE_TYPES
+            and edge.type not in SEGMENT_ANCHOR_EDGE_TYPES
+        )
+        for node_id, edges in incoming.items()
+    }
 
 
-async def evidence_gone(inference: Inference, storage: StorageBackend) -> bool:
-    """True when an inference's *entire* evidence set has left the active graph.
+async def evidence_gone_for(
+    inferences: Sequence[Inference], storage: StorageBackend
+) -> dict[str, bool]:
+    """Which of these inferences have had their *entire* evidence set archived.
 
     The follow-on to archiving a fact: what was derived from it is now floating.
     It is deliberately all-or-nothing — an inference with one surviving support
@@ -219,15 +222,28 @@ async def evidence_gone(inference: Inference, storage: StorageBackend) -> bool:
 
     Complements the `evidence_stale` review label, which fires on *any*
     superseded evidence but does not know about archival.
+
+    The evidence nodes themselves are still fetched one at a time — they are the
+    *neighbours* of the set, not the set, so there is no id list to batch on
+    until the edges come back. Fetching them in bulk needs a batched node read,
+    which is the same shape of protocol change one level over (ISSUES.md #14).
     """
-    edges = await storage.get_edges_from(inference.id, edge_type=EdgeType.DERIVED_FROM)
-    if not edges:
-        return False
-    for edge in edges:
-        evidence = await storage.get_node(edge.dst_id)
-        if evidence is None or evidence.status is NodeStatus.ACTIVE:
-            return False
-    return True
+    derived_from = await storage.get_edges_for(
+        [inference.id for inference in inferences],
+        direction="from",
+        edge_type=EdgeType.DERIVED_FROM,
+    )
+
+    gone: dict[str, bool] = {}
+    for inference in inferences:
+        edges = derived_from[inference.id]
+        gone[inference.id] = bool(edges)
+        for edge in edges:
+            evidence = await storage.get_node(edge.dst_id)
+            if evidence is None or evidence.status is NodeStatus.ACTIVE:
+                gone[inference.id] = False
+                break
+    return gone
 
 
 async def nominate_archival_candidates(
@@ -260,7 +276,7 @@ async def nominate_archival_candidates(
     un-judged node is not a node judged worth keeping, and nomination is a
     proposal, not a verdict.
     """
-    from epimemer.pipelines.reflection.review import review_labels
+    from epimemer.pipelines.reflection.review import review_labels_for
 
     judgment_cutoff = datetime.now(timezone.utc) - timedelta(days=judgment_max_age_days)
 
@@ -272,10 +288,26 @@ async def nominate_archival_candidates(
         if node.value.importance <= importance_ceiling:
             candidates["retired"].append(_candidate(node, "retired"))
 
-    for node in await storage.query_nodes(status=NodeStatus.ACTIVE):
+    active = list(await storage.query_nodes(status=NodeStatus.ACTIVE))
+
+    # Each class needs edges for a different subset, so the subsets are decided
+    # first and read in bulk after. Reading per node instead is what made this
+    # scan cost a round-trip per active node (ISSUES.md #14).
+    inferences = [node for node in active if isinstance(node, Inference)]
+    labels_by_node = await review_labels_for(inferences, storage)
+    gone_by_node = await evidence_gone_for(inferences, storage)
+
+    unretrieved = [
+        node for node in active
+        if not isinstance(node, Inference)
+        and node.value.importance <= importance_ceiling
+        and never_retrieved(node)
+    ]
+    in_degree = await knowledge_in_degree_for([n.id for n in unretrieved], storage)
+
+    for node in active:
         if isinstance(node, Inference):
-            labels = await review_labels(node, storage)
-            if "evidence_stale" in labels or await evidence_gone(node, storage):
+            if "evidence_stale" in labels_by_node.get(node.id, {}) or gone_by_node[node.id]:
                 candidates["evidence_stale"].append(_candidate(node, "evidence_stale"))
             continue
         if node.value.importance > importance_ceiling:
@@ -284,7 +316,7 @@ async def nominate_archival_candidates(
             continue
         if not never_retrieved(node):
             continue
-        if await knowledge_in_degree(node.id, storage) == 0:
+        if in_degree[node.id] == 0:
             candidates["never_retrieved"].append(_candidate(node, "never_retrieved"))
 
     ordered = [c for reason in _REASON_ORDER for c in candidates[reason]]

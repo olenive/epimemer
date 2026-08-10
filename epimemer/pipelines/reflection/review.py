@@ -4,7 +4,7 @@ Pure planning functions (reads only) that compute the edges / edge-ids a
 supersession or resolution must apply atomically.
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
@@ -28,18 +28,24 @@ def _unique(ids: list[str]) -> list[str]:
     return out
 
 
-async def review_labels(
-    node: EpistemicNode,
+async def review_labels_for(
+    nodes: Sequence[EpistemicNode],
     storage: StorageBackend,
     *,
     resolve_frames: "FrameResolver | None" = None,
-) -> dict[str, list[str]]:
-    """Compute epistemic review labels for an active node (REVIEW_EPISTEMIC.md §4.1).
+) -> dict[str, dict[str, list[str]]]:
+    """Review labels for many nodes at once, keyed by node id (§4.1).
 
-    Edges are the source of truth; this *derives* the labels retrieval surfaces so
-    a caller knows a node may be superseded, evidentially stale, or contested —
-    without the node ever leaving ACTIVE. Each label maps to the related node ids
-    the caller can hop to:
+    The batched form, and the one every scan should use: the labels each need
+    edges of a *fixed* type at a *fixed* endpoint, which is one query for the
+    whole node set rather than one per node. Doing it per node is what made
+    `gather_pending_review` the largest single source of round-trips in
+    `reflect` — three queries per active node (ISSUES.md #14).
+
+    Nodes with no review state are absent from the result rather than mapped to
+    an empty dict, so a caller can filter by membership.
+
+    Each label maps to the related node ids the caller can hop to:
 
     - ``superseded_candidate`` — node has incoming ``supersession_candidate`` edges
       (newer facts proposed to replace it); ids are those newer facts. (Case A)
@@ -50,44 +56,119 @@ async def review_labels(
       node that is still ACTIVE and in the same frame (an unresolved same-frame
       conflict); ids are the contesting nodes.
     """
-    labels: dict[str, list[str]] = {}
+    if not nodes:
+        return {}
 
-    candidates = await storage.get_edges_to(
-        node.id, edge_type=EdgeType.SUPERSESSION_CANDIDATE
+    node_ids = [node.id for node in nodes]
+    candidates = await storage.get_edges_for(
+        node_ids, direction="to", edge_type=EdgeType.SUPERSESSION_CANDIDATE
     )
-    if candidates:
-        labels["superseded_candidate"] = _unique([e.src_id for e in candidates])
+    contradicts_from = await storage.get_edges_for(
+        node_ids, direction="from", edge_type=EdgeType.CONTRADICTION
+    )
+    contradicts_to = await storage.get_edges_for(
+        node_ids, direction="to", edge_type=EdgeType.CONTRADICTION
+    )
 
-    if isinstance(node, Inference):
-        stale_sources: list[str] = []
-        for edge in await storage.get_edges_to(
-            node.id, edge_type=EdgeType.EVIDENCE_SUPERSEDED
-        ):
-            stale_sources.append(edge.src_id)
-        for edge in await storage.get_edges_from(
-            node.id, edge_type=EdgeType.DERIVED_FROM
-        ):
-            evidence = await storage.get_node(edge.dst_id)
-            if evidence is not None and evidence.status == NodeStatus.SUPERSEDED:
-                stale_sources.append(edge.dst_id)
-        if stale_sources:
-            labels["evidence_stale"] = _unique(stale_sources)
+    # Only inferences can be evidence-stale, so the two evidence queries are
+    # skipped entirely when the set holds none — which keeps the single-node
+    # `review_labels` below at the same query count it had before batching.
+    inference_ids = [node.id for node in nodes if isinstance(node, Inference)]
+    flagged_stale = (
+        await storage.get_edges_for(
+            inference_ids, direction="to", edge_type=EdgeType.EVIDENCE_SUPERSEDED
+        )
+        if inference_ids
+        else {}
+    )
+    derived_from = (
+        await storage.get_edges_for(
+            inference_ids, direction="from", edge_type=EdgeType.DERIVED_FROM
+        )
+        if inference_ids
+        else {}
+    )
 
-    contradiction_edges = list(
-        await storage.get_edges_from(node.id, edge_type=EdgeType.CONTRADICTION)
-    ) + list(await storage.get_edges_to(node.id, edge_type=EdgeType.CONTRADICTION))
-    contesting: list[str] = []
-    for edge in contradiction_edges:
-        other_id = edge.dst_id if edge.src_id == node.id else edge.src_id
-        other = await storage.get_node(other_id)
-        if other is None or other.status != NodeStatus.ACTIVE:
-            continue  # resolved (the partner was retired) — no longer contested
-        if await same_frame(node.id, other_id, storage, resolve=resolve_frames):
-            contesting.append(other_id)
-    if contesting:
-        labels["contested"] = _unique(contesting)
+    # Frames are needed for each node and for whoever contradicts it, and the
+    # contradiction partners are only known now that those edges are in hand.
+    # A caller that passed its own resolver has its own idea of the set to warm.
+    if resolve_frames is None:
+        contested_ids = {
+            endpoint
+            for node in nodes
+            for edge in list(contradicts_from[node.id]) + list(contradicts_to[node.id])
+            for endpoint in (edge.src_id, edge.dst_id)
+        }
+        resolve_frames = frame_resolver(
+            storage,
+            seed=await frames_for(list(contested_ids), storage) if contested_ids else None,
+        )
 
-    return labels
+    by_node: dict[str, dict[str, list[str]]] = {}
+    for node in nodes:
+        labels: dict[str, list[str]] = {}
+
+        if candidates[node.id]:
+            labels["superseded_candidate"] = _unique(
+                [e.src_id for e in candidates[node.id]]
+            )
+
+        if isinstance(node, Inference):
+            stale_sources = [e.src_id for e in flagged_stale[node.id]]
+            for edge in derived_from[node.id]:
+                evidence = await storage.get_node(edge.dst_id)
+                if evidence is not None and evidence.status == NodeStatus.SUPERSEDED:
+                    stale_sources.append(edge.dst_id)
+            if stale_sources:
+                labels["evidence_stale"] = _unique(stale_sources)
+
+        contesting: list[str] = []
+        for edge in list(contradicts_from[node.id]) + list(contradicts_to[node.id]):
+            other_id = edge.dst_id if edge.src_id == node.id else edge.src_id
+            other = await storage.get_node(other_id)
+            if other is None or other.status != NodeStatus.ACTIVE:
+                continue  # resolved (the partner was retired) — no longer contested
+            if await same_frame(node.id, other_id, storage, resolve=resolve_frames):
+                contesting.append(other_id)
+        if contesting:
+            labels["contested"] = _unique(contesting)
+
+        if labels:
+            by_node[node.id] = labels
+
+    return by_node
+
+
+async def review_labels(
+    node: EpistemicNode,
+    storage: StorageBackend,
+    *,
+    resolve_frames: "FrameResolver | None" = None,
+) -> dict[str, list[str]]:
+    """Epistemic review labels for one active node (REVIEW_EPISTEMIC.md §4.1).
+
+    Edges are the source of truth; this *derives* the labels retrieval surfaces
+    so a caller knows a node may be superseded, evidentially stale, or contested
+    — without the node ever leaving ACTIVE. See `review_labels_for`, which holds
+    the rules and which this is the one-node spelling of; prefer that one when
+    labelling a set, so the queries are shared across it.
+    """
+    return (
+        await review_labels_for([node], storage, resolve_frames=resolve_frames)
+    ).get(node.id, {})
+
+
+async def frames_for(
+    node_ids: Sequence[str], storage: StorageBackend
+) -> dict[str, set[str]]:
+    """`frames_of` for many nodes at once, keyed by node id."""
+    tagged = await storage.get_edges_for(
+        node_ids, direction="from", edge_type=EdgeType.HAS_METACONTEXT
+    )
+    return {
+        node_id: {edge.dst_id for edge in edges} or {BASE_METACONTEXT_ID}
+        for node_id, edges in tagged.items()
+    }
 
 
 async def frames_of(node_id: str, storage: StorageBackend) -> set[str]:
@@ -98,23 +179,28 @@ async def frames_of(node_id: str, storage: StorageBackend) -> set[str]:
     to the same single-frame set. Used to decide whether two nodes share a frame
     (and so whether an apparent conflict is genuine — see REVIEW_EPISTEMIC.md §4.3).
     """
-    edges = await storage.get_edges_from(node_id, edge_type=EdgeType.HAS_METACONTEXT)
-    frames = {edge.dst_id for edge in edges}
-    return frames or {BASE_METACONTEXT_ID}
+    return (await frames_for([node_id], storage))[node_id]
 
 
-def frame_resolver(storage: StorageBackend) -> "FrameResolver":
+def frame_resolver(
+    storage: StorageBackend, *, seed: dict[str, set[str]] | None = None
+) -> "FrameResolver":
     """A `frames_of` that answers each node once.
 
     Frame checks are made per *pair* — of contradiction candidates, of
     contesting nodes — while the nodes involved are drawn from a much smaller
-    set, and each uncached lookup is a full edge scan. Without this, a pass that
-    compares P pairs over N nodes does O(P) scans instead of O(N).
+    set. Without this, a pass that compares P pairs over N nodes does O(P)
+    lookups instead of O(N).
+
+    `seed` pre-loads answers a caller already has, from `frames_for`; that is
+    what takes the remaining O(N) down to one query, since a caller running a
+    pass over a node set knows that set upfront. Anything not seeded is still
+    resolved on demand, so a partial seed is safe.
 
     The cache is created by the caller and lives for that one pass, so it cannot
     serve a stale frame to a later operation.
     """
-    cache: dict[str, set[str]] = {}
+    cache: dict[str, set[str]] = dict(seed) if seed else {}
 
     async def resolve(node_id: str) -> set[str]:
         if node_id not in cache:
@@ -159,13 +245,11 @@ async def gather_pending_review(
     contested pair to the human). Reads only; resolution is a separate, explicit
     act.
     """
-    flagged: list[tuple[EpistemicNode, dict[str, list[str]]]] = []
-    resolve_frames = frame_resolver(storage)
-    for node in await storage.query_nodes():
-        labels = await review_labels(node, storage, resolve_frames=resolve_frames)
-        if labels:
-            flagged.append((node, labels))
-    return flagged
+    nodes = list(await storage.query_nodes())
+    # No resolver passed: `review_labels_for` warms one from the contradiction
+    # partners it finds, which is the set that actually gets frame-checked.
+    labels_by_node = await review_labels_for(nodes, storage)
+    return [(node, labels_by_node[node.id]) for node in nodes if node.id in labels_by_node]
 
 
 async def plan_evidence_stale_edges(

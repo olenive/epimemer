@@ -4,9 +4,10 @@ Measurements from `scripts/bench.py` (`make bench`). This file describes **where
 the system stands now**, not how it got here — superseded runs are deleted rather
 than kept, and `git log` holds them if a comparison is ever wanted.
 
-It is what makes ISSUES.md **#14**'s deferral condition checkable: #14 says the
-full-scan / N+1 patterns get fixed when latency is felt, and these are the
-numbers that say when.
+It is what keeps ISSUES.md **#14** honest. #14 is the full-scan / N+1 entry, and
+these numbers are what decides which of its remaining N+1 sites is worth
+attacking — and, twice now, what proved the site it had nominated was not the
+one costing the time.
 
 **When a change moves one of these numbers, measure before *and* after on the
 same machine in the same session, then replace the numbers here with the new
@@ -43,25 +44,26 @@ trustworthy; a cross-run comparison is not.
 
 | Nodes | Backend | ingest (docs/min) | search p50 | `list_sources` | `reflect` |
 |---|---|---|---|---|---|
-| 1,000 | memory | 19,158 | 23.0 ms | 29 ms | 851 ms |
-| 3,000 | memory | 18,758 | 66.9 ms | 87 ms | 6,665 ms |
-| 1,000 | SurrealDB | 3,951 | 214 ms | 1,080 ms | 10,284 ms |
-| 2,000 | SurrealDB | 3,829 | 283 ms | 2,013 ms | 29,946 ms |
+| 1,000 | memory | 19,459 | 22.2 ms | 16 ms | 787 ms |
+| 2,000 | memory | 18,871 | 44.5 ms | 31 ms | 2,913 ms |
+| 1,000 | SurrealDB | 3,217 | 164 ms | 275 ms | 8,107 ms |
+| 2,000 | SurrealDB | 3,213 | 246 ms | 862 ms | 29,056 ms |
 
 ### The 30 s crossings
 
 `EPIMEMER_TOOL_TIMEOUT_SECONDS` defaults to **30 s**, so "crossing" means *the
-tool call fails*, not *feels slow*.
+tool call fails*, not *feels slow*. These are extrapolations from the two sizes
+above — enough to rank the operations, not to trust a third digit.
 
 | Operation | in-memory | SurrealDB (loopback) | shape |
 |---|---|---|---|
-| `search` | ~1.6M | not reachable | linear in-memory, flat on SurrealDB |
-| `list_sources` | ~1M | ~28,000 | linear on both |
-| **`reflect`** | **~6,700** | **~2,000** | quadratic (exp. 1.87 / 1.54) |
+| `search` | ~1.3M | not reachable | linear in-memory, sublinear on SurrealDB |
+| `list_sources` | ~2M | ~17,000 | linear in-memory, exp. 1.65 on SurrealDB |
+| **`reflect`** | **~6,900** | **~2,000** | quadratic (exp. 1.89 / 1.84) |
 | ingest | not reachable | not reachable | flat |
 
 **`reflect` is the limiting operation on both backends**, and SurrealDB is the
-limiting backend by 3.3×. Nothing else is within two orders of magnitude of
+limiting backend by 3.4×. Nothing else is within an order of magnitude of
 failing.
 
 ---
@@ -72,19 +74,19 @@ failing.
 write path has never been the ceiling.
 
 **`search` — the cheapest of the three, on both backends.** In-memory it is
-linear and always was. On SurrealDB it is **flat**: ranking happens before the
-status filter, because SurrealDB re-runs such a subquery per embedding row and
-that cost two orders of magnitude when it was inside the ranking query. What
-remains is a **~120 ms floor of per-result enrichment round-trips** — one
-`get_node` and per-result annotation per hit. That floor is #14's N+1 pattern and
-is what a batched edge fetch would attack.
+linear and always was. On SurrealDB it is close to flat: ranking happens before
+the status filter, because SurrealDB re-runs such a subquery per embedding row
+and that cost two orders of magnitude when it was inside the ranking query. The
+per-result enrichment round-trips that used to floor it at ~120 ms are now
+batched — one query per annotation kind for the whole result set rather than per
+hit — which is most of the 1.2–1.4× it gained.
 
-**`list_sources` / `list_relations` — linear, and not urgent.** `mcp/tools.py`
-iterates every active node and fetches that node's edges: O(N) queries per call.
-In-memory that is now a dict lookup per node rather than a full scan, because
-`InMemoryStorage` keeps endpoint indexes (`by_src` / `by_dst`) beside `edges`.
-The N+1 *call pattern* remains and is #14's, but in-memory it is no longer worth
-attacking on its own.
+**`list_sources` / `list_relations` — no longer an N+1.** Both used to iterate
+every active node and fetch that node's edges: O(N) queries per call. Both now
+ask once for the whole active set (`get_edges_for`), which took `list_relations`
+from 803 queries to 7 at 400 nodes and `list_sources` from 883 to 87. What is
+left in `list_sources` is one `get_document` + `get_node` per *distinct source*,
+which is bounded by sources rather than by graph size.
 
 **`reflect` — the one that fails.** Two different stories per backend, and the
 difference is the whole diagnosis:
@@ -94,15 +96,19 @@ difference is the whole diagnosis:
   redundant, so it was made fast rather than removed: `similar_pairs`
   (`pipelines/reflection/contradiction_detection.py`) stacks the vectors and
   takes a matrix product per 512-row block instead of one Python call per pair.
-  That bought 4.1–4.6× and moved the crossing to ~6,700, with the exponent
+  That bought 4.1–4.6× and moved the crossing to ~6,900, with the exponent
   essentially unchanged — a constant factor moves a quadratic crossing by roughly
-  its square root.
-- **On SurrealDB it is round-trip bound**, which is why the same change bought
-  only 1.27–1.36× there. `detect_contradictions` issues one
-  `get_embeddings_for_item` per fact, then two edge queries per fact to build the
-  already-linked set, all sequential. **That is #14, and it is now what fails
-  first on that backend**, at ~2,000 nodes. The next real gain on the networked
-  path is batching, not arithmetic.
+  its square root. Batching the edge reads on top of it bought a further 1.04–1.09×,
+  which is the expected result of removing round-trips from a backend that has none.
+- **On SurrealDB it is round-trip bound**, and batching the *edge* reads did not
+  fix that. It removed 72% of `reflect`'s round-trips (5,144 → 1,448 at 400
+  nodes) and bought 1.19–1.38×, leaving the crossing at ~2,000. Profiling what
+  survives shows why: **every per-node read left is a `get_node` or a
+  `get_embeddings_for_item`**, not an edge query — 300 node fetches in
+  `topic_enrichment` (each just to read a `.content`), 300 embedding fetches
+  across contradiction detection and topic consolidation, plus one decay
+  `UPSERT` per node. Those are the expensive remainder. Batched node and
+  embedding reads are #14 step 4.
 
 ### What retrieval reinforcement costs
 
@@ -113,19 +119,26 @@ same container: **+5% in-memory, +8–12% on SurrealDB** (+14–17 ms).
 
 Cheap, and **flat in graph size**: k does not grow with the graph, so the cost is
 a constant — visible on SurrealDB where each write is a round-trip, near-invisible
-in-memory. It changes no crossing. It lands on top of the ~120 ms enrichment
-floor and is the same shape of cost, so a batched write and a batched edge fetch
-would be one piece of work.
+in-memory. It changes no crossing. It is a per-node write, the same shape as the
+decay writes in `reflect`, so a batched write would serve both.
 
 ---
 
 ## Before optimizing anything here
 
 **Profile first. Every performance fix in this project so far has overturned the
-cause its issue predicted** — the candidate explanations were wrong four times
+cause its issue predicted** — the candidate explanations were wrong five times
 running, and in each case a profile redirected the work to something the issue
-had not mentioned. The recipe: seed via `bench._seed`, wrap one `await
-reflect(...)` in `cProfile`, sort by cumulative time.
+had not mentioned. Most recently #14 named the contradiction phase's edge
+queries as what held `reflect` at the timeout; they turned out to be 14% of its
+storage calls, and removing all of them left the crossing where it was. The
+recipe: seed via `bench._seed`, wrap one `await reflect(...)` in `cProfile`,
+sort by cumulative time.
+
+On a networked backend, **count round-trips before timing anything** — wrap
+`SurrealDBStorage._query`, or the individual storage methods, in a counter and
+attribute each call to its caller. That is what identifies which N+1 site
+matters, and it is cheap enough to run at 400 nodes.
 
 Two implementation notes that outlived the measurements that produced them:
 

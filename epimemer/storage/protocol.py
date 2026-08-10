@@ -7,7 +7,7 @@ in-memory, or anything else can implement it.
 
 import re
 from datetime import datetime
-from typing import Protocol, Sequence, TypeVar
+from typing import Literal, Protocol, Sequence, TypeVar
 
 from pydantic import BaseModel
 
@@ -27,6 +27,11 @@ from epimemer.core.types import (
 _M = TypeVar("_M", bound=BaseModel)
 
 GRAPH_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+# Which endpoint of an edge a lookup matches on — the src (`"from"`, outgoing)
+# or the dst (`"to"`, incoming). Named rather than boolean because a caller
+# reading `direction="to"` needs no comment and `incoming=True` does.
+EdgeDirection = Literal["from", "to"]
 
 
 def validate_graph_name(name: str) -> str:
@@ -273,6 +278,37 @@ class StorageBackend(Protocol):
         self, node_id: str, *, edge_type: EdgeType | None = None
     ) -> Sequence[NodeEdge]:
         """Get incoming edges to a node, optionally filtered by type."""
+        ...
+
+    async def get_edges_for(
+        self,
+        node_ids: Sequence[str],
+        *,
+        direction: EdgeDirection,
+        edge_type: EdgeType | None = None,
+    ) -> dict[str, list[NodeEdge]]:
+        """`get_edges_from`/`get_edges_to` for many nodes in one round-trip.
+
+        Returns `{node_id: edges}` with the same edges the single-node method
+        would return for each id, so this is a batching of *cost*, not a change
+        of *answer*. Reflection reads the edges of every active node several
+        times over; asking once per node is what makes `reflect` round-trip
+        bound on a networked backend (ISSUES.md #14).
+
+        **Every requested id is a key**, mapping to `[]` when it has no matching
+        edges — including ids that are not nodes at all. Callers iterate the map
+        and a missing key would silently skip a node, so absence has to mean
+        "you did not ask" rather than "there were none". Repeated ids collapse to
+        one entry; an empty request returns `{}` without touching the store.
+
+        A self-loop belongs to its node in both directions, exactly as the
+        single-node methods report it.
+
+        Backends must answer this in a bounded number of statements —
+        chunking a large id list is fine, one query per id is the thing this
+        exists to replace — and must return whole edges, since callers read
+        `label`, `kind`, `weight` and `metadata` off them.
+        """
         ...
 
     async def count_edges_by_type(self) -> dict[EdgeType, int]:

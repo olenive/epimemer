@@ -29,7 +29,7 @@ from epimemer.core.types import (
     Segment,
     Timeline,
 )
-from epimemer.storage.protocol import resolve_reflect_threshold
+from epimemer.storage.protocol import EdgeDirection, resolve_reflect_threshold
 from epimemer.visualization.event_bus import InProcessEventBus
 from epimemer.visualization.events import (
     DocumentStored,
@@ -353,6 +353,17 @@ class InstrumentedStorage:
         self, node_id: str, *, edge_type: EdgeType | None = None
     ) -> Sequence[NodeEdge]:
         return await self._inner.get_edges_to(node_id, edge_type=edge_type)
+
+    async def get_edges_for(
+        self,
+        node_ids: Sequence[str],
+        *,
+        direction: EdgeDirection,
+        edge_type: EdgeType | None = None,
+    ) -> dict[str, list[NodeEdge]]:
+        return await self._inner.get_edges_for(
+            node_ids, direction=direction, edge_type=edge_type
+        )
 
     async def count_edges_by_type(self) -> dict[EdgeType, int]:
         return await self._inner.count_edges_by_type()

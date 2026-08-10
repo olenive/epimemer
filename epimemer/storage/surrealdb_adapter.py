@@ -32,7 +32,11 @@ from epimemer.core.types import (
     Topic,
     migration_excluded,
 )
-from epimemer.storage.protocol import drop_none_values, validate_graph_name
+from epimemer.storage.protocol import (
+    EdgeDirection,
+    drop_none_values,
+    validate_graph_name,
+)
 
 
 # Schemes the SDK maps to `AsyncEmbeddedSurrealConnection`, which is not a
@@ -184,6 +188,18 @@ async def _ranked_active_items(
         },
     )
     return [(r["item_id"], r["score"]) for r in rows]
+
+
+# Node ids per `IN` list in `get_edges_for`. The ids travel as a bind
+# parameter, so nothing here is a statement-length limit — chunking bounds the
+# planner's work and the result set held in memory at once.
+#
+# The exact value is not delicate: at 10,000 nodes this is 50 round-trips
+# against the 10,000 it replaces, and doubling it would save 25 of them —
+# nothing, next to a per-node fetch. It is kept small enough that the default
+# suite can afford to cross the seam, because a chunk boundary that no test
+# reaches is where a batched fetch silently drops rows.
+_EDGE_FETCH_CHUNK = 200
 
 
 def _upsert(table: str, *, data: str = "data", uid: str = "uid") -> str:
@@ -780,6 +796,38 @@ class SurrealDBStorage:
                 {"dst_id": node_id, "type": edge_type.value},
             )
         return [NodeEdge.model_validate(_clean_record(r)) for r in rows]
+
+    async def get_edges_for(
+        self,
+        node_ids: Sequence[str],
+        *,
+        direction: EdgeDirection,
+        edge_type: EdgeType | None = None,
+    ) -> dict[str, list[NodeEdge]]:
+        wanted = list(dict.fromkeys(node_ids))
+        # Pre-seeded so an id with no edges still gets a key. The query returns
+        # rows, and a node with none contributes none — without this the caller
+        # cannot tell "no edges" from "not asked for".
+        found: dict[str, list[NodeEdge]] = {node_id: [] for node_id in wanted}
+        if not wanted:
+            return found
+
+        field = "src_id" if direction == "from" else "dst_id"
+        where = f"{field} IN $ids" + (" AND type = $type" if edge_type else "")
+        params = {"type": edge_type.value} if edge_type else {}
+
+        for start in range(0, len(wanted), _EDGE_FETCH_CHUNK):
+            chunk = wanted[start : start + _EDGE_FETCH_CHUNK]
+            rows = await self._query(
+                f"SELECT * FROM node_edge WHERE {where}", {**params, "ids": chunk}
+            )
+            for row in rows or []:
+                edge = NodeEdge.model_validate(_clean_record(row))
+                # Re-group in Python: one flat result set carries no grouping,
+                # and `getattr` here is what preserves the association a
+                # per-node query got for free.
+                found[getattr(edge, field)].append(edge)
+        return found
 
     async def count_edges_by_type(self) -> dict[EdgeType, int]:
         counts = {et: 0 for et in EdgeType}

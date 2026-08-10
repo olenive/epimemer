@@ -5,8 +5,6 @@ no global state, easily testable. The MCP server layer in server.py
 calls these and wraps the results.
 """
 
-import asyncio
-
 from datetime import datetime, timezone
 from typing import Literal, Sequence
 
@@ -443,18 +441,21 @@ async def _in_frame_nodes(
     """Nodes in `metacontext_id` or in untagged base reality (The Real).
 
     Knowledge in the base frame applies everywhere; sibling frames are excluded.
-    `frames_of` is a storage round-trip per node, so the lookups are gathered
-    rather than awaited one at a time.
-    """
-    from epimemer.pipelines.reflection.review import frames_of
 
-    frame_sets = await asyncio.gather(
-        *(frames_of(node.id, storage) for node in nodes)
-    )
+    One query for the whole set. This was previously an `asyncio.gather` over a
+    round-trip per node, which bought concurrency at the cost of issuing
+    overlapping reads on the shared SurrealDB connection — the hazard ISSUES.md
+    #16 describes. Batching is faster *and* sequential, so the trade goes away
+    rather than being taken.
+    """
+    from epimemer.pipelines.reflection.review import frames_for
+
+    frames_by_node = await frames_for([node.id for node in nodes], storage)
     return [
         node
-        for node, frames in zip(nodes, frame_sets)
-        if metacontext_id in frames or BASE_METACONTEXT_ID in frames
+        for node in nodes
+        if metacontext_id in frames_by_node[node.id]
+        or BASE_METACONTEXT_ID in frames_by_node[node.id]
     ]
 
 
@@ -511,27 +512,29 @@ async def _hierarchy_annotations(
     participate, and a topic outside any hierarchy gets no keys at all rather
     than empty ones.
 
-    Edge lookups are per topic (the same N+1 family as the rest of `search`
-    enrichment), but neighbour bodies are fetched once each across the whole
-    result set and reuse nodes the result already carries — so a parent and its
-    children coming back together costs no extra fetches.
+    Both edge lookups are one query for the whole topic set, and neighbour
+    bodies are fetched once each across it, reusing nodes the result already
+    carries — so a parent and its children coming back together costs no extra
+    fetches.
     """
     topics = [n for n in nodes if isinstance(n, Topic)]
     if not topics:
         return {}
 
+    topic_ids = [topic.id for topic in topics]
+    parent_edges = await storage.get_edges_for(
+        topic_ids, direction="from", edge_type=EdgeType.SUBTOPIC_OF
+    )
+    child_edges = await storage.get_edges_for(
+        topic_ids, direction="to", edge_type=EdgeType.SUBTOPIC_OF
+    )
+
     neighbours_by_topic: dict[str, tuple[list[str], list[str]]] = {}
     needed: set[str] = set()
-    for topic in topics:
-        parent_edges = await storage.get_edges_from(
-            topic.id, edge_type=EdgeType.SUBTOPIC_OF
-        )
-        child_edges = await storage.get_edges_to(
-            topic.id, edge_type=EdgeType.SUBTOPIC_OF
-        )
-        parent_ids = [e.dst_id for e in parent_edges]
-        child_ids = [e.src_id for e in child_edges]
-        neighbours_by_topic[topic.id] = (parent_ids, child_ids)
+    for topic_id in topic_ids:
+        parent_ids = [e.dst_id for e in parent_edges[topic_id]]
+        child_ids = [e.src_id for e in child_edges[topic_id]]
+        neighbours_by_topic[topic_id] = (parent_ids, child_ids)
         needed.update(parent_ids)
         needed.update(child_ids)
 
@@ -694,7 +697,7 @@ async def search(
     see `_reinforce_retrieved`.
     """
     from epimemer.pipelines.query.types import QueryRequest
-    from epimemer.pipelines.reflection.review import review_labels
+    from epimemer.pipelines.reflection.review import review_labels_for
 
     # Map string node types to enums
     nt_enums = None
@@ -729,15 +732,16 @@ async def search(
     # for topics in a split hierarchy — their neighbours, so the caller can
     # drill rather than be handed the whole subtree.
     hierarchy = await _hierarchy_annotations(nodes, storage)
+    labels_by_node = await _metacontext_labels_for([n.id for n in nodes], storage)
+    review_by_node = await review_labels_for(nodes, storage)
+
     nodes_data = []
     for node in nodes:
         node_dict = _node_to_dict(node)
-        mc_labels = await _metacontext_labels(node.id, storage)
-        if mc_labels:
-            node_dict["metacontexts"] = mc_labels
-        review = await review_labels(node, storage)
-        if review:
-            node_dict["review"] = review
+        if labels_by_node[node.id]:
+            node_dict["metacontexts"] = labels_by_node[node.id]
+        if node.id in review_by_node:
+            node_dict["review"] = review_by_node[node.id]
         node_dict.update(hierarchy.get(node.id, {}))
         nodes_data.append(node_dict)
 
@@ -821,7 +825,7 @@ async def query_changes(
     present-state labels are accurate). Results are grouped per window; a node
     that changed in several windows appears in each.
     """
-    from epimemer.pipelines.reflection.review import review_labels
+    from epimemer.pipelines.reflection.review import review_labels_for
 
     nt_enums = [NodeType(t) for t in node_types] if node_types else [None]
 
@@ -834,18 +838,20 @@ async def query_changes(
             for node in await storage.query_changes(start=start, end=end, node_type=nt):
                 seen[node.id] = node
 
+        changed = list(seen.values())
+        labels_by_node = await _metacontext_labels_for([n.id for n in changed], storage)
+        review_by_node = await review_labels_for(changed, storage)
+
         changes = []
-        for node in seen.values():
+        for node in changed:
             node_dict = _node_to_dict(node)
             node_dict["events"] = [
                 e.model_dump(mode="json") for e in events_in_window(node, start, end)
             ]
-            mc_labels = await _metacontext_labels(node.id, storage)
-            if mc_labels:
-                node_dict["metacontexts"] = mc_labels
-            review = await review_labels(node, storage)
-            if review:
-                node_dict["review"] = review
+            if labels_by_node[node.id]:
+                node_dict["metacontexts"] = labels_by_node[node.id]
+            if node.id in review_by_node:
+                node_dict["review"] = review_by_node[node.id]
             changes.append(node_dict)
 
             key = _node_type_key(node)
@@ -937,13 +943,21 @@ async def list_sources(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
     """Distinct source/origin nodes with how many nodes reference each — the
     documents nodes are `sourced_from`, plus entities linked by attribution edges
     (e.g. published_by). Discovery before find_nodes."""
+    node_ids = [node.id for node in await storage.query_nodes()]
+    sourced_from = await storage.get_edges_for(
+        node_ids, direction="from", edge_type=EdgeType.SOURCED_FROM
+    )
+    attributed = await storage.get_edges_for(
+        node_ids, direction="to", edge_type=EdgeType.RELATED
+    )
+
     counts: dict[str, int] = {}
-    for node in await storage.query_nodes():
-        for e in await storage.get_edges_from(node.id, edge_type=EdgeType.SOURCED_FROM):
+    for node_id in node_ids:
+        for e in sourced_from[node_id]:
             counts[e.dst_id] = counts.get(e.dst_id, 0) + 1
-        for e in await storage.get_edges_to(node.id):
-            if e.type == EdgeType.RELATED and e.kind == "attribution":
-                counts[node.id] = counts.get(node.id, 0) + 1
+        for e in attributed[node_id]:
+            if e.kind == "attribution":
+                counts[node_id] = counts.get(node_id, 0) + 1
 
     sources = []
     for dst_id, count in sorted(counts.items(), key=lambda kv: -kv[1]):
@@ -963,15 +977,13 @@ async def list_sources(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
 async def list_relations(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
     """Distinct user-tier relationship labels (with kind + usage count) — discovery
     before coining a new label or consolidating synonyms via apply_reflection."""
+    from epimemer.pipelines.reflection.relation_consolidation import (
+        related_edges_of_active_nodes,
+    )
+
     counts: dict[tuple[str, str], int] = {}
-    seen_edges: set[str] = set()
-    for node in await storage.query_nodes():
-        for e in list(await storage.get_edges_from(node.id)) + list(
-            await storage.get_edges_to(node.id)
-        ):
-            if e.type == EdgeType.RELATED and e.id not in seen_edges:
-                seen_edges.add(e.id)
-                counts[(e.label or "", e.kind)] = counts.get((e.label or "", e.kind), 0) + 1
+    for e in await related_edges_of_active_nodes(storage):
+        counts[(e.label or "", e.kind)] = counts.get((e.label or "", e.kind), 0) + 1
 
     relations = [
         {"label": label, "kind": kind, "count": c}
@@ -1434,10 +1446,11 @@ async def reflect(
     from epimemer.pipelines.reflection.archival import nominate_archival_candidates
     from epimemer.pipelines.reflection.relation_consolidation import find_similar_relation_pairs
     from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
-    from epimemer.pipelines.reflection.topic_enrichment import gather_associated_material, _should_enrich
+    from epimemer.pipelines.reflection.topic_enrichment import gather_associated_material_for, _should_enrich
     from epimemer.pipelines.reflection.topic_splitting import should_split
     from epimemer.pipelines.reflection.review import (
         frame_resolver,
+        frames_for,
         gather_pending_review,
         same_frame,
     )
@@ -1508,14 +1521,16 @@ async def reflect(
             topic_cache.extend(t for t in all_topics if isinstance(t, Topic))
         return topic_cache
 
-    # Both phases want the same material, and gathering it is two full edge
-    # scans per topic. Read once, scoped to this call so nothing goes stale.
+    # Both phases want the same material. Gathered for every topic in one go the
+    # first time either asks, and scoped to this call so nothing goes stale.
     material_cache: dict[str, list[str]] = {}
 
     async def _material_for(topic: Topic) -> list[str]:
-        if topic.id not in material_cache:
-            material_cache[topic.id] = await gather_associated_material(topic, storage)
-        return material_cache[topic.id]
+        if not material_cache:
+            material_cache.update(
+                await gather_associated_material_for(await _active_topics(), storage)
+            )
+        return material_cache.get(topic.id, [])
 
     # 5. Detect contradictions (safety net for anything ingest-time check missed).
     #    Similarity nominates; keep only same-frame pairs — a high-similarity pair
@@ -1526,10 +1541,14 @@ async def reflect(
             similarity_threshold=0.80,
             model_id=model_id,
         )
-        # One resolver for the whole pass: candidate pairs are quadratic in
-        # facts while the facts themselves are not, and an uncached frame lookup
-        # is a full edge scan.
-        resolve_frames = frame_resolver(storage)
+        # One resolver for the whole pass, warmed in a single query: candidate
+        # pairs are quadratic in facts while the facts themselves are not, so
+        # the set to load is known from `raw` before any pair is checked.
+        candidate_ids = list({fact.id for pair in raw for fact in pair[:2]})
+        resolve_frames = frame_resolver(
+            storage,
+            seed=await frames_for(candidate_ids, storage) if candidate_ids else None,
+        )
         found = []
         for a, b, score in raw:
             if not await same_frame(a.id, b.id, storage, resolve=resolve_frames):
@@ -1903,7 +1922,7 @@ async def query_graph(
 ) -> tuple[dict, ResponseMeta]:
     """Traverse the graph from a node, returning the local subgraph."""
     from epimemer.pipelines.query.graph_expansion import expand_via_graph
-    from epimemer.pipelines.reflection.review import review_labels
+    from epimemer.pipelines.reflection.review import review_labels_for
 
     seed_node = await storage.get_node(node_id)
     if seed_node is None:
@@ -1923,12 +1942,12 @@ async def query_graph(
         exclude_edge_types=exclude_edge_types,
     )
 
+    review_by_node = await review_labels_for(nodes, storage)
     nodes_data = []
     for node in nodes:
         node_dict = _node_to_dict(node)
-        review = await review_labels(node, storage)
-        if review:
-            node_dict["review"] = review
+        if node.id in review_by_node:
+            node_dict["review"] = review_by_node[node.id]
         nodes_data.append(node_dict)
     edges_data = [e.model_dump(mode="json") for e in edges]
 
@@ -2069,15 +2088,34 @@ def _reconstruct_node(data: dict) -> EpistemicNode:
     raise ValueError(f"Cannot reconstruct node from data: {data}")
 
 
+async def _metacontext_labels_for(
+    node_ids: Sequence[str], storage: StorageBackend
+) -> dict[str, list[str]]:
+    """`_metacontext_labels` for many nodes at once, keyed by node id.
+
+    Each metacontext is read once for the whole set rather than once per node
+    that carries it — a shared frame is the normal case, so per node meant
+    re-reading the same handful of records for every result.
+    """
+    tagged = await storage.get_edges_for(
+        node_ids, direction="from", edge_type=EdgeType.HAS_METACONTEXT
+    )
+    contents: dict[str, str] = {}
+    for edges in tagged.values():
+        for edge in edges:
+            if edge.dst_id not in contents:
+                mc = await storage.get_metacontext(edge.dst_id)
+                if mc:
+                    contents[edge.dst_id] = mc.content
+    return {
+        node_id: [contents[e.dst_id] for e in edges if e.dst_id in contents]
+        for node_id, edges in tagged.items()
+    }
+
+
 async def _metacontext_labels(node_id: str, storage: StorageBackend) -> list[str]:
     """Content labels of the metacontexts a node is tagged with."""
-    edges = await storage.get_edges_from(node_id, edge_type=EdgeType.HAS_METACONTEXT)
-    labels: list[str] = []
-    for edge in edges:
-        mc = await storage.get_metacontext(edge.dst_id)
-        if mc:
-            labels.append(mc.content)
-    return labels
+    return (await _metacontext_labels_for([node_id], storage))[node_id]
 
 
 async def _symmetric_edge_between(

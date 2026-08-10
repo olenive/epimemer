@@ -122,16 +122,19 @@ async def detect_contradictions(
         if embeddings:
             fact_vectors[fact.id] = embeddings[0].vector
 
-    # Build a set of already-linked pairs (by SIMILARITY or CONTRADICTION edges)
-    linked_edge_types = {EdgeType.SIMILARITY, EdgeType.CONTRADICTION}
+    # Build a set of already-linked pairs (by SIMILARITY or CONTRADICTION edges).
+    # Four queries for the whole fact set: the edge type is part of the query
+    # rather than a filter over every edge each fact has.
     already_linked: set[frozenset[str]] = set()
-    for fact in facts:
-        edges_from = await storage.get_edges_from(fact.id)
-        edges_to = await storage.get_edges_to(fact.id)
-        for edge in list(edges_from) + list(edges_to):
-            if edge.type in linked_edge_types:
-                pair = frozenset({edge.src_id, edge.dst_id})
-                already_linked.add(pair)
+    fact_ids = [fact.id for fact in facts]
+    for edge_type in (EdgeType.SIMILARITY, EdgeType.CONTRADICTION):
+        for direction in ("from", "to"):
+            found = await storage.get_edges_for(
+                fact_ids, direction=direction, edge_type=edge_type
+            )
+            for edges in found.values():
+                for edge in edges:
+                    already_linked.add(frozenset({edge.src_id, edge.dst_id}))
 
     # Score every pair at once. Facts whose stored vector is a different width
     # are dropped rather than compared, exactly as facts with no embedding at

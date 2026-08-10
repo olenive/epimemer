@@ -165,10 +165,11 @@ than the convenience, and it is far easier to give up later than to win back.
 
 ## Tracked elsewhere, listed so the backlog is complete
 
-- **Batched edge fetch and aggregate queries** — `ISSUES.md` #14, steps 1–2.
-  Not a proposal: it is the one thing in the system that currently *fails* at a
-  size real use reaches (~2,000 nodes on SurrealDB). Ahead of everything in this
-  file.
+- **Batched node and embedding reads** — `ISSUES.md` #14, step 4. Not a
+  proposal: `reflect` on SurrealDB is the one thing in the system that currently
+  *fails* at a size real use reaches (~2,000 nodes), and after the batched edge
+  fetch landed this is what its remaining round-trips are. Ahead of everything
+  in this file.
 - **A dedicated read connection for viz snapshots** — `ISSUES.md` #16, deferred
   until the server gains concurrent clients.
 - **Native HNSW vector indexes** — `surrealdb_adapter.py:1105`. Waiting on

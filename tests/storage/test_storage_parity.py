@@ -704,6 +704,156 @@ class TestVectorSearchReturnsOnlyActiveNodes:
         assert sorted(item_id for item_id, _ in results) == sorted(n.id for n in live)
 
 
+class TestBatchedEdgeFetch:
+    """`get_edges_for` answers many nodes in one call (#14 step 1).
+
+    The oracle throughout is the pair it batches: whatever
+    `get_edges_from`/`get_edges_to` say about a node one at a time,
+    `get_edges_for` must say about that node in bulk. Only the number of
+    round-trips is meant to change.
+
+    Two things a batched implementation can get wrong that a per-node one
+    cannot: losing the *association* between a node and its edges (SurrealDB
+    returns one flat result set that has to be re-grouped in Python), and
+    dropping nodes that have no edges (a `GROUP BY`-shaped answer has no row for
+    them, so the caller cannot tell "no edges" from "never asked").
+    """
+
+    async def _triangle(self, store):
+        """a → b, b → c, and a self-loop on c, with distinguishable types."""
+        a = Fact(content="a", source_id="s1")
+        b = Fact(content="b", source_id="s1")
+        c = Fact(content="c", source_id="s1")
+        for node in (a, b, c):
+            await store.store_node(node)
+        edges = [
+            NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.SUPPORTS),
+            NodeEdge(src_id=b.id, dst_id=c.id, type=EdgeType.SUPPORTS),
+            NodeEdge(src_id=a.id, dst_id=c.id, type=EdgeType.CONTRADICTION),
+            NodeEdge(src_id=c.id, dst_id=c.id, type=EdgeType.RELATED, label="self"),
+        ]
+        for edge in edges:
+            await store.store_edge(edge)
+        return a, b, c
+
+    async def _agrees_with_singles(self, store, ids, *, edge_type=None):
+        """Assert both directions match the per-node methods for every id."""
+        for direction, single in (
+            ("from", store.get_edges_from),
+            ("to", store.get_edges_to),
+        ):
+            batched = await store.get_edges_for(
+                ids, direction=direction, edge_type=edge_type
+            )
+            for node_id in ids:
+                expected = await single(node_id, edge_type=edge_type)
+                assert {e.id for e in batched[node_id]} == {e.id for e in expected}, (
+                    f"direction={direction} disagreed for {node_id}"
+                )
+
+    async def test_it_agrees_with_the_per_node_methods(self, store):
+        a, b, c = await self._triangle(store)
+        await self._agrees_with_singles(store, [a.id, b.id, c.id])
+
+    async def test_the_type_filter_agrees_too(self, store):
+        a, b, c = await self._triangle(store)
+        await self._agrees_with_singles(
+            store, [a.id, b.id, c.id], edge_type=EdgeType.SUPPORTS
+        )
+
+    async def test_every_requested_id_gets_a_key(self, store):
+        """Including ids with no matching edges, and ids that are not nodes.
+
+        Absence must mean "you did not ask", never "there were none" — callers
+        iterate the map and a missing key would silently skip a node.
+        """
+        a, b, c = await self._triangle(store)
+        result = await store.get_edges_for(
+            [a.id, c.id, "no-such-node"], direction="to"
+        )
+
+        assert set(result) == {a.id, c.id, "no-such-node"}
+        assert result[a.id] == []  # nothing points at `a`
+        assert result["no-such-node"] == []
+        assert len(result[c.id]) == 3  # b→c, a→c, and c's self-loop
+
+    async def test_a_self_loop_appears_at_both_of_its_endpoints(self, store):
+        _, _, c = await self._triangle(store)
+
+        outgoing = await store.get_edges_for([c.id], direction="from")
+        incoming = await store.get_edges_for([c.id], direction="to")
+
+        loop = {e.id for e in outgoing[c.id]} & {e.id for e in incoming[c.id]}
+        assert len(loop) == 1
+
+    async def test_repeated_ids_collapse_to_one_entry(self, store):
+        a, b, _ = await self._triangle(store)
+        result = await store.get_edges_for([a.id, a.id, b.id], direction="from")
+
+        assert set(result) == {a.id, b.id}
+        assert len(result[a.id]) == 2
+
+    async def test_no_ids_is_no_work_and_an_empty_map(self, store):
+        await self._triangle(store)
+        assert await store.get_edges_for([], direction="from") == {}
+        assert await store.get_edges_for([], direction="to") == {}
+
+    async def test_edges_come_back_whole(self, store):
+        """The batched path must not return a projection.
+
+        Callers read `label`, `kind`, `weight` and `metadata` off these edges —
+        `list_relations` groups by label+kind — so a `SELECT src_id, dst_id`
+        would satisfy every other test here and still break them.
+        """
+        src = Fact(content="src", source_id="s1")
+        dst = Fact(content="dst", source_id="s1")
+        await store.store_node(src)
+        await store.store_node(dst)
+        edge = NodeEdge(
+            src_id=src.id,
+            dst_id=dst.id,
+            type=EdgeType.RELATED,
+            label="published_by",
+            kind="attribution",
+            weight=0.25,
+            metadata={"note": "kept"},
+        )
+        await store.store_edge(edge)
+
+        got = (await store.get_edges_for([src.id], direction="from"))[src.id][0]
+
+        assert got.id == edge.id
+        assert got.label == "published_by"
+        assert got.kind == "attribution"
+        assert got.weight == 0.25
+        assert got.metadata == {"note": "kept"}
+
+    async def test_more_ids_than_fit_in_one_statement(self, store):
+        """SurrealDB batches an `IN` list, so a large request has to chunk.
+
+        Chunking is where a batched fetch loses rows: the seam is invisible
+        unless the request is bigger than the chunk. 250 nodes with one edge
+        each is past the adapter's chunk size and still small enough to run in
+        the default suite.
+        """
+        hub = Topic(content="hub", source_id="s1")
+        await store.store_node(hub)
+        facts = [Fact(content=f"f{i}", source_id="s1") for i in range(250)]
+        for fact in facts:
+            await store.store_node(fact)
+            await store.store_edge(
+                NodeEdge(src_id=fact.id, dst_id=hub.id, type=EdgeType.SUPPORTS)
+            )
+
+        result = await store.get_edges_for(
+            [f.id for f in facts], direction="from", edge_type=EdgeType.SUPPORTS
+        )
+
+        assert len(result) == 250
+        assert all(len(result[f.id]) == 1 for f in facts)
+        assert {result[f.id][0].dst_id for f in facts} == {hub.id}
+
+
 class TestArchivalStatus:
     """`ARCHIVED` is how an *active* node leaves the active set.
 

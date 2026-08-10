@@ -12,6 +12,8 @@ What matters here is that frame resolution is proportional to *nodes*, not to
 *pairs*, and that nothing about the answer changed.
 """
 
+import contextlib
+
 import pytest
 
 from epimemer.core.types import (
@@ -33,17 +35,31 @@ def embedding_provider() -> MockEmbeddingProvider:
     return MockEmbeddingProvider(model_id="mock-embed", dimension=8)
 
 
-def _counting(storage, counts: dict):
-    """Wrap get_edges_from so the test can count frame lookups by node."""
-    original = storage.get_edges_from
+@contextlib.contextmanager
+def _counting(storage, requests: list):
+    """Record each frame-resolution request, as the ids it asked about.
 
-    async def counted(node_id, *, edge_type=None):
+    Frames are read in bulk now (#14), so what a per-pair implementation would
+    inflate is the number of *requests*, not the number of ids in them: a
+    resolver that fell back to answering pairs one at a time would show up here
+    as many single-id requests rather than one request naming the whole set.
+
+    Restores on exit. Two measurements are taken from one store, and a wrapper
+    left in place gets wrapped by the next one — so the first list keeps filling
+    during the second run and the comparison reads backwards.
+    """
+    original = storage.get_edges_for
+
+    async def counted(node_ids, *, direction, edge_type=None):
         if edge_type == EdgeType.HAS_METACONTEXT:
-            counts[node_id] = counts.get(node_id, 0) + 1
-        return await original(node_id, edge_type=edge_type)
+            requests.append(list(node_ids))
+        return await original(node_ids, direction=direction, edge_type=edge_type)
 
-    storage.get_edges_from = counted
-    return storage
+    storage.get_edges_for = counted
+    try:
+        yield storage
+    finally:
+        storage.get_edges_for = original
 
 
 async def _facts_that_look_alike(storage, provider, count: int):
@@ -66,42 +82,42 @@ async def _facts_that_look_alike(storage, provider, count: int):
 
 class TestFrameResolutionScales:
 
-    async def test_frames_are_resolved_per_node_not_per_pair(
+    async def test_frames_are_resolved_for_the_whole_set_at_once(
         self, storage, embedding_provider
     ):
         """With 12 mutually-similar facts there are 66 candidate pairs. Resolving
         frames once per pair means 132 lookups for 12 nodes."""
-        await _facts_that_look_alike(storage, embedding_provider, 12)
-        counts: dict[str, int] = {}
-        _counting(storage, counts)
+        facts = await _facts_that_look_alike(storage, embedding_provider, 12)
+        requests: list[list[str]] = []
+        with _counting(storage, requests):
+            await reflect(storage, embedding_provider)
 
-        await reflect(storage, embedding_provider)
-
-        assert counts, "no frame lookups happened at all — test no longer exercises this"
-        assert max(counts.values()) == 1, (
-            f"a node's frames were resolved {max(counts.values())} times in one "
-            "reflect; frame lookups must not scale with candidate pairs"
+        assert requests, "no frame lookups happened at all — test no longer exercises this"
+        assert max(len(ids) for ids in requests) == len(facts), (
+            "no request named the whole candidate set; frames are being resolved "
+            "in smaller groups than the pass already knows about"
         )
 
-    async def test_lookup_count_grows_with_nodes_not_pairs(
+    async def test_request_count_does_not_follow_the_pair_count(
         self, storage, embedding_provider
     ):
-        """Doubling the facts quadruples the pairs. Lookups must merely double."""
+        """Doubling the facts quadruples the pairs. Requests must not move."""
         await _facts_that_look_alike(storage, embedding_provider, 8)
-        small: dict[str, int] = {}
-        _counting(storage, small)
-        await reflect(storage, embedding_provider)
-        small_total = sum(small.values())
+        small: list[list[str]] = []
+        with _counting(storage, small):
+            await reflect(storage, embedding_provider)
 
         await _facts_that_look_alike(storage, embedding_provider, 8)
-        large: dict[str, int] = {}
-        _counting(storage, large)
-        await reflect(storage, embedding_provider)
-        large_total = sum(large.values())
+        large: list[list[str]] = []
+        with _counting(storage, large):
+            await reflect(storage, embedding_provider)
 
-        # 8 → 16 facts: pairs go 28 → 120, so a per-pair implementation would
-        # grow ~4×. Per-node growth is bounded well below that.
-        assert large_total < small_total * 3
+        # 8 → 16 facts: pairs go 28 → 120. A per-pair implementation would grow
+        # ~4×, a per-node one 2×; one request for the set does not grow at all.
+        assert len(large) == len(small), (
+            f"frame requests grew {len(small)} → {len(large)} when the pair "
+            "count quadrupled"
+        )
 
 
 class TestContradictionScoringIsBatched:
@@ -171,14 +187,103 @@ class TestContradictionScoringIsBatched:
         assert sizes == [24], "the pair count quadrupled; the call count must not move"
 
 
+class TestEdgeFetchesDoNotScaleWithTheGraph:
+    """Every phase asks for its edges in bulk (#14 step 1).
+
+    Profiling `reflect` on SurrealDB after #39 put it at **4,323 storage calls
+    for 400 nodes**, and the dominant sites were not the ones #14 predicted:
+    `gather_pending_review` alone issued three per node (35%), relation
+    consolidation two more (18%), while the contradiction phase #14 named was
+    14%. All of them share one shape — iterate nodes, fetch that node's edges —
+    so all of them are fixed by asking once for many.
+
+    Round-trips are what these tests pin, because on a networked backend that is
+    what the wall clock is made of. As everywhere in this module the duration
+    itself belongs in `make bench`.
+    """
+
+    async def _single_node_edge_calls(self, storage, provider, count: int) -> int:
+        """Per-node edge lookups issued by one `reflect` over `count` facts."""
+        await _facts_that_look_alike(storage, provider, count)
+
+        calls = 0
+        originals = {
+            name: getattr(storage, name)
+            for name in ("get_edges_from", "get_edges_to")
+        }
+
+        def counting(original):
+            async def counted(node_id, *, edge_type=None):
+                nonlocal calls
+                calls += 1
+                return await original(node_id, edge_type=edge_type)
+
+            return counted
+
+        for name, original in originals.items():
+            setattr(storage, name, counting(original))
+        try:
+            await reflect(storage, provider)
+        finally:
+            for name, original in originals.items():
+                setattr(storage, name, original)
+        return calls
+
+    async def test_doubling_the_graph_does_not_add_lookups(
+        self, storage, embedding_provider
+    ):
+        """8 → 16 facts. A per-node fetch doubles; a batched one does not move.
+
+        Deliberately a growth assertion rather than a budget: what is wrong is
+        that the count tracks the graph, and a fixed number would have to be
+        rewritten every time a phase is added.
+        """
+        # Each call *adds* facts to the same graph, so the second reflect runs
+        # over 16 of them — the same accumulate-and-compare shape as
+        # `test_lookup_count_grows_with_nodes_not_pairs` above.
+        small = await self._single_node_edge_calls(storage, embedding_provider, 8)
+        large = await self._single_node_edge_calls(storage, embedding_provider, 8)
+
+        assert large <= small, (
+            f"per-node edge lookups grew {small} → {large} when the graph "
+            "doubled; every phase must fetch edges for its whole node set at once"
+        )
+
+    async def test_reflect_asks_for_edges_in_bulk(self, storage, embedding_provider):
+        """The positive form: the batched call is the one actually being used.
+
+        Without this, deleting the phases entirely would pass the test above.
+        """
+        await _facts_that_look_alike(storage, embedding_provider, 6)
+        topic = Topic(content="Weather", source_id="s1")
+        await storage.store_node(topic)
+
+        batched = 0
+        original = storage.get_edges_for
+
+        async def counted(node_ids, *, direction, edge_type=None):
+            nonlocal batched
+            batched += 1
+            return await original(node_ids, direction=direction, edge_type=edge_type)
+
+        storage.get_edges_for = counted
+        await reflect(storage, embedding_provider)
+
+        assert batched > 0, "no phase used the batched edge fetch"
+
+
 class TestMaterialIsGatheredOnce:
 
     async def test_a_topic_material_is_read_once_per_reflect(
         self, storage, embedding_provider
     ):
-        """Split detection and the enrichment scan both need each topic's
-        material. Reading it twice doubles a full edge scan per topic for
-        nothing."""
+        """Split detection and the enrichment scan both need every topic's
+        material. Gathering it twice doubles the read for nothing.
+
+        Now that the read is batched (#14) the count to watch is per edge type
+        across the whole topic set, not per topic: one `SUPPORTS` query and one
+        `ABSTRACTS` query serve both phases.
+        """
         topic = Topic(content="Weather", source_id="s1")
         await storage.store_node(topic)
         for i in range(3):
@@ -188,21 +293,20 @@ class TestMaterialIsGatheredOnce:
                 NodeEdge(src_id=fact.id, dst_id=topic.id, type=EdgeType.SUPPORTS)
             )
 
-        counts: dict[tuple[str, EdgeType], int] = {}
-        original = storage.get_edges_to
+        counts: dict[EdgeType, int] = {}
+        original = storage.get_edges_for
 
-        async def counted(node_id, *, edge_type=None):
+        async def counted(node_ids, *, direction, edge_type=None):
             if edge_type in (EdgeType.SUPPORTS, EdgeType.ABSTRACTS):
-                key = (node_id, edge_type)
-                counts[key] = counts.get(key, 0) + 1
-            return await original(node_id, edge_type=edge_type)
+                counts[edge_type] = counts.get(edge_type, 0) + 1
+            return await original(node_ids, direction=direction, edge_type=edge_type)
 
-        storage.get_edges_to = counted
+        storage.get_edges_for = counted
         await reflect(storage, embedding_provider)
 
         assert counts, "no material lookups happened — test no longer exercises this"
         assert max(counts.values()) == 1, (
-            f"a topic's material was gathered {max(counts.values())} times in one "
+            f"topic material was gathered {max(counts.values())} times in one "
             "reflect"
         )
 

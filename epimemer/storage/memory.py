@@ -30,7 +30,11 @@ from epimemer.core.types import (
     Topic,
     migration_excluded,
 )
-from epimemer.storage.protocol import normalize_for_storage, validate_graph_name
+from epimemer.storage.protocol import (
+    EdgeDirection,
+    normalize_for_storage,
+    validate_graph_name,
+)
 
 _M = TypeVar("_M", bound=BaseModel)
 
@@ -387,6 +391,19 @@ class InMemoryStorage:
         self, node_id: str, *, edge_type: EdgeType | None = None
     ) -> Sequence[NodeEdge]:
         return _edges_at(self._g, self._g.by_dst, node_id, edge_type)
+
+    async def get_edges_for(
+        self,
+        node_ids: Sequence[str],
+        *,
+        direction: EdgeDirection,
+        edge_type: EdgeType | None = None,
+    ) -> dict[str, list[NodeEdge]]:
+        index = self._g.by_src if direction == "from" else self._g.by_dst
+        return {
+            node_id: _edges_at(self._g, index, node_id, edge_type)
+            for node_id in dict.fromkeys(node_ids)
+        }
 
     async def count_edges_by_type(self) -> dict[EdgeType, int]:
         counts = {et: 0 for et in EdgeType}

@@ -48,12 +48,15 @@ async def expand_via_graph(
     for _ in range(hops):
         next_frontier_ids: set[str] = set()
 
-        for node_id in frontier_ids:
-            # Get outgoing and incoming edges
-            outgoing = await storage.get_edges_from(node_id)
-            incoming = await storage.get_edges_to(node_id)
+        # Two queries per hop rather than two per node in the frontier. A hop is
+        # exactly the batch: every id in it is known before any of its edges are
+        # read (ISSUES.md #14).
+        frontier = list(frontier_ids)
+        outgoing = await storage.get_edges_for(frontier, direction="from")
+        incoming = await storage.get_edges_for(frontier, direction="to")
 
-            for edge in list(outgoing) + list(incoming):
+        for node_id in frontier:
+            for edge in list(outgoing[node_id]) + list(incoming[node_id]):
                 # Skip edges not followed in default traversal
                 if _skip(edge):
                     continue

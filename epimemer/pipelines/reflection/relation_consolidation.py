@@ -10,9 +10,45 @@ which relabels the edges in place (edges are not versioned).
 import math
 from collections import defaultdict
 
-from epimemer.core.types import EdgeType
+from epimemer.core.types import EdgeType, NodeEdge
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.storage.protocol import StorageBackend
+
+
+async def related_edges_of_active_nodes(
+    storage: StorageBackend,
+) -> list[NodeEdge]:
+    """Every user-tier (RELATED) edge with an active node at either end, once.
+
+    The shared read behind label consolidation and `list_relations`, which
+    otherwise each grew their own copy of it.
+
+    Scoped to active nodes rather than read straight off the edge table: edges
+    survive their endpoints being retired, so an unscoped `GROUP BY label` would
+    count labels that only archived and superseded nodes still use — reporting a
+    vocabulary the live graph no longer has, and proposing merges between
+    labels nobody can reach. That scoping is why this is two queries and not one
+    aggregate (ISSUES.md #14 step 2).
+
+    De-duplicated by edge id, since an edge between two active nodes is found
+    from both ends. Node order, then outgoing before incoming: label discovery
+    order survives into the proposals, where it decides which of two
+    equally-similar synonyms is `label_a`, so it is preserved rather than left
+    to whatever order the two queries come back in.
+    """
+    node_ids = [node.id for node in await storage.query_nodes()]
+    outgoing = await storage.get_edges_for(
+        node_ids, direction="from", edge_type=EdgeType.RELATED
+    )
+    incoming = await storage.get_edges_for(
+        node_ids, direction="to", edge_type=EdgeType.RELATED
+    )
+
+    by_id: dict[str, NodeEdge] = {}
+    for node_id in node_ids:
+        for edge in list(outgoing[node_id]) + list(incoming[node_id]):
+            by_id.setdefault(edge.id, edge)
+    return list(by_id.values())
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -39,14 +75,10 @@ async def find_similar_relation_pairs(
     """
     counts: dict[tuple[str, str], int] = {}
     seen_edges: set[str] = set()
-    for node in await storage.query_nodes():
-        edges = list(await storage.get_edges_from(node.id)) + list(
-            await storage.get_edges_to(node.id)
-        )
-        for e in edges:
-            if e.type == EdgeType.RELATED and e.label and e.id not in seen_edges:
-                seen_edges.add(e.id)
-                counts[(e.label, e.kind)] = counts.get((e.label, e.kind), 0) + 1
+    for edge in await related_edges_of_active_nodes(storage):
+        if edge.label and edge.id not in seen_edges:
+            seen_edges.add(edge.id)
+            counts[(edge.label, edge.kind)] = counts.get((edge.label, edge.kind), 0) + 1
 
     if len(counts) < 2:
         return []
