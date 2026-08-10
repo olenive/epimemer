@@ -150,7 +150,7 @@ Every node carries four value signals that are updated during ingestion and used
 - **Novelty** (0.0–1.0) — how unexpected relative to existing graph state. Contradictions and new topic clusters score high.
 - **Confidence** (0.0–1.0) — how well-supported by evidence. Multiple independent sources increase confidence.
 - **Relevance** (0.0–1.0) — how connected to frequently-queried topics. Nodes that are regularly retrieved or linked score higher.
-- **Recency** (`last_reinforced` timestamp) — when last reinforced by new evidence. Nodes that haven't been touched decay.
+- **Recency** (`retrieved_at` timestamp, null until a search returns the node) — when it was last used. Nodes that haven't been touched decay.
 
 These signals are updated at ingestion time (e.g., a new supporting fact increases an inference's confidence and recency). The `reflect` operation uses them to decide what to merge, decay, or flag:
 
@@ -242,7 +242,8 @@ nodes (
   novelty,         -- 0.0–1.0, updated continuously        (mutated in place)
   confidence,      -- 0.0–1.0, updated continuously        (mutated in place)
   relevance,       -- 0.0–1.0, updated continuously        (mutated in place)
-  last_reinforced  -- timestamp
+  retrieved_at          -- timestamp, null until first retrieval
+  importance_judged_at  -- timestamp, null until an agent judges it
   -- source_id is the Segment for text-derived nodes; entity/tag Topics have none.
   -- Sources and tags are NOT fields — they are Topics/RawDocuments reached by edges.
 )
