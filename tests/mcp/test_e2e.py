@@ -156,7 +156,6 @@ class TestMCPProtocol:
         data = _parse_response(result)
         assert "result" in data
         assert "similar_pairs" in data["result"]
-        assert "nodes_decayed" in data["result"]
 
     async def test_archive_via_protocol(self, server):
         result = await server.call_tool(

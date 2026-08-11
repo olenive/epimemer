@@ -121,18 +121,32 @@ The memory system's correctness is hard to assess during normal use, so developm
 
 ## Node Value Signals
 
-Every node carries four value signals that are updated during ingestion and used by `reflect` to drive consolidation:
+Every node carries a `ValueSignal`. One member is a score, one is a judgment, and two are clocks — and the split is deliberate: **a score can be computed, a judgment cannot, and use is an event rather than either.**
 
-- **Novelty** (0.0–1.0) — how unexpected relative to existing graph state. Contradictions and new topic clusters score high.
-- **Confidence** (0.0–1.0) — how well-supported by evidence. Multiple independent sources increase confidence.
-- **Relevance** (0.0–1.0) — how connected to frequently-queried topics. Nodes that are regularly retrieved or linked score higher.
-- **Recency** (`retrieved_at` timestamp, null until a search returns the node) — when it was last used. Nodes that haven't been touched decay.
+- **Confidence** (0.0–1.0) — *intended as* how well-supported by evidence. Also **not yet computed**: every node is created at 0.5. Topic merge reads it to pick which description becomes primary, so today that comparison is always a tie (#46).
+- **Importance** (0.0–1.0) — *does this matter?* Moved only by the `judge_importance` tool, in either direction, asymptotically toward its bound, and every move records a reason. Nothing automatic touches it: a decayed judgment would be a number nobody stands behind.
+- **`retrieved_at`** — null until a search returns the node, then the time it last did. *Is this being used?*
+- **`importance_judged_at`** — null until someone judges it. What ages is not the judgment but confidence in its *currency*, which is what the `stale_judgment` archival class reads.
 
-These signals are updated at ingestion time (e.g., a new supporting fact increases an inference's confidence and recency). The `reflect` operation uses them to decide what to merge, decay, or flag:
+Both clocks are nullable because "never" and "long ago" are different states, and only a nullable timestamp can tell them apart.
 
-- Low relevance + stale recency → candidate for decay or archival
-- High confidence + contradicted by new evidence → surface the conflict
-- High novelty + low confidence → flag for attention
+A merge collapses several nodes into a fresh one, so its signal is built by `merged_value_signal` — max importance and confidence, and **the later of each clock**, with null losing to any real timestamp. Carrying the number without its date would be worse than losing both: the merged node would claim a judgment nobody made, and since `stale_judgment` reads the *pair*, an unjudged node is never stale and the merged node stayed exempt from every archival class forever (#45). One shared function, because a merge rebuilds the signal field by field and silently resets whatever it forgets to name.
+
+`reflect` reads these to nominate candidates — it never writes them:
+
+- Never retrieved + not judged important + nothing depending on it → archival candidate
+- Judged important, but judged long ago and never revisited → hand back to review
+
+That is the whole of it today. The other `reflect` phases — consolidation,
+splitting, enrichment, contradiction detection, relation consolidation — key off
+embeddings, edge shape and text length, not off value signals, and they will
+keep doing so while confidence remains a constant (#46).
+
+> **Two scores were removed rather than fixed, for the same underlying reason: a stored number was answering a question that only makes sense at the moment it is asked.**
+>
+> A decaying **Relevance** score fell on every `reflect`, so it measured how often an operator ran `reflect` as much as it measured the node. `retrieved_at` answers the same question without that confound.
+>
+> **Novelty** was meant as how unexpected a node is relative to existing graph state, and was never computed — every node was created at 1.0. Computing it at ingest would not have rescued it: the same content is unexpected arriving into an empty graph and unremarkable arriving into a mature one, so a stored answer records arrival order and then freezes. The word also quietly conflated two things — *new to the graph*, which `created_at` already gives exactly, and *unlike what is known*, which is the one anybody wanted. The latter is well-posed whenever it is asked against the graph as it stands, and the nearest-neighbour distance `vector_search` returns answers it with no field, no migration and a current baseline. **"Surprise" is the better name for the concept** and is used for it below; it says unexpectedness rather than newness, and it carries its own precondition — surprising *relative to what*. Reserved for a caller-supplied signal if one is ever wanted, since an observer-relative name fits a reported judgment (as `importance` is) and misfits a computed one.
 
 ## Timelines
 
@@ -215,9 +229,8 @@ nodes (
   extraction_method, created_at,                           -- content (immutable)
   status,          -- "active" | "superseded" | "merged"   (mutated in place)
   superseded_at,   -- timestamp, nullable                  (mutated in place)
-  novelty,         -- 0.0–1.0, updated continuously        (mutated in place)
-  confidence,      -- 0.0–1.0, updated continuously        (mutated in place)
-  relevance,       -- 0.0–1.0, updated continuously        (mutated in place)
+  confidence,      -- 0.0–1.0, creation-time only so far  (mutated in place)
+  importance,      -- 0.0–1.0, moved only by judgment      (mutated in place)
   retrieved_at          -- timestamp, null until first retrieval
   importance_judged_at  -- timestamp, null until an agent judges it
   -- source_id is the Segment for text-derived nodes; entity/tag Topics have none.
@@ -279,7 +292,9 @@ knowledge claim and editing it rewrites no history:
 | Mutated in place | Set by | Why it's not a version |
 |---|---|---|
 | `status`, `superseded_at` | supersede / merge | this is precisely how a node is *retired* and how "state at time T" is reconstructed |
-| `value` signals (novelty / confidence / relevance) | reflection (decay, reinforcement) | a changing salience score, not a changed claim |
+| `value.confidence` | creation default; topic merge combines it via `merged_value_signal`, clocks included | a changing salience score, not a changed claim |
+| `importance`, `importance_judged_at` | `judge_importance` | a recorded assessment of the same claim, with its own provenance trail |
+| `retrieved_at` | `search` | a record that the node was read, not a change to what it says |
 | edge `label` (user relations) | reflection (relation consolidation) | edges are not versioned; relabelling a synonym is a plain update |
 
 So "a node is never mutated" is shorthand for "a node's *content* is never mutated".
@@ -426,10 +441,10 @@ The data model types (Topics, Facts, Inferences, Segments, Embeddings) should be
 ## Open Questions
 
 - **Incremental clustering**: online HDBSCAN, centroid drift detection, split heuristics
-- **Value signal computation**: precise algorithms for computing novelty (relative to what baseline?), relevance decay curves, confidence aggregation from multiple sources
-- **Value-driven consolidation thresholds**: how do value signals translate into concrete merge/split/decay decisions?
-- **Topic evolution**: value signals provide the inputs (declining relevance = decay, rising novelty = splitting), but the structural mechanisms need design
-- **Contradiction handling**: high-novelty contradictions surface automatically via value signals, but the resolution or coexistence strategy needs design
+- **Value signal computation**: precise algorithms for aggregating confidence from multiple sources. (Neither decay curves nor novelty are among these any more — both signals were removed rather than tuned, and the "relative to what baseline?" that dogged novelty is answered by asking at read time instead of storing an answer. See the removal note under *Node Value Signals*.)
+- **Value-driven consolidation thresholds**: how do value signals translate into concrete merge/split decisions? Archival thresholds are settled (importance ceiling, judgment age); merge and split still key off embedding similarity alone.
+- **Topic evolution**: the structural mechanisms need design. The input a split wants is *surprise* — how unlike the material a topic already holds a new member is — which is a read-time question over embeddings rather than a stored field. It is also nearly free where it would be asked: `reflect` already builds the block-wise similarity matrix over every topic and fact (`pair_scoring.similar_pairs`), and a per-row max over that same matrix is one reduction on data already in hand
+- **Contradiction handling**: contradictions surface today via embedding similarity plus an LLM judgment; the resolution or coexistence strategy needs design
 - **Timeline implementation details**: efficient storage and querying of precise timelines (DataFrame-backed), vague timeline ordering heuristics, cyclical timeline template-to-instance mapping
 - **Metacontext inheritance scope**: how deep does inheritance go? If a metacontext is inherited from a document, do inferences derived from those facts also inherit it? Probably yes, but edge cases need thought.
 - **Metacontext-aware value signals**: does "confidence" mean the same thing in a fictional metacontext (canonicity) vs. factual (likelihood of truth)? May need metacontext-specific interpretation of value signals.

@@ -4,8 +4,6 @@ Covers:
 - Edge creation: correct edge types for each node pair
 - Edge creation: edges carry correct src_id and dst_id
 - Edge creation: Petri net tokens flow correctly
-- Value updates: confidence increases on supporting evidence
-- Value updates: novelty increases on contradiction
 - Value updates: retrieval reinforcement stamps retrieved_at
 - Persist: all nodes and edges stored in storage after persist call
 - Versioning: supersede creates new node, marks old as superseded, creates edge

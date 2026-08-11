@@ -98,10 +98,45 @@ class _GraphStore:
     by_src: dict[str, set[str]] = field(default_factory=dict)
     by_dst: dict[str, set[str]] = field(default_factory=dict)
     embeddings: dict[str, EmbeddingRecord] = field(default_factory=dict)
+    # Item index over `embeddings`, on the same terms as the endpoint indexes:
+    # derived state whose only writers are `_put_embedding` / `_drop_embedding`.
+    by_item: dict[str, set[str]] = field(default_factory=dict)
     timelines: dict[str, Timeline] = field(default_factory=dict)
     metacontexts: dict[str, Metacontext] = field(default_factory=dict)
     stores_since_reflect: int = 0
     reflect_threshold_override: int | None = None
+
+
+def _put_embedding(g: _GraphStore, embedding: EmbeddingRecord) -> str:
+    """Insert or replace an embedding and keep the item index exact.
+
+    Same discipline as `_put_edge`: writes are upserts by id, so a record
+    stored again under a different `item_id` has to leave the old entry.
+    Without the index, fetching one item's vector walked every embedding in the
+    graph — an O(N) scan inside a per-node loop, which is what made in-memory
+    `reflect` quadratic in the same way the SurrealDB one was.
+    """
+    previous = g.embeddings.get(embedding.id)
+    if previous is not None:
+        _unindex_embedding(g, previous)
+    g.embeddings[embedding.id] = embedding
+    g.by_item.setdefault(embedding.item_id, set()).add(embedding.id)
+    return embedding.id
+
+
+def _unindex_embedding(g: _GraphStore, embedding: EmbeddingRecord) -> None:
+    ids = g.by_item.get(embedding.item_id)
+    if ids is None:
+        return
+    ids.discard(embedding.id)
+    if not ids:
+        del g.by_item[embedding.item_id]
+
+
+def _drop_embedding(g: _GraphStore, embedding_id: str) -> None:
+    embedding = g.embeddings.pop(embedding_id, None)
+    if embedding is not None:
+        _unindex_embedding(g, embedding)
 
 
 def _index_edge(g: _GraphStore, edge: NodeEdge) -> None:
@@ -163,6 +198,21 @@ def _edges_at(
         for edge in (g.edges[edge_id] for edge_id in index.get(node_id, ()))
         if edge_type is None or edge.type == edge_type
     )
+
+
+def _embeddings_at(
+    g: _GraphStore, item_id: str, model_id: str | None
+) -> list[EmbeddingRecord]:
+    """One item's embeddings, from the index rather than a scan.
+
+    Model is filtered after the lookup, for the same reason the edge type is:
+    an item has one embedding per model, so the list is tiny.
+    """
+    return [
+        embedding
+        for embedding in (g.embeddings[eid] for eid in g.by_item.get(item_id, ()))
+        if model_id is None or embedding.model_id == model_id
+    ]
 
 
 _DEFAULT_DB = "default"
@@ -260,6 +310,14 @@ class InMemoryStorage:
     async def get_node(self, node_id: str) -> EpistemicNode | None:
         node = self._g.nodes.get(node_id)
         return None if node is None else _copy(node)
+
+    async def get_nodes(self, node_ids: Sequence[str]) -> dict[str, EpistemicNode]:
+        found = {}
+        for node_id in dict.fromkeys(node_ids):
+            node = self._g.nodes.get(node_id)
+            if node is not None:
+                found[node_id] = _copy(node)
+        return found
 
     async def query_nodes(
         self,
@@ -461,7 +519,7 @@ class InMemoryStorage:
             node.status = NodeStatus.SUPERSEDED
             node.superseded_at = superseded_at
             self._g.nodes[new_node.id] = _store(new_node)
-            self._g.embeddings[new_embedding.id] = _store(new_embedding)
+            _put_embedding(self._g, _store(new_embedding))
             self._migrate_edges_inplace({old_node.id}, new_node.id)
             _put_edge(self._g, _store(lineage_edge))
             for edge in evidence_edges:
@@ -530,7 +588,7 @@ class InMemoryStorage:
         snapshot = copy.deepcopy(self._g)
         try:
             self._g.nodes[merged_node.id] = _store(merged_node)
-            self._g.embeddings[merged_embedding.id] = _store(merged_embedding)
+            _put_embedding(self._g, _store(merged_embedding))
             # Migrate before writing lineage edges so they are not re-pointed.
             self._migrate_edges_inplace({s.id for s in source_nodes}, merged_node.id)
             for source in source_nodes:
@@ -572,7 +630,7 @@ class InMemoryStorage:
                 replaced_timelines.append((timeline.id, self._g.timelines.get(timeline.id)))
                 self._g.timelines[timeline.id] = _store(timeline)
             for embedding in embeddings:
-                self._g.embeddings[embedding.id] = _store(embedding)
+                _put_embedding(self._g, _store(embedding))
                 added_embeddings.append(embedding.id)
         except Exception:
             for node_id in added_nodes:
@@ -580,7 +638,7 @@ class InMemoryStorage:
             for edge_id in added_edges:
                 _drop_edge(self._g, edge_id)
             for embedding_id in added_embeddings:
-                self._g.embeddings.pop(embedding_id, None)
+                _drop_embedding(self._g, embedding_id)
             # Reversed: an id written twice in one batch must end up holding
             # what it held before the batch, not what it held mid-batch.
             for timeline_id, previous in reversed(replaced_timelines):
@@ -593,20 +651,20 @@ class InMemoryStorage:
     # --- Embeddings ---
 
     async def store_embedding(self, embedding: EmbeddingRecord) -> str:
-        self._g.embeddings[embedding.id] = _store(embedding)
-        return embedding.id
+        return _put_embedding(self._g, _store(embedding))
 
     async def get_embeddings_for_item(
         self, item_id: str, model_id: str | None = None
     ) -> Sequence[EmbeddingRecord]:
-        results = []
-        for emb in self._g.embeddings.values():
-            if emb.item_id != item_id:
-                continue
-            if model_id is not None and emb.model_id != model_id:
-                continue
-            results.append(emb)
-        return _copy_all(results)
+        return _copy_all(_embeddings_at(self._g, item_id, model_id))
+
+    async def get_embeddings_for_items(
+        self, item_ids: Sequence[str], *, model_id: str | None = None
+    ) -> dict[str, list[EmbeddingRecord]]:
+        return {
+            item_id: _copy_all(_embeddings_at(self._g, item_id, model_id))
+            for item_id in dict.fromkeys(item_ids)
+        }
 
     async def vector_search(
         self,

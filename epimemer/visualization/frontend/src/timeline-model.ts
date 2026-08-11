@@ -253,7 +253,7 @@ const describeNode = (node: NodeView): string =>
     "",
     `created   ${node.created_at}`,
     `retrieved  ${node.retrieved_at ?? "never"}`,
-    `confidence ${node.confidence.toFixed(2)}  novelty ${node.novelty.toFixed(2)}`,
+    `confidence ${node.confidence.toFixed(2)}`,
   ].join("\n");
 
 /**

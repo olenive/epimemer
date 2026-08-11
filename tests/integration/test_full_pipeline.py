@@ -116,7 +116,6 @@ class TestFullPipeline:
 
         reflect_result, _ = await reflect(storage, embedding_provider)
         assert "similar_pairs" in reflect_result
-        assert "nodes_decayed" in reflect_result
         assert "contradictions" in reflect_result
 
     async def test_update_creates_version_history(

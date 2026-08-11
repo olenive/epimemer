@@ -125,10 +125,10 @@ useful:
 - `contested` → an unresolved same-frame contradiction; do not trust it blindly.
 
 ### Recording that something matters (judge_importance)
-- Two value dimensions move independently. `relevance` answers "is this being
-  used?" and maintains itself — retrieval restores it, time decays it, you never
+- Two things are tracked, and they move independently. *Use* is recorded for
+  you: every node a search returns gets `retrieved_at` stamped, and you never
   touch it. `importance` answers "does this matter?" and only moves when someone
-  judges that it does.
+  judges that it does — being read a lot is not a judgment.
 - `judge_importance(node_id, direction, reason, related_id=None)` is that
   judgment, in both directions. Pass `related_id` when a specific new node
   triggered the reassessment.

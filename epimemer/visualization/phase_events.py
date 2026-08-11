@@ -15,9 +15,9 @@ so watching a process cannot change what it computes — the same guarantee
 `_run_net` makes for the real nets.
 
 Usage:
-    async with phase_pipeline(bus, "reflect", ("decay", "consolidation")) as phase:
-        decayed = await phase("decay", lambda: apply_decay(storage), tokens=int)
+    async with phase_pipeline(bus, "reflect", ("consolidation", "review")) as phase:
         pairs = await phase("consolidation", lambda: find_pairs(storage), tokens=len)
+        flagged = await phase("review", lambda: gather_pending(storage), tokens=len)
 """
 
 import time

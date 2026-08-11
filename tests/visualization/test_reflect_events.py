@@ -152,18 +152,19 @@ class TestEmission:
         received = _recorder(bus)
 
         async def _boom(*args, **kwargs):
-            raise RuntimeError("decay exploded")
+            raise RuntimeError("consolidation exploded")
 
         monkeypatch.setattr(
-            "epimemer.pipelines.reflection.value_decay.apply_decay", _boom
+            "epimemer.pipelines.reflection.topic_consolidation.find_similar_topic_pairs",
+            _boom,
         )
 
-        with pytest.raises(RuntimeError, match="decay exploded"):
+        with pytest.raises(RuntimeError, match="consolidation exploded"):
             await reflect(storage, embedding_provider, event_bus=bus)
 
         assert isinstance(received[-1], PipelineFailed)
         assert received[-1].pipeline_name == "reflect"
-        assert "decay exploded" in received[-1].error
+        assert "consolidation exploded" in received[-1].error
         assert not any(isinstance(e, PipelineCompleted) for e in received)
 
 
@@ -187,15 +188,8 @@ class TestWatchingChangesNothing:
         )
         unwatched, unwatched_meta = await reflect(storage, embedding_provider)
 
-        # Decay is applied on every call, so the counts of *what decayed* differ
-        # between the two runs; everything the agent acts on must not.
-        for key in (
-            "similar_pairs",
-            "split_candidates",
-            "enrichment_candidates",
-            "contradictions",
-            "pending_review",
-            "similar_relations",
-        ):
-            assert watched[key] == unwatched[key], key
+        # `reflect` reads and proposes without writing, so two consecutive
+        # calls see the same graph and must agree on every key — not merely on
+        # the ones the agent acts on, as when decay made each run differ.
+        assert watched == unwatched
         assert unwatched_meta.nodes_returned == watched_meta.nodes_returned

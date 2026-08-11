@@ -49,7 +49,7 @@ the knowledge graph and pipeline execution in real time.
 | `EPIMEMER_EMBEDDING_PROVIDER` | `sentence-transformers` | `sentence-transformers`, `mock` |
 | `EPIMEMER_EMBEDDING_MODEL_ID` | `all-MiniLM-L6-v2` | Any sentence-transformers model |
 | `EPIMEMER_SEGMENTATION_STRATEGY` | `paragraph` | `paragraph`, `semantic` |
-| `EPIMEMER_REINFORCEMENT_BOOST` | `0.2` | Relevance restored per retrieval; `0.0` disables |
+| `EPIMEMER_RECORD_RETRIEVAL` | `true` | Stamp `retrieved_at` on search results; `false` disables |
 | `EPIMEMER_IMPORTANCE_STEP` | `0.25` | Fraction of the gap to the bound closed by one `judge_importance` call, in either direction |
 | `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
 | `EPIMEMER_VIZ_ENABLED` | `true` | `true`, `false` |
@@ -103,7 +103,7 @@ restate the count.
 
 | Tool | Purpose |
 |------|---------|
-| `reflect` | Analyse the graph for consolidation/decay candidates |
+| `reflect` | Analyse the graph for consolidation/cleanup candidates (reads only) |
 | `configure_reflection` | Set (or clear) this graph's store threshold for suggesting a reflect |
 | `apply_reflection` | Apply agent decisions from a reflection (including user-approved archivals) |
 

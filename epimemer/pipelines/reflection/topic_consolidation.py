@@ -8,19 +8,29 @@ parent, keeping children active).
 import math
 
 from epimemer.core.types import (
-    EmbeddingRecord,
     EpistemicNode,
     NodeType,
     Topic,
-    ValueSignal,
+    merged_value_signal,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.pipelines.graph_construction.versioning import merge_nodes
+from epimemer.pipelines.reflection.pair_scoring import (
+    similar_pairs,
+    stack_uniform_width,
+)
 from epimemer.storage.protocol import StorageBackend
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Compute cosine similarity between two vectors."""
+    """Cosine similarity between two vectors.
+
+    Kept scalar deliberately. Its one remaining caller is the merge safety bar,
+    which runs over the two or three nodes of a single proposed merge — bounded
+    by the merge, not by the graph — so the setup cost of a matrix product would
+    exceed the comparisons it replaces. The graph-scaled loop that used to be
+    here is now `similar_pairs` (#47).
+    """
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(x * x for x in b))
@@ -41,9 +51,12 @@ async def all_pairs_above_threshold(
     near-duplicates are collapsed. Returns False if any node lacks a stored
     embedding — if similarity cannot be verified, the merge is refused.
     """
+    by_item = await storage.get_embeddings_for_items(
+        [node.id for node in nodes], model_id=model_id
+    )
     vectors: list[list[float]] = []
     for node in nodes:
-        embeddings = await storage.get_embeddings_for_item(node.id, model_id=model_id)
+        embeddings = by_item[node.id]
         if not embeddings:
             return False
         vectors.append(embeddings[0].vector)
@@ -86,30 +99,37 @@ async def find_similar_topic_pairs(
     if len(topics) < 2:
         return []
 
-    # Get embeddings for each topic
-    topic_vectors: dict[str, list[float]] = {}
-    for topic in topics:
-        embeddings = await storage.get_embeddings_for_item(
-            topic.id, model_id=effective_model_id
-        )
-        if embeddings:
-            topic_vectors[topic.id] = embeddings[0].vector
+    # One fetch for every topic's vector rather than one per topic: a vector is
+    # the most expensive row in the store, and this walks all of them (#14).
+    by_item = await storage.get_embeddings_for_items(
+        [topic.id for topic in topics], model_id=effective_model_id
+    )
+    topic_vectors: dict[str, list[float]] = {
+        topic.id: by_item[topic.id][0].vector
+        for topic in topics
+        if by_item[topic.id]
+    }
 
-    # Compute pairwise similarities
-    pairs: list[tuple[Topic, Topic, float]] = []
-    topic_list = [t for t in topics if t.id in topic_vectors]
+    # Score every pair at once, over the topics whose vectors can form a matrix.
+    # This was the last per-pair Python loop in `reflect`, and once storage
+    # stopped being the cost it was most of the wall clock: 71% on SurrealDB and
+    # 88% in-memory at 1,200 nodes, against 9 ms of storage (#47).
+    by_id = {topic.id: topic for topic in topics}
+    kept_ids, vectors = stack_uniform_width(
+        [topic.id for topic in topics], topic_vectors
+    )
+    if not kept_ids:
+        return []
+    topic_list = [by_id[topic_id] for topic_id in kept_ids]
 
-    for i in range(len(topic_list)):
-        for j in range(i + 1, len(topic_list)):
-            a = topic_list[i]
-            b = topic_list[j]
-            similarity = _cosine_similarity(
-                topic_vectors[a.id], topic_vectors[b.id]
-            )
-            if similarity >= similarity_threshold:
-                pairs.append((a, b, similarity))
+    pairs = [
+        (topic_list[i], topic_list[j], similarity)
+        for i, j, similarity in similar_pairs(vectors, similarity_threshold)
+    ]
 
-    # Sort by similarity descending
+    # Sort by similarity descending. Stable, so pairs that tie stay in index
+    # order — which is the order `similar_pairs` returns them in, and the order
+    # the loop this replaced produced them in.
     pairs.sort(key=lambda x: x[2], reverse=True)
     return pairs
 
@@ -124,8 +144,8 @@ async def merge_similar_topics(
 
     Creates a new Topic with combined content from both sources. The topic
     with higher confidence is used as the primary content, with the other
-    appended. Value signals are combined (max confidence, max relevance,
-    average novelty).
+    appended. Value signals are combined by `merged_value_signal`, which
+    carries both value clocks across as well as the scalars.
 
     Uses merge_nodes from the versioning module to embed the merged topic,
     migrate the originals' edges onto it, mark originals as merged, and create
@@ -149,15 +169,10 @@ async def merge_similar_topics(
     # Combine content
     merged_content = f"{primary.content} {secondary.content}"
 
-    # Combine value signals
-    # Importance takes the max, like confidence and relevance: a judgment made
-    # about either source still applies to what replaces them.
-    merged_value = ValueSignal(
-        confidence=max(topic_a.value.confidence, topic_b.value.confidence),
-        relevance=max(topic_a.value.relevance, topic_b.value.relevance),
-        novelty=(topic_a.value.novelty + topic_b.value.novelty) / 2.0,
-        importance=max(topic_a.value.importance, topic_b.value.importance),
-    )
+    # Shared with the wired merge in `apply_reflection`, and shared deliberately:
+    # rebuilding a signal field by field silently resets whatever it forgets to
+    # name, which is how both clocks came to be dropped here (#45).
+    merged_value = merged_value_signal([topic_a.value, topic_b.value])
 
     # Create the merged topic
     merged_topic = Topic(

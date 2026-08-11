@@ -42,29 +42,52 @@ trustworthy; a cross-run comparison is not.
 
 ## Where things stand
 
+**Measured at 2,000/4,000/8,000 rather than the 1,000/2,000 this table used to
+carry.** `reflect` got fast enough that the small sizes no longer separate the
+fixed costs from the scaling ones, and a two-point exponent turned out to be
+worth little — see the warning below the crossings.
+
 | Nodes | Backend | ingest (docs/min) | search p50 | `list_sources` | `reflect` |
 |---|---|---|---|---|---|
-| 1,000 | memory | 19,459 | 22.2 ms | 16 ms | 787 ms |
-| 2,000 | memory | 18,871 | 44.5 ms | 31 ms | 2,913 ms |
-| 1,000 | SurrealDB | 3,217 | 164 ms | 275 ms | 8,107 ms |
-| 2,000 | SurrealDB | 3,213 | 246 ms | 862 ms | 29,056 ms |
+| 2,000 | memory | 18,487 | 45.1 ms | 31 ms | 197 ms |
+| 4,000 | memory | 18,805 | 88.5 ms | 64 ms | 365 ms |
+| 8,000 | memory | 18,171 | 177.0 ms | 149 ms | 780 ms |
+| 2,000 | SurrealDB | 3,878 | 230.0 ms | 258 ms | 819 ms |
+| 4,000 | SurrealDB | 3,750 | 355.3 ms | 514 ms | 2,051 ms |
+| 8,000 | SurrealDB | 3,730 | 581.8 ms | 1,034 ms | 5,696 ms |
 
 ### The 30 s crossings
 
 `EPIMEMER_TOOL_TIMEOUT_SECONDS` defaults to **30 s**, so "crossing" means *the
-tool call fails*, not *feels slow*. These are extrapolations from the two sizes
-above — enough to rank the operations, not to trust a third digit.
+tool call fails*, not *feels slow*. Fitted over three sizes, which is enough to
+rank the operations and not enough to trust a third digit.
 
-| Operation | in-memory | SurrealDB (loopback) | shape |
+| Operation | in-memory | SurrealDB (loopback) | exponent (mem / surreal) |
 |---|---|---|---|
-| `search` | ~1.3M | not reachable | linear in-memory, sublinear on SurrealDB |
-| `list_sources` | ~2M | ~17,000 | linear in-memory, exp. 1.65 on SurrealDB |
-| **`reflect`** | **~6,900** | **~2,000** | quadratic (exp. 1.89 / 1.84) |
+| `search` | ~1.5M | ~2.9M | 0.99 / 0.67 |
+| `list_sources` | ~870,000 | ~230,000 | 1.13 / 1.00 |
+| **`reflect`** | **~320,000** | **~26,000** | 0.99 / 1.40 |
 | ingest | not reachable | not reachable | flat |
 
-**`reflect` is the limiting operation on both backends**, and SurrealDB is the
-limiting backend by 3.4×. Nothing else is within an order of magnitude of
-failing.
+**Nothing here fails at a size anyone is running.** `reflect` is still the first
+to go, and SurrealDB is still the limiting backend, but the nearest crossing is
+~26,000 nodes rather than the ~2,200 it was two changes ago.
+
+> **Two points are not a shape.** The previous version of this table put
+> `reflect` at a quadratic exponent of 1.75–1.87 and crossings near 7,000,
+> extrapolated from 1,000 and 2,000 nodes. Three points put the same code's
+> successor at 0.99 in-memory — the earlier fit was reading fixed setup cost as
+> curvature, which inflates the exponent and understates the crossing badly.
+> Fit over at least three sizes spanning 4×, or report the measurements without
+> a crossing.
+
+**`reflect` is quadratic in principle and does not look it yet.** Both phases
+compare every pair, so the work really is O(N²); at these sizes it happens
+inside two matrix products whose constant is small enough that the linear costs
+— reading the vectors, walking the edges — still dominate. Expect the exponent
+to climb toward 2 well beyond 8,000 nodes. In-memory measuring 0.99 is a
+statement about where the crossover between those two costs currently sits, not
+a claim that the pair comparison went away.
 
 ---
 
@@ -86,61 +109,113 @@ every active node and fetch that node's edges: O(N) queries per call. Both now
 ask once for the whole active set (`get_edges_for`), which took `list_relations`
 from 803 queries to 7 at 400 nodes and `list_sources` from 883 to 87. What is
 left in `list_sources` is one `get_document` + `get_node` per *distinct source*,
-which is bounded by sources rather than by graph size.
+which is bounded by sources rather than by graph size. It gained a further
+2.2–3.3× when the edge fetch stopped using `IN` for large id sets (below), which
+is also what flattened its exponent from 1.56 to ~1.
 
-**`reflect` — the one that fails.** Two different stories per backend, and the
-difference is the whole diagnosis:
+**`reflect` — still the limiting operation, and now bound by bytes.**
 
-- **In-memory it is arithmetic-bound and quadratic.** The contradiction phase
-  compares every surviving candidate fact pair. That work is genuine, not
-  redundant, so it was made fast rather than removed: `similar_pairs`
-  (`pipelines/reflection/contradiction_detection.py`) stacks the vectors and
-  takes a matrix product per 512-row block instead of one Python call per pair.
-  That bought 4.1–4.6× and moved the crossing to ~6,900, with the exponent
-  essentially unchanged — a constant factor moves a quadratic crossing by roughly
-  its square root. Batching the edge reads on top of it bought a further 1.04–1.09×,
-  which is the expected result of removing round-trips from a backend that has none.
-- **On SurrealDB it is round-trip bound**, and batching the *edge* reads did not
-  fix that. It removed 72% of `reflect`'s round-trips (5,144 → 1,448 at 400
-  nodes) and bought 1.19–1.38×, leaving the crossing at ~2,000. Profiling what
-  survives shows why: **every per-node read left is a `get_node` or a
-  `get_embeddings_for_item`**, not an edge query — 300 node fetches in
-  `topic_enrichment` (each just to read a `.content`), 300 embedding fetches
-  across contradiction detection and topic consolidation, plus one decay
-  `UPSERT` per node. Those are the expensive remainder. Batched node and
-  embedding reads are #14 step 4.
+- **In-memory it is arithmetic-bound.** Both pair phases compare every pair,
+  which is genuine work rather than redundancy, so both were made fast rather
+  than made smaller: `similar_pairs` (`pipelines/reflection/pair_scoring.py`)
+  stacks the vectors and takes a matrix product per 512-row block instead of one
+  Python call per pair. Facts went first (#39, 4.1–4.6×) and topics followed
+  once storage stopped hiding them (#47, **7.3× at 1,000 nodes and 16.5× at
+  2,000** in-memory — the ratio grows with size because what was removed was
+  quadratic and what remains is not). Storage batching buys nothing on this
+  backend, as expected of one with no round-trips: **1.03–1.10×** for #14 step 4,
+  which is noise.
+- **On SurrealDB it was round-trip bound, and is not any more.** Step 4 bought
+  **6.19× at 1,000 nodes and 7.09× at 2,000** (6,464 → 1,044 ms; 24,946 →
+  3,519 ms), measured same-session, and took round-trips at 1,200 nodes from
+  3,086 to **56**. Vectorizing the topic phase on top of that (#47) bought a
+  further **2.9× and 4.4×** at the same two sizes.
+
+  Three separate causes, and the batching everyone predicted was the smallest:
+
+  1. **A per-call full scan of the embedding table** — 64% of `reflect` at
+     1,200 nodes, and quadratic. `get_embeddings_for_item` asked
+     `WHERE item_id = $i AND model_id = $m`, and the planner chose
+     `idx_emb_model`, which matches *every* row for the graph's one model, then
+     filtered `item_id` afterwards. Per call: 2.4 ms at 400 embeddings, 6.2 at
+     1,200, 15.6 at 3,000 — dead linear in table size, inside a per-node loop.
+     Asking on `item_id` alone uses `idx_emb_item` and is flat at ~0.6 ms.
+     Fixing that one predicate, with no batching at all, took `reflect` at 1,200
+     nodes from 8,890 ms to 3,868 ms — **2.3× from a one-line change**.
+  2. **`IN` does not use an index**, so `get_edges_for` was scanning the edge
+     table once per chunk *and* paying O(rows × ids) for the predicate. Reading
+     the candidate rows and matching them in Python is 14× faster past ~100 ids.
+  3. **The batched reads themselves** (`get_nodes`, `get_embeddings_for_items`),
+     which is what #14 step 4 nominated. Worth 3,868 → 1,465 ms once the two
+     above were fixed. Real, and the smallest of the three.
+
+  The write side had already gone: value decay was one `UPSERT` per active node
+  per pass, and removing `relevance` (#44) removed it, making `reflect` a pure
+  read.
+
+  **What binds it now is payload, not round-trips or arithmetic.** At 4,000
+  nodes `reflect` is 2,032 ms, of which 1,840 ms is inside **87** queries — 21 ms
+  each, because those queries move whole tables: 894 ms for the two
+  `get_embeddings_for_items` calls that fetch every fact and topic vector, 430 ms
+  of edges, 349 ms of nodes. That is close to irreducible with this design —
+  pairwise comparison needs the vectors, and they are 384 floats each. Reducing
+  it means moving the comparison to the server or keeping vectors across calls,
+  both of which are larger changes than anything in #14 or #47, and neither is
+  worth making while the crossing sits at ~26,000 nodes.
 
 ### What retrieval reinforcement costs
 
-`search` writes every returned node back with a bumped `relevance` and a fresh
-timestamp — k extra writes per call, on by default
-(`EPIMEMER_REINFORCEMENT_BOOST=0.2`). Measured with `--skip-reflect` against the
-same container: **+5% in-memory, +8–12% on SurrealDB** (+14–17 ms).
+`search` writes every returned node back with a fresh `retrieved_at` — k extra
+writes per call, on by default (`EPIMEMER_RECORD_RETRIEVAL=true`). Measured with
+`--skip-reflect` against the same container: **+5% in-memory, +8–12% on
+SurrealDB** (+14–17 ms). `search` is otherwise unchanged by step 4 (0.95–0.96×,
+i.e. noise): it fetches one embedding per query, not one per node.
 
 Cheap, and **flat in graph size**: k does not grow with the graph, so the cost is
 a constant — visible on SurrealDB where each write is a round-trip, near-invisible
-in-memory. It changes no crossing. It is a per-node write, the same shape as the
-decay writes in `reflect`, so a batched write would serve both.
+in-memory. It changes no crossing. Since value decay was removed this is the only
+per-node write left in the read path, so it is what a batched write would serve.
 
 ---
 
 ## Before optimizing anything here
 
 **Profile first. Every performance fix in this project so far has overturned the
-cause its issue predicted** — the candidate explanations were wrong five times
-running, and in each case a profile redirected the work to something the issue
-had not mentioned. Most recently #14 named the contradiction phase's edge
-queries as what held `reflect` at the timeout; they turned out to be 14% of its
-storage calls, and removing all of them left the crossing where it was. The
-recipe: seed via `bench._seed`, wrap one `await reflect(...)` in `cProfile`,
-sort by cumulative time.
+cause its issue predicted** — six times running, and in each case a profile
+redirected the work to something the issue had not mentioned. #14 first named
+the contradiction phase's edge queries as what held `reflect` at the timeout;
+they were 14% of its storage calls, and removing all of them left the crossing
+where it was. Step 4 then named batched node and embedding reads; those turned
+out to be the *smallest* of the three causes, behind a query that never used the
+right index. The recipe: seed via `bench._seed`, wrap one `await reflect(...)` in
+`cProfile`, sort by cumulative time.
+
+**#47 is the one exception, and worth knowing why.** It was predicted correctly
+and it under-promised: the issue expected ~4× by analogy with #39 and measured
+7.3–16.5× in-memory. The difference is that #39 removed a quadratic from a
+`reflect` that had other quadratics left, while #47 removed the last one — so
+the ratio kept growing with graph size instead of settling at a constant. A
+profile is what made the prediction reliable: #47 was written *from* the
+measurement that closed #14, not from a guess about where time goes.
 
 On a networked backend, **count round-trips before timing anything** — wrap
 `SurrealDBStorage._query`, or the individual storage methods, in a counter and
 attribute each call to its caller. That is what identifies which N+1 site
-matters, and it is cheap enough to run at 400 nodes.
+matters, and it is cheap enough to run at 400 nodes. Attribute to the *reflect
+phase* as well by subscribing to the pipeline event bus: the phase boundaries
+are exact because `reflect` is sequential, and it is what showed that the
+enrichment material gather is billed to `split_detection`, whichever phase asks
+for it first.
 
-Two implementation notes that outlived the measurements that produced them:
+**Then check the query plan, not just the call count.** A call count says which
+site is hot; `EXPLAIN` says whether each call is O(1) or O(table). The two
+biggest wins in step 4 were both plan problems that no amount of round-trip
+counting would have found — one call in the right place can still scan
+everything. `EXPLAIN` output is a nested `children` tree; walk it for
+`IndexScan` and the `index` attribute, and treat *no* index attribute as a full
+scan.
+
+Three implementation notes that outlived the measurements that produced them:
 
 - **A single `LET $active = (…); SELECT …` call does not work through the
   SurrealDB driver.** `db.query` returns the *first* statement's result, so the
@@ -155,7 +230,28 @@ Two implementation notes that outlived the measurements that produced them:
 - **In-memory endpoint indexes cost ~102 bytes per edge** (3.2 MiB at 32,500
   edges, measured with `sys.getsizeof` over both index dicts and their sets).
   Roughly what the `edges` dict's own table and keys cost, and small next to the
-  `NodeEdge` objects being indexed.
+  `NodeEdge` objects being indexed. The embedding item index added for step 4 is
+  the same trade on a smaller table.
+- **A second predicate can cost you the index.** Adding `AND model_id = $m` to
+  an `item_id` lookup made the planner take the *other* index, the unselective
+  one, and filter afterwards. A composite `(item_id, model_id)` index did not
+  help — measured, the planner still preferred the unselective one, and adding
+  it made the plan a bare scan. `WITH INDEX idx_emb_item` did work (22× at
+  3,000 rows), but so did simply dropping the predicate from the query and
+  filtering in Python, which is what shipped: same speed, no version-specific
+  syntax, and it degrades to correct rather than to a parse error. Do not drop
+  `idx_emb_model` itself — `_ranked_items` narrows by model and needs it.
+- **`IN $ids` does not use an index here at all.** Verified with `EXPLAIN` on
+  `src_id IN $ids` against `idx_edge_src`, with and without a `WITH INDEX` hint:
+  both plan a full scan, and the list is then tested per row, so a batched fetch
+  costs O(rows × ids). Two consequences. Chunking an `IN` buys almost nothing —
+  3,000 nodes over 9,000 edges took 692 ms at 200 ids per chunk against 511 ms
+  as a single query — so a chunk size is a memory bound, not a speed knob. And
+  past a crossover it is cheaper to read the candidate rows and match them in
+  Python: measured at **100–200 ids for edges** (stable across 400/1,200/3,000
+  nodes, because both sides grow linearly in table size), **past 400 for nodes**
+  and **past 1,000 for embeddings** — the heavier the row, the longer `IN` stays
+  worth it, since the alternative reads rows nobody asked for.
 
 ---
 

@@ -190,16 +190,29 @@ async def _ranked_active_items(
     return [(r["item_id"], r["score"]) for r in rows]
 
 
-# Node ids per `IN` list in `get_edges_for`. The ids travel as a bind
-# parameter, so nothing here is a statement-length limit — chunking bounds the
-# planner's work and the result set held in memory at once.
+# `IN` does not use an index in this SurrealDB. Verified with EXPLAIN on
+# `src_id IN $ids` against `idx_edge_src`, with and without an explicit
+# `WITH INDEX` hint: both plan a full scan, and the list is then evaluated per
+# row. A batched fetch therefore costs O(rows x ids), which is why chunking is
+# nearly worthless on the edge table — 3,000 nodes over 9,000 edges took 692 ms
+# at 200 ids per chunk and 511 ms as a single query.
 #
-# The exact value is not delicate: at 10,000 nodes this is 50 round-trips
-# against the 10,000 it replaces, and doubling it would save 25 of them —
-# nothing, next to a per-node fetch. It is kept small enough that the default
-# suite can afford to cross the seam, because a chunk boundary that no test
-# reaches is where a batched fetch silently drops rows.
-_EDGE_FETCH_CHUNK = 200
+# Above this many ids it is cheaper to read the candidate rows and match them
+# here. Measured on node_edge: the crossover sat at 100-200 ids at 400, 1,200
+# and 3,000 nodes alike — stable because both sides of the trade grow linearly
+# in table size — and at 3,000 nodes the whole-type read was 34 ms against
+# 511 ms for the `IN`. Edges only: repeated on heavier rows, the crossover was
+# past 400 ids for nodes and past 1,000 for embeddings, a vector being the most
+# expensive row in the store to fetch for nobody.
+_EDGE_IN_PREDICATE_MAX = 100
+
+# Ids per `IN` list for the fetches that stay on `IN` at every size. The ids
+# travel as a bind parameter, so this is not a statement-length limit — it
+# bounds the per-row work of the predicate and the result set held at once.
+# Small enough that the default suite can afford to cross the seam, because a
+# chunk boundary no test reaches is where a batched fetch silently drops rows.
+_NODE_FETCH_CHUNK = 250
+_EMBEDDING_FETCH_CHUNK = 250
 
 
 def _upsert(table: str, *, data: str = "data", uid: str = "uid") -> str:
@@ -634,6 +647,28 @@ class SurrealDBStorage:
                 return _record_to_node(table, rows[0])
         return None
 
+    async def get_nodes(self, node_ids: Sequence[str]) -> dict[str, EpistemicNode]:
+        wanted = list(dict.fromkeys(node_ids))
+        found: dict[str, EpistemicNode] = {}
+        if not wanted:
+            return found
+
+        # Three statements per chunk rather than the 1-3 *per id* the
+        # single-node form costs: `get_node` cannot know which table holds an
+        # id, so it probes topic, then fact, then inference, and pays for every
+        # miss on the way. Here the misses are free — a table that holds none of
+        # these ids returns no rows.
+        for start in range(0, len(wanted), _NODE_FETCH_CHUNK):
+            chunk = wanted[start : start + _NODE_FETCH_CHUNK]
+            for table in ("topic", "fact", "inference"):
+                rows = await self._query(
+                    f"SELECT * FROM {table} WHERE uid IN $ids", {"ids": chunk}
+                )
+                for row in rows or []:
+                    node = _record_to_node(table, row)
+                    found[node.id] = node
+        return found
+
     async def query_nodes(
         self,
         *,
@@ -813,20 +848,38 @@ class SurrealDBStorage:
             return found
 
         field = "src_id" if direction == "from" else "dst_id"
-        where = f"{field} IN $ids" + (" AND type = $type" if edge_type else "")
+        type_clause = " AND type = $type" if edge_type else ""
         params = {"type": edge_type.value} if edge_type else {}
 
-        for start in range(0, len(wanted), _EDGE_FETCH_CHUNK):
-            chunk = wanted[start : start + _EDGE_FETCH_CHUNK]
-            rows = await self._query(
-                f"SELECT * FROM node_edge WHERE {where}", {**params, "ids": chunk}
-            )
+        def collect(rows) -> None:
             for row in rows or []:
                 edge = NodeEdge.model_validate(_clean_record(row))
                 # Re-group in Python: one flat result set carries no grouping,
                 # and `getattr` here is what preserves the association a
-                # per-node query got for free.
-                found[getattr(edge, field)].append(edge)
+                # per-node query got for free. `found` is pre-seeded with the
+                # requested ids, so this also drops any row we did not ask for.
+                edges = found.get(getattr(edge, field))
+                if edges is not None:
+                    edges.append(edge)
+
+        if len(wanted) > _EDGE_IN_PREDICATE_MAX:
+            # Past the crossover: read the candidate rows and match here. `IN`
+            # is evaluated per row rather than through the index, so asking for
+            # a large set costs more than reading the type and discarding what
+            # nobody asked for. Reflection always arrives on this branch — it
+            # asks about every active node at once.
+            collect(await self._query(
+                "SELECT * FROM node_edge" + (" WHERE type = $type" if edge_type else ""),
+                params,
+            ))
+            return found
+
+        # One statement: the branch above bounds this list, so there is no
+        # chunk seam on the edge path to get wrong.
+        collect(await self._query(
+            f"SELECT * FROM node_edge WHERE {field} IN $ids{type_clause}",
+            {**params, "ids": wanted},
+        ))
         return found
 
     async def count_edges_by_type(self) -> dict[EdgeType, int]:
@@ -1112,17 +1165,50 @@ class SurrealDBStorage:
     async def get_embeddings_for_item(
         self, item_id: str, model_id: str | None = None
     ) -> Sequence[EmbeddingRecord]:
+        # `model_id` is filtered here rather than in the query, and that is the
+        # whole point of this shape. `WHERE item_id = $i AND model_id = $m` made
+        # the planner choose `idx_emb_model` — which matches *every* row for the
+        # graph's one model — and filter `item_id` afterwards, so a single-item
+        # fetch scanned the entire embedding table. Measured per call: 2.4 ms at
+        # 400 embeddings, 6.2 at 1,200, 15.6 at 3,000, dead linear. Asking on
+        # `item_id` alone uses `idx_emb_item` and is flat at ~0.6 ms.
+        #
+        # `idx_emb_model` is not the problem and must stay: `_ranked_items`
+        # narrows by model and genuinely needs it. Nor is a composite index the
+        # fix — measured, the planner still preferred the unselective one.
+        rows = await self._query(
+            "SELECT * FROM embedding WHERE item_id = $item_id", {"item_id": item_id}
+        )
+        records = [EmbeddingRecord.model_validate(_clean_record(r)) for r in rows]
         if model_id is None:
+            return records
+        return [record for record in records if record.model_id == model_id]
+
+    async def get_embeddings_for_items(
+        self, item_ids: Sequence[str], *, model_id: str | None = None
+    ) -> dict[str, list[EmbeddingRecord]]:
+        wanted = list(dict.fromkeys(item_ids))
+        # Pre-seeded for the same reason as `get_edges_for`: an item with no
+        # embedding still gets a key, so absence means "not asked".
+        found: dict[str, list[EmbeddingRecord]] = {item_id: [] for item_id in wanted}
+        if not wanted:
+            return found
+
+        # `model_id` stays out of the query here too — the predicate that steers
+        # the planner onto `idx_emb_model` is the one this fetch cannot afford.
+        for start in range(0, len(wanted), _EMBEDDING_FETCH_CHUNK):
+            chunk = wanted[start : start + _EMBEDDING_FETCH_CHUNK]
             rows = await self._query(
-                "SELECT * FROM embedding WHERE item_id = $item_id",
-                {"item_id": item_id},
+                "SELECT * FROM embedding WHERE item_id IN $ids", {"ids": chunk}
             )
-        else:
-            rows = await self._query(
-                "SELECT * FROM embedding WHERE item_id = $item_id AND model_id = $model_id",
-                {"item_id": item_id, "model_id": model_id},
-            )
-        return [EmbeddingRecord.model_validate(_clean_record(r)) for r in rows]
+            for row in rows or []:
+                record = EmbeddingRecord.model_validate(_clean_record(row))
+                if model_id is not None and record.model_id != model_id:
+                    continue
+                records = found.get(record.item_id)
+                if records is not None:
+                    records.append(record)
+        return found
 
     async def vector_search(
         self,

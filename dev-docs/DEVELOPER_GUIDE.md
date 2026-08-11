@@ -167,10 +167,10 @@ asyncio.run(main())
 
 Reflection is not a single net — it is a set of analysis functions in
 `epimemer/pipelines/reflection/` (topic consolidation, splitting, enrichment,
-contradiction detection, relation consolidation, value decay) composed by the
-`reflect` tool. Decay is applied immediately; everything else is returned as
-candidates for the agent to act on via `apply_reflection`. Debug the whole thing
-through the tool function:
+contradiction detection, relation consolidation, archival nomination) composed
+by the `reflect` tool. Every one of them reads only — results come back as
+candidates for the agent to act on via `apply_reflection`, and `reflect` itself
+never changes the graph. Debug the whole thing through the tool function:
 
 ```python
 import asyncio
@@ -185,7 +185,6 @@ async def main():
     # ... populate storage ...
 
     result, meta = await reflect(storage, emb, similarity_threshold=0.85)
-    print(f"Decayed: {result['nodes_decayed']}")
     print(f"Similar topic pairs: {result['similar_pairs']}")
     print(f"Split candidates: {result['split_candidates']}")
     print(f"Contradictions: {result['contradictions']}")
@@ -195,8 +194,8 @@ asyncio.run(main())
 ```
 
 To isolate one stage, call its module function directly — e.g.
-`find_similar_topic_pairs` from `topic_consolidation`, or `apply_decay` from
-`value_decay`.
+`find_similar_topic_pairs` from `topic_consolidation`, or
+`nominate_archival_candidates` from `archival`.
 
 ### Timeline Functions
 

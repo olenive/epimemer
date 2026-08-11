@@ -198,8 +198,18 @@ class TestViewConversion:
         assert view.graph == "my-graph"
         assert view.source_id == "s1"
         assert view.extraction_method == "unspecified"
-        assert 0.0 <= view.novelty <= 1.0
         assert 0.0 <= view.confidence <= 1.0
+
+    def test_the_view_does_not_carry_novelty(self):
+        """The frontend contract drops it with the field (#46).
+
+        `NodeView` is the single shape both the event stream and the snapshot
+        endpoints hand the frontend, so a field left here would keep the tooltip
+        rendering `novelty 1.00` on every node long after nothing produced it.
+        """
+        view = node_to_view(Topic(content="A topic", source_id="s1"), "g")
+
+        assert "novelty" not in view.model_dump()
 
     def test_node_to_view_fact(self):
         f = Fact(content="A fact", source_id="s2")

@@ -26,7 +26,7 @@ from epimemer.core.types import (
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.tools import reflect
-from epimemer.pipelines.reflection import contradiction_detection
+from epimemer.pipelines.reflection import contradiction_detection, topic_consolidation
 from epimemer.pipelines.reflection.review import frames_of, same_frame
 
 
@@ -182,6 +182,84 @@ class TestContradictionScoringIsBatched:
         assert sizes == [12]
 
         await _facts_that_look_alike(storage, embedding_provider, 12)
+        sizes.clear()
+        await reflect(storage, embedding_provider)
+        assert sizes == [24], "the pair count quadrupled; the call count must not move"
+
+
+async def _topics_that_look_alike(storage, provider, count: int):
+    """Topics sharing one embedding, so every pair clears any threshold."""
+    vector = (await provider.embed(["shared"]))[0]
+    topics = []
+    for i in range(count):
+        topic = Topic(content=f"Subject number {i}", source_id="s1")
+        await storage.store_node(topic)
+        await storage.store_embedding(
+            EmbeddingRecord(item_id=topic.id, model_id=provider.model_id, vector=vector)
+        )
+        topics.append(topic)
+    return topics
+
+
+class TestTopicScoringIsBatched:
+    """The same obligation as contradiction scoring, on the topic phase (#47).
+
+    Once storage stopped being the cost (#14 step 4), this loop became **71% of
+    `reflect` on SurrealDB and 88% in-memory** — 800 ms of Python at 1,200
+    nodes against 9 ms of storage. It is the same quadratic and the same fix:
+    the comparisons are genuine work, so they move into one matrix product
+    rather than being reduced.
+
+    As with #39, neither test asserts a duration. The exponent does not change,
+    so what is pinned is the shape; `make bench` measures the constant.
+    """
+
+    async def test_no_python_cosine_call_per_pair(
+        self, storage, embedding_provider, monkeypatch
+    ):
+        """12 mutually-similar topics are 66 pairs, and 66 Python calls.
+
+        Each one re-derives both norms from scratch, so the same topic's vector
+        is walked once per partner rather than once per pass.
+        """
+        await _topics_that_look_alike(storage, embedding_provider, 12)
+
+        calls = 0
+
+        def counted(*_vectors):
+            nonlocal calls
+            calls += 1
+            return 0.0  # below any threshold, so nothing downstream shifts
+
+        monkeypatch.setattr(
+            topic_consolidation, "_cosine_similarity", counted, raising=False
+        )
+
+        await reflect(storage, embedding_provider)
+
+        assert calls == 0, (
+            f"topic scoring made {calls} per-pair Python calls; it must score "
+            "the set in one batched operation"
+        )
+
+    async def test_the_whole_set_is_scored_in_one_call(
+        self, storage, embedding_provider, monkeypatch
+    ):
+        """Doubling the topics quadruples the pairs; the call count must not move."""
+        sizes: list[int] = []
+        original = topic_consolidation.similar_pairs
+
+        def counted(vectors, threshold, **kwargs):
+            sizes.append(len(vectors))
+            return original(vectors, threshold, **kwargs)
+
+        monkeypatch.setattr(topic_consolidation, "similar_pairs", counted)
+
+        await _topics_that_look_alike(storage, embedding_provider, 12)
+        await reflect(storage, embedding_provider)
+        assert sizes == [12]
+
+        await _topics_that_look_alike(storage, embedding_provider, 12)
         sizes.clear()
         await reflect(storage, embedding_provider)
         assert sizes == [24], "the pair count quadrupled; the call count must not move"
@@ -361,7 +439,6 @@ class TestAnswersAreUnchanged:
         result, meta = await reflect(storage, embedding_provider)
 
         assert set(result) == {
-            "nodes_decayed",
             "similar_pairs",
             "split_candidates",
             "enrichment_candidates",
@@ -371,3 +448,39 @@ class TestAnswersAreUnchanged:
             "similar_relations",
         }
         assert meta.nodes_returned >= len(result["contradictions"])
+
+
+class TestReflectWritesNothing:
+    """`reflect` proposes; it does not act (#44).
+
+    Value decay was the one exception — a write per active node per pass, to a
+    field nothing read. With it gone the invariant is clean and worth pinning:
+    every phase is a read, the agent decides, and `apply_reflection` is the only
+    thing that changes the graph. It is also what makes `reflect` safe to run
+    speculatively, and it removes the largest write from the path #14 is
+    still trying to make fit inside the tool timeout.
+    """
+
+    async def test_no_node_is_written_during_a_reflect(
+        self, storage, embedding_provider
+    ):
+        await _facts_that_look_alike(storage, embedding_provider, 6)
+        topic = Topic(content="Weather", source_id="s1")
+        await storage.store_node(topic)
+
+        written: list[str] = []
+        original = storage.store_node
+
+        async def counted(node):
+            written.append(node.id)
+            return await original(node)
+
+        storage.store_node = counted
+        try:
+            await reflect(storage, embedding_provider)
+        finally:
+            storage.store_node = original
+
+        assert written == [], (
+            f"reflect wrote {len(written)} nodes; it must only propose"
+        )

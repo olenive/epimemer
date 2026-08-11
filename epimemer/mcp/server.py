@@ -409,7 +409,7 @@ async def memory_search(
             graph_hops=graph_hops,
             metacontext_id=metacontext_id,
             cross_frame=cross_frame,
-            reinforcement_boost=deps["config"].reinforcement_boost,
+            record_retrieval=deps["config"].record_retrieval,
             event_bus=deps.get("event_bus"),
         ),
         ctx,
@@ -546,7 +546,7 @@ async def memory_judge_importance(
     indefinitely; judging it down is how you hand it back to review without
     asserting it should be archived outright.
 
-    Retrieval already maintains relevance on its own, so there is no need to
+    Retrieval already records that a node was used, so there is no need to
     judge a node up merely because you read it.
 
     Each call moves importance asymptotically toward its bound — repeated calls
@@ -682,12 +682,11 @@ async def memory_record_variant(
 async def memory_reflect(
     ctx: Context,
     similarity_threshold: float = 0.85,
-    decay_rate: float = 0.05,
     relation_similarity_threshold: float = 0.9,
 ) -> str:
     """Analyse the memory graph and return candidates for you to act on.
 
-    Applies value decay immediately, then identifies:
+    Reads only — nothing here changes the graph. Identifies:
     - Similar topic pairs that could be consolidated under a parent (this also
       covers duplicate source/tag/entity Topics)
     - Topics with high internal variance that could be split
@@ -706,7 +705,6 @@ async def memory_reflect(
 
     Args:
         similarity_threshold: Cosine similarity threshold for finding similar pairs.
-        decay_rate: Multiplicative decay factor for relevance.
         relation_similarity_threshold: Similarity bar for proposing relationship-
             label consolidations.
     """
@@ -720,7 +718,6 @@ async def memory_reflect(
             storage=deps["storage"],
             embedding_provider=deps["embedding_provider"],
             similarity_threshold=similarity_threshold,
-            decay_rate=decay_rate,
             relation_similarity_threshold=relation_similarity_threshold,
             event_bus=deps.get("event_bus"),
         )
@@ -733,7 +730,7 @@ async def memory_reflect(
         ctx,
         f"threshold={similarity_threshold} stores_since={stores_before}",
         lambda r, m: (
-            f"decayed={r['nodes_decayed']} pairs={len(r['similar_pairs'])} "
+            f"pairs={len(r['similar_pairs'])} "
             f"pending={len(r['pending_review'])} relations={len(r['similar_relations'])}"
         ),
     )

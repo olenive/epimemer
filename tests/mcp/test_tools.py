@@ -545,20 +545,24 @@ class TestSearch:
 # --- Retrieval reinforcement ---
 
 
-async def _value_signals(storage) -> dict[str, tuple[float, object]]:
-    """relevance + retrieved_at for every node, keyed by id."""
+async def _value_signals(storage) -> dict[str, tuple[object, object, float]]:
+    """Both clocks + importance for every node, keyed by id."""
     nodes = await storage.query_nodes(status=NodeStatus.ACTIVE)
-    return {n.id: (n.value.relevance, n.value.retrieved_at) for n in nodes}
+    return {
+        n.id: (n.value.retrieved_at, n.value.importance_judged_at, n.value.importance)
+        for n in nodes
+    }
 
 
-class TestSearchReinforcement:
-    """Retrieval is the one automatic upward path on `relevance`.
+class TestSearchRecordsRetrieval:
+    """`retrieved_at` is the whole record of use, and search is what writes it.
 
-    Without it relevance only ever decays, so it measures age rather than use
-    and cannot tell an old load-bearing node from an old dead one.
+    Without it the only thing known about a node is its age, which cannot tell
+    an old load-bearing node from an old dead one — the distinction archival
+    nomination is built on.
     """
 
-    async def test_search_reinforces_returned_nodes(
+    async def test_search_stamps_the_nodes_it_returned(
         self, storage, embedding_provider, config
     ):
         await _two_step_ingest(
@@ -567,6 +571,7 @@ class TestSearchReinforcement:
             storage, embedding_provider, config,
         )
         before = await _value_signals(storage)
+        assert all(retrieved is None for retrieved, _, _ in before.values())
 
         result, _ = await search(
             "Machine learning models require large datasets.",
@@ -574,47 +579,56 @@ class TestSearchReinforcement:
             embedding_provider,
             k=1,
             graph_hops=0,
-            reinforcement_boost=0.2,
+            record_retrieval=True,
         )
         returned = {n["id"] for n in result["nodes"]}
-        assert returned, "need at least one returned node to reinforce"
+        assert returned, "need at least one returned node to stamp"
 
         after = await _value_signals(storage)
-        for node_id, (relevance, retrieved_at) in after.items():
-            old_relevance, old_retrieved_at = before[node_id]
+        for node_id, signal in after.items():
+            retrieved_at, judged_at, importance = signal
             if node_id in returned:
-                assert relevance > old_relevance
-                # Freshly ingested, so this is the first retrieval: None → a time.
                 assert retrieved_at is not None
             else:
-                assert relevance == old_relevance
-                assert retrieved_at == old_retrieved_at
+                assert signal == before[node_id], "an unreturned node was touched"
 
-    async def test_reinforcement_saturates_rather_than_pinning(
+    async def test_being_read_is_not_being_judged(
         self, storage, embedding_provider, config
     ):
-        """Repeated hits approach 1.0 asymptotically and never exceed it."""
+        """Retrieval moves the retrieval clock and nothing else.
+
+        The two are deliberately separate: a node returned by every search has
+        been *used* a lot, which is not the same as anyone having decided it
+        matters. Writing use into importance would let popularity forge a
+        judgment nobody made.
+        """
         await _two_step_ingest(
             "Machine learning models require large datasets.",
             storage, embedding_provider, config,
         )
-        for _ in range(20):
+        before = await _value_signals(storage)
+
+        for _ in range(5):
             result, _ = await search(
                 "Machine learning models require large datasets.",
                 storage,
                 embedding_provider,
                 k=1,
                 graph_hops=0,
-                reinforcement_boost=0.5,
+                record_retrieval=True,
             )
-        returned = {n["id"] for n in result["nodes"]}
-        after = await _value_signals(storage)
-        for node_id in returned:
-            assert after[node_id][0] < 1.0
 
-    async def test_search_reinforcement_disabled_at_zero_boost(
+        after = await _value_signals(storage)
+        for node_id in {n["id"] for n in result["nodes"]}:
+            _, judged_at, importance = after[node_id]
+            _, old_judged_at, old_importance = before[node_id]
+            assert importance == old_importance
+            assert judged_at == old_judged_at is None
+
+    async def test_recording_can_be_switched_off(
         self, storage, embedding_provider, config
     ):
+        """It costs a write per returned node, so it has an off switch."""
         await _two_step_ingest(
             "Machine learning models require large datasets.",
             storage, embedding_provider, config,
@@ -626,7 +640,7 @@ class TestSearchReinforcement:
             storage,
             embedding_provider,
             k=5,
-            reinforcement_boost=0.0,
+            record_retrieval=False,
         )
         assert await _value_signals(storage) == before
 
@@ -747,7 +761,6 @@ class TestJudgeImportanceDownward:
         stored = await storage.get_node(node.id)
         assert stored.value.importance_judged_at is not None
         assert stored.value.retrieved_at is None
-        assert stored.value.relevance == pytest.approx(0.5)
 
     async def test_an_unknown_direction_is_refused(self, storage):
         node = Fact(content="real", source_id="s1")
@@ -816,20 +829,6 @@ class TestJudgeImportanceUpward:
         assert [r["reason"] for r in stored.metadata["reinforcements"]] == [
             "first", "second",
         ]
-
-    async def test_reinforce_leaves_relevance_alone(self, storage):
-        """Importance is a judgment; it must not double as a usage signal."""
-        node = Fact(
-            content="untouched relevance",
-            source_id="s1",
-            value=ValueSignal(relevance=0.3),
-        )
-        await storage.store_node(node)
-
-        await judge_importance(node.id, direction="up", reason="matters", storage=storage)
-
-        stored = await storage.get_node(node.id)
-        assert stored.value.relevance == pytest.approx(0.3)
 
     async def test_reinforce_stamps_the_judgment_clock_and_only_that_one(
         self, storage
@@ -962,17 +961,15 @@ class TestUpdate:
     async def test_preserves_value_signal(self, storage, embedding_provider):
         t = Topic(content="old content", source_id="s1")
         t.value.confidence = 0.9
-        t.value.relevance = 0.8
-        t.value.novelty = 0.3
+        t.value.importance = 0.8
         await storage.store_node(t)
 
         result, _ = await update(t.id, "new content", storage, embedding_provider)
         new = await storage.get_node(result["new_node_id"])
 
-        # A content correction must not reset reinforcement history.
+        # A content correction must not reset accumulated value.
         assert new.value.confidence == 0.9
-        assert new.value.relevance == 0.8
-        assert new.value.novelty == 0.3
+        assert new.value.importance == 0.8
 
         # The signal is copied, not shared: reinforcing the correction must not
         # rewrite the superseded original's recorded value.
@@ -1112,7 +1109,6 @@ class TestReflect:
 
         result, _ = await reflect(storage, embedding_provider)
         assert "similar_pairs" in result
-        assert "nodes_decayed" in result
         assert "contradictions" in result
         assert "pending_review" in result
 
@@ -1294,7 +1290,7 @@ class TestApplyReflectionArchivals:
 
         found, _ = await search(
             "Kestrels hover while hunting.", storage, embedding_provider,
-            k=5, graph_hops=0, reinforcement_boost=0.0,
+            k=5, graph_hops=0, record_retrieval=False,
         )
         assert fact.id in {n["id"] for n in found["nodes"]}
 
@@ -1302,7 +1298,7 @@ class TestApplyReflectionArchivals:
 
         after, _ = await search(
             "Kestrels hover while hunting.", storage, embedding_provider,
-            k=5, graph_hops=0, reinforcement_boost=0.0,
+            k=5, graph_hops=0, record_retrieval=False,
         )
         assert fact.id not in {n["id"] for n in after["nodes"]}
 
@@ -1402,6 +1398,38 @@ class TestApplyReflectionMerge:
         # Distinct topics are left untouched and active.
         assert (await storage.get_node(a.id)).status == NodeStatus.ACTIVE
         assert (await storage.get_node(b.id)).status == NodeStatus.ACTIVE
+
+    async def test_the_wired_merge_carries_the_value_clocks(
+        self, storage, embedding_provider
+    ):
+        """The agent-driven path has the same obligation as the helper (#45).
+
+        This is the merge that actually runs in production — `merge_similar_topics`
+        is the pipeline helper. Carrying `importance` forward without the date it
+        was judged leaves the merged node exempt from `stale_judgment` forever.
+        """
+        judged_at = datetime.now(timezone.utc) - timedelta(days=400)
+        retrieved_at = datetime.now(timezone.utc) - timedelta(days=3)
+        a = await self._store_topic(storage, embedding_provider, "ML basics", [1.0, 0.0])
+        a.value = ValueSignal(
+            importance=0.9, importance_judged_at=judged_at, retrieved_at=retrieved_at
+        )
+        await storage.store_node(a)
+        b = await self._store_topic(
+            storage, embedding_provider, "Machine learning basics", [1.0, 0.0]
+        )
+
+        result, _ = await apply_reflection(
+            storage, embedding_provider,
+            merges=[{"source_ids": [a.id, b.id], "content": "Machine learning basics"}],
+            merge_similarity_threshold=0.9,
+        )
+
+        assert result["topics_merged"] == 1
+        merged = (await storage.query_nodes(node_type=NodeType.TOPIC))[0]
+        assert merged.value.importance == pytest.approx(0.9)
+        assert merged.value.importance_judged_at == judged_at
+        assert merged.value.retrieved_at == retrieved_at
 
     async def test_merge_refused_without_embeddings(self, storage, embedding_provider):
         # Similarity cannot be verified without embeddings → refuse.

@@ -18,6 +18,7 @@ from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
     Fact,
+    Inference,
     Metacontext,
     NodeEdge,
     NodeStatus,
@@ -54,12 +55,12 @@ class TestStoreIsUpsert:
         topic = Topic(content="hello", source_id="s1")
         await store.store_node(topic)
 
-        topic.value.relevance = 0.123
+        topic.value.confidence = 0.123
         await store.store_node(topic)
 
         got = await store.get_node(topic.id)
         assert got is not None
-        assert got.value.relevance == pytest.approx(0.123)
+        assert got.value.confidence == pytest.approx(0.123)
 
         # ...and exactly one row, not two.
         rows = await store.query_nodes()
@@ -194,14 +195,14 @@ class TestPayloadFidelity:
         topic = Topic(
             content="important",
             source_id="s1",
-            value=ValueSignal(importance=0.87, relevance=0.31),
+            value=ValueSignal(importance=0.87, confidence=0.31),
         )
         await store.store_node(topic)
 
         got = await store.get_node(topic.id)
         assert got is not None
         assert got.value.importance == pytest.approx(0.87)
-        assert got.value.relevance == pytest.approx(0.31)
+        assert got.value.confidence == pytest.approx(0.31)
 
     async def test_value_signal_importance_defaults_for_older_rows(self, store):
         """A row written before the field existed reads back at the default.
@@ -828,30 +829,258 @@ class TestBatchedEdgeFetch:
         assert got.weight == 0.25
         assert got.metadata == {"note": "kept"}
 
-    async def test_more_ids_than_fit_in_one_statement(self, store):
-        """SurrealDB batches an `IN` list, so a large request has to chunk.
-
-        Chunking is where a batched fetch loses rows: the seam is invisible
-        unless the request is bigger than the chunk. 250 nodes with one edge
-        each is past the adapter's chunk size and still small enough to run in
-        the default suite.
-        """
+    async def _hub_and_spokes(self, store, count: int):
         hub = Topic(content="hub", source_id="s1")
         await store.store_node(hub)
-        facts = [Fact(content=f"f{i}", source_id="s1") for i in range(250)]
+        facts = [Fact(content=f"f{i}", source_id="s1") for i in range(count)]
         for fact in facts:
             await store.store_node(fact)
             await store.store_edge(
                 NodeEdge(src_id=fact.id, dst_id=hub.id, type=EdgeType.SUPPORTS)
             )
+        return hub, facts
+
+    @pytest.mark.parametrize("count", [40, 250])
+    async def test_a_large_request_answers_the_same_as_a_small_one(self, store, count):
+        """Both sides of the adapter's `IN`-versus-scan seam (#14 step 4).
+
+        SurrealDB evaluates `IN` per row instead of through the index, so past
+        a measured size the adapter stops asking for the ids and reads the
+        candidate rows instead. That is a second code path, and a second code
+        path is where a batched fetch quietly starts dropping rows — so the
+        cheap branch and the expensive one are asserted to agree. 40 is below
+        the crossover and 250 above it, both small enough for the default suite.
+        """
+        hub, facts = await self._hub_and_spokes(store, count)
 
         result = await store.get_edges_for(
             [f.id for f in facts], direction="from", edge_type=EdgeType.SUPPORTS
         )
 
-        assert len(result) == 250
+        assert len(result) == count
         assert all(len(result[f.id]) == 1 for f in facts)
         assert {result[f.id][0].dst_id for f in facts} == {hub.id}
+
+    async def test_the_large_path_returns_only_what_was_asked_for(self, store):
+        """The scan branch reads rows nobody asked about; none may leak out.
+
+        It fetches by type rather than by id, so every edge of that type comes
+        back and the ids are matched here. A node outside the request must not
+        appear in the map, and its edges must not be attributed to one inside.
+        """
+        hub, facts = await self._hub_and_spokes(store, 150)
+        stranger = Fact(content="stranger", source_id="s2")
+        await store.store_node(stranger)
+        await store.store_edge(
+            NodeEdge(src_id=stranger.id, dst_id=hub.id, type=EdgeType.SUPPORTS)
+        )
+
+        asked = [f.id for f in facts]
+        result = await store.get_edges_for(
+            asked, direction="from", edge_type=EdgeType.SUPPORTS
+        )
+
+        assert set(result) == set(asked)
+        assert stranger.id not in result
+        assert all(len(result[node_id]) == 1 for node_id in asked)
+
+    async def test_the_large_path_still_honours_no_type_filter(self, store):
+        """Without a type the scan reads the whole edge table — same contract."""
+        hub, facts = await self._hub_and_spokes(store, 150)
+        extra = NodeEdge(
+            src_id=facts[0].id, dst_id=hub.id, type=EdgeType.RELATED, label="also"
+        )
+        await store.store_edge(extra)
+
+        result = await store.get_edges_for([f.id for f in facts], direction="from")
+
+        assert len(result[facts[0].id]) == 2
+        assert all(len(result[f.id]) == 1 for f in facts[1:])
+
+
+class TestBatchedNodeFetch:
+    """`get_nodes` answers many ids in a bounded number of statements (#14 step 4).
+
+    The oracle is `get_node`, one id at a time. On SurrealDB the single-node
+    form cannot know which table holds an id, so it probes topic, then fact,
+    then inference and pays for each miss — 2,104 round-trips for 900 nodes in
+    one `reflect`. Only that cost is meant to change.
+
+    Unlike `get_edges_for`, an id that is not a node is *absent* from the map
+    rather than present with an empty value: a list has an empty value and a
+    node does not, so `result.get(id)` matches `await get_node(id)`.
+    """
+
+    async def _mixed(self, store):
+        """One node of each type, since the adapter reads them from three tables."""
+        nodes = [
+            Topic(content="a topic", source_id="s1"),
+            Fact(content="a fact", source_id="s1"),
+            Inference(content="an inference", source_id="s1"),
+        ]
+        for node in nodes:
+            await store.store_node(node)
+        return nodes
+
+    async def test_it_agrees_with_the_single_node_method(self, store):
+        nodes = await self._mixed(store)
+
+        batched = await store.get_nodes([n.id for n in nodes])
+
+        for node in nodes:
+            expected = await store.get_node(node.id)
+            assert batched[node.id].id == expected.id
+            assert batched[node.id].content == expected.content
+            assert type(batched[node.id]) is type(expected)
+
+    async def test_an_id_that_is_not_a_node_is_absent(self, store):
+        nodes = await self._mixed(store)
+
+        result = await store.get_nodes([nodes[0].id, "no-such-node"])
+
+        assert set(result) == {nodes[0].id}
+        assert result.get("no-such-node") is None
+
+    async def test_repeated_ids_collapse_to_one_entry(self, store):
+        nodes = await self._mixed(store)
+        result = await store.get_nodes([nodes[0].id, nodes[0].id, nodes[1].id])
+        assert set(result) == {nodes[0].id, nodes[1].id}
+
+    async def test_no_ids_is_no_work_and_an_empty_map(self, store):
+        await self._mixed(store)
+        assert await store.get_nodes([]) == {}
+
+    async def test_retired_nodes_come_back_too(self, store):
+        """`get_node` ignores status, so this must as well.
+
+        Callers reach for a node by id when they already hold a reference to
+        it — a lineage edge, an archived candidate — and filtering by status
+        here would turn a batched read into a silently different question.
+        """
+        nodes = await self._mixed(store)
+        await store.update_node_status(
+            nodes[1].id, NodeStatus.ARCHIVED, datetime.now(timezone.utc)
+        )
+
+        result = await store.get_nodes([n.id for n in nodes])
+
+        assert set(result) == {n.id for n in nodes}
+        assert result[nodes[1].id].status is NodeStatus.ARCHIVED
+
+    async def test_nodes_come_back_whole(self, store):
+        """Callers read content, value signals and metadata off these."""
+        fact = Fact(
+            content="whole", source_id="s1",
+            value=ValueSignal(importance=0.9), metadata={"note": "kept"},
+        )
+        await store.store_node(fact)
+
+        got = (await store.get_nodes([fact.id]))[fact.id]
+
+        assert got.content == "whole"
+        assert got.value.importance == 0.9
+        assert got.metadata == {"note": "kept"}
+
+    async def test_more_ids_than_fit_in_one_statement(self, store):
+        """Past the adapter's chunk size, where a batched fetch loses rows."""
+        facts = [Fact(content=f"f{i}", source_id="s1") for i in range(300)]
+        for fact in facts:
+            await store.store_node(fact)
+
+        result = await store.get_nodes([f.id for f in facts])
+
+        assert len(result) == 300
+        assert {result[f.id].content for f in facts} == {f"f{i}" for i in range(300)}
+
+
+class TestBatchedEmbeddingFetch:
+    """`get_embeddings_for_items` answers many items in one round-trip (#14 step 4).
+
+    The oracle is `get_embeddings_for_item`. Vectors are the heaviest rows in
+    the store and every phase of `reflect` that compares them was reading them
+    one item at a time.
+    """
+
+    async def _embedded(self, store, count: int, model_id: str = "model-a"):
+        facts = [Fact(content=f"f{i}", source_id="s1") for i in range(count)]
+        for i, fact in enumerate(facts):
+            await store.store_node(fact)
+            await store.store_embedding(EmbeddingRecord(
+                item_id=fact.id, model_id=model_id, vector=[float(i), 0.5]
+            ))
+        return facts
+
+    async def test_it_agrees_with_the_single_item_method(self, store):
+        facts = await self._embedded(store, 3)
+
+        batched = await store.get_embeddings_for_items([f.id for f in facts])
+
+        for fact in facts:
+            expected = await store.get_embeddings_for_item(fact.id)
+            assert [e.vector for e in batched[fact.id]] == [e.vector for e in expected]
+
+    async def test_the_model_filter_agrees_too(self, store):
+        fact = (await self._embedded(store, 1, model_id="model-a"))[0]
+        await store.store_embedding(EmbeddingRecord(
+            item_id=fact.id, model_id="model-b", vector=[9.0, 9.0]
+        ))
+
+        batched = await store.get_embeddings_for_items([fact.id], model_id="model-a")
+
+        assert len(batched[fact.id]) == 1
+        assert batched[fact.id][0].model_id == "model-a"
+        assert len(await store.get_embeddings_for_item(fact.id)) == 2
+
+    async def test_every_requested_id_gets_a_key(self, store):
+        """Including items with no embedding, and ids that are not items."""
+        facts = await self._embedded(store, 1)
+        bare = Fact(content="unembedded", source_id="s1")
+        await store.store_node(bare)
+
+        result = await store.get_embeddings_for_items(
+            [facts[0].id, bare.id, "no-such-item"]
+        )
+
+        assert set(result) == {facts[0].id, bare.id, "no-such-item"}
+        assert result[bare.id] == []
+        assert result["no-such-item"] == []
+        assert len(result[facts[0].id]) == 1
+
+    async def test_repeated_ids_collapse_to_one_entry(self, store):
+        facts = await self._embedded(store, 2)
+        result = await store.get_embeddings_for_items(
+            [facts[0].id, facts[0].id, facts[1].id]
+        )
+        assert set(result) == {facts[0].id, facts[1].id}
+        assert len(result[facts[0].id]) == 1
+
+    async def test_no_ids_is_no_work_and_an_empty_map(self, store):
+        await self._embedded(store, 1)
+        assert await store.get_embeddings_for_items([]) == {}
+
+    async def test_vectors_come_back_whole(self, store):
+        """A projection would satisfy every other test here and break ranking."""
+        fact = Fact(content="v", source_id="s1")
+        await store.store_node(fact)
+        await store.store_embedding(EmbeddingRecord(
+            item_id=fact.id, model_id="model-a", vector=[0.1, 0.2, 0.3]
+        ))
+
+        got = (await store.get_embeddings_for_items([fact.id]))[fact.id][0]
+
+        assert got.vector == [0.1, 0.2, 0.3]
+        assert got.model_id == "model-a"
+        assert got.item_id == fact.id
+
+    async def test_more_ids_than_fit_in_one_statement(self, store):
+        """Past the adapter's chunk size, where a batched fetch loses rows."""
+        facts = await self._embedded(store, 300)
+
+        result = await store.get_embeddings_for_items([f.id for f in facts])
+
+        assert len(result) == 300
+        assert all(len(result[f.id]) == 1 for f in facts)
+        assert {result[f.id][0].vector[0] for f in facts} == {float(i) for i in range(300)}
 
 
 class TestArchivalStatus:

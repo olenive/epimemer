@@ -116,11 +116,11 @@ class TestNodeStorage:
 
     async def test_value_signal_preserved(self, store):
         t = Topic(content="topic", source_id="s1")
-        t.value.novelty = 0.3
+        t.value.importance = 0.3
         t.value.confidence = 0.9
         await store.store_node(t)
         got = await store.get_node(t.id)
-        assert got.value.novelty == 0.3
+        assert got.value.importance == 0.3
         assert got.value.confidence == 0.9
 
 

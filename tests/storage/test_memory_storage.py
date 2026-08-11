@@ -581,22 +581,22 @@ class TestStoreIsolation:
 
         got = await store.get_node(topic.id)
         got.content = "mutated"
-        got.value.relevance = 0.999
+        got.value.confidence = 0.999
 
         again = await store.get_node(topic.id)
         assert again.content == "original"
-        assert again.value.relevance != 0.999
+        assert again.value.confidence != 0.999
 
     async def test_mutating_caller_object_after_store_does_not_change_store(self, store):
         topic = Topic(content="original", source_id="s1")
         await store.store_node(topic)
 
         topic.content = "mutated"
-        topic.value.relevance = 0.999
+        topic.value.confidence = 0.999
 
         got = await store.get_node(topic.id)
         assert got.content == "original"
-        assert got.value.relevance != 0.999
+        assert got.value.confidence != 0.999
 
     async def test_mutating_queried_node_does_not_change_store(self, store):
         topic = Topic(content="original", source_id="s1")

@@ -45,9 +45,7 @@ class NodeView(BaseModel):
     status: str               # "active" | "superseded" | "merged"
     source_id: str | None = None  # tag/entity topics have no segment origin
     extraction_method: str
-    novelty: float
     confidence: float
-    relevance: float
     retrieved_at: datetime | None      # None until a search has returned it
     created_at: datetime
     graph: str
@@ -130,9 +128,7 @@ def node_to_view(node: EpistemicNode, graph: str) -> NodeView:
         status=node.status.value,
         source_id=node.source_id,
         extraction_method=node.extraction_method,
-        novelty=node.value.novelty,
         confidence=node.value.confidence,
-        relevance=node.value.relevance,
         retrieved_at=node.value.retrieved_at,
         created_at=node.created_at,
         graph=graph,

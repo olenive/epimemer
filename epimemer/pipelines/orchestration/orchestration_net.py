@@ -76,7 +76,6 @@ class SearchInput(BaseModel):
 class ReflectInput(BaseModel):
     """Routed input for the reflection pipeline."""
     similarity_threshold: float = 0.85
-    decay_rate: float = 0.05
 
 
 class MemoryResult(BaseModel):
@@ -208,7 +207,6 @@ async def run_reflect(
         storage=storage,
         embedding_provider=embedding_provider,
         similarity_threshold=input.similarity_threshold,
-        decay_rate=input.decay_rate,
     )
     return MemoryResult(
         action="reflect",

@@ -37,12 +37,23 @@ async def gather_associated_material_for(
         for edge_type in (EdgeType.SUPPORTS, EdgeType.ABSTRACTS)
     }
 
+    # The linked nodes in one read rather than one per edge. This was the
+    # largest remaining N+1 in `reflect`: 900 fetches at 1,200 nodes, and on
+    # SurrealDB each cost 1-3 round-trips, because a node's table is not known
+    # from its id and `get_node` probes all three (#14).
+    linked = await storage.get_nodes([
+        edge.src_id
+        for by_topic in by_edge_type.values()
+        for edges in by_topic.values()
+        for edge in edges
+    ])
+
     material: dict[str, list[str]] = {}
     for topic_id in topic_ids:
         contents: list[str] = []
-        for edges in by_edge_type.values():
-            for edge in edges[topic_id]:
-                node = await storage.get_node(edge.src_id)
+        for by_topic in by_edge_type.values():
+            for edge in by_topic[topic_id]:
+                node = linked.get(edge.src_id)
                 if node is not None and isinstance(node, (Fact, Inference)):
                     contents.append(node.content)
         material[topic_id] = contents

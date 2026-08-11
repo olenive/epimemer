@@ -419,17 +419,80 @@ nodes), and topic-merge; nothing reinforces it and nothing reads it — not
 retrieval ranking, not archival candidacy. Relevance is therefore a monotone
 function of age and carries no information about a node's worth.
 
+> **Outcome (ISSUES.md #44, since resolved): `relevance` was deleted, not
+> fixed.** Adding retrieval reinforcement made it non-monotone, as planned
+> below — and it still had no reader, because §12.4 rules it out of ranking on
+> purpose and archival ended up reading `retrieved_at` instead. The deeper
+> problem was that a decayed float could not answer the question anyway: its
+> value depends on how often an operator ran `reflect`, so 0.3 might be "used
+> once, long ago" or "used often, on a busy graph". A nullable timestamp
+> separates *never* from *long ago* without that confound. `apply_decay` went
+> with it, which makes `reflect` a pure read.
+>
+> **The same audit checked the siblings, and they are not in the same position**
+> — worth recording so the question is not reopened from scratch:
+> `confidence` *is* read (topic merge picks the higher-confidence description as
+> primary) and both it and `novelty` are rendered in the viz tooltip, so neither
+> was write-only in the way `relevance` was. But neither is ever *computed*:
+> every ingested node gets 1.0 / 0.5 and nothing updates them, which makes the
+> merge comparison a permanent tie. That is ISSUES.md **#46**, and it is a
+> different problem with a different answer — the fields are documented as
+> measurements and are really unset priors, so the fix is more likely to be
+> letting the calling agent supply them than deleting them.
+>
+> **Outcome (2026-08-11): #46 was split, and the two halves went different
+> ways.** Bundling them was the mistake — they shared a symptom (an uncomputed
+> constant documented as a measurement) and nothing else. #46 now covers
+> `confidence` alone; the `novelty` half is resolved and its entry deleted.
+>
+> **`novelty` was deleted.** Not for want of a reader, and not because
+> computing it was expensive: the number cannot be stored honestly at all.
+> Measured at ingest it answers "unexpected relative to what the graph held
+> *then*" — a fact about arrival order, frozen for the life of the node — while
+> the question anyone wants asked is against the graph as it stands. That one is
+> well-posed at any time and already answerable from the nearest-neighbour
+> distance `vector_search` returns, so it needs no field, no migration and no
+> baseline convention. The name was also carrying two meanings: *new to the
+> graph*, which `created_at` gives exactly, and *unlike what is known*, which is
+> the one that mattered. **"Surprise" is the better term** for the second and is
+> now what the design docs say — it names unexpectedness rather than newness, and
+> it makes its own precondition audible (surprising relative to *what*). It is
+> reserved for a caller-supplied signal if one is ever wanted: an
+> observer-relative name suits a reported judgment, as `importance` is, and
+> misleads on a computed one — surprisal has a definition (−log p) with
+> additivity a cosine distance does not have.
+>
+> **`confidence` stays open as #46**, and the recommendation above stands. It has
+> a live reader, an objective definition already computed elsewhere
+> (`knowledge_in_degree_for`, used by archival), and unlike `novelty` its stored
+> form is defensible — corroboration accumulates rather than being relative to a
+> moment.
+>
+> **The same audit found the model's one live defect (#45, since resolved).**
+> Both merge sites rebuilt the signal field by field and named only the scalars,
+> so a merged node carried `importance = max(sources)` forward while both clocks
+> reset to null. The lost timestamp was not the damage; the false *pair* was.
+> `judgment_is_stale` reads importance and its date together, and an unjudged
+> node is correctly never stale — so the class below, which exists precisely so
+> that importance cannot protect a node forever, was unreachable for anything a
+> merge produced. Fixed by one shared `merged_value_signal` in `core/types.py`:
+> a field-by-field rebuild silently resets what it forgets to name, and one
+> function means the next field added to `ValueSignal` has one place to be
+> considered rather than two places to be missed.
+
 The revision splits value into two dimensions with different dynamics:
 
 | Dimension | Moves down | Moves up | Answers |
 | --- | --- | --- | --- |
-| `relevance` (existing) | decay (existing) | automatic reinforcement on retrieval | "is this being used?" |
-| `importance` (new) | judgment only — never the decay clock | explicit judgment: agent `judge_importance` tool, human review | "does this matter?" |
+| ~~`relevance`~~ → `retrieved_at` | n/a — a timestamp does not decay | stamped on retrieval | "is this being used?" |
+| `importance` (new) | judgment only, via `judge_importance` | explicit judgment: agent `judge_importance` tool, human review | "does this matter?" |
 
-Decay must never erode a judgment: an agent that marks a node important is
+Nothing automatic may erode a judgment: an agent that marks a node important is
 recording an assessment, not starting a timer. That is why importance is a
-separate field rather than a relevance bump — a bumped relevance would silently
-decay back out.
+separate field rather than a usage bump. With decay gone the rule is easier to
+hold — nothing in the system lowers `importance` except another judgment — and
+what ages instead is *confidence in the judgment's currency*, expressed by
+`importance_judged_at` and read by the `stale_judgment` nomination class.
 
 A third signal is **computed, not stored**: *structural importance* — a node's
 knowledge-edge in-degree (inferences `derived_from` it, facts supporting it).
@@ -443,10 +506,10 @@ rewrite.
 
 ### 12.2 Upward paths
 
-1. **Usage reinforcement (automatic).** A node returned by `search` gets
-   `retrieved_at = now` and a partial relevance restore
-   (`relevance += boost × (1 − relevance)`). System-driven, no judgment; the
-   asymptotic form means repeated hits saturate rather than pin at 1.0.
+1. **Usage recording (automatic).** A node returned by `search` gets
+   `retrieved_at = now`. System-driven, no judgment. (As built this also raised
+   an asymptotic `relevance` float; that field is gone — the timestamp is now
+   the whole of what retrieval records.)
 2. **Agent judgment (explicit).** New tool
    `judge_importance(node_id, direction, reason, related_id=None)`: moves
    `importance` up or down and
@@ -509,10 +572,11 @@ are the expensive-to-recreate layer.
 - Cleanup is **archive-only**. Deletion stays out of the system.
 - `judge_importance` records provenance for every judgment, in both
   directions; there is no raw setter.
-- **Value signals do not feed search ranking.** Retrieval reinforcement creates
-  a feedback loop (retrieved → higher relevance → retrieved). At archival
+- **Value signals do not feed search ranking.** Recording use creates a
+  feedback loop (retrieved → ranked higher → retrieved). At archival
   granularity that loop is benign — it only protects used nodes from cleanup.
   Wired into ranking it would compound: popular nodes crowd out better matches,
-  which then decay unread and get archived for it. If ranking ever wants a
-  value term, that is a deliberate future decision with its own analysis, not
-  a free by-product of this design.
+  and are then protected from cleanup for it. If ranking ever wants a value
+  term, that is a deliberate future decision with its own analysis, not a free
+  by-product of this design. This is the rule that left `relevance` with no
+  consumer and eventually removed it (#44).

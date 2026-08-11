@@ -152,6 +152,9 @@ class InstrumentedStorage:
     async def get_node(self, node_id: str) -> EpistemicNode | None:
         return await self._inner.get_node(node_id)
 
+    async def get_nodes(self, node_ids: Sequence[str]) -> dict[str, EpistemicNode]:
+        return await self._inner.get_nodes(node_ids)
+
     async def get_node_by_content(
         self,
         content: str,
@@ -385,6 +388,11 @@ class InstrumentedStorage:
         self, item_id: str, model_id: str | None = None
     ) -> Sequence[EmbeddingRecord]:
         return await self._inner.get_embeddings_for_item(item_id, model_id)
+
+    async def get_embeddings_for_items(
+        self, item_ids: Sequence[str], *, model_id: str | None = None
+    ) -> dict[str, list[EmbeddingRecord]]:
+        return await self._inner.get_embeddings_for_items(item_ids, model_id=model_id)
 
     async def vector_search(
         self,

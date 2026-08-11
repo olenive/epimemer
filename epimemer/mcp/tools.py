@@ -25,11 +25,12 @@ from epimemer.core.types import (
     Timeline,
     Topic,
     ValueSignal,
+    merged_value_signal,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.mcp.config import (
     DEFAULT_IMPORTANCE_STEP,
-    DEFAULT_REINFORCEMENT_BOOST,
+    DEFAULT_RECORD_RETRIEVAL,
     ServerConfig,
 )
 from epimemer.mcp.types import ResponseMeta
@@ -624,45 +625,43 @@ async def topic_tree(
     return result, meta
 
 
-def reinforced_signal(value: ValueSignal, boost: float, at: datetime) -> ValueSignal:
+def retrieved_signal(value: ValueSignal, at: datetime) -> ValueSignal:
     """The value signal a node carries after being retrieved.
 
-    `relevance += boost × (1 − relevance)`: asymptotic, so a node hit
-    repeatedly approaches 1.0 instead of pinning there on the second hit.
-    Every other field is carried through unchanged — reinforcement records
-    *use*, and must not quietly restate a judgment held elsewhere in the
-    signal. `importance_judged_at` is part of that: being read is not being
-    judged.
+    Stamps `retrieved_at` and nothing else. Every other field is carried
+    through unchanged — retrieval records *use*, and must not quietly restate a
+    judgment held elsewhere in the signal. `importance_judged_at` is part of
+    that: being read is not being judged.
+
+    This used to also raise a `relevance` float asymptotically. That field was
+    removed (no reader, and confounded by reflect frequency), which leaves the
+    timestamp as the whole of what retrieval records — and makes this the
+    complete answer to "when was this last used?".
     """
-    return value.model_copy(
-        update={
-            "relevance": value.relevance + boost * (1.0 - value.relevance),
-            "retrieved_at": at,
-        }
-    )
+    return value.model_copy(update={"retrieved_at": at})
 
 
-async def _reinforce_retrieved(
-    nodes: Sequence[EpistemicNode], storage: StorageBackend, boost: float
+async def _record_retrieval(
+    nodes: Sequence[EpistemicNode], storage: StorageBackend, enabled: bool
 ) -> None:
-    """Write retrieval reinforcement back for every node search returned.
+    """Stamp `retrieved_at` on every node search returned.
 
-    This is the only automatic upward path on `relevance`; without it the
-    signal is a monotone function of age and says nothing about whether a node
-    is load-bearing — which is exactly the distinction archival candidacy
-    needs.
+    Without this the only thing known about a node is its age, which says
+    nothing about whether it is load-bearing — exactly the distinction archival
+    candidacy needs, and the reason `never_retrieved` can mean what it says.
 
     It deliberately does **not** feed ranking: results stay ordered by
-    similarity. The loop (retrieved → more relevant → retrieved) is benign at
-    archival granularity and compounds at ranking granularity, where popular
-    nodes would crowd out better matches. See
-    `dev-docs/REVIEW_EPISTEMIC.md` §12.4.
+    similarity. Wiring use back into ranking creates a `retrieved → ranked
+    higher → retrieved` loop under which popular nodes crowd out better
+    matches. See `dev-docs/REVIEW_EPISTEMIC.md` §12.4.
+
+    Costs one write per returned node, which is why it can be switched off.
     """
-    if boost <= 0.0:
+    if not enabled:
         return
     at = datetime.now(timezone.utc)
     for node in nodes:
-        node.value = reinforced_signal(node.value, boost, at)
+        node.value = retrieved_signal(node.value, at)
         # No backend shares object identity with its callers, so the mutation
         # above is local until it is written back.
         await storage.store_node(node)
@@ -678,7 +677,7 @@ async def search(
     graph_hops: int = 1,
     metacontext_id: str | None = None,
     cross_frame: bool = False,
-    reinforcement_boost: float = DEFAULT_REINFORCEMENT_BOOST,
+    record_retrieval: bool = DEFAULT_RECORD_RETRIEVAL,
     event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Search the memory graph via hybrid retrieval (vector + graph expansion).
@@ -692,9 +691,9 @@ async def search(
     carry `parents` / `subtopics` as id + preview, so the caller can drill via
     `topic_tree` instead of being handed the whole subtree.
 
-    Returned nodes are reinforced (`reinforcement_boost`, 0.0 disables): being
-    retrieved is what tells relevance apart from age. Ranking is unaffected —
-    see `_reinforce_retrieved`.
+    Returned nodes have `retrieved_at` stamped (`record_retrieval=False`
+    disables): being retrieved is what tells a used node from a merely old one.
+    Ranking is unaffected — see `_record_retrieval`.
     """
     from epimemer.pipelines.query.types import QueryRequest
     from epimemer.pipelines.reflection.review import review_labels_for
@@ -726,7 +725,7 @@ async def search(
 
     # Reinforce before serializing, so the caller sees the signal the node now
     # holds rather than the one it held a moment ago.
-    await _reinforce_retrieved(nodes, storage, reinforcement_boost)
+    await _record_retrieval(nodes, storage, record_retrieval)
 
     # Build node dicts with metacontext labels, computed review labels, and —
     # for topics in a split hierarchy — their neighbours, so the caller can
@@ -1165,8 +1164,8 @@ async def judge_importance(
 
     The explicit path, in both directions: an agent that learns something making
     an existing node matter more — or less — has nowhere else to put it.
-    `relevance` is owned by the decay clock, so a judgment written there quietly
-    decays back out.
+    Retrieval writes a timestamp, not a verdict, so being read a lot cannot
+    stand in for having been judged.
 
     Named for the act rather than the outcome, which is what lets one tool carry
     both directions. `direction` is not ceremony wrapped around the judgment; it
@@ -1415,7 +1414,6 @@ async def record_variant(
 # The phases `reflect` reports to the visualization strip, in execution order.
 # Named here so the topology and the calls below cannot drift apart.
 REFLECT_PHASES = (
-    "decay",
     "topic_consolidation",
     "split_detection",
     "enrichment_scan",
@@ -1431,16 +1429,15 @@ async def reflect(
     embedding_provider: EmbeddingProvider,
     *,
     similarity_threshold: float = 0.85,
-    decay_rate: float = 0.05,
     relation_similarity_threshold: float = 0.9,
     event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Analyse the memory graph and return candidates for the agent to act on.
 
-    Runs embedding-based analysis and value decay (applied immediately).
-    Returns split candidates, similar topic pairs, enrichment candidates,
-    contradiction pairs, and similar relationship-label pairs for the agent to
-    review and act on via memory.apply_reflection.
+    Reads only. Returns split candidates, similar topic pairs, enrichment
+    candidates, contradiction pairs, archival nominations and similar
+    relationship-label pairs for the agent to review and act on via
+    memory.apply_reflection — nothing here changes the graph.
     """
     from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
     from epimemer.pipelines.reflection.archival import nominate_archival_candidates
@@ -1454,14 +1451,9 @@ async def reflect(
         gather_pending_review,
         same_frame,
     )
-    from epimemer.pipelines.reflection import value_decay
     from epimemer.visualization.phase_events import phase_pipeline
 
     model_id = embedding_provider.model_id
-
-    # 1. Decay (applied immediately — no agent input needed)
-    async def _decay():
-        return await value_decay.apply_decay(storage, decay_rate=decay_rate)
 
     # 2. Find similar topic pairs for consolidation
     async def _consolidation():
@@ -1596,7 +1588,6 @@ async def reflect(
     # declares a synthetic linear topology and fires it by hand. Without a bus
     # `phase` is a bare await, so watching cannot change what is computed.
     async with phase_pipeline(event_bus, "reflect", REFLECT_PHASES) as phase:
-        nodes_decayed = await phase("decay", _decay, tokens=int)
         similar_pairs = await phase("topic_consolidation", _consolidation, tokens=len)
         split_candidates = await phase("split_detection", _splits, tokens=len)
         enrichment_candidates = await phase("enrichment_scan", _enrichment, tokens=len)
@@ -1612,7 +1603,6 @@ async def reflect(
         )
 
     result = {
-        "nodes_decayed": nodes_decayed,
         "similar_pairs": similar_pairs,
         "split_candidates": split_candidates,
         "enrichment_candidates": enrichment_candidates,
@@ -1801,13 +1791,10 @@ async def apply_reflection(
             merges_rejected += 1
             continue
 
-        merged_value = ValueSignal(
-            confidence=max(s.value.confidence for s in sources),
-            relevance=max(s.value.relevance for s in sources),
-            novelty=sum(s.value.novelty for s in sources) / len(sources),
-            # Max, as above: collapsing topics must not discard a judgment.
-            importance=max(s.value.importance for s in sources),
-        )
+        # Combined in one shared place: a field-by-field rebuild here silently
+        # reset both value clocks, leaving merged nodes permanently exempt from
+        # archival nomination (#45).
+        merged_value = merged_value_signal([s.value for s in sources])
         merged_topic = Topic(
             content=content,
             source_id=sources[0].source_id,

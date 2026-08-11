@@ -36,8 +36,8 @@ def _make_node_view(**overrides) -> NodeView:
     now = datetime.now(timezone.utc)
     defaults = dict(
         node_id="n1", node_type="topic", content="test", status="active",
-        source_id="seg1", extraction_method="agent", novelty=1.0, confidence=0.5,
-        relevance=0.5, retrieved_at=now, created_at=now, graph="default",
+        source_id="seg1", extraction_method="agent", confidence=0.5,
+        retrieved_at=now, created_at=now, graph="default",
     )
     defaults.update(overrides)
     return NodeView(**defaults)

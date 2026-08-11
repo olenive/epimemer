@@ -59,9 +59,7 @@ export interface NodeView {
   status: string;
   source_id: string;
   extraction_method: string;
-  novelty: number;
   confidence: number;
-  relevance: number;
   retrieved_at: string | null;   // null until a search has returned it
   created_at: string;
   graph: string;

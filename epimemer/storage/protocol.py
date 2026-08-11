@@ -111,10 +111,11 @@ class StorageBackend(Protocol):
 
     **`store_*` is upsert by id.** Storing a record whose id already exists
     replaces it in place; it must not duplicate the record and must not
-    silently do nothing. Every caller relies on this — `apply_decay` re-stores
-    decayed nodes, `add_timeline_timepoint` re-stores the timeline — so a
-    backend that treats `store_*` as insert-only loses those writes without
-    raising. `write_batch_tx` is the deliberate exception; see its docstring.
+    silently do nothing. Every caller relies on this — `_record_retrieval`
+    re-stores each node a search returned, `add_timeline_timepoint` re-stores
+    the timeline — so a backend that treats `store_*` as insert-only loses those
+    writes without raising. `write_batch_tx` is the deliberate exception; see
+    its docstring.
 
     **Records round-trip unchanged.** What `store_*` accepts is what the
     matching getter returns: content is preserved byte-for-byte (unicode,
@@ -196,6 +197,27 @@ class StorageBackend(Protocol):
         at_time: datetime | None = None,
     ) -> Sequence[EpistemicNode]:
         """Query nodes by type, status, and/or temporal filter."""
+        ...
+
+    async def get_nodes(self, node_ids: Sequence[str]) -> dict[str, EpistemicNode]:
+        """`get_node` for many ids in a bounded number of statements.
+
+        A batching of *cost*, not of *answer*: each id maps to exactly what
+        `get_node` would return for it, at any status.
+
+        **Ids that are not nodes are absent from the map**, rather than present
+        with a `None` value — so `result.get(node_id)` behaves exactly like
+        `await get_node(node_id)` and callers keep the check they already write.
+        This differs from `get_edges_for`, where every id gets a key: a list has
+        an empty value and a node does not. Repeated ids collapse; an empty
+        request returns `{}` without touching the store.
+
+        Backends must not answer this with one statement per id — that is the
+        cost it exists to remove. On SurrealDB a node's table is not known from
+        its id, so the single-node form probes topic, then fact, then inference:
+        1–3 round-trips each, and 2,104 of them in one `reflect` at 1,200 nodes
+        (ISSUES.md #14).
+        """
         ...
 
     async def get_node_by_content(
@@ -453,6 +475,23 @@ class StorageBackend(Protocol):
         self, item_id: str, model_id: str | None = None
     ) -> Sequence[EmbeddingRecord]:
         """Get embeddings for an item, optionally filtered by model."""
+        ...
+
+    async def get_embeddings_for_items(
+        self, item_ids: Sequence[str], *, model_id: str | None = None
+    ) -> dict[str, list[EmbeddingRecord]]:
+        """`get_embeddings_for_item` for many items in one round-trip.
+
+        **Every requested id is a key**, mapping to `[]` when the item has no
+        embeddings — including ids that are not items at all. Callers iterate
+        the map, so absence must mean "you did not ask" rather than "there were
+        none". Repeated ids collapse; an empty request returns `{}` without
+        touching the store.
+
+        Vectors are the heaviest rows in the store, and every phase of `reflect`
+        that compares them was reading them one item at a time. Backends must
+        answer in a bounded number of statements.
+        """
         ...
 
     async def vector_search(

@@ -1,16 +1,48 @@
 # Epimemer — Known Issues
 
-Living issue tracker. **Last review: 2026-08-10.**
+Living issue tracker. **Last review: 2026-08-11.**
 
-Everything found so far is resolved except **14** and **16**. **14**'s first two
-steps are done; what remains is step 4, which the work on steps 1–2 discovered
-and which is where `reflect`'s cost actually sits. **16** stays deferred by
-design.
+Open: **16**, **46**, **48**. **16** stays deferred by design, **46** needs a
+decision, and **48** is a defect that does not hurt yet. **Nothing open fails at
+a size anyone is running.**
+
+**46 was split and halved.** It covered `novelty` and `confidence` together
+because both were uncomputed constants documented as measurements; that shared
+symptom was the only thing they shared. **`novelty` is removed** — the entry is
+gone, `REVIEW_EPISTEMIC.md` §12.1 has the reasoning, and the guard is
+`test_a_node_stored_with_novelty_still_loads` in `tests/core/test_types.py`.
+Worth carrying forward: **a field whose meaning depends on when it is measured
+cannot be stored honestly.** `relevance` (#44) failed that test on operator
+habit, `novelty` on arrival order. Ask it of a new score before adding one, and
+prefer the read-time derivation — it needs no migration and cannot go stale.
+
+**14 and 47 are both resolved**, and between them they took `reflect` on
+SurrealDB from failing at ~2,200 nodes to a 30 s crossing around **26,000**, and
+in-memory to ~320,000. #14 was the full-scan / N+1 entry that ran for months;
+#47 was the Python pair loop it uncovered, worth a further **2.9–4.4× on
+SurrealDB and 7.3–16.5× in-memory**. `BENCHMARKS.md` carries the numbers, the
+three causes behind #14 — of which the batched reads it nominated were the
+smallest — and what binds `reflect` now, which is payload rather than
+round-trips or arithmetic. **44** (`relevance` was write-only) and **45** (a
+merge reset both value clocks) are also resolved; see `REVIEW_EPISTEMIC.md`
+§12.1.
+
+**Three methods earned their keep** and are worth reusing:
+
+- Asking **"what reads this?"** of one field found #44, #45 and #46.
+- Reading the **query plan**, not just the call count, found the two largest
+  costs in #14 step 4 — both single calls that scanned a whole table, which a
+  round-trip counter rates as cheap.
+- **Fitting an exponent over three sizes rather than two.** The two-point fit
+  put `reflect` at 1.75–1.87 and its crossing near 7,000; three points put its
+  successor at 0.99 in-memory. The short fit was reading fixed setup cost as
+  curvature.
+
 Resolved entries are **removed from this file** once merged — their resolution
 lives in git history and the merged code. Issue numbers are stable IDs; the gaps
-(6–13, 15, 17–43) are deleted-resolved items, not missing work, and code
-comments citing a number no longer listed here are pointing at one of them. New
-findings continue from **44**.
+(1–15, 17–45, 47) are deleted-resolved items, not missing work, and code comments
+citing a number no longer listed here are pointing at one of them. New findings
+continue from **49**.
 
 35–38 were the value model & graph hygiene plan
 (`dev-docs/REVIEW_EPISTEMIC.md` §12, which records what the plan did not
@@ -21,7 +53,7 @@ are gone. **`dev-docs/BENCHMARKS.md`** carries the state those fixes left the sy
 in and the conclusions still worth acting on, but not the runs themselves — it
 describes where things stand, not how they got there, and superseded
 measurements are deleted rather than kept. The blow-by-blow is in `git log`.
-#14 below depends on the current numbers.
+#48 below depends on the current numbers.
 
 **Workflow (required for every fix):**
 
@@ -51,97 +83,33 @@ is entirely sequential.
 
 ## Open issues
 
-### Issue 14 — Full-scan / N+1 query patterns — ▶ ACTIONABLE (steps 1–2 done; step 4 is the new front)
+### Issue 48 — `get_node_by_content` scans the node table on every ingest — ▶ ACTIONABLE
 
-**Status.** Steps 1 and 2 are **done and merged**: `get_edges_for` exists on both
-backends and every N+1 *edge* site in the system now uses it. Step 3 stays
-blocked by #16 — and is now moot, see below. Step 4 is new, and it is what
-actually holds `reflect` at the timeout.
+Found by the same query-plan audit as #14 step 4, on the *write* path rather
+than the read path.
 
-**Guarded by** `tests/storage/test_storage_parity.py::TestBatchedEdgeFetch` and
-`tests/pipelines/reflection/test_reflect_scaling.py::TestEdgeFetchesDoNotScaleWithTheGraph`.
+`SELECT * FROM {table} WHERE content = $content AND status = $status LIMIT 1`
+has no index on `content`, so the planner takes `idx_{table}_status` — which
+matches every active row — and filters afterwards. Measured per call: **1.3 ms
+at 400 facts, 2.1 at 1,200, 4.3 at 3,000**, linear in table size.
 
-#### What steps 1–2 bought
+It is called during ingest to make a repeated source/tag name reuse one node, so
+ingest is O(N) per node and O(N²) overall. **It does not hurt yet**: ingest is
+flat to 2,000 nodes in `BENCHMARKS.md` because 4 ms against the rest of a
+`store_decomposition` is nothing. It is filed because it is the same defect as
+the embedding one, on a path whose cost currently hides it.
 
-Measured before and after on the same machine in the same session, with
-`store_decomposition` flat to three significant figures as the control:
+**The fix is not obvious and that is why this is an issue rather than a patch.**
+An index on `content` means indexing full node text, which is heavy and may cost
+more on the write side than it saves. Options worth measuring: index a hash of
+the content instead; scope the lookup to the node types that actually use exact
+-name upsert (source/tag topics) rather than all three tables; or accept it with
+the measurement recorded.
 
-| backend | operation | 1,000 nodes | 2,000 nodes |
-|---|---|---|---|
-| surrealdb | `list_sources` | 1,133 → **275** ms (4.12×) | 2,343 → **862** ms (2.72×) |
-| surrealdb | `search` | 230 → **164** ms (1.40×) | 296 → **246** ms (1.20×) |
-| surrealdb | `reflect` | 11,165 → **8,107** ms (1.38×) | 34,695 → **29,056** ms (1.19×) |
-| memory | `list_sources` | 28 → **16** ms (1.79×) | 58 → **31** ms (1.85×) |
-| memory | `reflect` | 856 → **787** ms (1.09×) | 3,038 → **2,913** ms (1.04×) |
-
-Round-trips at 400 nodes, which is the number the fix actually targets:
-`reflect` 5,144 → **1,448**, `search` 319 → **141**, `list_sources` 883 → **87**,
-`list_relations` 803 → **7**.
-
-#### What it did not buy, and why
-
-**`reflect` on SurrealDB is still at the 30 s timeout at ~2,000 nodes.** The
-prediction in the previous version of this entry — that the batched edge fetch
-was what stood between `reflect` and the crossing — was wrong, which is the
-fifth time in a row this project's predicted cause has not survived a profile.
-
-Attribution after the fix, at 400 nodes: of the storage reads `reflect` still
-issues per node, **none are edge fetches**. What is left is
-
-- `get_node` per neighbour (300 of 600 reads, all in `topic_enrichment`, which
-  fetches each fact/inference body just to read `.content`),
-- `get_embeddings_for_item` per fact and per topic (300, split between
-  contradiction detection and topic consolidation),
-- and, outside the read count, one `UPSERT` per node from value decay.
-
-Edge batching removed 72% of the round-trips and moved the wall clock 19%,
-because the traffic that remains is the expensive part.
-
-#### What to fix, in order
-
-Two earlier steps predate this list and are not repeated: indexing in-memory
-edge lookups, and separating ranking from the status filter in SurrealDB's
-`vector_search`.
-
-1. ~~**Batched edge fetch in the protocol.**~~ **Done.**
-   `get_edges_for(node_ids, *, direction, edge_type)` returning a map, on both
-   backends. Every N+1 edge site uses it, including `_hierarchy_annotations`,
-   which had been left waiting for exactly this.
-2. ~~**Aggregate queries for the listing tools.**~~ **Done, by step 1 rather
-   than by aggregation.** A `GROUP BY` over `node_edge` would have counted
-   labels belonging to archived and superseded endpoints, since edges outlive
-   their nodes — it would have been one query and the wrong answer. Scoping to
-   active nodes needs their ids anyway, so the batched fetch gets the same
-   result honestly: `list_relations` went 803 queries → 7.
-3. **`asyncio.gather` on per-node enrichment** — **blocked by #16, and no longer
-   wanted.** The one place this pattern had already been used (`_in_frame_nodes`)
-   is now a single batched query: sequential *and* faster, so the concurrency
-   that #16 makes unsafe buys nothing. Prefer batching over gathering anywhere
-   this comes up again.
-4. **Batched node and embedding reads — the new front.** `get_nodes(ids)` and
-   `get_embeddings_for_items(ids, model_id)`, same shape as `get_edges_for` and
-   the same parity obligation, plus a batched write for value decay. This is
-   what `reflect`'s 30 s crossing is made of now, on the evidence above rather
-   than on prediction. Profile again before assuming the mix stays as measured.
-
----
-
-#### Where this issue stands
-
-`EPIMEMER_TOOL_TIMEOUT_SECONDS` defaults to **30 s**, so "crossing" means *the
-tool call fails*, not *feels slow*. `reflect` on SurrealDB is the only operation
-in the system that fails at a size real use reaches — ~2,000 nodes, roughly 100
-documents of five segments. `search` and the listing tools are now far from any
-crossing on both backends.
-
-Ingest is flat on both backends at every size measured; the write path has never
-been the ceiling.
-
-`dev-docs/BENCHMARKS.md` carries the reproduction commands, the caveats that
-qualify every number (mocked embeddings, a self-similar synthetic corpus,
-loopback-only networking), and the profiling recipe. Its standing warning is the
-one that matters here, and step 1 above is the latest evidence for it:
-**profile first.**
+**Failing test first** — a plan assertion is the honest guard here, in
+`tests/storage/test_surrealdb_storage.py`: `EXPLAIN` the lookup and assert it
+does not resolve through a status index. Behaviour is already covered by the
+exact-name upsert tests, which must keep passing unchanged.
 
 ---
 
@@ -192,6 +160,75 @@ while the server is single-client stdio; keep this issue open as the reminder.
 
 ---
 
+### Issue 46 — `confidence` is a constant that documentation describes as a measurement — ◆ NEEDS A DECISION
+
+Found by the audit that resolved #44: having established that `relevance` was
+written but never read, the obvious next question was whether its siblings were
+any better off. They are worse in a different direction — **read, but never
+written.**
+
+> **Narrowed 2026-08-11.** This entry originally covered `novelty` as well.
+> **`novelty` was removed** rather than decided; the two fields shared a symptom
+> and nothing else, and bundling them was hiding that they had different answers.
+> See `REVIEW_EPISTEMIC.md` §12.1 for the reasoning and the naming conclusion
+> ("surprise", reserved for a caller-supplied signal). The short version: a
+> stored novelty answers "unexpected relative to what the graph held *then*",
+> which is arrival order frozen forever, while the useful question is against the
+> graph as it stands — well-posed at read time, already answerable from
+> `vector_search`, and needing no field. **`confidence` is not in that position**,
+> which is why it is still here: corroboration accumulates rather than being
+> relative to a moment, so its stored form is defensible.
+
+Every node created by ingest gets `ValueSignal()` (`mcp/tools.py:313`), so
+`confidence` is **always 0.5**, against documentation promising "how
+well-supported by evidence; multiple independent sources increase confidence".
+
+Nothing computes it. The only writer after creation is topic merge
+(`merged_value_signal`, `core/types.py`), which takes the `max` over inputs that
+are themselves the constant, so the result is the same constant again.
+`store_decomposition` accepts an importance prior but nothing equivalent.
+
+**One behavioural consequence.** `merge_similar_topics` reads `confidence` to
+choose which description becomes primary (`topic_consolidation.py:164`). Since
+every node ties at 0.5, the `>=` always takes `topic_a`, so the
+"higher-confidence description wins" rule is really "whichever was passed first
+wins". The merged content is a concatenation, so nothing is lost — but the
+ordering is arbitrary while reading as if it were principled.
+
+Not a failure. What makes it worth an entry is the same thing that made #44 one:
+**the documentation describes a mechanism that does not exist**, so the next
+person to reach for a "how well-supported is this?" signal finds one that is
+documented, populated, rendered, and meaningless.
+
+#### The decision (no code before it)
+
+1. **Compute it.** "How well-supported" means counting corroborating edges,
+   which is structural in-degree, which `knowledge_in_degree_for` already
+   computes and archival already uses. Ask whether a second, *stored* copy of a
+   value already derived on demand earns its keep — and note the trap that sank
+   `novelty` does not apply here, since in-degree at read time and in-degree at
+   write time differ by accumulation rather than by baseline.
+2. **Accept it as a prior and say so.** Keep the field, let
+   `store_decomposition` take it alongside `importance`, and rewrite the docs to
+   describe a caller-supplied hint rather than a computed measurement.
+3. **Remove it**, as #44 removed `relevance` and as `novelty` has now gone.
+   Cheapest, but unlike either of those it has a live reader, so the merge
+   primary-selection rule needs a replacement — content length, or `created_at`,
+   either of which is at least honest about being arbitrary.
+
+**Recommendation: (2).** It is the smallest change that makes the documentation
+true, it keeps the door open for (1) later without another migration, and it
+matches how `importance` already works — a judgment the calling agent supplies,
+because the agent is the only party in the system that has read the material.
+
+**Test once a direction is chosen.** For (2):
+`tests/mcp/test_tools.py::TestStoreDecompositionValuePriors` — a decomposition
+entry carrying `confidence` stores it; one omitting it keeps the documented
+default; an out-of-range value is refused by the `ValueSignal` bounds rather
+than silently clamped.
+
+---
+
 ## Older carry-overs (open, low priority)
 
 From the original live-graph walkthrough (issues 1–5, otherwise resolved or kept
@@ -207,15 +244,28 @@ it lives in README → *Not yet built*.
 
 ## Recommended order
 
-**#14 step 4 is what is left**, and it is the only thing in the system that
-breaks at a size real use reaches: `reflect` on SurrealDB still crosses 30 s at
-~2,000 nodes. Steps 1–2 took 72% of its round-trips out and moved the wall clock
-19%, which is what established that the remaining cost is per-node *node and
-embedding* reads rather than edges. #14 above has the measurements.
+**Nothing here breaks, and the performance thread has run out.** `reflect` was
+the only operation that failed inside a plausible graph size; #14 and #47 took
+its crossing from ~2,200 nodes to ~26,000 on SurrealDB and ~320,000 in-memory.
+What binds it now is the bytes moved to compare vectors — close to irreducible
+without moving the comparison server-side or caching vectors across calls, both
+of which are larger changes than either issue was, and neither worth making at
+this crossing. **The next performance issue should come from a profile, not
+from this list.**
 
-**#16 stays deferred**, with its trigger stated. **#14 step 3** is dropped
-rather than deferred — batching turned out to beat gathering, so the prong #16
-blocked is one nobody wants.
+**#48 is a defect that does not hurt yet** — an O(N) scan per ingested node,
+invisible at today's sizes. Worth doing before the graph sizes that make it
+visible, and worth measuring rather than patching: the obvious fix (index the
+content) may cost more than it saves.
+
+**#46 is blocked on a decision, not on effort**: nothing fails, but the docs
+describe a measurement the code does not take, which is the same trap #44 was.
+Its `novelty` half needed no decision in the end — the question "measured
+against what, and does that survive being stored?" answered it.
+
+**#16 stays deferred**, with its trigger stated. #14's step 3 was dropped rather
+than deferred — batching beat gathering, so the prong #16 blocked is one nobody
+wants.
 
 Work that does not exist yet, as opposed to work that is wrong, lives in
 `dev-docs/PROPOSED_FEATURES.md`.
@@ -224,5 +274,6 @@ What to pick up, and what has to be true first:
 
 | Order | Work | Trigger |
 |---|---|---|
-| 1 | 14 step 4 (batched node + embedding reads, batched decay write) | **Ready now**, and measured rather than predicted: after steps 1–2 every per-node read left in `reflect` is a `get_node` or a `get_embeddings_for_item`. A protocol change on both backends per the parity rule, same shape as `get_edges_for` |
+| 1 | 48 (`get_node_by_content` scans per ingest) | **Ready now** but not urgent, and the fix needs measuring before it is chosen. Do it before graph sizes make it visible, not after |
+| blocked | 46 (`confidence` is a constant) | Needs a decision between computing it, accepting it as a caller-supplied prior (recommended), or removing it — which now costs a replacement rule for merge primary-selection. Not a failure — the docs describe a mechanism that does not exist |
 | deferred | 16 | The server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`) |

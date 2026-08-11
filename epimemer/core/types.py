@@ -5,6 +5,7 @@ These types serve double duty:
 2. Petri net tokens — flow through processing pipelines
 """
 
+from collections.abc import Iterable, Sequence
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
@@ -158,23 +159,38 @@ BASE_METACONTEXT_ID = "the-real"
 class ValueSignal(BaseModel):
     """Multi-dimensional value signal attached to every node.
 
-    `relevance` and `importance` answer different questions and move on
-    different clocks: relevance is "is this being used?" (decays, restored by
-    retrieval), importance is "does this matter?" (judgment only). Keeping them
-    apart is what stops decay from quietly eroding an assessment an agent or a
-    human deliberately recorded.
+    Two questions get asked of a node — "is this being used?" and "does this
+    matter?" — and they are answered by different kinds of evidence. Use is a
+    fact about events, so it is recorded as *when* they happened. Mattering is a
+    judgment, so it is recorded as a number plus when someone last stood behind
+    it.
 
-    Each has its own timestamp, and the names say which mechanism writes them.
-    One shared `last_reinforced` could not: retrieval is passive and automatic
-    while a judgment is deliberate and rare, so a single field either conflated
-    them or — as it did — silently recorded only the passive one under a name
-    that read like the other.
+    There used to be a third answer, a decaying `relevance` float, and it was
+    removed rather than kept: nothing read it, and `retrieved_at` answers the
+    same question better. A decayed number is confounded by how often an
+    operator ran `reflect` — 0.3 might be "used once, long ago" or "used often,
+    on a graph that reflects a lot" — so it described operator habit as much as
+    the node. A timestamp separates *never* from *long ago* without that.
+
+    A `novelty` float was removed for a related reason (#46). It was meant as
+    how unlike existing graph state a node is, and it went not because nothing
+    read it — though nothing did — but because the number cannot be stored
+    honestly: measured at ingest it answers "unexpected relative to what the
+    graph held *then*", which is a fact about arrival order, frozen at 1.0 for
+    everything ever created. Asked at read time against the graph as it stands
+    the question is well-posed, and the nearest-neighbour distance
+    `vector_search` returns answers it without a field. `created_at` already
+    carries the other sense the name kept collapsing into — how new a node is.
+
+    Each clock's name says which mechanism writes it. One shared
+    `last_reinforced` could not: retrieval is passive and automatic while a
+    judgment is deliberate and rare, so a single field either conflated them
+    or — as it did — silently recorded only the passive one under a name that
+    read like the other.
     """
-    novelty: float = Field(default=1.0, ge=0.0, le=1.0)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
-    relevance: float = Field(default=0.5, ge=0.0, le=1.0)
-    # Never moved by `apply_decay`. Raised only by judgment — the `reinforce`
-    # tool, or a prior supplied at ingest.
+    # Moved only by judgment — the `judge_importance` tool, or a prior supplied
+    # at ingest. Nothing automatic touches it, which is the point.
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
     # Both are None until the thing they name actually happens. "Never
     # retrieved" and "never judged" are states worth distinguishing from
@@ -183,6 +199,49 @@ class ValueSignal(BaseModel):
     # nomination had to compare two clock reads with a tolerance window.
     retrieved_at: datetime | None = None
     importance_judged_at: datetime | None = None
+
+
+def _latest(times: Iterable[datetime | None]) -> datetime | None:
+    """The most recent of these, or `None` if none of them happened."""
+    happened = [t for t in times if t is not None]
+    return max(happened) if happened else None
+
+
+def merged_value_signal(signals: Sequence[ValueSignal]) -> ValueSignal:
+    """Combine the signals of nodes being collapsed into one replacement.
+
+    Lives here, shared by both merge sites, because a merge builds a *fresh*
+    node: a field-by-field rebuild silently resets every field it forgets to
+    name, and the two sites forgot different things at different times. One
+    function means a field added to `ValueSignal` has exactly one place to be
+    considered rather than two places to be missed.
+
+    Each field is combined by what it means:
+
+    - `importance` takes the max — a judgment made about either source still
+      applies to what replaces them, so collapsing topics must not discard one.
+    - **Both clocks take the latest**, with `None` meaning "never" and so losing
+      to any real timestamp. Carrying `importance` across without the date it
+      was judged is not a lost timestamp but a false pair: the merged node claims
+      a judgment nobody ever made, and `judgment_is_stale` reads the pair, so an
+      unjudged node is never stale and the merged node stays exempt from every
+      archival class permanently (#45). The same argument holds for retrieval —
+      knowledge that has been retrieved does not become unretrieved by being
+      merged.
+    - `confidence` takes the max, as both sites already did. Nothing computes it
+      yet (#46), so it is a placeholder preserving the existing behaviour rather
+      than a claim about merging.
+
+    Requires at least one signal; merging nothing has no meaning.
+    """
+    if not signals:
+        raise ValueError("merged_value_signal requires at least one signal")
+    return ValueSignal(
+        confidence=max(s.confidence for s in signals),
+        importance=max(s.importance for s in signals),
+        retrieved_at=_latest(s.retrieved_at for s in signals),
+        importance_judged_at=_latest(s.importance_judged_at for s in signals),
+    )
 
 
 # --- Documents and Segments ---

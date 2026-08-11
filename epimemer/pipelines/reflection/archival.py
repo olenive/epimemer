@@ -223,23 +223,27 @@ async def evidence_gone_for(
     Complements the `evidence_stale` review label, which fires on *any*
     superseded evidence but does not know about archival.
 
-    The evidence nodes themselves are still fetched one at a time — they are the
-    *neighbours* of the set, not the set, so there is no id list to batch on
-    until the edges come back. Fetching them in bulk needs a batched node read,
-    which is the same shape of protocol change one level over (ISSUES.md #14).
+    The evidence nodes are the *neighbours* of the set rather than the set, so
+    there is no id list to batch on until the edges come back — which is why
+    they are read in a second pass rather than a first. Reading them one at a
+    time gave up the early exit below in exchange for a round-trip per edge;
+    now the whole neighbourhood arrives at once and the exit is free.
     """
     derived_from = await storage.get_edges_for(
         [inference.id for inference in inferences],
         direction="from",
         edge_type=EdgeType.DERIVED_FROM,
     )
+    evidence_by_id = await storage.get_nodes([
+        edge.dst_id for edges in derived_from.values() for edge in edges
+    ])
 
     gone: dict[str, bool] = {}
     for inference in inferences:
         edges = derived_from[inference.id]
         gone[inference.id] = bool(edges)
         for edge in edges:
-            evidence = await storage.get_node(edge.dst_id)
+            evidence = evidence_by_id.get(edge.dst_id)
             if evidence is None or evidence.status is NodeStatus.ACTIVE:
                 gone[inference.id] = False
                 break

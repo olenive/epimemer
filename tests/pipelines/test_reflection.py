@@ -4,9 +4,6 @@ Covers:
 - Topic consolidation: finds similar pairs above threshold
 - Topic consolidation: dissimilar topics not paired
 - Topic consolidation: merge creates new topic, marks originals as merged
-- Value decay: relevance decreases after decay pass
-- Value decay: returns correct count of decayed nodes
-- Value decay: respects min_relevance floor
 - Contradiction detection: finds similar fact pairs
 - Contradiction detection: excludes already-linked pairs
 - Archival: finds old superseded nodes
@@ -34,6 +31,7 @@ from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.pipelines.reflection.archival import (
     archive_nodes,
     find_archival_candidates,
+    never_retrieved,
     nominate_archival_candidates,
 )
 from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
@@ -41,7 +39,6 @@ from epimemer.pipelines.reflection.topic_consolidation import (
     find_similar_topic_pairs,
     merge_similar_topics,
 )
-from epimemer.pipelines.reflection.value_decay import apply_decay
 from epimemer.mcp.tools import judge_importance
 from epimemer.storage.memory import InMemoryStorage
 
@@ -67,19 +64,19 @@ async def storage_with_similar_topics(embedding_provider: MockEmbeddingProvider)
         id="topic-a",
         content="Machine learning algorithms",
         source_id="seg-1",
-        value=ValueSignal(confidence=0.8, relevance=0.7, novelty=0.6),
+        value=ValueSignal(confidence=0.8),
     )
     topic_b = Topic(
         id="topic-b",
         content="Machine learning algorithms",  # identical content = identical embedding
         source_id="seg-2",
-        value=ValueSignal(confidence=0.6, relevance=0.5, novelty=0.4),
+        value=ValueSignal(confidence=0.6),
     )
     topic_c = Topic(
         id="topic-c",
         content="Ocean currents and marine biology deep sea exploration",
         source_id="seg-3",
-        value=ValueSignal(confidence=0.9, relevance=0.8, novelty=0.3),
+        value=ValueSignal(confidence=0.9),
     )
 
     for topic in [topic_a, topic_b, topic_c]:
@@ -296,6 +293,102 @@ async def test_merge_carries_the_higher_importance(embedding_provider):
     assert merged.value.importance == pytest.approx(0.9)
 
 
+class TestMergeCarriesTheValueClocks:
+    """A merge must carry *when* each signal was set, not only its value (#45).
+
+    Merge builds a fresh node, and a field-by-field rebuild silently resets
+    every field it forgets to name. Forgetting the two clocks is worse than
+    losing a timestamp: the merged node keeps `importance = max(sources)` while
+    claiming it was never judged, and `judgment_is_stale` reads the *pair*. An
+    unjudged node is never stale, so a high-importance merged node fell through
+    every nomination class permanently — the one safety net that stops
+    importance protecting a node forever was unreachable for anything a merge
+    produced.
+    """
+
+    async def _pair(self, storage, judged_days_ago=None, retrieved_days_ago=None):
+        """One touched topic and one untouched one, ready to merge."""
+        def ago(days):
+            return None if days is None else datetime.now(timezone.utc) - timedelta(days=days)
+
+        await storage.store_node(Topic(
+            id="topic-touched",
+            content="Machine learning algorithms",
+            source_id="seg-1",
+            value=ValueSignal(
+                importance=0.9,
+                importance_judged_at=ago(judged_days_ago),
+                retrieved_at=ago(retrieved_days_ago),
+            ),
+        ))
+        await storage.store_node(Topic(
+            id="topic-untouched",
+            content="Machine learning algorithms",
+            source_id="seg-1",
+            value=ValueSignal(),
+        ))
+        return (
+            await storage.get_node("topic-touched"),
+            await storage.get_node("topic-untouched"),
+        )
+
+    async def test_merge_carries_the_judgment_clock_across(self, embedding_provider):
+        """The judgment and its date travel together or the pair lies."""
+        storage = InMemoryStorage()
+        touched, untouched = await self._pair(storage, judged_days_ago=200)
+
+        merged = await merge_similar_topics(
+            touched, untouched, storage, embedding_provider
+        )
+
+        assert merged.value.importance == pytest.approx(0.9)
+        assert merged.value.importance_judged_at == touched.value.importance_judged_at
+
+    async def test_merge_carries_the_retrieval_clock_across(self, embedding_provider):
+        """Knowledge that has been retrieved does not become unretrieved."""
+        storage = InMemoryStorage()
+        touched, untouched = await self._pair(storage, retrieved_days_ago=3)
+
+        merged = await merge_similar_topics(
+            touched, untouched, storage, embedding_provider
+        )
+
+        assert merged.value.retrieved_at == touched.value.retrieved_at
+        assert not never_retrieved(merged)
+
+    async def test_a_merged_node_with_a_stale_judgment_is_still_nominated(
+        self, embedding_provider
+    ):
+        """The consequence, end to end: the safety net has to reach merges."""
+        storage = InMemoryStorage()
+        touched, untouched = await self._pair(storage, judged_days_ago=400)
+        merged = await merge_similar_topics(
+            touched, untouched, storage, embedding_provider
+        )
+
+        candidates = await nominate_archival_candidates(
+            storage, judgment_max_age_days=180
+        )
+
+        assert [(c.node_id, c.reason) for c in candidates] == [
+            (merged.id, "stale_judgment")
+        ]
+
+    async def test_a_merge_of_untouched_topics_leaves_both_clocks_unset(
+        self, embedding_provider
+    ):
+        """`None` means never, and a merge invents no history that did not happen."""
+        storage = InMemoryStorage()
+        touched, untouched = await self._pair(storage)
+
+        merged = await merge_similar_topics(
+            touched, untouched, storage, embedding_provider
+        )
+
+        assert merged.value.importance_judged_at is None
+        assert merged.value.retrieved_at is None
+
+
 async def test_merge_creates_new_topic_marks_originals(
     storage_with_similar_topics, embedding_provider
 ):
@@ -318,8 +411,6 @@ async def test_merge_creates_new_topic_marks_originals(
 
     # Value signals combined correctly
     assert merged.value.confidence == pytest.approx(0.8)  # max
-    assert merged.value.relevance == pytest.approx(0.7)  # max
-    assert merged.value.novelty == pytest.approx(0.5)  # average of 0.6 and 0.4
 
     # Originals marked as merged
     original_a = await storage.get_node("topic-a")
@@ -337,86 +428,6 @@ async def test_merge_creates_new_topic_marks_originals(
     merged_edges_b = [e for e in edges_from_b if e.type == EdgeType.MERGED_INTO]
     assert len(merged_edges_b) == 1
     assert merged_edges_b[0].dst_id == merged.id
-
-
-# --- Value decay tests ---
-
-
-async def test_value_decay_reduces_relevance():
-    """Relevance decreases after a decay pass."""
-    storage = InMemoryStorage()
-
-    topic = Topic(
-        id="topic-decay",
-        content="A topic with high relevance",
-        source_id="seg-1",
-        value=ValueSignal(relevance=0.8, confidence=0.5, novelty=0.5),
-    )
-    await storage.store_node(topic)
-
-    await apply_decay(storage, decay_rate=0.1)
-
-    updated = await storage.get_node("topic-decay")
-    assert updated.value.relevance == pytest.approx(0.72)  # 0.8 * 0.9
-
-
-async def test_value_decay_returns_correct_count():
-    """apply_decay returns the number of nodes decayed."""
-    storage = InMemoryStorage()
-
-    for i in range(5):
-        topic = Topic(
-            id=f"topic-{i}",
-            content=f"Topic number {i}",
-            source_id=f"seg-{i}",
-            value=ValueSignal(relevance=0.5),
-        )
-        await storage.store_node(topic)
-
-    count = await apply_decay(storage, decay_rate=0.1)
-    assert count == 5
-
-
-async def test_decay_leaves_importance_untouched():
-    """Decay is a clock; importance is a judgment. The clock must not erode it.
-
-    An agent that marks a node important is recording an assessment, not
-    starting a timer — an importance that decayed back out would make the
-    judgment worthless.
-    """
-    storage = InMemoryStorage()
-
-    topic = Topic(
-        id="topic-important",
-        content="A topic judged important",
-        source_id="seg-1",
-        value=ValueSignal(relevance=0.8, importance=0.9),
-    )
-    await storage.store_node(topic)
-
-    await apply_decay(storage, decay_rate=0.1)
-
-    updated = await storage.get_node("topic-important")
-    assert updated.value.relevance == pytest.approx(0.72)
-    assert updated.value.importance == pytest.approx(0.9)
-
-
-async def test_value_decay_respects_min_relevance():
-    """Decay does not push relevance below min_relevance."""
-    storage = InMemoryStorage()
-
-    topic = Topic(
-        id="topic-floor",
-        content="A topic near the floor",
-        source_id="seg-1",
-        value=ValueSignal(relevance=0.02),
-    )
-    await storage.store_node(topic)
-
-    await apply_decay(storage, decay_rate=0.9, min_relevance=0.01)
-
-    updated = await storage.get_node("topic-floor")
-    assert updated.value.relevance >= 0.01
 
 
 # --- Contradiction detection tests ---

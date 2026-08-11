@@ -1,5 +1,7 @@
 """Tests for core Pydantic types."""
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from petritype.core.executable_graph_components import ListPlaceNode
 
@@ -17,6 +19,7 @@ from epimemer.core.types import (
     Timepoint,
     Topic,
     ValueSignal,
+    merged_value_signal,
     migration_excluded,
     traversal_excluded,
 )
@@ -54,10 +57,65 @@ class TestValueSignal:
 
     def test_default_values(self):
         v = ValueSignal()
-        assert v.novelty == 1.0
         assert v.confidence == 0.5
-        assert v.relevance == 0.5
         assert v.importance == 0.5
+
+    def test_a_node_stored_with_relevance_still_loads(self):
+        """The migration case for #44's removal, and the whole risk of it.
+
+        `relevance` was written into every node of every existing graph. It is
+        gone from the model, so loading one of those rows now hands Pydantic a
+        key it does not declare — and a model configured `extra="forbid"` would
+        raise, taking out every pre-existing graph on read. Nothing recoverable
+        is lost by ignoring it: the field had no reader, which is why it went.
+        """
+        v = ValueSignal.model_validate(
+            {"novelty": 0.3, "confidence": 0.9, "relevance": 0.37, "importance": 0.8}
+        )
+
+        assert not hasattr(v, "relevance")
+        assert v.confidence == 0.9
+        assert v.importance == 0.8
+
+    def test_a_reloaded_signal_no_longer_carries_relevance(self):
+        """It is dropped on the way out too, so a re-store cleans the row."""
+        restored = ValueSignal.model_validate(
+            ValueSignal.model_validate({"confidence": 0.9, "relevance": 0.37})
+            .model_dump(mode="json")
+        )
+        assert "relevance" not in restored.model_dump(mode="json")
+
+    def test_a_node_stored_with_novelty_still_loads(self):
+        """The migration case for #46's removal, and the wider one of the two.
+
+        `relevance` was at least written by something. `novelty` was written by
+        nothing after creation: every node in every existing graph carries it at
+        exactly 1.0, because the default was the only writer. So the key is in
+        more rows than `relevance` ever was, and a model configured
+        `extra="forbid"` would raise on all of them.
+
+        Nothing recoverable is lost. What the field reached for — how unlike the
+        rest of the graph a node is — is not a property of the node at all: the
+        same content scores differently arriving into an empty graph and into a
+        mature one, so a stored answer records ingest order and then freezes.
+        Asked at read time against the graph as it stands, the question is
+        well-posed, and `vector_search` already answers it.
+        """
+        v = ValueSignal.model_validate(
+            {"novelty": 0.3, "confidence": 0.9, "importance": 0.8}
+        )
+
+        assert not hasattr(v, "novelty")
+        assert v.confidence == 0.9
+        assert v.importance == 0.8
+
+    def test_a_reloaded_signal_no_longer_carries_novelty(self):
+        """Dropped on the way out too, so a re-store cleans the row."""
+        restored = ValueSignal.model_validate(
+            ValueSignal.model_validate({"confidence": 0.9, "novelty": 0.3})
+            .model_dump(mode="json")
+        )
+        assert "novelty" not in restored.model_dump(mode="json")
 
     def test_both_clocks_start_unset(self):
         """"Never retrieved" and "never judged" are real states, not fictions.
@@ -81,22 +139,71 @@ class TestValueSignal:
         them for review.
         """
         v = ValueSignal.model_validate(
-            {"novelty": 1.0, "confidence": 0.5, "relevance": 0.5, "importance": 0.5}
+            {"novelty": 1.0, "confidence": 0.5, "importance": 0.5}
         )
         assert v.retrieved_at is None
         assert v.importance_judged_at is None
 
     def test_custom_values(self):
-        v = ValueSignal(novelty=0.3, confidence=0.9, relevance=0.1)
-        assert v.novelty == 0.3
+        v = ValueSignal(importance=0.3, confidence=0.9)
+        assert v.importance == 0.3
         assert v.confidence == 0.9
-        assert v.relevance == 0.1
 
     def test_bounds_validation(self):
         with pytest.raises(Exception):
-            ValueSignal(novelty=1.5)
+            ValueSignal(importance=1.5)
         with pytest.raises(Exception):
             ValueSignal(confidence=-0.1)
+
+
+class TestMergedValueSignal:
+    """The one place a merge decides what a combined signal says (#45)."""
+
+    def _at(self, days_ago: int) -> datetime:
+        return datetime.now(timezone.utc) - timedelta(days=days_ago)
+
+    def test_a_real_timestamp_beats_never(self):
+        """`None` means never happened, so it loses to anything that did."""
+        judged, retrieved = self._at(200), self._at(5)
+        merged = merged_value_signal([
+            ValueSignal(importance_judged_at=judged, retrieved_at=retrieved),
+            ValueSignal(),
+        ])
+        assert merged.importance_judged_at == judged
+        assert merged.retrieved_at == retrieved
+
+    def test_the_later_of_two_real_timestamps_wins(self):
+        older, newer = self._at(200), self._at(10)
+        merged = merged_value_signal([
+            ValueSignal(importance_judged_at=older),
+            ValueSignal(importance_judged_at=newer),
+        ])
+        assert merged.importance_judged_at == newer
+
+    def test_order_does_not_matter(self):
+        older, newer = self._at(200), self._at(10)
+        a = ValueSignal(importance=0.9, importance_judged_at=older)
+        b = ValueSignal(importance=0.2, importance_judged_at=newer)
+        assert merged_value_signal([a, b]) == merged_value_signal([b, a])
+
+    def test_untouched_sources_produce_an_untouched_signal(self):
+        """A merge invents no history: nothing happened, so both clocks stay unset."""
+        merged = merged_value_signal([ValueSignal(), ValueSignal()])
+        assert merged.importance_judged_at is None
+        assert merged.retrieved_at is None
+
+    def test_scalars_keep_the_behaviour_both_sites_already_had(self):
+        merged = merged_value_signal([
+            ValueSignal(confidence=0.8, importance=0.9),
+            ValueSignal(confidence=0.4, importance=0.2),
+        ])
+        assert merged.confidence == pytest.approx(0.8)   # max
+        assert merged.importance == pytest.approx(0.9)   # max
+
+    def test_merging_nothing_is_refused(self):
+        """Silently returning defaults would look like a merge that lost everything."""
+        with pytest.raises(ValueError):
+            merged_value_signal([])
 
 
 class TestRawDocument:
@@ -135,7 +242,7 @@ class TestEpistemicNodes:
         t = Topic(content="A topic about ML", source_id="seg1")
         assert t.status == NodeStatus.ACTIVE
         assert t.superseded_at is None
-        assert t.value.novelty == 1.0
+        assert t.value.confidence == 0.5
         assert t.extraction_method == "unspecified"
 
     def test_fact_defaults(self):
@@ -152,11 +259,11 @@ class TestEpistemicNodes:
         assert t1.id != t2.id
 
     def test_serialization_roundtrip(self):
-        t = Topic(content="test", source_id="s1", value=ValueSignal(novelty=0.7))
+        t = Topic(content="test", source_id="s1", value=ValueSignal(confidence=0.7))
         data = t.model_dump(mode="json")
         restored = Topic.model_validate(data)
         assert restored.id == t.id
-        assert restored.value.novelty == 0.7
+        assert restored.value.confidence == 0.7
 
 
 class TestNodeEdge:
@@ -217,7 +324,6 @@ class TestPetritypeIntegration:
 class TestTimepoint:
 
     def test_creation_with_concrete_dates(self):
-        from datetime import datetime, timezone
         tp = Timepoint(
             start=datetime(2024, 1, 1, tzinfo=timezone.utc),
             end=datetime(2024, 12, 31, tzinfo=timezone.utc),
@@ -268,8 +374,8 @@ class TestMetacontext:
 
     def test_has_value_signals(self):
         mc = Metacontext(content="test")
-        assert mc.value.novelty == 1.0
         assert mc.value.confidence == 0.5
+        assert mc.value.importance == 0.5
 
     def test_serialization_roundtrip(self):
         mc = Metacontext(content="Fiction", description="Fictional setting")
