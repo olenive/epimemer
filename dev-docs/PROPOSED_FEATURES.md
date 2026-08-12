@@ -174,3 +174,9 @@ than the convenience, and it is far easier to give up later than to win back.
   until the server gains concurrent clients.
 - **Native HNSW vector indexes** — `surrealdb_adapter.py:1105`. Waiting on
   SurrealDB, not on us.
+- **Valid-time rendering on the timeline panel** — designed:
+  `TIMELINE_VISUALISATION.md` §13, with a checked-in visual reference at
+  `dev-docs/mockups/valid-time-grammar.html`. Blocked on #53 construction (the
+  data it renders does not exist yet); the grammar was designed early because it
+  pins two decisions — gaps are never styled as false, bars fade through the
+  now-line — that would otherwise be made by accident in the first renderer.

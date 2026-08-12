@@ -21,7 +21,6 @@ def _():
     from petritype.core.rustworkx_graph import RustworkxGraph
     from petritype.plotting.simple_graphviz import SimpleGraphvizVisualization
     from epimemer.embeddings.mock import MockEmbeddingProvider
-    from epimemer.llm.mock import MockDecompositionProvider
     from epimemer.mcp.config import ServerConfig
     from epimemer.pipelines.orchestration.orchestration_net import MemoryRequest, orchestration_net
     from epimemer.storage.memory import InMemoryStorage
@@ -30,7 +29,6 @@ def _():
         ExecutableGraphOperations,
         InMemoryStorage,
         MemoryRequest,
-        MockDecompositionProvider,
         MockEmbeddingProvider,
         RustworkxGraph,
         ServerConfig,
@@ -74,7 +72,6 @@ async def _(
     ExecutableGraphOperations,
     InMemoryStorage,
     MemoryRequest,
-    MockDecompositionProvider,
     MockEmbeddingProvider,
     RustworkxGraph,
     ServerConfig,
@@ -87,8 +84,7 @@ async def _(
 ):
     storage = InMemoryStorage()
     emb = MockEmbeddingProvider(model_id="mock", dimension=8)
-    decomp = MockDecompositionProvider()
-    config = ServerConfig(storage_backend="memory", embedding_provider="mock", decomposition_provider="mock")
+    config = ServerConfig(storage_backend="memory", embedding_provider="mock")
 
     if action.value == "ingest":
         payload = {"content": content.value}
@@ -98,7 +94,7 @@ async def _(
         payload = {}
 
     request = MemoryRequest(action=action.value, payload=payload)
-    graph = orchestration_net(request, storage, emb, decomp, config)
+    graph = orchestration_net(request, storage, emb, config)
 
     if step.value > 0:
         graph, fired = await ExecutableGraphOperations.execute_graph(graph, max_transitions=step.value)

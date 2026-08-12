@@ -355,13 +355,18 @@ class StorageBackend(Protocol):
         new_embedding: EmbeddingRecord,
         lineage_edge: NodeEdge,
         *,
+        status: NodeStatus,
         superseded_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
     ) -> None:
         """Atomically supersede ``old_node`` with ``new_node``.
 
-        Marks the old node superseded, stores and embeds the new node, migrates
+        ``status`` says *why* — `CORRECTED` or `HISTORICAL` (#53). It is passed
+        in rather than assumed because the two are opposite events and only the
+        caller knows which happened.
+
+        Marks the old node with ``status``, stores and embeds the new node, migrates
         the old node's non-history edges onto the new node, and persists
         ``lineage_edge`` (the superseded_by edge). Also inserts ``evidence_edges``
         (e.g. evidence_superseded flags on dependent inferences) and deletes
@@ -376,17 +381,19 @@ class StorageBackend(Protocol):
         existing_id: str,
         lineage_edge: NodeEdge,
         *,
+        status: NodeStatus,
         superseded_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
     ) -> None:
         """Atomically supersede ``old_node`` by an already-existing node.
 
-        Marks the old node superseded and persists ``lineage_edge`` (superseded_by,
-        old → existing). Unlike ``supersede_node_tx`` it does **not** create a new
-        node, embed, or migrate edges — the existing node carries its own
-        evidence. Inserts ``evidence_edges`` and deletes ``clear_edge_ids`` as
-        above. All-or-nothing.
+        Marks the old node with ``status`` (see ``supersede_node_tx``) and
+        persists ``lineage_edge`` (superseded_by, old → existing). Unlike
+        ``supersede_node_tx`` it does **not** create a new node, embed, or
+        migrate edges — the existing node carries its own evidence. Inserts
+        ``evidence_edges`` and deletes ``clear_edge_ids`` as above.
+        All-or-nothing.
         """
         ...
 

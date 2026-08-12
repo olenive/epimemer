@@ -1,2 +1,0 @@
-[console_scripts]
-epimemer-viz = epimemer.visualization.hub:main

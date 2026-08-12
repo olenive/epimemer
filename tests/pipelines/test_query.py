@@ -286,8 +286,8 @@ async def test_graph_expansion_excludes_non_active_neighbors(embedding_provider)
     )
     await storage.store_edge(supports)
 
-    await supersede_by_existing(fact_a, "fact-b", storage)
-    assert (await storage.get_node("fact-a")).status is NodeStatus.SUPERSEDED
+    await supersede_by_existing(fact_a, "fact-b", storage, status=NodeStatus.CORRECTED)
+    assert (await storage.get_node("fact-a")).status is NodeStatus.CORRECTED
     # The edge survives supersession by design — that is what makes this a bug.
     assert any(e.id == "edge-a-i" for e in await storage.get_edges_to("inf-1"))
 

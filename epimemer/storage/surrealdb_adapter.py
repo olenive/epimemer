@@ -922,6 +922,7 @@ class SurrealDBStorage:
         new_embedding: EmbeddingRecord,
         lineage_edge: NodeEdge,
         *,
+        status: NodeStatus,
         superseded_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
@@ -941,7 +942,7 @@ class SurrealDBStorage:
             "INSERT INTO node_edge $lineage_data",
         ]
         params: dict = {
-            "status": NodeStatus.SUPERSEDED.value,
+            "status": status.value,
             "sup_at": superseded_at.isoformat(),
             "old_uid": old_node.id,
             "new_uid": new_node.id,
@@ -959,6 +960,7 @@ class SurrealDBStorage:
         existing_id: str,
         lineage_edge: NodeEdge,
         *,
+        status: NodeStatus,
         superseded_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
@@ -969,7 +971,7 @@ class SurrealDBStorage:
             "INSERT INTO node_edge $lineage_data",
         ]
         params: dict = {
-            "status": NodeStatus.SUPERSEDED.value,
+            "status": status.value,
             "sup_at": superseded_at.isoformat(),
             "old_uid": old_node.id,
             "lineage_data": _edge_row(lineage_edge),

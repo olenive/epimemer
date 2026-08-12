@@ -13,6 +13,7 @@ from epimemer.core.types import (
     Inference,
     NodeEdge,
     NodeStatus,
+    SUPERSEDED_STATUSES,
 )
 from epimemer.storage.protocol import StorageBackend
 
@@ -117,7 +118,10 @@ async def review_labels_for(
             stale_sources = [e.src_id for e in flagged_stale[node.id]]
             for edge in derived_from[node.id]:
                 evidence = await storage.get_node(edge.dst_id)
-                if evidence is not None and evidence.status == NodeStatus.SUPERSEDED:
+                # Every supersession kind, not just the legacy one: an
+                # inference resting on a claim that has stopped being current
+                # is as suspect as one resting on a claim that was wrong (#53).
+                if evidence is not None and evidence.status in SUPERSEDED_STATUSES:
                     stale_sources.append(edge.dst_id)
             if stale_sources:
                 labels["evidence_stale"] = _unique(stale_sources)

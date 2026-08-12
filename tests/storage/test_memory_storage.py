@@ -365,10 +365,11 @@ class TestAtomicOperations:
         new_emb = EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.0, 1.0, 0.0])
         lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
         await store.supersede_node_tx(
-            old, new, new_emb, lineage, superseded_at=datetime.now(timezone.utc)
+            old, new, new_emb, lineage,             status=NodeStatus.CORRECTED,
+            superseded_at=datetime.now(timezone.utc),
         )
 
-        assert (await store.get_node(old.id)).status == NodeStatus.SUPERSEDED
+        assert (await store.get_node(old.id)).status == NodeStatus.CORRECTED
         assert (await store.get_node(new.id)).content == "new topic"
         assert len(await store.get_embeddings_for_item(new.id)) == 1
         migrated = await store.get_edges_to(new.id, edge_type=EdgeType.SUPPORTS)
@@ -395,7 +396,8 @@ class TestAtomicOperations:
 
         with pytest.raises(RuntimeError, match="injected failure"):
             await store.supersede_node_tx(
-                old, new, new_emb, lineage, superseded_at=datetime.now(timezone.utc)
+                old, new, new_emb, lineage,                 status=NodeStatus.CORRECTED,
+                superseded_at=datetime.now(timezone.utc),
             )
 
         # Nothing applied: old still active, new node/embedding/edge absent.
@@ -455,7 +457,8 @@ class TestAtomicOperations:
         new_emb = EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.0, 1.0])
         lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
         await store.supersede_node_tx(
-            old, new, new_emb, lineage, superseded_at=datetime.now(timezone.utc)
+            old, new, new_emb, lineage,             status=NodeStatus.CORRECTED,
+            superseded_at=datetime.now(timezone.utc),
         )
 
         # Knowledge edge migrated; review edge did not.
@@ -682,7 +685,8 @@ class TestStoreIsolation:
             new_embedding=new_emb,
             lineage_edge=lineage,
             superseded_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
-        )
+        status=NodeStatus.CORRECTED,
+    )
 
         new.content = "mutated"
         lineage.label = "mutated"

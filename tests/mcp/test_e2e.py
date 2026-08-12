@@ -168,7 +168,10 @@ class TestMCPProtocol:
     async def test_error_returns_structured_json(self, server):
         result = await server.call_tool(
             "update",
-            {"node_id": "nonexistent", "new_content": "test"},
+            {
+                "node_id": "nonexistent", "new_content": "test",
+                "because": "it_was_wrong",
+            },
         )
         data = _parse_response(result)
         assert "error" in data

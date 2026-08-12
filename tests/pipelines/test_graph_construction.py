@@ -266,11 +266,17 @@ class TestVersioning:
         )
         await storage.store_node(old_topic)
 
-        await supersede_node(old_topic, new_topic, storage, embedding_provider)
+        await supersede_node(
+            old_topic,
+            new_topic,
+            storage,
+            embedding_provider,
+            status=NodeStatus.CORRECTED,
+        )
 
         stored_old = await storage.get_node("old-topic")
         assert stored_old is not None
-        assert stored_old.status == NodeStatus.SUPERSEDED
+        assert stored_old.status == NodeStatus.CORRECTED
         assert stored_old.superseded_at is not None
 
     @pytest.mark.asyncio
@@ -289,7 +295,13 @@ class TestVersioning:
         )
         await storage.store_node(old_topic)
 
-        await supersede_node(old_topic, new_topic, storage, embedding_provider)
+        await supersede_node(
+            old_topic,
+            new_topic,
+            storage,
+            embedding_provider,
+            status=NodeStatus.CORRECTED,
+        )
 
         stored_new = await storage.get_node("new-topic-2")
         assert stored_new is not None
@@ -311,7 +323,13 @@ class TestVersioning:
         )
         await storage.store_node(old_topic)
 
-        edge = await supersede_node(old_topic, new_topic, storage, embedding_provider)
+        edge = await supersede_node(
+            old_topic,
+            new_topic,
+            storage,
+            embedding_provider,
+            status=NodeStatus.CORRECTED,
+        )
 
         assert edge.src_id == "old-topic-3"
         assert edge.dst_id == "new-topic-3"
@@ -333,7 +351,13 @@ class TestVersioning:
         )
         await storage.store_node(old_topic)
 
-        await supersede_node(old_topic, new_topic, storage, embedding_provider)
+        await supersede_node(
+            old_topic,
+            new_topic,
+            storage,
+            embedding_provider,
+            status=NodeStatus.CORRECTED,
+        )
 
         edges = await storage.get_edges_from("old-topic-4")
         assert len(edges) == 1
@@ -544,11 +568,17 @@ class TestStorageRoundTrip:
             content="Updated topic",
             source_id="seg-1",
         )
-        edge = await supersede_node(original, updated, storage, embedding_provider)
+        edge = await supersede_node(
+            original,
+            updated,
+            storage,
+            embedding_provider,
+            status=NodeStatus.CORRECTED,
+        )
 
         # Original is superseded
         stored_orig = await storage.get_node("rt-v-orig")
-        assert stored_orig.status == NodeStatus.SUPERSEDED
+        assert stored_orig.status == NodeStatus.CORRECTED
 
         # New is active
         stored_new = await storage.get_node("rt-v-new")

@@ -237,10 +237,11 @@ class TestAtomicOperations:
         new_emb = EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.1, 0.2, 0.3])
         lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
         await store.supersede_node_tx(
-            old, new, new_emb, lineage, superseded_at=datetime.now(timezone.utc)
+            old, new, new_emb, lineage,             status=NodeStatus.CORRECTED,
+            superseded_at=datetime.now(timezone.utc),
         )
 
-        assert (await store.get_node(old.id)).status == NodeStatus.SUPERSEDED
+        assert (await store.get_node(old.id)).status == NodeStatus.CORRECTED
         assert (await store.get_node(new.id)).content == "new topic"
         assert len(await store.get_embeddings_for_item(new.id)) == 1
         into_new = await store.get_edges_to(new.id, edge_type=EdgeType.SUPPORTS)
@@ -262,7 +263,8 @@ class TestAtomicOperations:
         lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
         with pytest.raises(Exception):
             await store.supersede_node_tx(
-                old, new, new_emb, lineage, superseded_at=datetime.now(timezone.utc)
+                old, new, new_emb, lineage,                 status=NodeStatus.CORRECTED,
+                superseded_at=datetime.now(timezone.utc),
             )
 
         # Rolled back: the old node was never marked superseded.
@@ -350,9 +352,10 @@ class TestAtomicOperations:
             superseded_at=datetime.now(timezone.utc),
             evidence_edges=evidence,
             clear_edge_ids=[candidate.id],
-        )
+        status=NodeStatus.CORRECTED,
+    )
 
-        assert (await store.get_node(fact.id)).status == NodeStatus.SUPERSEDED
+        assert (await store.get_node(fact.id)).status == NodeStatus.CORRECTED
         assert (await store.get_node(existing.id)).status == NodeStatus.ACTIVE
         assert len(
             await store.get_edges_from(fact.id, edge_type=EdgeType.SUPERSEDED_BY)

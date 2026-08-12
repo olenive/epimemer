@@ -66,7 +66,7 @@ class TestIssue1UpdateEmbedsReplacement:
 
         result, _ = await update(
             old.id, "Petri nets model concurrent systems", storage, embedding_provider
-        )
+        , because="it_was_wrong")
         new_id = result["new_node_id"]
 
         embeddings = await storage.get_embeddings_for_item(new_id)
@@ -79,7 +79,13 @@ class TestIssue1UpdateEmbedsReplacement:
         await _store_with_embedding(storage, embedding_provider, old)
 
         new_content = "Petri nets are a modelling language for concurrent systems"
-        result, _ = await update(old.id, new_content, storage, embedding_provider)
+        result, _ = await update(
+            old.id,
+            new_content,
+            storage,
+            embedding_provider,
+            because="it_was_wrong",
+        )
         new_id = result["new_node_id"]
 
         search_result, _ = await search(
@@ -139,7 +145,13 @@ class TestIssue3SupersedeMigratesEdges:
             NodeEdge(src_id=fact.id, dst_id=old.id, type=EdgeType.SUPPORTS)
         )
 
-        result, _ = await update(old.id, "new topic", storage, embedding_provider)
+        result, _ = await update(
+            old.id,
+            "new topic",
+            storage,
+            embedding_provider,
+            because="it_was_wrong",
+        )
         new_id = result["new_node_id"]
 
         # The supporting fact now backs the current node, not the dead one.
@@ -171,7 +183,13 @@ class TestIssue4LineageTraversal:
     ):
         old = Topic(content="old topic", source_id="s1")
         await storage.store_node(old)
-        result, _ = await update(old.id, "new topic", storage, embedding_provider)
+        result, _ = await update(
+            old.id,
+            "new topic",
+            storage,
+            embedding_provider,
+            because="it_was_wrong",
+        )
         new_id = result["new_node_id"]
 
         graph, _ = await query_graph(old.id, storage, hops=2)
@@ -186,7 +204,13 @@ class TestIssue4LineageTraversal:
     ):
         old = Topic(content="old topic", source_id="s1")
         await storage.store_node(old)
-        result, _ = await update(old.id, "new topic", storage, embedding_provider)
+        result, _ = await update(
+            old.id,
+            "new topic",
+            storage,
+            embedding_provider,
+            because="it_was_wrong",
+        )
         new_id = result["new_node_id"]
 
         graph, _ = await query_graph(
@@ -230,7 +254,13 @@ class TestCombinedUpdateRetrieval:
         await _store_with_embedding(storage, embedding_provider, old)
 
         new_content = "Petri nets are a modelling language for concurrent systems"
-        result, _ = await update(old.id, new_content, storage, embedding_provider)
+        result, _ = await update(
+            old.id,
+            new_content,
+            storage,
+            embedding_provider,
+            because="it_was_wrong",
+        )
         new_id = result["new_node_id"]
 
         search_result, _ = await search(

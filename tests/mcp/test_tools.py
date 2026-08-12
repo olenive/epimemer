@@ -935,12 +935,18 @@ class TestUpdate:
         t = Topic(content="old content", source_id="s1")
         await storage.store_node(t)
 
-        result, _ = await update(t.id, "new content", storage, embedding_provider)
+        result, _ = await update(
+            t.id,
+            "new content",
+            storage,
+            embedding_provider,
+            because="it_was_wrong",
+        )
         assert result["old_node_id"] == t.id
         assert result["new_node_id"] != t.id
 
         old = await storage.get_node(t.id)
-        assert old.status == NodeStatus.SUPERSEDED
+        assert old.status == NodeStatus.CORRECTED
 
         new = await storage.get_node(result["new_node_id"])
         assert new.content == "new content"
@@ -948,13 +954,25 @@ class TestUpdate:
 
     async def test_rejects_nonexistent_node(self, storage, embedding_provider):
         with pytest.raises(ValueError, match="not found"):
-            await update("nonexistent", "content", storage, embedding_provider)
+            await update(
+                "nonexistent",
+                "content",
+                storage,
+                embedding_provider,
+                because="it_was_wrong",
+            )
 
     async def test_preserves_node_type(self, storage, embedding_provider):
         f = Fact(content="old fact", source_id="s1")
         await storage.store_node(f)
 
-        result, _ = await update(f.id, "new fact", storage, embedding_provider)
+        result, _ = await update(
+            f.id,
+            "new fact",
+            storage,
+            embedding_provider,
+            because="it_was_wrong",
+        )
         new = await storage.get_node(result["new_node_id"])
         assert isinstance(new, Fact)
 
@@ -964,7 +982,13 @@ class TestUpdate:
         t.value.importance = 0.8
         await storage.store_node(t)
 
-        result, _ = await update(t.id, "new content", storage, embedding_provider)
+        result, _ = await update(
+            t.id,
+            "new content",
+            storage,
+            embedding_provider,
+            because="it_was_wrong",
+        )
         new = await storage.get_node(result["new_node_id"])
 
         # A content correction must not reset accumulated value.
@@ -987,7 +1011,13 @@ class TestUpdate:
                  extraction_method="agent:import")
         await storage.store_node(f)
 
-        result, _ = await update(f.id, "new fact", storage, embedding_provider)
+        result, _ = await update(
+            f.id,
+            "new fact",
+            storage,
+            embedding_provider,
+            because="it_was_wrong",
+        )
         new = await storage.get_node(result["new_node_id"])
 
         assert new.extraction_method == "agent:import"
@@ -1004,10 +1034,10 @@ class TestSupersedeBy:
         await storage.store_node(old)
         await storage.store_node(new)
 
-        result, _ = await supersede_by(old.id, new.id, storage)
+        result, _ = await supersede_by(old.id, new.id, storage, because="it_was_wrong")
 
         assert result["superseded_id"] == old.id and result["by_id"] == new.id
-        assert (await storage.get_node(old.id)).status == NodeStatus.SUPERSEDED
+        assert (await storage.get_node(old.id)).status == NodeStatus.CORRECTED
         assert (await storage.get_node(new.id)).status == NodeStatus.ACTIVE
         lineage = await storage.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)
         assert len(lineage) == 1 and lineage[0].dst_id == new.id
@@ -1023,7 +1053,7 @@ class TestSupersedeBy:
             NodeEdge(src_id=support.id, dst_id=old.id, type=EdgeType.SUPPORTS)
         )
 
-        await supersede_by(old.id, new.id, storage)
+        await supersede_by(old.id, new.id, storage, because="it_was_wrong")
 
         assert await storage.get_edges_to(new.id, edge_type=EdgeType.SUPPORTS) == []
         assert len(await storage.get_edges_to(old.id, edge_type=EdgeType.SUPPORTS)) == 1
@@ -1032,15 +1062,15 @@ class TestSupersedeBy:
         t = Topic(content="t", source_id="s1")
         await storage.store_node(t)
         with pytest.raises(ValueError, match="cannot supersede itself"):
-            await supersede_by(t.id, t.id, storage)
+            await supersede_by(t.id, t.id, storage, because="it_was_wrong")
 
     async def test_rejects_missing_nodes(self, storage):
         t = Topic(content="t", source_id="s1")
         await storage.store_node(t)
         with pytest.raises(ValueError, match="not found"):
-            await supersede_by("nope", t.id, storage)
+            await supersede_by("nope", t.id, storage, because="it_was_wrong")
         with pytest.raises(ValueError, match="not found"):
-            await supersede_by(t.id, "nope", storage)
+            await supersede_by(t.id, "nope", storage, because="it_was_wrong")
 
 
 class TestCaseBEvidenceStaleness:
@@ -1055,7 +1085,7 @@ class TestCaseBEvidenceStaleness:
             NodeEdge(src_id=inf.id, dst_id=fact.id, type=EdgeType.DERIVED_FROM)
         )
 
-        await supersede_by(fact.id, newer.id, storage)
+        await supersede_by(fact.id, newer.id, storage, because="it_was_wrong")
 
         flags = await storage.get_edges_to(inf.id, edge_type=EdgeType.EVIDENCE_SUPERSEDED)
         assert len(flags) == 1 and flags[0].src_id == fact.id
@@ -1069,7 +1099,13 @@ class TestCaseBEvidenceStaleness:
             NodeEdge(src_id=fact.id, dst_id=inf.id, type=EdgeType.SUPPORTS)
         )
 
-        await update(fact.id, "corrected fact", storage, embedding_provider)
+        await update(
+            fact.id,
+            "corrected fact",
+            storage,
+            embedding_provider,
+            because="it_was_wrong",
+        )
 
         flags = await storage.get_edges_to(inf.id, edge_type=EdgeType.EVIDENCE_SUPERSEDED)
         assert len(flags) == 1
@@ -1083,7 +1119,7 @@ class TestCaseBEvidenceStaleness:
             NodeEdge(src_id=newer.id, dst_id=fact.id, type=EdgeType.SUPERSESSION_CANDIDATE)
         )
 
-        await supersede_by(fact.id, newer.id, storage)
+        await supersede_by(fact.id, newer.id, storage, because="it_was_wrong")
 
         assert await storage.get_edges_to(
             fact.id, edge_type=EdgeType.SUPERSESSION_CANDIDATE
@@ -1466,11 +1502,13 @@ class TestApplyReflectionSupersessions:
 
         result, _ = await apply_reflection(
             storage, embedding_provider,
-            supersessions=[{"old_id": old.id, "by_id": winner.id}],
+            supersessions=[
+                {"old_id": old.id, "by_id": winner.id, "because": "it_was_wrong"},
+            ],
         )
 
         assert result["supersessions_applied"] == 1
-        assert (await storage.get_node(old.id)).status == NodeStatus.SUPERSEDED
+        assert (await storage.get_node(old.id)).status == NodeStatus.CORRECTED
         assert (await storage.get_node(winner.id)).status == NodeStatus.ACTIVE
         lineage = await storage.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)
         assert len(lineage) == 1 and lineage[0].dst_id == winner.id
@@ -1489,9 +1527,12 @@ class TestApplyReflectionSupersessions:
         result, _ = await apply_reflection(
             storage, embedding_provider,
             supersessions=[
-                {"old_id": a.id, "by_id": a.id},        # self-supersede
-                {"old_id": a.id, "by_id": "missing"},   # missing winner
-                {"old_id": "missing", "by_id": a.id},   # missing loser
+                # self-supersede
+                {"old_id": a.id, "by_id": a.id, "because": "it_was_wrong"},
+                # missing winner
+                {"old_id": a.id, "by_id": "missing", "because": "it_was_wrong"},
+                # missing loser
+                {"old_id": "missing", "by_id": a.id, "because": "it_was_wrong"},
             ],
         )
         assert result["supersessions_applied"] == 0
@@ -2689,7 +2730,13 @@ class TestTraversalVsMigration:
 
         # Supersession migrates the sourced_from edge onto the replacement.
         new = Fact(content="the corrected fact", source_id=fact.source_id)
-        await supersede_node(fact, new, storage, embedding_provider)
+        await supersede_node(
+            fact,
+            new,
+            storage,
+            embedding_provider,
+            status=NodeStatus.CORRECTED,
+        )
         migrated = await storage.get_edges_from(new.id, edge_type=EdgeType.SOURCED_FROM)
         assert [e.dst_id for e in migrated] == [doc_id]
 

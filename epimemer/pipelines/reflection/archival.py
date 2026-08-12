@@ -26,11 +26,13 @@ async def find_archival_candidates(
     *,
     max_age_days: int = 90,
 ) -> list[EpistemicNode]:
-    """Find superseded or merged nodes older than the cutoff.
+    """Find retired nodes old enough to export, excluding the historical ones.
 
-    Only nodes with status SUPERSEDED or MERGED whose superseded_at
-    timestamp is older than max_age_days are returned. Active nodes
-    are never included.
+    Nodes retired as CORRECTED or MERGED (plus legacy SUPERSEDED) whose
+    `superseded_at` is older than `max_age_days`. Active nodes are never
+    included, and neither are HISTORICAL ones: those were retired because the
+    world changed, not because they were wrong, so they remain true of their
+    period and ageing is not a reason to discard them (#53).
 
     Args:
         storage: The storage backend.
@@ -43,11 +45,16 @@ async def find_archival_candidates(
 
     candidates: list[EpistemicNode] = []
 
-    # Check superseded nodes
-    superseded = await storage.query_nodes(status=NodeStatus.SUPERSEDED)
-    for node in superseded:
-        if node.superseded_at is not None and node.superseded_at <= cutoff:
-            candidates.append(node)
+    # Superseded nodes, but *not* the historical ones. A node retired because
+    # the world changed was never wrong — it is still true of its period — so
+    # retiring it again for age would be the same defect one level down: the
+    # graph discarding something true because it is no longer current (#53).
+    # `SUPERSEDED` is the legacy status, kept because pre-#53 rows do not record
+    # which kind they were; they stay eligible, as they were before.
+    for status in (NodeStatus.SUPERSEDED, NodeStatus.CORRECTED):
+        for node in await storage.query_nodes(status=status):
+            if node.superseded_at is not None and node.superseded_at <= cutoff:
+                candidates.append(node)
 
     # Check merged nodes
     merged = await storage.query_nodes(status=NodeStatus.MERGED)

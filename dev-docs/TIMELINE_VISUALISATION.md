@@ -771,3 +771,122 @@ first or a last — and that nothing forced a label into the second free range.
 And a 5,000-case run showed the outer repeat-until-stable loop was dead: the
 inner merge loop already converges. It was removed rather than kept as
 untestable insurance.
+
+---
+
+## 13. Valid-time grammar (designed 2026-08-12 — not built)
+
+How the panel draws **validity intervals** — concrete and vague ranges, per
+`ISSUES.md` #53 T1/T2/T3. **Blocked on #53 construction**: none of the data this
+renders exists yet. Designed now because the grammar exposed two rendering
+decisions (gaps, the now-line) that would otherwise be made by accident in code.
+
+**A rendered mock of every mark in this section is checked in at
+`dev-docs/mockups/valid-time-grammar.html`** — self-contained, theme-aware
+(honours `prefers-color-scheme` and a `data-theme` attribute on `<html>`), no
+dependencies; open it in a browser. It is the visual normative reference; this
+section is the written one. A published copy exists as a Claude artifact
+(`https://claude.ai/code/artifact/f7ade2f8-8561-4d0b-ba54-b28a3599dc9b`) but the
+repo file is the durable record — do not depend on the URL.
+
+**The governing principle: one mark per T1 concept, and nothing drawn that the
+data does not assert.** If two things are different in the model they must be
+different on screen; if the model refuses to claim something (open-world gaps,
+unknown endpoints), the pixels must refuse too. Every rule below is an instance
+of that sentence.
+
+Provenance of the idea, for whoever extends it: Priestley's *Chart of
+Biography* (1765) — the ancestor of all timeline charts — drew certain
+lifespans as solid lines and uncertain ones as dots. The witness dot below is
+that idea; the overall register (muted bands, one accent, annotation over
+ornament) is the Information-is-Beautiful school.
+
+### 13.1 The marks
+
+| T1 concept | Mark |
+|---|---|
+| Endpoint: **point** (stated) | Crisp bar cap with a short perpendicular tick; date label in the mono face |
+| Endpoint: **unknown** | The bar **dissolves** — a linear gradient to fully transparent over roughly 24px. "The edge is somewhere in this fog" |
+| Endpoint: **unbounded** | The bar keeps **full weight and exits the frame** (arrowhead at the frame edge in unclipped samples). "There is no edge" |
+| **Witness point** | Solid dot on the bar with a faint halo ring. A claim with *no* endpoints and one witness — the commonest real record — is a dot with the bar fading **symmetrically** away from it in both directions |
+| **Vague label, resolved** ("during the Renaissance" with explicit approximate bounds) | **Hatched** band (45° line pattern), soft `c.` date labels, the stored label rendered verbatim on the band |
+| **Vague label, unresolved** | Never placed on the axis — no coordinates were asserted. Goes to the existing undated tray (§12.6) as a chip, label intact |
+| **Per-source validity** | One thin strip per source, stacked under the fact, each **direct-labelled** with its source. No filled union bar, ever. An optional summary is a **hollow dashed envelope** labelled "any source asserts" — outline-only so it cannot be read as a claim |
+| Interval marked **stated** | Solid fill |
+| Interval marked **inferred** | Hollow fill (soft tint) with a dashed outline — squinting performs the stated-only filter the API offers |
+| Reflect-**proposed** boundary | Dashed cap in the pending colour wearing a review chip ("proposed · review") until accepted |
+| **Recurrence** (one node, several intervals) | Beads on a **hairline dotted claim spine**; the spine says "same claim, nothing asserted here" |
+| **`temporally_followed_by`** | A small elbow connector from the end of one claim's bar to the start of the next, with a terminal dot — order, not replacement. Chains that return to their own lane (Saint Petersburg) are drawn calmly; the renderer must be cycle-safe |
+| Status **`HISTORICAL`** | Desaturated bar (the muted slot below), **never hidden** — still true of its period |
+| Status **`CORRECTED`** | Hidden by default, mirroring `include_corrected=off`; struck-through when summoned |
+| The **now-line** | A dashed rule across the axis in the now colour, labelled "now — this timeline's clock" — it is the timeline's `reference_time`, never wall-clock (§12.5, T3) |
+
+### 13.2 Rules — places a reasonable rendering would lie
+
+Each of these is a way pixels can assert something the data does not say.
+They are constraints, not suggestions:
+
+1. **A gap is never styled as "false".** Open world: outside a stated interval
+   is *no assertion*. A red or shaded gap draws a claim nobody made. Gaps stay
+   ground-coloured; only the dotted spine crosses them.
+2. **Unknown and unbounded never share a treatment.** They are different values
+   in the model — T1's load-bearing distinction — so fade for one, frame-exit
+   for the other. One treatment for both re-collapses on screen what the type
+   system separated.
+3. **A label-only interval never sits on the axis.** Placing it anywhere is
+   fabrication. Tray until resolved; resolution *adds* a position, it never
+   replaces the words.
+4. **No filled union bar.** "No default collapse" is a data rule (T1 §3);
+   the hollow envelope is the only summary allowed.
+5. **Historical is muted, not hidden; corrected is hidden, not deleted.**
+   The two halves of the #55 opacity rule and the T3 reachability defaults,
+   applied consistently.
+6. **Cross-clock claims never share an axis.** Comparison across timelines is
+   `unknown` by definition (T1 §5); an in-universe claim on the CE axis asserts
+   a mapping nobody made. Tray, with a clock badge.
+7. **Bars fade *through* the now-line, they do not stop at it.** Stopping
+   asserts an endpoint. Currency is a reading against the timeline's reference
+   clock, not a stored boundary.
+8. **Soundness flags sit on the inference, not on its premises.** The premises
+   are not what is unsound.
+
+### 13.3 Colour tokens
+
+Validated (OKLCH lightness band, chroma floor, colour-vision-deficiency ΔE
+separation, contrast against the surface) in **both** themes; the validation was
+run with a perceptual checker, not eyeballed. The aqua slot sits below 3:1
+contrast on the light surface, which is acceptable **only because source strips
+are always direct-labelled** — keep that invariant or re-pick the colour.
+
+| Token | Light | Dark | Role |
+|---|---|---|---|
+| `claim` | `#2a78d6` | `#3987e5` | active claim bars, witness dots |
+| `inference` | `#4a3aa7` | `#9085e9` | inference cards/marks (right side) |
+| `src-b` | `#eb6834` | `#d95926` | second source strip |
+| `src-c` | `#1baf7a` | `#199e70` | third source strip (direct-label required) |
+| `historical` | `#8095aa` | `#5d6d7e` | HISTORICAL bars |
+| `pending` | `#9a6b00` on `#f6ecd4` | `#fab219` on `#33290e` | proposals, soundness flags |
+| `now` | `#d03b3b` | `#e66767` | the now-line only |
+
+The panel frontend is Tailwind (`CLAUDE.md`); carry these as CSS custom
+properties in the theme layer, as the mock does, rather than scattering hex
+values through class names. Neutrals in the mock are blue-biased greys chosen to
+sit with `claim` — reuse them or re-derive, but do not fall back to pure grey.
+
+### 13.4 Implementation notes
+
+- **Fits the existing panel.** Vertical axis, past at top (§12.1); facts left,
+  inferences right (§12.3); the undated tray (§12.6) absorbs unresolved labels
+  and cross-clock chips unchanged; the reference-time marker (§12.5) *is* the
+  now-line. Nothing in this grammar requires a layout change — bars become
+  vertical spans in lanes beside the axis.
+- **Gradients and hatching** are plain SVG `linearGradient` / `pattern` fills
+  referencing the CSS variables — see the mock for working markup, including
+  the symmetric witness fade and the 45° hatch.
+- **Every `temporally_followed_by` walk must be cycle-safe** — recurrence makes
+  cycles legal for this edge type (see #53 T2 and the review note on repeated
+  transitions). The elbow renderer and any lineage layout must terminate on
+  revisited nodes.
+- **The tooltip layer** carries what the mark compresses: the `(source,
+  interval)` pairs verbatim, endpoint kinds by name, `stated`/`inferred`, and
+  the witness date. The mark is the summary; the tooltip is the record.

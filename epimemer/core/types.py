@@ -33,11 +33,57 @@ class NodeType(str, Enum):
 
 class NodeStatus(str, Enum):
     ACTIVE = "active"
+    # Retired by supersession, reason unrecorded. **Legacy only** — kept so
+    # graphs written before #53 still load, since those rows genuinely do not
+    # say which of the two below they were and inventing an answer would be a
+    # lie. Nothing writes it any more.
     SUPERSEDED = "superseded"
+    # We were wrong. The claim should not have been believed, and the node is
+    # kept for the audit trail rather than for its content.
+    CORRECTED = "corrected"
+    # The world moved on. The claim was right and is **still right of its
+    # period** — only no longer current. Filing this as an error is how a graph
+    # forgets history: Saint Petersburg became Leningrad became Saint
+    # Petersburg, each name correct in its turn (#53).
+    HISTORICAL = "historical"
     MERGED = "merged"
     # Retired for triviality rather than for being wrong: the node was fine,
     # it just was not worth keeping in the active set. Reversed by `restore`.
     ARCHIVED = "archived"
+
+
+# What "retired by supersession" means now that it means three things. Readers
+# that used `== NodeStatus.SUPERSEDED` must use this instead: the comparison
+# still runs, it simply stops seeing two thirds of the cases, which is the
+# quiet kind of regression.
+SUPERSEDED_STATUSES: frozenset[NodeStatus] = frozenset({
+    NodeStatus.SUPERSEDED, NodeStatus.CORRECTED, NodeStatus.HISTORICAL,
+})
+
+
+# Why a node was superseded, as the caller states it. There is deliberately no
+# default: the whole finding behind #53 is that the two cases are opposite and
+# that picking either silently mislabels the other.
+SUPERSESSION_REASONS: dict[str, NodeStatus] = {
+    "it_was_wrong": NodeStatus.CORRECTED,
+    "the_world_changed": NodeStatus.HISTORICAL,
+}
+
+
+def superseded_status_for(because: str) -> NodeStatus:
+    """The status a supersession leaves behind, given the caller's reason.
+
+    Spelled as sentences rather than as `corrected`/`historical` because the
+    caller is usually a language model choosing between them, and the judgment
+    it has to make is exactly the difference between those two sentences.
+    """
+    status = SUPERSESSION_REASONS.get(because)
+    if status is None:
+        raise ValueError(
+            f"Unknown supersession reason {because!r}. "
+            f"Expected one of: {', '.join(sorted(SUPERSESSION_REASONS))}."
+        )
+    return status
 
 
 class EdgeType(str, Enum):
@@ -329,11 +375,14 @@ class NodeChangeEvent(BaseModel):
     """A lifecycle event on a node that falls inside a queried time window.
 
     Emitted by temporal change queries: `created` when the node was born in the
-    window; `superseded`/`merged` when the node was retired in the window (the
-    kind mirrors the node's terminal status). A node both born and retired inside
-    one window yields two events.
+    window; otherwise the node's terminal status verbatim, since that is exactly
+    what the retirement was. `corrected` and `historical` are the two halves of
+    the old `superseded`, which survives only on rows written before #53. A node
+    both born and retired inside one window yields two events.
     """
-    kind: Literal["created", "superseded", "merged"]
+    kind: Literal[
+        "created", "superseded", "corrected", "historical", "merged"
+    ]
     at: datetime
 
 

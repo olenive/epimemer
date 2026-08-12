@@ -223,7 +223,8 @@ async def test_concurrent_supersede_distinct_nodes(surreal):
         lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
         from datetime import datetime, timezone
         await store.supersede_node_tx(
-            old, new, emb, lineage, superseded_at=datetime.now(timezone.utc)
+            old, new, emb, lineage,             status=NodeStatus.CORRECTED,
+            superseded_at=datetime.now(timezone.utc),
         )
         return new.id
 
@@ -232,7 +233,7 @@ async def test_concurrent_supersede_distinct_nodes(surreal):
     )
 
     for old, new_id in zip(olds, new_ids):
-        assert (await verifier.get_node(old.id)).status == NodeStatus.SUPERSEDED
+        assert (await verifier.get_node(old.id)).status == NodeStatus.CORRECTED
         assert await verifier.get_node(new_id) is not None
         lineage = await verifier.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)
         assert len(lineage) == 1 and lineage[0].dst_id == new_id

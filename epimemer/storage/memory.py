@@ -506,6 +506,7 @@ class InMemoryStorage:
         new_embedding: EmbeddingRecord,
         lineage_edge: NodeEdge,
         *,
+        status: NodeStatus,
         superseded_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
@@ -516,7 +517,7 @@ class InMemoryStorage:
             node = self._g.nodes.get(old_node.id)
             if node is None:
                 raise KeyError(f"Node {old_node.id} not found")
-            node.status = NodeStatus.SUPERSEDED
+            node.status = status
             node.superseded_at = superseded_at
             self._g.nodes[new_node.id] = _store(new_node)
             _put_embedding(self._g, _store(new_embedding))
@@ -536,6 +537,7 @@ class InMemoryStorage:
         existing_id: str,
         lineage_edge: NodeEdge,
         *,
+        status: NodeStatus,
         superseded_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
@@ -545,7 +547,7 @@ class InMemoryStorage:
             node = self._g.nodes.get(old_node.id)
             if node is None:
                 raise KeyError(f"Node {old_node.id} not found")
-            node.status = NodeStatus.SUPERSEDED
+            node.status = status
             node.superseded_at = superseded_at
             # No new node, no embedding, no migration — the existing node stands.
             _put_edge(self._g, _store(lineage_edge))

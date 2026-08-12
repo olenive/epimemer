@@ -19,6 +19,7 @@ from epimemer.core.types import (
     NodeChangeEvent,
     NodeEdge,
     NodeStatus,
+    superseded_status_for,
     NodeType,
     RawDocument,
     Segment,
@@ -773,8 +774,11 @@ def events_in_window(
     if start <= node.created_at < end:
         events.append(NodeChangeEvent(kind="created", at=node.created_at))
     if node.superseded_at is not None and start <= node.superseded_at < end:
-        kind = "merged" if node.status == NodeStatus.MERGED else "superseded"
-        events.append(NodeChangeEvent(kind=kind, at=node.superseded_at))
+        # The terminal status *is* the event: retiring as `historical` and
+        # retiring as `corrected` are different things to report (#53).
+        events.append(
+            NodeChangeEvent(kind=node.status.value, at=node.superseded_at)
+        )
     return events
 
 
@@ -1059,11 +1063,18 @@ async def update(
     new_content: str,
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
+    *,
+    because: str,
 ) -> tuple[dict, ResponseMeta]:
     """Update a node by creating a new version (supersession).
 
     The replacement is embedded and inherits the original's edges so it remains
     searchable and connected (see supersede_node).
+
+    `because` says which of two opposite things happened — `"it_was_wrong"` or
+    `"the_world_changed"` — and has no default on purpose (#53). A claim that
+    stopped being true was never an error, and recording it as one is how a
+    graph forgets its own history.
     """
     from epimemer.pipelines.graph_construction.versioning import supersede_node
 
@@ -1098,7 +1109,10 @@ async def update(
     else:
         raise ValueError(f"Unknown node type for node '{node_id}'")
 
-    edge = await supersede_node(old_node, new_node, storage, embedding_provider)
+    edge = await supersede_node(
+        old_node, new_node, storage, embedding_provider,
+        status=superseded_status_for(because),
+    )
 
     result = {
         "old_node_id": old_node.id,
@@ -1236,12 +1250,16 @@ async def supersede_by(
     old_id: str,
     existing_id: str,
     storage: StorageBackend,
+    *,
+    because: str,
 ) -> tuple[dict, ResponseMeta]:
     """Supersede a node by an already-existing node.
 
-    Use this to resolve an outdated fact or a same-frame contradiction where the
-    current truth already exists in the graph (rather than new content). The old
-    node is marked superseded (superseded_by → existing); inferences that
+    Use this where the current truth already exists in the graph (rather than
+    arriving as new content). `because` distinguishes the two reasons that can
+    be true of — `"it_was_wrong"` (a correction) or `"the_world_changed"` (the
+    old claim still holds of its period); see #53. The old
+    node is marked accordingly (superseded_by → existing); inferences that
     depended on it are flagged evidence_stale; the existing node keeps its own
     edges. Unlike `update`, no new node is created.
     """
@@ -1255,7 +1273,9 @@ async def supersede_by(
     if await storage.get_node(existing_id) is None:
         raise ValueError(f"Node '{existing_id}' not found")
 
-    edge = await supersede_by_existing(old, existing_id, storage)
+    edge = await supersede_by_existing(
+        old, existing_id, storage, status=superseded_status_for(because)
+    )
     result = {"superseded_id": old_id, "by_id": existing_id, "edge_id": edge.id}
     meta = ResponseMeta(nodes_returned=2)
     return result, meta
@@ -1766,7 +1786,12 @@ async def apply_reflection(
             metadata={**old_topic.metadata, "enriched_from": topic_id},
         )
         # supersede_node embeds the replacement and migrates edges.
-        await supersede_node(old_topic, enriched, storage, embedding_provider)
+        # Enrichment rewrites a topic's own description; the earlier wording
+        # was never true-of-a-period, so this is a correction (#53).
+        await supersede_node(
+            old_topic, enriched, storage, embedding_provider,
+            status=NodeStatus.CORRECTED,
+        )
         topics_enriched += 1
 
     # 4. Merge near-duplicate topics into one (guarded by a high similarity bar)
@@ -1816,7 +1841,10 @@ async def apply_reflection(
         old_node = await storage.get_node(old_id)
         if old_node is None or await storage.get_node(by_id) is None:
             continue
-        await supersede_by_existing(old_node, by_id, storage)
+        await supersede_by_existing(
+            old_node, by_id, storage,
+            status=superseded_status_for(supersede_spec["because"]),
+        )
         supersessions_applied += 1
 
     # 6. Archive the approved trivial nodes: export first, then one atomic flip.

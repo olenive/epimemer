@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 import pytest
 
 from epimemer.core.types import (
+    NodeStatus,
     EdgeType,
     EmbeddingRecord,
     Fact,
@@ -343,7 +344,8 @@ class TestTheIndexTracksTheCompoundTransactions:
             EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.0, 1.0]),
             lineage,
             superseded_at=datetime.now(timezone.utc),
-        )
+        status=NodeStatus.CORRECTED,
+    )
 
         assert await _found_to(store, new.id, EdgeType.SUPPORTS) == [supporting.id]
         assert await _found_to(store, old.id, EdgeType.SUPPORTS) == []
@@ -371,7 +373,8 @@ class TestTheIndexTracksTheCompoundTransactions:
             NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY),
             superseded_at=datetime.now(timezone.utc),
             clear_edge_ids=[cleared.id],
-        )
+        status=NodeStatus.CORRECTED,
+    )
 
         assert await store.get_edges_from(candidate.id) == []
         _assert_index_matches_edges(store)
@@ -397,7 +400,8 @@ class TestTheIndexTracksTheCompoundTransactions:
                 EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.0, 1.0]),
                 NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY),
                 superseded_at=datetime.now(timezone.utc),
-            )
+            status=NodeStatus.CORRECTED,
+        )
 
         assert store._g.by_src == before_src
         assert store._g.by_dst == before_dst
@@ -412,7 +416,9 @@ class TestTheIndexTracksTheCompoundTransactions:
 
         lineage = NodeEdge(src_id=old.id, dst_id=keeper.id, type=EdgeType.SUPERSEDED_BY)
         await store.supersede_by_existing_tx(
-            old, keeper.id, lineage, superseded_at=datetime.now(timezone.utc)
+            old, keeper.id, lineage,
+            status=NodeStatus.CORRECTED,
+            superseded_at=datetime.now(timezone.utc),
         )
 
         assert await _found_to(store, keeper.id) == [lineage.id]

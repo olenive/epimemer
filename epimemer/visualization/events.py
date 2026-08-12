@@ -42,7 +42,9 @@ class NodeView(BaseModel):
     node_id: str
     node_type: str            # "topic" | "fact" | "inference"
     content: str
-    status: str               # "active" | "superseded" | "merged"
+    # "active" | "corrected" | "historical" | "merged" | "archived", plus the
+    # legacy "superseded" on graphs written before #53.
+    status: str
     source_id: str | None = None  # tag/entity topics have no segment origin
     extraction_method: str
     confidence: float

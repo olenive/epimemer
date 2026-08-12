@@ -218,13 +218,14 @@ class InstrumentedStorage:
         new_embedding: EmbeddingRecord,
         lineage_edge: NodeEdge,
         *,
+        status: NodeStatus,
         superseded_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
     ) -> None:
         await self._inner.supersede_node_tx(
             old_node, new_node, new_embedding, lineage_edge,
-            superseded_at=superseded_at,
+            status=status, superseded_at=superseded_at,
             evidence_edges=evidence_edges,
             clear_edge_ids=clear_edge_ids,
         )
@@ -234,7 +235,7 @@ class InstrumentedStorage:
             graph=graph,
             node_id=old_node.id,
             old_status=old_node.status.value,
-            new_status=NodeStatus.SUPERSEDED.value,
+            new_status=status.value,
         ))
         await self._bus.publish(NodeStored(graph=graph, node=node_to_view(new_node, graph)))
         await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(lineage_edge, graph)))
@@ -247,13 +248,14 @@ class InstrumentedStorage:
         existing_id: str,
         lineage_edge: NodeEdge,
         *,
+        status: NodeStatus,
         superseded_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
     ) -> None:
         await self._inner.supersede_by_existing_tx(
             old_node, existing_id, lineage_edge,
-            superseded_at=superseded_at,
+            status=status, superseded_at=superseded_at,
             evidence_edges=evidence_edges,
             clear_edge_ids=clear_edge_ids,
         )
@@ -262,7 +264,7 @@ class InstrumentedStorage:
             graph=graph,
             node_id=old_node.id,
             old_status=old_node.status.value,
-            new_status=NodeStatus.SUPERSEDED.value,
+            new_status=status.value,
         ))
         await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(lineage_edge, graph)))
         for edge in evidence_edges:

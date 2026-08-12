@@ -468,16 +468,26 @@ async def memory_link(
 async def memory_update(
     node_id: str,
     new_content: str,
+    because: str,
     ctx: Context,
 ) -> str:
     """Update a node by creating a new version (immutable history).
 
-    The old node is marked as superseded; a new node is created with
-    a superseded_by edge linking old to new.
+    The old node is retired; a new node is created with a superseded_by edge
+    linking old to new.
 
     Args:
         node_id: ID of the node to update.
         new_content: The updated content.
+        because: Why the old version is being retired — one of:
+            "it_was_wrong" — the old content was mistaken, and should not have
+                been believed. The node is kept as an audit trail.
+            "the_world_changed" — the old content was correct and **remains
+                correct of its period**; it is simply no longer current. A city
+                renamed, a government replaced, a price that has since moved.
+            There is no default, because the two are opposite claims about the
+            old node and picking one silently mislabels the other. A graph that
+            files world-changes as errors forgets its own history.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -485,6 +495,7 @@ async def memory_update(
         lambda: tools.update(
             node_id=node_id,
             new_content=new_content,
+            because=because,
             storage=deps["storage"],
             embedding_provider=deps["embedding_provider"],
         ),
@@ -498,18 +509,22 @@ async def memory_update(
 async def memory_supersede_by(
     old_id: str,
     existing_id: str,
+    because: str,
     ctx: Context,
 ) -> str:
     """Supersede a node by an already-existing node (resolve outdated/contradiction).
 
-    Marks old_id superseded by existing_id (superseded_by edge), flags inferences
-    that depended on old_id as evidence_stale, and clears any supersession
-    candidacy on it. The existing node is unchanged. Use when the current truth
-    is already in the graph; use `update` when you have new content.
+    Marks old_id retired and superseded by existing_id (superseded_by edge), flags
+    inferences that depended on old_id as evidence_stale, and clears any
+    supersession candidacy on it. The existing node is unchanged. Use when the
+    current truth is already in the graph; use `update` when you have new content.
 
     Args:
         old_id: The node being retired.
         existing_id: The existing node that supersedes it.
+        because: Why old_id is being retired — "it_was_wrong" (it was mistaken)
+            or "the_world_changed" (it was correct and remains correct of its
+            period, just not current). No default: see `update`.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -517,6 +532,7 @@ async def memory_supersede_by(
         lambda: tools.supersede_by(
             old_id=old_id,
             existing_id=existing_id,
+            because=because,
             storage=deps["storage"],
         ),
         ctx,
@@ -768,9 +784,13 @@ async def memory_apply_reflection(
             merge_similarity_threshold similar, else it is rejected — use this
             only for true duplicates, and `parents` for merely related topics.
         supersessions: Resolve flagged/contested nodes from reflect's
-            pending_review by superseding the outdated/losing node with an
-            existing one. Each: {old_id: str, by_id: str}. Atomic; the winner is
-            unchanged and dependent inferences are flagged evidence_stale.
+            pending_review by superseding the losing node with an existing one.
+            Each: {old_id: str, by_id: str, because: str}, where `because` is
+            "it_was_wrong" (a correction) or "the_world_changed" (the old claim
+            still holds of its period — a renamed city, a change of government).
+            There is no default: filing a world-change as an error is how the
+            graph forgets its own history. Atomic; the winner is unchanged and
+            dependent inferences are flagged evidence_stale.
         archivals: Archive trivial nodes from reflect's archival_candidates, as
             a list of node ids. **Ask the user before passing anything here** —
             archival is a human-approved verdict, like resolving a

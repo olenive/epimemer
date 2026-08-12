@@ -20,11 +20,24 @@ cd epimemer
 uv sync
 ```
 
+The marimo notebooks under `notebooks/` need an extra, and rendering the graph
+diagrams also needs the Graphviz system binaries, which no Python package can
+supply:
+
+```bash
+uv sync --extra notebooks
+brew install graphviz          # or your platform's equivalent
+uv run marimo edit notebooks/01_segmentation.py
+```
+
 ### Run tests
 
 ```bash
 uv run python -m pytest tests/ -q
 ```
+
+The notebook dependency check skips without that extra; everything else runs on
+a plain `uv sync`.
 
 ### Start the MCP server (in-memory, no persistence)
 

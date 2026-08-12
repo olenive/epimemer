@@ -133,12 +133,12 @@ class TestFullPipeline:
 
         update_result, _ = await update(
             topic.id, "Python is a versatile language", storage, embedding_provider
-        )
+        , because="it_was_wrong")
         assert update_result["old_node_id"] == topic.id
         assert update_result["new_node_id"] != topic.id
 
         old = await storage.get_node(topic.id)
-        assert old.status == NodeStatus.SUPERSEDED
+        assert old.status == NodeStatus.CORRECTED
 
         edges_from_old = await storage.get_edges_from(topic.id)
         history_edges = [e for e in edges_from_old if e.type == EdgeType.SUPERSEDED_BY]

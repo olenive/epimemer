@@ -11,7 +11,6 @@ dependencies = [
     "pydantic-ai>=1.70.0",
     "surrealdb>=1.0.8",
     "sentence-transformers>=5.3.0",
-    "marimo>=0.13.0",
     "fastmcp>=3.1.0",
     "starlette>=0.46.0",
     "uvicorn>=0.34.0",
@@ -23,6 +22,19 @@ dependencies = [
 dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
+]
+# Everything the marimo notebooks under notebooks/ need (#50). `marimo` lived in
+# the runtime dependencies until nothing outside notebooks/ turned out to import
+# it, which made it a demo dependency shipped to every install.
+# `petritype[examples]` rather than naming rustworkx and matplotlib directly:
+# those are petritype's requirements for its graph and plotting modules, so
+# listing them here would go stale the next time it moves.
+# `graphviz` is the Python binding only. Rendering also needs the Graphviz
+# system binaries (`dot`) — `brew install graphviz` — which no extra can supply.
+notebooks = [
+    "marimo>=0.13.0",
+    "petritype[examples]",
+    "graphviz>=0.20",
 ]
 
 [project.scripts]

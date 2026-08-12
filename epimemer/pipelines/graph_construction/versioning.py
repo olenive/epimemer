@@ -11,6 +11,7 @@ from epimemer.core.types import (
     EmbeddingRecord,
     EpistemicNode,
     NodeEdge,
+    NodeStatus,
     Topic,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
@@ -22,6 +23,8 @@ async def supersede_node(
     new_node: EpistemicNode,
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
+    *,
+    status: NodeStatus,
 ) -> NodeEdge:
     """Create a new version of a node.
 
@@ -40,6 +43,10 @@ async def supersede_node(
         new_node: The replacement node.
         storage: The storage backend.
         embedding_provider: Used to embed the replacement node's content.
+        status: Why the old node is being retired — `CORRECTED` (it was wrong)
+            or `HISTORICAL` (the world changed, and it is still right of its
+            period). No default: the two are opposite events and only the
+            caller knows which one happened (#53).
 
     Returns:
         The superseded_by edge linking old to new.
@@ -69,7 +76,8 @@ async def supersede_node(
     clear_edge_ids = await find_candidate_edge_ids_into(old_node.id, storage)
 
     await storage.supersede_node_tx(
-        old_node, new_node, new_embedding, lineage_edge, superseded_at=now,
+        old_node, new_node, new_embedding, lineage_edge,
+        status=status, superseded_at=now,
         evidence_edges=evidence_edges, clear_edge_ids=clear_edge_ids,
     )
     return lineage_edge
@@ -79,12 +87,16 @@ async def supersede_by_existing(
     old_node: EpistemicNode,
     existing_id: str,
     storage: StorageBackend,
+    *,
+    status: NodeStatus,
 ) -> NodeEdge:
     """Supersede ``old_node`` by an already-existing node.
 
-    Used to resolve a contradiction/staleness where the current truth is a node
-    that already exists (rather than freshly-written content). Marks the old node
-    superseded with a superseded_by edge (old → existing), flags dependent
+    Used where the current truth is a node that already exists (rather than
+    freshly-written content) — either because the earlier claim was wrong or
+    because the world changed, which ``status`` distinguishes (#53). Marks the
+    old node with ``status`` and a superseded_by edge (old → existing), flags
+    dependent
     inferences (Case B), and clears any supersession_candidate edges on the old
     node — atomically. The existing node is unchanged: its evidence is its own,
     so the old node's edges are deliberately NOT migrated onto it.
@@ -106,7 +118,7 @@ async def supersede_by_existing(
     clear_edge_ids = await find_candidate_edge_ids_into(old_node.id, storage)
 
     await storage.supersede_by_existing_tx(
-        old_node, existing_id, lineage_edge, superseded_at=now,
+        old_node, existing_id, lineage_edge, status=status, superseded_at=now,
         evidence_edges=evidence_edges, clear_edge_ids=clear_edge_ids,
     )
     return lineage_edge
