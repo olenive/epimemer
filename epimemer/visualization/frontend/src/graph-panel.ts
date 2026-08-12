@@ -11,7 +11,14 @@ import dagre from "cytoscape-dagre";
 // @ts-expect-error — cytoscape-fcose has no types
 import fcose from "cytoscape-fcose";
 import type { EventRouter } from "./events";
-import { currentPalette, type Palette } from "./theme";
+import {
+  currentTheme,
+  currentPalette,
+  semanticPaletteFor,
+  type Palette,
+  type SemanticPalette,
+  type Theme,
+} from "./theme";
 import type {
   EdgeStored,
   EdgeView,
@@ -26,23 +33,43 @@ cytoscape.use(fcose);
 
 // --- Color scheme by node type ---
 
-const NODE_COLORS: Record<string, string> = {
-  topic: "#6366f1",      // indigo
-  fact: "#22c55e",       // green
-  inference: "#f59e0b",  // amber
-  segment: "#64748b",    // slate
-  document: "#94a3b8",   // light slate
+// Both tables name a *meaning* in the shared semantic palette rather than a hex
+// value, so the graph and the timeline cannot drift apart again (#56) and a
+// re-pick happens once, in `theme.ts`.
+const NODE_MEANINGS: Record<string, keyof SemanticPalette> = {
+  topic: "topic",
+  fact: "fact",
+  inference: "inference",
+  segment: "segment",
+  document: "document",
 };
 
-const EDGE_COLORS: Record<string, string> = {
-  supports: "#4ade80",
-  abstracts: "#facc15",
-  subtopic_of: "#818cf8",
-  similarity: "#38bdf8",
-  contradiction: "#ef4444",
-  derived_from: "#a78bfa",
-  superseded_by: "#6b7280",
-  merged_into: "#6b7280",
+// An edge tied to a node kind takes that kind's hue: `supports` runs from a
+// fact, `derived_from` from an inference, `subtopic_of` between topics. That is
+// also what keeps them apart — three of these used to sit on a hue that, after
+// the palette moved, belonged to a *different* kind.
+const EDGE_MEANINGS: Record<string, keyof SemanticPalette> = {
+  supports: "fact",
+  abstracts: "abstracts",
+  subtopic_of: "topic",
+  similarity: "similarity",
+  contradiction: "contradiction",
+  derived_from: "inference",
+  superseded_by: "lineage",
+  merged_into: "lineage",
+};
+
+/** Fallback for a kind this build has never heard of: a plain neutral. */
+const UNKNOWN_KIND = "#9ca3af";
+
+export const nodeColor = (nodeType: string, theme: Theme): string => {
+  const meaning = NODE_MEANINGS[nodeType];
+  return meaning ? semanticPaletteFor(theme)[meaning] : UNKNOWN_KIND;
+};
+
+export const edgeColor = (edgeType: string, theme: Theme): string => {
+  const meaning = EDGE_MEANINGS[edgeType];
+  return meaning ? semanticPaletteFor(theme)[meaning] : UNKNOWN_KIND;
 };
 
 // Everything that has left the active set fades the same way. The *reason* it
@@ -97,8 +124,9 @@ const LAYOUT_CONFIGS: Record<string, object> = {
 // Cast needed: Cytoscape types don't model data() mappers for numeric fields.
 //
 // Built per theme rather than declared once: the canvas is drawn, not styled,
-// so Tailwind's `dark:` variants cannot reach it. Node and edge hues are
-// theme-independent (see `theme.ts`); only the label and border neutrals move.
+// so Tailwind's `dark:` variants cannot reach it. The hues move with the theme
+// too (#56), but they are baked into each element's `color` data at add time
+// rather than read from here — so `applyTheme` re-writes them.
 const stylesheetFor = (palette: Palette) => [
   {
     selector: "node",
@@ -228,7 +256,7 @@ export const initGraphPanel = (
         content: n.content,
         nodeType: n.node_type,
         status: n.status,
-        color: NODE_COLORS[n.node_type] ?? "#9ca3af",
+        color: nodeColor(n.node_type, currentTheme()),
         opacity: statusOpacity(n.status),
       },
     });
@@ -263,7 +291,7 @@ export const initGraphPanel = (
         source: e.src_id,
         target: e.dst_id,
         edgeType: e.edge_type,
-        color: EDGE_COLORS[e.edge_type] ?? "#6b7280",
+        color: edgeColor(e.edge_type, currentTheme()),
         weight: e.weight,
       },
     });
@@ -314,7 +342,7 @@ export const initGraphPanel = (
           content: n.content,
           nodeType: n.node_type,
           status: n.status,
-          color: NODE_COLORS[n.node_type] ?? "#9ca3af",
+          color: nodeColor(n.node_type, currentTheme()),
           opacity: statusOpacity(n.status),
         },
       });
@@ -336,7 +364,7 @@ export const initGraphPanel = (
           source: e.src_id,
           target: e.dst_id,
           edgeType: e.edge_type,
-          color: EDGE_COLORS[e.edge_type] ?? "#6b7280",
+          color: edgeColor(e.edge_type, currentTheme()),
           weight: e.weight,
         },
       });
@@ -375,6 +403,15 @@ export const initGraphPanel = (
    * user has already read.
    */
   const applyTheme = (): void => {
+    // Neutrals live in the stylesheet; hues live in each element's data, so a
+    // theme switch has to touch both or half the canvas keeps the old theme.
+    const theme = currentTheme();
+    state.cy.nodes().forEach((n) => {
+      n.data("color", nodeColor(n.data("nodeType") ?? "", theme));
+    });
+    state.cy.edges().forEach((e) => {
+      e.data("color", edgeColor(e.data("edgeType") ?? "", theme));
+    });
     state.cy.style(stylesheetFor(currentPalette()));
   };
 

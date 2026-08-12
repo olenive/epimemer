@@ -6,9 +6,15 @@
  * the cytoscape canvas, the timeline SVG, the graphviz DOT — so those read a
  * palette from here instead.
  *
- * The palette is **neutrals only**. Node and edge hues are saturated enough to
- * read on either background and are deliberately left alone, so that "fact
- * green" means the same thing in both themes.
+ * Two palettes live here. `Palette` is the **neutrals** for the drawn panels.
+ * `SemanticPalette` is the hues that say *what kind of thing* something is, and
+ * it is shared by every panel that draws one — which it had to become: the
+ * graph drew facts green and inferences amber while the timeline drew the same
+ * two blue and violet, in one split pane (#56).
+ *
+ * Both vary by theme. The hues used not to, on the reasoning that a saturated
+ * colour reads on either background — but that is also what let the two tables
+ * drift, since neither had a theme axis forcing anyone to reconcile them.
  */
 
 export type Theme = "light" | "dark";
@@ -43,6 +49,9 @@ export interface Palette {
   breakBackground: string;
   breakSlash: string;
   breakLabel: string;
+  /** The reference-time rule and its label — chrome, so deliberately neutral. */
+  referenceLine: string;
+  referenceLabel: string;
   /** Pipeline detail graph (graphviz DOT). */
   placeFill: string;
   placeStroke: string;
@@ -63,6 +72,8 @@ const DARK: Palette = {
   breakBackground: "#111827",
   breakSlash: "#6b7280",
   breakLabel: "#9ca3af",
+  referenceLine: "#6b7280",
+  referenceLabel: "#9ca3af",
   placeFill: "#1e293b",
   placeStroke: "#475569",
   placeText: "#94a3b8",
@@ -82,6 +93,8 @@ const LIGHT: Palette = {
   breakBackground: "#d1d5db",
   breakSlash: "#4b5563",
   breakLabel: "#374151",
+  referenceLine: "#4b5563",
+  referenceLabel: "#374151",
   placeFill: "#f1f5f9",
   placeStroke: "#94a3b8",
   placeText: "#475569",
@@ -93,6 +106,69 @@ const LIGHT: Palette = {
 };
 
 export const paletteFor = (theme: Theme): Palette => (theme === "dark" ? DARK : LIGHT);
+
+// --- Semantic hues ---
+
+/**
+ * What kind of thing something is, in colour. One table, every panel.
+ *
+ * The values come from the valid-time grammar's set (VISUALISATION.md C.6),
+ * which was picked against a perceptual check in both themes — lightness band,
+ * chroma floor, colour-vision-deficiency separation, contrast on the surface.
+ * The graph panel's older hues were not, so the shared set is that one.
+ */
+export interface SemanticPalette {
+  topic: string;
+  fact: string;
+  inference: string;
+  segment: string;
+  document: string;
+  /** Retired-but-still-true-of-its-period. The timeline desaturates; the graph
+   *  uses opacity instead, so this is currently timeline-only. */
+  historical: string;
+  /** Proposals awaiting review — a reflect-proposed boundary, a soundness flag. */
+  pending: string;
+  contradiction: string;
+  selection: string;
+  /** Edge meanings with no node kind of their own. */
+  similarity: string;
+  abstracts: string;
+  /** Lineage rather than knowledge: superseded_by, merged_into. */
+  lineage: string;
+}
+
+const SEMANTIC_LIGHT: SemanticPalette = {
+  topic: "#1baf7a",
+  fact: "#2a78d6",
+  inference: "#4a3aa7",
+  segment: "#64748b",
+  document: "#94a3b8",
+  historical: "#8095aa",
+  pending: "#9a6b00",
+  contradiction: "#ef4444",
+  selection: "#ec4899",
+  similarity: "#38bdf8",
+  abstracts: "#facc15",
+  lineage: "#6b7280",
+};
+
+const SEMANTIC_DARK: SemanticPalette = {
+  topic: "#199e70",
+  fact: "#3987e5",
+  inference: "#9085e9",
+  segment: "#64748b",
+  document: "#94a3b8",
+  historical: "#5d6d7e",
+  pending: "#fab219",
+  contradiction: "#ef4444",
+  selection: "#ec4899",
+  similarity: "#38bdf8",
+  abstracts: "#facc15",
+  lineage: "#6b7280",
+};
+
+export const semanticPaletteFor = (theme: Theme): SemanticPalette =>
+  theme === "dark" ? SEMANTIC_DARK : SEMANTIC_LIGHT;
 
 /** Icon for the toggle: show where the click will take you, not where you are. */
 export const themeToggleIcon = (theme: Theme): string => (theme === "dark" ? "☀" : "☾");
@@ -110,6 +186,9 @@ export const currentTheme = (root: HTMLElement = document.documentElement): Them
   root.classList.contains("dark") ? "dark" : "light";
 
 export const currentPalette = (): Palette => paletteFor(currentTheme());
+
+export const currentSemanticPalette = (): SemanticPalette =>
+  semanticPaletteFor(currentTheme());
 
 export const applyTheme = (
   theme: Theme,

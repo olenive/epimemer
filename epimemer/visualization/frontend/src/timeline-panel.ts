@@ -57,7 +57,12 @@ import {
   type Gap,
   type Scale,
 } from "./timeline-scale";
-import { currentPalette } from "./theme";
+import {
+  currentPalette,
+  currentTheme,
+  semanticPaletteFor,
+  type Theme,
+} from "./theme";
 import type { AnyEvent, NodeStatusChanged, NodeStored, TimelineStored } from "./types";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -84,13 +89,20 @@ const WHEEL_STEP = 0.85;
 /** One wheel notch while panning, as a fraction of the visible span. */
 const PAN_STEP = 0.12;
 
-// Mark hues read on either background, so only the neutrals come from the
-// palette. "Selected pink" means the same thing in both themes.
-const MARK_FILL = "#3b82f6";
-const MARK_FILL_SELECTED = "#ec4899";
-const INFERENCE_FILL = "#a78bfa";
-const REFERENCE_STROKE = "#f59e0b";
-const REFERENCE_LABEL = "#d97706";
+/**
+ * Mark hues, from the palette the graph panel also draws from (#56).
+ *
+ * Facts and inferences used to be named here, and differently — the two panels
+ * sit side by side and disagreed about what colour a fact is. `kind` is a node
+ * type, so anything that is not an inference is drawn as a claim.
+ */
+export const markColor = (kind: string, theme: Theme): string => {
+  const palette = semanticPaletteFor(theme);
+  return kind === "inference" ? palette.inference : palette.fact;
+};
+
+export const selectedMarkColor = (theme: Theme): string =>
+  semanticPaletteFor(theme).selection;
 
 interface View {
   domain: Domain;
@@ -347,12 +359,12 @@ export const initTimelinePanel = (
 
   // --- Rendering ---
 
-  const markFill = (mark: DatedMark): string =>
-    mark.id === state.selectedMarkId
-      ? MARK_FILL_SELECTED
-      : mark.side === "right"
-        ? INFERENCE_FILL
-        : MARK_FILL;
+  const markFill = (mark: DatedMark): string => {
+    const theme = currentTheme();
+    return mark.id === state.selectedMarkId
+      ? selectedMarkColor(theme)
+      : markColor(mark.side === "right" ? "inference" : "fact", theme);
+  };
 
   const bindMark = (element: SVGElement, mark: TimelineMark): void => {
     element.setAttribute("class", "cursor-pointer");
@@ -512,13 +524,16 @@ export const initTimelinePanel = (
   ): void => {
     if (at < scale.domain.t0 || at > scale.domain.t1) return;
     const y = timeToPos(scale, at);
+    // Neutral, not amber: the rule is chrome — an annotation on the axis — and
+    // a semantic hue here competes with the things that are data (#56).
+    const palette = currentPalette();
     group.appendChild(
       svg("line", {
         x1: 0,
         y1: y,
         x2: width,
         y2: y,
-        stroke: REFERENCE_STROKE,
+        stroke: palette.referenceLine,
         "stroke-width": 1,
         "stroke-dasharray": "4 3",
         "stroke-opacity": 0.8,
@@ -527,7 +542,7 @@ export const initTimelinePanel = (
     const label = svg("text", {
       x: width - 4,
       y: y - 3,
-      fill: REFERENCE_LABEL,
+      fill: palette.referenceLabel,
       "font-size": 9,
       "text-anchor": "end",
     });
@@ -670,7 +685,7 @@ export const initTimelinePanel = (
       height: label.height,
       rx: 3,
       fill: palette.breakBackground,
-      stroke: MARK_FILL_SELECTED,
+      stroke: selectedMarkColor(currentTheme()),
       "stroke-width": 1,
       "stroke-opacity": 0.7,
     });

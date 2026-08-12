@@ -2,8 +2,9 @@
 
 Living issue tracker. **Last review: 2026-08-12.**
 
-Open: **16**, **46**, **48**, **51**, **52**, **53**, **54**, **55**, **56**.
-New findings continue from **57**.
+Open: **16**, **46**, **48**, **51**, **52**, **53**, **54**. Resolved and
+awaiting deletion once merged: **55**, **56**. New findings continue from
+**57**.
 
 **#53 is the most important thing in this file.** *Facts have no validity
 interval, so the graph cannot say when a claim was true.* Saint Petersburg was
@@ -49,8 +50,10 @@ is construction. T2 unblocked **#54** and added a second caller to **#48**.
 The rest: **46** is decided and ready, **51** follows it, **52** is deferred
 behind **53** (its safety precondition is what uncovered the problem), **48**
 is a defect that does not hurt yet, **54** is small and ready — it stops data
-damage that accrues with use — **55** and **56** are both frontend lookup
-tables that drifted from what they encode, and **16** stays deferred by design.
+damage that accrues with use — and **16** stays deferred by design. **55** and
+**56** are done: both were a frontend lookup table drifting from what it
+encodes, and both are now fixed by removing the table's ability to drift rather
+than by correcting its entries.
 **Nothing open *fails* at a size anyone is running** — #53 is a correctness
 ceiling rather than a crash, which is precisely why it is easy to keep not
 noticing.
@@ -1850,7 +1853,7 @@ failed before the fix (*expected 1 to be less than 1*).
 
 ---
 
-### Issue 56 — the two panels disagree about what colour a fact is — ▶ ACTIONABLE
+### Issue 56 — the two panels disagree about what colour a fact is — ✅ RESOLVED (2026-08-12)
 
 Filed 2026-08-12, out of the valid-time grammar review. `VISUALISATION.md` C.6
 asserted that the semantic hues are *"how the graph says what kind of thing you
@@ -1893,6 +1896,39 @@ this issue a small down-payment on C.1 rather than work C.1 has to redo.
 both themes — the assertion that is false today, and the one that stops the two
 tables drifting apart again. Plus: no two distinct semantic meanings resolve to
 the same hue in either theme.
+
+**Resolved 2026-08-12.** `SemanticPalette` in `theme.ts` is the one table, per
+theme; `semanticPaletteFor(theme)` reads it. Both panels now name a *meaning*
+rather than a hex value — `nodeColor` / `edgeColor` in `graph-panel.ts`,
+`markColor` / `selectedMarkColor` in `timeline-panel.ts` — so a re-pick is a
+one-line change in one file and neither panel can drift again.
+
+Guarded by `src/palette.test.ts`: cross-panel equality for `fact` and
+`inference` in both themes (failed before the fix with *expected '#22c55e' to be
+'#3b82f6'*), distinctness across the nine meanings, and that the load-bearing
+hues actually vary by theme.
+
+Three things the fix had to deal with that the entry did not anticipate:
+
+- **Hues are baked into each cytoscape element's `color` data at add time**, so
+  `applyTheme` had to start re-writing them. Restyling alone left half the
+  canvas in the previous theme — invisible until the palette gained a theme
+  axis, because until then the hues were the same in both.
+- **The edge table's collisions resolve by rule, not by re-picking.** An edge
+  tied to a node kind takes that kind's hue: `supports` → fact, `derived_from` →
+  inference, `subtopic_of` → topic. That is why they collided in the first place
+  — each was a hand-picked near-miss of the kind it belongs to.
+- **`theme.ts` claimed the hues were theme-independent** *"so that fact green
+  means the same thing in both themes"*. That reasoning is what let the drift
+  happen: with no theme axis, nothing ever forced the two tables to be
+  reconciled. The docstring now says so.
+
+**Left alone deliberately:** `pipeline-detail.ts` keeps its own
+active/completed/failed colours, which C.6 lists as a separate group. Worth
+knowing that this fix *removed* a collision there — pipeline-completed green was
+exactly the old fact green, and pipeline-active amber exactly the old inference
+amber. Pipeline-completed `#22c55e` is now merely adjacent to topic `#1baf7a`,
+in a different panel.
 
 ---
 
@@ -1980,12 +2016,12 @@ What to pick up, and what has to be true first:
 
 | Order | Work | Trigger |
 |---|---|---|
-| 0 | **55 (viz draws retired nodes as live)** | **Ready now, ~4 lines, no decision.** Regression from `666904f`: `corrected` and `historical` are absent from `graph-panel.ts`'s opacity map and fall through to 1.0. Fix the fallthrough default, not the two keys |
+| 0 | ~~55, 56 (the two frontend lookup tables)~~ | **Done 2026-08-12.** Both were a table drifting from the meaning it encodes — see the ✅ row below |
 | 1 | **54 (historical provenance and validity)** | **Unblocked by T2 and ready now.** A world-change goes through `temporally_followed_by`; the historical node keeps its own `sourced_from` edges and therefore its validity intervals. Migration becomes **per edge type** — both blanket answers were withdrawn, and "migrate nothing" is the dangerous one: it drops `has_metacontext` and lands a fiction-frame replacement in base reality. `migration_excluded` becomes a policy function |
 | 2 | **53 (validity intervals)** | **Design complete (T1/T2/T3), nothing built.** Everything else on this list is a defect inside a sound model; this one says the model cannot express something true. The floor (splitting `SUPERSEDED`) is done; the rest is construction against the entry, and `graph_as_of` is the only piece carrying a migration cost |
 | 3 | 46 (`confidence` becomes a supplied prior) | Decided 2026-08-12, but **two review amendments change the field shape and need sign-off first** (store the unrated case as absent; record a basis alongside a non-default prior). The work remains the tool guidance more than the field. Independent of 53 |
 | 4 | 51 (corroboration derived at read time) | After 46, which is what makes it a separate signal rather than a rewrite of one. Apply the review's neighbourhood exclusions (contradictors, variants). Measure the extra hop before putting it on the default `search` path. Ships with a known 53-shaped inaccuracy, stated in the entry |
 | 5 | 48 (`get_node_by_content` scans per ingest) | **Ready now** but not urgent, and the fix needs measuring before it is chosen. **T2 added a second caller** — the verbatim-twin floor; the load-bearing recurrence detector is nomination including `HISTORICAL` (#53 T2 second pass) — so do both in one visit to this path |
-| 6 | 56 (the panels disagree on what colour a fact is) | **Decided, ready now** — C.6 holds the palette. Frontend only, and it pairs naturally with #55, which touches the same file for the same reason (a lookup table drifting from what it encodes). Route it through `theme.ts` so it is a down-payment on C.1 rather than work C.1 redoes |
+| ✅ | 55, 56 | Both done 2026-08-12 — the two frontend lookup tables that had drifted from what they encode |
 | deferred | 52 (fact deduplication) | Re-open after 53 — and the re-open must carry the review's event/state distinction: interval union dedupes states, never events. Not before |
 | deferred | 16 | The server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`) |
