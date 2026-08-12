@@ -2,8 +2,8 @@
 
 Living issue tracker. **Last review: 2026-08-12.**
 
-Open: **16**, **46**, **48**, **51**, **52**, **53**, **54**, **55**. New
-findings continue from **56**.
+Open: **16**, **46**, **48**, **51**, **52**, **53**, **54**, **55**, **56**.
+New findings continue from **57**.
 
 **#53 is the most important thing in this file.** *Facts have no validity
 interval, so the graph cannot say when a claim was true.* Saint Petersburg was
@@ -18,9 +18,10 @@ the layer the system exists to provide.
 
 **#53 is split into T1 / T2 / T3, all three decided (2026-08-12).** They are
 written up inside the entry and are the design of record, together with the
-binding second-pass amendments (same date) marked inside each — read those too;
-two of them withdraw earlier wording (#54's copy fix, T2's recurrence
-mechanism).
+binding second- and third-pass amendments (same date) marked inside each — read
+those too. Several withdraw earlier wording: #54's fix went *copy everything* →
+*migrate nothing* → **per edge type**, and T2's recurrence mechanism was
+restated twice before it named the code it changes.
 
 - **T1 — what a validity interval is and where it lives.** Replaces the entry's
   original recommendation (b): validity is a new type carried on the
@@ -48,9 +49,11 @@ is construction. T2 unblocked **#54** and added a second caller to **#48**.
 The rest: **46** is decided and ready, **51** follows it, **52** is deferred
 behind **53** (its safety precondition is what uncovered the problem), **48**
 is a defect that does not hurt yet, **54** is small and ready — it stops data
-damage that accrues with use — and **16** stays deferred by design. **Nothing
-open *fails* at a size anyone is running** — #53 is a correctness ceiling
-rather than a crash, which is precisely why it is easy to keep not noticing.
+damage that accrues with use — **55** and **56** are both frontend lookup
+tables that drifted from what they encode, and **16** stays deferred by design.
+**Nothing open *fails* at a size anyone is running** — #53 is a correctness
+ceiling rather than a crash, which is precisely why it is easy to keep not
+noticing.
 
 **A design review (2026-08-12) of the open set added amendments** — blockquotes
 marked *Review 2026-08-12* inside #46, #51, #52 and #53 — and filed **#54**.
@@ -1407,14 +1410,58 @@ Petersburg's chain returns to its own node, and *"Labour is in government"* →
   by construction; the constraint is recorded so the next dedup site does not
   collapse four transitions into one.
 
+##### Third pass (2026-08-12) — the two mechanisms the second pass left unnamed
+
+The amendments above say *what* must happen without saying *where*, and both
+land on code that today refuses them by design. Decided now, because the entry
+otherwise reads as though the recall already exists.
+
+**1. Recall is one `statuses` parameter on `vector_search`, not a caller fix.**
+`check_conflicts` does no status filtering of its own — it inherits it from
+`vector_search`, which is `ACTIVE`-only *by construction on both backends* and
+says why: *"Superseded and merged nodes must never resurface here"*
+(`surrealdb_adapter.py:1223`; the same guard at `memory.py:687`). That guard is
+what makes `recurs` unreachable, and **the same guard blocks T3's
+`include_historical=True` default**. One change, two customers.
+
+So `vector_search` gains `statuses: frozenset[NodeStatus] =
+frozenset({NodeStatus.ACTIVE})` on the protocol and both backends. The default
+preserves today's behaviour exactly, so no existing path resurfaces anything by
+accident. The alternative — a second retired-only lookup method — was rejected
+because it duplicates the SurrealDB over-fetch machinery (`_OVERFETCH_FACTORS`,
+`_ranked_active_items`), which is the only difficult part of that adapter;
+`_active_ids` generalises to a status-parameterised form instead.
+
+**Ships in the same commit: `check_conflicts` candidates carry their `status`.**
+Once retired nodes can appear, an agent cannot tell an active twin from a
+historical one — and that distinction is the entire basis for choosing between
+`redundant` and `recurs`. A candidate list that hides it invites exactly the
+misclassification the verdict was added to prevent.
+
+**2. `recurs` resolves through a widened `restore`, not a new tool.** `restore`
+is `ARCHIVED`-only (`mcp/tools.py:1856`), but its docstring's reason is narrower
+than its check — *"restoring an archive must not resurrect a node that was
+superseded for being wrong"* forbids `CORRECTED` and says nothing about
+`HISTORICAL`, which T2 already called restorable. Widen it to accept
+`HISTORICAL`; keep `CORRECTED` refused, which is now the docstring's literal
+meaning rather than an accident of the pre-split enum.
+
+The reactivation and the new `sourced_from` edge (with the new document's
+interval) must land in **one transaction**: a node back to `ACTIVE` with no
+edge recording why is a claim the graph asserts and cannot attribute. The prior
+intervals and the `temporally_followed_by` record are untouched, so the node
+ends holding several disjoint intervals — the shape
+`TIMELINE_VISUALISATION.md` §13.1 draws as beads on a spine.
+
 ##### What T2 unblocks
 
 **#54's shape is settled and it is no longer blocked.** A world-change goes
 through `temporally_followed_by`; the historical node keeps its own
-`sourced_from` edges and therefore its validity intervals; the replacement
-gets **none of them** — the second pass withdrew the earlier "copies" wording,
-because copying a source edge onto a different claim fabricates attribution
-(see #54 for the full argument).
+`sourced_from` edges and therefore its validity intervals, and the replacement
+gets **none of them**. Both blanket answers were withdrawn — copying everything
+fabricates attribution, migrating nothing drops `has_metacontext` and moves a
+fiction-frame replacement into base reality. Migration becomes **per edge
+type**; #54 holds the table.
 
 **#48 gains a second caller.** The `get_node_by_content` path must now consider
 `HISTORICAL` twins as well as `ACTIVE` ones, so the scan #48 wants to fix for
@@ -1662,21 +1709,48 @@ policy (see *Older carry-overs*). The full ownership question — which edges
 belong to which period — genuinely does wait for #53. This issue is only the
 interim floor that stops the bleeding.
 
-**Fix (revised 2026-08-12, second pass — the earlier "copy" version is
-withdrawn):** when the supersession status is `HISTORICAL`, **migrate
-nothing** — the historical node keeps its own provenance, tags, relationships
-and (once #53 lands) validity intervals, and the replacement receives **none
-of them**. Copying was the first draft, and it fabricates assertions: a
-`sourced_from` edge moved *or copied* onto the replacement records the old
-claim's document asserting the **new** claim — soon with the old claim's
-intervals attached — which is false attribution, exactly the class T1 §8
-forbids the agent itself. The replacement's provenance is its own: a
-`succeeds` verdict arrives with a new document, and `store_decomposition`
-gives the new fact its own `sourced_from` at creation. When the status is
-`CORRECTED`, behaviour is unchanged (move — the audit-trail husk does not need
-sources, and the replacement is the *same claim*, corrected). `supersede_by_existing` already migrates nothing, so the change
-is scoped to `supersede_node_tx` on both backends, switched by the `status`
-argument the transaction already receives.
+**Fix (decided 2026-08-12, third pass — both earlier versions are withdrawn):**
+when the supersession status is `HISTORICAL`, migration becomes **per edge
+type**. Neither of the two earlier drafts survives, and the reason each failed
+is worth keeping, because both were reached by generalising from one edge type.
+
+*Draft 1, "copy everything", fabricates attribution.* A `sourced_from` edge
+copied onto the replacement records the old claim's document asserting the
+**new** claim — soon with the old claim's intervals attached — which is exactly
+the class T1 §8 forbids the agent itself.
+
+*Draft 2, "migrate nothing", breaks frames.* Migration has no per-type
+granularity today: `migration_excluded` (`core/types.py:187`) excludes only
+`NON_KNOWLEDGE_EDGE_TYPES` — history plus review — so **everything else** is one
+undifferentiated bucket. "Nothing" therefore drops `has_metacontext` along with
+provenance, and a fiction-frame fact's replacement lands in base reality. A
+routine supersession would silently break CLAUDE.md's one hard rule: never mix
+fictional and factual information. It would also drop `tagged_with`, leaving the
+replacement unreachable by topic traversal.
+
+The policy, by group:
+
+| Edges | On `HISTORICAL` | Why |
+|---|---|---|
+| `sourced_from` | **neither move nor copy** | Attribution. That document did not assert the new claim, and the edge carries the intervals that make the old node true *of its period* |
+| `has_metacontext` | **copy** | A frame is not a claim about the world — it says *which* world. Losing it changes the replacement's frame without anyone deciding to |
+| `tagged_with` | **copy** | Topics are timeless (T1 §7). The replacement is about the same subjects, and without the tags it is unreachable by topic traversal |
+| Knowledge edges — `contradiction`, `variant_of`, `related`, `supports`, `derived_from` | **stay** on the historical node | Each is a claim *about the old claim*. Re-pointing one asserts it of a claim nobody assessed |
+| History + review | unchanged — version-anchored | Already correct via `migration_excluded` |
+
+The replacement's provenance is its own: a `succeeds` verdict arrives with a new
+document, and `store_decomposition` gives the new fact its own `sourced_from` at
+creation. When the status is `CORRECTED`, behaviour is unchanged — move
+everything, because the audit-trail husk does not need sources and the
+replacement is the *same claim*, corrected.
+
+**This needs a real policy function, not a wider boolean.** `migration_excluded`
+answers yes/no and cannot express *copy*. Replace it at the two call sites with
+one pure function returning the disposition — `move | copy | keep` — from
+`(edge, status)`, so the table above lives in one testable place rather than
+being reproduced in two backends. `supersede_by_existing` already migrates
+nothing and is unaffected; the change is scoped to `supersede_node_tx` on both
+backends, switched by the `status` argument the transaction already receives.
 
 **This exposes the `update` world-change path as the odd one out.** A
 replacement written via `update(node_id, new_content,
@@ -1705,10 +1779,18 @@ fabricated `because`. Documentation only; no signature change.
   `because="the_world_changed"`: the historical node **still has** its
   `sourced_from` edge, and the replacement **does not gain it** — its
   provenance is its own or absent;
+- the same supersession on a fact tagged into a **fiction metacontext**: the
+  replacement is in **the same frame**, not base reality. This is the assertion
+  that fails under "migrate nothing" and it is the reason the policy is
+  per-type;
+- `tagged_with`: both nodes carry the tag afterwards — the historical node keeps
+  it *and* the replacement has it;
+- a `contradiction` edge on the old node stays on the old node and does **not**
+  appear on the replacement;
 - supersede with `because="it_was_wrong"`: the corrected node does **not** keep
-  it (unchanged move behaviour);
+  any of them (unchanged move behaviour, all groups);
 - history/review edges stay version-anchored in both cases
-  (`migration_excluded` untouched).
+  (`migration_excluded`'s successor leaves them alone).
 
 - **T1 addition:** the historical node retains the **validity intervals** on
   its `sourced_from` edge; nothing about the old claim's validity appears on
@@ -1758,6 +1840,52 @@ frontend's edge-type tables in the same commit — this entry is the precedent.
 **Failing test first**: `graph-panel.test.ts` — a node with a status the map has
 never heard of renders at retired opacity, not 1.0; `active` still renders at
 1.0.
+
+---
+
+### Issue 56 — the two panels disagree about what colour a fact is — ▶ ACTIONABLE
+
+Filed 2026-08-12, out of the valid-time grammar review. `VISUALISATION.md` C.6
+asserted that the semantic hues are *"how the graph says what kind of thing you
+are looking at, and the panels agree on them"*. The second half was false:
+
+| Node type | `graph-panel.ts:29` | `timeline-panel.ts:89` |
+|---|---|---|
+| fact | `#22c55e` green | `#3b82f6` blue |
+| inference | `#f59e0b` amber | `#a78bfa` violet |
+
+Both panels are visible at once — they are the two halves of the split pane — so
+a user watching a fact appear in one and move in the other sees it change
+kind. This is the same class of defect as #55 (a lookup table drifting from the
+meaning it encodes), one level up: not a missing key, but two tables that never
+agreed.
+
+**Decision (2026-08-12):** one shared semantic palette, taken from the
+valid-time grammar's validated set. `VISUALISATION.md` **C.6 holds the table and
+the reasoning** — fact blue, inference violet, topic to the grammar's green,
+contradiction keeps red, and the now-line becomes a neutral dashed rule rather
+than competing for it. `TIMELINE_VISUALISATION.md` §13.3 defers to C.6.
+
+**Consequences that are mechanical, not further decisions.** Each is a hue that
+now collides with a *different* meaning than it had:
+
+- `subtopic_of` (`#818cf8`) was derived from topic indigo — it follows topic;
+- `derived_from` (`#a78bfa`) is now the inference **node** colour;
+- `supports` (`#4ade80`) is now adjacent to the topic **node** colour;
+- `REFERENCE_STROKE` / `REFERENCE_LABEL` (amber) become the neutral now-rule —
+  and amber is wanted for *pending*.
+
+**One structural note.** `timeline-panel.ts` holds these as module constants
+with a single value each, so it has no dark-theme variant to change; the palette
+is per-theme. The recolour should route through `theme.ts`'s palette rather than
+re-adding constants, which is the direction Part C is going anyway. That makes
+this issue a small down-payment on C.1 rather than work C.1 has to redo.
+
+**Failing test first**: a shared-palette test asserting that `graph-panel` and
+`timeline-panel` resolve the *same* colour for `fact` and for `inference` in
+both themes — the assertion that is false today, and the one that stops the two
+tables drifting apart again. Plus: no two distinct semantic meanings resolve to
+the same hue in either theme.
 
 ---
 
@@ -1846,10 +1974,11 @@ What to pick up, and what has to be true first:
 | Order | Work | Trigger |
 |---|---|---|
 | 0 | **55 (viz draws retired nodes as live)** | **Ready now, ~4 lines, no decision.** Regression from `666904f`: `corrected` and `historical` are absent from `graph-panel.ts`'s opacity map and fall through to 1.0. Fix the fallthrough default, not the two keys |
-| 1 | **54 (historical provenance and validity)** | **Unblocked by T2 and ready now.** A world-change goes through `temporally_followed_by`; the historical node keeps its own `sourced_from` edges and therefore its validity intervals, and the replacement gets **none of them** — the earlier "copies" version fabricated attribution and is withdrawn (see the entry) |
+| 1 | **54 (historical provenance and validity)** | **Unblocked by T2 and ready now.** A world-change goes through `temporally_followed_by`; the historical node keeps its own `sourced_from` edges and therefore its validity intervals. Migration becomes **per edge type** — both blanket answers were withdrawn, and "migrate nothing" is the dangerous one: it drops `has_metacontext` and lands a fiction-frame replacement in base reality. `migration_excluded` becomes a policy function |
 | 2 | **53 (validity intervals)** | **Design complete (T1/T2/T3), nothing built.** Everything else on this list is a defect inside a sound model; this one says the model cannot express something true. The floor (splitting `SUPERSEDED`) is done; the rest is construction against the entry, and `graph_as_of` is the only piece carrying a migration cost |
 | 3 | 46 (`confidence` becomes a supplied prior) | Decided 2026-08-12, but **two review amendments change the field shape and need sign-off first** (store the unrated case as absent; record a basis alongside a non-default prior). The work remains the tool guidance more than the field. Independent of 53 |
 | 4 | 51 (corroboration derived at read time) | After 46, which is what makes it a separate signal rather than a rewrite of one. Apply the review's neighbourhood exclusions (contradictors, variants). Measure the extra hop before putting it on the default `search` path. Ships with a known 53-shaped inaccuracy, stated in the entry |
 | 5 | 48 (`get_node_by_content` scans per ingest) | **Ready now** but not urgent, and the fix needs measuring before it is chosen. **T2 added a second caller** — the verbatim-twin floor; the load-bearing recurrence detector is nomination including `HISTORICAL` (#53 T2 second pass) — so do both in one visit to this path |
+| 6 | 56 (the panels disagree on what colour a fact is) | **Decided, ready now** — C.6 holds the palette. Frontend only, and it pairs naturally with #55, which touches the same file for the same reason (a lookup table drifting from what it encodes). Route it through `theme.ts` so it is a down-payment on C.1 rather than work C.1 redoes |
 | deferred | 52 (fact deduplication) | Re-open after 53 — and the re-open must carry the review's event/state distinction: interval union dedupes states, never events. Not before |
 | deferred | 16 | The server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`) |

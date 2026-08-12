@@ -180,3 +180,7 @@ than the convenience, and it is far easier to give up later than to win back.
   data it renders does not exist yet); the grammar was designed early because it
   pins two decisions — gaps are never styled as false, bars fade through the
   now-line — that would otherwise be made by accident in the first renderer.
+  **Its colour set shipped ahead of it**: the palette was promoted to serve both
+  panels and now lives in `VISUALISATION.md` C.6, with the recolour tracked as
+  ISSUES.md **#56**. That part is unblocked, because a shared palette does not
+  depend on the data.

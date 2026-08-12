@@ -819,7 +819,7 @@ ornament) is the Information-is-Beautiful school.
 | **`temporally_followed_by`** | A small elbow connector from the end of one claim's bar to the start of the next, with a terminal dot — order, not replacement. Chains that return to their own lane (Saint Petersburg) are drawn calmly; the renderer must be cycle-safe |
 | Status **`HISTORICAL`** | Desaturated bar (the muted slot below), **never hidden** — still true of its period |
 | Status **`CORRECTED`** | Hidden by default, mirroring `include_corrected=off`; struck-through when summoned |
-| The **now-line** | A dashed rule across the axis in the now colour, labelled "now — this timeline's clock" — it is the timeline's `reference_time`, never wall-clock (§12.5, T3) |
+| The **now-line** | A dashed **neutral** rule across the axis (no semantic hue — §13.3), labelled "now — this timeline's clock". It is the timeline's `reference_time`, never wall-clock (§12.5, T3) |
 
 ### 13.2 Rules — places a reasonable rendering would lie
 
@@ -854,19 +854,28 @@ They are constraints, not suggestions:
 
 Validated (OKLCH lightness band, chroma floor, colour-vision-deficiency ΔE
 separation, contrast against the surface) in **both** themes; the validation was
-run with a perceptual checker, not eyeballed. The aqua slot sits below 3:1
-contrast on the light surface, which is acceptable **only because source strips
-are always direct-labelled** — keep that invariant or re-pick the colour.
+run with a perceptual checker, not eyeballed.
+
+> **Amended 2026-08-12.** This set was promoted to the **shared semantic
+> palette for both panels** — `VISUALISATION.md` C.6 is now the source of truth,
+> and the graph panel adopts these hues rather than its own (#56). Two tokens
+> changed in the promotion, and the mock at
+> `dev-docs/mockups/valid-time-grammar.html` still shows the originals.
 
 | Token | Light | Dark | Role |
 |---|---|---|---|
-| `claim` | `#2a78d6` | `#3987e5` | active claim bars, witness dots |
-| `inference` | `#4a3aa7` | `#9085e9` | inference cards/marks (right side) |
-| `src-b` | `#eb6834` | `#d95926` | second source strip |
-| `src-c` | `#1baf7a` | `#199e70` | third source strip (direct-label required) |
+| `claim` | `#2a78d6` | `#3987e5` | active claim bars, witness dots; **also the graph's fact nodes** |
+| `inference` | `#4a3aa7` | `#9085e9` | inference cards/marks (right side); **also the graph's inference nodes** |
+| `topic` | `#1baf7a` | `#199e70` | **Changed role.** Was `src-c`; now the shared topic hue, because fact and inference took blue and violet and left topic adjacent to inference |
 | `historical` | `#8095aa` | `#5d6d7e` | HISTORICAL bars |
 | `pending` | `#9a6b00` on `#f6ecd4` | `#fab219` on `#33290e` | proposals, soundness flags |
-| `now` | `#d03b3b` | `#e66767` | the now-line only |
+| ~~`now`~~ | — | — | **Withdrawn.** Red belongs to contradiction, which is older and appears in both panels. The now-line is chrome, not data: a **dashed neutral rule**, `--text-secondary` stroke with a `--text-strong` label |
+
+**Source strips no longer draw from this table.** A strip is *always*
+direct-labelled — the invariant that made a sub-3:1 colour acceptable in the
+first place — so its hue carries no meaning and must not compete with one that
+does. They take a plain rotation whose only requirement is that adjacent strips
+in a stack differ. `src-b` (`#eb6834` / `#d95926`) is a fine first entry.
 
 The panel frontend is Tailwind (`CLAUDE.md`); carry these as CSS custom
 properties in the theme layer, as the mock does, rather than scattering hex

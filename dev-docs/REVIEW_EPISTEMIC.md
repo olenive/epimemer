@@ -106,7 +106,7 @@ classifies the pair:
 | **contradicts** | conflicting claims, same frame, unclear which holds | record `CONTRADICTION`; resolve (agent/human) |
 | **cross-frame** | "conflict" only because frames differ (fiction vs real) | not a conflict; both coexist; optional `variant_of` |
 | **succeeds** | both true, over different periods — the world moved | write `temporally_followed_by` (old → new); old node → `HISTORICAL`, restorable (#53 T2) |
-| **recurs** | the same claim, previously retired `HISTORICAL`, is true again | surface the historical twin; **explicit reactivation** — `restore` + a new `sourced_from` edge with the new document's interval (#53 T2, second pass) |
+| **recurs** | the same claim, previously retired `HISTORICAL`, is true again | surface the historical twin; **explicit reactivation** — a `restore` widened to accept `HISTORICAL`, plus a new `sourced_from` edge with the new document's interval, in one transaction (#53 T2, third pass) |
 | **compatible** | no conflict | nothing |
 
 A separate, non-similarity trigger handles **evidential staleness**: when a fact
@@ -222,6 +222,17 @@ bites.
 > only today, so a historical twin is never nominated and the `recurs` verdict
 > (§3) can never fire — active-only recall is precisely what hides the twin
 > the recurrence design depends on surfacing. ISSUES.md #53 → T2, second pass.
+>
+> **Third pass, same date — where that change lives.** `check_conflicts` does
+> no status filtering of its own; it inherits `vector_search`'s, which is
+> `ACTIVE`-only on both backends *by design* (*"Superseded and merged nodes must
+> never resurface here"*). Widening recall therefore means one `statuses`
+> parameter on `vector_search`, defaulting to `{ACTIVE}` so nothing changes
+> until a caller asks — and the same parameter is what §13.10's
+> `include_historical` default needs, so it is one change with two customers.
+> **And the candidates must carry their `status`:** telling `redundant` from
+> `recurs` *is* the active/retired distinction, so a candidate list that hides
+> it invites the misclassification the verdict exists to prevent.
 
 ### 5.2 Case B — evidential staleness (reactive, at supersede)
 
@@ -923,10 +934,18 @@ cycle-safe — §13.10's lineage collapse is the first — and nothing may dedup
 this type by `(src, dst, type)` signature. The recurrence *detector* is
 similarity nomination **including `HISTORICAL` candidates**, resolved by the
 `recurs` verdict (§3) as an explicit reactivation: `restore` plus the new
-source's edge. And a world-change migrates **no** edges onto the replacement —
-moving or copying `sourced_from` (which carries validity once T1 is built)
-onto a different claim fabricates attribution; ISSUES.md **#54** carries the
-fix.
+source's edge. And a world-change migrates **per edge type**: `sourced_from`
+(which carries validity once T1 is built) neither moves nor copies, because
+putting it on a different claim fabricates attribution — while `has_metacontext`
+and `tagged_with` *are* copied, because a frame and a topic are not claims about
+the world. The blanket answer in either direction was wrong, and "migrate
+nothing" was wrong dangerously: it moves a fiction-frame replacement into base
+reality. ISSUES.md **#54** carries the table.
+
+**Third pass, same date:** the two mechanisms above now name the code they
+change — recall via a `statuses` parameter on `vector_search` (§5.1), and
+reactivation via a `restore` widened to accept `HISTORICAL` while still refusing
+`CORRECTED`, which is what its docstring always literally said.
 
 ### 13.10 T3 decided (2026-08-12) — retrieval and naming; the design is complete
 

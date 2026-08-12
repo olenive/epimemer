@@ -730,17 +730,56 @@ on dark grey chrome, or a picker panel the same colour as its background.
 - A **query parameter** (`?palette=reset`) as a second way back for the case
   where the button is somehow unreachable.
 
-## C.6 What is not customisable, and why
+## C.6 The semantic hues — shared across panels, and not customisable
 
-The semantic hues stay fixed in this phase: node types (topic indigo, fact
-green, inference amber), edge types, contradiction red, selection pink, and the
-pipeline's active/completed/failed colours.
+The semantic hues stay fixed in this phase: node types, edge types,
+contradiction red, selection pink, and the pipeline's active/completed/failed
+colours.
 
 They are not decoration — they are how the graph says what kind of thing you
-are looking at, and the panels agree on them. Making them settable is a
-reasonable *later* phase (C4), but it needs an answer to "what happens when two
-of them are set to the same value", which is a different question from "let me
-darken this background".
+are looking at. This section used to add *"and the panels agree on them"*, which
+was **not true**: the graph panel drew facts green and inferences amber
+(`graph-panel.ts:29`) while the timeline drew the same two blue and violet
+(`timeline-panel.ts:89`). One window, two answers to "what colour is a fact".
+
+**Decided 2026-08-12: one semantic palette, shared by both panels**, taken from
+the valid-time grammar's set (`TIMELINE_VISUALISATION.md` §13.3) because that
+set was perceptually validated in both themes — lightness band, chroma floor,
+colour-vision-deficiency separation, contrast against the surface — and the
+graph panel's was not.
+
+| Meaning | Light | Dark | Was |
+|---|---|---|---|
+| **fact / claim** | `#2a78d6` | `#3987e5` | graph green `#22c55e`, timeline `#3b82f6` |
+| **inference** | `#4a3aa7` | `#9085e9` | graph amber `#f59e0b`, timeline `#a78bfa` |
+| **topic** | `#1baf7a` | `#199e70` | indigo `#6366f1` |
+| **historical / retired** | `#8095aa` | `#5d6d7e` | — (new; see #55) |
+| **pending / proposed** | `#9a6b00` on `#f6ecd4` | `#fab219` on `#33290e` | — |
+| **contradiction** | `#ef4444` | `#ef4444` | unchanged |
+| **selection** | `#ec4899` | `#ec4899` | unchanged |
+
+Two choices inside that are worth their reasons:
+
+**Topic moves rather than staying indigo.** Fact takes blue and inference takes
+violet, which puts inference next to indigo in both themes. Topic takes the
+green the grammar had spare. It is the furthest hue from both, and it was
+already validated, so nothing has to be re-checked.
+
+**Contradiction keeps red; the now-line gives it up.** §13.3 reserved red for
+the now-line, and contradiction has been red in the graph panel far longer. The
+now-line is *chrome* — an annotation on the axis, not a thing in the data — so
+it becomes a **dashed neutral rule** (`--text-secondary` stroke, `--text-strong`
+label) and stops competing with a semantic hue. It is also no longer amber,
+which the grammar needs for *pending*.
+
+**Source strips are deliberately outside this palette.** §13.3's own invariant
+is that a per-source strip is *always* direct-labelled, so its colour carries no
+meaning and may reuse any hue. They draw from a plain rotation whose only
+requirement is that adjacent strips in one stack differ.
+
+Making the semantic hues settable is a reasonable *later* phase (C4), but it
+needs an answer to "what happens when two of them are set to the same value",
+which is a different question from "let me darken this background".
 
 ## C.7 File plan
 
