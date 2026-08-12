@@ -34,6 +34,12 @@ the token model, the contrast-ratio guard, and what is deliberately *not*
 customisable. This entry exists only so the backlog is complete; read Part C
 rather than this paragraph.
 
+**One piece is already built.** C.6's semantic palette shipped 2026-08-12 as
+`SemanticPalette` in `theme.ts` (ISSUES.md #56) — not as picker work, but
+because the graph and timeline panels disagreed about what colour a fact is.
+The hues now have a single per-theme home, which is a small down-payment on C1's
+"one source of truth for colour". Everything else in Part C is unbuilt.
+
 **Cost.** C1 (the Tailwind token migration) is the bulk of it: ~230 grey class
 occurrences collapse to nine CSS-variable-backed semantic tokens. Large but
 mechanical, and it ends with a structural test that stops the migration rotting
@@ -180,7 +186,8 @@ than the convenience, and it is far easier to give up later than to win back.
   data it renders does not exist yet); the grammar was designed early because it
   pins two decisions — gaps are never styled as false, bars fade through the
   now-line — that would otherwise be made by accident in the first renderer.
-  **Its colour set shipped ahead of it**: the palette was promoted to serve both
-  panels and now lives in `VISUALISATION.md` C.6, with the recolour tracked as
-  ISSUES.md **#56**. That part is unblocked, because a shared palette does not
-  depend on the data.
+  **Its colour set shipped ahead of it** (2026-08-12, ISSUES.md #56): the
+  palette was promoted to serve both panels and now lives in
+  `VISUALISATION.md` C.6, built as `SemanticPalette` in `theme.ts`. A shared
+  palette never depended on the interval data, and the two panels were already
+  disagreeing about what colour a fact is.

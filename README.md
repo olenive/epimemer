@@ -215,10 +215,10 @@ sees a white flash while the bundle loads.
 Page chrome uses Tailwind's `dark:` variants against a `dark` class on `<html>`.
 The three *drawn* surfaces — the cytoscape canvas, the timeline SVG and the
 graphviz Petri nets — cannot be reached by CSS variants, so they read a palette
-from `theme.ts` at render time and are repainted on toggle. That palette is
-neutrals only: node and edge hues are saturated enough to read on either
-background and are deliberately shared, so "fact green" means the same thing in
-both themes.
+from `theme.ts` at render time and are repainted on toggle. `theme.ts` holds two
+palettes: the neutrals, and a **shared semantic palette** — the hues that say
+what kind of thing something is. Both vary by theme, and both panels read the
+same one, so a fact is the same colour wherever it is drawn.
 
 ### Panels
 

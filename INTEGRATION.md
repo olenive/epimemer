@@ -76,8 +76,8 @@ restate the count.
 | `store_decomposition` | Store agent-extracted topics/facts/inferences (step 2 of ingest) |
 | `search` | Hybrid retrieval — vector similarity + graph expansion |
 | `link` | Create typed edges between nodes |
-| `update` | Create a new node version (immutable history) |
-| `supersede_by` | Retire a node in favour of an already-existing one |
+| `update` | Create a new node version (immutable history). `because` is required — `"it_was_wrong"` or `"the_world_changed"` |
+| `supersede_by` | Retire a node in favour of an already-existing one. `because` as above; if you cannot tell which happened, `record_contradiction` instead of guessing |
 | `judge_importance` | Raise or lower a node's importance and record why (importance protects it from archival) |
 
 ### Discovery & Stats

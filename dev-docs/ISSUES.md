@@ -854,10 +854,11 @@ checking possible at all.
 > **Still open below**: this does not solve recurrence. A claim that becomes
 > true *again* has nowhere to say so, which is what the interval-set model is
 > for. One further limitation found while building it and deliberately left
-> alone: `supersede_node_tx` migrates the old node's edges onto the replacement,
+> alone: `supersede_node_tx` migrated the old node's edges onto the replacement,
 > which is right for a correction and wrong for a world-change — the historical
-> node should keep its own provenance. Fixing it needs the validity model to say
-> what "current" means for each, so it waits for the decision below.
+> node should keep its own provenance. It was thought to need the validity model
+> first; it did not. Filed as **#54** and **fixed 2026-08-12**, before this
+> entry is built.
 > *(Review 2026-08-12: the waiting judgment is reversed for the interim floor —
 > filed as **#54**. Migration is a move, not a copy, so the cost of waiting
 > accrues in data. The full ownership question still waits for the decision.)*
@@ -1367,7 +1368,7 @@ adjacency.
 ##### Housekeeping this pulls in
 
 `HISTORY_EDGE_TYPES` is `{SUPERSEDED_BY, MERGED_INTO}` (`core/types.py:137`)
-and feeds both `migration_excluded` and the default-traversal exclusion. The
+and feeds both `migration_disposition` and the default-traversal exclusion. The
 new edge **joins it**: it is lineage rather than knowledge, and if it migrated
 on a later supersession it would detach from the transition it records.
 
@@ -1406,10 +1407,10 @@ Petersburg's chain returns to its own node, and *"Labour is in government"* →
   not terminate on this graph.
 - **Parallel edges between one pair are legal — one per observed transition —
   and nothing may dedup them by `(src, dst, type)` signature.**
-  `_migrate_edges_inplace` already skips the type via `migration_excluded`
-  (it joins `HISTORY_EDGE_TYPES`), so today's one signature-dedup site is safe
-  by construction; the constraint is recorded so the next dedup site does not
-  collapse four transitions into one.
+  `_migrate_edges_inplace` already skips the type — `migration_disposition`
+  answers `keep` for everything in `HISTORY_EDGE_TYPES`, which this joins — so
+  today's one signature-dedup site is safe by construction; the constraint is
+  recorded so the next dedup site does not collapse four transitions into one.
 
 ##### Third pass (2026-08-12) — the two mechanisms the second pass left unnamed
 
@@ -1737,7 +1738,7 @@ The policy, by group:
 | `has_metacontext` | **copy** | A frame is not a claim about the world — it says *which* world. Losing it changes the replacement's frame without anyone deciding to |
 | `tagged_with` | **copy** | Topics are timeless (T1 §7). The replacement is about the same subjects, and without the tags it is unreachable by topic traversal |
 | Knowledge edges — `contradiction`, `variant_of`, `related`, `supports`, `derived_from` | **stay** on the historical node | Each is a claim *about the old claim*. Re-pointing one asserts it of a claim nobody assessed |
-| History + review | unchanged — version-anchored | Already correct via `migration_excluded` |
+| History + review | unchanged — version-anchored | Was already correct, and stays so: `migration_disposition` answers `keep` for both |
 
 The replacement's provenance is its own: a `succeeds` verdict arrives with a new
 document, and `store_decomposition` gives the new fact its own `sourced_from` at

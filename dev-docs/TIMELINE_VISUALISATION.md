@@ -856,11 +856,13 @@ Validated (OKLCH lightness band, chroma floor, colour-vision-deficiency ΔE
 separation, contrast against the surface) in **both** themes; the validation was
 run with a perceptual checker, not eyeballed.
 
-> **Amended 2026-08-12.** This set was promoted to the **shared semantic
-> palette for both panels** — `VISUALISATION.md` C.6 is now the source of truth,
-> and the graph panel adopts these hues rather than its own (#56). Two tokens
+> **Amended and built 2026-08-12.** This set was promoted to the **shared
+> semantic palette for both panels** and lives in `theme.ts` as
+> `SemanticPalette`; `VISUALISATION.md` C.6 is the source of truth, and the
+> graph panel now draws from it rather than its own table (#56). Two tokens
 > changed in the promotion, and the mock at
-> `dev-docs/mockups/valid-time-grammar.html` still shows the originals.
+> `dev-docs/mockups/valid-time-grammar.html` still shows the originals — it is
+> the reference for the *marks*, not for the hues.
 
 | Token | Light | Dark | Role |
 |---|---|---|---|

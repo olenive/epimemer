@@ -5,6 +5,12 @@ Implementation plans. **Parts A and B are built and merged** (written
 customisation — is designed and not built** (written 2026-08-08); it starts
 below Part B.
 
+One piece of Part C went in ahead of the rest: **C.6's semantic palette is
+built** (2026-08-12, ISSUES.md #56). It was not a picker feature — the two
+panels disagreed about what colour a fact is, and fixing that meant giving the
+hues a single per-theme home. C.1's token migration, the store and the picker are all
+still unbuilt.
+
 The failure this was written to kill: a stale MCP process holds the fixed viz
 port, so the browser shows *its* empty in-memory store while the session the
 user is actually driving fails to bind and serves no visualization at all —
@@ -569,8 +575,9 @@ choices persisted.
 
 ## C.0 The problem this runs into immediately
 
-The dashboard has **three** colour systems, and the request lands across all of
-them.
+The dashboard had **three** colour systems, and the request lands across all of
+them. (#56 turned the third into a runtime palette; the count below is the
+current state, not the one this section was written against.)
 
 1. **Tailwind utility classes** — the chrome: header, toolbars, panels,
    buttons, chips, the detail drawer. About **22 distinct grey classes over
@@ -580,9 +587,14 @@ them.
    time by the three *drawn* surfaces that Tailwind cannot reach: the cytoscape
    canvas, the timeline SVG, and the graphviz DOT for the pipeline detail.
    These *can* be changed live today.
-3. **Hard-coded hues** — node colours, edge colours, mark fills, pipeline
-   state colours. Deliberately outside the palette, because "fact green" must
-   mean the same thing in both themes.
+3. **The runtime `SemanticPalette`** (`theme.ts`, added by #56) — the hues that
+   say what kind of thing something is, read at render time by both the graph
+   and the timeline. This *used* to be system 3, "hard-coded hues, deliberately
+   outside the palette because 'fact green' must mean the same thing in both
+   themes" — and that reasoning is exactly what let the graph and the timeline
+   disagree about what colour a fact is, since neither had a theme axis forcing
+   anyone to reconcile them. The pipeline's active/completed/failed colours are
+   the remainder, still hard-coded and still their own group (C.6).
 
 The two things asked for split across the hard boundary: timeline mark text is
 `palette.nodeLabel` (system 2, easy), and the timepoint detail text plus every
@@ -742,8 +754,9 @@ was **not true**: the graph panel drew facts green and inferences amber
 (`graph-panel.ts:29`) while the timeline drew the same two blue and violet
 (`timeline-panel.ts:89`). One window, two answers to "what colour is a fact".
 
-**Decided 2026-08-12: one semantic palette, shared by both panels**, taken from
-the valid-time grammar's set (`TIMELINE_VISUALISATION.md` §13.3) because that
+**Decided and built 2026-08-12 (#56): one semantic palette, shared by both
+panels**, taken from the valid-time grammar's set
+(`TIMELINE_VISUALISATION.md` §13.3) because that
 set was perceptually validated in both themes — lightness band, chroma floor,
 colour-vision-deficiency separation, contrast against the surface — and the
 graph panel's was not.

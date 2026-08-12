@@ -761,15 +761,22 @@ written before the split do not record which kind they were and assigning one
 would be a fabrication — the same reasoning that keeps `retrieved_at` nullable.
 
 **What it does not do**, and what the interval model is still for: recurrence
-(a claim becoming true again has nowhere to say so), validity dates of any kind,
-and edge ownership — `supersede_node_tx` still migrates the old node's edges to
-the replacement, which is right for a correction and wrong for a world-change.
-*Review 2026-08-12: the edge-ownership half no longer waits* — filed as
-ISSUES.md **#54**, because migration is a **move** (`_migrate_edges_inplace`
-re-points edges in place), so every world-change supersession strips the
-historical node of its own provenance, and that damage accrues in data while
-the design decision is pending. The interim floor is copy-not-move for
-`HISTORICAL`; the full ownership question still waits for the interval model.
+(a claim becoming true again has nowhere to say so) and validity dates of any
+kind.
+
+**Edge ownership was the third item and is now fixed** (ISSUES.md **#54**, built
+2026-08-12). It did not wait for the interval model, because migration was a
+**move** — `_migrate_edges_inplace` re-pointed edges in place — so every
+world-change supersession stripped the historical node of its own provenance,
+and that damage accrued in data while the design was pending. Migration is now
+**per edge type**, via `migration_disposition(edge_type, status)`: a correction
+moves everything but history and review; a world-change moves nothing, keeps
+provenance and the judgments made about the old claim on the old node, and
+copies only `has_metacontext` and `tagged_with`. Both blanket answers were tried
+and withdrawn — copying everything fabricates attribution, and migrating nothing
+drops the frame, which would move a fiction-frame replacement into base reality.
+The *validity* half still waits for the interval model, but it waits safely: the
+intervals will ride on `sourced_from` edges that no longer go anywhere.
 
 ### 13.6 The method that found it
 
