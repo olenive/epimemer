@@ -1798,7 +1798,7 @@ fabricated `because`. Documentation only; no signature change.
 
 ---
 
-### Issue 55 — the graph view draws corrected and historical nodes as live — ▶ ACTIONABLE (trivial)
+### Issue 55 — the graph view draws corrected and historical nodes as live — ✅ RESOLVED (2026-08-12)
 
 Filed 2026-08-12. A regression introduced by `666904f`, the commit that split
 `SUPERSEDED`. Found while triaging the design review, which could not have seen
@@ -1840,6 +1840,13 @@ frontend's edge-type tables in the same commit — this entry is the precedent.
 **Failing test first**: `graph-panel.test.ts` — a node with a status the map has
 never heard of renders at retired opacity, not 1.0; `active` still renders at
 1.0.
+
+**Resolved 2026-08-12.** `STATUS_OPACITY` is gone; `statusOpacity(status)` names
+`active` and fades everything else, so the retired list can no longer fall
+behind the Python enum. Guarded by `src/graph-panel.test.ts` →
+`describe("statusOpacity")`, three cases: `active` at 1.0, all five retired
+statuses below 1.0, and an unknown status below 1.0 — the last is the one that
+failed before the fix (*expected 1 to be less than 1*).
 
 ---
 

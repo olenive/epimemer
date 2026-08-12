@@ -49,12 +49,18 @@ const EDGE_COLORS: Record<string, string> = {
 // left (wrong, duplicated, or merely trivial) is not something a node's opacity
 // can carry, and an unlisted status falling through to 1.0 would draw a retired
 // node as a live one.
-const STATUS_OPACITY: Record<string, number> = {
-  active: 1.0,
-  superseded: 0.3,
-  merged: 0.3,
-  archived: 0.3,
-};
+//
+// So `active` is the only status named, and everything else — including one
+// this file has never heard of — fades. Listing the retired statuses instead is
+// what caused #55: `NodeStatus` grew `corrected` and `historical` in 666904f,
+// the list did not, and two retired states silently drew as live. A status is
+// added on the Python side by someone who has no reason to look here, so the
+// default is the only part of this that can be relied on to be right.
+const ACTIVE_OPACITY = 1.0;
+const RETIRED_OPACITY = 0.3;
+
+export const statusOpacity = (status: string): number =>
+  status === "active" ? ACTIVE_OPACITY : RETIRED_OPACITY;
 
 // --- Layout configs ---
 //
@@ -210,7 +216,7 @@ export const initGraphPanel = (
       existing.data("label", truncate(n.content, 40));
       existing.data("content", n.content);
       existing.data("status", n.status);
-      existing.data("opacity", STATUS_OPACITY[n.status] ?? 1.0);
+      existing.data("opacity", statusOpacity(n.status));
       return;
     }
 
@@ -223,7 +229,7 @@ export const initGraphPanel = (
         nodeType: n.node_type,
         status: n.status,
         color: NODE_COLORS[n.node_type] ?? "#9ca3af",
-        opacity: STATUS_OPACITY[n.status] ?? 1.0,
+        opacity: statusOpacity(n.status),
       },
     });
 
@@ -234,7 +240,7 @@ export const initGraphPanel = (
     const node = state.cy.getElementById(event.node_id);
     if (node.length > 0) {
       node.data("status", event.new_status);
-      node.data("opacity", STATUS_OPACITY[event.new_status] ?? 1.0);
+      node.data("opacity", statusOpacity(event.new_status));
     }
   };
 
@@ -309,7 +315,7 @@ export const initGraphPanel = (
           nodeType: n.node_type,
           status: n.status,
           color: NODE_COLORS[n.node_type] ?? "#9ca3af",
-          opacity: STATUS_OPACITY[n.status] ?? 1.0,
+          opacity: statusOpacity(n.status),
         },
       });
     }
