@@ -28,15 +28,16 @@ async def supersede_node(
 ) -> NodeEdge:
     """Create a new version of a node.
 
-    Marks the old node as superseded, stores and embeds the new node, migrates
-    the old node's relationships onto the replacement, and creates a
-    superseded_by edge from old to new — all atomically (the storage backend
-    applies it as a single transaction).
+    Marks the old node as superseded, stores and embeds the new node, carries
+    its edges over according to `status`, and creates a superseded_by edge from
+    old to new — all atomically (the storage backend applies it as a single
+    transaction).
 
     Embedding and edge migration are part of the operation so that *every*
     supersession path is correct by construction: a replacement that is not
-    embedded is invisible to vector search, and one that does not inherit its
-    predecessor's edges is orphaned from its supporting evidence.
+    embedded is invisible to vector search, and one that does not inherit the
+    edges it is entitled to is orphaned — from its evidence after a correction,
+    or from its frame and topics after a world-change.
 
     Args:
         old_node: The node being superseded.
@@ -46,7 +47,10 @@ async def supersede_node(
         status: Why the old node is being retired — `CORRECTED` (it was wrong)
             or `HISTORICAL` (the world changed, and it is still right of its
             period). No default: the two are opposite events and only the
-            caller knows which one happened (#53).
+            caller knows which one happened (#53). It also selects the edge
+            policy — see `migration_disposition` (#54). A `HISTORICAL` node
+            keeps its own provenance and the judgments made about it; only its
+            frame and tags are copied onto the replacement.
 
     Returns:
         The superseded_by edge linking old to new.

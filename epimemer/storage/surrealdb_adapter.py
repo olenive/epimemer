@@ -16,7 +16,6 @@ from surrealdb import AsyncSurreal
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from epimemer.core.types import (
-    NON_KNOWLEDGE_EDGE_TYPES,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
@@ -30,7 +29,8 @@ from epimemer.core.types import (
     Segment,
     Timeline,
     Topic,
-    migration_excluded,
+    migration_disposition,
+    moved_edge_types,
 )
 from epimemer.storage.protocol import (
     EdgeDirection,
@@ -915,6 +915,40 @@ class SurrealDBStorage:
             if isinstance(result, dict) and result.get("status") not in (None, "OK"):
                 raise RuntimeError(f"Transaction failed: {result.get('result')}")
 
+    async def _plan_copied_edges(
+        self, old_id: str, new_id: str, status: NodeStatus
+    ) -> list[dict]:
+        """Rows for the edges a retirement *copies* onto the replacement.
+
+        Planned in Python and read pre-transaction, the same way
+        `merge_nodes_tx` plans its re-pointing: the adapter is single-connection
+        and already documented as unsafe for concurrent callers, so nothing
+        interleaves. Copies are rebuilt rather than cloned, so `uid` and
+        `created_at` are the new edge's own.
+        """
+        copied = {t for t in EdgeType if migration_disposition(t, status) == "copy"}
+        if not copied:
+            return []
+
+        rows: list[dict] = []
+        seen: set[tuple[str, str, str]] = set()
+        incident = {e.id: e for e in await self.get_edges_from(old_id)}
+        incident |= {e.id: e for e in await self.get_edges_to(old_id)}
+        for edge in incident.values():
+            if edge.type not in copied:
+                continue
+            new_src = new_id if edge.src_id == old_id else edge.src_id
+            new_dst = new_id if edge.dst_id == old_id else edge.dst_id
+            signature = (new_src, new_dst, edge.type.value)
+            if new_src == new_dst or signature in seen:
+                continue
+            seen.add(signature)
+            rows.append(_edge_row(NodeEdge(
+                **(edge.model_dump(exclude={"id", "created_at"})
+                   | {"src_id": new_src, "dst_id": new_dst}),
+            )))
+        return rows
+
     async def supersede_node_tx(
         self,
         old_node: EpistemicNode,
@@ -927,20 +961,31 @@ class SurrealDBStorage:
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
     ) -> None:
-        excluded = [t.value for t in NON_KNOWLEDGE_EDGE_TYPES]
+        # Which edges follow the replacement depends on *why* the old node is
+        # being retired (#54): a correction re-points everything but history and
+        # review; a world-change re-points nothing and copies only the frame and
+        # the tags. Both answers come from `migration_disposition`, so this
+        # backend cannot develop an opinion of its own.
+        moved = [t.value for t in moved_edge_types(status)]
+        copied_data = await self._plan_copied_edges(old_node.id, new_node.id, status)
 
         statements = [
             f"UPDATE {_node_to_table(old_node)} SET status = $status, "
             f"superseded_at = $sup_at WHERE uid = $old_uid",
             f"INSERT INTO {_node_to_table(new_node)} $new_data",
             "INSERT INTO embedding $emb_data",
-            "UPDATE node_edge SET src_id = $new_uid "
-            "WHERE src_id = $old_uid AND type NOT IN $excluded",
-            "UPDATE node_edge SET dst_id = $new_uid "
-            "WHERE dst_id = $old_uid AND type NOT IN $excluded",
-            "DELETE node_edge WHERE src_id = $new_uid AND dst_id = $new_uid",
-            "INSERT INTO node_edge $lineage_data",
         ]
+        if moved:
+            statements += [
+                "UPDATE node_edge SET src_id = $new_uid "
+                "WHERE src_id = $old_uid AND type IN $moved",
+                "UPDATE node_edge SET dst_id = $new_uid "
+                "WHERE dst_id = $old_uid AND type IN $moved",
+                "DELETE node_edge WHERE src_id = $new_uid AND dst_id = $new_uid",
+            ]
+        if copied_data:
+            statements.append("INSERT INTO node_edge $copied_data")
+        statements.append("INSERT INTO node_edge $lineage_data")
         params: dict = {
             "status": status.value,
             "sup_at": superseded_at.isoformat(),
@@ -948,7 +993,8 @@ class SurrealDBStorage:
             "new_uid": new_node.id,
             "new_data": _serialize(new_node),
             "emb_data": _serialize(new_embedding),
-            "excluded": excluded,
+            "moved": moved,
+            "copied_data": copied_data,
             "lineage_data": _edge_row(lineage_edge),
         }
         self._append_review_writes(statements, params, evidence_edges, clear_edge_ids)
@@ -1058,7 +1104,7 @@ class SurrealDBStorage:
         repointed_data: list[dict] = []
         seen: set[tuple[str, str, str]] = set()
         for edge in incident.values():
-            if migration_excluded(edge):
+            if migration_disposition(edge.type, NodeStatus.MERGED) == "keep":
                 continue
             old_edge_ids.append(edge.id)  # every incident edge is deleted...
             new_src = merged_node.id if edge.src_id in source_ids else edge.src_id

@@ -488,6 +488,20 @@ async def memory_update(
             There is no default, because the two are opposite claims about the
             old node and picking one silently mislabels the other. A graph that
             files world-changes as errors forgets its own history.
+
+            **If you cannot tell which happened, do not pick one.** Two undated
+            claims and no knowledge of which came first is not enough to judge,
+            and a guessed `because` reads afterwards as a judgment someone made.
+            Record a `record_contradiction` instead and leave the pair contested
+            for whoever can resolve it.
+
+    Note on world-changes: the replacement's sources are its own, and this tool
+    writes content *you* authored, so a world-change resolved here can leave the
+    new node with no source at all. Prefer ingesting the document that reports
+    the change and resolving with `supersede_by` against the fact it produced.
+    Reach for `update` with "the_world_changed" when you can genuinely attribute
+    the new content; if you cannot say where it came from, that is worth
+    noticing rather than working around.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -524,7 +538,14 @@ async def memory_supersede_by(
         existing_id: The existing node that supersedes it.
         because: Why old_id is being retired — "it_was_wrong" (it was mistaken)
             or "the_world_changed" (it was correct and remains correct of its
-            period, just not current). No default: see `update`.
+            period, just not current). No default, and no guessing: if you
+            cannot tell the two apart, `record_contradiction` and leave the pair
+            contested rather than inventing a reason. See `update`.
+
+    On "the_world_changed", the retired node keeps its own sources, tags and
+    relationships — it is still true of its period, and what its sources said
+    about it stays said about it. `existing_id` is untouched: its provenance is
+    its own.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(

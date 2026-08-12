@@ -2,8 +2,8 @@
 
 Living issue tracker. **Last review: 2026-08-12.**
 
-Open: **16**, **46**, **48**, **51**, **52**, **53**, **54**. Resolved and
-awaiting deletion once merged: **55**, **56**. New findings continue from
+Open: **16**, **46**, **48**, **51**, **52**, **53**. Resolved and awaiting
+deletion once merged: **54**, **55**, **56**. New findings continue from
 **57**.
 
 **#53 is the most important thing in this file.** *Facts have no validity
@@ -49,11 +49,9 @@ is construction. T2 unblocked **#54** and added a second caller to **#48**.
 
 The rest: **46** is decided and ready, **51** follows it, **52** is deferred
 behind **53** (its safety precondition is what uncovered the problem), **48**
-is a defect that does not hurt yet, **54** is small and ready — it stops data
-damage that accrues with use — and **16** stays deferred by design. **55** and
-**56** are done: both were a frontend lookup table drifting from what it
-encodes, and both are now fixed by removing the table's ability to drift rather
-than by correcting its entries.
+is a defect that does not hurt yet, and **16** stays deferred by design.
+**54**, **55** and **56** are done — and all three were the same shape: a rule
+stated in one place and re-derived, differently, somewhere else.
 **Nothing open *fails* at a size anyone is running** — #53 is a correctness
 ceiling rather than a crash, which is precisely why it is easy to keep not
 noticing.
@@ -1678,7 +1676,7 @@ and, added by the second-pass review —
 
 ---
 
-### Issue 54 — world-change supersession strips the historical node's provenance and validity — ▶ ACTIONABLE (unblocked by #53 T2)
+### Issue 54 — world-change supersession strips the historical node's provenance and validity — ✅ RESOLVED (2026-08-12)
 
 Filed 2026-08-12, out of the design review of #53 step 1. The defect was known
 at build time and deliberately deferred ("edge ownership waits for the validity
@@ -1798,6 +1796,40 @@ fabricated `because`. Documentation only; no signature change.
 - **T1 addition:** the historical node retains the **validity intervals** on
   its `sourced_from` edge; nothing about the old claim's validity appears on
   the replacement.
+
+**Resolved 2026-08-12.** `migration_excluded` is gone. `migration_disposition(
+edge_type, status)` returns `move | copy | keep` and is the only place the
+policy exists; `moved_edge_types(status)` derives the type list the SurrealDB
+adapter needs, so the backend cannot answer differently from the rest of the
+system. Guarded by `tests/core/test_types.py` →
+`TestWorldChangeMigrationPolicy` (six cases, including that a legacy
+`SUPERSEDED` row still behaves as it always did) and
+`tests/pipelines/test_supersession_kind.py` →
+`TestWorldChangeKeepsTheHistoricalNodesEdges` (six cases on **both** backends
+via the parity fixture). Before the fix, six of those twelve failed with the
+edge simply absent from the historical node.
+
+Two things worth knowing for whoever builds #53 on top:
+
+- **The frame test passes both before and after**, and that is the point of it.
+  Today's behaviour moves the frame, so the assertion only fails against
+  "migrate nothing" — it is a guard against the wrong fix rather than a
+  demonstration of the defect, and it is the reason the policy is per-type.
+- **SurrealDB plans its copies in Python**, pre-transaction, exactly as
+  `merge_nodes_tx` already plans its re-pointing — the adapter is
+  single-connection and documented as unsafe for concurrent callers, so nothing
+  interleaves. Copies are rebuilt rather than cloned so `uid` and `created_at`
+  belong to the new edge.
+
+**The documentation half shipped with it**, and it found one live defect:
+`apply_reflection`'s docstring specified `supersessions: [{old_id, by_id}]`
+while the code has required `because` since `666904f` — a caller following the
+docstring got a `KeyError`. Also fixed: `epimemer_prompts/DEFAULT.md` called
+`supersede_by(old_id, existing_id)` without the required argument. Both now
+carry the can't-tell routing — if you cannot tell a correction from a
+world-change, `record_contradiction` and leave the pair contested, because a
+guessed `because` is indistinguishable afterwards from a judged one — and the
+`update` docstring names the unattributable-replacement smell.
 
 ---
 
@@ -2016,12 +2048,11 @@ What to pick up, and what has to be true first:
 
 | Order | Work | Trigger |
 |---|---|---|
-| 0 | ~~55, 56 (the two frontend lookup tables)~~ | **Done 2026-08-12.** Both were a table drifting from the meaning it encodes — see the ✅ row below |
-| 1 | **54 (historical provenance and validity)** | **Unblocked by T2 and ready now.** A world-change goes through `temporally_followed_by`; the historical node keeps its own `sourced_from` edges and therefore its validity intervals. Migration becomes **per edge type** — both blanket answers were withdrawn, and "migrate nothing" is the dangerous one: it drops `has_metacontext` and lands a fiction-frame replacement in base reality. `migration_excluded` becomes a policy function |
-| 2 | **53 (validity intervals)** | **Design complete (T1/T2/T3), nothing built.** Everything else on this list is a defect inside a sound model; this one says the model cannot express something true. The floor (splitting `SUPERSEDED`) is done; the rest is construction against the entry, and `graph_as_of` is the only piece carrying a migration cost |
-| 3 | 46 (`confidence` becomes a supplied prior) | Decided 2026-08-12, but **two review amendments change the field shape and need sign-off first** (store the unrated case as absent; record a basis alongside a non-default prior). The work remains the tool guidance more than the field. Independent of 53 |
-| 4 | 51 (corroboration derived at read time) | After 46, which is what makes it a separate signal rather than a rewrite of one. Apply the review's neighbourhood exclusions (contradictors, variants). Measure the extra hop before putting it on the default `search` path. Ships with a known 53-shaped inaccuracy, stated in the entry |
-| 5 | 48 (`get_node_by_content` scans per ingest) | **Ready now** but not urgent, and the fix needs measuring before it is chosen. **T2 added a second caller** — the verbatim-twin floor; the load-bearing recurrence detector is nomination including `HISTORICAL` (#53 T2 second pass) — so do both in one visit to this path |
-| ✅ | 55, 56 | Both done 2026-08-12 — the two frontend lookup tables that had drifted from what they encode |
+| ✅ | ~~55, 56~~ | **Done 2026-08-12** — the two frontend lookup tables that had drifted from what they encode |
+| ✅ | ~~54 (historical provenance and validity)~~ | **Done 2026-08-12.** `migration_disposition(edge_type, status)` is the policy; a world-change keeps provenance and judgments on the historical node and copies only the frame and tags |
+| 1 | **53 (validity intervals)** | **Design complete (T1/T2/T3), nothing built.** Everything else on this list is a defect inside a sound model; this one says the model cannot express something true. The floor (splitting `SUPERSEDED`) is done; the rest is construction against the entry, and `graph_as_of` is the only piece carrying a migration cost |
+| 2 | 46 (`confidence` becomes a supplied prior) | Decided 2026-08-12, but **two review amendments change the field shape and need sign-off first** (store the unrated case as absent; record a basis alongside a non-default prior). The work remains the tool guidance more than the field. Independent of 53 |
+| 3 | 51 (corroboration derived at read time) | After 46, which is what makes it a separate signal rather than a rewrite of one. Apply the review's neighbourhood exclusions (contradictors, variants). Measure the extra hop before putting it on the default `search` path. Ships with a known 53-shaped inaccuracy, stated in the entry |
+| 4 | 48 (`get_node_by_content` scans per ingest) | **Ready now** but not urgent, and the fix needs measuring before it is chosen. **T2 added a second caller** — the verbatim-twin floor; the load-bearing recurrence detector is nomination including `HISTORICAL` (#53 T2 second pass) — so do both in one visit to this path |
 | deferred | 52 (fact deduplication) | Re-open after 53 — and the re-open must carry the review's event/state distinction: interval union dedupes states, never events. Not before |
 | deferred | 16 | The server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`) |

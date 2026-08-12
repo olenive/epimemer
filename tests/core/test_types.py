@@ -20,34 +20,89 @@ from epimemer.core.types import (
     Topic,
     ValueSignal,
     merged_value_signal,
-    migration_excluded,
+    migration_disposition,
+    moved_edge_types,
     traversal_excluded,
 )
 
 
 class TestEdgeBehaviour:
+    """Traversal and migration are independent questions about an edge.
 
-    def test_relationship_edge_traversed_and_migrated(self):
+    Migration gained a third answer with #54: a world-change neither moves an
+    edge nor leaves everything behind, so `copy` exists for the two types that
+    describe *where a claim sits* rather than asserting it.
+    """
+
+    def test_relationship_edge_traversed_and_moved_by_a_correction(self):
         e = NodeEdge(src_id="a", dst_id="b", type=EdgeType.RELATED,
                      label="refuted_in", kind="relationship")
-        assert not traversal_excluded(e) and not migration_excluded(e)
+        assert not traversal_excluded(e)
+        assert migration_disposition(e.type, NodeStatus.CORRECTED) == "move"
 
-    def test_attribution_edge_not_traversed_but_migrated(self):
+    def test_attribution_edge_not_traversed_but_moved_by_a_correction(self):
         e = NodeEdge(src_id="a", dst_id="b", type=EdgeType.RELATED,
                      label="published_by", kind="attribution")
-        assert traversal_excluded(e) and not migration_excluded(e)
+        assert traversal_excluded(e)
+        assert migration_disposition(e.type, NodeStatus.CORRECTED) == "move"
 
-    def test_sourced_from_not_traversed_but_migrated(self):
+    def test_sourced_from_not_traversed_but_moved_by_a_correction(self):
         e = NodeEdge(src_id="a", dst_id="d", type=EdgeType.SOURCED_FROM)
-        assert traversal_excluded(e) and not migration_excluded(e)
+        assert traversal_excluded(e)
+        assert migration_disposition(e.type, NodeStatus.CORRECTED) == "move"
 
-    def test_tagged_with_traversed_and_migrated(self):
+    def test_tagged_with_traversed_and_moved_by_a_correction(self):
         e = NodeEdge(src_id="a", dst_id="t", type=EdgeType.TAGGED_WITH)
-        assert not traversal_excluded(e) and not migration_excluded(e)
+        assert not traversal_excluded(e)
+        assert migration_disposition(e.type, NodeStatus.CORRECTED) == "move"
 
-    def test_history_edge_neither(self):
+    def test_history_edge_neither_traversed_nor_migrated(self):
         e = NodeEdge(src_id="a", dst_id="b", type=EdgeType.SUPERSEDED_BY)
-        assert traversal_excluded(e) and migration_excluded(e)
+        assert traversal_excluded(e)
+        for status in (NodeStatus.CORRECTED, NodeStatus.HISTORICAL, NodeStatus.MERGED):
+            assert migration_disposition(e.type, status) == "keep"
+
+
+class TestWorldChangeMigrationPolicy:
+    """#54. The historical node keeps what it asserted; the replacement does not
+    inherit assertions it never made."""
+
+    def test_provenance_stays_with_the_claim_its_document_asserted(self):
+        assert migration_disposition(
+            EdgeType.SOURCED_FROM, NodeStatus.HISTORICAL
+        ) == "keep"
+
+    def test_a_judgment_about_the_old_claim_stays_on_it(self):
+        for edge_type in (
+            EdgeType.CONTRADICTION, EdgeType.VARIANT_OF, EdgeType.RELATED,
+            EdgeType.SUPPORTS, EdgeType.DERIVED_FROM,
+        ):
+            assert migration_disposition(edge_type, NodeStatus.HISTORICAL) == "keep"
+
+    def test_the_frame_and_the_tags_are_copied(self):
+        """A frame says which world, a tag says what about — neither asserts the
+        claim, and losing the frame would move a fiction claim into base
+        reality."""
+        for edge_type in (EdgeType.HAS_METACONTEXT, EdgeType.TAGGED_WITH):
+            assert migration_disposition(edge_type, NodeStatus.HISTORICAL) == "copy"
+
+    def test_a_world_change_moves_nothing(self):
+        assert moved_edge_types(NodeStatus.HISTORICAL) == frozenset()
+
+    def test_a_correction_and_a_merge_still_move_everything_but_bookkeeping(self):
+        for status in (NodeStatus.CORRECTED, NodeStatus.MERGED):
+            moved = moved_edge_types(status)
+            assert EdgeType.SOURCED_FROM in moved
+            assert EdgeType.HAS_METACONTEXT in moved
+            assert EdgeType.SUPERSEDED_BY not in moved
+            assert EdgeType.SUPERSESSION_CANDIDATE not in moved
+
+    def test_legacy_superseded_rows_behave_as_they_always_did(self):
+        """Nothing writes `SUPERSEDED` any more, but old graphs still load and
+        must not change meaning under a policy written after them."""
+        assert migration_disposition(
+            EdgeType.SOURCED_FROM, NodeStatus.SUPERSEDED
+        ) == "move"
 
     def test_topic_source_id_optional(self):
         assert Topic(content="BBC").source_id is None

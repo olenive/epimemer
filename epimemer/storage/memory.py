@@ -28,7 +28,7 @@ from epimemer.core.types import (
     Segment,
     Timeline,
     Topic,
-    migration_excluded,
+    migration_disposition,
 )
 from epimemer.storage.protocol import (
     EdgeDirection,
@@ -471,16 +471,24 @@ class InMemoryStorage:
 
     # --- Atomic compound operations ---
 
-    def _migrate_edges_inplace(self, old_ids: set[str], new_id: str) -> None:
-        """Re-point non-history edges touching old_ids onto new_id, in place.
+    def _migrate_edges_inplace(
+        self, old_ids: set[str], new_id: str, *, status: NodeStatus
+    ) -> None:
+        """Carry edges touching old_ids onto new_id, per `migration_disposition`.
+
+        `status` is why the old node is being retired, and it decides each
+        edge's fate: a correction (or a merge) re-points everything but history
+        and review, while a world-change re-points nothing and copies only the
+        frame and the tags (#54).
 
         Drops self-loops (where two merged sources were connected) and collapses
         duplicate (src, dst, type) edges, keeping one per group. The new node is
-        assumed to start with no edges, so dedup only tracks edges migrated here.
+        assumed to start with no edges, so dedup only tracks edges handled here.
         """
         seen_signatures: set[tuple[str, str, str]] = set()
         for edge in list(self._g.edges.values()):
-            if migration_excluded(edge):
+            disposition = migration_disposition(edge.type, status)
+            if disposition == "keep":
                 continue
             if edge.src_id not in old_ids and edge.dst_id not in old_ids:
                 continue
@@ -490,9 +498,22 @@ class InMemoryStorage:
                 continue
             signature = (new_src, new_dst, edge.type.value)
             if new_src == new_dst or signature in seen_signatures:
-                _drop_edge(self._g, edge.id)
+                # A copy that would collide simply is not made; a move has to
+                # drop the edge, since leaving it would strand it on a retired
+                # endpoint it no longer describes.
+                if disposition == "move":
+                    _drop_edge(self._g, edge.id)
                 continue
             seen_signatures.add(signature)
+            if disposition == "copy":
+                # Rebuilt rather than `model_copy`d so `id` and `created_at`
+                # come from their factories: this is a new edge made now, and
+                # inheriting the original's identity would overwrite it.
+                _put_edge(self._g, _store(NodeEdge(
+                    **(edge.model_dump(exclude={"id", "created_at"})
+                       | {"src_id": new_src, "dst_id": new_dst}),
+                )))
+                continue
             # Un-index against the old endpoints while they are still readable.
             _unindex_edge(self._g, edge)
             edge.src_id = new_src
@@ -521,7 +542,7 @@ class InMemoryStorage:
             node.superseded_at = superseded_at
             self._g.nodes[new_node.id] = _store(new_node)
             _put_embedding(self._g, _store(new_embedding))
-            self._migrate_edges_inplace({old_node.id}, new_node.id)
+            self._migrate_edges_inplace({old_node.id}, new_node.id, status=status)
             _put_edge(self._g, _store(lineage_edge))
             for edge in evidence_edges:
                 _put_edge(self._g, _store(edge))
@@ -592,7 +613,10 @@ class InMemoryStorage:
             self._g.nodes[merged_node.id] = _store(merged_node)
             _put_embedding(self._g, _store(merged_embedding))
             # Migrate before writing lineage edges so they are not re-pointed.
-            self._migrate_edges_inplace({s.id for s in source_nodes}, merged_node.id)
+            self._migrate_edges_inplace(
+                {s.id for s in source_nodes}, merged_node.id,
+                status=NodeStatus.MERGED,
+            )
             for source in source_nodes:
                 node = self._g.nodes.get(source.id)
                 if node is None:

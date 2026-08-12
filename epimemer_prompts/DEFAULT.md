@@ -92,17 +92,29 @@ each candidate:
 | Verdict | What it means | What to do |
 | --- | --- | --- |
 | redundant | the same claim restated | nothing (or rely on the existing node) |
-| supersedes | the new fact replaces an outdated one | `supersede_by(old_id, existing_id)`; or `update` if you have corrected *content* |
+| supersedes | the new fact replaces an outdated one | `supersede_by(old_id, existing_id, because=…)`; or `update` if you have corrected *content* |
 | contradicts | genuine conflict, **same frame**, unclear which holds | `record_contradiction(a, b)` |
 | cross-frame | only "conflicts" because the frames differ | `record_variant(a, b)` — not a conflict |
 | compatible | no conflict | nothing |
+
+**`because` is a judgment, and it has no safe default.** Retiring a node says
+*why*: `"it_was_wrong"` (it should not have been believed) or
+`"the_world_changed"` (it was right, and is still right of its period — a city
+renamed, a government replaced). They are opposite claims about the old node,
+and the wrong one either files history as an error or preserves a mistake as
+history. **If you cannot tell** — two undated claims, no knowledge of which came
+first — do not pick one. Use `record_contradiction(a, b)` and leave the pair
+contested for someone who can resolve it. A guessed `because` is
+indistinguishable afterwards from a judged one.
 
 **Record verdicts.**
 - `record_contradiction(a, b)` — both facts stay active and become `contested`;
   the response includes a `notify_user` signal.
 - `record_variant(a, b)` — records a cross-frame divergence so it stays queryable.
-- `supersede_by(old_id, existing_id)` — retire an outdated node in favour of one
-  already in the graph (dependent inferences are flagged `evidence_stale`).
+- `supersede_by(old_id, existing_id, because=…)` — retire an outdated node in
+  favour of one already in the graph (dependent inferences are flagged
+  `evidence_stale`). On `"the_world_changed"` the retired node keeps its own
+  sources: it is still true of its period, and its sources are what say so.
 
 **Human-in-the-loop.**
 - When `record_contradiction` returns `notify_user: true` (a same-frame

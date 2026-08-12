@@ -24,7 +24,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from epimemer.core.types import (
+    EdgeType,
     Fact,
+    NodeEdge,
     NodeStatus,
     SUPERSEDED_STATUSES,
     ValueSignal,
@@ -199,3 +201,143 @@ class TestLegacyGraphsStillLoad:
 
         assert node.status is NodeStatus.SUPERSEDED
         assert node.status in SUPERSEDED_STATUSES
+
+
+class TestWorldChangeKeepsTheHistoricalNodesEdges:
+    """A world-change migrates per edge type; a correction still moves everything.
+
+    The historical node is kept *because it is still true of its period*, and
+    what makes it true of a period is its own provenance — and, once #53 lands,
+    the validity intervals riding on those `sourced_from` edges. Moving them
+    onto the replacement leaves the historical node unable to say who asserted
+    it or when it held (#54).
+
+    Copying them is not the answer either: a `sourced_from` edge on the
+    replacement records the old claim's document asserting the *new* claim,
+    which is fabricated attribution. So provenance neither moves nor copies.
+
+    But "migrate nothing" is wrong in the other direction, and dangerously —
+    it drops `has_metacontext`, and a fiction-frame claim's replacement would
+    land in base reality. A frame says which world a claim belongs to and a tag
+    says what it is about; neither asserts the claim, so both are true of the
+    replacement too.
+    """
+
+    async def _world_change(self, storage, embedding_provider, old):
+        await tools.update(
+            node_id=old.id,
+            new_content="The city is called Saint Petersburg.",
+            because="the_world_changed",
+            storage=storage,
+            embedding_provider=embedding_provider,
+        )
+        edges = await storage.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)
+        return (await storage.get_node(edges[0].dst_id))
+
+    async def test_the_historical_node_keeps_its_source_and_the_replacement_does_not_gain_it(
+        self, storage, embedding_provider
+    ):
+        old = await _fact(storage, embedding_provider, "The city is called Leningrad.")
+        await storage.store_edge(NodeEdge(
+            src_id=old.id, dst_id="doc-1953", type=EdgeType.SOURCED_FROM,
+        ))
+
+        new = await self._world_change(storage, embedding_provider, old)
+
+        kept = await storage.get_edges_from(old.id, edge_type=EdgeType.SOURCED_FROM)
+        gained = await storage.get_edges_from(new.id, edge_type=EdgeType.SOURCED_FROM)
+        assert [e.dst_id for e in kept] == ["doc-1953"]
+        assert gained == [] or list(gained) == []
+
+    async def test_the_replacement_stays_in_the_frame_the_old_claim_was_in(
+        self, storage, embedding_provider
+    ):
+        """The assertion that fails under "migrate nothing".
+
+        CLAUDE.md's one hard rule is that fictional and factual information are
+        never mixed. A supersession that silently drops the frame breaks it
+        without anyone deciding to.
+        """
+        old = await _fact(storage, embedding_provider, "The city is called Leningrad.")
+        await storage.store_edge(NodeEdge(
+            src_id=old.id, dst_id="mc-fiction", type=EdgeType.HAS_METACONTEXT,
+        ))
+
+        new = await self._world_change(storage, embedding_provider, old)
+
+        frames = await storage.get_edges_from(new.id, edge_type=EdgeType.HAS_METACONTEXT)
+        assert [e.dst_id for e in frames] == ["mc-fiction"]
+
+    async def test_both_nodes_carry_the_tag(self, storage, embedding_provider):
+        """Topics are timeless, so the tag is true of both claims.
+
+        Without this the replacement is unreachable by topic traversal.
+        """
+        old = await _fact(storage, embedding_provider, "The city is called Leningrad.")
+        await storage.store_edge(NodeEdge(
+            src_id=old.id, dst_id="topic-cities", type=EdgeType.TAGGED_WITH,
+        ))
+
+        new = await self._world_change(storage, embedding_provider, old)
+
+        old_tags = await storage.get_edges_from(old.id, edge_type=EdgeType.TAGGED_WITH)
+        new_tags = await storage.get_edges_from(new.id, edge_type=EdgeType.TAGGED_WITH)
+        assert [e.dst_id for e in old_tags] == ["topic-cities"]
+        assert [e.dst_id for e in new_tags] == ["topic-cities"]
+
+    async def test_a_knowledge_edge_stays_with_the_claim_it_was_made_about(
+        self, storage, embedding_provider
+    ):
+        """A contradiction is a claim *about the old claim*. Re-pointing it
+        asserts it of a claim nobody assessed."""
+        old = await _fact(storage, embedding_provider, "The city is called Leningrad.")
+        other = await _fact(storage, embedding_provider, "The city is called Tsaritsyn.")
+        await storage.store_edge(NodeEdge(
+            src_id=old.id, dst_id=other.id, type=EdgeType.CONTRADICTION,
+        ))
+
+        new = await self._world_change(storage, embedding_provider, old)
+
+        assert len(await storage.get_edges_from(old.id, edge_type=EdgeType.CONTRADICTION)) == 1
+        assert len(await storage.get_edges_from(new.id, edge_type=EdgeType.CONTRADICTION)) == 0
+
+    async def test_a_correction_still_moves_everything(
+        self, storage, embedding_provider
+    ):
+        """Unchanged behaviour: the corrected node is an audit husk, and the
+        replacement is the *same claim*, corrected — so the sources it was
+        drawn from are genuinely its own."""
+        old = await _fact(storage, embedding_provider, "The capital is Bonn.")
+        for dst, edge_type in (
+            ("doc-1", EdgeType.SOURCED_FROM),
+            ("mc-fiction", EdgeType.HAS_METACONTEXT),
+            ("topic-capitals", EdgeType.TAGGED_WITH),
+        ):
+            await storage.store_edge(NodeEdge(src_id=old.id, dst_id=dst, type=edge_type))
+
+        await tools.update(
+            node_id=old.id, new_content="The capital is Berlin.",
+            because="it_was_wrong",
+            storage=storage, embedding_provider=embedding_provider,
+        )
+        lineage = await storage.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)
+        new_id = lineage[0].dst_id
+
+        for edge_type in (
+            EdgeType.SOURCED_FROM, EdgeType.HAS_METACONTEXT, EdgeType.TAGGED_WITH,
+        ):
+            assert len(await storage.get_edges_from(old.id, edge_type=edge_type)) == 0
+            assert len(await storage.get_edges_from(new_id, edge_type=edge_type)) == 1
+
+    async def test_history_edges_stay_version_anchored_in_both_cases(
+        self, storage, embedding_provider
+    ):
+        """The lineage edge points at the version it was written about. If it
+        migrated it would detach from the transition it records."""
+        old = await _fact(storage, embedding_provider, "The city is called Leningrad.")
+
+        new = await self._world_change(storage, embedding_provider, old)
+
+        lineage = await storage.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)
+        assert [e.dst_id for e in lineage] == [new.id]
+        assert len(await storage.get_edges_from(new.id, edge_type=EdgeType.SUPERSEDED_BY)) == 0

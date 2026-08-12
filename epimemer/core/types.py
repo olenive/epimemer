@@ -184,14 +184,58 @@ def traversal_excluded(edge: "NodeEdge") -> bool:
     return edge.type == EdgeType.RELATED and edge.kind == ATTRIBUTION_KIND
 
 
-def migration_excluded(edge: "NodeEdge") -> bool:
-    """True when an edge should NOT be carried onto a replacement on supersede/merge.
+# Edges a world-change carries onto the replacement rather than leaving behind.
+# A frame says *which world* a claim belongs to; a tag says what it is *about*.
+# Neither asserts the claim, so both are as true of the replacement as of its
+# predecessor — and dropping the frame would move a fiction-frame claim into
+# base reality, which is the one thing CLAUDE.md forbids outright.
+WORLD_CHANGE_COPIED_EDGE_TYPES: frozenset[EdgeType] = frozenset(
+    {EdgeType.HAS_METACONTEXT, EdgeType.TAGGED_WITH}
+)
 
-    Only history + review are excluded (they are anchored to a specific node
-    version). Provenance, tags, and relationships all migrate, so a corrected node
-    keeps its sources, tags, and relationships.
+# What happens to an edge when the node it touches is replaced.
+EdgeDisposition = Literal["move", "copy", "keep"]
+
+
+def migration_disposition(edge_type: EdgeType, status: NodeStatus) -> EdgeDisposition:
+    """What becomes of a `edge_type` edge when its node is retired as `status`.
+
+    `move` re-points it onto the replacement, `copy` leaves it and adds a second
+    edge on the replacement, `keep` leaves it alone.
+
+    **A correction moves everything** except history and review: the old node is
+    an audit husk that does not need sources, and the replacement is the *same
+    claim*, corrected, so what the claim was drawn from is genuinely its own.
+
+    **A world-change moves nothing** (#54). The historical node is kept because
+    it is still true of its period, and what makes it true of a period is its own
+    provenance — with, once #53 lands, the validity intervals riding on those
+    `sourced_from` edges. Moving them leaves it unable to say who asserted it or
+    when it held. Copying them is not the alternative: a `sourced_from` edge on
+    the replacement records the old claim's document asserting the *new* claim,
+    which is fabricated attribution. The same argument covers knowledge edges —
+    a contradiction or a variant is a judgment made *about the old claim*, and
+    re-pointing one asserts it of a claim nobody assessed.
+
+    Frames and tags are the exception, and copy: see
+    `WORLD_CHANGE_COPIED_EDGE_TYPES`.
     """
-    return edge.type in NON_KNOWLEDGE_EDGE_TYPES
+    if edge_type in NON_KNOWLEDGE_EDGE_TYPES:
+        return "keep"  # anchored to a specific node version
+    if status is NodeStatus.HISTORICAL:
+        return "copy" if edge_type in WORLD_CHANGE_COPIED_EDGE_TYPES else "keep"
+    return "move"
+
+
+def moved_edge_types(status: NodeStatus) -> frozenset[EdgeType]:
+    """The edge types a retirement re-points, for backends that filter by type.
+
+    Derived from `migration_disposition` rather than restated, so a backend
+    cannot answer this question differently from the rest of the system.
+    """
+    return frozenset(
+        t for t in EdgeType if migration_disposition(t, status) == "move"
+    )
 
 # Reserved id for the canonical base-reality frame ("The Real"). Matched by id,
 # never by content, so a fiction frame that internally mentions "reality" is

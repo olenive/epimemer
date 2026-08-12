@@ -1068,13 +1068,18 @@ async def update(
 ) -> tuple[dict, ResponseMeta]:
     """Update a node by creating a new version (supersession).
 
-    The replacement is embedded and inherits the original's edges so it remains
-    searchable and connected (see supersede_node).
+    The replacement is embedded so it remains searchable.
 
     `because` says which of two opposite things happened — `"it_was_wrong"` or
     `"the_world_changed"` — and has no default on purpose (#53). A claim that
     stopped being true was never an error, and recording it as one is how a
     graph forgets its own history.
+
+    It also decides which edges follow the replacement (#54). A correction
+    hands over everything but history and review: the old node is an audit husk
+    and the replacement is the same claim, corrected. A world-change hands over
+    the frame and the tags only — the retired node keeps its own provenance,
+    because it is still true of its period and its sources are what say so.
     """
     from epimemer.pipelines.graph_construction.versioning import supersede_node
 
@@ -1671,11 +1676,14 @@ async def apply_reflection(
         consolidation that retires nodes from the active graph, so the bar is
         high by design — use parents for merely related (not duplicate) topics.
         (Sources, tags, and entities are also Topics, so they consolidate here.)
-    supersessions: [{old_id: str, by_id: str}] — resolve a flagged/contested node
-        (from reflect's pending_review) by superseding ``old_id`` with an existing
-        node ``by_id``. Atomic: marks old superseded (lineage old → by), flags
-        inferences that depended on old as evidence_stale, and clears any
-        supersession candidacy on it. The winner is unchanged; no new node.
+    supersessions: [{old_id: str, by_id: str, because: str}] — resolve a
+        flagged/contested node (from reflect's pending_review) by superseding
+        ``old_id`` with an existing node ``by_id``. Atomic: marks old superseded
+        (lineage old → by), flags inferences that depended on old as
+        evidence_stale, and clears any supersession candidacy on it. The winner
+        is unchanged; no new node. ``because`` is required and is a judgment —
+        ``"it_was_wrong"`` or ``"the_world_changed"``; if you cannot tell which
+        happened, leave the pair contested rather than guessing (see `update`).
     archivals: [node_id] — archive the approved nodes from reflect's
         archival_candidates. Exports each node with its edges (returned as
         ``archive_data`` — keep it; that copy is the archive) and atomically
