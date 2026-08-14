@@ -772,6 +772,47 @@ And a 5,000-case run showed the outer repeat-until-stable loop was dead: the
 inner merge loop already converges. It was removed rather than kept as
 untestable insurance.
 
+### 12.12 Tick labels in the mark column (built 2026-08-13)
+
+The axis tick labels — `00:00`, `12:00` — were unreadable on a dense timeline,
+and the cause was paint order rather than contrast. SVG has no z-index, so the
+later sibling wins, and `renderAxis` ran before the marks: every label was
+painted over by the first mark that shared its time. On a graph of two hundred
+nodes the axis column is a solid stack, so they vanished entirely.
+
+Two changes, and neither is a colour change:
+
+1. **`renderAxis` returns its tick labels** in a group instead of appending
+   them, and the caller appends that group last.
+2. **Each label carries an opaque plate** — a pill, `rx` at half its height —
+   drawn from the same chrome colour the break marker uses.
+
+The plate is the same move the break marker had already made for the same
+reason: axis chrome that has to overwrite what is behind it. That colour was
+called `breakBackground`, which named its one caller rather than the idea, so
+it became **`surfaceChrome`** with three callers — break marker, tick plate,
+expanded card. Three separately tuned near-background greys is exactly the
+drift #56 was about.
+
+**What it costs.** The plate is opaque, so marks landing at a tick's exact time
+are hidden — ~34×12px at five to ten places. That is a real cost, since
+position on the axis means time, but the alternative does not fit: marks span
+`axisX ± 14.4` at their widest and the side-text columns start at
+`LABEL_INSET = 26`, leaving an 11px gutter for a 28px label. The plate is sized
+from `CHAR_WIDTH` with 3px of padding so it stays as small as legibility allows.
+
+**No bold.** Neither panel uses `font-weight` at all — hierarchy is carried by
+hue and opacity — and §13.3's rule is that chrome stays subordinate to data.
+Bolding the ticks would have made the axis furniture heavier than every data
+label on the panel. Dark-mode `tickLabel` went up one step instead
+(`#6b7280` → `#9ca3af`, gray-500 → gray-400), because gray-500 on the plate is
+only ~3.9:1. Light mode already sat at gray-600 and reads ~5.2:1 on its plate,
+so it was left alone.
+
+Guarded by three tests in `timeline-panel.test.ts` → *tick labels*: labels
+painted after every mark, a plate behind each one, and the plate filled from
+`surfaceChrome`.
+
 ---
 
 ## 13. Valid-time grammar (designed 2026-08-12 — not built)

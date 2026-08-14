@@ -45,8 +45,15 @@ export interface Palette {
   axis: string;
   tick: string;
   tickLabel: string;
-  /** Break marker: it paints over the baseline, so it matches the panel background. */
-  breakBackground: string;
+  /**
+   * Opaque chrome surface, for anything drawn that has to overwrite what is
+   * behind it: the break marker over the baseline, a tick label's plate over
+   * the mark column, an expanded card over its neighbours. One value, because
+   * three separately-tuned near-background greys would drift.
+   *
+   * Named for `--surface-chrome`, the token it becomes in VISUALISATION.md C.1.
+   */
+  surfaceChrome: string;
   breakSlash: string;
   breakLabel: string;
   /** The reference-time rule and its label — chrome, so deliberately neutral. */
@@ -68,8 +75,10 @@ const DARK: Palette = {
   nodeBorder: "#1f2937",
   axis: "#374151",
   tick: "#4b5563",
-  tickLabel: "#6b7280",
-  breakBackground: "#111827",
+  // A step brighter than `tick`: the label sits on a plate in the mark column,
+  // and gray-500 on gray-900 is only ~3.9:1.
+  tickLabel: "#9ca3af",
+  surfaceChrome: "#111827",
   breakSlash: "#6b7280",
   breakLabel: "#9ca3af",
   referenceLine: "#6b7280",
@@ -90,7 +99,7 @@ const LIGHT: Palette = {
   axis: "#6b7280",
   tick: "#6b7280",
   tickLabel: "#4b5563",
-  breakBackground: "#d1d5db",
+  surfaceChrome: "#d1d5db",
   breakSlash: "#4b5563",
   breakLabel: "#374151",
   referenceLine: "#4b5563",

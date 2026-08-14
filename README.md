@@ -67,15 +67,38 @@ For persistent storage across sessions, run SurrealDB in a container via [Colima
 ### Start SurrealDB
 
 ```bash
-# Start the container runtime (1GB is plenty for SurrealDB)
-colima start --memory 1
+./scripts/start_local_surrealdb.sh
+```
 
-# Run SurrealDB
-docker run -d --name surrealdb -p 8000:8000 \
-  surrealdb/surrealdb:latest start --user root --pass root
+That script is how this project starts SurrealDB, and it is the only copy of
+those flags worth keeping. It starts Colima if it is not running, creates the
+container on-disk if it does not exist, waits for the health endpoint, and
+registers the MCP server with Claude Code. Safe to re-run.
+
+**The storage path is the whole difference between persistent and not.**
+`surreal start` takes an optional `[PATH]`, and its default is `memory` — so a
+container started without one keeps the entire graph in RAM and loses it on
+restart, with no error and no warning. Everything here that starts SurrealDB
+for real passes an explicit `rocksdb:` path.
+
+If you already have a container from an older version of these instructions,
+check it:
+
+```bash
+docker inspect surrealdb --format '{{json .Config.Cmd}}'
+```
+
+The output must contain `rocksdb:`. If it reads only `["start","--user",
+"root","--pass","root"]` the container is in-memory, and anything stored in it
+is already gone on the next restart. To migrate:
+
+```bash
+docker rm -f surrealdb && ./scripts/start_local_surrealdb.sh
 ```
 
 ### Register Epimemer with SurrealDB
+
+The script does this. To do it by hand:
 
 ```bash
 claude mcp add epimemer \
@@ -91,23 +114,32 @@ claude mcp add epimemer \
 # Stop colima when not needed (frees RAM)
 colima stop
 
-# Restart later — the SurrealDB container and its data persist
+# Restart later. The data lives in the `surreal-data` volume rather than in
+# the container, so it survives both of these.
 colima start --memory 1
 docker start surrealdb
 ```
 
 ### SurrealDB without Colima
 
-If you have Docker Desktop or a native SurrealDB install:
+If you have Docker Desktop or a native SurrealDB install, the script does not
+apply and you start it yourself. Note the explicit storage path in both — it is
+what the script exists to get right:
 
 ```bash
-# Native install
-surreal start --user root --pass root file:epimemer.db
+# Native install — on disk, relative to the working directory
+surreal start --user root --pass root rocksdb:epimemer.db
 
-# Or Docker Desktop
+# Or Docker Desktop — on disk, in a named volume that outlives the container.
+# -u 0:0 because the image's non-root user cannot write the volume mount.
 docker run -d --name surrealdb -p 8000:8000 \
-  surrealdb/surrealdb:latest start --user root --pass root
+  --restart unless-stopped -u 0:0 \
+  -v surreal-data:/data \
+  surrealdb/surrealdb:latest \
+  start --user root --pass root rocksdb:/data/epimemer.db
 ```
+
+Then register the MCP server as above.
 
 ## Configuration
 
@@ -120,7 +152,7 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_SURREALDB_USER` | `root` | SurrealDB username |
 | `EPIMEMER_SURREALDB_PASS` | `root` | SurrealDB password |
 | `EPIMEMER_SURREALDB_NAMESPACE` | `epimemer` | SurrealDB namespace |
-| `EPIMEMER_SURREALDB_DATABASE` | `memory` | SurrealDB database name |
+| `EPIMEMER_SURREALDB_DATABASE` | `memory` | SurrealDB database name — one database per graph. This is a *name*, not a storage mode: the default is spelled `memory` but says nothing about where data lives. Whether storage is in-memory is decided by `EPIMEMER_STORAGE_BACKEND` here and by the `[PATH]` argument on the server |
 | `EPIMEMER_GRAPH` | (empty) | Override database name for multi-graph |
 | `EPIMEMER_EMBEDDING_PROVIDER` | `sentence-transformers` | `sentence-transformers` or `mock` |
 | `EPIMEMER_EMBEDDING_MODEL_ID` | `all-MiniLM-L6-v2` | Embedding model name |

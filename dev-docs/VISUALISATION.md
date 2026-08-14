@@ -626,7 +626,8 @@ would be 22 controls that mostly move together, which is a worse UI than the
 thing it replaces.
 
 **The drawn surfaces then derive from the same tokens.** `palette.nodeLabel` is
-`--text-primary`; `palette.breakBackground` is `--surface-chrome`;
+`--text-primary`; `palette.surfaceChrome` is `--surface-chrome` (already named
+for its token, and already shared by three drawn surfaces);
 `palette.axis` and `palette.tick` are `--border` and `--text-muted`. That is a
 real simplification independent of the picker — those values are currently
 duplicated between `theme.ts` and the markup, and have already drifted once (the

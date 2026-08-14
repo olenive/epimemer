@@ -78,6 +78,10 @@ const LABEL_HEIGHT = 15;
 const BLOCK_HEIGHT = 22;
 /** Rough width of a character at the label font size, for budgeting text. */
 const CHAR_WIDTH = 5.6;
+/** How far above its tick a label sits, and the plate that backs it. */
+const TICK_LABEL_OFFSET = 5;
+const TICK_PLATE_HEIGHT = 12;
+const TICK_PLATE_PADDING = 3;
 /** How many lines a selected mark's card may run to. */
 const CARD_LINES = 5;
 const CARD_LINE_HEIGHT = 12;
@@ -431,12 +435,22 @@ export const initTimelinePanel = (
     group.appendChild(shape);
   };
 
+  /**
+   * The axis line, its ticks and its breaks.
+   *
+   * Returns the tick labels in a group of their own rather than appending them,
+   * because SVG has no z-index and every mark is drawn in this same column: a
+   * label appended here is painted over by the first mark that shares its time.
+   * The caller appends the returned group last. Each label carries a plate for
+   * the same reason the break marker does — it has to overwrite the marks it
+   * lands on to stay readable.
+   */
   const renderAxis = (
     group: SVGGElement,
     scale: Scale,
     axisX: number,
     height: number,
-  ): void => {
+  ): SVGGElement => {
     const palette = currentPalette();
     group.appendChild(
       svg("line", {
@@ -450,6 +464,7 @@ export const initTimelinePanel = (
     );
 
     const visibleSpan = scale.domain.t1 - scale.domain.t0;
+    const tickLabels = svg("g", {});
     for (const segment of scale.segments) {
       for (const tick of ticksForSegment(segment)) {
         const y = timeToPos(scale, tick);
@@ -463,15 +478,34 @@ export const initTimelinePanel = (
             "stroke-width": 1,
           }),
         );
+        const text = formatTick(tick, visibleSpan);
+        // Sized off the same character budget the side labels use, and kept as
+        // tight as legibility allows: the plate is opaque, so every pixel of it
+        // is a mark the reader cannot see.
+        const plateWidth = text.length * CHAR_WIDTH + TICK_PLATE_PADDING * 2;
+        tickLabels.appendChild(
+          svg("rect", {
+            class: "tick-plate",
+            x: axisX - plateWidth / 2,
+            y: y - TICK_LABEL_OFFSET - TICK_PLATE_HEIGHT + 3,
+            width: plateWidth,
+            height: TICK_PLATE_HEIGHT,
+            // Fully round ends at this height, so it reads as a pill rather
+            // than a box cut out of the column.
+            rx: TICK_PLATE_HEIGHT / 2,
+            fill: palette.surfaceChrome,
+          }),
+        );
         const label = svg("text", {
+          class: "tick-label",
           x: axisX,
-          y: y - 5,
+          y: y - TICK_LABEL_OFFSET,
           fill: palette.tickLabel,
           "font-size": 9,
           "text-anchor": "middle",
         });
-        label.textContent = formatTick(tick, visibleSpan);
-        group.appendChild(label);
+        label.textContent = text;
+        tickLabels.appendChild(label);
       }
     }
 
@@ -482,7 +516,7 @@ export const initTimelinePanel = (
           y: brk.p0,
           width: 20,
           height: BREAK_PX,
-          fill: palette.breakBackground,
+          fill: palette.surfaceChrome,
         }),
       );
       // Two slashes, the conventional mark for a collapsed axis.
@@ -507,6 +541,8 @@ export const initTimelinePanel = (
       label.textContent = formatSpan(brk.gap.t1 - brk.gap.t0);
       group.appendChild(label);
     }
+
+    return tickLabels;
   };
 
   /**
@@ -684,7 +720,7 @@ export const initTimelinePanel = (
       width: cardWidth,
       height: label.height,
       rx: 3,
-      fill: palette.breakBackground,
+      fill: palette.surfaceChrome,
       stroke: selectedMarkColor(currentTheme()),
       "stroke-width": 1,
       "stroke-opacity": 0.7,
@@ -855,10 +891,12 @@ export const initTimelinePanel = (
     const group = svg("g", { transform: `translate(0, ${AXIS_PADDING})` });
     const axisX = Math.round(width / 2);
 
-    renderAxis(group, scale, axisX, usable);
+    const tickLabels = renderAxis(group, scale, axisX, usable);
     renderReferenceRule(group, scale, width, referenceTime());
     for (const mark of filtered.dated) renderMark(group, scale, mark, axisX);
     const hidden = renderLabels(group, scale, filtered.dated, axisX, width, usable);
+    // Last, so the marks sharing the axis column cannot bury them.
+    group.appendChild(tickLabels);
 
     if (hidden > 0) {
       const note = svg("text", {

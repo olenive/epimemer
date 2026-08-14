@@ -54,7 +54,7 @@ describe("paletteFor", () => {
     const light = paletteFor("light");
     // The break marker paints over the baseline, so a shared value would leave
     // a dark rectangle sitting on a white page.
-    expect(dark.breakBackground).not.toBe(light.breakBackground);
+    expect(dark.surfaceChrome).not.toBe(light.surfaceChrome);
     expect(dark.nodeLabel).not.toBe(light.nodeLabel);
     expect(dark.axis).not.toBe(light.axis);
   });

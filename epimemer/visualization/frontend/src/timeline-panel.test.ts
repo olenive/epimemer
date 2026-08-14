@@ -357,6 +357,67 @@ describe("theming", () => {
   });
 });
 
+describe("tick labels", () => {
+  // The axis column is where every mark is drawn, so a tick label sharing that
+  // column is competing with data for the same pixels. Two things keep it
+  // readable: it is painted last, and it carries its own background.
+  const spanning = {
+    nodes: [
+      node({ node_id: "n1", created_at: "2024-01-01T00:00:00Z" }),
+      node({ node_id: "n2", created_at: "2024-06-01T00:00:00Z" }),
+    ],
+    edges: [],
+  };
+
+  /** Every element under the body, in document order — which is paint order. */
+  const painted = (): Element[] => [...el("body").querySelectorAll("*")];
+
+  const ticks = (): SVGElement[] => [
+    ...document.querySelectorAll<SVGElement>("#body text.tick-label"),
+  ];
+
+  it("paints tick labels after every mark, so the axis column cannot bury them", () => {
+    panel.loadSnapshot(spanning);
+    const order = painted();
+
+    const lastMark = Math.max(...marks().map((m) => order.indexOf(m)));
+    const firstTick = Math.min(...ticks().map((t) => order.indexOf(t)));
+
+    expect(ticks().length).toBeGreaterThan(0);
+    expect(firstTick).toBeGreaterThan(lastMark);
+  });
+
+  it("backs each tick label with a plate wide enough to sit behind it", () => {
+    panel.loadSnapshot(spanning);
+    const order = painted();
+    const plates = [...document.querySelectorAll<SVGElement>("#body rect.tick-plate")];
+
+    expect(plates).toHaveLength(ticks().length);
+    for (const tick of ticks()) {
+      const centre = Number(tick.getAttribute("x"));
+      const text = tick.textContent ?? "";
+      const plate = plates.find(
+        (p) =>
+          Number(p.getAttribute("x")) < centre &&
+          Number(p.getAttribute("x")) + Number(p.getAttribute("width")) > centre,
+      );
+      expect(plate, `no plate behind ${text}`).toBeDefined();
+      // Behind, not over: the plate has to be the earlier sibling.
+      expect(order.indexOf(plate as Element)).toBeLessThan(order.indexOf(tick));
+      expect(Number(plate?.getAttribute("width"))).toBeGreaterThan(text.length * 5.6);
+    }
+  });
+
+  it("fills the plate from the same chrome colour the break marker uses", () => {
+    // One value, two users. Two would drift.
+    panel.loadSnapshot(spanning);
+    const plate = document.querySelector("#body rect.tick-plate");
+    expect(plate).not.toBeNull();
+    expect(paletteFor("light").surfaceChrome).toBeTypeOf("string");
+    expect(plate?.getAttribute("fill")).toBe(paletteFor("light").surfaceChrome);
+  });
+});
+
 describe("filtering", () => {
   it("narrows by linked node type", () => {
     panel.loadSnapshot({
