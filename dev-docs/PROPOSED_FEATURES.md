@@ -23,6 +23,89 @@ reduced here to a pointer.
 
 ## Ready to build
 
+### Retrieval provenance — designed, not built
+
+**What.** A focus mode that desaturates everything the last retrieval did *not*
+return — in both panels, with the dimmed nodes still clickable — plus the
+response text the agent received, reachable from a list of recent retrievals.
+
+**Fully designed already** — `RETRIEVAL_PROVENANCE.md`. Read that rather than
+this paragraph.
+
+**Why.** The dashboard shows what is in the graph. It cannot show what the agent
+was given, which is the question you have when a search disappoints. The
+non-returned nodes stay on screen because half the value is seeing what was
+*missed*.
+
+**Cost.** One recording site (`_run_with_timeout` covers all six node-returning
+tools), a bounded ring plus an RPC, and two panels learning one appearance rule.
+Six commits; the first three change nothing a user sees.
+
+**Blockers.** None, but two ordering constraints: `LEXICAL_SEARCH.md` should
+land first (it turns the provenance enum from two values into four), and the
+bounded-ring module is shared with the event log, which is the simpler consumer
+and validates it.
+
+---
+
+### Event log — designed, not built
+
+**What.** A filterable log panel of what the agent changed, whose entries
+highlight their nodes in the graph on click.
+
+**Fully designed already** — `EVENT_LOG.md`. Read that rather than this
+paragraph.
+
+**Why.** Supersession is a destructive-looking act performed invisibly: a belief
+the graph held becomes historical, the agent decided it, and nothing shows. This
+is the queued feature with the clearest epistemic justification.
+
+**It starts with a defect.** `NodeStatusChanged` does not name the superseding
+node, and neither does `query_changes` — "superseded by whom" exists nowhere but
+the `SUPERSEDED_BY` edge. That fix is `ISSUES.md` material and lands first,
+alone.
+
+**Cost.** A coarse per-transaction event, a bounded ring in the hub, a panel.
+Six commits; the first three change nothing a user sees. No storage work, and
+the filtering is client-side — deliberately not BM25, for the reason in
+`EVENT_LOG.md` §5.
+
+**Blockers.** None. Shares its bounded-ring module with retrieval provenance
+(`RETRIEVAL_PROVENANCE.md`), which is the argument for building this one
+first — it is the simpler consumer and it validates the ring.
+
+---
+
+### Lexical search — designed, not built
+
+**What.** BM25 keyword retrieval over nodes *and* segments, fused into `search`
+alongside the existing vector path by Reciprocal Rank Fusion.
+
+**Fully designed already** — `LEXICAL_SEARCH.md`, including the SurrealDB 3.0
+syntax and BM25 scoring behaviour verified against the running engine. Read that
+rather than this paragraph.
+
+**Why.** `search` is vector-only, and sentence embeddings cannot find an
+arbitrary identifier: `JIRA-4417` and `JIRA-4418` embed to nearly the same
+point. There is no substring or token match anywhere in the storage protocol, so
+a node reachable only by a rare token is unreachable. Indexing segments as well
+as nodes covers the case where extraction paraphrased the identifier away
+before it ever reached a node.
+
+**Cost.** One new protocol method on both backends (SurrealDB uses native FTS;
+the memory backend needs BM25 in Python), a second for the segment→node bridge,
+a new transition and a fusion step in the query net. Six commits, each green
+alone; the first four change nothing agent-visible.
+
+**Sequencing.** Should land *before* retrieval provenance
+(`RETRIEVAL_PROVENANCE.md`). That feature's record distinguishes two seed
+tiers today and four once lexical exists; designing it as a boolean first
+means rebuilding it after.
+
+**Blockers.** None.
+
+---
+
 ### Colour customisation — designed, not built
 
 **What.** A dropdown of colour pickers for the parts of the dashboard the user
@@ -81,6 +164,12 @@ coherent when constraints conflict.
 three types or one type with a mode. The current `Timepoint` already spans
 concrete, interval, and label-only, so the case for three separate models is not
 obvious and should be argued before any of it is built.
+
+One constraint already decided ahead of it (2026-08-17, recorded in
+`ISSUES.md` #53 T2): recurrence-rule facts — "Christmas is Dec 24–26,
+annually" — are `CyclicalTimeline`'s case and **never route through
+supersession or restore**; they never stop being true, so they have no
+lifecycle, and their occurrences are separate event facts.
 
 ---
 

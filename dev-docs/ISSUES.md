@@ -2,9 +2,9 @@
 
 Living issue tracker. **Last review: 2026-08-12.**
 
-Open: **16**, **46**, **48**, **51**, **52**, **53**. Resolved and awaiting
-deletion once merged: **54**, **55**, **56**. New findings continue from
-**57**.
+Open: **16**, **46**, **48**, **51**, **52**, **53**, **57**. Resolved and
+awaiting deletion once merged: **54**, **55**, **56**. New findings continue
+from **58**.
 
 **#53 is the most important thing in this file.** *Facts have no validity
 interval, so the graph cannot say when a claim was true.* Saint Petersburg was
@@ -1455,6 +1455,27 @@ intervals and the `temporally_followed_by` record are untouched, so the node
 ends holding several disjoint intervals — the shape
 `TIMELINE_VISUALISATION.md` §13.1 draws as beads on a spine.
 
+**Added constraint (2026-08-17, from the `EVENT_LOG.md` review) — restoration
+must not overwrite lifecycle history.** `query_changes` derives its events
+from `(superseded_at, status)`, and that pair cannot represent *retired, then
+came back* — clearing the timestamp erases the retirement; keeping it makes
+the derived kind read `"active"` at retirement time. Since cycles are legal
+here, the fix is an **append-only lifecycle episode list** on the node
+(`{retired_at, because, restored_at | None}` per episode, current-state
+fields kept as a snapshot), and the widened `restore` appends an episode
+rather than mutating one. Details and the named test: `EVENT_LOG.md` §6. The
+#57 counterpart id rides on the episode.
+
+**And a category guard: cyclical facts never route through this machinery at
+all.** "The Christmas holiday period" is a recurrence *rule* — it never stops
+being true, so it never retires, never restores, and enumerating its
+occurrences as validity intervals is the wrong representation even though T1's
+lists could hold them. That is the `CyclicalTimeline` case
+(`PROPOSED_FEATURES.md` → *Specialized timelines*). An agent marking such a
+fact `HISTORICAL` in January is making a category error; individual
+occurrences ("Christmas 2025 in Berlin") are *event* facts, which per #52's
+amendment are never interval-unioned into the rule.
+
 ##### What T2 unblocks
 
 **#54's shape is settled and it is no longer blocked.** A world-change goes
@@ -1962,6 +1983,42 @@ knowing that this fix *removed* a collision there — pipeline-completed green w
 exactly the old fact green, and pipeline-active amber exactly the old inference
 amber. Pipeline-completed `#22c55e` is now merely adjacent to topic `#1baf7a`,
 in a different panel.
+
+---
+
+### Issue 57 — supersession events never name the superseding node — ▶ ACTIONABLE
+
+Filed 2026-08-17, from the `EVENT_LOG.md` review. "Node 123 was superseded by
+node 124" cannot be rendered from anything the system emits, on either surface:
+
+- **Live:** `NodeStatusChanged` carries `node_id` / `old_status` /
+  `new_status` only (`visualization/events.py:215-221`). The relation arrives
+  as a separate `EdgeStored` a moment later
+  (`visualization/instrumented_storage.py:234-243`), joinable only by stream
+  adjacency — which breaks the moment anything interleaves.
+- **Durable:** `events_in_window` emits kind + timestamp with no counterpart
+  (`mcp/tools.py:764-782`), so `query_changes` reports *that* a node retired
+  but not *by whom*.
+
+"Superseded by whom" exists nowhere but the edge itself — not in the live
+event, not in `query_changes`, not in any tool response.
+
+**Fix — designed in `EVENT_LOG.md` §2, not duplicated here:** carry the
+counterpart id on both surfaces. Both already hold it: `supersede_node_tx` is
+handed `old_node`, `new_node` and `lineage_edge` together, and `query_changes`
+can join the edge it already reads. Per the §3.1 vocabulary decision
+(2026-08-17), the counterpart lands *alongside the status-split kinds*: the
+event says "corrected by 124" / "followed by 124", never a bare id with a
+flattened `superseded`.
+
+Independent of every open decision and of whether the log panel is ever built
+— this is a defect in the event contract, landable today, and `EVENT_LOG.md`
+§9 orders it first for that reason.
+
+**Failing tests, written first** (named in `EVENT_LOG.md` §8):
+
+- `test_node_status_changed_names_the_superseding_node` — live surface.
+- `test_query_changes_names_the_superseding_node` — durable surface.
 
 ---
 
