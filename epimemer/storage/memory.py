@@ -29,6 +29,8 @@ from epimemer.core.types import (
     Timeline,
     Topic,
     migration_disposition,
+    with_retirement,
+    with_return,
 )
 from epimemer.storage.protocol import (
     EdgeDirection,
@@ -385,7 +387,14 @@ class InMemoryStorage:
                 node.superseded_at is not None
                 and start <= node.superseded_at < end
             )
-            if born or retired:
+            # An earlier episode's retirement, or a return, is not visible in
+            # the scalar pair — see the protocol docstring.
+            in_episode = any(
+                start <= ep.retired_at < end
+                or (ep.restored_at is not None and start <= ep.restored_at < end)
+                for ep in node.lifecycle
+            )
+            if born or retired or in_episode:
                 results.append(node)
         return _copy_all(results)
 
@@ -540,6 +549,10 @@ class InMemoryStorage:
                 raise KeyError(f"Node {old_node.id} not found")
             node.status = status
             node.superseded_at = superseded_at
+            node.lifecycle = with_retirement(
+                node.lifecycle, at=superseded_at, because=status,
+                counterpart=new_node.id,
+            )
             self._g.nodes[new_node.id] = _store(new_node)
             _put_embedding(self._g, _store(new_embedding))
             self._migrate_edges_inplace({old_node.id}, new_node.id, status=status)
@@ -570,6 +583,10 @@ class InMemoryStorage:
                 raise KeyError(f"Node {old_node.id} not found")
             node.status = status
             node.superseded_at = superseded_at
+            node.lifecycle = with_retirement(
+                node.lifecycle, at=superseded_at, because=status,
+                counterpart=existing_id,
+            )
             # No new node, no embedding, no migration — the existing node stands.
             _put_edge(self._g, _store(lineage_edge))
             for edge in evidence_edges:
@@ -585,8 +602,9 @@ class InMemoryStorage:
         nodes: Sequence[EpistemicNode],
         *,
         status: NodeStatus,
-        retired_at: datetime | None,
+        at: datetime,
     ) -> None:
+        returning = status is NodeStatus.ACTIVE
         snapshot = copy.deepcopy(self._g)
         try:
             for node in nodes:
@@ -594,7 +612,11 @@ class InMemoryStorage:
                 if stored is None:
                     raise KeyError(f"Node {node.id} not found")
                 stored.status = status
-                stored.superseded_at = retired_at
+                stored.superseded_at = None if returning else at
+                stored.lifecycle = (
+                    with_return(stored.lifecycle, at=at) if returning
+                    else with_retirement(stored.lifecycle, at=at, because=status)
+                )
         except Exception:
             self._graphs[self._database] = snapshot
             raise
@@ -623,6 +645,10 @@ class InMemoryStorage:
                     raise KeyError(f"Node {source.id} not found")
                 node.status = NodeStatus.MERGED
                 node.superseded_at = merged_at
+                node.lifecycle = with_retirement(
+                    node.lifecycle, at=merged_at, because=NodeStatus.MERGED,
+                    counterpart=merged_node.id,
+                )
             for edge in lineage_edges:
                 _put_edge(self._g, _store(edge))
         except Exception:

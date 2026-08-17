@@ -970,6 +970,11 @@ async def memory_query_changes(
     metacontext/review labels. Distinct from `as_of`, which snapshots state at a
     single instant; this reports the *deltas* across a span.
 
+    Each event carries a `kind` — created, corrected, historical, merged,
+    archived, restored — and, where something replaced the node, the
+    `counterpart` id that did. A node that retired, came back and retired again
+    reports all three events, not only the last.
+
     Specify windows one of three ways (precedence in this order):
       - windows: explicit [[startISO, endISO], ...]; a missing/empty end means now.
       - last_hours / last_days: a single trailing window ending now.

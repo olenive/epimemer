@@ -958,7 +958,7 @@ async def test_archived_evidence_strands_its_inference():
     assert "inference-stranded" not in before
 
     await storage.set_node_status_tx(
-        [evidence], status=NodeStatus.ARCHIVED, retired_at=now
+        [evidence], status=NodeStatus.ARCHIVED, at=now
     )
 
     after = await nominate_archival_candidates(storage)
@@ -986,7 +986,7 @@ async def test_partly_archived_evidence_does_not_strand_an_inference():
         ))
 
     await storage.set_node_status_tx(
-        [swept], status=NodeStatus.ARCHIVED, retired_at=datetime.now(timezone.utc)
+        [swept], status=NodeStatus.ARCHIVED, at=datetime.now(timezone.utc)
     )
 
     nominated = {c.node_id for c in await nominate_archival_candidates(storage)}

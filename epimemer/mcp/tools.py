@@ -766,20 +766,44 @@ def events_in_window(
 ) -> list[NodeChangeEvent]:
     """Lifecycle events on a node that fall in the half-open window [start, end).
 
-    Emits `created` when the node was born in the window and `superseded`/`merged`
-    (mirroring the node's terminal status) when it was retired in the window. A
-    node both born and retired inside one window yields two events.
+    Emits `created` when the node was born in the window, and one event per
+    lifecycle episode boundary that falls inside it: the status the retirement
+    gave the node — retiring as `historical` and retiring as `corrected` are
+    different things to report (#53) — with the counterpart that caused it, and
+    `restored` where the node came back.
+
+    The episodes are read rather than `(status, superseded_at)` because that
+    pair holds only the *latest* transition: a node that retired, returned and
+    retired again has three events and one `superseded_at`.
     """
     events: list[NodeChangeEvent] = []
     if start <= node.created_at < end:
         events.append(NodeChangeEvent(kind="created", at=node.created_at))
-    if node.superseded_at is not None and start <= node.superseded_at < end:
-        # The terminal status *is* the event: retiring as `historical` and
-        # retiring as `corrected` are different things to report (#53).
+
+    for episode in node.lifecycle:
+        if start <= episode.retired_at < end:
+            events.append(NodeChangeEvent(
+                kind=episode.because.value,
+                at=episode.retired_at,
+                counterpart=episode.counterpart,
+            ))
+        if episode.restored_at is not None and start <= episode.restored_at < end:
+            events.append(NodeChangeEvent(kind="restored", at=episode.restored_at))
+
+    # A retirement no episode records: a graph written before episodes existed,
+    # or a bare `update_node_status`. Reported without a counterpart rather than
+    # dropped — old graphs are not repaired, but they are still readable.
+    if (
+        node.superseded_at is not None
+        and node.status is not NodeStatus.ACTIVE
+        and all(ep.retired_at != node.superseded_at for ep in node.lifecycle)
+        and start <= node.superseded_at < end
+    ):
         events.append(
             NodeChangeEvent(kind=node.status.value, at=node.superseded_at)
         )
-    return events
+
+    return sorted(events, key=lambda event: event.at)
 
 
 async def as_of(
@@ -1873,7 +1897,7 @@ async def apply_reflection(
         await storage.set_node_status_tx(
             to_archive,
             status=NodeStatus.ARCHIVED,
-            retired_at=datetime.now(timezone.utc),
+            at=datetime.now(timezone.utc),
         )
 
     # 7. Re-judge importance. Separate from archivals on purpose: archiving is a
@@ -2056,7 +2080,7 @@ async def restore(
     await storage.write_batch_tx(nodes=missing, edges=missing_edges)
     if archived:
         await storage.set_node_status_tx(
-            archived, status=NodeStatus.ACTIVE, retired_at=None
+            archived, status=NodeStatus.ACTIVE, at=datetime.now(timezone.utc)
         )
 
     result = {

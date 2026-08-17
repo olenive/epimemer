@@ -4,13 +4,22 @@ import pytest
 
 from datetime import datetime, timezone
 
-from epimemer.core.types import NodeStatus, Timeline, Topic
+from epimemer.core.types import (
+    EdgeType,
+    EmbeddingRecord,
+    Fact,
+    NodeEdge,
+    NodeStatus,
+    Timeline,
+    Topic,
+)
 from epimemer.pipelines.timeline.functions import add_timepoint
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization import instrumented_storage as instrumented_storage_mod
 from epimemer.visualization.event_bus import create_event_bus
 from epimemer.visualization.events import (
     GraphSwitched,
+    NodeStatusChanged,
     NodeStored,
     TimelineStored,
     node_to_view,
@@ -94,6 +103,90 @@ class TestTagTopicEmission:
         await wrapped.write_batch_tx(nodes=[node])   # must not raise
 
         assert await wrapped.get_node(node.id) is not None       # still committed
+
+
+class TestSupersessionCounterpart:
+    """#57: a retirement event has to say *by whom*.
+
+    The relation also arrives as an `EdgeStored` a moment later, so a consumer
+    could in principle join the two by their adjacency in the stream. That join
+    breaks as soon as anything interleaves, which is why the id belongs on the
+    event that reports the retirement.
+    """
+
+    async def _superseded(self, bus, *, status):
+        inner = InMemoryStorage()
+        wrapped = instrument_storage(inner, bus)
+        received: list[NodeStatusChanged] = []
+        bus.subscribe(NodeStatusChanged, handler=lambda e: received.append(e))
+
+        old = Fact(content="Leningrad is the city's name", source_id="s1")
+        new = Fact(content="Saint Petersburg is the city's name", source_id="s1")
+        await wrapped.store_node(old)
+        await wrapped.supersede_node_tx(
+            old, new,
+            EmbeddingRecord(item_id=new.id, model_id="test", vector=[1.0, 0.0]),
+            NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY),
+            status=status,
+            superseded_at=datetime.now(timezone.utc),
+        )
+        return old, new, received
+
+    async def test_node_status_changed_names_the_superseding_node(self, bus):
+        old, new, received = await self._superseded(bus, status=NodeStatus.CORRECTED)
+
+        assert [e.node_id for e in received] == [old.id]
+        assert received[0].counterpart == new.id
+
+    async def test_world_change_names_the_node_that_followed_it(self, bus):
+        """A world-change and a correction are opposite acts (#53) and both need
+        the counterpart — the status says which act it was, the id says with what."""
+        old, new, received = await self._superseded(bus, status=NodeStatus.HISTORICAL)
+
+        assert received[0].new_status == NodeStatus.HISTORICAL.value
+        assert received[0].counterpart == new.id
+
+    async def test_supersede_by_existing_names_the_existing_node(self, bus):
+        inner = InMemoryStorage()
+        wrapped = instrument_storage(inner, bus)
+        received: list[NodeStatusChanged] = []
+        bus.subscribe(NodeStatusChanged, handler=lambda e: received.append(e))
+
+        old = Fact(content="the earlier claim", source_id="s1")
+        winner = Fact(content="the claim that stands", source_id="s1")
+        await wrapped.store_node(old)
+        await wrapped.store_node(winner)
+        await wrapped.supersede_by_existing_tx(
+            old, winner.id,
+            NodeEdge(src_id=old.id, dst_id=winner.id, type=EdgeType.SUPERSEDED_BY),
+            status=NodeStatus.CORRECTED,
+            superseded_at=datetime.now(timezone.utc),
+        )
+
+        assert [e.counterpart for e in received] == [winner.id]
+
+    async def test_merge_names_the_target_every_source_went_into(self, bus):
+        """Same defect, same shape: without the id, "merged" says a node left the
+        active set and not where its content ended up."""
+        inner = InMemoryStorage()
+        wrapped = instrument_storage(inner, bus)
+        received: list[NodeStatusChanged] = []
+        bus.subscribe(NodeStatusChanged, handler=lambda e: received.append(e))
+
+        sources = [Fact(content=f"duplicate {i}", source_id="s1") for i in range(2)]
+        for node in sources:
+            await wrapped.store_node(node)
+        merged = Fact(content="the one kept", source_id="s1")
+        await wrapped.merge_nodes_tx(
+            sources, merged,
+            EmbeddingRecord(item_id=merged.id, model_id="test", vector=[1.0, 0.0]),
+            [NodeEdge(src_id=s.id, dst_id=merged.id, type=EdgeType.MERGED_INTO)
+             for s in sources],
+            merged_at=datetime.now(timezone.utc),
+        )
+
+        assert {e.node_id for e in received} == {s.id for s in sources}
+        assert {e.counterpart for e in received} == {merged.id}
 
 
 class TestMultiGraphPassThrough:

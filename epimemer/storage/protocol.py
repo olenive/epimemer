@@ -241,10 +241,15 @@ class StorageBackend(Protocol):
         """Nodes whose creation or retirement falls in the half-open window
         [start, end).
 
-        A node matches if its `created_at` is in the window (born) or its
+        A node matches if its `created_at` is in the window (born), its
         `superseded_at` is in the window (retired — covers both supersession and
-        merge). Returns plain nodes regardless of status; callers derive the
-        specific lifecycle events from each node's timestamps and status.
+        merge), or **any of its lifecycle episodes** began or ended there.
+
+        The episodes are why the last clause exists: a node that retired,
+        returned and retired again has one `superseded_at`, and a window over
+        the first retirement would otherwise not match it at all. Returns plain
+        nodes regardless of status; callers derive the specific lifecycle events
+        from each node's episodes and timestamps.
         """
         ...
 
@@ -366,9 +371,12 @@ class StorageBackend(Protocol):
         in rather than assumed because the two are opposite events and only the
         caller knows which happened.
 
-        Marks the old node with ``status``, stores and embeds the new node, migrates
-        the old node's non-history edges onto the new node, and persists
-        ``lineage_edge`` (the superseded_by edge). Also inserts ``evidence_edges``
+        Marks the old node with ``status`` and appends a lifecycle episode
+        naming ``new_node`` as the counterpart (#57 — "superseded by whom" must
+        be readable without joining on the lineage edge), stores and embeds the
+        new node, migrates the old node's non-history edges onto the new node,
+        and persists ``lineage_edge`` (the superseded_by edge). Also inserts
+        ``evidence_edges``
         (e.g. evidence_superseded flags on dependent inferences) and deletes
         ``clear_edge_ids`` (e.g. resolved supersession_candidate edges). If any
         step fails, the whole operation is rolled back.
@@ -388,7 +396,8 @@ class StorageBackend(Protocol):
     ) -> None:
         """Atomically supersede ``old_node`` by an already-existing node.
 
-        Marks the old node with ``status`` (see ``supersede_node_tx``) and
+        Marks the old node with ``status`` (see ``supersede_node_tx``), appends
+        a lifecycle episode with ``existing_id`` as the counterpart, and
         persists ``lineage_edge`` (superseded_by, old → existing). Unlike
         ``supersede_node_tx`` it does **not** create a new node, embed, or
         migrate edges — the existing node carries its own evidence. Inserts
@@ -402,13 +411,23 @@ class StorageBackend(Protocol):
         nodes: Sequence[EpistemicNode],
         *,
         status: NodeStatus,
-        retired_at: datetime | None,
+        at: datetime,
     ) -> None:
-        """Atomically move every node in ``nodes`` to ``status``.
+        """Atomically move every node in ``nodes`` to ``status``, as of ``at``.
 
-        No node, edge or embedding is created or destroyed — only the status
-        and ``superseded_at`` (the instant the node left the active set, which
-        is what temporal queries read; pass None when returning to ACTIVE).
+        No node, edge or embedding is created or destroyed. ``status`` says
+        which direction this is and ``at`` is the instant it happened:
+
+        - **A retirement** (any status but ACTIVE) sets ``superseded_at`` to
+          ``at`` and appends a lifecycle episode with no counterpart, since
+          nothing superseded the node — archival retires it for triviality.
+        - **A return** (ACTIVE) clears ``superseded_at`` and closes the open
+          episode at ``at``. A node with no open episode keeps an empty
+          history rather than gaining an invented one.
+
+        The instant is the caller's either way. A backend that reached for its
+        own clock on the return would make the two halves of one round trip
+        disagree about when it happened.
 
         Archival is the reason this exists: the caller exports the nodes first,
         and the flip must not apply partially, because a half-flipped batch
@@ -433,9 +452,11 @@ class StorageBackend(Protocol):
         Stores and embeds the merged node, migrates the sources' non-history
         edges onto it (dropping self-loops where two merged sources were
         connected, and collapsing duplicate edges to one per src/dst/type),
-        marks each source merged, and persists ``lineage_edges`` (the
-        merged_into edges). If any step fails, the whole operation is rolled
-        back.
+        marks each source merged — appending a lifecycle episode naming
+        ``merged_node`` as the counterpart, so the history says where the
+        content went rather than only that the node left — and persists
+        ``lineage_edges`` (the merged_into edges). If any step fails, the whole
+        operation is rolled back.
         """
         ...
 

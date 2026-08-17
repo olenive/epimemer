@@ -1986,7 +1986,7 @@ in a different panel.
 
 ---
 
-### Issue 57 — supersession events never name the superseding node — ▶ ACTIONABLE
+### Issue 57 — supersession events never name the superseding node — ✅ RESOLVED (2026-08-17)
 
 Filed 2026-08-17, from the `EVENT_LOG.md` review. "Node 123 was superseded by
 node 124" cannot be rendered from anything the system emits, on either surface:
@@ -2019,6 +2019,46 @@ Independent of every open decision and of whether the log panel is ever built
 
 - `test_node_status_changed_names_the_superseding_node` — live surface.
 - `test_query_changes_names_the_superseding_node` — durable surface.
+
+**Resolution (2026-08-17).** `NodeStatusChanged` carries `counterpart`, emitted
+from the three transaction boundaries that know it — `supersede_node_tx`
+(the replacement), `supersede_by_existing_tx` (the existing node) and
+`merge_nodes_tx` (the merge target).
+
+The durable half needed more than a field. Deriving the history from
+`(status, superseded_at)` cannot survive a node that leaves the active set
+twice, which #53 T2 legalises: clearing `superseded_at` on the return erases
+the first retirement from every window, and keeping it makes that retirement
+report the node's *current* status. So nodes gained an **append-only
+`lifecycle` list** (`LifecycleEpisode`: `retired_at`, `because`, `counterpart`,
+`restored_at`), with `(status, superseded_at)` kept as the current-state
+snapshot the fast paths read. Nothing clears or overwrites an episode; a
+return closes the open one. `events_in_window` derives from the episodes and
+falls back to the scalar pair for rows written before them — no retroactive
+repair, per *Older carry-overs* below. `query_changes` matches on episode
+boundaries too, or a window over anything but a node's last retirement would
+not find it at all.
+
+`set_node_status_tx` took the one signature change: `retired_at: datetime |
+None` became `at: datetime`, because a return happens at an instant as much as
+a retirement does and the backend must not reach for its own clock to date it.
+
+The episode list is planned in Python and written whole rather than appended to
+in SurrealQL. Both engines take `array::append`, but the embedded `mem://` one
+has **no `object::` namespace at all**, so closing an episode has no expression
+it can share with the server — and a history assembled two ways is a history
+that can differ two ways.
+
+**Guarding tests:** `test_node_status_changed_names_the_superseding_node`,
+`test_world_change_names_the_node_that_followed_it`,
+`test_supersede_by_existing_names_the_existing_node`,
+`test_merge_names_the_target_every_source_went_into` (live);
+`test_query_changes_names_the_superseding_node`,
+`test_query_changes_reports_every_episode_of_a_recurring_node` (durable, both
+backends); `test_lifecycle_episodes_round_trip`,
+`test_archival_appends_an_episode_without_a_counterpart` (parity);
+`test_lifecycle_episodes_round_trip_over_a_real_connection` (ws://, since the
+embedded engine is not the server).
 
 ---
 

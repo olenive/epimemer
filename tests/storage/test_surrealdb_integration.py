@@ -22,7 +22,7 @@ To drive it by hand, start a server and point the env var at it:
 
 If ``EPIMEMER_SURREAL_WS_URL`` is unset or the server is unreachable, the whole
 module is skipped (no connection is attempted by default) — and pytest reports
-skips as success, so check for ``5 passed`` rather than trusting the exit code.
+skips as success, so check for ``6 passed`` rather than trusting the exit code.
 A server that accepts connections without answering (another Docker/Colima
 profile holding the port, or a wedged container) reads as unreachable here.
 """
@@ -261,7 +261,7 @@ async def test_archival_flip_rolls_back_over_a_real_connection(surreal):
         await store.set_node_status_tx(
             [*nodes, missing],
             status=NodeStatus.ARCHIVED,
-            retired_at=datetime.now(timezone.utc),
+            at=datetime.now(timezone.utc),
         )
 
     for node in nodes:
@@ -269,7 +269,57 @@ async def test_archival_flip_rolls_back_over_a_real_connection(surreal):
 
     # ...and the same call without the missing node commits every flip.
     await store.set_node_status_tx(
-        nodes, status=NodeStatus.ARCHIVED, retired_at=datetime.now(timezone.utc)
+        nodes, status=NodeStatus.ARCHIVED, at=datetime.now(timezone.utc)
     )
     for node in nodes:
         assert (await verifier.get_node(node.id)).status == NodeStatus.ARCHIVED
+
+
+async def test_lifecycle_episodes_round_trip_over_a_real_connection(surreal):
+    """The episode list survives the server, not only the embedded engine.
+
+    The two are not the same SurrealDB: the embedded one has no `object::`
+    functions at all, which is why the history is planned in Python rather than
+    appended to in SurrealQL. A nested array of objects going out through one
+    connection and coming back through another is the part `mem://` cannot
+    vouch for.
+    """
+    from datetime import datetime, timezone
+
+    store = await surreal()
+    verifier = await surreal()
+
+    old = Fact(content="the earlier claim", source_id="s1")
+    new = Fact(content="what replaced it", source_id="s1")
+    await store.store_node(old)
+    at = datetime(2026, 6, 15, tzinfo=timezone.utc)
+    await store.supersede_node_tx(
+        old, new,
+        EmbeddingRecord(item_id=new.id, model_id="test", vector=[1.0, 0.0, 0.0]),
+        NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY),
+        status=NodeStatus.HISTORICAL, superseded_at=at,
+    )
+
+    retired = await verifier.get_node(old.id)
+    assert [(e.retired_at, e.because, e.counterpart) for e in retired.lifecycle] == [
+        (at, NodeStatus.HISTORICAL, new.id)
+    ]
+
+    came_back = datetime(2026, 6, 20, tzinfo=timezone.utc)
+    await store.set_node_status_tx(
+        [retired], status=NodeStatus.ACTIVE, at=came_back,
+    )
+
+    back = await verifier.get_node(old.id)
+    assert back.status is NodeStatus.ACTIVE
+    assert back.superseded_at is None
+    assert len(back.lifecycle) == 1
+    assert back.lifecycle[0].restored_at == came_back
+
+    # The window predicate is SurrealQL the server parses for itself, and the
+    # retirement it has to find is no longer in `superseded_at`.
+    changed = await verifier.query_changes(
+        start=datetime(2026, 6, 14, tzinfo=timezone.utc),
+        end=datetime(2026, 6, 16, tzinfo=timezone.utc),
+    )
+    assert old.id in {n.id for n in changed}

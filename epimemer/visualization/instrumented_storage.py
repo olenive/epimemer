@@ -236,6 +236,7 @@ class InstrumentedStorage:
             node_id=old_node.id,
             old_status=old_node.status.value,
             new_status=status.value,
+            counterpart=new_node.id,
         ))
         await self._bus.publish(NodeStored(graph=graph, node=node_to_view(new_node, graph)))
         await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(lineage_edge, graph)))
@@ -265,6 +266,7 @@ class InstrumentedStorage:
             node_id=old_node.id,
             old_status=old_node.status.value,
             new_status=status.value,
+            counterpart=existing_id,
         ))
         await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(lineage_edge, graph)))
         for edge in evidence_edges:
@@ -275,11 +277,9 @@ class InstrumentedStorage:
         nodes: Sequence[EpistemicNode],
         *,
         status: NodeStatus,
-        retired_at: datetime | None,
+        at: datetime,
     ) -> None:
-        await self._inner.set_node_status_tx(
-            nodes, status=status, retired_at=retired_at
-        )
+        await self._inner.set_node_status_tx(nodes, status=status, at=at)
         graph = self._inner.current_database
         for node in nodes:
             await self._bus.publish(NodeStatusChanged(
@@ -310,6 +310,7 @@ class InstrumentedStorage:
                 node_id=source.id,
                 old_status=source.status.value,
                 new_status=NodeStatus.MERGED.value,
+                counterpart=merged_node.id,
             ))
         for edge in lineage_edges:
             await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))

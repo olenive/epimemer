@@ -361,6 +361,63 @@ class Segment(BaseModel):
 # --- Epistemic Nodes ---
 
 
+class LifecycleEpisode(BaseModel):
+    """One spell a node spent out of the active set, and the return that ended it.
+
+    `(status, superseded_at)` is a single slot, and a node can leave the active
+    set more than once — #53 T2 legalised that, and Saint Petersburg is the
+    standing example. The pair cannot say *retired, then came back*: clear
+    `superseded_at` on the return and the retirement disappears from every time
+    window; keep it and the retirement reports the node's *current* status, which
+    by then is `active`. A scalar `restored_at` only defers the same overwrite to
+    the second retirement.
+
+    So the history is a list and the list is append-only. A retirement appends an
+    episode; a return closes the open one. Nothing is ever cleared or
+    overwritten, and `(status, superseded_at)` stay on the node as the
+    current-state snapshot the fast paths read.
+
+    `because` is the status the node took, reusing `NodeStatus` rather than
+    minting a second vocabulary for the same thing (`ACTIVE` is not a legal
+    value — a node does not retire into being active). `counterpart` is the node
+    that replaced, followed or absorbed this one, and is `None` where nothing
+    did: archival retires a node without anything superseding it.
+    """
+    retired_at: datetime
+    because: NodeStatus
+    counterpart: str | None = None
+    restored_at: datetime | None = None
+
+
+def with_retirement(
+    episodes: Sequence[LifecycleEpisode],
+    *,
+    at: datetime,
+    because: NodeStatus,
+    counterpart: str | None = None,
+) -> list[LifecycleEpisode]:
+    """`episodes` plus the retirement that just happened. Never mutates its input."""
+    return [
+        *episodes,
+        LifecycleEpisode(retired_at=at, because=because, counterpart=counterpart),
+    ]
+
+
+def with_return(
+    episodes: Sequence[LifecycleEpisode], *, at: datetime,
+) -> list[LifecycleEpisode]:
+    """`episodes` with the open one closed at `at`.
+
+    A no-op when there is nothing open: a node retired before episodes existed
+    has no episode to close, and old graphs are not repaired retroactively
+    (ISSUES.md → *Older carry-overs*). Closing is the only edit an episode ever
+    receives, and it happens once.
+    """
+    if not episodes or episodes[-1].restored_at is not None:
+        return list(episodes)
+    return [*episodes[:-1], episodes[-1].model_copy(update={"restored_at": at})]
+
+
 class Topic(BaseModel):
     """Paragraph-length semantic summary of a theme.
 
@@ -372,6 +429,9 @@ class Topic(BaseModel):
     source_id: str | None = None      # Segment.id, if extracted from text (entity/tag topics have none)
     status: NodeStatus = NodeStatus.ACTIVE
     superseded_at: datetime | None = None
+    # Every spell this node has spent out of the active set. Append-only; the
+    # two fields above are the current-state snapshot of the last entry.
+    lifecycle: list[LifecycleEpisode] = Field(default_factory=list)
     value: ValueSignal = Field(default_factory=ValueSignal)
     extraction_method: str = "unspecified"
     metadata: dict = Field(default_factory=dict)
@@ -388,6 +448,9 @@ class Fact(BaseModel):
     source_id: str                    # Segment.id that generated this
     status: NodeStatus = NodeStatus.ACTIVE
     superseded_at: datetime | None = None
+    # Every spell this node has spent out of the active set. Append-only; the
+    # two fields above are the current-state snapshot of the last entry.
+    lifecycle: list[LifecycleEpisode] = Field(default_factory=list)
     value: ValueSignal = Field(default_factory=ValueSignal)
     extraction_method: str = "unspecified"
     metadata: dict = Field(default_factory=dict)
@@ -405,6 +468,9 @@ class Inference(BaseModel):
     source_id: str                    # Segment.id that generated this
     status: NodeStatus = NodeStatus.ACTIVE
     superseded_at: datetime | None = None
+    # Every spell this node has spent out of the active set. Append-only; the
+    # two fields above are the current-state snapshot of the last entry.
+    lifecycle: list[LifecycleEpisode] = Field(default_factory=list)
     value: ValueSignal = Field(default_factory=ValueSignal)
     extraction_method: str = "unspecified"
     metadata: dict = Field(default_factory=dict)
@@ -419,15 +485,22 @@ class NodeChangeEvent(BaseModel):
     """A lifecycle event on a node that falls inside a queried time window.
 
     Emitted by temporal change queries: `created` when the node was born in the
-    window; otherwise the node's terminal status verbatim, since that is exactly
-    what the retirement was. `corrected` and `historical` are the two halves of
-    the old `superseded`, which survives only on rows written before #53. A node
-    both born and retired inside one window yields two events.
+    window, `restored` when it came back, and otherwise the status the
+    retirement gave it, since that is exactly what the retirement was.
+    `corrected` and `historical` are the two halves of the old `superseded`,
+    which survives only on rows written before #53. A node both born and retired
+    inside one window yields two events.
+
+    `counterpart` is the node that replaced, followed or absorbed this one — the
+    "by whom" of a supersession (#57). It is `None` for births, returns, and
+    retirements that had no counterpart (archival) or predate episodes.
     """
     kind: Literal[
-        "created", "superseded", "corrected", "historical", "merged"
+        "created", "superseded", "corrected", "historical", "merged",
+        "archived", "restored",
     ]
     at: datetime
+    counterpart: str | None = None
 
 
 # --- Edges ---

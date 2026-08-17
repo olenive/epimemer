@@ -129,6 +129,9 @@ export interface NodeStatusChanged extends BaseEvent {
   node_id: string;
   old_status: string;
   new_status: string;
+  /** The node that replaced, followed or absorbed this one. Null where nothing
+   *  did — archival retires a node without a successor. */
+  counterpart: string | null;
 }
 
 export interface EdgeStored extends BaseEvent {

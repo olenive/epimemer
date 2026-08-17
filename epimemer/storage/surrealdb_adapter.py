@@ -21,6 +21,7 @@ from epimemer.core.types import (
     EpistemicNode,
     Fact,
     Inference,
+    LifecycleEpisode,
     Metacontext,
     NodeEdge,
     NodeStatus,
@@ -31,6 +32,8 @@ from epimemer.core.types import (
     Topic,
     migration_disposition,
     moved_edge_types,
+    with_retirement,
+    with_return,
 )
 from epimemer.storage.protocol import (
     EdgeDirection,
@@ -305,6 +308,35 @@ def _edge_row(edge: NodeEdge) -> dict:
     row = _serialize(edge)
     row["type"] = edge.type.value
     return row
+
+
+# Timestamps are uniform UTC ISO-8601 strings, so these string comparisons are
+# chronologically correct — the same property `query_changes` already relies on
+# for `created_at` and `superseded_at`. The `?? []` is load-bearing: on a row
+# written before episodes existed the field is absent, and `array::len(NONE)` is
+# an error rather than zero.
+_EPISODE_IN_WINDOW = (
+    "array::len((lifecycle ?? [])"
+    "[WHERE retired_at >= $start AND retired_at < $end]) > 0 "
+    "OR array::len((lifecycle ?? [])"
+    "[WHERE restored_at != NONE AND restored_at >= $start "
+    "AND restored_at < $end]) > 0"
+)
+
+
+def _episode_rows(episodes: Sequence[LifecycleEpisode]) -> list[dict]:
+    """A lifecycle history as SurrealDB stores it (ISO strings, no null keys).
+
+    The whole list is written each time rather than appended to in the database.
+    Both engines this backend runs against would take an `array::append`, but
+    only one of them has the object functions that closing an episode needs, and
+    a history that is assembled two different ways is a history that can differ
+    two different ways. Planning it here also matches how `merge_nodes_tx`
+    already plans its edge migration, for the same reason: the adapter is
+    single-connection and documented as unsafe for concurrent callers, so
+    nothing interleaves between the read and the write.
+    """
+    return [drop_none_values(ep.model_dump(mode="json")) for ep in episodes]
 
 
 def _clean_record(record: dict) -> dict:
@@ -724,15 +756,17 @@ class SurrealDBStorage:
         results = []
 
         # Half-open window [start, end): a node matches if it was born
-        # (created_at) or retired (superseded_at — set for supersede and merge
-        # alike) within the window. Timestamps are uniform UTC ISO-8601 strings,
-        # so the string comparison is chronologically correct.
+        # (created_at), retired (superseded_at — set for supersede and merge
+        # alike), or if any lifecycle episode began or ended inside it. The last
+        # clause is what makes a node that retired, returned and retired again
+        # reportable in a window over anything but its final retirement.
         for table in tables:
             rows = await self._query(
                 f"SELECT * FROM {table} WHERE "
                 f"(created_at >= $start AND created_at < $end) "
                 f"OR (superseded_at != NONE AND superseded_at >= $start "
-                f"AND superseded_at < $end)",
+                f"AND superseded_at < $end) "
+                f"OR {_EPISODE_IN_WINDOW}",
                 {"start": start.isoformat(), "end": end.isoformat()},
             )
             results.extend(_record_to_node(table, r) for r in rows)
@@ -971,7 +1005,8 @@ class SurrealDBStorage:
 
         statements = [
             f"UPDATE {_node_to_table(old_node)} SET status = $status, "
-            f"superseded_at = $sup_at WHERE uid = $old_uid",
+            f"superseded_at = $sup_at, lifecycle = $lifecycle "
+            f"WHERE uid = $old_uid",
             f"INSERT INTO {_node_to_table(new_node)} $new_data",
             "INSERT INTO embedding $emb_data",
         ]
@@ -993,6 +1028,10 @@ class SurrealDBStorage:
             "new_uid": new_node.id,
             "new_data": _serialize(new_node),
             "emb_data": _serialize(new_embedding),
+            "lifecycle": _episode_rows(with_retirement(
+                old_node.lifecycle, at=superseded_at, because=status,
+                counterpart=new_node.id,
+            )),
             "moved": moved,
             "copied_data": copied_data,
             "lineage_data": _edge_row(lineage_edge),
@@ -1013,7 +1052,8 @@ class SurrealDBStorage:
     ) -> None:
         statements = [
             f"UPDATE {_node_to_table(old_node)} SET status = $status, "
-            f"superseded_at = $sup_at WHERE uid = $old_uid",
+            f"superseded_at = $sup_at, lifecycle = $lifecycle "
+            f"WHERE uid = $old_uid",
             "INSERT INTO node_edge $lineage_data",
         ]
         params: dict = {
@@ -1021,6 +1061,10 @@ class SurrealDBStorage:
             "sup_at": superseded_at.isoformat(),
             "old_uid": old_node.id,
             "lineage_data": _edge_row(lineage_edge),
+            "lifecycle": _episode_rows(with_retirement(
+                old_node.lifecycle, at=superseded_at, because=status,
+                counterpart=existing_id,
+            )),
         }
         self._append_review_writes(statements, params, evidence_edges, clear_edge_ids)
         await self._run_transaction(statements, params)
@@ -1030,7 +1074,7 @@ class SurrealDBStorage:
         nodes: Sequence[EpistemicNode],
         *,
         status: NodeStatus,
-        retired_at: datetime | None,
+        at: datetime,
     ) -> None:
         if not nodes:
             return
@@ -1047,16 +1091,31 @@ class SurrealDBStorage:
             "IF array::len($found) != $expected "
             "{ THROW 'set_node_status_tx: node not found' }",
         ]
+        returning = status is NodeStatus.ACTIVE
         params: dict = {
             "uids": uids,
             "expected": len(set(uids)),
             "status": status.value,
-            "retired_at": retired_at.isoformat() if retired_at else None,
+            "retired_at": None if returning else at.isoformat(),
         }
         for table in {_node_to_table(node) for node in nodes}:
             statements.append(
                 f"UPDATE {table} SET status = $status, "
                 "superseded_at = $retired_at WHERE uid IN $uids"
+            )
+        # The history is per-node, so it takes a statement per node. The status
+        # flip above stays a single bulk update: it is the same for all of them,
+        # and it is the part that has to be all-or-nothing.
+        for i, node in enumerate(nodes):
+            episodes = (
+                with_return(node.lifecycle, at=at) if returning
+                else with_retirement(node.lifecycle, at=at, because=status)
+            )
+            params[f"lifecycle_{i}"] = _episode_rows(episodes)
+            params[f"uid_{i}"] = node.id
+            statements.append(
+                f"UPDATE {_node_to_table(node)} SET lifecycle = $lifecycle_{i} "
+                f"WHERE uid = $uid_{i}"
             )
         await self._run_transaction(statements, params)
 
@@ -1131,20 +1190,29 @@ class SurrealDBStorage:
             statements.append("DELETE node_edge WHERE uid IN $old_edge_ids")
         if repointed_data:
             statements.append("INSERT INTO node_edge $repointed_data")
-        statements += [
-            "UPDATE topic SET status = $status, superseded_at = $merged_at "
-            "WHERE uid IN $sources",
-            "UPDATE fact SET status = $status, superseded_at = $merged_at "
-            "WHERE uid IN $sources",
-            "UPDATE inference SET status = $status, superseded_at = $merged_at "
-            "WHERE uid IN $sources",
-        ]
+        # One statement per source: the status and instant are shared, but each
+        # source carries its own history and writes its own list.
+        for i, source in enumerate(source_nodes):
+            statements.append(
+                f"UPDATE {_node_to_table(source)} SET status = $status, "
+                f"superseded_at = $merged_at, lifecycle = $lifecycle_{i} "
+                f"WHERE uid = $source_{i}"
+            )
         if lineage_data:
             statements.append("INSERT INTO node_edge $lineage_data")
+
+        source_params: dict = {}
+        for i, source in enumerate(source_nodes):
+            source_params[f"source_{i}"] = source.id
+            source_params[f"lifecycle_{i}"] = _episode_rows(with_retirement(
+                source.lifecycle, at=merged_at, because=NodeStatus.MERGED,
+                counterpart=merged_node.id,
+            ))
 
         await self._run_transaction(
             statements,
             {
+                **source_params,
                 "merged_data": _serialize(merged_node),
                 "emb_data": _serialize(merged_embedding),
                 "old_edge_ids": old_edge_ids,

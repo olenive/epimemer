@@ -213,12 +213,22 @@ class NodeStored(Event):
 
 
 class NodeStatusChanged(Event):
-    """A node's status was updated (e.g., active → superseded)."""
+    """A node's status was updated (e.g., active → corrected).
+
+    `counterpart` is the node that replaced, followed or absorbed this one. It
+    is carried here rather than left to the `SUPERSEDED_BY` edge that arrives as
+    its own `EdgeStored` a moment later, because joining those two by their
+    adjacency in the stream breaks as soon as anything interleaves — and "123
+    superseded by 124" is the one thing a reader of this event wants to know
+    (#57). `None` where nothing superseded the node: archival retires a node for
+    triviality, and there is no counterpart to name.
+    """
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
     event_type: Literal["node_status_changed"] = "node_status_changed"
     node_id: str
     old_status: str
     new_status: str
+    counterpart: str | None = None
 
 
 class EdgeStored(Event):

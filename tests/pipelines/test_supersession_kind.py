@@ -158,7 +158,7 @@ class TestReadersSeeBothKinds:
         await storage.set_node_status_tx(
             [await storage.get_node(old.id)],
             status=NodeStatus.CORRECTED,
-            retired_at=datetime.now(timezone.utc) - timedelta(days=400),
+            at=datetime.now(timezone.utc) - timedelta(days=400),
         )
 
         candidates = await find_archival_candidates(storage, max_age_days=90)
@@ -178,7 +178,7 @@ class TestReadersSeeBothKinds:
         await storage.set_node_status_tx(
             [await storage.get_node(old.id)],
             status=NodeStatus.HISTORICAL,
-            retired_at=datetime.now(timezone.utc) - timedelta(days=400),
+            at=datetime.now(timezone.utc) - timedelta(days=400),
         )
 
         candidates = await find_archival_candidates(storage, max_age_days=90)

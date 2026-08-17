@@ -1110,7 +1110,7 @@ class TestArchivalStatus:
         at = datetime.now(timezone.utc)
 
         await store.set_node_status_tx(
-            [junk], status=NodeStatus.ARCHIVED, retired_at=at
+            [junk], status=NodeStatus.ARCHIVED, at=at
         )
 
         active_ids = {n.id for n in await store.query_nodes(status=NodeStatus.ACTIVE)}
@@ -1133,13 +1133,70 @@ class TestArchivalStatus:
             store, Fact(content="trivial", source_id="s1"), [1.0, 0.0, 0.0]
         )
         await store.set_node_status_tx(
-            [junk], status=NodeStatus.ARCHIVED, retired_at=datetime.now(timezone.utc)
+            [junk], status=NodeStatus.ARCHIVED, at=datetime.now(timezone.utc)
         )
 
         await store.update_node_status(junk.id, NodeStatus.ACTIVE)
 
         active_ids = {n.id for n in await store.query_nodes(status=NodeStatus.ACTIVE)}
         assert junk.id in active_ids
+
+    async def test_lifecycle_episodes_round_trip(self, store):
+        """The episode list is storage state, so both backends must keep it.
+
+        Written as parity rather than as an in-memory test because it is a
+        protocol field: a backend that accepts the write and loses the list on
+        read makes the durable history silently backend-dependent.
+        """
+        old = await self._stored(
+            store, Fact(content="the earlier claim", source_id="s1"), [1.0, 0.0, 0.0]
+        )
+        new = Fact(content="what replaced it", source_id="s1")
+        at = datetime(2026, 6, 15, tzinfo=timezone.utc)
+        await store.supersede_node_tx(
+            old, new,
+            EmbeddingRecord(item_id=new.id, model_id="test", vector=[1.0, 0.0, 0.0]),
+            NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY),
+            status=NodeStatus.HISTORICAL, superseded_at=at,
+        )
+
+        retired = await store.get_node(old.id)
+        assert len(retired.lifecycle) == 1
+        episode = retired.lifecycle[0]
+        assert episode.retired_at == at
+        assert episode.because is NodeStatus.HISTORICAL
+        assert episode.counterpart == new.id
+        assert episode.restored_at is None
+
+        came_back = datetime(2026, 6, 20, tzinfo=timezone.utc)
+        await store.set_node_status_tx(
+            [retired], status=NodeStatus.ACTIVE, at=came_back,
+        )
+
+        back = await store.get_node(old.id)
+        assert back.status is NodeStatus.ACTIVE
+        assert back.superseded_at is None
+        # Append-only: the retirement is still there, now with its end.
+        assert len(back.lifecycle) == 1
+        assert back.lifecycle[0].retired_at == at
+        assert back.lifecycle[0].restored_at == came_back
+
+    async def test_archival_appends_an_episode_without_a_counterpart(self, store):
+        """Archival retires a node too, and nothing superseded it. The episode
+        records the retirement; `counterpart` is honestly empty rather than
+        borrowed from somewhere."""
+        junk = await self._stored(
+            store, Fact(content="trivial", source_id="s1"), [1.0, 0.0, 0.0]
+        )
+        at = datetime(2026, 6, 15, tzinfo=timezone.utc)
+        await store.set_node_status_tx(
+            [junk], status=NodeStatus.ARCHIVED, at=at,
+        )
+
+        archived = await store.get_node(junk.id)
+        assert [(e.retired_at, e.because, e.counterpart) for e in archived.lifecycle] == [
+            (at, NodeStatus.ARCHIVED, None)
+        ]
 
     async def test_archival_flip_is_atomic(self, store):
         """A failure part-way through leaves *every* node active.
@@ -1159,7 +1216,7 @@ class TestArchivalStatus:
             await store.set_node_status_tx(
                 [*nodes, missing],
                 status=NodeStatus.ARCHIVED,
-                retired_at=datetime.now(timezone.utc),
+                at=datetime.now(timezone.utc),
             )
 
         active_ids = {n.id for n in await store.query_nodes(status=NodeStatus.ACTIVE)}

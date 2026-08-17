@@ -1647,7 +1647,7 @@ class TestRestore:
         node = Fact(content="archived but wanted back", source_id="s1")
         await storage.store_node(node)
         await storage.set_node_status_tx(
-            [node], status=NodeStatus.ARCHIVED, retired_at=datetime.now(timezone.utc)
+            [node], status=NodeStatus.ARCHIVED, at=datetime.now(timezone.utc)
         )
 
         result, _ = await restore({"nodes": [_node_to_dict(node)]}, storage)
@@ -2427,6 +2427,16 @@ def _fact_at(content, created, *, status=NodeStatus.ACTIVE, retired=None):
     )
 
 
+async def _supersede(storage, old, new, *, status, at):
+    """A real supersession at a chosen instant, so windows can be exact."""
+    await storage.supersede_node_tx(
+        old, new,
+        EmbeddingRecord(item_id=new.id, model_id="test", vector=[1.0, 0.0, 0.0]),
+        NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY),
+        status=status, superseded_at=at,
+    )
+
+
 class TestEventsInWindow:
 
     def test_created_in_window(self):
@@ -2562,6 +2572,72 @@ class TestQueryChangesTool:
         by_id = {c["id"]: c for c in result["windows"][0]["changes"]}
         assert by_id[a.id]["metacontexts"] == ["Fiction"]
         assert "superseded_candidate" in by_id[a.id]["review"]
+
+    async def test_query_changes_names_the_superseding_node(self, storage):
+        """#57, durable surface. Before this, the history reported *that* a node
+        retired and never *by whom* — the relation existed only as an edge."""
+        old = _fact_at("Leningrad", datetime(2026, 6, 12, tzinfo=timezone.utc))
+        new = _fact_at("Saint Petersburg", datetime(2026, 6, 14, tzinfo=timezone.utc))
+        await storage.store_node(old)
+        await _supersede(storage, old, new,
+                         status=NodeStatus.HISTORICAL,
+                         at=datetime(2026, 6, 15, tzinfo=timezone.utc))
+
+        result, _ = await query_changes([(_W_START, _W_END)], storage)
+        by_id = {c["id"]: c for c in result["windows"][0]["changes"]}
+        retirements = [
+            e for e in by_id[old.id]["events"] if e["kind"] == "historical"
+        ]
+        assert [e["counterpart"] for e in retirements] == [new.id]
+
+    async def test_query_changes_reports_every_episode_of_a_recurring_node(
+        self, storage,
+    ):
+        """Retired, brought back, retired again — three transitions, three reports.
+
+        `(status, superseded_at)` is one slot, so it can hold only the last of
+        them: clear it on the return and the first retirement vanishes from
+        every window; keep it and the retirement reports the node's *current*
+        status. A scalar `restored_at` defers the same overwrite to the second
+        retirement rather than fixing it.
+        """
+        node = _fact_at("the claim", datetime(2026, 6, 1, tzinfo=timezone.utc))
+        first = _fact_at("what replaced it",
+                         datetime(2026, 6, 11, tzinfo=timezone.utc))
+        second = _fact_at("what replaced it next",
+                          datetime(2026, 6, 15, tzinfo=timezone.utc))
+        await storage.store_node(node)
+
+        retired_first = datetime(2026, 6, 11, tzinfo=timezone.utc)
+        came_back = datetime(2026, 6, 13, tzinfo=timezone.utc)
+        retired_again = datetime(2026, 6, 15, tzinfo=timezone.utc)
+
+        await _supersede(storage, node, first,
+                         status=NodeStatus.HISTORICAL, at=retired_first)
+        # The return, driven at the storage layer: the `recurs` verdict that will
+        # call this is #53 T2 work, and the contract it needs holds here already.
+        await storage.set_node_status_tx(
+            [await storage.get_node(node.id)], status=NodeStatus.ACTIVE, at=came_back,
+        )
+        await _supersede(storage, await storage.get_node(node.id), second,
+                         status=NodeStatus.HISTORICAL, at=retired_again)
+
+        def window(start_day, end_day):
+            return (datetime(2026, 6, start_day, tzinfo=timezone.utc),
+                    datetime(2026, 6, end_day, tzinfo=timezone.utc))
+
+        result, _ = await query_changes(
+            [window(10, 12), window(12, 14), window(14, 16)], storage,
+        )
+        reported = [
+            [e for c in win["changes"] if c["id"] == node.id for e in c["events"]]
+            for win in result["windows"]
+        ]
+        assert [[e["kind"] for e in evs] for evs in reported] == [
+            ["historical"], ["restored"], ["historical"],
+        ]
+        assert [e["counterpart"] for e in reported[0]] == [first.id]
+        assert [e["counterpart"] for e in reported[2]] == [second.id]
 
 
 class TestResolveWindows:
