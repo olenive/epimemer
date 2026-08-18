@@ -242,10 +242,14 @@ class ActionVerb(str, Enum):
     `events_in_window` emits, so the live log and the durable history speak one
     vocabulary (EVENT_LOG.md §3.1, revised).
 
-    `RETIRED` is the legacy `NodeStatus.SUPERSEDED` and only that: rows written
-    before the split genuinely do not say which act they were, and guessing one
-    would be the lie #53 refused to tell. It is the *unclassified* verb, not a
-    sixth kind of act.
+    `UNDETERMINED` is the absence of a determination, and it serves two cases
+    that share exactly that. The legacy `NodeStatus.SUPERSEDED` is one: rows
+    written before the split genuinely do not say which act they were, and
+    guessing one would be the lie #53 refused to tell. A status this module has
+    never heard of is the other. It is not a kind of act, and — since it was
+    briefly named `RETIRED` — it deliberately does not claim the node left the
+    active set: `ACTIVE → RESTORED` already proves non-retirement statuses flow
+    through the same transaction, so the fall-through cannot assume otherwise.
 
     Recurrence needs no verb of its own. #53 T2's `recurs` verdict resolves as a
     restore plus a new source edge, which is `RESTORED` with the edge in
@@ -258,7 +262,7 @@ class ActionVerb(str, Enum):
     MERGED = "merged"
     ARCHIVED = "archived"
     RESTORED = "restored"
-    RETIRED = "retired"
+    UNDETERMINED = "undetermined"
 
 
 class GraphActionRecorded(Event):

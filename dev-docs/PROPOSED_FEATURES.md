@@ -21,11 +21,14 @@ reduced here to a pointer.
 
 ---
 
-## Ready to build
+## Built and merged
 
-### Retrieval provenance — built, awaiting merge
+Kept here, reduced to a pointer, until the next backlog review — the design
+documents they name are the record.
 
-**Built 2026-08-18** on branch `lexical-search` (unmerged).
+### Retrieval provenance — built
+
+**Built 2026-08-18**, merged to `main` the same day.
 `RETRIEVAL_PROVENANCE.md` §10 holds the construction notes — the five further
 tools the coverage oracle found, the producer-side payload guard, the
 desaturation rule shared by both panels; what follows is the original rationale.
@@ -54,9 +57,9 @@ and validates it.
 
 ---
 
-### Event log — built, awaiting merge
+### Event log — built
 
-**Built 2026-08-18** on branch `lexical-search` (unmerged). `EVENT_LOG.md` §11
+**Built 2026-08-18**, merged to `main` the same day. `EVENT_LOG.md` §11
 holds the construction notes — the seventh verb the no-`superseded` rule forced,
 the rail-not-a-column layout ruling, the ring sizing; what follows is the
 original rationale.
@@ -88,9 +91,9 @@ first — it is the simpler consumer and it validates the ring.
 
 ---
 
-### Lexical search — built, awaiting merge
+### Lexical search — built
 
-**Built 2026-08-18** on branch `lexical-search` (unmerged). `LEXICAL_SEARCH.md`
+**Built 2026-08-18**, merged to `main` the same day. `LEXICAL_SEARCH.md`
 §11 holds the construction notes — engine-dialect negotiation, the
 embedded-core IDF divergence, the no-stemming ruling; what follows is the
 original rationale.
@@ -122,6 +125,8 @@ means rebuilding it after.
 **Blockers.** None.
 
 ---
+
+## Ready to build
 
 ### Colour customisation — designed, not built
 

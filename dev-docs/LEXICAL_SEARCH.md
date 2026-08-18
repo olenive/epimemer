@@ -7,7 +7,7 @@ Revised the same day after review: **declared `terms` drive the lexical arm**,
 with a conservative statistical fallback when omitted, and zero-scored matches
 never reach fusion — see §10.
 
-**Built 2026-08-18** on branch `lexical-search` (unmerged). Construction
+**Built 2026-08-18**, merged to `main` the same day. Construction
 taught the engine several things the design did not know — §11 records them
 and is the design of record where it conflicts with earlier sections.
 
@@ -573,7 +573,7 @@ R1–R3, R5 and R6 individually.
 
 ## 11. Construction notes (2026-08-18)
 
-Built on branch `lexical-search`, all §8 steps, both backends; unit,
+Built and merged to `main`, all §8 steps, both backends; unit,
 integration and frontend suites green. What construction taught, reported by
 the implementer and ruled accepted 2026-08-18. **Where these conflict with
 earlier sections, these win.**

@@ -21,6 +21,7 @@ from epimemer.core.types import (
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization.event_bus import create_event_bus
 from epimemer.visualization.events import ActionVerb, Event, GraphActionRecorded
+from epimemer.visualization.graph_actions import summarise, verb_for_status
 from epimemer.visualization.instrumented_storage import instrument_storage
 
 
@@ -101,8 +102,28 @@ class TestVocabulary:
         """The one thing §3.1 rules out by name: "superseded 123 → 124" flattens
         the distinction #53 exists to record. The legacy `SUPERSEDED` status —
         rows that genuinely do not say which act they were — reads as the
-        unclassified `retired`, not as a guess at one of the two."""
+        unclassified `undetermined`, not as a guess at one of the two."""
         assert "superseded" not in {verb.value for verb in ActionVerb}
+
+    def test_the_legacy_status_reads_as_undetermined(self):
+        assert verb_for_status(NodeStatus.SUPERSEDED) is ActionVerb.UNDETERMINED
+
+    def test_an_unrecognised_status_does_not_claim_the_node_was_retired(self):
+        """§11.1 amended (2026-08-19). The fall-through used to answer `retired`,
+        on the reasoning that "it left the active set" is the only part that can
+        be relied on. That is an assumption, not a fact: `ACTIVE → restored` is
+        already a non-retirement flowing through the same transaction, so a
+        status added later need not be a retirement either. The default names
+        the absence of a determination instead of inventing one."""
+        assert verb_for_status("provisional") is ActionVerb.UNDETERMINED
+        assert "retired" not in {verb.value for verb in ActionVerb}
+
+    def test_an_undetermined_act_still_reads_as_a_line(self):
+        """`undetermined 1 node` is not English. The verb names a state, so the
+        summary has to say what happened to the node in it."""
+        line = summarise(ActionVerb.UNDETERMINED, ["abcdef1234"], {})
+
+        assert line == "status undetermined: 1 node"
 
     async def test_recurrence_is_restored_plus_counts_not_a_new_verb(self, bus):
         """#53 T2's `recurs` verdict resolves as restore + a new source edge.

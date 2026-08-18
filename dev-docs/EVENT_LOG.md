@@ -3,7 +3,7 @@
 Design for a log panel in the dashboard — a list of what the agent changed,
 filterable, with entries that highlight their nodes in the graph on click.
 
-Decided 2026-08-17. **Built 2026-08-18** on branch `lexical-search`, §9 steps
+Decided 2026-08-17. **Built and merged to `main` 2026-08-18**, §9 steps
 1–6 — see §11 for the construction notes and what they settled.
 
 The motivating case, in the user's words: *"if the log entry is node 123 is
@@ -218,8 +218,16 @@ filters over fields:
 
 - **verb** — chips, multi-select
 - **node id** — text box, exact
-- **time range** — reuses the timeline panel's range inputs
+- **time range** — its own two date inputs, sharing the timeline's `TimeRange`
 - **free text** — plain substring over `summary`
+
+> **Amended 2026-08-19 (review).** This bullet read "reuses the timeline panel's
+> range inputs", and construction did not take it literally — see §11.8. Those
+> inputs are also written by shift-drag zoom on the axis, so sharing the
+> *controls* would let scrubbing the timeline silently filter the log: a filter
+> nobody set, whose cause is in another panel. The log keeps its own two date
+> inputs; what is shared is the *rule* — `TimeRange` and the half-open
+> comparison, both from `timeline-filter.ts`. Ruled on and kept as built.
 
 **Not BM25, and not because it is expensive.** Log vocabulary is a dozen verbs
 repeated thousands of times, and SurrealDB's BM25 clamps IDF to zero above 50%
@@ -419,17 +427,61 @@ possible.
 
 ## 11. Construction notes (2026-08-18)
 
-Built on branch `lexical-search`, §9 steps 2–6 (step 1 was #57, 2026-08-17).
+Built and merged to `main`, §9 steps 2–6 (step 1 was #57, 2026-08-17).
 Unit, integration and frontend suites green. **Where these conflict with
 earlier sections, these win.**
 
 1. **The verb list needed a seventh entry, and §3.1's rule is why.** "There is
    no `superseded` verb" is binding, but `NodeStatus.SUPERSEDED` still exists —
    #53 kept it for rows that genuinely do not record which act they were. It
-   maps to **`retired`**: the unclassified verb, not a sixth kind of act.
-   Mapping it to `corrected` would have been the invented answer #53 refused to
-   give, and mapping it to `superseded` is what the rule forbids. Guarded by
+   maps to the unclassified verb, not to a sixth kind of act. Mapping it to
+   `corrected` would have been the invented answer #53 refused to give, and
+   mapping it to `superseded` is what the rule forbids. Guarded by
    `test_there_is_no_superseded_verb`.
+
+   > **Renamed 2026-08-19 (review): `retired` → `undetermined`.** As built, the
+   > verb was `retired`, and `verb_for_status` also used it as the fall-through
+   > for a status the module has never heard of, on the reasoning that "it left
+   > the active set" is the only part that can be relied on. **That reasoning
+   > was wrong.** It is an assumption, not a fact: `ACTIVE → restored` is
+   > already a non-retirement flowing through `set_node_status_tx`, so a status
+   > added later need not be a retirement either, and the default would then
+   > state something false about what the agent did. `undetermined` names the
+   > absence of a determination, which is exactly what both cases have in
+   > common — the legacy row whose kind was never recorded, and the status this
+   > module cannot classify. Two consequences worth keeping:
+   >
+   > - **The two defaults now point opposite ways on purpose.** The frontend's
+   >   `statusOpacity` fades an unlisted status; this fall-through refuses to
+   >   claim one. Fading a live node is cosmetic; a log line asserting a
+   >   retirement that did not happen is a false statement about the agent.
+   > - **The verb names a state, so it cannot carry a line alone.**
+   >   "undetermined 1 node" says nothing happened to anything; `summarise`
+   >   renders **"status undetermined: N nodes"**. Guarded by
+   >   `test_an_unrecognised_status_does_not_claim_the_node_was_retired` and
+   >   `test_an_undetermined_act_still_reads_as_a_line`.
+   >
+   > No migration: the ring is in-memory and per session, so no stored
+   > vocabulary carries the old name.
+   >
+   > **Sunset condition (2026-08-19).** The two users of `UNDETERMINED` retire
+   > on different schedules, and only one of them ever retires:
+   >
+   > - **The map entry** `NodeStatus.SUPERSEDED: ActionVerb.UNDETERMINED` is
+   >   dead code the day `NodeStatus.SUPERSEDED` leaves `NodeStatus` in
+   >   `epimemer/core/types.py`, and it should be deleted in that same change —
+   >   not before it, and not as a tidy-up of its own. Hanging the condition on
+   >   the enum member is deliberate: "no graph anywhere still holds such a row"
+   >   is not a thing this repository can observe, and nothing in `epimemer/`
+   >   writes the status, so the enum member is the whole remaining supply.
+   >   Whoever removes it owns the read-side question too — a stored row still
+   >   carrying the string would then fail at the Pydantic boundary, which is
+   >   #53's problem to answer, not this module's.
+   > - **The fall-through** `_STATUS_VERBS.get(status, ActionVerb.UNDETERMINED)`
+   >   has no sunset. It answers for statuses that do not exist yet, so it is
+   >   never spent. `ActionVerb.UNDETERMINED` therefore outlives the legacy
+   >   status it was first written for, and removing the verb along with the map
+   >   entry would be the wrong half to delete.
 2. **Emission is at the five `_tx` boundaries and nowhere else.**
    `supersede_node_tx`, `supersede_by_existing_tx`, `merge_nodes_tx`,
    `set_node_status_tx`, `write_batch_tx`. Single writes (`store_node`,
@@ -470,4 +522,4 @@ earlier sections, these win.**
    driven by shift-drag zoom on the axis, so sharing them would make scrubbing
    the timeline silently filter the log — a filter nobody set. The *rule* is
    shared (`TimeRange`, half-open, from `timeline-filter.ts`); the controls are
-   not.
+   not. **Reviewed 2026-08-19: kept as built, and §5's bullet amended to match.**

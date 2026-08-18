@@ -4,7 +4,7 @@ Design for a focus mode over the graph and timeline that dims everything the
 last retrieval did *not* return, plus a record of the response text the agent
 received, reachable from a list of recent retrievals.
 
-Decided 2026-08-17. **Built 2026-08-18** on branch `lexical-search`, §8 steps
+Decided 2026-08-17. **Built and merged to `main` 2026-08-18**, §8 steps
 1–6 — see §10 for the construction notes and what they settled.
 
 The question it answers is not "what is in the graph" but **"what did the agent
@@ -431,7 +431,7 @@ should land whichever feature gets there first.
 
 ## 10. Construction notes (2026-08-18)
 
-Built on branch `lexical-search`, §8 steps 1–6. Unit, integration and frontend
+Built and merged to `main`, §8 steps 1–6. Unit, integration and frontend
 suites green. **Where these conflict with earlier sections, these win.**
 
 1. **The §2 census was wrong a third time, and the oracle is why we know.**

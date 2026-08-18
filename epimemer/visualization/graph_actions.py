@@ -26,27 +26,35 @@ def next_action_id() -> str:
 
 
 # A status flip reads as the act that caused it. `SUPERSEDED` is the legacy
-# value #53 kept for rows that predate the split; it maps to the unclassified
-# `RETIRED` rather than to a guess between the two acts it might have been.
+# value #53 kept for rows that predate the split; it maps to `UNDETERMINED`
+# rather than to a guess between the two acts it might have been.
+#
+# That entry sunsets with the enum member, not on its own: delete it in the same
+# change that removes `NodeStatus.SUPERSEDED` from `core/types.py`, since nothing
+# in `epimemer/` writes the status and the member is its whole remaining supply
+# (EVENT_LOG.md §11.1). The verb does not go with it — the fall-through below
+# answers for statuses that do not exist yet, so it is never spent.
 _STATUS_VERBS: Mapping[NodeStatus, ActionVerb] = {
     NodeStatus.ACTIVE: ActionVerb.RESTORED,
     NodeStatus.CORRECTED: ActionVerb.CORRECTED,
     NodeStatus.HISTORICAL: ActionVerb.WORLD_CHANGED,
     NodeStatus.MERGED: ActionVerb.MERGED,
     NodeStatus.ARCHIVED: ActionVerb.ARCHIVED,
-    NodeStatus.SUPERSEDED: ActionVerb.RETIRED,
+    NodeStatus.SUPERSEDED: ActionVerb.UNDETERMINED,
 }
 
 
 def verb_for_status(status: NodeStatus) -> ActionVerb:
     """The verb a flip to `status` reads as.
 
-    Falls through to `RETIRED` for a status this module has never heard of —
-    the same default `statusOpacity` takes in the frontend, and for the same
-    reason: a status is added by someone who has no cause to look here, so
-    "it left the active set" is the only part that can be relied on.
+    Falls through to `UNDETERMINED` for a status this module has never heard
+    of, because a status is added by someone who has no cause to look here.
+    The frontend's `statusOpacity` defaults the other way — an unlisted status
+    *fades* — and that asymmetry is deliberate: fading a live node is a
+    cosmetic error, while a log line saying a node was retired when it was not
+    is a false statement about what the agent did.
     """
-    return _STATUS_VERBS.get(status, ActionVerb.RETIRED)
+    return _STATUS_VERBS.get(status, ActionVerb.UNDETERMINED)
 
 
 def _short(node_id: str) -> str:
@@ -87,6 +95,14 @@ def summarise(
             lead = f"merged {others} node{'' if others == 1 else 's'} into {_short(subjects[0])}"
         case ActionVerb.STORED:
             lead = "stored"
+        case ActionVerb.UNDETERMINED:
+            # The verb names a state rather than an act, so it cannot carry the
+            # line on its own: "undetermined 1 node" says nothing happened to
+            # anything. What is known is that the status moved and that we
+            # cannot say to what effect.
+            lead = f"status undetermined: {len(subjects)} node" + (
+                "" if len(subjects) == 1 else "s"
+            )
         case _:
             lead = f"{verb.value.replace('_', '-')} {len(subjects)} node" + (
                 "" if len(subjects) == 1 else "s"
