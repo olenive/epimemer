@@ -24,6 +24,7 @@ from epimemer.core.types import (
     NodeStatus,
     NodeType,
     RawDocument,
+    Segment,
     Timeline,
     Topic,
     ValueSignal,
@@ -629,7 +630,9 @@ class TestVectorSearchReturnsOnlyActiveNodes:
         topic = await self._stored(
             store, Topic(content="ML", source_id="s1"), [1.0, 0.0, 0.0]
         )
-        await store.update_node_status(topic.id, NodeStatus.SUPERSEDED)
+        await store.set_node_status_tx(
+            [topic], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+        )
 
         # An exact match on the query vector: only the status filter can hide it.
         results = await store.vector_search([1.0, 0.0, 0.0], "test", k=5)
@@ -640,7 +643,9 @@ class TestVectorSearchReturnsOnlyActiveNodes:
         topic = await self._stored(
             store, Topic(content="ML", source_id="s1"), [1.0, 0.0, 0.0]
         )
-        await store.update_node_status(topic.id, NodeStatus.MERGED)
+        await store.set_node_status_tx(
+            [topic], status=NodeStatus.MERGED, at=datetime.now(timezone.utc)
+        )
 
         results = await store.vector_search([1.0, 0.0, 0.0], "test", k=5)
 
@@ -664,7 +669,9 @@ class TestVectorSearchReturnsOnlyActiveNodes:
         live = await self._stored(
             store, Topic(content="AI", source_id="s1"), [0.9, 0.1, 0.0]
         )
-        await store.update_node_status(topic.id, NodeStatus.SUPERSEDED)
+        await store.set_node_status_tx(
+            [topic], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+        )
 
         results = await store.vector_search(
             [1.0, 0.0, 0.0], "test", k=5, node_type=NodeType.TOPIC
@@ -689,8 +696,9 @@ class TestVectorSearchReturnsOnlyActiveNodes:
             )
             for i in range(6)
         ]
-        for node in retired:
-            await store.update_node_status(node.id, NodeStatus.SUPERSEDED)
+        await store.set_node_status_tx(
+            retired, status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+        )
         live = [
             await self._stored(
                 store,
@@ -958,8 +966,8 @@ class TestBatchedNodeFetch:
         here would turn a batched read into a silently different question.
         """
         nodes = await self._mixed(store)
-        await store.update_node_status(
-            nodes[1].id, NodeStatus.ARCHIVED, datetime.now(timezone.utc)
+        await store.set_node_status_tx(
+            [nodes[1]], status=NodeStatus.ARCHIVED, at=datetime.now(timezone.utc)
         )
 
         result = await store.get_nodes([n.id for n in nodes])
@@ -1136,7 +1144,9 @@ class TestArchivalStatus:
             [junk], status=NodeStatus.ARCHIVED, at=datetime.now(timezone.utc)
         )
 
-        await store.update_node_status(junk.id, NodeStatus.ACTIVE)
+        await store.set_node_status_tx(
+            [junk], status=NodeStatus.ACTIVE, at=datetime.now(timezone.utc)
+        )
 
         active_ids = {n.id for n in await store.query_nodes(status=NodeStatus.ACTIVE)}
         assert junk.id in active_ids
@@ -1221,3 +1231,404 @@ class TestArchivalStatus:
 
         active_ids = {n.id for n in await store.query_nodes(status=NodeStatus.ACTIVE)}
         assert {n.id for n in nodes} <= active_ids
+
+
+class TestLexicalSearch:
+    """`text_search` is the first protocol method where the backends genuinely
+    differ: SurrealDB scores in-engine with its own analyzer, the in-memory
+    backend scores in Python (`storage/bm25.py`). Exact score parity is not
+    achievable — the stemmers alone disagree — so what is asserted here is what
+    is achievable and what callers actually depend on: the same *set* of hits
+    for an unambiguous term, the same order where scores are unambiguous, and
+    the same answers to the three rules that decide membership.
+
+    Corpora here are five documents wide on purpose. IDF is `log((N - n + 0.5) /
+    (n + 0.5))`, so nothing can score above zero until a term is in fewer than
+    half the corpus: a two-document fixture makes every result empty and reads
+    as a broken implementation.
+    """
+
+    TICKETS = (
+        "Ticket JIRA-4417 was closed after the deployment rollback",
+        "Ticket JIRA-4418 remains open pending the deployment review",
+        "The deployment pipeline was rewritten last quarter",
+        "Nothing here concerns tickets at all",
+        "A note about the weather this morning",
+    )
+
+    async def _facts(self, store, contents=None) -> list[Fact]:
+        facts = [
+            Fact(content=content, source_id="s1")
+            for content in (contents if contents is not None else self.TICKETS)
+        ]
+        for fact in facts:
+            await store.store_node(fact)
+        return facts
+
+    async def test_text_search_agrees_across_backends_on_a_rare_term(self, store):
+        """Set parity, §4: the rare identifier finds its node and only its node.
+
+        The near-miss shares every token of `JIRA-4417` except `4417`, so a
+        backend whose match is disjunctive rather than conjunctive returns both
+        and fails here.
+        """
+        facts = await self._facts(store)
+
+        hits = await store.text_search(
+            ["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT
+        )
+
+        assert [node_id for node_id, _ in hits] == [facts[0].id]
+
+    async def test_text_search_is_or_across_terms(self, store):
+        """§2.4's trap, asserted against `text_search` directly.
+
+        Never route this through `search`: the vector arm supplies results even
+        when a conjunctive lexical arm returns nothing, so the fused version of
+        this test passes without testing anything.
+
+        Both halves matter. A single `@@` over both terms returns `[]` — the
+        multi-word prose query that silently degrades to vector-only. And the
+        scores must be *unchanged* by the absent term, or "contributes nothing"
+        would mean "contributes something negative".
+        """
+        await self._facts(store)
+
+        both = await store.text_search(
+            ["rollback", "zzzznotpresent"], corpus="nodes", node_type=NodeType.FACT
+        )
+        alone = await store.text_search(
+            ["rollback"], corpus="nodes", node_type=NodeType.FACT
+        )
+
+        assert [node_id for node_id, _ in both] == [node_id for node_id, _ in alone]
+        assert both
+        for (_, with_absent), (_, without) in zip(both, alone):
+            assert with_absent == pytest.approx(without, rel=1e-9)
+
+    async def test_zero_scored_matches_never_reach_fusion(self, store):
+        """R1: the IDF floor zeroes the score, and the hit list drops the row.
+
+        `deployment` is in three of five facts. It still *matches* them — the
+        clamp is on the score, not on membership — and a zero-scored row
+        surviving into rank fusion would arrive at an arbitrary tie rank and
+        fuse almost as strongly as the best real hit.
+        """
+        await self._facts(store)
+
+        assert await store.text_search(
+            ["deployment"], corpus="nodes", node_type=NodeType.FACT
+        ) == []
+
+    async def test_a_rare_term_outranks_a_less_rare_one(self, store):
+        """Order parity where the scores are unambiguous, §4. Within one list
+        only — there is no order across node types to assert.
+
+        The tokens are invented rather than English because one backend stems
+        and the other does not: an ordinary word here would be asserting that
+        Snowball and this test agree about its root, which is the one thing §4
+        says not to depend on.
+        """
+        await self._facts(store, [
+            "zqxx wobble",
+            "wobble frunk",
+            "grelt frunk",
+            "plink grelt",
+            "snorf plink",
+        ])
+
+        hits = await store.text_search(
+            ["zqxx", "wobble"], corpus="nodes", node_type=NodeType.FACT
+        )
+
+        # `zqxx` is in one of five and `wobble` in two, so the fact holding both
+        # outranks the fact holding only the commoner one.
+        assert len(hits) == 2
+        assert hits[0][1] > hits[1][1]
+
+    async def test_same_term_clamps_in_one_table_and_scores_in_another(self, store):
+        """R5/R6: BM25's corpus is one node table, not the graph.
+
+        `orbit` is in three of five facts and one of five topics. It says
+        nothing about which fact you want and quite a lot about which topic —
+        which is the honest reading, not an artefact. A backend that scored one
+        merged corpus gets a single answer for both and fails here.
+        """
+        await self._facts(store, [
+            "orbit correction burn scheduled",
+            "orbit decay measured again",
+            "orbit insertion completed",
+            "unrelated ground station note",
+            "another unrelated note entirely",
+        ])
+        for content in (
+            "orbit",
+            "ground stations",
+            "telemetry",
+            "propulsion",
+            "mission planning",
+        ):
+            await store.store_node(Topic(content=content, source_id="s1"))
+
+        facts = await store.text_search(
+            ["orbit"], corpus="nodes", node_type=NodeType.FACT
+        )
+        topics = await store.text_search(
+            ["orbit"], corpus="nodes", node_type=NodeType.TOPIC
+        )
+
+        assert facts == []
+        assert len(topics) == 1 and topics[0][1] > 0
+
+    async def test_text_search_requires_a_node_type_for_the_node_corpus(self, store):
+        """R5, as a contract rather than a convention: there is no cross-table
+        score with which to merge two node types into one ranked list."""
+        with pytest.raises(ValueError):
+            await store.text_search(["anything"], corpus="nodes")
+
+    async def test_a_corrected_node_is_not_a_lexical_seed(self, store):
+        """R7: the index matches every row whatever its status; the gate does not.
+
+        A CORRECTED node is a claim concluded *wrong*. Without a status gate it
+        comes back as a lexical seed, ranked highest exactly when it holds the
+        rare identifier the caller searched for.
+        """
+        facts = await self._facts(store)
+        await store.set_node_status_tx(
+            [facts[0]], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
+        )
+
+        assert await store.text_search(
+            ["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT
+        ) == []
+        # ...and it is reachable when explicitly asked for, exactly as
+        # `query_nodes` treats status.
+        corrected = await store.text_search(
+            ["JIRA-4417"],
+            corpus="nodes",
+            node_type=NodeType.FACT,
+            status=NodeStatus.CORRECTED,
+        )
+        assert [node_id for node_id, _ in corrected] == [facts[0].id]
+
+    async def test_retiring_a_node_does_not_change_what_the_rest_score(self, store):
+        """The statistics note in R7, pinned so nobody chases it as a bug.
+
+        `WHERE` exclusion does not change the index's corpus counts, so IDF is
+        computed over every row in the table however many are retired. A backend
+        that scored only what it was about to return would compute different
+        numbers from the same graph.
+        """
+        facts = await self._facts(store)
+        before = await store.text_search(
+            ["rollback"], corpus="nodes", node_type=NodeType.FACT
+        )
+
+        await store.set_node_status_tx(
+            [facts[2]], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
+        )
+        after = await store.text_search(
+            ["rollback"], corpus="nodes", node_type=NodeType.FACT
+        )
+
+        assert [node_id for node_id, _ in before] == [node_id for node_id, _ in after]
+        assert before[0][1] == pytest.approx(after[0][1], rel=1e-9)
+
+    async def test_text_search_finds_an_identifier_in_a_segment(self, store):
+        """The other corpus, §1.1. Segments keep the raw text a paraphrased fact
+        may have dropped, and they have no status to gate on."""
+        segments = [
+            Segment(source_id="d1", text=text, span_start=0, span_end=len(text))
+            for text in self.TICKETS
+        ]
+        for segment in segments:
+            await store.store_segment(segment)
+
+        hits = await store.text_search(["JIRA-4417"], corpus="segments")
+
+        assert [segment_id for segment_id, _ in hits] == [segments[0].id]
+
+    async def test_exact_containment_outranks_scattered_cooccurrence(self, store):
+        """R8: adjacency is evidence, and BM25 cannot see it.
+
+        A conjunctive token match asks only whether all three of `jira`, `-` and
+        `4417` are somewhere in the document — "JIRA - 4417" twice in a short
+        note satisfies it, scores *higher* than the real ticket (more term
+        frequency, fewer words to normalise by), and the full-text index has no
+        phrase query to say otherwise. Containment of the original string is the
+        only adjacency signal available, so it decides the order and the score
+        decides ties within each half.
+        """
+        facts = await self._facts(store, [
+            "Ticket JIRA-4417 was closed after the deployment rollback",
+            "JIRA - 4417 JIRA - 4417 quick note",
+            "The kitchen tap on floor two has been fixed",
+            "Quarterly revenue exceeded the forecast",
+            "A note about the weather this morning",
+        ])
+
+        plain = dict(await store.text_search(
+            ["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT
+        ))
+        verified = await store.text_search(
+            ["JIRA-4417"],
+            corpus="nodes",
+            node_type=NodeType.FACT,
+            verify_containment=True,
+        )
+
+        # Both are token matches, and on score alone the scattered one wins.
+        assert plain[facts[1].id] > plain[facts[0].id]
+        assert [node_id for node_id, _ in verified] == [facts[0].id, facts[1].id]
+
+    async def test_a_longer_identifier_is_not_a_containment_match(self, store):
+        """The other half of R8: token boundaries exclude what containment cannot.
+
+        `JIRA-44170` *contains* the string `JIRA-4417`, so a containment scan on
+        its own would return the wrong ticket. It is not a candidate: digit runs
+        tokenize whole, so `44170` is not `4417` and the token match never offers
+        it for checking. The two filters run in this order for that reason.
+        """
+        facts = await self._facts(store, [
+            "Ticket JIRA-4417 was closed after the deployment rollback",
+            "Ticket JIRA-44170 tracks the follow-up work",
+            "The kitchen tap on floor two has been fixed",
+            "Quarterly revenue exceeded the forecast",
+            "A note about the weather this morning",
+        ])
+
+        hits = await store.text_search(
+            ["JIRA-4417"],
+            corpus="nodes",
+            node_type=NodeType.FACT,
+            verify_containment=True,
+        )
+
+        assert [node_id for node_id, _ in hits] == [facts[0].id]
+
+    async def test_text_search_without_terms_returns_nothing(self, store):
+        await self._facts(store)
+        assert await store.text_search(
+            [], corpus="nodes", node_type=NodeType.FACT
+        ) == []
+
+    async def test_text_search_honours_k(self, store):
+        await self._facts(store, [
+            "alpha rollback one",
+            "alpha rollback two",
+            "beta note three",
+            "gamma note four",
+            "delta note five",
+        ])
+
+        hits = await store.text_search(
+            ["rollback"], corpus="nodes", node_type=NodeType.FACT, k=1
+        )
+
+        assert len(hits) == 1
+
+
+class TestNodesBySource:
+    """The bridge a segment hit crosses to reach the graph.
+
+    A node's `source_id` is the id of the segment it was extracted from, and
+    until now nothing could walk that edge in bulk. The map's shape follows
+    `get_edges_for` rather than `get_nodes`: a segment with no extracted nodes
+    has an empty list, and callers iterate the map, so a missing key would
+    silently skip a segment.
+    """
+
+    async def test_returns_the_nodes_extracted_from_each_segment(self, store):
+        first = Segment(source_id="d1", text="one", span_start=0, span_end=3)
+        second = Segment(source_id="d1", text="two", span_start=3, span_end=6)
+        for segment in (first, second):
+            await store.store_segment(segment)
+
+        topic = Topic(content="a topic", source_id=first.id)
+        fact = Fact(content="a fact", source_id=first.id)
+        inference = Inference(content="an inference", source_id=second.id)
+        for node in (topic, fact, inference):
+            await store.store_node(node)
+
+        by_source = await store.get_nodes_by_source([first.id, second.id])
+
+        assert {n.id for n in by_source[first.id]} == {topic.id, fact.id}
+        assert [n.id for n in by_source[second.id]] == [inference.id]
+
+    async def test_every_requested_id_is_a_key(self, store):
+        segment = Segment(source_id="d1", text="one", span_start=0, span_end=3)
+        await store.store_segment(segment)
+
+        by_source = await store.get_nodes_by_source([segment.id, "not-a-segment"])
+
+        assert by_source[segment.id] == []
+        assert by_source["not-a-segment"] == []
+
+    async def test_repeated_ids_collapse_and_an_empty_request_is_empty(self, store):
+        segment = Segment(source_id="d1", text="one", span_start=0, span_end=3)
+        await store.store_segment(segment)
+        fact = Fact(content="a fact", source_id=segment.id)
+        await store.store_node(fact)
+
+        assert await store.get_nodes_by_source([]) == {}
+        repeated = await store.get_nodes_by_source([segment.id, segment.id])
+        assert [n.id for n in repeated[segment.id]] == [fact.id]
+
+    async def test_nodes_come_back_at_any_status(self, store):
+        """The gate belongs to the caller, not here.
+
+        R7 filters bridged nodes exactly as it filters direct lexical seeds — but
+        it filters them *there*, so that the one rule lives in one place. A
+        bridge that pre-filtered would make `status=CORRECTED` unreachable
+        through it while the direct route still honoured it.
+        """
+        segment = Segment(source_id="d1", text="one", span_start=0, span_end=3)
+        await store.store_segment(segment)
+        retired = Fact(content="a retired fact", source_id=segment.id)
+        await store.store_node(retired)
+        await store.set_node_status_tx(
+            [retired], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
+        )
+
+        by_source = await store.get_nodes_by_source([segment.id])
+
+        assert [n.id for n in by_source[segment.id]] == [retired.id]
+        assert by_source[segment.id][0].status is NodeStatus.CORRECTED
+
+
+class TestBatchedSegmentFetch:
+    """Segments by their own id — the only thing a lexical hit knows about them.
+
+    Every other route into the segment table goes through the document that
+    contains it, which a hit over the segment corpus does not have.
+    """
+
+    async def test_returns_the_requested_segments(self, store):
+        segments = [
+            Segment(source_id="d1", text=f"segment {i}", span_start=i, span_end=i + 1)
+            for i in range(3)
+        ]
+        for segment in segments:
+            await store.store_segment(segment)
+
+        found = await store.get_segments([segments[0].id, segments[2].id])
+
+        assert set(found) == {segments[0].id, segments[2].id}
+        assert found[segments[0].id].text == "segment 0"
+        assert found[segments[2].id].source_id == "d1"
+
+    async def test_unknown_ids_are_absent_rather_than_none(self, store):
+        segment = Segment(source_id="d1", text="only", span_start=0, span_end=4)
+        await store.store_segment(segment)
+
+        found = await store.get_segments([segment.id, "not-a-segment"])
+
+        assert set(found) == {segment.id}
+        assert found.get("not-a-segment") is None
+
+    async def test_repeated_ids_collapse_and_an_empty_request_is_empty(self, store):
+        segment = Segment(source_id="d1", text="only", span_start=0, span_end=4)
+        await store.store_segment(segment)
+
+        assert await store.get_segments([]) == {}
+        assert set(await store.get_segments([segment.id, segment.id])) == {segment.id}

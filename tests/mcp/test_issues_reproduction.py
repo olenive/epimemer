@@ -14,6 +14,8 @@ traversal; ``link`` resolves epistemic nodes only).
 References are to ISSUES.md (discovered 2026-06-25).
 """
 
+from datetime import datetime, timezone
+
 import pytest
 
 from epimemer.core.types import (
@@ -107,7 +109,9 @@ class TestIssue2SearchExcludesSupersededNodes:
         await storage.store_embedding(
             EmbeddingRecord(item_id=node.id, model_id="m", vector=[1.0, 0.0, 0.0])
         )
-        await storage.update_node_status(node.id, NodeStatus.SUPERSEDED)
+        await storage.set_node_status_tx(
+            [node], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+        )
 
         # Exact-match query → cosine 1.0 → would top the list if not filtered.
         results = await storage.vector_search([1.0, 0.0, 0.0], "m", k=10)
@@ -119,7 +123,9 @@ class TestIssue2SearchExcludesSupersededNodes:
     ):
         node = Topic(content="neural networks for vision", source_id="s1")
         await _store_with_embedding(storage, embedding_provider, node)
-        await storage.update_node_status(node.id, NodeStatus.SUPERSEDED)
+        await storage.set_node_status_tx(
+            [node], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+        )
 
         result, _ = await search(
             node.content, storage, embedding_provider, k=10, graph_hops=0,

@@ -179,6 +179,23 @@ class StorageBackend(Protocol):
         """Retrieve all segments for a document."""
         ...
 
+    async def get_segments(self, segment_ids: Sequence[str]) -> dict[str, Segment]:
+        """`get_segments_for_document` by id instead of by document, batched.
+
+        A lexical search over the segment corpus comes back with ids and scores;
+        rendering those hits needs their text and their document. Nothing else
+        in the protocol could fetch a segment by its own id — the only route was
+        through the document that contains it, which a hit does not know.
+
+        **Ids that are not segments are absent from the map**, rather than
+        present with a `None` value, so `result.get(sid)` behaves exactly like a
+        single-segment lookup would. This follows `get_nodes` rather than
+        `get_edges_for`: a list has an empty value and a segment does not.
+        Repeated ids collapse; an empty request returns `{}` without touching
+        the store.
+        """
+        ...
+
     # --- Epistemic Nodes ---
 
     async def store_node(self, node: EpistemicNode) -> str:
@@ -251,15 +268,6 @@ class StorageBackend(Protocol):
         nodes regardless of status; callers derive the specific lifecycle events
         from each node's episodes and timestamps.
         """
-        ...
-
-    async def update_node_status(
-        self,
-        node_id: str,
-        status: NodeStatus,
-        superseded_at: datetime | None = None,
-    ) -> None:
-        """Update a node's status (e.g., mark as superseded or merged)."""
         ...
 
     async def relabel_edges(self, old_label: str, new_label: str) -> int:
@@ -536,6 +544,110 @@ class StorageBackend(Protocol):
         ordered by descending similarity.
         """
         ...
+
+    # --- Lexical search ---
+
+    async def text_search(
+        self,
+        terms: Sequence[str],
+        *,
+        corpus: Literal["nodes", "segments"],
+        k: int = 10,
+        node_type: NodeType | None = None,
+        status: NodeStatus = NodeStatus.ACTIVE,
+        verify_containment: bool = False,
+    ) -> Sequence[tuple[str, float]]:
+        """Ids and BM25 scores for documents matching ANY term, best first.
+
+        The counterpart to `vector_search`, and it fails in the opposite
+        direction: cosine similarity has no notion of term rarity, so a node
+        reachable only by a rare token — a ticket id, an error code — is
+        unreachable today (`dev-docs/LEXICAL_SEARCH.md` §1). IDF is exactly the
+        missing statistic.
+
+        **A term is a conjunction; terms are ORed.** `"JIRA-4417"` analyzes to
+        several tokens and matches only documents containing all of them, which
+        is what separates it from `JIRA-4418`; a term absent from the corpus
+        contributes nothing rather than excluding everything. Terms arrive
+        pre-split so both backends agree on what the terms *are* before they can
+        disagree about anything else.
+
+        **`verify_containment` splits the hits by adjacency**, for callers whose
+        terms were *declared* rather than guessed at (§10, R2/R8). Candidates
+        still come from the same token match — an exact-containing document
+        necessarily contains the tokens, so nothing is missed and `JIRA-44170`
+        is still excluded before any string is compared — and are then
+        partitioned by whether they hold a term literally, up to the analyzer's
+        folding and without stemming (`bm25.contains_term`). Containing
+        documents rank first and are **exempt from the zero rule**: their
+        evidence is the containment, not the score, so a term whose common half
+        sits at the IDF floor still returns the document that spells it out.
+        Score orders each half internally, and the rest of the hits are
+        truncated at `> 0` as always. Off by default: the fallback path infers
+        its terms from the query and has no exactness to verify.
+
+        **Scores are strictly positive** — unless `verify_containment` rescued
+        a hit, whose score is reported as measured and may be zero or, on an
+        engine that does not clamp its IDF, negative. Otherwise a match whose
+        BM25 score is `0.0` — the IDF floor, which a term more common than half
+        the corpus falls to — is not a result. Both backends enforce this; it is part of the contract,
+        not an optimisation. The floor zeroes the *score*, not the *match*, and
+        a zero-scored row surviving into rank fusion would arrive at an
+        arbitrary tie rank and fuse almost as strongly as the best real hit
+        (§10, R1). One backend scores below the floor negatively rather than
+        clamping, so the rule is `> 0` and not `!= 0`.
+
+        **One call scores one corpus partition.** With `corpus="nodes"`,
+        `node_type` is required: node tables carry their own BM25 statistics, so
+        IDF's N is per type and a merged multi-type list would sort incomparable
+        numbers. Measured: the same term with the same hit count scores `0.0` in
+        a 4-row table and `0.9615` in a 10-row one. The caller makes one call
+        per type and fuses *ranks*, which are the only thing that may cross a
+        table boundary (§10, R5/R6). Raises `ValueError` if `node_type` is
+        omitted for the node corpus.
+
+        `status` mirrors `vector_search`: ACTIVE by default, same meaning, so
+        the two seed routes cannot disagree about whether a node exists. Without
+        it a CORRECTED node — a claim concluded *wrong* — comes back as a
+        lexical seed, ranked high precisely when it holds a rare identifier
+        (§10, R7). Ignored for `corpus="segments"`; segments have no status.
+
+        Filtering by status does **not** change the corpus IDF is computed over.
+        The index counts every row in the table whatever its status, so scores
+        drift slightly as nodes retire — harmless under rank fusion, and stated
+        here so nobody chases it as a bug. A backend that scored only the rows
+        it was about to return would compute different numbers from the same
+        graph.
+        """
+        ...
+
+    async def get_nodes_by_source(
+        self, source_ids: Sequence[str]
+    ) -> dict[str, list[EpistemicNode]]:
+        """Nodes extracted from each segment, keyed by the segment's id.
+
+        The bridge a segment hit crosses to reach the graph. `store_decomposition`
+        is agent-driven, so a fact written as "the deployment ticket was closed"
+        never contains the identifier that was in the source text — and no search
+        of any kind recovers it from nodes. The segment kept the raw text, and a
+        node's `source_id` is its `Segment.id`, so a segment hit answers *the id
+        is in this passage; here is what we concluded from it*
+        (`LEXICAL_SEARCH.md` §1.1).
+
+        **Every requested id is a key**, mapping to `[]` where nothing was
+        extracted from that segment — including ids that are not segments at
+        all. Callers iterate the map, so absence must mean "you did not ask"
+        rather than "there were none", exactly as in `get_edges_for`. Repeated
+        ids collapse; an empty request returns `{}` without touching the store.
+
+        Nodes come back at **any status**; the caller applies the same gate it
+        applies to direct lexical seeds, or the bridge is a side door around it
+        (§10, R7).
+
+        Batched — a bounded number of statements, not one per id.
+        """
+        ...
+
 
     # --- Timelines ---
 

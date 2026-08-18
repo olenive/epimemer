@@ -108,7 +108,9 @@ class TestNodeStorage:
     async def test_query_by_status(self, store):
         t = Topic(content="topic", source_id="s1")
         await store.store_node(t)
-        await store.update_node_status(t.id, NodeStatus.SUPERSEDED)
+        await store.set_node_status_tx(
+            [t], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+        )
         active = await store.query_nodes(status=NodeStatus.ACTIVE)
         superseded = await store.query_nodes(status=NodeStatus.SUPERSEDED)
         assert len(active) == 0
@@ -170,7 +172,9 @@ class TestCounts:
     async def test_count_nodes_respects_status(self, store):
         topic = Topic(content="t", source_id="s1")
         await store.store_node(topic)
-        await store.update_node_status(topic.id, NodeStatus.SUPERSEDED)
+        await store.set_node_status_tx(
+            [topic], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+        )
         active = await store.count_nodes_by_type(status=NodeStatus.ACTIVE)
         superseded = await store.count_nodes_by_type(status=NodeStatus.SUPERSEDED)
         assert active[NodeType.TOPIC] == 0
@@ -568,7 +572,9 @@ class TestVectorSearchOverFetch:
                     item_id=fact.id, model_id=model_id, vector=[1.0, 0.001 * i, 0.0]
                 )
             )
-            await store.update_node_status(fact.id, NodeStatus.SUPERSEDED)
+            await store.set_node_status_tx(
+                [fact], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+            )
             made["retired"].append(fact)
         for i in range(live):
             fact = Fact(content=f"live {i}", source_id="s1")
@@ -847,3 +853,100 @@ class TestReconnection:
 
         assert results == [None] * 5
         assert len(built) == 2, f"{len(built) - 1} connections built for one drop"
+
+
+class TestFullTextDialectAndIdfFloor:
+    """Where the two SurrealDBs this adapter drives do not agree.
+
+    `mem://` is not a connection to the standalone server; it is an older
+    SurrealDB core compiled into the Python SDK. Most of full-text search is
+    identical on the two — the analyzer, the match operator, `search::score`,
+    and positive scores to seven decimal places — but two things are not, and
+    both are load-bearing enough to pin here rather than discover later.
+    """
+
+    CORPUS = (
+        "Ticket JIRA-4417 was closed after the deployment rollback",
+        "Ticket JIRA-4418 remains open pending the deployment review",
+        "Ticket JIRA-4419 was reassigned to the platform team",
+        "Ticket JIRA-4420 is blocked on a certificate rotation",
+        "Ticket JIRA-4421 covers the quarterly audit backlog",
+    )
+
+    async def _seed(self, store, contents=None) -> list[Fact]:
+        facts = [
+            Fact(content=text, source_id="s1")
+            for text in (contents if contents is not None else self.CORPUS)
+        ]
+        for fact in facts:
+            await store.store_node(fact)
+        return facts
+
+    async def test_the_index_is_defined_in_this_engines_dialect(self, store):
+        """The server renamed `SEARCH` to `FULLTEXT` and each core rejects the
+        other's spelling outright, so `_setup_schema` negotiates. If the
+        negotiation failed there would be no index, and every lexical search
+        would return nothing rather than raising.
+        """
+        await self._seed(store)
+
+        assert await store.text_search(
+            ["4417"], corpus="nodes", node_type=NodeType.FACT
+        )
+
+    async def test_an_uninformative_term_cannot_delete_a_real_hit(self, store):
+        """The per-reference score floor, and why the adapter applies its own.
+
+        This engine does not clamp IDF at zero — a term in more than half the
+        corpus scores *negative* here where the server scores `0.0`. Summed
+        across an OR, an uninformative term would then drag a genuine hit below
+        the truncation and delete it. `math::max` is what makes the contract
+        ("contributes nothing") true on both.
+        """
+        facts = await self._seed(store)
+
+        with_noise = await store.text_search(
+            ["4417", "ticket"], corpus="nodes", node_type=NodeType.FACT
+        )
+
+        assert [node_id for node_id, _ in with_noise] == [facts[0].id]
+
+    async def test_a_multi_token_term_of_mostly_common_words_is_lost_here(
+        self, store
+    ):
+        """A known divergence, pinned so it is a decision rather than a surprise.
+
+        A term is one match reference, and its score is the engine's own sum
+        over its tokens — which this core does not floor. `JIRA-4417` in a
+        corpus where *every* document says JIRA is two heavily-negative tokens
+        plus one strongly positive one, and the total goes below zero: the
+        adapter cannot floor what it never sees separately, and splitting the
+        term into per-token references is not available either, because the
+        standalone server stops matching conjunctively as soon as the `WHERE`
+        gains that structure (measured — the near-miss comes back).
+
+        On the server the same call returns the fact. The divergence needs a
+        corpus where the identifier's common half is above the floor, which the
+        five-ticket graph below is and a real graph is not: adding six unrelated
+        facts is enough to make both engines agree, which is the second half of
+        this test.
+        """
+        facts = await self._seed(store)
+
+        assert await store.text_search(
+            ["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT
+        ) == []
+
+        await self._seed(store, [
+            "The kitchen tap on floor two has been fixed",
+            "Quarterly revenue exceeded the forecast by four percent",
+            "The onboarding checklist now includes laptop encryption",
+            "A new espresso machine arrived in the north wing",
+            "Cycling to the office is reimbursed from next month",
+            "The annual fire drill happens on a Tuesday",
+        ])
+
+        hits = await store.text_search(
+            ["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT
+        )
+        assert [node_id for node_id, _ in hits] == [facts[0].id]

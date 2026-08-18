@@ -3,7 +3,8 @@
 Design for a log panel in the dashboard — a list of what the agent changed,
 filterable, with entries that highlight their nodes in the graph on click.
 
-Decided 2026-08-17. Nothing here is built yet.
+Decided 2026-08-17. **Built 2026-08-18** on branch `lexical-search`, §9 steps
+1–6 — see §11 for the construction notes and what they settled.
 
 The motivating case, in the user's words: *"if the log entry is node 123 is
 being superseded by node 124, it would be handy if I could click on the log
@@ -52,10 +53,16 @@ Fix: carry the counterpart id on both surfaces. Both already hold it —
 `supersede_node_tx` is handed `old_node`, `new_node` and `lineage_edge`
 together, and `query_changes` can join the edge it already has access to.
 
-**This lands first, on its own, regardless of whether the log is built.** It is
-a defect in the event contract, not a missing feature, and it is filed as one:
-**`ISSUES.md` #57** (2026-08-17 — the review found it had been called for here
-but never filed).
+**This landed first, on its own — `ISSUES.md` #57, resolved 2026-08-17.** It
+was a defect in the event contract, not a missing feature: counterpart ids now
+ride on both surfaces, via the append-only lifecycle-episode list of §6. §8's
+first two tests and §9's commit 1 are done; everything below builds on top.
+One known gap, ruled on separately: `update_node_status` bypassed the episode
+path (zero production callers at resolution time). **Closed 2026-08-18 by
+deletion** — the method is gone from the protocol and both backends, and its
+test callers moved to `set_node_status_tx`, so every status flip now writes an
+episode by construction rather than by discipline. The scalar-pair fallback in
+`events_in_window` stays for graphs written before episodes existed.
 
 ---
 
@@ -325,21 +332,31 @@ before the code that satisfies it.
 
 - `test_node_status_changed_names_the_superseding_node` — §2, on the live event.
   Must be shown failing first; it is the whole reason the example does not work.
+  **Built with #57 (2026-08-17), as was the durable one below and §6's
+  N-cycle episode test.**
 - `test_query_changes_names_the_superseding_node` — §2, durable path.
 - `test_supersede_publishes_one_action_for_four_events` — §3.1: the coarse event
-  is emitted once per transaction, not once per write.
+  is emitted once per transaction, not once per write. **Built 2026-08-18**
+  (`tests/visualization/test_graph_actions.py`).
 - `test_action_ids_are_monotonic_across_browser_reconnects` — §4.1. A
   `seq`-based implementation passes every other test here and fails this one.
+  **Built 2026-08-18** (`tests/visualization/test_hub.py`, where two browser
+  sockets make the claim checkable).
 - `test_ring_evicts_oldest_and_backfills_on_subscribe` — §4.2, bounded and
-  replayable.
-- `test_log_filters_by_verb_and_substring` — §5, pure, no DOM.
+  replayable. **Built 2026-08-18**; the pure ring has its own module tests in
+  `tests/visualization/test_ring.py`.
+- `test_log_filters_by_verb_and_substring` — §5, pure, no DOM. **Built
+  2026-08-18** (`log-store.test.ts`).
 - `test_query_changes_reports_every_episode_of_a_recurring_node` — §6 revised:
   retire a node as HISTORICAL, restore it, retire it again; windows spanning
   each transition report all three events with the right kinds. A scalar
   `(superseded_at, status)` implementation — or a scalar `restored_at` —
   loses one of them and fails.
-- `test_highlight_reports_an_id_absent_from_the_graph` — §7.1.
-- `test_highlight_clears_a_conflicting_type_filter` — §7.2.
+- `test_highlight_reports_an_id_absent_from_the_graph` — §7.1. **Built
+  2026-08-18** (`graph-panel.test.ts`).
+- `test_highlight_clears_a_conflicting_type_filter` — §7.2. **Built 2026-08-18**
+  (same file). Both are written against pure functions rather than a live
+  cytoscape instance — see §11.6.
 
 Storage is untouched, so the unit suite covers this; no integration run needed
 beyond what §2's durable-path change requires.
@@ -350,18 +367,21 @@ beyond what §2's durable-path change requires.
 
 1. Counterpart id on `NodeStatusChanged` and `events_in_window` (§2).
    Independent of everything else here, and worth landing alone.
+   **Done — #57, 2026-08-17.**
 2. `GraphActionRecorded` + emission at the transaction boundaries (§3.1).
-3. The bounded ring module, pure, with tests.
-4. Hub-side instance + backfill on subscribe (§4.2).
-5. Log panel: rendering and filters (§5).
+   **Done 2026-08-18.**
+3. The bounded ring module, pure, with tests. **Done 2026-08-18.**
+4. Hub-side instance + backfill on subscribe (§4.2). **Done 2026-08-18.**
+5. Log panel: rendering and filters (§5). **Done 2026-08-18.**
 6. Click-to-highlight, both silent-failure fixes, bidirectional selection (§7).
+   **Done 2026-08-18.**
 
 Steps 1–3 change nothing a user sees. Step 4 is where the panel becomes
 possible.
 
 ---
 
-## 10. Open
+## 10. Resolved while building (was: Open)
 
 - **Event category — resolved (2026-08-17, review), and the premise was
   wrong.** Nothing filters by category anywhere: hub subscription filtering
@@ -374,8 +394,80 @@ possible.
   `category: GRAPH` — it is a graph-mutation summary, which is what GRAPH
   means, and if category filtering ever becomes real, "coarse actions are
   GRAPH events" is the reading that keeps old subscribers working.
-- **Ring size**, and whether it is configurable.
-- **Where the panel lives.** The layout critique from the retrieval discussion
-  applies unchanged: the dashboard already has two vertical panels, a drawer and
-  a strip, and a fourth vertical column would starve the graph. A log is a
-  narrow list and probably wants the drawer or a rail, not a division.
+- **Ring size — resolved 2026-08-18: 512, not configurable.** The measurement
+  that decides it is the one §3 already took, read at the right granularity: a
+  25-node `store_decomposition` emits 176 fine-grained events and **one** act,
+  because it is one transaction. Re-measured while building, with a heavier
+  25-node ingest (every node on one segment): 309 events, still one act. So the
+  coarse stream is two orders of magnitude smaller than the firehose §3 refused,
+  and 512 entries is a long working session rather than a few seconds of one.
+  Not configurable: a knob here is one more number nobody has measured, and the
+  ring is bounded either way.
+- **Where the panel lives — resolved 2026-08-18: a rail.** Not the drawer,
+  which retrieval provenance is about to split into Node and Response tabs
+  (`RETRIEVAL_PROVENANCE.md` §5.1); a third tab there would put three unrelated
+  drivers in one pane. The rail is a fixed-width (`w-80 shrink-0`) sibling of
+  the split container, hidden until the header's **Log** button asks for it, so
+  the graph keeps its width by default. **Structural, not stylistic:** an
+  earlier draft put it *inside* `#split-container` and
+  `layout.test.ts::has exactly the two halves and the divider as children`
+  caught it immediately — that guard exists because the detail drawer made the
+  same mistake and every hover resized the timeline. The rail is now guarded the
+  same way.
+
+---
+
+## 11. Construction notes (2026-08-18)
+
+Built on branch `lexical-search`, §9 steps 2–6 (step 1 was #57, 2026-08-17).
+Unit, integration and frontend suites green. **Where these conflict with
+earlier sections, these win.**
+
+1. **The verb list needed a seventh entry, and §3.1's rule is why.** "There is
+   no `superseded` verb" is binding, but `NodeStatus.SUPERSEDED` still exists —
+   #53 kept it for rows that genuinely do not record which act they were. It
+   maps to **`retired`**: the unclassified verb, not a sixth kind of act.
+   Mapping it to `corrected` would have been the invented answer #53 refused to
+   give, and mapping it to `superseded` is what the rule forbids. Guarded by
+   `test_there_is_no_superseded_verb`.
+2. **Emission is at the five `_tx` boundaries and nowhere else.**
+   `supersede_node_tx`, `supersede_by_existing_tx`, `merge_nodes_tx`,
+   `set_node_status_tx`, `write_batch_tx`. Single writes (`store_node`,
+   `store_edge`) emit no act: they are writes, not transactions, and the three
+   production callers of `store_node` are source/tag upserts that nobody wants a
+   log line for. Consequence, stated rather than hidden: an act performed
+   entirely through single writes would not appear in the log. Nothing on the
+   production path does.
+3. **`action_id` is a process-wide counter, zero-padded.** One process is one
+   session (`session_id` is a fresh uuid4 per process), so the process is the
+   right scope; the padding makes the lexical order a JSON consumer gets for
+   free the numeric one, which is what lets the frontend sort and dedup on it
+   without parsing. A restarted server is a different session with its own ring
+   and its own numbering — §4.2's stated limit, unchanged.
+4. **The ring is values, not a buffer.** `remember` returns a new tuple. The
+   hub keeps a ring per session in a dict it also iterates while fanning out,
+   and a ring that mutated in place would have every reader sharing one buffer.
+   Cost is a copy of `capacity` references per act — nothing next to
+   serializing the act that prompted it.
+5. **Backfill reuses the live subscription test.** `_replay_actions` runs the
+   same `_subscribed(payload)` predicate the live path runs, so a replayed entry
+   can never reach a browser a live one would not have. Writing the graph check
+   out a second time is exactly the shape of bug this project keeps finding.
+6. **`highlightNodes` now returns a report, and the caller says so.** The two
+   silent failures are closed in `graph-panel.ts` as three pure functions —
+   `missingFrom`, `filterAfterHighlight`, `highlightNote` — because cytoscape
+   cannot be instantiated under jsdom (no canvas), so the panel's own tests are
+   pure by necessity and the rule had to be extractable to be testable at all.
+   The filter is cleared **only** when it would hide something being
+   highlighted; clearing unconditionally would undo a filter the user set, every
+   time they clicked an entry about a node that filter already showed.
+7. **Bidirectional selection does not reveal the rail.** Clicking a node sets
+   the log's node-id filter and stops there. Opening a panel on every node click
+   is the drawer-stealing behaviour `RETRIEVAL_PROVENANCE.md` §5.2 rules out;
+   the filter is simply there when you open the log.
+8. **§5's "time range reuses the timeline panel's range inputs" was not taken
+   literally.** The log has its own two date inputs. The timeline's are also
+   driven by shift-drag zoom on the axis, so sharing them would make scrubbing
+   the timeline silently filter the log — a filter nobody set. The *rule* is
+   shared (`TimeRange`, half-open, from `timeline-filter.ts`); the controls are
+   not.

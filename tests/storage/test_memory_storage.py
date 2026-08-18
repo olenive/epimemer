@@ -119,15 +119,20 @@ class TestNodeStorage:
     async def test_query_by_status(self, store):
         t = Topic(content="topic", source_id="s1")
         await store.store_node(t)
-        await store.update_node_status(t.id, NodeStatus.SUPERSEDED)
+        await store.set_node_status_tx(
+            [t], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+        )
         active = await store.query_nodes(status=NodeStatus.ACTIVE)
         superseded = await store.query_nodes(status=NodeStatus.SUPERSEDED)
         assert len(active) == 0
         assert len(superseded) == 1
 
     async def test_update_nonexistent_raises(self, store):
+        absent = Topic(content="never stored", source_id="s1")
         with pytest.raises(KeyError):
-            await store.update_node_status("nonexistent", NodeStatus.SUPERSEDED)
+            await store.set_node_status_tx(
+                [absent], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+            )
 
 
 class TestEdgeStorage:
@@ -176,7 +181,9 @@ class TestCounts:
     async def test_count_nodes_respects_status(self, store):
         topic = Topic(content="t", source_id="s1")
         await store.store_node(topic)
-        await store.update_node_status(topic.id, NodeStatus.SUPERSEDED)
+        await store.set_node_status_tx(
+            [topic], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+        )
         active = await store.count_nodes_by_type(status=NodeStatus.ACTIVE)
         superseded = await store.count_nodes_by_type(status=NodeStatus.SUPERSEDED)
         assert active[NodeType.TOPIC] == 0

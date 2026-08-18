@@ -11,6 +11,7 @@ import type {
   MetacontextView,
   NodeView,
   ReflectPressure,
+  RetrievalRecordWire,
   SessionInfo,
   TimelineView,
 } from "./types";
@@ -57,6 +58,24 @@ export const fetchSessions = async (): Promise<SessionInfo[]> => {
 export const fetchGraphs = async (session: string): Promise<GraphListResponse> => {
   const resp = await fetch(`/api/graphs?session=${encodeURIComponent(session)}`);
   if (!resp.ok) throw await failure(resp, "Failed to fetch graphs");
+  return resp.json();
+};
+
+export interface RetrievalsResponse {
+  records: RetrievalRecordWire[];
+}
+
+/**
+ * This session's retrieval records, payloads included.
+ *
+ * Answered by the MCP process itself, which is why it carries the response
+ * text even when the hub's own mirror is guarded down to structural metadata —
+ * and why it fails once that process exits. The mirror is what survives that;
+ * the two routes are complementary (§3.2).
+ */
+export const fetchRetrievals = async (session: string): Promise<RetrievalsResponse> => {
+  const resp = await fetch(`/api/retrievals?session=${encodeURIComponent(session)}`);
+  if (!resp.ok) throw await failure(resp, "Failed to fetch retrievals");
   return resp.json();
 };
 

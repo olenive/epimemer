@@ -165,6 +165,245 @@ async def test_browser_only_receives_its_subscribed_session(hub):
             assert msg["session_id"] == "s-a"
 
 
+# --- the log ring (EVENT_LOG.md §4.2) ---
+
+
+def _action(action_id: str, *, graph: str = "memory", verb: str = "stored") -> dict:
+    return {
+        "category": "graph",
+        "event_type": "graph_action_recorded",
+        "graph": graph,
+        "action_id": action_id,
+        "verb": verb,
+        "subjects": ["n1"],
+        "counts": {"nodes": 1},
+        "summary": f"stored ({action_id})",
+    }
+
+
+async def _subscribe(browser, session: str, graphs=None) -> None:
+    await browser.send(json.dumps({"subscribe": {"session": session, "graphs": graphs}}))
+
+
+async def _drain(browser, n: int, timeout: float = 3.0) -> list[dict]:
+    return [
+        json.loads(await asyncio.wait_for(browser.recv(), timeout=timeout))
+        for _ in range(n)
+    ]
+
+
+async def test_ring_evicts_oldest_and_backfills_on_subscribe(hub, monkeypatch):
+    """§4.2: bounded and replayable.
+
+    A browser opened *after* the agent did something is the normal case — you
+    open the dashboard because you noticed. A live-only stream is empty exactly
+    then.
+    """
+    monkeypatch.setattr(hubmod, "LOG_RING_CAPACITY", 3)
+    async with websockets.connect(hub.ingest) as sess:
+        await _register(sess, _session("s-a"))
+        await _wait(lambda: _pred_len(hub.addr, 1))
+
+        for i in range(5):
+            await sess.send(PublishEvent(payload=_action(f"{i:03d}")).model_dump_json())
+        await asyncio.sleep(0.1)
+
+        async with websockets.connect(hub.ws) as browser:
+            await _subscribe(browser, "s-a")
+            replayed = await _drain(browser, 3)
+
+    assert [m["action_id"] for m in replayed] == ["002", "003", "004"]
+    assert all(m["session_id"] == "s-a" for m in replayed)
+
+
+async def test_the_ring_keeps_only_the_coarse_stream(hub):
+    """It selects on `event_type`, not on category — every graph event carries
+    `category: graph`, and remembering all of them is the firehose §3 refused."""
+    async with websockets.connect(hub.ingest) as sess:
+        await _register(sess, _session("s-a"))
+        await _wait(lambda: _pred_len(hub.addr, 1))
+
+        await sess.send(PublishEvent(payload=_node_event()).model_dump_json())
+        await sess.send(PublishEvent(payload=_action("001")).model_dump_json())
+        await asyncio.sleep(0.1)
+
+        async with websockets.connect(hub.ws) as browser:
+            await _subscribe(browser, "s-a")
+            replayed = await _drain(browser, 1)
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(browser.recv(), timeout=0.3)
+
+    assert [m["event_type"] for m in replayed] == ["graph_action_recorded"]
+
+
+async def test_backfill_stays_inside_the_viewed_graph(hub):
+    """§6: an entry from graph A must never highlight into graph B."""
+    async with websockets.connect(hub.ingest) as sess:
+        await _register(sess, _session("s-a"))
+        await _wait(lambda: _pred_len(hub.addr, 1))
+
+        await sess.send(PublishEvent(payload=_action("001", graph="alpha")).model_dump_json())
+        await sess.send(PublishEvent(payload=_action("002", graph="beta")).model_dump_json())
+        await asyncio.sleep(0.1)
+
+        async with websockets.connect(hub.ws) as browser:
+            await _subscribe(browser, "s-a", graphs=["beta"])
+            replayed = await _drain(browser, 1)
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(browser.recv(), timeout=0.3)
+
+    assert [m["action_id"] for m in replayed] == ["002"]
+
+
+async def test_action_ids_are_monotonic_across_browser_reconnects(hub):
+    """§4.1: `seq` cannot carry this.
+
+    It is assigned per browser connection at send time and restarts at 0 on
+    reconnect, so two views of the same act disagree about its number. The
+    `action_id` is assigned by the session that emitted the act, so it does not
+    — which is what lets a log dedup a replay against what it already holds.
+    A `seq`-based implementation passes every other test in this file.
+    """
+    async with websockets.connect(hub.ingest) as sess:
+        await _register(sess, _session("s-a"))
+        await _wait(lambda: _pred_len(hub.addr, 1))
+
+        async with websockets.connect(hub.ws) as first:
+            await _subscribe(first, "s-a")
+            await asyncio.sleep(0.1)
+            for i in range(2):
+                await sess.send(PublishEvent(payload=_action(f"{i:03d}")).model_dump_json())
+            live = await _drain(first, 2)
+
+        await sess.send(PublishEvent(payload=_action("002")).model_dump_json())
+        await asyncio.sleep(0.1)
+
+        async with websockets.connect(hub.ws) as second:
+            await _subscribe(second, "s-a")
+            replayed = await _drain(second, 3)
+
+    assert [m["seq"] for m in live] == [1, 2]
+    assert [m["seq"] for m in replayed] == [1, 2, 3]      # seq restarted
+    ids = [m["action_id"] for m in replayed]
+    assert ids == sorted(ids) == ["000", "001", "002"]    # the ids did not
+    assert [m["action_id"] for m in live] == ids[:2]
+
+
+# --- the retrieval-record mirror (RETRIEVAL_PROVENANCE.md §3.2) ---
+
+
+def _record(record_id: str, *, graph: str = "memory", payload: str = "{}") -> dict:
+    return {
+        "category": "graph",
+        "event_type": "retrieval_recorded",
+        "graph": graph,
+        "record": {
+            "record_id": record_id,
+            "tool": "epimemer.search",
+            "query": "deployment",
+            "graph": graph,
+            "retrieved": [{"node_id": "n1", "provenance": "vector", "score": 0.82}],
+            "response_text": payload,
+            "truncated": False,
+        },
+    }
+
+
+async def test_records_survive_session_death_in_the_hub_ring(hub):
+    """§3.2 revised. Session-side-only placement made records unreachable the
+    moment the MCP process exited — the hub keeps disconnected sessions but
+    raises on RPC to them, which is exactly the "open the dashboard after
+    noticing" case this feature calls normal.
+    """
+    async with websockets.connect(hub.ingest) as sess:
+        await _register(sess, _session("s-a"))
+        await _wait(lambda: _pred_len(hub.addr, 1))
+        await sess.send(PublishEvent(payload=_record("001")).model_dump_json())
+        await asyncio.sleep(0.1)
+    # The session is gone. The hub still lists it, and the RPC to it would now
+    # raise — but the ring is here.
+
+    async def _disconnected() -> bool:
+        return (await _sessions(hub.addr))[0]["connected"] is False
+
+    await _wait(_disconnected)
+
+    async with websockets.connect(hub.ws) as browser:
+        await _subscribe(browser, "s-a")
+        replayed = await _drain(browser, 1)
+
+    assert [m["record"]["record_id"] for m in replayed] == ["001"]
+
+
+async def test_records_never_mix_across_sessions(hub):
+    """Per-session keying is a contract, not an accident of placement.
+
+    The identity unit is the MCP process, one per conversation; a browser that
+    saw another session's records would be reading another conversation's.
+    """
+    async with websockets.connect(hub.ingest) as a, websockets.connect(hub.ingest) as b:
+        await _register(a, _session("s-a"))
+        await _register(b, _session("s-b"))
+        await _wait(lambda: _pred_len(hub.addr, 2))
+
+        await a.send(PublishEvent(payload=_record("a-1")).model_dump_json())
+        await b.send(PublishEvent(payload=_record("b-1")).model_dump_json())
+        await a.send(PublishEvent(payload=_record("a-2")).model_dump_json())
+        await asyncio.sleep(0.1)
+
+        async with websockets.connect(hub.ws) as browser:
+            await _subscribe(browser, "s-a")
+            replayed = await _drain(browser, 2)
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(browser.recv(), timeout=0.3)
+
+    assert [m["record"]["record_id"] for m in replayed] == ["a-1", "a-2"]
+
+
+async def test_the_two_rings_are_bounded_separately(hub, monkeypatch):
+    """Records carry payloads and acts do not, so they are sized by different
+    things — one capacity for both would be wrong twice."""
+    monkeypatch.setattr(hubmod, "RETRIEVAL_RING_CAPACITY", 2)
+    monkeypatch.setattr(hubmod, "LOG_RING_CAPACITY", 4)
+    async with websockets.connect(hub.ingest) as sess:
+        await _register(sess, _session("s-a"))
+        await _wait(lambda: _pred_len(hub.addr, 1))
+
+        for i in range(4):
+            await sess.send(PublishEvent(payload=_record(f"r{i}")).model_dump_json())
+            await sess.send(PublishEvent(payload=_action(f"a{i}")).model_dump_json())
+        await asyncio.sleep(0.1)
+
+        async with websockets.connect(hub.ws) as browser:
+            await _subscribe(browser, "s-a")
+            replayed = await _drain(browser, 6)
+
+    kinds = [m["event_type"] for m in replayed]
+    assert kinds.count("graph_action_recorded") == 4
+    assert kinds.count("retrieval_recorded") == 2
+
+
+async def test_the_retrievals_rpc_reaches_the_session(hub):
+    """The payload route: served by the process that produced it, which is what
+    still works when the hub's mirror is guarded down to metadata."""
+    async with websockets.connect(hub.ingest) as sess:
+        await _register(sess, _session("s-a"))
+        await _wait(lambda: _pred_len(hub.addr, 1))
+
+        pending = asyncio.create_task(_http_get(hub.addr, "/api/retrievals?session=s-a"))
+        req = json.loads(await asyncio.wait_for(sess.recv(), timeout=3))
+        assert req["method"] == "retrievals"
+        await sess.send(RpcResponse(
+            request_id=req["request_id"],
+            result={"records": [{"record_id": "001", "response_text": "{}"}]},
+        ).model_dump_json())
+
+        status, body = await asyncio.wait_for(pending, timeout=3)
+
+    assert status == 200
+    assert json.loads(body)["records"][0]["record_id"] == "001"
+
+
 # --- RPC round-trip ---
 
 

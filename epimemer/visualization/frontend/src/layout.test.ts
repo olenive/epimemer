@@ -54,6 +54,34 @@ describe("split pane structure", () => {
   });
 });
 
+/**
+ * The same hazard one panel later. EVENT_LOG.md §10 ruled that a fourth
+ * vertical column would starve the graph, so the log is a rail: a fixed-width
+ * sibling of the split, never a child of it.
+ */
+describe("the log rail", () => {
+  it("is a sibling of the split, not a column inside it", () => {
+    expect(byId("split-container").contains(byId("log-rail"))).toBe(false);
+    expect(byId("main-row").contains(byId("log-rail"))).toBe(true);
+  });
+
+  it("takes a fixed width rather than its content's", () => {
+    // Without `shrink-0` a long summary would widen the rail and squeeze the
+    // graph — the drawer's failure, rotated ninety degrees.
+    const classes = byId("log-rail").className;
+    expect(classes).toMatch(/\bw-\d+\b/);
+    expect(classes).toContain("shrink-0");
+  });
+
+  it("scrolls its entries internally", () => {
+    expect(byId("log-entries").className).toContain("overflow-y-auto");
+  });
+
+  it("starts hidden, so the graph keeps its width until the log is asked for", () => {
+    expect(byId("log-rail").className).toContain("hidden");
+  });
+});
+
 describe("elements the panels bind to", () => {
   const REQUIRED = [
     "split-container",
@@ -80,6 +108,23 @@ describe("elements the panels bind to", () => {
     "detail-title",
     "detail-content",
     "btn-close-detail",
+    "main-row",
+    "btn-toggle-log",
+    "log-rail",
+    "log-entries",
+    "log-empty",
+    "log-verbs",
+    "log-node-id",
+    "log-text",
+    "log-range-start",
+    "log-range-end",
+    "log-clear",
+    "log-count",
+    "log-note",
+    "record-selector",
+    "record-unread",
+    "tab-node",
+    "tab-response",
   ];
 
   // `main.ts` throws on a missing id, so a rename here is a blank dashboard.

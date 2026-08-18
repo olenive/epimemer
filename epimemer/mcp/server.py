@@ -23,7 +23,16 @@ from epimemer.mcp.config import (
     create_storage,
     load_config,
 )
+from epimemer.mcp.retrieval_records import (
+    RetrievalRecord,
+    append_record,
+    new_record_log,
+    next_record_id,
+    records_of,
+    structural_only,
+)
 from epimemer.mcp.types import ResponseMeta, ToolResponse
+from epimemer.visualization.events import RetrievalRecorded
 
 
 def _parse_utc(value: str) -> datetime:
@@ -93,6 +102,10 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     event_bus = None
     viz_session = None
     viz_hub_url = None
+    # Written at the tool choke point, read by the hub's `retrievals` RPC. It
+    # exists whether or not visualization is on: the record is what the agent
+    # was handed, and that is worth keeping even with nobody watching.
+    retrievals = new_record_log()
     if config.viz_enabled:
         from epimemer.visualization.event_bus import create_event_bus
         from epimemer.visualization.hub import ensure_hub_running
@@ -132,6 +145,10 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             viz_session,
             ingest_url,
             default_reflect_threshold=config.reflect_threshold,
+            records=lambda: [
+                json.loads(record.model_dump_json())
+                for record in records_of(retrievals)
+            ],
         )
         logger.info(
             "Visualization: publishing to hub at %s (session %s)",
@@ -147,6 +164,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             "event_bus": event_bus,
             "viz_session": viz_session,
             "viz_hub_url": viz_hub_url,
+            "retrievals": retrievals,
         }
     finally:
         if stop_viz_client is not None:
@@ -200,6 +218,49 @@ def _error_response(error: str) -> str:
 _tool_logger = logging.getLogger("epimemer.mcp.tools")
 
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+async def _record_response(
+    deps: dict, tool_name: str, input_summary: str, response_text: str, meta: ResponseMeta
+) -> None:
+    """Keep what this call handed the agent (`RETRIEVAL_PROVENANCE.md` §3).
+
+    One insertion here covers every tool, including ones not written yet — the
+    alternative was six wrappers that drift, and the census of which six was
+    wrong twice. What it cannot do by construction is know the *ids*: those are
+    declared on `meta` by each tool, and `retrieved is None` means a tool never
+    declared, which the record carries as a visible gap rather than an
+    indistinguishable empty list (§2.1).
+
+    Failures write nothing: there is no response to record, and the selector
+    lists what the agent was handed.
+    """
+    record = RetrievalRecord(
+        record_id=next_record_id(),
+        tool=tool_name,
+        query=input_summary,
+        graph=deps["storage"].current_database,
+        retrieved=meta.retrieved,
+        response_text=response_text,
+    )
+    append_record(deps["retrievals"], record)
+
+    bus = deps["event_bus"]
+    if bus is None:
+        return
+    # The guard is the **bind**, not the process (§3.2). A hub bound to
+    # loopback is reachable only from this machine, so the mirror carries the
+    # whole record and survives session death; a hub anyone can reach gets
+    # structural metadata only, and the payload stays here behind the
+    # `retrievals` RPC for as long as this process lives.
+    exposed = record if deps["config"].viz_host in _LOOPBACK_HOSTS else structural_only(record)
+    await bus.publish(RetrievalRecorded(
+        graph=record.graph,
+        record=json.loads(exposed.model_dump_json()),
+    ))
+
+
 async def _run_with_timeout(
     tool_name: str,
     coro: Callable[[], Awaitable[tuple[dict, ResponseMeta]]],
@@ -215,7 +276,9 @@ async def _run_with_timeout(
         result, meta = await asyncio.wait_for(coro(), timeout=timeout)
         latency = (time.monotonic() - start) * 1000
         _log(tool_name, input_summary, output_summary_fn(result, meta), meta)
-        return _build_response(result, meta, latency)
+        response_text = _build_response(result, meta, latency)
+        await _record_response(deps, tool_name, input_summary, response_text, meta)
+        return response_text
     except asyncio.TimeoutError:
         latency = (time.monotonic() - start) * 1000
         error_msg = f"{tool_name} timed out after {timeout}s"
@@ -375,27 +438,46 @@ async def memory_search(
     graph_hops: int = 1,
     metacontext_id: str | None = None,
     cross_frame: bool = False,
+    terms: list[str] | None = None,
 ) -> str:
     """Search the epistemic memory graph.
 
-    Performs hybrid retrieval: vector similarity search followed by
-    graph expansion to discover related nodes. Results always include
-    metacontext labels and computed review labels (superseded_candidate /
-    evidence_stale / contested) so you can see when a node may be outdated,
-    have stale evidence, or be contested before relying on it.
+    Hybrid retrieval: embedding similarity and keyword matching run
+    independently and are fused by rank, then graph expansion pulls in what the
+    winners connect to. Results always include metacontext labels and computed
+    review labels (superseded_candidate / evidence_stale / contested) so you can
+    see when a node may be outdated, have stale evidence, or be contested before
+    relying on it.
+
+    **Pass identifiers, names and exact phrases you care about as `terms`.** A
+    ticket id, an error code, a person's name, a filename. Embeddings shred
+    those — `JIRA-4417` becomes word pieces pooled with the rest of the
+    sentence, so every other ticket id scores about as well — and keyword
+    matching supplies the term rarity similarity has no notion of. A declared
+    term's best hit is kept even if rank fusion would otherwise have cut it.
+
+    Each returned node carries `provenance`: `lexical` (a term matched its
+    content), `segment` (a term matched the passage it came from), `vector`
+    (similarity), or `expanded` (reached by an edge from one of those). The
+    response also carries `segments` — the passages that matched, which answer
+    *where did I read that?* rather than *what do I believe?*
 
     For provenance/topic listings (which nodes came from X / are about Y), use
     find_nodes, not search.
 
     Args:
         query: Natural language search query.
-        k: Maximum number of vector search results.
+        k: Maximum number of results per retrieval arm.
         node_types: Filter to specific types: "topic", "fact", "inference".
-        graph_hops: Number of graph traversal hops from vector results.
+        graph_hops: Number of graph traversal hops from the fused results.
         metacontext_id: Optional — frame-scope results to this metacontext plus
             untagged base-reality nodes (other frames are excluded).
         cross_frame: Set true to ignore frame scoping and search across all
             metacontexts (opt-in; otherwise frames don't bleed together).
+        terms: Exact strings that matter — identifiers, names, phrases. Matched
+            whole and ORed; each matches only documents containing all of its
+            words. Omit and the keyword arm falls back to the query's own words,
+            which still finds rare ones but guarantees nothing.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -409,6 +491,7 @@ async def memory_search(
             graph_hops=graph_hops,
             metacontext_id=metacontext_id,
             cross_frame=cross_frame,
+            terms=terms,
             record_retrieval=deps["config"].record_retrieval,
             event_bus=deps.get("event_bus"),
         ),

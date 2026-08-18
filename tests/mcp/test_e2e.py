@@ -14,6 +14,7 @@ import pytest
 from fastmcp import FastMCP
 
 from epimemer.embeddings.mock import MockEmbeddingProvider
+from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.storage.memory import InMemoryStorage
@@ -29,6 +30,10 @@ async def _test_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             storage_backend="memory",
             embedding_provider="mock",
         ),
+        "event_bus": None,
+        "viz_session": None,
+        "viz_hub_url": None,
+        "retrievals": new_record_log(),
     }
 
 

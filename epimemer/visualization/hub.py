@@ -42,6 +42,12 @@ from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from epimemer.visualization.protocol import RpcRequest, SessionInfo
+from epimemer.visualization.ring import (
+    LOG_RING_CAPACITY,
+    RETRIEVAL_RING_CAPACITY,
+    backfill,
+    remember,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +56,33 @@ STATIC_DIR = Path(__file__).parent / "static"
 HUB_SERVICE = "epimemer-viz-hub"        # marker in /api/health, so a probe knows
 DISCONNECT_GRACE_SECONDS = 300          # keep a dropped session listed (greyed) this long
 RPC_TIMEOUT_SECONDS = 10.0
+
+# The coarse acts the log reads. Selected by `event_type` rather than by
+# category: every graph event carries `category: graph`, so a category test
+# would remember the firehose EVENT_LOG.md §3 refused to ship.
+ACTION_EVENT_TYPE = "graph_action_recorded"
+
+# Retrieval records, mirrored here so the selector, focus mode and the Response
+# tab survive the session's death — the hub keeps disconnected sessions, but
+# RPC to one raises, which is exactly the "open the dashboard after noticing"
+# case (RETRIEVAL_PROVENANCE.md §3.2). What arrives is already guarded: on a
+# non-loopback bind the session sends structural metadata only.
+RETRIEVAL_EVENT_TYPE = "retrieval_recorded"
+
+# Both rings hang off `sessions[sid]`; this says which event fills which, and
+# how deep. Keeping the pair in one place is what stops a third ring arriving
+# with a capacity nobody chose.
+_RING_KEYS = {ACTION_EVENT_TYPE: "actions", RETRIEVAL_EVENT_TYPE: "retrievals"}
+
+
+def _ring_capacity(event_type: str) -> int:
+    """Read at call time, not captured — the capacities are module constants a
+    test may substitute, and a table built at import would not see it."""
+    return (
+        LOG_RING_CAPACITY
+        if event_type == ACTION_EVENT_TYPE
+        else RETRIEVAL_RING_CAPACITY
+    )
 
 try:
     from importlib.metadata import version as _pkg_version
@@ -79,39 +112,56 @@ def create_hub_app() -> Starlette:
     so no locks beyond what each await naturally serializes):
 
     - ``sessions``: session_id -> {ws, info, pending_rpcs, connected,
-      last_event_at, drop_handle}
+      last_event_at, drop_handle, actions}
     - ``browsers``: WebSocket -> {seq, session, graphs}  (per-connection seq +
       subscription to one session and an optional graph set)
+
+    ``actions`` is the log's bounded ring (EVENT_LOG.md §4.2). It hangs off the
+    session because every event already passes through one line here, where the
+    hub stamps ``session_id`` before fan-out — so the append is one statement at
+    a place that already exists, and a browser gets backfill on subscribe with
+    no RPC round-trip and without waking a session process.
+
+    Stated plainly, because it is easy to oversell: this survives browser
+    reloads, which is the case that matters. It does **not** survive an MCP
+    restart — ``session_id`` is a fresh uuid4 per process, so a restarted server
+    registers as a different session with an empty ring. Only ``query_changes``
+    (§6) is durable.
     """
     sessions: dict[str, dict[str, Any]] = {}
     browsers: dict[WebSocket, dict[str, Any]] = {}
 
     # --- browser fan-out ---
 
+    async def _send(ws: WebSocket, st: dict[str, Any], message: dict) -> bool:
+        """One message to one browser, stamped with that browser's own `seq`.
+
+        `seq` is per connection and starts at 0, so it detects a drop on this
+        socket and says nothing about position in any stream — which is why a
+        log entry carries its own `action_id` (§4.1).
+        """
+        st["seq"] += 1
+        try:
+            await ws.send_text(json.dumps({**message, "seq": st["seq"]}))
+            return True
+        except Exception:
+            return False
+
     async def _fanout(message: dict, predicate: Callable[[dict], bool]) -> None:
         if not browsers:
             return
-        dead: list[WebSocket] = []
-
-        async def _one(ws: WebSocket, st: dict[str, Any]) -> None:
-            if not predicate(st):
-                return
-            st["seq"] += 1
-            try:
-                await ws.send_text(json.dumps({**message, "seq": st["seq"]}))
-            except Exception:
-                dead.append(ws)
-
-        await asyncio.gather(*[_one(ws, st) for ws, st in list(browsers.items())])
-        for ws in dead:
-            browsers.pop(ws, None)
+        targets = [(ws, st) for ws, st in browsers.items() if predicate(st)]
+        alive = await asyncio.gather(*[_send(ws, st, message) for ws, st in targets])
+        for (ws, _), ok in zip(targets, alive):
+            if not ok:
+                browsers.pop(ws, None)
 
     async def _broadcast_system(message: dict) -> None:
         """Send a system message (session up/down) to every browser."""
         await _fanout(message, lambda st: True)
 
-    async def _broadcast_event(payload: dict) -> None:
-        """Send an event to browsers subscribed to its session (and graph)."""
+    def _subscribed(payload: dict) -> Callable[[dict[str, Any]], bool]:
+        """Does a browser's subscription cover this payload's session and graph?"""
         session_id = payload.get("session_id")
         event_graph = payload.get("graph", "")
 
@@ -122,7 +172,29 @@ def create_hub_app() -> Starlette:
                 return False
             return True
 
-        await _fanout(payload, _match)
+        return _match
+
+    async def _broadcast_event(payload: dict) -> None:
+        """Send an event to browsers subscribed to its session (and graph)."""
+        await _fanout(payload, _subscribed(payload))
+
+    async def _replay(ws: WebSocket, st: dict[str, Any]) -> None:
+        """Hand one browser the acts and records it missed, oldest first.
+
+        The same subscription test the live path uses, so a replayed entry can
+        never reach a browser a live one would not have — an entry from graph A
+        must not highlight into graph B (EVENT_LOG.md §6). Per-session by
+        construction: the ring hangs off the session, so records from two
+        sessions cannot mix however they interleave in time.
+        """
+        sess = sessions.get(st["session"] or "")
+        if sess is None:
+            return
+        for ring_key in _RING_KEYS.values():
+            for payload in backfill(sess[ring_key]):
+                if _subscribed(payload)(st) and not await _send(ws, st, payload):
+                    browsers.pop(ws, None)
+                    return
 
     def _session_public(sid: str, sess: dict[str, Any]) -> dict:
         info: SessionInfo = sess["info"]
@@ -180,6 +252,11 @@ def create_hub_app() -> Starlette:
             "connected": True,
             "last_event_at": existing["last_event_at"] if existing else None,
             "drop_handle": None,
+            # A reconnecting session keeps both rings: the process is the same
+            # one, its ids carry on, and dropping them here would empty the
+            # panel on every hub blip.
+            "actions": existing["actions"] if existing else (),
+            "retrievals": existing["retrievals"] if existing else (),
         }
         logger.info("Session registered: %s (%s:%s pid %s)", sid, info.backend, info.active_graph, info.pid)
         await _broadcast_system({"type": "session_connected", "session": _session_public(sid, sessions[sid])})
@@ -197,6 +274,12 @@ def create_hub_app() -> Starlette:
                     payload = dict(msg.get("payload", {}))
                     payload["session_id"] = sid
                     sessions[sid]["last_event_at"] = _now()
+                    ring_key = _RING_KEYS.get(payload.get("event_type", ""))
+                    if ring_key is not None:
+                        sessions[sid][ring_key] = remember(
+                            sessions[sid][ring_key], payload,
+                            capacity=_ring_capacity(payload["event_type"]),
+                        )
                     await _broadcast_event(payload)
 
                 elif mtype == "register":
@@ -264,6 +347,10 @@ def create_hub_app() -> Starlette:
                     st["session"] = sub.get("session")
                     graphs = sub.get("graphs")
                     st["graphs"] = set(graphs) if isinstance(graphs, list) else None
+                    # You open the dashboard *after* noticing the agent did
+                    # something, so a live-only stream is empty exactly when it
+                    # is wanted (EVENT_LOG.md §4.2).
+                    await _replay(ws, st)
         except WebSocketDisconnect:
             pass
         finally:
@@ -294,6 +381,19 @@ def create_hub_app() -> Starlette:
             return JSONResponse({"error": "Missing 'session' or 'graph' query parameter"}, status_code=400)
         return await _rpc_endpoint(session_id, "snapshot", {"graph": graph})
 
+    async def api_retrievals(request: Request) -> JSONResponse:
+        """This session's retrieval records, payloads included.
+
+        Served by the session process itself, which is what makes it work when
+        the hub's own mirror is guarded down to structural metadata. It stops
+        working when the session exits — the mirror is what survives that, and
+        the two are complementary rather than redundant (§3.2).
+        """
+        session_id = request.query_params.get("session")
+        if not session_id:
+            return JSONResponse({"error": "Missing 'session' query parameter"}, status_code=400)
+        return await _rpc_endpoint(session_id, "retrievals", {})
+
     async def _rpc_endpoint(session_id: str, method: str, params: dict) -> JSONResponse:
         try:
             result = await _rpc(session_id, method, params)
@@ -314,6 +414,7 @@ def create_hub_app() -> Starlette:
         Route("/api/sessions", api_sessions),
         Route("/api/graphs", api_graphs),
         Route("/api/snapshot", api_snapshot),
+        Route("/api/retrievals", api_retrievals),
         WebSocketRoute("/ws", handle_browser),
         WebSocketRoute("/ingest", handle_ingest),
     ]

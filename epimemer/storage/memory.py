@@ -2,7 +2,8 @@
 
 Implements the StorageBackend protocol using plain dictionaries.
 Supports multiple named graphs via a dict-of-dicts pattern.
-Vector search uses brute-force cosine similarity.
+Vector search uses brute-force cosine similarity; lexical search scores the
+corpus on every call (`storage/bm25.py`) rather than maintaining an index.
 """
 
 import copy
@@ -10,7 +11,7 @@ import math
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Sequence, TypeVar
+from typing import Literal, Sequence, TypeVar
 
 from pydantic import BaseModel
 
@@ -32,6 +33,7 @@ from epimemer.core.types import (
     with_retirement,
     with_return,
 )
+from epimemer.storage.bm25 import bm25_scores, containment_first
 from epimemer.storage.protocol import (
     EdgeDirection,
     normalize_for_storage,
@@ -303,6 +305,14 @@ class InMemoryStorage:
             s for s in self._g.segments.values() if s.source_id == doc_id
         )
 
+    async def get_segments(self, segment_ids: Sequence[str]) -> dict[str, Segment]:
+        found = {}
+        for segment_id in dict.fromkeys(segment_ids):
+            segment = self._g.segments.get(segment_id)
+            if segment is not None:
+                found[segment_id] = _copy(segment)
+        return found
+
     # --- Epistemic Nodes ---
 
     async def store_node(self, node: EpistemicNode) -> str:
@@ -397,18 +407,6 @@ class InMemoryStorage:
             if born or retired or in_episode:
                 results.append(node)
         return _copy_all(results)
-
-    async def update_node_status(
-        self,
-        node_id: str,
-        status: NodeStatus,
-        superseded_at: datetime | None = None,
-    ) -> None:
-        node = self._g.nodes.get(node_id)
-        if node is None:
-            raise KeyError(f"Node {node_id} not found")
-        node.status = status
-        node.superseded_at = superseded_at
 
     async def relabel_edges(self, old_label: str, new_label: str) -> int:
         """Rewrite the label on all user-tier edges from old_label to new_label.
@@ -745,6 +743,80 @@ class InMemoryStorage:
 
         candidates.sort(key=lambda x: x[1], reverse=True)
         return candidates[:k]
+
+    # --- Lexical search ---
+
+    async def text_search(
+        self,
+        terms: Sequence[str],
+        *,
+        corpus: Literal["nodes", "segments"],
+        k: int = 10,
+        node_type: NodeType | None = None,
+        status: NodeStatus = NodeStatus.ACTIVE,
+        verify_containment: bool = False,
+    ) -> Sequence[tuple[str, float]]:
+        """BM25 over one corpus partition. See the protocol for the contract.
+
+        Scored over every row of the partition and *then* filtered by status,
+        which is the order SurrealDB's index imposes on the other backend: IDF
+        counts the whole table whatever each row's status. Scoring only the
+        active rows would be cheaper here and would compute different numbers
+        from the same graph.
+
+        Ties break on id. The engine's tie order is arbitrary, so this is
+        stricter than parity requires — but a search that returns a different
+        order on two identical runs is a bug report waiting to be written.
+        """
+        if not terms:
+            return []
+
+        if corpus == "segments":
+            documents = {seg.id: seg.text for seg in self._g.segments.values()}
+            eligible = set(documents)
+        else:
+            if node_type is None:
+                raise ValueError(
+                    "text_search(corpus='nodes') requires a node_type: BM25 "
+                    "statistics are per node table, so a merged multi-type list "
+                    "would sort incomparable scores."
+                )
+            expected_class = _NODE_TYPE_TO_CLASS[node_type]
+            partition = [
+                node
+                for node in self._g.nodes.values()
+                if isinstance(node, expected_class)
+            ]
+            documents = {node.id: node.content for node in partition}
+            eligible = {node.id for node in partition if node.status == status}
+
+        # `bm25_scores` returns every document the token match reached, scored
+        # or floored — which is precisely the candidate set R8 partitions. The
+        # zero rule is applied here rather than there so containment can rescue
+        # a floored hit before it is dropped.
+        candidates = [
+            (doc_id, score)
+            for doc_id, score in bm25_scores(documents, terms).items()
+            if doc_id in eligible
+        ]
+        if not verify_containment:
+            hits = [(doc_id, score) for doc_id, score in candidates if score > 0.0]
+            hits.sort(key=lambda hit: (-hit[1], hit[0]))
+            return hits[:k]
+
+        return containment_first(candidates, documents, terms)[:k]
+
+    async def get_nodes_by_source(
+        self, source_ids: Sequence[str]
+    ) -> dict[str, list[EpistemicNode]]:
+        wanted = list(dict.fromkeys(source_ids))
+        if not wanted:
+            return {}
+        by_source: dict[str, list[EpistemicNode]] = {sid: [] for sid in wanted}
+        for node in self._g.nodes.values():
+            if node.source_id in by_source:
+                by_source[node.source_id].append(_copy(node))
+        return by_source
 
     # --- Timelines ---
 

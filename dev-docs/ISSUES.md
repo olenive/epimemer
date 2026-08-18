@@ -2,9 +2,9 @@
 
 Living issue tracker. **Last review: 2026-08-12.**
 
-Open: **16**, **46**, **48**, **51**, **52**, **53**, **57**. Resolved and
-awaiting deletion once merged: **54**, **55**, **56**. New findings continue
-from **58**.
+Open: **16**, **46**, **48**, **51**, **52**, **53**, **58**, **59**. Resolved
+and awaiting deletion once merged: **54**, **55**, **56**, and **57** (resolved
+on the unmerged `lexical-search` branch). New findings continue from **60**.
 
 **#53 is the most important thing in this file.** *Facts have no validity
 interval, so the graph cannot say when a claim was true.* Saint Petersburg was
@@ -2062,6 +2062,90 @@ embedded engine is not the server).
 
 ---
 
+### Issue 58 — FTS index backfill runs inside `connect()` with no progress reporting — ⏸ DEFERRED (trigger stated)
+
+Filed 2026-08-18 from the lexical-search construction; the indexes ship with
+the unmerged `lexical-search` branch. Defining the full-text indexes backfills
+every existing row the first time `_setup_schema` runs against a graph —
+inside `connect()`, before anything else can happen, with nothing visible to
+the user. `IF NOT EXISTS` means it happens exactly once per graph.
+
+Measured (`LEXICAL_SEARCH.md` §11.5 — SurrealDB 3.0.5, median of 3,
+documents = nodes + segments): 2,000 → 1.0 s; 6,000 → 3.8 s; **20,000 →
+19 s**. Steady-state connect stays ~30 ms. This is lifespan startup, not a
+tool call, so no timeout fires — it just looks like a hang.
+
+Deferred because nothing hurts at current graph sizes, and per this file's
+policy the next performance fix should come from something real.
+
+**Trigger:** graphs approaching ~10,000 nodes, where the first connect blocks
+for >10 s unexplained. **Fix then:** build the index asynchronously after
+connect (searches degrade to vector-only until it lands, which R3 makes
+graceful), or surface progress through logging / the viz hub. Whoever picks
+it up decides between them; the async option must not violate the §5 rule
+that a schema that cannot be set up is a failed connection.
+
+---
+
+### Issue 59 — embeddings are truncated at 256 word-pieces with no guard anywhere — ▶ ACTIONABLE
+
+Filed 2026-08-18. **Called for in `LEXICAL_SEARCH.md` §9 on 2026-08-18 and not
+filed at the time** — the same omission that let #57 sit unfiled for a month
+after `EVENT_LOG.md` asked for it. Filed now on that precedent, before the
+detail is lost.
+
+`all-MiniLM-L6-v2` truncates its input at **256 word-pieces**, and there is no
+content-length guard anywhere on the path to it:
+`SentenceTransformersProvider.embed` passes `texts` straight to
+`model.encode` (`embeddings/sentence_transformers.py`), and nothing upstream
+measures, splits or warns. A long fact's tail is simply absent from its
+embedding, and nothing says so — not the caller, not the log, not the stored
+`EmbeddingRecord`.
+
+**The failure is silent in the direction that matters.** A node whose content
+runs past the window is stored, indexed and returned by `graph_stats` like any
+other; it is only *unfindable by the part of itself that was cut off*. Vector
+search cannot report a miss it does not know it had, so the symptom is a search
+that quietly under-returns — the same shape as the defect `LEXICAL_SEARCH.md`
+was built to fix, one layer down.
+
+**Lexical search mitigates it incidentally and must not be mistaken for a fix.**
+BM25 indexes the whole field on both backends, so a truncated tail is still
+reachable *by an exact token in it* — which is real relief for identifiers and
+none at all for paraphrase. The underlying gap is separate and untouched.
+
+**Scale is unmeasured, and that is the first piece of work.** 256 word-pieces is
+roughly 150–200 English words; a decomposed fact is usually one sentence, so the
+suspicion is that almost nothing is affected today and that the exceptions are
+`Segment` text and unusually long inference content. **Measure before deciding:**
+the distribution of tokenized lengths over a real graph's nodes and segments,
+and how many cross the window. A fix chosen ahead of that number is the trap
+this file has recorded three times.
+
+**Options, none obvious, all needing that measurement first:**
+
+- **Refuse to embed what will be truncated**, and say so. Honest and loud; makes
+  ingest fail on content the caller cannot easily shorten.
+- **Chunk and pool.** Embed each window and mean-pool, which is what the model
+  does *within* the window anyway. Changes the meaning of a vector, so it wants
+  its own justification rather than being slipped in.
+- **Store the truncation as a fact about the record** — a flag or the measured
+  token count on `EmbeddingRecord` — and let readers decide. Cheapest, and it
+  converts a silent gap into a visible one, which is this file's usual verdict.
+- **Accept it with the number recorded**, if the measurement says the window is
+  never reached in practice.
+
+**Failing test first**, per the workflow: `tests/embeddings/` — a text known to
+exceed the window and a prefix of it embed to the *same* vector today, which is
+the defect stated as an assertion. Whatever option is chosen, that pair must
+stop being indistinguishable — by raising, by differing, or by the record
+saying which one was cut.
+
+**Not a lexical-search defect and not fixed by it.** It is filed here rather
+than in `LEXICAL_SEARCH.md` §9 for that reason; §9 keeps the pointer.
+
+---
+
 ## Older carry-overs (open, low priority)
 
 From the original live-graph walkthrough (issues 1–5, otherwise resolved or kept
@@ -2152,5 +2236,6 @@ What to pick up, and what has to be true first:
 | 2 | 46 (`confidence` becomes a supplied prior) | Decided 2026-08-12, but **two review amendments change the field shape and need sign-off first** (store the unrated case as absent; record a basis alongside a non-default prior). The work remains the tool guidance more than the field. Independent of 53 |
 | 3 | 51 (corroboration derived at read time) | After 46, which is what makes it a separate signal rather than a rewrite of one. Apply the review's neighbourhood exclusions (contradictors, variants). Measure the extra hop before putting it on the default `search` path. Ships with a known 53-shaped inaccuracy, stated in the entry |
 | 4 | 48 (`get_node_by_content` scans per ingest) | **Ready now** but not urgent, and the fix needs measuring before it is chosen. **T2 added a second caller** — the verbatim-twin floor; the load-bearing recurrence detector is nomination including `HISTORICAL` (#53 T2 second pass) — so do both in one visit to this path |
+| 5 | 59 (embedding truncation) | **Ready to measure, not to fix.** Take the token-length distribution over a real graph first; the entry lists four options and says which measurement decides between them. Lexical search relieves the identifier case and none of the rest |
 | deferred | 52 (fact deduplication) | Re-open after 53 — and the re-open must carry the review's event/state distinction: interval union dedupes states, never events. Not before |
 | deferred | 16 | The server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`) |

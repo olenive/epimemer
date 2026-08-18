@@ -10,7 +10,7 @@ with SurrealDB's built-in 'id' field (which uses RecordID type).
 import asyncio
 import contextlib
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Sequence
+from typing import Any, Awaitable, Callable, Literal, Sequence
 
 from surrealdb import AsyncSurreal
 from websockets.exceptions import ConnectionClosed, WebSocketException
@@ -35,6 +35,7 @@ from epimemer.core.types import (
     with_retirement,
     with_return,
 )
+from epimemer.storage.bm25 import containment_first
 from epimemer.storage.protocol import (
     EdgeDirection,
     drop_none_values,
@@ -216,6 +217,106 @@ _EDGE_IN_PREDICATE_MAX = 100
 # chunk boundary no test reaches is where a batched fetch silently drops rows.
 _NODE_FETCH_CHUNK = 250
 _EMBEDDING_FETCH_CHUNK = 250
+
+
+# --- Full-text search ---
+#
+# The analyzer is the one both backends are written against: `class`
+# tokenization cuts a token wherever the character class changes, so `JIRA-4417`
+# becomes `jira`, `-`, `4417` and the rare piece is separable from the common
+# prefix. That is the whole mechanism — measured, `search::analyze` returns
+# exactly that (`dev-docs/LEXICAL_SEARCH.md` §2.3).
+
+_ANALYZER_DDL = (
+    "DEFINE ANALYZER IF NOT EXISTS epimemer_text "
+    "TOKENIZERS class FILTERS lowercase, ascii, snowball(english);"
+)
+
+# The two backends this adapter connects to are two different SurrealDBs, and
+# they do not agree on how a full-text index is declared. The standalone 3.0.5
+# server renamed the keyword and dropped the parameter list; the engine embedded
+# in the Python SDK — which is what `mem://` is, and therefore what most of the
+# test suite runs against — is an older core that only parses the 2.x form.
+# Each *rejects the other's syntax outright*, so there is no spelling that
+# satisfies both and no version to write against.
+#
+# Everything else about full-text search is identical on the two: the analyzer
+# DDL, the match operator, `search::score`, and the positive scores themselves
+# (measured to seven decimal places). Only this one statement forks.
+_FTS_INDEX_MODERN = (
+    "DEFINE INDEX IF NOT EXISTS idx_{table}_fts ON {table} "
+    "FIELDS {field} FULLTEXT ANALYZER epimemer_text BM25;"
+)
+_FTS_INDEX_LEGACY = (
+    "DEFINE INDEX IF NOT EXISTS idx_{table}_fts ON {table} "
+    "FIELDS {field} SEARCH ANALYZER epimemer_text BM25(1.2,0.75);"
+)
+
+# Which field of which table is searchable. Nodes answer "what do I believe?"
+# and segments answer "where did I read that?", and a rare identifier is almost
+# always the second question: `store_decomposition` is agent-driven, so a
+# paraphrased fact may never contain the id the source text did (§1.1).
+_FTS_TARGETS = (
+    ("topic", "content"),
+    ("fact", "content"),
+    ("inference", "content"),
+    ("segment", "text"),
+)
+
+# How far past `k` the inner ranking reaches before the status gate is applied.
+# The gate cannot go inside: adding any non-match predicate to a `WHERE` that
+# ORs two match references makes the engine stop using the full-text index, and
+# the `@@` operator then matches a document that contains *any* token of a term
+# rather than all of them — so `JIRA-4417` starts returning `JIRA-4418`, at a
+# positive score that the zero-rule truncation does not catch. Measured on
+# 3.0.5; the subquery keeps the inner `WHERE` pure, which keeps the index.
+#
+# The reach only bites when more than this many *positively-scored* rows are all
+# retired, because the inner ranking is by score and the zero-scored bulk sinks
+# below it. Cheaper than the alternative for the same reason `vector_search`
+# over-fetches rather than filtering first.
+_TEXT_SEARCH_OVERFETCH = 10
+
+# How far it reaches for a *declared* term instead, whose containment check
+# reads the text of what was fetched (R8). The reasoning above inverts here: the
+# hit containment exists to rescue is the one whose score is at or below the IDF
+# floor, which in a ranking by score is the bottom — precisely what the reach
+# cuts off. So the declared path fetches an order of magnitude wider.
+#
+# It cannot fetch *everything*, and the alternative — a containment predicate in
+# the `WHERE`, letting the engine find the rows directly — is the one thing R8
+# forbids, for the reason directly above. Residual, stated rather than hidden: a
+# term whose every token is common across more than this many documents can
+# still have its literal match fall outside the window. A declared term is an
+# identifier or a name, which is the case where the candidate set is small
+# enough that the reach never binds at all.
+_CONTAINMENT_OVERFETCH = 100
+
+
+async def _define_fts_indexes(query) -> None:
+    """Define the full-text indexes in whichever dialect this engine speaks.
+
+    The first target pays for the negotiation; the rest reuse what worked. If
+    both dialects fail the error is raised with the other one chained to it, so
+    a third SurrealDB that speaks neither is diagnosable rather than mysterious.
+
+    Defining the index **backfills existing rows** — verified on both engines —
+    so an existing graph needs no migration step. It also means the first
+    connect after this ships is slower than every connect before it, once, in a
+    place with no progress reporting. Measured in `dev-docs/BENCHMARKS.md`.
+    """
+    template = _FTS_INDEX_MODERN
+    for table, field in _FTS_TARGETS:
+        try:
+            await query(template.format(table=table, field=field))
+        except Exception as unsupported:
+            if template is _FTS_INDEX_LEGACY:
+                raise
+            template = _FTS_INDEX_LEGACY
+            try:
+                await query(template.format(table=table, field=field))
+            except Exception as also_unsupported:
+                raise also_unsupported from unsupported
 
 
 def _upsert(table: str, *, data: str = "data", uid: str = "uid") -> str:
@@ -616,6 +717,11 @@ class SurrealDBStorage:
             DEFINE TABLE IF NOT EXISTS graph_state SCHEMALESS;
         """)
 
+        # Full-text search over node content and segment text. Last, because
+        # every table it indexes has to exist first.
+        await query(_ANALYZER_DDL)
+        await _define_fts_indexes(query)
+
     @property
     def db(self) -> AsyncSurreal:
         if self._db is None:
@@ -660,6 +766,19 @@ class SurrealDBStorage:
             {"source_id": doc_id},
         )
         return [Segment.model_validate(_clean_record(r)) for r in rows]
+
+    async def get_segments(self, segment_ids: Sequence[str]) -> dict[str, Segment]:
+        wanted = list(dict.fromkeys(segment_ids))
+        found: dict[str, Segment] = {}
+        for start in range(0, len(wanted), _NODE_FETCH_CHUNK):
+            chunk = wanted[start : start + _NODE_FETCH_CHUNK]
+            rows = await self._query(
+                "SELECT * FROM segment WHERE uid IN $ids", {"ids": chunk}
+            )
+            for row in rows or []:
+                segment = Segment.model_validate(_clean_record(row))
+                found[segment.id] = segment
+        return found
 
     # --- Epistemic Nodes ---
 
@@ -772,25 +891,6 @@ class SurrealDBStorage:
             results.extend(_record_to_node(table, r) for r in rows)
 
         return results
-
-    async def update_node_status(
-        self,
-        node_id: str,
-        status: NodeStatus,
-        superseded_at: datetime | None = None,
-    ) -> None:
-        for table in ("topic", "fact", "inference"):
-            rows = await self._query(
-                f"UPDATE {table} SET status = $status, superseded_at = $superseded_at WHERE uid = $uid",
-                {
-                    "uid": node_id,
-                    "status": status.value,
-                    "superseded_at": superseded_at.isoformat() if superseded_at else None,
-                },
-            )
-            if rows:
-                return
-        raise KeyError(f"Node {node_id} not found")
 
     async def relabel_edges(self, old_label: str, new_label: str) -> int:
         """Rewrite the label on user-tier edges (in place; edges are not versioned)."""
@@ -1371,6 +1471,128 @@ class SurrealDBStorage:
         return await _ranked_active_items(
             self._query, query_vector, model_id, k, node_type
         )
+
+    # --- Lexical search ---
+
+    async def text_search(
+        self,
+        terms: Sequence[str],
+        *,
+        corpus: Literal["nodes", "segments"],
+        k: int = 10,
+        node_type: NodeType | None = None,
+        status: NodeStatus = NodeStatus.ACTIVE,
+        verify_containment: bool = False,
+    ) -> Sequence[tuple[str, float]]:
+        """Top-k rows by BM25, scored in-engine. See the protocol for the contract.
+
+        One match reference per term, ORed, with their scores summed. A single
+        `@@` is **conjunctive** — every token of its argument must be present —
+        which is what makes `JIRA-4417` reject `JIRA-4418`, and also what makes
+        one absent word in a multi-word query return nothing at all. Separate
+        references give the OR the terms need while each stays conjunctive
+        within itself (§2.4).
+
+        The status gate and the zero-score truncation both sit *outside* a
+        subquery whose `WHERE` holds nothing but match references. That shape is
+        load-bearing rather than stylistic — see `_TEXT_SEARCH_OVERFETCH`.
+
+        `verify_containment` obeys the same constraint from the other side: the
+        matched text comes back with the rows and the string comparison happens
+        here, in Python. As a `WHERE` predicate it would be the same trap in a
+        new costume — the index drops, `@@` turns disjunctive, and the near-miss
+        returns at a score the zero rule cannot catch (R8, §11.4).
+        """
+        if not terms:
+            return []
+
+        if corpus == "segments":
+            table, field = "segment", "text"
+            carried, conditions, params = "", [], {}
+        else:
+            if node_type is None:
+                raise ValueError(
+                    "text_search(corpus='nodes') requires a node_type: BM25 "
+                    "statistics are per node table, so a merged multi-type list "
+                    "would sort incomparable scores."
+                )
+            table, field = _NODE_TYPE_TO_TABLE[node_type], "content"
+            carried, conditions = "status, ", ["status = $status"]
+            params = {"status": status.value}
+
+        # Match references are 1-based and each term gets its own. Each score is
+        # floored at zero before the sum: the standalone engine already clamps
+        # its IDF there, but the older core embedded in the Python SDK returns
+        # the negative value instead, and an uninformative term would then drag
+        # a document's total *below* the truncation and delete a real hit. The
+        # contract says a term more common than half the corpus contributes
+        # nothing; on one of these engines that has to be made true here.
+        refs = range(1, len(terms) + 1)
+        matches = " OR ".join(f"{field} @{ref}@ $term_{ref}" for ref in refs)
+        score = " + ".join(f"math::max([search::score({ref}), 0])" for ref in refs)
+        params |= {f"term_{ref}": terms[ref - 1] for ref in refs}
+
+        # The zero rule is the engine's job only when nothing may rescue a
+        # floored row; with containment it becomes this method's, applied after
+        # the partition. The matched text rides along for the same reason.
+        if verify_containment:
+            fetched, selected = f"{field} AS body, ", "body, "
+            reach = k * _CONTAINMENT_OVERFETCH
+            limit = reach  # the partition decides what the top k is, not the score
+        else:
+            fetched = selected = ""
+            reach, limit = k * _TEXT_SEARCH_OVERFETCH, k
+            conditions.append("score > 0")
+        params |= {"reach": reach, "limit": limit}
+        gate = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        rows = await self._query(
+            f"""
+            SELECT uid, {selected}score FROM (
+                SELECT uid, {fetched}{carried}{score} AS score
+                FROM {table}
+                WHERE {matches}
+                ORDER BY score DESC
+                LIMIT $reach
+            )
+            {gate}
+            ORDER BY score DESC
+            LIMIT $limit
+            """,
+            params,
+        )
+        candidates = [(row["uid"], row["score"]) for row in rows or []]
+        if not verify_containment:
+            return candidates
+        return containment_first(
+            candidates, {row["uid"]: row["body"] for row in rows or []}, terms
+        )[:k]
+
+    async def get_nodes_by_source(
+        self, source_ids: Sequence[str]
+    ) -> dict[str, list[EpistemicNode]]:
+        """Three statements per chunk — one per node table — not one per id.
+
+        A node's table is not derivable from its `source_id`, so the segment
+        bridge would otherwise probe topic, then fact, then inference for every
+        segment a lexical search hit. That is the shape ISSUES.md #14 exists to
+        keep out of the read paths.
+        """
+        wanted = list(dict.fromkeys(source_ids))
+        if not wanted:
+            return {}
+
+        by_source: dict[str, list[EpistemicNode]] = {sid: [] for sid in wanted}
+        for start in range(0, len(wanted), _NODE_FETCH_CHUNK):
+            chunk = wanted[start : start + _NODE_FETCH_CHUNK]
+            for table in ("topic", "fact", "inference"):
+                rows = await self._query(
+                    f"SELECT * FROM {table} WHERE source_id IN $ids", {"ids": chunk}
+                )
+                for row in rows or []:
+                    node = _record_to_node(table, row)
+                    by_source[node.source_id].append(node)
+        return by_source
 
     # --- Timelines ---
 

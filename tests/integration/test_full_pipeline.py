@@ -228,8 +228,8 @@ class TestFullPipeline:
         topics = await storage.query_nodes(node_type=NodeType.TOPIC)
         assert len(topics) > 0
         old_time = datetime.now(timezone.utc) - timedelta(days=200)
-        await storage.update_node_status(
-            topics[0].id, NodeStatus.SUPERSEDED, superseded_at=old_time,
+        await storage.set_node_status_tx(
+            [topics[0]], status=NodeStatus.SUPERSEDED, at=old_time,
         )
 
         archive_result, _ = await archive(storage, max_age_days=90)

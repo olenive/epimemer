@@ -179,6 +179,31 @@ const SEMANTIC_DARK: SemanticPalette = {
 export const semanticPaletteFor = (theme: Theme): SemanticPalette =>
   theme === "dark" ? SEMANTIC_DARK : SEMANTIC_LIGHT;
 
+/**
+ * The same hue, drained of colour — how focus mode dims.
+ *
+ * Focus owns **saturation**; status owns **opacity** (RETRIEVAL_PROVENANCE.md
+ * §4.1). So this mixes each channel toward the grey of the *same luminance*,
+ * leaving lightness alone: a desaturation that also darkened would be an
+ * opacity change wearing a different name, and retired-and-retrieved would
+ * land at the same appearance as active-and-not.
+ *
+ * It lives here rather than in a panel because both panels dim, and a second
+ * implementation is how they would come to disagree — which is #56, exactly.
+ */
+export const desaturate = (hex: string, amount = 0.85): string => {
+  const channels = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  if (channels.some(Number.isNaN)) return hex;
+  const [r, g, b] = channels;
+  const grey = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return (
+    "#" +
+    channels
+      .map((c) => Math.round(c + (grey - c) * amount).toString(16).padStart(2, "0"))
+      .join("")
+  );
+};
+
 /** Icon for the toggle: show where the click will take you, not where you are. */
 export const themeToggleIcon = (theme: Theme): string => (theme === "dark" ? "☀" : "☾");
 

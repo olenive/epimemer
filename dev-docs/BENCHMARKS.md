@@ -253,6 +253,36 @@ Three implementation notes that outlived the measurements that produced them:
   and **past 1,000 for embeddings** — the heavier the row, the longer `IN` stays
   worth it, since the alternative reads rows nobody asked for.
 
+### What defining the full-text index costs, once
+
+`DEFINE INDEX ... FULLTEXT` backfills every existing row, and `_setup_schema`
+runs inside `connect()`, which has no progress reporting. So the first connect
+after lexical search ships is slower than every connect before it, exactly once,
+somewhere the user cannot see it. `LEXICAL_SEARCH.md` §5 called for this to be
+measured before the index shipped rather than after.
+
+Measured against SurrealDB 3.0.5 over ws://localhost, indexes dropped and
+redefined three times per size, median reported. Each node carries a ~14-word
+sentence and each segment a ~40-word one; both corpora are indexed, so the
+document count is nodes **plus** segments.
+
+| Nodes | Segments | Documents indexed | First connect | Steady connect |
+|---|---|---|---|---|
+| 1,000 | 1,000 | 2,000 | **1.0 s** | 31 ms |
+| 3,000 | 3,000 | 6,000 | **3.8 s** | 30 ms |
+| 10,000 | 10,000 | 20,000 | **19 s** (13–24 s) | 59 ms |
+
+Roughly 0.5–1 ms per indexed document, and the spread at 10,000 is wider than
+the gap between the first two sizes — so treat the shape as "seconds, growing
+with the graph" rather than as a clean linear law.
+
+Two things follow. `IF NOT EXISTS` means this happens once per graph, and every
+subsequent connect is back to ~30 ms, so it is a one-off and not a tax. But a
+graph in the tens of thousands makes `connect()` block for tens of seconds with
+nothing on screen, which will read as a hang. If that becomes a complaint, the
+fix is progress reporting or an out-of-band index build — not skipping the
+index, which would leave `text_search` silently returning nothing.
+
 ---
 
 ## Not yet measured
@@ -263,6 +293,11 @@ Three implementation notes that outlived the measurements that produced them:
 - **Real embeddings.** `--real-embeddings` adds the constant this deliberately
   omits, for an end-to-end figure.
 - **Embedding throughput on its own**, separated from ingest.
+- **`query_changes` after #57 (2026-08-17).** The window predicate now adds two
+  array-filter scans per row (lifecycle episodes) on top of the existing full
+  scan, on SurrealDB. Correct, unindexed, unmeasured — flagged at resolution
+  time; probably irrelevant at current graph sizes. Per house policy, act on a
+  profile, not on this note.
 
 ---
 

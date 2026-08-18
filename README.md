@@ -235,6 +235,20 @@ graph.
   the hub URL, whether the hub can see this session, and the `session_id` to pick
   in the selector. The durable answer to "I opened the visualizer but can't find my
   graph".
+- **Activity log** (the header's *Log* button): one entry per transaction — what
+  the agent stored, corrected, world-changed, merged, archived or restored —
+  filterable by verb, node id, text and time. Click an entry to highlight the
+  nodes it acted on; click a node to filter the log to it.
+- **Retrieval focus** (the header's *Retrieval* selector): pick a recent tool
+  call and everything it did *not* return desaturates, in both panels. Dimmed
+  nodes stay clickable — the interesting click is on one that did not come back
+  — and the drawer's **Response** tab shows exactly what epimemer returned.
+
+> **`EPIMEMER_VIZ_HOST` is a privacy setting as well as a network one.** On the
+> default loopback bind the hub keeps whole retrieval records, so they survive
+> the MCP process exiting. Point it at a non-loopback address and sessions
+> mirror **structural metadata only** — no query text, no response payloads —
+> and the payloads stay in the MCP process, reachable only while it is running.
 
 ### Light and dark mode
 

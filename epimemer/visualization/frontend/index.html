@@ -52,16 +52,32 @@
             <span id="view-mode-badge" class="px-1.5 py-0.5 rounded text-xs bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-400">-</span>
             <button id="btn-refresh" class="px-1.5 py-0.5 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Refresh snapshot">Refresh</button>
           </div>
+          <!-- Retrieval selector. A retrieval arriving adds an entry and moves
+               the unread count and nothing else: ambient signal, deliberate
+               detail (RETRIEVAL_PROVENANCE.md §5.2). -->
+          <div class="flex items-center gap-1.5 text-xs">
+            <span class="text-gray-600 dark:text-gray-500">Retrieval:</span>
+            <select id="record-selector" class="text-xs bg-white text-gray-700 border-gray-400 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700 rounded px-1.5 py-0.5 border max-w-64" title="Dim everything this retrieval did not return">
+              <option value="">No retrievals</option>
+            </select>
+            <span id="record-unread" class="hidden px-1.5 py-0.5 rounded text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"></span>
+          </div>
         </div>
         <div class="flex gap-2">
           <button id="btn-toggle-graph" class="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Show or hide the graph">Graph</button>
           <button id="btn-toggle-timeline" class="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Show or hide the timeline">Timeline</button>
           <button id="btn-toggle-pipeline" class="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Toggle pipeline strip">Pipelines</button>
+          <button id="btn-toggle-log" class="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Show or hide what the agent did to this graph">Log</button>
           <span id="ws-status" class="px-2 py-1 text-xs rounded bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-400" title="this browser's socket to the visualization hub — it says nothing about whether a session can answer">Hub disconnected</span>
           <button id="btn-toggle-theme" class="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Switch theme" aria-label="Switch theme">☾</button>
         </div>
       </header>
 
+      <!-- The main row: the resizable split, plus the log rail beside it.
+           The rail is a sibling of the split rather than a child, because a
+           child would become a third column of it and compete for the width
+           (the drawer already made that mistake once — see layout.test.ts). -->
+      <div id="main-row" class="flex flex-1 min-h-0 min-w-0">
       <!-- Graph and timeline share the width; either can take all of it. -->
       <div id="split-container" class="flex flex-1 min-h-0 min-w-0">
       <!-- Knowledge graph — relative so the pipeline detail can overlay it -->
@@ -145,15 +161,48 @@
       </div>
       </div>
 
+      <!-- Activity log — a rail, not a division. A fourth *resizable* column
+           would starve the graph, and the drawer belongs to node detail
+           (EVENT_LOG.md §10). Fixed width and `shrink-0`, so it takes its own
+           20rem and never its content's; hidden until the Log button asks. -->
+      <aside id="log-rail" class="hidden w-80 shrink-0 flex flex-col min-h-0 border-l border-gray-400 bg-gray-300 dark:border-gray-800 dark:bg-gray-900">
+        <div class="flex items-center justify-between px-3 py-1.5 border-b border-gray-400 dark:border-gray-800 shrink-0">
+          <span class="text-xs font-medium text-gray-600 dark:text-gray-500 uppercase tracking-wider">Activity</span>
+          <span id="log-count" class="text-[10px] text-gray-600 dark:text-gray-500" title="entries shown / entries held">0</span>
+        </div>
+        <div class="flex flex-col gap-1 px-2 py-1.5 border-b border-gray-400 dark:border-gray-800 shrink-0">
+          <div id="log-verbs" class="flex flex-wrap gap-1"></div>
+          <input id="log-node-id" type="search" placeholder="node id (exact)" class="text-xs bg-white text-gray-700 border-gray-400 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700 rounded px-1.5 py-0.5 border" title="Show only acts involving this node. Exact — an id is a lookup, not a search." />
+          <input id="log-text" type="search" placeholder="text in the summary" class="text-xs bg-white text-gray-700 border-gray-400 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-700 rounded px-1.5 py-0.5 border" title="Plain substring over the summary line" />
+          <div class="flex items-center gap-1 text-[10px] text-gray-600 dark:text-gray-500">
+            <input id="log-range-start" type="date" class="text-xs bg-white text-gray-600 border-gray-400 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700 rounded px-1 py-0.5 border" title="Acts from" />
+            <span>→</span>
+            <input id="log-range-end" type="date" class="text-xs bg-white text-gray-600 border-gray-400 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700 rounded px-1 py-0.5 border" title="Acts until" />
+            <button id="log-clear" class="ml-auto px-1.5 py-0.5 rounded bg-gray-100 hover:bg-gray-50 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-400 transition-colors" title="Clear every filter">Clear</button>
+          </div>
+        </div>
+        <div id="log-entries" class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-0.5 p-1"></div>
+        <div id="log-empty" class="px-3 py-3 text-xs text-gray-600 dark:text-gray-500 shrink-0"></div>
+        <!-- A click that could not do what it looked like says so here, rather
+             than leaving a highlight that landed on nothing (EVENT_LOG.md §7). -->
+        <div id="log-note" class="hidden px-3 py-1.5 text-[10px] border-t border-gray-400 dark:border-gray-800 text-amber-700 dark:text-amber-500 shrink-0"></div>
+      </aside>
+      </div>
+
       <!-- Node detail drawer — a bottom drawer of the whole layout.
            Not a child of the split: as a flex item in a row it took its width
            from its content, so every hover resized it and shoved the timeline
            sideways. Fixed height for the same reason — a drawer that grows
            with its text would re-lay the timeline out under the cursor. -->
       <div id="detail-drawer" class="hidden border-t border-gray-400 bg-gray-300 dark:border-gray-800 dark:bg-gray-900 shrink-0 h-40 flex flex-col">
-        <div class="flex items-center justify-between px-3 py-1.5 border-b border-gray-400 dark:border-gray-800">
-          <span id="detail-title" class="text-xs font-medium text-gray-600 dark:text-gray-400"></span>
-          <button id="btn-close-detail" class="text-xs text-gray-600 dark:text-gray-500 hover:text-gray-900 dark:text-gray-600 dark:hover:text-gray-400">&times;</button>
+        <div class="flex items-center gap-2 px-3 py-1 border-b border-gray-400 dark:border-gray-800">
+          <!-- Two tabs, not one pane: node detail follows your selection and a
+               response follows the selected record — different drivers, and in
+               focus mode you want both at once (RETRIEVAL_PROVENANCE.md §5.1). -->
+          <button id="tab-node" class="px-2 py-0.5 text-xs rounded-t border-b-2 border-blue-500 text-gray-800 dark:text-gray-200" title="The node you clicked">Node</button>
+          <button id="tab-response" class="px-2 py-0.5 text-xs rounded-t border-b-2 border-transparent text-gray-600 dark:text-gray-500" title="What epimemer returned for the selected retrieval — not what the agent's client rendered">Response</button>
+          <span id="detail-title" class="text-xs font-medium text-gray-600 dark:text-gray-400 truncate"></span>
+          <button id="btn-close-detail" class="ml-auto text-xs text-gray-600 dark:text-gray-500 hover:text-gray-900 dark:hover:text-gray-400">&times;</button>
         </div>
         <pre id="detail-content" class="flex-1 min-h-0 overflow-auto px-3 py-2 text-xs text-gray-600 dark:text-gray-400 whitespace-pre-wrap"></pre>
       </div>

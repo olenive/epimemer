@@ -134,6 +134,64 @@ export interface NodeStatusChanged extends BaseEvent {
   counterpart: string | null;
 }
 
+/**
+ * One human-meaningful act, at the transaction boundary that performed it.
+ *
+ * The fine-grained events keep flowing and the graph panel keeps reading them;
+ * the log reads only this. `summary` arrives pre-rendered — see `log-store.ts`
+ * for why the frontend must not assemble it. `action_id` is assigned by the
+ * session that emitted the act, so it is a position in a stream, which `seq`
+ * (per browser connection, reset on reconnect) is not.
+ */
+export interface GraphActionRecorded extends BaseEvent {
+  category: "graph";
+  event_type: "graph_action_recorded";
+  action_id: string;
+  /** stored | corrected | world_changed | merged | archived | restored | retired */
+  verb: string;
+  /** Node ids, primary first. */
+  subjects: string[];
+  counts: Record<string, number>;
+  summary: string;
+}
+
+/** One node a response named, and how it was reached. */
+export interface RetrievedNodeWire {
+  node_id: string;
+  /** vector | lexical | segment | expanded | direct */
+  provenance: string;
+  /** Similarity or BM25 where the tool has one; null where it ranks nothing. */
+  score: number | null;
+}
+
+/**
+ * What one tool call handed the agent.
+ *
+ * `retrieved` is `null` when the tool never declared its ids — which is a
+ * different thing from `[]`, "declared and returned nothing". Keeping them
+ * apart is what makes a forgotten declaration visible rather than silent.
+ *
+ * `query` and `response_text` are empty on a record the hub holds under a
+ * non-loopback bind: payloads stay in the session process there, reachable
+ * only over the `retrievals` RPC while that session lives.
+ */
+export interface RetrievalRecordWire {
+  record_id: string;
+  at: string;
+  tool: string;
+  query: string;
+  graph: string;
+  retrieved: RetrievedNodeWire[] | null;
+  response_text: string;
+  truncated: boolean;
+}
+
+export interface RetrievalRecorded extends BaseEvent {
+  category: "graph";
+  event_type: "retrieval_recorded";
+  record: RetrievalRecordWire;
+}
+
 export interface EdgeStored extends BaseEvent {
   category: "graph";
   event_type: "edge_stored";
@@ -201,6 +259,8 @@ export type GraphEvent =
   | NodeStored
   | ReflectCounterUpdated
   | NodeStatusChanged
+  | GraphActionRecorded
+  | RetrievalRecorded
   | EdgeStored
   | TimelineStored
   | EmbeddingStored

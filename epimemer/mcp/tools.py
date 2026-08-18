@@ -6,7 +6,7 @@ calls these and wraps the results.
 """
 
 from datetime import datetime, timezone
-from typing import Literal, Sequence
+from typing import Iterable, Iterator, Literal, Mapping, Sequence
 
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
@@ -34,8 +34,10 @@ from epimemer.mcp.config import (
     DEFAULT_RECORD_RETRIEVAL,
     ServerConfig,
 )
+from epimemer.mcp.retrieval_records import RetrievedNode
 from epimemer.mcp.types import ResponseMeta
 from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment
+from epimemer.pipelines.query.types import SeedProvenance
 from epimemer.storage.protocol import (
     StorageBackend,
     resolve_reflect_threshold,
@@ -76,6 +78,71 @@ async def _run_net(
     steps_before = graph.step_count
     graph = await Runner.run_to_completion(RunContext(graph=graph))
     return graph, graph.step_count - steps_before
+
+
+# --- Declaring what a response carries ---
+#
+# Every tool that puts a node id where the agent can read it says so on its
+# `ResponseMeta`. The choke point in `server.py` writes the record; it does not
+# guess the ids, because walking an arbitrary result dict for id-shaped keys
+# would guess differently per tool and break silently when a shape changed
+# (`RETRIEVAL_PROVENANCE.md` §2.1).
+#
+# The rule is semantic rather than a list of tools: **`retrieved` is the set of
+# node ids present in the response** — what the agent saw. The enumeration in
+# §2 was wrong twice for exactly the reason a list is the wrong shape.
+
+
+def _declare(
+    node_ids: Iterable[str],
+    *,
+    provenance: SeedProvenance | Mapping[str, SeedProvenance] = SeedProvenance.DIRECT,
+    scores: Mapping[str, float] | None = None,
+) -> list[RetrievedNode]:
+    """The declaration for a response carrying `node_ids`.
+
+    Deduplicated, first appearance winning, so a node reached twice is declared
+    once and in the order the response lists it. `DIRECT` is the default because
+    most tools return nodes without ranking them at all; a ranked tool passes
+    its own map.
+    """
+    declared: dict[str, RetrievedNode] = {}
+    for node_id in node_ids:
+        if node_id in declared:
+            continue
+        declared[node_id] = RetrievedNode(
+            node_id=node_id,
+            provenance=(
+                provenance.get(node_id, SeedProvenance.DIRECT)
+                if isinstance(provenance, Mapping)
+                else provenance
+            ),
+            score=None if scores is None else scores.get(node_id),
+        )
+    return list(declared.values())
+
+
+_NESTED_ID_KEYS = ("id", "node_id", "topic_id")
+
+
+def _ids_within(value: object) -> Iterator[str]:
+    """Every node id nested anywhere in a result structure this tool just built.
+
+    Used by `reflect` alone, whose seven nominee lists have seven shapes.
+    Reading them off a hand-written list of key paths is how the eighth shape
+    would go undeclared, and §2.1's objection does not apply here: it is about
+    the *choke point* guessing across tools it knows nothing about, where this
+    is a tool reading the structure it wrote three lines earlier.
+    """
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if key in _NESTED_ID_KEYS and isinstance(item, str):
+                yield item
+            else:
+                yield from _ids_within(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _ids_within(item)
 
 
 # --- Segment (step 1 of agent-driven ingest) ---
@@ -622,6 +689,8 @@ async def topic_tree(
     meta = ResponseMeta(
         nodes_returned=len(visited) + len(ancestors),
         source_types={"topic": len(visited) + len(ancestors)},
+        # id + preview is still "the agent saw this node".
+        retrieved=_declare([node.id, *(a.id for a in ancestors), *visited]),
     )
     return result, meta
 
@@ -678,10 +747,35 @@ async def search(
     graph_hops: int = 1,
     metacontext_id: str | None = None,
     cross_frame: bool = False,
+    terms: list[str] | None = None,
     record_retrieval: bool = DEFAULT_RECORD_RETRIEVAL,
     event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
-    """Search the memory graph via hybrid retrieval (vector + graph expansion).
+    """Search the memory graph: embedding similarity and keyword matching, fused.
+
+    **Pass identifiers, names and exact phrases you care about as `terms`.**
+    A ticket id, an error code, a person's name, a filename — anything where the
+    exact string matters. Embeddings shred those: `JIRA-4417` becomes word
+    pieces mean-pooled with the rest of the sentence, so the query embeds to
+    roughly "short alphanumeric string" and every *other* ticket id in the graph
+    scores about as well. Keyword matching supplies the term rarity that
+    similarity has no notion of, and a declared term's best hit is kept in the
+    results even if rank fusion would otherwise have cut it.
+
+    Terms are matched whole and ORed: `terms=["JIRA-4417", "certificate
+    rotation"]` finds nodes matching either, and each term matches only
+    documents containing all of its words. Omit `terms` and the keyword arm
+    falls back to the query's own words — rare ones still fire, common ones
+    contribute nothing, and there is no survival guarantee. Declaring is the
+    reliable path.
+
+    Each returned node carries `provenance` saying how it was reached:
+    `lexical` (an exact term matched its content), `segment` (a term matched the
+    source passage it was extracted from), `vector` (embedding similarity), or
+    `expanded` (reached by an edge from one of the above). The response also
+    carries `segments` — the passages that matched, whether or not anything was
+    extracted from them, since *where did I read that?* is a different question
+    from *what do I believe?*
 
     If metacontext_id is provided, results are frame-scoped to that metacontext
     plus untagged base-reality nodes (set cross_frame=True to ignore frames).
@@ -696,7 +790,7 @@ async def search(
     disables): being retrieved is what tells a used node from a merely old one.
     Ranking is unaffected — see `_record_retrieval`.
     """
-    from epimemer.pipelines.query.types import QueryRequest
+    from epimemer.pipelines.query.types import QueryRequest, SeedProvenance
     from epimemer.pipelines.reflection.review import review_labels_for
 
     # Map string node types to enums
@@ -710,6 +804,7 @@ async def search(
         node_types=nt_enums,
         graph_hops=graph_hops,
         model_id=embedding_provider.model_id,
+        terms=terms,
     )
 
     if metacontext_id and not cross_frame:
@@ -738,6 +833,12 @@ async def search(
     nodes_data = []
     for node in nodes:
         node_dict = _node_to_dict(node)
+        # How this node was reached. Frame-scoping can hand back a node the
+        # final run did not rank, so the label falls back to `expanded` rather
+        # than being omitted — every returned node says something about itself.
+        node_dict["provenance"] = query_result.provenance.get(
+            node.id, SeedProvenance.EXPANDED
+        ).value
         if labels_by_node[node.id]:
             node_dict["metacontexts"] = labels_by_node[node.id]
         if node.id in review_by_node:
@@ -748,12 +849,25 @@ async def search(
     result = {
         "nodes": nodes_data,
         "edges": edges_data,
+        # Passages the keyword arm matched, in their own right. A segment is not
+        # a graph node and must not be pretended into one.
+        "segments": [hit.model_dump(mode="json") for hit in query_result.segments],
     }
     meta = ResponseMeta(
         nodes_searched=query_result.metadata.nodes_searched,
         nodes_returned=len(nodes),
         graph_hops=query_result.metadata.graph_hops,
         source_types=query_result.metadata.source_types,
+        # The provenance the response already carries, declared for the
+        # dashboard. Same fallback as the serialized dict above, so the two
+        # cannot disagree about how a node was reached.
+        retrieved=_declare(
+            (node.id for node in nodes),
+            provenance={
+                node.id: query_result.provenance.get(node.id, SeedProvenance.EXPANDED)
+                for node in nodes
+            },
+        ),
     )
     return result, meta
 
@@ -790,9 +904,9 @@ def events_in_window(
         if episode.restored_at is not None and start <= episode.restored_at < end:
             events.append(NodeChangeEvent(kind="restored", at=episode.restored_at))
 
-    # A retirement no episode records: a graph written before episodes existed,
-    # or a bare `update_node_status`. Reported without a counterpart rather than
-    # dropped — old graphs are not repaired, but they are still readable.
+    # A retirement no episode records: a graph written before episodes existed.
+    # Reported without a counterpart rather than dropped — old graphs are not
+    # repaired, but they are still readable.
     if (
         node.superseded_at is not None
         and node.status is not NodeStatus.ACTIVE
@@ -834,7 +948,11 @@ async def as_of(
         "at": at.isoformat(),
         "nodes": [_node_to_dict(n) for n in nodes],
     }
-    meta = ResponseMeta(nodes_returned=len(nodes), source_types=source_types)
+    meta = ResponseMeta(
+        nodes_returned=len(nodes),
+        source_types=source_types,
+        retrieved=_declare(n.id for n in nodes),
+    )
     return result, meta
 
 
@@ -859,6 +977,9 @@ async def query_changes(
     windows_data = []
     total = 0
     source_types: dict[str, int] = {}
+    # Across every window, since the record is per response and a node that
+    # changed twice was still shown once.
+    changed_ids: list[str] = []
     for start, end in windows:
         seen: dict[str, EpistemicNode] = {}
         for nt in nt_enums:
@@ -880,6 +1001,7 @@ async def query_changes(
             if node.id in review_by_node:
                 node_dict["review"] = review_by_node[node.id]
             changes.append(node_dict)
+            changed_ids.append(node.id)
 
             key = _node_type_key(node)
             source_types[key] = source_types.get(key, 0) + 1
@@ -892,7 +1014,11 @@ async def query_changes(
         })
 
     result = {"windows": windows_data}
-    meta = ResponseMeta(nodes_returned=total, source_types=source_types)
+    meta = ResponseMeta(
+        nodes_returned=total,
+        source_types=source_types,
+        retrieved=_declare(changed_ids),
+    )
     return result, meta
 
 
@@ -962,7 +1088,11 @@ async def find_nodes(
         key = _node_type_key(node)
         source_types[key] = source_types.get(key, 0) + 1
     result = {"nodes": [_node_to_dict(n) for n in nodes]}
-    meta = ResponseMeta(nodes_returned=len(nodes), source_types=source_types)
+    meta = ResponseMeta(
+        nodes_returned=len(nodes),
+        source_types=source_types,
+        retrieved=_declare(n.id for n in nodes),
+    )
     return result, meta
 
 
@@ -997,7 +1127,12 @@ async def list_sources(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
         sources.append({"id": dst_id, "name": name, "kind": kind, "node_count": count})
 
     result = {"sources": sources}
-    meta = ResponseMeta(nodes_returned=len(sources))
+    # Documents among these are not graph nodes and simply never match one in
+    # the dashboard; the entity topics are, and are the reason this declares.
+    meta = ResponseMeta(
+        nodes_returned=len(sources),
+        retrieved=_declare(source["id"] for source in sources),
+    )
     return result, meta
 
 
@@ -1148,7 +1283,9 @@ async def update(
         "new_node_id": new_node.id,
         "edge_id": edge.id,
     }
-    meta = ResponseMeta(nodes_returned=2)
+    meta = ResponseMeta(
+        nodes_returned=2, retrieved=_declare([new_node.id, old_node.id])
+    )
     return result, meta
 
 
@@ -1272,7 +1409,7 @@ async def judge_importance(
         "direction": direction,
         "judgments": len(node.metadata["reinforcements"]),
     }
-    return result, ResponseMeta(nodes_returned=1)
+    return result, ResponseMeta(nodes_returned=1, retrieved=_declare([node.id]))
 
 
 async def supersede_by(
@@ -1306,7 +1443,9 @@ async def supersede_by(
         old, existing_id, storage, status=superseded_status_for(because)
     )
     result = {"superseded_id": old_id, "by_id": existing_id, "edge_id": edge.id}
-    meta = ResponseMeta(nodes_returned=2)
+    meta = ResponseMeta(
+        nodes_returned=2, retrieved=_declare([existing_id, old_id])
+    )
     return result, meta
 
 
@@ -1372,7 +1511,29 @@ async def check_conflicts(
             candidate_count += len(candidates)
 
     result = {"conflicts": conflicts, "threshold": threshold}
-    meta = ResponseMeta(nodes_returned=candidate_count)
+    # The review loop's front door. Candidates are `vector` with the cosine as
+    # the score — they genuinely are similarity results, so no new provenance
+    # value is needed for them (§3, amended). The source facts are declared too:
+    # the agent read their content here.
+    meta = ResponseMeta(
+        nodes_returned=candidate_count,
+        retrieved=_declare(
+            [
+                *(c["fact"]["id"] for c in conflicts),
+                *(cand["id"] for c in conflicts for cand in c["candidates"]),
+            ],
+            provenance={
+                cand["id"]: SeedProvenance.VECTOR
+                for c in conflicts
+                for cand in c["candidates"]
+            },
+            scores={
+                cand["id"]: cand["score"]
+                for c in conflicts
+                for cand in c["candidates"]
+            },
+        ),
+    )
     return result, meta
 
 
@@ -1667,6 +1828,11 @@ async def reflect(
             + len(pending_review) + len(archival_candidates)
             + len(similar_relations)
         ),
+        # Reflect **scans** the whole active graph and the agent sees only the
+        # nominees, so a reflect record dims everything except them. That is
+        # accurate rather than a special case: `retrieved` is what the response
+        # carried, never what the tool looked at (§2, corrected).
+        retrieved=_declare(_ids_within(result)),
     )
     return result, meta
 
@@ -2008,6 +2174,19 @@ async def query_graph(
         nodes_returned=len(nodes),
         graph_hops=hops,
         source_types=source_types,
+        # Everything but the seed arrived by walking edges from it, which is
+        # what `expanded` means; the seed itself was asked for by id.
+        retrieved=_declare(
+            (n.id for n in nodes),
+            provenance={
+                n.id: (
+                    SeedProvenance.DIRECT
+                    if n.id == seed_node.id
+                    else SeedProvenance.EXPANDED
+                )
+                for n in nodes
+            },
+        ),
     )
     return result, meta
 
@@ -2357,7 +2536,7 @@ async def create_timelink(
     await storage.store_edge(edge)
 
     result = {"edge_id": edge.id, "timepoint_id": timepoint_id}
-    meta = ResponseMeta(nodes_returned=1)
+    meta = ResponseMeta(nodes_returned=1, retrieved=_declare([node_id]))
     return result, meta
 
 
@@ -2416,7 +2595,9 @@ async def get_metacontexts_for_node(
             metacontexts.append(mc.model_dump(mode="json"))
 
     result = {"node_id": node_id, "metacontexts": metacontexts}
-    meta = ResponseMeta(nodes_returned=len(metacontexts))
+    meta = ResponseMeta(
+        nodes_returned=len(metacontexts), retrieved=_declare([node_id])
+    )
     return result, meta
 
 

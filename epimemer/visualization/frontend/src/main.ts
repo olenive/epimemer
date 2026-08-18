@@ -9,10 +9,14 @@
 
 import "./style.css";
 
-import { fetchGraphs, fetchSessions, fetchSnapshot } from "./api";
+import { fetchGraphs, fetchRetrievals, fetchSessions, fetchSnapshot } from "./api";
+import { initDrawer, notRetrievedMarker } from "./drawer";
 import { createEventRouter } from "./events";
-import { initGraphPanel } from "./graph-panel";
+import { highlightNote, initGraphPanel } from "./graph-panel";
+import { initLogPanel } from "./log-panel";
 import { initPipelineStrip } from "./pipeline-strip";
+import { initRetrievalSelector } from "./retrieval-selector";
+import { responseText, type RecordEntry } from "./retrieval-store";
 import { initSplitPane } from "./split-pane";
 import { initTimelinePanel } from "./timeline-panel";
 import type { TimelineMark } from "./timeline-model";
@@ -104,25 +108,29 @@ const router = createEventRouter(wsUrl, (connected) => {
 // from the pointer as you read it. Only the close button changes the layout,
 // because that is a deliberate act rather than a side effect of looking.
 
-const detailDrawer = $("detail-drawer");
-const detailTitle = $("detail-title");
-const detailContent = $("detail-content");
-
-const showDetail = (nodeId: string, content: string, nodeType: string): void => {
-  detailTitle.textContent = `${nodeType} — ${nodeId.slice(0, 8)}`;
-  detailContent.textContent = content;
-  detailDrawer.classList.remove("hidden");
-};
-
-const clearDetail = (): void => {
-  detailTitle.textContent = "";
-  detailContent.textContent = "";
-};
-
-$("btn-close-detail").addEventListener("click", () => {
-  clearDetail();
-  detailDrawer.classList.add("hidden");
+const drawer = initDrawer({
+  drawer: $("detail-drawer"),
+  tabNode: $<HTMLButtonElement>("tab-node"),
+  tabResponse: $<HTMLButtonElement>("tab-response"),
+  title: $("detail-title"),
+  content: $("detail-content"),
+  close: $("btn-close-detail"),
 });
+
+/**
+ * Open a node's detail, saying so when the current retrieval did not return it.
+ *
+ * Dimmed nodes stay clickable on purpose: the interesting click is on one that
+ * did *not* come back, and the marker states the absence rather than leaving it
+ * implied by the colour (§4.3).
+ */
+const showDetail = (nodeId: string, content: string, nodeType: string): void => {
+  drawer.showNode(
+    `${nodeType} — ${nodeId.slice(0, 8)}`,
+    content,
+    notRetrievedMarker(graphPanel.isInFocus(nodeId), recordSelector.selected() !== null),
+  );
+};
 
 // --- Pipeline strip ---
 
@@ -149,7 +157,14 @@ document.addEventListener("keydown", (e) => {
 const graphPanel = initGraphPanel(
   $("graph-container"),
   router,
-  showDetail,
+  // Selection is bidirectional (§7): a log entry highlights its nodes, and a
+  // node narrows the log to what was done to it. The rail is not revealed —
+  // ambient signal, deliberate detail — so the filter is simply there when you
+  // open it. `logPanel` is initialised below and only read at click time.
+  (nodeId, content, nodeType) => {
+    showDetail(nodeId, content, nodeType);
+    logPanel.filterToNode(nodeId);
+  },
   {
     layoutSelect: $<HTMLSelectElement>("graph-layout"),
     filterSelect: $<HTMLSelectElement>("graph-filter"),
@@ -194,6 +209,62 @@ const timelinePanel = initTimelinePanel(
 );
 
 
+
+// --- Activity log ---
+
+const logPanel = initLogPanel(
+  {
+    rail: $("log-rail"),
+    entries: $("log-entries"),
+    empty: $("log-empty"),
+    verbs: $("log-verbs"),
+    nodeId: $<HTMLInputElement>("log-node-id"),
+    text: $<HTMLInputElement>("log-text"),
+    rangeStart: $<HTMLInputElement>("log-range-start"),
+    rangeEnd: $<HTMLInputElement>("log-range-end"),
+    clear: $("log-clear"),
+    count: $("log-count"),
+    note: $("log-note"),
+  },
+  router,
+  // Click an entry, highlight what it acted on. `highlightNodes` reports what
+  // it could not do — an id this graph does not hold, a type filter it had to
+  // clear — and the rail says so, because a highlight that lands on nothing
+  // looks exactly like a broken panel (§7).
+  (entry) => highlightNote(graphPanel.highlightNodes(entry.subjects)),
+);
+
+$("btn-toggle-log").addEventListener("click", () => logPanel.toggle());
+
+// --- Retrieval provenance: focus mode ---
+
+/**
+ * Dim everything the chosen retrieval did not return, in **both** panels.
+ *
+ * Timeline marks are the same nodes, so dimming only the graph would leave the
+ * two panels disagreeing about what came back — the class of bug #56 fixed for
+ * colour. Focus state therefore lives here, above both, like the theme does.
+ */
+const applyFocus = (entry: RecordEntry | null): void => {
+  const ids = entry === null ? null : entry.nodeIds;
+  graphPanel.setFocus(ids);
+  timelinePanel.setFocus(ids);
+  // Selecting a record is a deliberate act, so this is the one path allowed to
+  // open the drawer and change its tab (§5.2). A record merely *arriving* never
+  // reaches here.
+  if (entry !== null) {
+    drawer.showResponse(
+      `Response — ${entry.tool.replace(/^epimemer\./, "")}`,
+      responseText(entry),
+    );
+  }
+};
+
+const recordSelector = initRetrievalSelector(
+  { select: $<HTMLSelectElement>("record-selector"), unread: $("record-unread") },
+  router,
+  applyFocus,
+);
 
 // --- Theme ---
 
@@ -286,9 +357,28 @@ const loadGraphSnapshot = async (graph: string): Promise<void> => {
 
 const switchViewedGraph = async (graph: string): Promise<void> => {
   viewedGraph = graph;
+  // Before the subscription changes, so the backfill the hub replays lands in
+  // an empty log rather than behind the previous graph's entries.
+  logPanel.setViewedGraph(graph);
+  recordSelector.setViewedGraph(graph);
   router.setSessionSubscription({ session: selectedSession, graphs: [graph] });
   updateModeBadge();
   await loadGraphSnapshot(graph);
+};
+
+/**
+ * Fold in the payloads the hub's mirror may not hold.
+ *
+ * Best-effort by design: the RPC fails once the session exits, and the mirror
+ * is exactly what covers that case. A failure here means "no payloads", not
+ * "no records" (§3.2).
+ */
+const loadRetrievals = async (session: string): Promise<void> => {
+  try {
+    recordSelector.merge((await fetchRetrievals(session)).records);
+  } catch (err) {
+    console.debug("Retrieval payloads unavailable from the session:", err);
+  }
 };
 
 // --- Selectors ---
@@ -335,8 +425,13 @@ const populateSessionSelector = (): void => {
 
 /** Show a session, reporting `false` if it could not answer. */
 const selectSession = async (sessionId: string): Promise<boolean> => {
-  // A different session has its own pipelines — start its strip fresh.
-  if (sessionId !== selectedSession) pipelineStrip.clearAll();
+  // A different session has its own pipelines and its own history — start both
+  // fresh. Entries from one session must never read as another's.
+  if (sessionId !== selectedSession) {
+    pipelineStrip.clearAll();
+    logPanel.clearAll();
+    recordSelector.clearAll();
+  }
   selectedSession = sessionId;
   sessionSelector.value = sessionId;
   renderGraphList({ kind: "loading" });
@@ -352,6 +447,7 @@ const selectSession = async (sessionId: string): Promise<boolean> => {
     renderReflectBadge();
     renderGraphList({ kind: "ready", graphs, active: active_graph });
     await switchViewedGraph(active_graph);
+    await loadRetrievals(sessionId);
     return true;
   } catch (err) {
     // Say so on screen. The console is where this used to stop, which is why a

@@ -23,7 +23,12 @@ reduced here to a pointer.
 
 ## Ready to build
 
-### Retrieval provenance — designed, not built
+### Retrieval provenance — built, awaiting merge
+
+**Built 2026-08-18** on branch `lexical-search` (unmerged).
+`RETRIEVAL_PROVENANCE.md` §10 holds the construction notes — the five further
+tools the coverage oracle found, the producer-side payload guard, the
+desaturation rule shared by both panels; what follows is the original rationale.
 
 **What.** A focus mode that desaturates everything the last retrieval did *not*
 return — in both panels, with the dimmed nodes still clickable — plus the
@@ -37,9 +42,10 @@ was given, which is the question you have when a search disappoints. The
 non-returned nodes stay on screen because half the value is seeing what was
 *missed*.
 
-**Cost.** One recording site (`_run_with_timeout` covers all six node-returning
-tools), a bounded ring plus an RPC, and two panels learning one appearance rule.
-Six commits; the first three change nothing a user sees.
+**Cost.** One recording site (`_run_with_timeout` covers every tool, which
+turned out to be **fourteen** carrying node ids rather than six), a bounded ring
+plus an RPC, and two panels learning one appearance rule. Six commits; the first
+three change nothing a user sees.
 
 **Blockers.** None, but two ordering constraints: `LEXICAL_SEARCH.md` should
 land first (it turns the provenance enum from two values into four), and the
@@ -48,7 +54,12 @@ and validates it.
 
 ---
 
-### Event log — designed, not built
+### Event log — built, awaiting merge
+
+**Built 2026-08-18** on branch `lexical-search` (unmerged). `EVENT_LOG.md` §11
+holds the construction notes — the seventh verb the no-`superseded` rule forced,
+the rail-not-a-column layout ruling, the ring sizing; what follows is the
+original rationale.
 
 **What.** A filterable log panel of what the agent changed, whose entries
 highlight their nodes in the graph on click.
@@ -60,10 +71,11 @@ paragraph.
 the graph held becomes historical, the agent decided it, and nothing shows. This
 is the queued feature with the clearest epistemic justification.
 
-**It starts with a defect.** `NodeStatusChanged` does not name the superseding
-node, and neither does `query_changes` — "superseded by whom" exists nowhere but
-the `SUPERSEDED_BY` edge. That fix is `ISSUES.md` material and lands first,
-alone.
+**It started with a defect, now fixed.** `NodeStatusChanged` did not name the
+superseding node, and neither did `query_changes`. Filed as `ISSUES.md` #57 and
+**resolved 2026-08-17**: counterpart ids on both surfaces, with the append-only
+lifecycle-episode list from `EVENT_LOG.md` §6. The panel itself
+(`EVENT_LOG.md` §9 steps 2–6) followed on 2026-08-18.
 
 **Cost.** A coarse per-transaction event, a bounded ring in the hub, a panel.
 Six commits; the first three change nothing a user sees. No storage work, and
@@ -76,7 +88,12 @@ first — it is the simpler consumer and it validates the ring.
 
 ---
 
-### Lexical search — designed, not built
+### Lexical search — built, awaiting merge
+
+**Built 2026-08-18** on branch `lexical-search` (unmerged). `LEXICAL_SEARCH.md`
+§11 holds the construction notes — engine-dialect negotiation, the
+embedded-core IDF divergence, the no-stemming ruling; what follows is the
+original rationale.
 
 **What.** BM25 keyword retrieval over nodes *and* segments, fused into `search`
 alongside the existing vector path by Reciprocal Rank Fusion.

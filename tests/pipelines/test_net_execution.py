@@ -334,9 +334,11 @@ class TestEveryNetReachesQuiescence:
             None,
         )
 
-        # Three chained transitions — this net is exactly why the old cap of 3
-        # happened to work. Quiescence has to reach the same end.
-        assert fired == 3
+        # Six transitions: a fork, two retrieval arms, the fusion that joins
+        # them, expansion, assembly. This net is exactly why the old cap of 3
+        # happened to work back when it had three — and why a cap is the wrong
+        # mechanism, since adding an arm silently truncated it.
+        assert fired == 6
         assert len(graph.place_named("QueryResult").tokens) == 1
 
     async def test_orchestration_net(self, storage, embedding_provider, config):

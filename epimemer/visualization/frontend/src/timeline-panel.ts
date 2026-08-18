@@ -60,6 +60,7 @@ import {
 import {
   currentPalette,
   currentTheme,
+  desaturate,
   semanticPaletteFor,
   type Theme,
 } from "./theme";
@@ -105,6 +106,17 @@ export const markColor = (kind: string, theme: Theme): string => {
   return kind === "inference" ? palette.inference : palette.fact;
 };
 
+/**
+ * A mark's fill, focus included — the timeline's half of `nodeFill`.
+ *
+ * Dim only the graph and the two panels disagree about what came back, which
+ * is the class of bug #56 fixed for colour (RETRIEVAL_PROVENANCE.md §4.2). Both
+ * sides desaturate through `theme.ts`, so there is one dimming rule rather than
+ * two that drift.
+ */
+export const markFillFor = (kind: string, theme: Theme, inFocus: boolean): string =>
+  inFocus ? markColor(kind, theme) : desaturate(markColor(kind, theme));
+
 export const selectedMarkColor = (theme: Theme): string =>
   semanticPaletteFor(theme).selection;
 
@@ -147,6 +159,14 @@ export interface TimelinePanelHandle {
   loadSnapshot: (snapshot: SnapshotLike) => void;
   /** Re-measure and redraw — call when the panel is shown or resized. */
   refresh: () => void;
+  /**
+   * Dim every mark this retrieval did not return; `null` leaves focus mode.
+   *
+   * A mark can stand for several nodes, and it is in focus if any of them came
+   * back — the mark says "something here was retrieved", which is the honest
+   * reading of a mark that is not a node.
+   */
+  setFocus: (nodeIds: readonly string[] | null) => void;
 }
 
 const svg = <K extends keyof SVGElementTagNameMap>(
@@ -299,6 +319,22 @@ export const initTimelinePanel = (
     render();
   };
 
+  // --- Focus mode (RETRIEVAL_PROVENANCE.md §4.2) ---
+  //
+  // Held here rather than in the filters: a filter removes marks, and focus
+  // must leave them drawn. *"What did the agent miss?"* is half the question,
+  // and a filtered-away mark cannot answer it.
+
+  let focused: ReadonlySet<string> | null = null;
+
+  const markInFocus = (mark: TimelineMark): boolean =>
+    focused === null || mark.nodeIds.some((id) => focused!.has(id));
+
+  const setFocus = (nodeIds: readonly string[] | null): void => {
+    focused = nodeIds === null ? null : new Set(nodeIds);
+    render();
+  };
+
   // --- Filters ---
 
   const readFilters = (): TimelineFilters => {
@@ -367,7 +403,11 @@ export const initTimelinePanel = (
     const theme = currentTheme();
     return mark.id === state.selectedMarkId
       ? selectedMarkColor(theme)
-      : markColor(mark.side === "right" ? "inference" : "fact", theme);
+      : markFillFor(
+          mark.side === "right" ? "inference" : "fact",
+          theme,
+          markInFocus(mark),
+        );
   };
 
   const bindMark = (element: SVGElement, mark: TimelineMark): void => {
@@ -1038,5 +1078,5 @@ export const initTimelinePanel = (
     observer.disconnect();
   };
 
-  return { cleanup, clear, loadSnapshot, refresh: render };
+  return { cleanup, clear, loadSnapshot, refresh: render, setFocus };
 };

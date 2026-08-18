@@ -45,6 +45,7 @@ async def start_hub_client(
     info: SessionInfo,
     hub_url: str,
     default_reflect_threshold: int = 10,
+    records: Callable[[], list[dict]] | None = None,
 ) -> Callable[[], Awaitable[None]]:
     """Start forwarding this session to the hub. Returns an async ``stop()``.
 
@@ -53,6 +54,11 @@ async def start_hub_client(
     endpoint (e.g. ``ws://127.0.0.1:8765/ingest``).
     ``default_reflect_threshold`` is the server default reported with the
     active graph's reflection pressure, unless that graph overrides it.
+    ``records`` returns this session's retrieval records, already serialized;
+    the ``retrievals`` RPC answers from it, payloads included, which is the
+    route that still works when the hub's mirror is guarded. It is a callable
+    rather than the log itself so this module stays ignorant of the record
+    type, exactly as ``PublishEvent.payload`` is opaque to the hub.
     """
     stop_event = asyncio.Event()
     # RPC reads share one lock: two concurrent viz reads must not interleave the
@@ -85,6 +91,12 @@ async def start_hub_client(
                     )
                 elif req.method == "snapshot":
                     result = await assemble_snapshot(raw_storage, req.params["graph"])
+                elif req.method == "retrievals":
+                    # No storage read, so the lock buys nothing here — but
+                    # every RPC staying on one path is worth more than the
+                    # microseconds, and a future record that *did* read
+                    # storage would otherwise be the exception nobody noticed.
+                    result = {"records": records() if records else []}
                 else:
                     raise ValueError(f"unknown rpc method {req.method!r}")
             await ws.send(RpcResponse(request_id=req.request_id, result=result).model_dump_json())

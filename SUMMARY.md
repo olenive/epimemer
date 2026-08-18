@@ -303,7 +303,7 @@ knowledge claim and editing it rewrites no history:
 | edge `label` (user relations) | reflection (relation consolidation) | edges are not versioned; relabelling a synonym is a plain update |
 
 So "a node is never mutated" is shorthand for "a node's *content* is never mutated".
-Mutating metadata uses dedicated in-place storage operations (`update_node_status`,
+Mutating metadata uses dedicated in-place storage operations (`set_node_status_tx`,
 `relabel_edges`) and never touches the content embedding. (Sources and tags are now
 Topics linked by edges, so they consolidate by topic-merge, not in-place mutation.)
 

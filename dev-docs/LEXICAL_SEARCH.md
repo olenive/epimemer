@@ -7,7 +7,9 @@ Revised the same day after review: **declared `terms` drive the lexical arm**,
 with a conservative statistical fallback when omitted, and zero-scored matches
 never reach fusion — see §10.
 
-Nothing here is built yet.
+**Built 2026-08-18** on branch `lexical-search` (unmerged). Construction
+taught the engine several things the design did not know — §11 records them
+and is the design of record where it conflicts with earlier sections.
 
 ---
 
@@ -61,7 +63,9 @@ SurrealDB **3.0.5**, probed in a throwaway namespace on 2026-08-17. These are
 measurements, not recollections — several contradict what the 2.x documentation
 says.
 
-**2.1 The `SEARCH` keyword is gone.** SurrealDB 3.0 renamed it to `FULLTEXT`:
+**2.1 The `SEARCH` keyword is gone.** SurrealDB 3.0 renamed it to `FULLTEXT`
+*(server only — the Python SDK's embedded `mem://` core still speaks 2.x;
+§11.1)*:
 
 ```sql
 -- 2.x, and what the docs and every LLM say. Parse error on 3.0.5:
@@ -107,7 +111,8 @@ WHERE content @1@ "deployment" OR content @2@ "rollback" OR content @3@ "ticket"
 ORDER BY score DESC;
 ```
 
-**2.5 SurrealDB's BM25 uses classic IDF, clamped at zero.** Measured: a term in
+**2.5 SurrealDB's BM25 uses classic IDF, clamped at zero** *(3.0.5 server
+only — the embedded core returns negative IDF; §11.2)*. Measured: a term in
 2 of 4 documents scores exactly `0.0`; a term in 3 of 4 also scores `0.0`, not a
 negative number. That fits `log((N - n + 0.5) / (n + 0.5))` — zero at `n = N/2`,
 negative above and clamped.
@@ -297,7 +302,8 @@ runs inside `connect()`, which has no progress reporting. On an existing graph
 of a few thousand nodes the first connect after this ships will be slower than
 every connect before it, once. `IF NOT EXISTS` means it happens exactly once,
 but it happens somewhere the user cannot see. This should be measured on a
-realistic graph before it ships, not after.
+realistic graph before it ships, not after. **Measured 2026-08-18: §11.5 —
+1 s at 2,000 documents, 19 s at 20,000, inside `connect()`.**
 
 ---
 
@@ -362,6 +368,13 @@ nothing.
 > `JIRA-4418`'s fact is **not a seed of any kind** (it may appear only as
 > `expanded`). True at every hop count, and it pins the actual claim —
 > lexical discriminates 4417 from 4418 — rather than a side effect.
+>
+> **Corrected again at construction (2026-08-18):** "not a seed of any kind"
+> was still too strong — the *vector* arm may legitimately seed the near-miss
+> (they embed alike; lexical does not control the vector top-k, and on the
+> test corpus the vector ranking included both tickets). The assertion as
+> built: 4417 **is** a lexical seed, 4418 **is not** — shown failing on the
+> vector-only tree. §11.8.
 
 Then:
 
@@ -404,6 +417,17 @@ Then:
 - `test_segment_bridge_respects_the_status_gate` — §10 R7: a segment hit whose
   only extracted node is CORRECTED bridges to nothing (the segment itself may
   still be reported).
+- `test_an_exact_containing_hit_survives_zero_scored_tokens` — §10 R8, the
+  §11.2 rescue: a corpus where every document says `JIRA`; declared term
+  `JIRA-4417`; the exact document returns even where the term's BM25 score
+  is ≤ 0. Asserted at the fusion level, both backends — the engine-level
+  divergence test stays as the pin of engine truth beneath it.
+- `test_exact_containment_outranks_scattered_cooccurrence` — §10 R8: a
+  document containing the literal `JIRA-4417` outranks one containing `JIRA`
+  and `4417` apart, for the declared term.
+- `test_a_longer_identifier_is_not_a_containment_match` — §10 R8's boundary
+  half: `JIRA-44170` is not returned for declared `JIRA-4417` — the token
+  match excludes it from candidacy before containment is ever checked.
 
 Storage protocol changes mean `make test-integration SURREAL_PORT=8123` runs
 alongside the unit suite.
@@ -443,7 +467,8 @@ returns, so the first four can land without touching agent-visible behaviour.
   A long fact's tail is silently absent from its embedding today. Lexical search
   incidentally mitigates this — BM25 indexes the whole field — but the
   underlying gap is separate and still unaddressed. It belongs in `ISSUES.md`,
-  not here.
+  not here. **Filed 2026-08-18 as `ISSUES.md` #59**, which carries the options
+  and the measurement that has to come first.
 
 ---
 
@@ -513,7 +538,109 @@ computes — is the statistic that separates them, and R1/R3 use it.
   inside one tool. Statistics note, no action: `WHERE` exclusion does not
   change the index's corpus counts, so scores drift slightly as nodes retire
   — harmless under rank fusion, recorded here so nobody chases it as a bug.
+  **Implementation note (2026-08-18): the status filter must wrap the FTS
+  query as a subquery.** Inlining any non-match predicate into the
+  OR-of-match-refs `WHERE` makes 3.0.5 drop the FTS index and match
+  disjunctively — the near-miss returns at a *positive* score R1 cannot
+  catch. Measured, and proven load-bearing by patching it back (§11.4).
+- **R8 — declared terms verify containment** *(added 2026-08-18 after
+  construction; built same day — §11.9)*. Token matching and substring matching fail
+  in opposite directions, and each filters the other's false positives:
+  token boundaries exclude `JIRA-44170` from a `JIRA-4417` query (digit runs
+  tokenize whole), while containment excludes scattered co-occurrence
+  ("the JIRA migration hit error 4417"), which conjunctive tokens cannot —
+  the FTS has no phrase queries, so containment is the only adjacency signal
+  available. For each **declared** term: candidates come from the FTS token
+  match as today (an exact-containing document necessarily contains the
+  tokens, so the candidate set cannot miss one); candidates are partitioned
+  by **normalized containment of the original string** (the analyzer's
+  lowercase/ascii folding, no stemming — exactness is unstemmed by
+  definition) — complete *within the widened fetch window*; the residual is
+  stated in §11.9; exact-containing hits rank above token-only hits within
+  the term's list and are **exempt from R1** — their evidence is the
+  containment, not the BM25 score; R2 protects the top *exact* hit when one
+  exists, else the top token hit. The fallback path is unchanged. The
+  containment check runs client-side in the adapter over fetched candidates,
+  **never in the FTS `WHERE`** (§11.4's trap). This also erases §11.2's
+  user-facing consequence: an exact match can no longer be lost to
+  engine-dependent scoring, confining that divergence to fallback ranking.
 
 The headline test in §7 deliberately stays on the **fallback** path (the
 identifier is a rare token; R3 must find it unaided); the new tests above pin
 R1–R3, R5 and R6 individually.
+
+---
+
+## 11. Construction notes (2026-08-18)
+
+Built on branch `lexical-search`, all §8 steps, both backends; unit,
+integration and frontend suites green. What construction taught, reported by
+the implementer and ruled accepted 2026-08-18. **Where these conflict with
+earlier sections, these win.**
+
+1. **Two engines, two dialects.** The Python SDK's embedded `mem://` core is
+   an older SurrealDB that rejects `FULLTEXT` and requires 2.x `SEARCH`; the
+   3.0.5 server rejects `SEARCH`. `_setup_schema` negotiates the dialect
+   (`surrealdb_adapter.py`, both DDL strings). §2's measurements are the
+   server's.
+2. **The IDF clamp (§2.5) is server-only.** The embedded core returns
+   negative IDF. A per-reference `math::max(…, 0)` aligns single-token terms
+   and cross-term sums — but not tokens *inside* one multi-token term:
+   `JIRA-4417`, in a corpus where every document says `JIRA`, is lost on the
+   embedded core and scores `1.0895` on the server. Not fixable from the
+   query layer (per-token refs break 3.0.5's conjunctive matching — measured,
+   the near-miss leaks). Pinned by
+   `test_a_multi_token_term_of_mostly_common_words_is_lost_here`. Parity
+   across *engines* is rare-term only, like parity across backends.
+   **Mitigated by R8 (2026-08-18):** exact-containing hits for declared terms
+   no longer depend on the score, so the user-facing loss disappears and the
+   divergence is confined to fallback ranking.
+3. **The memory backend does not stem.** Deliberate: Snowball is not
+   reproducible in-tree, and a partial stemmer disagrees in both directions.
+   Consequence: `"deployments"` finds `"deployment"` on SurrealDB and not in
+   memory. Cross-backend guarantees are exact-token, which is the feature's
+   purpose anyway.
+4. **R7's status filter is a subquery, not a `WHERE` clause** — see the
+   implementation note under R7. Inlined predicates silently disable the FTS
+   index on 3.0.5 and `@@` turns disjunctive.
+5. **Backfill measured (§5's gate).** Median of 3, documents = nodes +
+   segments: 2,000 → 1.0 s; 6,000 → 3.8 s; 20,000 → 19 s — inside
+   `connect()`, no progress reporting; steady connect stays ~30 ms.
+   Acceptable at current graph sizes; numbers live in `BENCHMARKS.md`.
+6. **One protocol addition beyond §4: `get_segments(ids)`**, both backends —
+   §6's `segments` response key needs segment text, and nothing could fetch
+   a segment by its own id.
+7. **R2's cost shape:** one `text_search` per declared term per partition —
+   per-term attribution is what the survival guarantee requires. The
+   fallback stays at one call per partition.
+8. **The headline assertion was corrected once more** (see §7's dated note):
+   the claim under test is lexical-side only — 4417 is a lexical seed, 4418
+   is not.
+9. **R8 built (2026-08-18, same branch).** How it landed, and three
+   consequences ruled accepted:
+   - `text_search` gains `verify_containment: bool = False` on the protocol
+     and both backends; the declared path turns it on, the fallback path is
+     untouched. The partition rule lives once, in `bm25.containment_first`;
+     the string comparison runs in Python over fetched rows, never in the
+     FTS `WHERE` (§11.4). New engine-trap guard:
+     `test_containment_keeps_the_index_over_a_real_connection`.
+   - **The rescue needs reach.** The hit R8 rescues sits at the bottom of a
+     score ordering, so the declared-term fetch widened ×10 (k×100 vs
+     k×10). Measured on 3.0.5 over 3,000 facts (median of 5): rare declared
+     term 1.6 ms with containment vs 1.9 ms plain; worst case — every token
+     in every document — 24.2 ms vs 16.8 ms. **Residual, stated in the
+     code:** a term whose tokens are common across more than ~1,000
+     documents can still have its literal match fall outside the window.
+     Outside the feature's purpose (identifiers have a rare token almost by
+     definition); the known upgrade if it ever bites is a containment scan
+     when a saturated window comes back all zero-scored.
+   - **Declaring a common word now returns its zero-scored containing
+     hits** where R1 previously returned none. That is R8 as written, and
+     what declaring means — and why the fallback path was left alone.
+   - **The declared path's per-term ordering is rank-built, not
+     score-summed:** re-sorting on the BM25 sum at the end undid the rescue,
+     so a term's list is ordered exact-first then by rank, and fusion
+     consumes it as ranks like every other list.
+   - Exactness is *not* exposed at the tool surface — provenance stays
+     `lexical`; `RETRIEVAL_PROVENANCE.md` owns that vocabulary if it ever
+     wants the distinction.

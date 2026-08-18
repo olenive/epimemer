@@ -29,6 +29,7 @@ from epimemer.core.types import (
     NodeEdge,
     NodeStatus,
     NodeType,
+    Segment,
     Topic,
     ValueSignal,
 )
@@ -1593,7 +1594,9 @@ class TestArchive:
         t = Topic(content="old topic", source_id="s1")
         await storage.store_node(t)
         old_time = datetime.now(timezone.utc) - timedelta(days=200)
-        await storage.update_node_status(t.id, NodeStatus.SUPERSEDED, superseded_at=old_time)
+        await storage.set_node_status_tx(
+            [t], status=NodeStatus.SUPERSEDED, at=old_time
+        )
 
         result, meta = await archive(storage, max_age_days=90)
         assert result["nodes_archived"] == 1
@@ -1663,7 +1666,9 @@ class TestRestore:
         retired — restoring an archive is not a blanket resurrection."""
         node = Fact(content="wrong and superseded", source_id="s1")
         await storage.store_node(node)
-        await storage.update_node_status(node.id, NodeStatus.SUPERSEDED)
+        await storage.set_node_status_tx(
+            [node], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+        )
 
         result, _ = await restore({"nodes": [_node_to_dict(node)]}, storage)
 
@@ -2400,7 +2405,9 @@ class TestGraphStats:
     async def test_excludes_superseded_nodes(self, storage):
         topic = Topic(content="t", source_id="s1")
         await storage.store_node(topic)
-        await storage.update_node_status(topic.id, NodeStatus.SUPERSEDED)
+        await storage.set_node_status_tx(
+            [topic], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+        )
 
         result, _ = await graph_stats(storage, default_reflect_threshold=10)
         assert result["nodes_by_type"]["topic"] == 0
@@ -2954,3 +2961,275 @@ def test_tool_count_matches_integration_doc():
     assert int(stated.group(1)) == registered, (
         f"INTEGRATION.md says {stated.group(1)} tools but server.py registers {registered}"
     )
+
+
+class TestLexicalSearch:
+    """What the second retrieval arm buys, at the surface an agent actually sees.
+
+    Every fact here embeds to roughly "short alphanumeric string" — WordPiece
+    shreds `JIRA-4417` and mean-pools the pieces with the rest of the sentence —
+    so the failure vector search has is not that the right node ranks low. It is
+    that the *wrong ticket ids rank about equally high*. Cosine similarity has no
+    notion of term rarity, which is exactly what BM25's IDF supplies.
+    """
+
+    TICKETS = (
+        "Ticket JIRA-4417 was closed after the deployment rollback",
+        "Ticket JIRA-4418 remains open pending the deployment review",
+        "Ticket JIRA-4419 was reassigned to the platform team",
+        "Ticket JIRA-4420 is blocked on a certificate rotation",
+        "Ticket JIRA-4421 covers the quarterly audit backlog",
+    )
+
+    # Facts about something else, so the corpus is a graph rather than a ticket
+    # list. Without them `jira` is in *every* document, which is a corpus no
+    # real graph has and which puts the shared half of the identifier below the
+    # IDF floor — an interesting edge case, pinned in the storage tests, but the
+    # wrong thing for these to be measuring.
+    OTHERS = (
+        "The kitchen tap on floor two has been fixed",
+        "Quarterly revenue exceeded the forecast by four percent",
+        "The onboarding checklist now includes laptop encryption",
+        "A new espresso machine arrived in the north wing",
+        "Cycling to the office is reimbursed from next month",
+        "The annual fire drill happens on a Tuesday",
+    )
+
+    async def _store(self, storage, embedding_provider, contents) -> list[Fact]:
+        facts = []
+        for content in contents:
+            fact = Fact(content=content, source_id="seg-1")
+            await storage.store_node(fact)
+            vectors = await embedding_provider.embed([content])
+            await storage.store_embedding(EmbeddingRecord(
+                item_id=fact.id,
+                model_id=embedding_provider.model_id,
+                vector=vectors[0],
+            ))
+            facts.append(fact)
+        return facts
+
+    async def _tickets(self, storage, embedding_provider) -> list[Fact]:
+        """The five ticket facts, in a corpus that also holds unrelated ones."""
+        tickets = await self._store(storage, embedding_provider, self.TICKETS)
+        await self._store(storage, embedding_provider, self.OTHERS)
+        return tickets
+
+    async def test_search_finds_an_identifier_vector_search_cannot(
+        self, storage, embedding_provider
+    ):
+        """The reason the feature exists, asserted on **seeds** rather than on
+        the whole result.
+
+        Both ticket facts share a source, so at `graph_hops >= 2` the near-miss
+        is legitimately reachable from the right seed — that is expansion doing
+        its job, and "the near-miss is not returned" would fail against correct
+        behaviour. Exact match and related-by-connection are different
+        provenances, so the claim is stated in those terms: 4417's fact is
+        present *as a lexical seed*, and 4418's fact is not a seed of any kind.
+
+        Deliberately on the **fallback** path — no `terms` — because `4417` is a
+        rare token and R3 must find it unaided.
+
+        §7 words the second half as "not a seed of *any* kind". That is stronger
+        than the change can support: whether 4418 lands in the vector arm's
+        top-k is the embedding provider's business, not lexical search's, and
+        asserting it would make this test a lottery over something the feature
+        does not touch. The claim being pinned is the one the feature makes —
+        lexical discriminates 4417 from 4418 — so the assertion is that 4418 is
+        not a *lexical* seed. It may still arrive by similarity or by an edge.
+        """
+        facts = await self._tickets(storage, embedding_provider)
+
+        result, _ = await search(
+            "JIRA-4417", storage, embedding_provider, k=5, graph_hops=1
+        )
+
+        by_id = {node["id"]: node for node in result["nodes"]}
+        assert by_id[facts[0].id]["provenance"] == "lexical"
+        assert by_id.get(facts[1].id, {}).get("provenance") in (
+            None, "vector", "expanded",
+        )
+
+    async def test_search_response_labels_seed_provenance(
+        self, storage, embedding_provider
+    ):
+        """Every node the agent is handed says how it was reached.
+
+        A flat "retrieved" set throws away the most useful thing the feature
+        produces: *this matched at 0.82; that one was dragged in by an edge from
+        it; this third one came back on an exact token match* is the question
+        actually being asked when a search disappoints.
+        """
+        await self._tickets(storage, embedding_provider)
+
+        result, _ = await search(
+            "JIRA-4417", storage, embedding_provider, k=5, graph_hops=1
+        )
+
+        labels = {node["provenance"] for node in result["nodes"]}
+        assert labels
+        assert labels <= {"lexical", "segment", "vector", "expanded"}
+
+    async def test_prose_query_without_terms_adds_no_lexical_noise(
+        self, storage, embedding_provider
+    ):
+        """R3: a query of only common words returns the vector-only result.
+
+        Every token of "the ticket" is in every fact of this corpus, so the IDF
+        floor zeroes all of it and the lexical arm contributes nothing. No
+        threshold was invented to achieve that — the corpus decided.
+        """
+        await self._store(storage, embedding_provider, self.TICKETS)
+
+        result, _ = await search(
+            "the ticket", storage, embedding_provider, k=5, graph_hops=0
+        )
+
+        assert {node["provenance"] for node in result["nodes"]} == {"vector"}
+
+    async def test_declared_terms_drive_the_lexical_arm(
+        self, storage, embedding_provider
+    ):
+        """R2: the caller says which token is load-bearing, rather than the
+        system inferring it from query shape.
+
+        "find JIRA-4417 please" and "deployment problems yesterday" are the same
+        length with opposite intents, which is why length was rejected as the
+        heuristic and why the agent — which is an agent, not a search box — is
+        asked instead.
+        """
+        facts = await self._tickets(storage, embedding_provider)
+
+        result, _ = await search(
+            "find the ticket that was closed",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
+            terms=["JIRA-4417"],
+        )
+
+        by_id = {node["id"]: node for node in result["nodes"]}
+        assert by_id[facts[0].id]["provenance"] == "lexical"
+
+    async def test_an_exact_containing_hit_survives_zero_scored_tokens(
+        self, storage, embedding_provider
+    ):
+        """R8's rescue of the divergence in §11.2, at the surface that shows it.
+
+        A ticket list is the corpus where BM25 has least to say: `jira` is in
+        every document, so the common half of the identifier is at or below the
+        IDF floor, and what the two engines do there differs — one clamps to
+        zero, the other returns the negative value and drags the whole term
+        below the truncation with it. The declared term then finds nothing on
+        one engine and the right fact on the other, from the same graph.
+
+        Containment does not care. The document holds the literal string the
+        caller declared; that is the evidence, and the score is not consulted.
+        The engine divergence stays where it is (pinned in the storage tests)
+        and stops being visible to an agent that declares its identifiers.
+        """
+        facts = await self._store(storage, embedding_provider, self.TICKETS)
+
+        result, _ = await search(
+            "find the ticket that was closed",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
+            terms=["JIRA-4417"],
+        )
+
+        by_id = {node["id"]: node for node in result["nodes"]}
+        assert by_id[facts[0].id]["provenance"] == "lexical"
+
+    async def test_segment_hit_bridges_to_its_extracted_nodes(
+        self, storage, embedding_provider
+    ):
+        """§1.1: the identifier is in the passage and nowhere else.
+
+        `store_decomposition` is agent-driven, so a fact written as "the
+        deployment ticket was closed" never contains the id the source text did.
+        No search of any kind recovers it from nodes — and the segment kept the
+        raw text.
+        """
+        segments = []
+        passages = (
+            "Ops confirmed that ticket JIRA-4417 was closed overnight",
+            "A separate note about the coffee machine on floor two",
+            "Minutes from the weekly planning meeting, nothing decided",
+            "A reminder that the office moves next month",
+            "Notes on the new starter onboarding checklist",
+        )
+        for index, text in enumerate(passages):
+            segment = Segment(
+                source_id="doc-1", text=text, span_start=index, span_end=index + 1
+            )
+            await storage.store_segment(segment)
+            segments.append(segment)
+
+        paraphrase = Fact(
+            content="the deployment ticket was closed", source_id=segments[0].id
+        )
+        await storage.store_node(paraphrase)
+        vectors = await embedding_provider.embed([paraphrase.content])
+        await storage.store_embedding(EmbeddingRecord(
+            item_id=paraphrase.id,
+            model_id=embedding_provider.model_id,
+            vector=vectors[0],
+        ))
+
+        result, _ = await search(
+            "JIRA-4417", storage, embedding_provider, k=5, graph_hops=0
+        )
+
+        by_id = {node["id"]: node for node in result["nodes"]}
+        assert by_id[paraphrase.id]["provenance"] == "segment"
+        # ...and the passage is reported in its own right. A segment is not a
+        # graph node and must not be pretended into one.
+        assert [hit["segment_id"] for hit in result["segments"]] == [segments[0].id]
+        assert result["segments"][0]["text"] == passages[0]
+        assert result["segments"][0]["document_id"] == "doc-1"
+
+    async def test_segment_bridge_respects_the_status_gate(
+        self, storage, embedding_provider
+    ):
+        """R7: the bridge is not a side door around the gate.
+
+        A CORRECTED node is a claim concluded *wrong*. Gating the direct route
+        and not the bridged one would let it back in through the segment that
+        produced it, which is the one place nobody would look.
+        """
+        passages = (
+            "Ops confirmed that ticket JIRA-4417 was closed overnight",
+            "A separate note about the coffee machine on floor two",
+            "Minutes from the weekly planning meeting, nothing decided",
+            "A reminder that the office moves next month",
+            "Notes on the new starter onboarding checklist",
+        )
+        segments = []
+        for index, text in enumerate(passages):
+            segment = Segment(
+                source_id="doc-1", text=text, span_start=index, span_end=index + 1
+            )
+            await storage.store_segment(segment)
+            segments.append(segment)
+
+        wrong = Fact(
+            content="the deployment ticket was closed", source_id=segments[0].id
+        )
+        await storage.store_node(wrong)
+        await storage.set_node_status_tx(
+            [wrong], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
+        )
+
+        result, _ = await search(
+            "JIRA-4417", storage, embedding_provider, k=5, graph_hops=0
+        )
+
+        assert wrong.id not in {node["id"] for node in result["nodes"]}
+        # The passage itself still matched, and saying so is honest: the segment
+        # really does contain the identifier. What it no longer does is smuggle
+        # a retired claim back in behind it.
+        assert [hit["segment_id"] for hit in result["segments"]] == [segments[0].id]

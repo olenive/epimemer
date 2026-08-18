@@ -322,10 +322,10 @@ async def test_hybrid_retrieval_end_to_end(populated_graph):
     )
     graph = hybrid_retrieval_net(request, emb_provider, storage)
 
-    # Execute all 3 transitions
-    graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=3)
+    # Fork, two retrieval arms, fusion, expansion, assembly.
+    graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=6)
 
-    assert fired == 3
+    assert fired == 6
 
     # Get the final result
     result_place = graph.place_named("QueryResult")
@@ -346,7 +346,7 @@ async def test_hybrid_retrieval_metadata_counts(populated_graph):
         graph_hops=1,
     )
     graph = hybrid_retrieval_net(request, emb_provider, storage)
-    graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=3)
+    graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=6)
 
     result = graph.place_named("QueryResult").tokens[0]
     metadata = result.metadata
@@ -377,23 +377,35 @@ async def test_hybrid_retrieval_tokens_flow_correctly(populated_graph):
     )
     graph = hybrid_retrieval_net(request, emb_provider, storage)
 
-    # Before execution: QueryRequest has a token, others empty
+    # Before execution: QueryRequest holds the only token.
     assert len(graph.place_named("QueryRequest").tokens) == 1
-    assert len(graph.place_named("VectorResults").tokens) == 0
-    assert len(graph.place_named("ExpandedResults").tokens) == 0
-    assert len(graph.place_named("QueryResult").tokens) == 0
+    for place in ("VectorQuery", "LexicalQuery", "Seeds", "QueryResult"):
+        assert len(graph.place_named(place).tokens) == 0
 
-    # After transition 1: VectorResults has a token
+    # The fork feeds both arms from one request.
     graph, _ = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=1)
     assert len(graph.place_named("QueryRequest").tokens) == 0
-    assert len(graph.place_named("VectorResults").tokens) == 1
+    assert len(graph.place_named("VectorQuery").tokens) == 1
+    assert len(graph.place_named("LexicalQuery").tokens) == 1
 
-    # After transition 2: ExpandedResults has a token
+    # Both arms run. Either may go first — the fusion is what waits, and it
+    # cannot fire until both its input places hold a token.
+    graph, _ = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=2)
+    assert len(graph.place_named("VectorResults").tokens) == 1
+    assert len(graph.place_named("LexicalResults").tokens) == 1
+    assert len(graph.place_named("Seeds").tokens) == 0
+
+    # Fusion consumes both and produces one seed set.
     graph, _ = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=1)
     assert len(graph.place_named("VectorResults").tokens) == 0
+    assert len(graph.place_named("LexicalResults").tokens) == 0
+    assert len(graph.place_named("Seeds").tokens) == 1
+
+    # Expansion, then assembly.
+    graph, _ = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=1)
+    assert len(graph.place_named("Seeds").tokens) == 0
     assert len(graph.place_named("ExpandedResults").tokens) == 1
 
-    # After transition 3: QueryResult has a token
     graph, _ = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=1)
     assert len(graph.place_named("ExpandedResults").tokens) == 0
     assert len(graph.place_named("QueryResult").tokens) == 1
@@ -436,3 +448,195 @@ async def test_temporal_query_excludes_future_nodes(embedding_provider):
     node_ids = {n.id for n in result}
     assert "past-topic" in node_ids
     assert "future-topic" not in node_ids
+
+
+# --- The lexical arm inside the net ---
+
+
+@pytest.fixture
+async def ticket_graph(embedding_provider):
+    """Facts whose identifiers are the only thing separating them.
+
+    Every one of these embeds to roughly "short alphanumeric string" — which is
+    the scenario the lexical arm exists for, and the one where a vector-only
+    search cannot tell 4417 from 4418 however well it works.
+    """
+    storage = InMemoryStorage()
+    contents = [
+        "Ticket JIRA-4417 was closed after the deployment rollback",
+        "Ticket JIRA-4418 remains open pending the deployment review",
+        "Ticket JIRA-4419 was reassigned to the platform team",
+        "Ticket JIRA-4420 is blocked on a certificate rotation",
+        "Ticket JIRA-4421 covers the quarterly audit backlog",
+    ]
+    facts = []
+    for content in contents:
+        fact = Fact(content=content, source_id="seg-1")
+        await storage.store_node(fact)
+        vectors = await embedding_provider.embed([content])
+        await storage.store_embedding(EmbeddingRecord(
+            item_id=fact.id, model_id=embedding_provider.model_id, vector=vectors[0]
+        ))
+        facts.append(fact)
+    return storage, embedding_provider, facts
+
+
+async def _run(request, embedding_provider, storage) -> QueryResult:
+    graph, _ = await tools._run_net(
+        hybrid_retrieval_net(request, embedding_provider, storage), "retrieval", None
+    )
+    return graph.place_named("QueryResult").tokens[0]
+
+
+async def test_the_lexical_arm_seeds_the_node_the_identifier_names(ticket_graph):
+    """The net's whole reason for gaining a second arm.
+
+    The near-miss shares every token of the query except the number, so a
+    conjunctive lexical match separates them where similarity cannot.
+    """
+    storage, provider, facts = ticket_graph
+    request = QueryRequest(query_text="JIRA-4417", k=3, graph_hops=0)
+
+    result = await _run(request, provider, storage)
+
+    assert result.provenance[facts[0].id] == "lexical"
+    assert result.provenance.get(facts[1].id) != "lexical"
+
+
+async def test_every_returned_node_is_labelled(ticket_graph):
+    """Provenance is not optional decoration: a node in the result with no
+    label would be a node the system cannot say how it found."""
+    storage, provider, facts = ticket_graph
+    request = QueryRequest(query_text="JIRA-4417", k=5, graph_hops=1)
+
+    result = await _run(request, provider, storage)
+
+    assert {node.id for node in result.nodes} == set(result.provenance)
+
+
+async def test_expansion_labels_what_it_dragged_in(populated_graph):
+    """A neighbour reached by an edge is `expanded`, whatever the arms did.
+
+    The distinction the focus panel exists to draw — *this matched; that one was
+    dragged in by an edge from it* — and the reason this is an enum rather than
+    a boolean.
+    """
+    storage, provider = populated_graph
+    request = QueryRequest(query_text="Neural networks", k=1, graph_hops=1)
+
+    result = await _run(request, provider, storage)
+
+    assert "expanded" in set(result.provenance.values())
+
+
+async def test_a_prose_query_adds_no_lexical_seeds(ticket_graph):
+    """R3's floor doing its work inside the net.
+
+    Every token of this query is in every fact, so BM25 says nothing about any
+    of them and the lexical arm contributes no seeds at all — which is what
+    keeps the fallback path from adding noise to ordinary prose searches.
+    """
+    storage, provider, _ = ticket_graph
+    request = QueryRequest(query_text="the ticket", k=5, graph_hops=0)
+
+    result = await _run(request, provider, storage)
+
+    assert "lexical" not in set(result.provenance.values())
+
+
+async def test_a_retired_node_is_not_a_lexical_seed(ticket_graph):
+    """R7 through the net: both arms take the same view of what exists."""
+    storage, provider, facts = ticket_graph
+    await storage.set_node_status_tx(
+        [facts[0]], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
+    )
+    request = QueryRequest(query_text="JIRA-4417", k=5, graph_hops=0)
+
+    result = await _run(request, provider, storage)
+
+    assert facts[0].id not in result.provenance
+
+
+async def test_a_segment_hit_bridges_to_the_nodes_extracted_from_it(
+    embedding_provider,
+):
+    """§1.1: the identifier is only in the source text, never in the claim.
+
+    This is the half of lexical search that survives an agent paraphrasing. No
+    search of any kind recovers `JIRA-4417` from the fact — it is not in it —
+    but the segment kept the raw passage, and the fact points back at it.
+    """
+    from epimemer.core.types import Segment
+
+    storage = InMemoryStorage()
+    passages = [
+        "Ops confirmed that ticket JIRA-4417 was closed overnight",
+        "A separate note about the coffee machine on floor two",
+        "Minutes from the weekly planning meeting, nothing decided",
+        "A reminder that the office moves next month",
+        "Notes on the new starter onboarding checklist",
+    ]
+    segments = []
+    for index, text in enumerate(passages):
+        segment = Segment(
+            source_id="doc-1", text=text, span_start=index, span_end=index + 1
+        )
+        await storage.store_segment(segment)
+        segments.append(segment)
+
+    # The fact paraphrases the passage and drops the identifier entirely.
+    paraphrase = Fact(content="the deployment ticket was closed", source_id=segments[0].id)
+    await storage.store_node(paraphrase)
+    vectors = await embedding_provider.embed([paraphrase.content])
+    await storage.store_embedding(EmbeddingRecord(
+        item_id=paraphrase.id,
+        model_id=embedding_provider.model_id,
+        vector=vectors[0],
+    ))
+
+    request = QueryRequest(query_text="JIRA-4417", k=5, graph_hops=0)
+    result = await _run(request, embedding_provider, storage)
+
+    assert result.provenance[paraphrase.id] == "segment"
+    assert [hit.segment_id for hit in result.segments] == [segments[0].id]
+    assert result.segments[0].document_id == "doc-1"
+
+
+async def test_the_last_node_type_is_still_a_lexical_seed_without_segments(
+    embedding_provider,
+):
+    """A graph with no matching segment must not relabel a whole node type.
+
+    The lexical arm returns one ranking per node type and then one more for the
+    segment bridge, and the caller once told the two apart by slicing the last
+    entry off. With no segment hit there is no entry to slice, so the last node
+    type's ranking was taken for the bridge and its hits came back labelled
+    `vector` — the arm found them, and the result denied it.
+
+    Inference is last in `NodeType`, which is why the identifier lives on one
+    here.
+    """
+    storage = InMemoryStorage()
+    contents = [
+        "Concluded that JIRA-4417 caused the outage",
+        "Concluded that the platform team is overloaded",
+        "Concluded that the release cadence is too slow",
+        "Concluded that onboarding takes about a fortnight",
+        "Concluded that the office move will slip",
+    ]
+    inferences = []
+    for content in contents:
+        inference = Inference(content=content, source_id="seg-1")
+        await storage.store_node(inference)
+        vectors = await embedding_provider.embed([content])
+        await storage.store_embedding(EmbeddingRecord(
+            item_id=inference.id,
+            model_id=embedding_provider.model_id,
+            vector=vectors[0],
+        ))
+        inferences.append(inference)
+
+    request = QueryRequest(query_text="JIRA-4417", k=5, graph_hops=0)
+    result = await _run(request, embedding_provider, storage)
+
+    assert result.provenance[inferences[0].id] == "lexical"

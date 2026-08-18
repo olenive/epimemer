@@ -15,6 +15,7 @@ import pytest
 from fastmcp import FastMCP
 
 from epimemer.embeddings.mock import MockEmbeddingProvider
+from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.storage.memory import InMemoryStorage
@@ -30,6 +31,10 @@ async def _session(storage, config: ServerConfig) -> AsyncIterator[FastMCP]:
         "storage": storage,
         "embedding_provider": MockEmbeddingProvider(model_id="mock-embed", dimension=8),
         "config": config,
+        "event_bus": None,
+        "viz_session": None,
+        "viz_hub_url": None,
+        "retrievals": new_record_log(),
     }
 
     @asynccontextmanager

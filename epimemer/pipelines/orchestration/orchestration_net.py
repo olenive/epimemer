@@ -71,6 +71,10 @@ class SearchInput(BaseModel):
     node_types: list[str] | None = None
     graph_hops: int = 1
     metacontext_id: str | None = None
+    # Identifiers, names and exact phrases the caller declares load-bearing.
+    # Routed through rather than dropped: a search reached this way would
+    # otherwise silently lose the lever the tool description teaches.
+    terms: list[str] | None = None
 
 
 class ReflectInput(BaseModel):
@@ -189,6 +193,7 @@ async def run_search(
         node_types=input.node_types,
         graph_hops=input.graph_hops,
         metacontext_id=input.metacontext_id,
+        terms=input.terms,
     )
     return MemoryResult(
         action="search",

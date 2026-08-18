@@ -15,7 +15,7 @@ Usage:
 
 import logging
 from datetime import datetime
-from typing import Sequence
+from typing import Literal, Sequence
 
 from epimemer.core.types import (
     EdgeType,
@@ -32,6 +32,7 @@ from epimemer.core.types import (
 from epimemer.storage.protocol import EdgeDirection, resolve_reflect_threshold
 from epimemer.visualization.event_bus import InProcessEventBus
 from epimemer.visualization.events import (
+    ActionVerb,
     DocumentStored,
     EdgeStored,
     EmbeddingStored,
@@ -45,6 +46,7 @@ from epimemer.visualization.events import (
     node_to_view,
     timeline_to_view,
 )
+from epimemer.visualization.graph_actions import graph_action, verb_for_status
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +110,9 @@ class InstrumentedStorage:
 
     # --- Segments (read) ---
 
+    async def get_segments(self, segment_ids: Sequence[str]) -> dict[str, Segment]:
+        return await self._inner.get_segments(segment_ids)
+
     async def get_segments_for_document(self, doc_id: str) -> Sequence[Segment]:
         return await self._inner.get_segments_for_document(doc_id)
 
@@ -121,25 +126,6 @@ class InstrumentedStorage:
             node=node_to_view(node, graph),
         ))
         return result
-
-    async def update_node_status(
-        self,
-        node_id: str,
-        status: NodeStatus,
-        superseded_at: datetime | None = None,
-    ) -> None:
-        # Fetch old status before the update
-        node = await self._inner.get_node(node_id)
-        old_status = node.status.value if node else "unknown"
-
-        await self._inner.update_node_status(node_id, status, superseded_at)
-
-        await self._bus.publish(NodeStatusChanged(
-            graph=self._inner.current_database,
-            node_id=node_id,
-            old_status=old_status,
-            new_status=status.value,
-        ))
 
     async def relabel_edges(self, old_label: str, new_label: str) -> int:
         return await self._inner.relabel_edges(old_label, new_label)
@@ -242,6 +228,12 @@ class InstrumentedStorage:
         await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(lineage_edge, graph)))
         for edge in evidence_edges:
             await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
+        await self._bus.publish(graph_action(
+            graph=graph,
+            verb=verb_for_status(status),
+            subjects=[old_node.id, new_node.id],
+            counts={"nodes": 1, "edges": 1 + len(evidence_edges)},
+        ))
 
     async def supersede_by_existing_tx(
         self,
@@ -271,6 +263,12 @@ class InstrumentedStorage:
         await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(lineage_edge, graph)))
         for edge in evidence_edges:
             await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
+        await self._bus.publish(graph_action(
+            graph=graph,
+            verb=verb_for_status(status),
+            subjects=[old_node.id, existing_id],
+            counts={"edges": 1 + len(evidence_edges)},
+        ))
 
     async def set_node_status_tx(
         self,
@@ -287,6 +285,16 @@ class InstrumentedStorage:
                 node_id=node.id,
                 old_status=node.status.value,
                 new_status=status.value,
+            ))
+        # Archival flips a batch; restore flips it back. Either way it is one
+        # act, whatever it swept up — which is what keeps a 600-node archival
+        # run from being 600 log lines.
+        if nodes:
+            await self._bus.publish(graph_action(
+                graph=graph,
+                verb=verb_for_status(status),
+                subjects=[node.id for node in nodes],
+                counts={"nodes": len(nodes)},
             ))
 
     async def merge_nodes_tx(
@@ -314,6 +322,14 @@ class InstrumentedStorage:
             ))
         for edge in lineage_edges:
             await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
+        await self._bus.publish(graph_action(
+            graph=graph,
+            verb=ActionVerb.MERGED,
+            # The survivor first: "merged 2 nodes into 5e6f7g8h" is the line, and
+            # where the content went is the part worth reading.
+            subjects=[merged_node.id, *(s.id for s in source_nodes)],
+            counts={"nodes": 1, "edges": len(lineage_edges)},
+        ))
 
     async def write_batch_tx(
         self,
@@ -345,6 +361,17 @@ class InstrumentedStorage:
                 await self._bus.publish(TimelineStored(
                     graph=graph, timeline=timeline_to_view(timeline, graph),
                 ))
+            await self._bus.publish(graph_action(
+                graph=graph,
+                verb=ActionVerb.STORED,
+                subjects=[node.id for node in nodes],
+                counts={
+                    "nodes": len(nodes),
+                    "edges": len(edges),
+                    "embeddings": len(embeddings),
+                    "timelines": len(timelines),
+                },
+            ))
         except Exception:
             logger.exception("write_batch_tx event emission failed; write already committed")
 
@@ -408,6 +435,30 @@ class InstrumentedStorage:
         return await self._inner.vector_search(
             query_vector, model_id, k=k, node_type=node_type,
         )
+
+    async def text_search(
+        self,
+        terms: Sequence[str],
+        *,
+        corpus: Literal["nodes", "segments"],
+        k: int = 10,
+        node_type: NodeType | None = None,
+        status: NodeStatus = NodeStatus.ACTIVE,
+        verify_containment: bool = False,
+    ) -> Sequence[tuple[str, float]]:
+        return await self._inner.text_search(
+            terms,
+            corpus=corpus,
+            k=k,
+            node_type=node_type,
+            status=status,
+            verify_containment=verify_containment,
+        )
+
+    async def get_nodes_by_source(
+        self, source_ids: Sequence[str]
+    ) -> dict[str, list[EpistemicNode]]:
+        return await self._inner.get_nodes_by_source(source_ids)
 
     # --- Timelines ---
 

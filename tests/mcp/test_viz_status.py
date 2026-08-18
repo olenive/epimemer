@@ -14,6 +14,7 @@ import pytest
 import uvicorn
 import websockets
 
+from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.storage.memory import InMemoryStorage
@@ -30,8 +31,10 @@ def _deps(viz_session=None, viz_hub_url=None) -> dict:
         "storage": InMemoryStorage(),
         "embedding_provider": None,
         "config": ServerConfig(),
+        "event_bus": None,
         "viz_session": viz_session,
         "viz_hub_url": viz_hub_url,
+        "retrievals": new_record_log(),
     }
 
 

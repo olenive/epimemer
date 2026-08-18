@@ -22,7 +22,7 @@ To drive it by hand, start a server and point the env var at it:
 
 If ``EPIMEMER_SURREAL_WS_URL`` is unset or the server is unreachable, the whole
 module is skipped (no connection is attempted by default) — and pytest reports
-skips as success, so check for ``6 passed`` rather than trusting the exit code.
+skips as success, so check for ``9 passed`` rather than trusting the exit code.
 A server that accepts connections without answering (another Docker/Colima
 profile holding the port, or a wedged container) reads as unreachable here.
 """
@@ -30,6 +30,8 @@ profile holding the port, or a wedged container) reads as unreachable here.
 import asyncio
 import os
 import uuid
+
+from datetime import datetime, timezone
 
 import pytest
 
@@ -323,3 +325,103 @@ async def test_lifecycle_episodes_round_trip_over_a_real_connection(surreal):
         end=datetime(2026, 6, 16, tzinfo=timezone.utc),
     )
     assert old.id in {n.id for n in changed}
+
+
+# --- Lexical search ---
+
+
+async def test_fts_index_is_defined_for_every_searchable_table(surreal):
+    """Schema guard, and the one that says which SurrealDB we are talking to.
+
+    The standalone server and the engine embedded in the Python SDK are
+    different cores that reject each other's `DEFINE INDEX` syntax outright
+    (`FULLTEXT` vs `SEARCH`), so `_setup_schema` negotiates. The unit suite only
+    ever exercises the embedded half; without this, shipping the wrong dialect
+    would leave every lexical search on a real deployment returning nothing,
+    silently, while the whole suite stayed green.
+    """
+    store = await surreal()
+
+    for table in ("topic", "fact", "inference", "segment"):
+        info = await store._query(f"INFO FOR TABLE {table};")
+        assert f"idx_{table}_fts" in info["indexes"], (
+            f"{table} has no full-text index"
+        )
+
+
+async def test_text_search_discriminates_a_near_miss_over_a_real_connection(surreal):
+    """The status gate and conjunctive matching, together, on the real engine.
+
+    Apart is not the same as together. Adding any non-match predicate to a
+    `WHERE` that ORs two match references makes 3.0.5 stop using the full-text
+    index, and `@@` then matches a document holding *any* token of a term rather
+    than all of them — so `JIRA-4417` starts returning `JIRA-4418`, at a
+    positive score the zero-rule truncation does not catch. The embedded engine
+    does not do this, so the unit suite cannot see it.
+    """
+    from epimemer.core.types import NodeType
+
+    store = await surreal()
+    verifier = await surreal()
+
+    contents = [
+        "Ticket JIRA-4417 was closed after the deployment rollback",
+        "Ticket JIRA-4418 remains open pending the deployment review",
+        "The deployment pipeline was rewritten last quarter",
+        "Nothing here concerns tickets at all",
+        "A note about the weather this morning",
+    ]
+    facts = [Fact(content=text, source_id="s1") for text in contents]
+    for fact in facts:
+        await store.store_node(fact)
+
+    hits = await verifier.text_search(
+        ["JIRA-4417", "zzzznotpresent"], corpus="nodes", node_type=NodeType.FACT
+    )
+    assert [node_id for node_id, _ in hits] == [facts[0].id]
+
+    # The gate itself: a corrected claim holding the identifier stays out.
+    await store.set_node_status_tx(
+        [facts[0]], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
+    )
+    assert await verifier.text_search(
+        ["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT
+    ) == []
+
+
+async def test_containment_keeps_the_index_over_a_real_connection(surreal):
+    """R8 on the engine whose planner is the reason R8 is checked in Python.
+
+    The matched text rides back in the projection because a `WHERE` predicate is
+    where it must not go: the containment check would disable the full-text
+    index exactly as an inlined status gate does, `@@` would turn disjunctive,
+    and the near-miss would return at a positive score. So this asserts what
+    that failure would break — `JIRA-4418` stays out — as well as what
+    containment adds: the document holding the literal identifier outranks one
+    that merely holds its tokens, and the longer id is not a match for the
+    shorter one.
+    """
+    from epimemer.core.types import NodeType
+
+    store = await surreal()
+    verifier = await surreal()
+
+    contents = [
+        "Ticket JIRA-4417 was closed after the deployment rollback",
+        "JIRA - 4417 JIRA - 4417 quick note",
+        "Ticket JIRA-4418 remains open pending the deployment review",
+        "Ticket JIRA-44170 tracks the follow-up work",
+        "A note about the weather this morning",
+    ]
+    facts = [Fact(content=text, source_id="s1") for text in contents]
+    for fact in facts:
+        await store.store_node(fact)
+
+    hits = await verifier.text_search(
+        ["JIRA-4417"],
+        corpus="nodes",
+        node_type=NodeType.FACT,
+        verify_containment=True,
+    )
+
+    assert [node_id for node_id, _ in hits] == [facts[0].id, facts[1].id]

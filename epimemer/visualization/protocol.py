@@ -67,12 +67,15 @@ class RpcResponse(BaseModel):
 class RpcRequest(BaseModel):
     """A read the hub asks a session to execute in its own process.
 
-    ``list_graphs`` takes no params; ``snapshot`` takes ``{"graph": <name>}``.
+    ``list_graphs`` takes no params; ``snapshot`` takes ``{"graph": <name>}``;
+    ``retrievals`` takes none and answers with this session's own retrieval
+    records, payloads included — the route that keeps working when the hub
+    holds structural metadata only (`RETRIEVAL_PROVENANCE.md` §3.2).
     """
 
     type: Literal["rpc_request"] = "rpc_request"
     request_id: str
-    method: Literal["list_graphs", "snapshot"]
+    method: Literal["list_graphs", "snapshot", "retrievals"]
     params: dict = Field(default_factory=dict)
 
 

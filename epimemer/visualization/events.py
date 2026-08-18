@@ -231,6 +231,83 @@ class NodeStatusChanged(Event):
     counterpart: str | None = None
 
 
+class ActionVerb(str, Enum):
+    """What one act *did*, in the vocabulary the rest of the system already uses.
+
+    Deliberately **not** a `superseded` verb. #53 decided that supersession is
+    two opposite acts — a correction (the claim was wrong; terminal) and a
+    world-change (the claim was right, and the world moved on; reversible) — and
+    a log line reading "superseded 123 → 124" flattens exactly the distinction
+    the graph records. These names match the terminal statuses and what
+    `events_in_window` emits, so the live log and the durable history speak one
+    vocabulary (EVENT_LOG.md §3.1, revised).
+
+    `RETIRED` is the legacy `NodeStatus.SUPERSEDED` and only that: rows written
+    before the split genuinely do not say which act they were, and guessing one
+    would be the lie #53 refused to tell. It is the *unclassified* verb, not a
+    sixth kind of act.
+
+    Recurrence needs no verb of its own. #53 T2's `recurs` verdict resolves as a
+    restore plus a new source edge, which is `RESTORED` with the edge in
+    `counts` — recorded so nobody mints a `recurs` verb later and splits the
+    vocabulary again.
+    """
+    STORED = "stored"
+    CORRECTED = "corrected"
+    WORLD_CHANGED = "world_changed"
+    MERGED = "merged"
+    ARCHIVED = "archived"
+    RESTORED = "restored"
+    RETIRED = "retired"
+
+
+class GraphActionRecorded(Event):
+    """One human-meaningful act, at the transaction boundary that performed it.
+
+    A transaction publishes four or more fine-grained events; the entry a person
+    wants to read corresponds to the *transaction*, and no single event
+    represents it. Reconstructing one by grouping in the frontend would need a
+    correlation id that does not exist, and would guess wrong under concurrency.
+
+    The fine-grained stream is untouched — the graph panel needs it, and nothing
+    about it changes. The log consumes only this one.
+
+    `action_id` is monotonic and assigned by the session process that emits the
+    act. The hub's `seq` cannot carry this: it is assigned per browser
+    connection at send time and resets on reconnect, so it is a drop detector
+    rather than a position in a stream (§4.1).
+
+    `summary` is pre-rendered here on purpose. A log line the frontend assembles
+    from parts is a second place where the vocabulary of the system gets
+    decided, and it would drift from the tool responses that use the same words.
+    """
+    category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
+    event_type: Literal["graph_action_recorded"] = "graph_action_recorded"
+    action_id: str
+    verb: ActionVerb
+    subjects: list[str]          # node ids, primary first
+    counts: dict[str, int]       # {"edges": 3, "nodes": 1} — what it swept up
+    summary: str
+
+
+class RetrievalRecorded(Event):
+    """A tool answered, and this is what it handed the agent.
+
+    `record` is a serialized `mcp.retrieval_records.RetrievalRecord`, carried as
+    a plain dict on purpose: the visualization layer is below the MCP layer and
+    must not import it back. The hub treats it opaquely, and only the frontend
+    reads its fields.
+
+    The **payload guard lives at the producer**, not here: on a non-loopback
+    viz bind the session publishes a structural-metadata-only record, so query
+    text and response payloads never leave the process by this route
+    (`RETRIEVAL_PROVENANCE.md` §3.2).
+    """
+    category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
+    event_type: Literal["retrieval_recorded"] = "retrieval_recorded"
+    record: dict
+
+
 class EdgeStored(Event):
     """An edge was created between two nodes."""
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
@@ -391,7 +468,7 @@ class ReflectCounterUpdated(Event):
 
 # --- Union of all concrete event types ---
 
-GraphEvent = NodeStored | NodeStatusChanged | EdgeStored | TimelineStored | EmbeddingStored | DocumentStored | SegmentStored | GraphSwitched | ReflectCounterUpdated
+GraphEvent = NodeStored | NodeStatusChanged | GraphActionRecorded | RetrievalRecorded | EdgeStored | TimelineStored | EmbeddingStored | DocumentStored | SegmentStored | GraphSwitched | ReflectCounterUpdated
 PipelineEvent = PipelineStarted | TransitionEnabled | TransitionFired | TransitionCompleted | TokensUpdated | PipelineCompleted | PipelineFailed
 
 AnyEvent = GraphEvent | PipelineEvent

@@ -210,7 +210,9 @@ async def test_node_status_change_emits_event(bus, storage):
     await storage.store_node(topic)
 
     from epimemer.core.types import NodeStatus
-    await storage.update_node_status(topic.id, NodeStatus.SUPERSEDED)
+    await storage.set_node_status_tx(
+        [topic], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+    )
 
     assert len(received) == 1
     assert received[0].old_status == "active"

@@ -14,6 +14,7 @@ import type { EventRouter } from "./events";
 import {
   currentTheme,
   currentPalette,
+  desaturate,
   semanticPaletteFor,
   type Palette,
   type SemanticPalette,
@@ -67,6 +68,29 @@ export const nodeColor = (nodeType: string, theme: Theme): string => {
   return meaning ? semanticPaletteFor(theme)[meaning] : UNKNOWN_KIND;
 };
 
+/**
+ * The colour a node draws in. **Every caller goes through here** — including
+ * `applyTheme`, which is where focus state was previously lost.
+ *
+ * Cytoscape has no saturation property: nodes draw as
+ * `background-color: data(color)`, so desaturation is a *computed colour*
+ * written into `data("color")` rather than a channel the renderer blends for
+ * us. That is why focus is an argument to the colour rather than a later
+ * mutation of it — `applyTheme` recomputing from type and theme alone would
+ * restore every node to full saturation and silently exit the mode
+ * (RETRIEVAL_PROVENANCE.md §4.1).
+ *
+ * `statusOpacity` is untouched. The two channels never meet in a caller.
+ */
+export const nodeFill = (nodeType: string, theme: Theme, inFocus: boolean): string =>
+  inFocus ? nodeColor(nodeType, theme) : desaturate(nodeColor(nodeType, theme));
+
+/** What a node whose data says this should draw as, after a theme change. */
+export const refreshedFill = (
+  data: { nodeType?: string; inFocus?: boolean },
+  theme: Theme,
+): string => nodeFill(data.nodeType ?? "", theme, data.inFocus ?? true);
+
 export const edgeColor = (edgeType: string, theme: Theme): string => {
   const meaning = EDGE_MEANINGS[edgeType];
   return meaning ? semanticPaletteFor(theme)[meaning] : UNKNOWN_KIND;
@@ -88,6 +112,59 @@ const RETIRED_OPACITY = 0.3;
 
 export const statusOpacity = (status: string): number =>
   status === "active" ? ACTIVE_OPACITY : RETIRED_OPACITY;
+
+// --- Highlighting, and its two silent failures ---
+//
+// `highlightNodes` is driven from elsewhere — a timepoint on the timeline, a
+// log entry, a retrieval record — and it could fail in two ways that looked
+// identical from the outside and said nothing: an id this graph does not hold
+// (`getElementById` returns an empty collection, `.addClass` is a no-op), and a
+// node the type filter has set `display: none` on. Click, nothing happens, no
+// explanation. Both are closed here rather than at each caller
+// (EVENT_LOG.md §7, RETRIEVAL_PROVENANCE.md §4.4).
+
+export interface HighlightReport {
+  highlighted: string[];
+  /** Requested ids this graph does not hold. */
+  missing: string[];
+  /** A type filter was cleared so the highlight would be visible. */
+  filterCleared: boolean;
+}
+
+/** Which of `wanted` the graph does not hold, in the order asked for. */
+export const missingFrom = (
+  present: readonly string[],
+  wanted: readonly string[],
+): string[] => {
+  const held = new Set(present);
+  return wanted.filter((id) => !held.has(id));
+};
+
+/**
+ * The type filter to leave in place so every highlighted node is visible.
+ *
+ * Cleared only when it would actually hide one of them. Clearing
+ * unconditionally would undo a filter the user set, every time they clicked an
+ * entry about a node that filter already showed.
+ */
+export const filterAfterHighlight = (
+  currentFilter: string,
+  types: readonly string[],
+): string =>
+  currentFilter === "all" || types.every((type) => type === currentFilter)
+    ? currentFilter
+    : "all";
+
+/** What to tell the user, or null when nothing needs saying. */
+export const highlightNote = (report: HighlightReport): string | null => {
+  const parts: string[] = [];
+  if (report.missing.length > 0) {
+    const n = report.missing.length;
+    parts.push(`${n} node${n === 1 ? " is" : "s are"} not in this graph`);
+  }
+  if (report.filterCleared) parts.push("type filter cleared to show them");
+  return parts.length > 0 ? parts.join("; ") : null;
+};
 
 // --- Layout configs ---
 //
@@ -192,10 +269,25 @@ export interface GraphPanelHandle {
   cleanup: () => void;
   clearGraph: () => void;
   loadSnapshot: (nodes: NodeView[], edges: EdgeView[]) => void;
-  /** Mark exactly these nodes; an empty list clears the highlight. */
-  highlightNodes: (nodeIds: readonly string[]) => void;
+  /**
+   * Mark exactly these nodes; an empty list clears the highlight.
+   *
+   * Reports what it could not do, so a caller can say so rather than leaving a
+   * click that appears to have been ignored.
+   */
+  highlightNodes: (nodeIds: readonly string[]) => HighlightReport;
   /** Re-style the canvas for the current theme, preserving layout and selection. */
   applyTheme: () => void;
+  /**
+   * Dim everything this retrieval did not return; `null` leaves focus mode.
+   *
+   * Dimmed nodes stay drawn, hoverable and clickable — the interesting click
+   * is on a dimmed node (*why didn't this come back?*), and making them inert
+   * would remove the answer the mode exists to give (§4.3).
+   */
+  setFocus: (nodeIds: readonly string[] | null) => void;
+  /** Whether a node is in the current retrieval; true when focus is off. */
+  isInFocus: (nodeId: string) => boolean;
 }
 
 /**
@@ -222,6 +314,14 @@ export const initGraphPanel = (
     currentFilter: "all",
     pendingLayout: null,
   };
+
+  // The retrieval a record returned, or null when focus mode is off. Null is
+  // *not* an empty set: nothing is dimmed until a record is selected, and an
+  // empty retrieval dims everything, which is the honest picture of a search
+  // that came back with nothing.
+  let focused: ReadonlySet<string> | null = null;
+  const inFocus = (nodeId: string): boolean =>
+    focused === null || focused.has(nodeId);
 
   if (controls) {
     bindGraphControls(controls.layoutSelect, controls.filterSelect, state.cy, state);
@@ -256,7 +356,8 @@ export const initGraphPanel = (
         content: n.content,
         nodeType: n.node_type,
         status: n.status,
-        color: nodeColor(n.node_type, currentTheme()),
+        inFocus: inFocus(n.node_id),
+        color: nodeFill(n.node_type, currentTheme(), inFocus(n.node_id)),
         opacity: statusOpacity(n.status),
       },
     });
@@ -342,7 +443,8 @@ export const initGraphPanel = (
           content: n.content,
           nodeType: n.node_type,
           status: n.status,
-          color: nodeColor(n.node_type, currentTheme()),
+          inFocus: inFocus(n.node_id),
+          color: nodeFill(n.node_type, currentTheme(), inFocus(n.node_id)),
           opacity: statusOpacity(n.status),
         },
       });
@@ -384,15 +486,38 @@ export const initGraphPanel = (
   ];
 
   /**
-   * Highlight a set of nodes selected elsewhere — currently a timepoint on the
-   * timeline panel, whose linked nodes these are. Replaces any previous
-   * highlight rather than adding to it, so selection reads as one thing.
+   * Highlight a set of nodes selected elsewhere — a timepoint on the timeline,
+   * an entry in the log, a record in the retrieval selector. Replaces any
+   * previous highlight rather than adding to it, so selection reads as one
+   * thing.
+   *
+   * Clears a type filter that would hide what is being highlighted, and returns
+   * the ids this graph does not hold. Both were silent before: the class landed
+   * on an empty collection, or on something with `display: none`.
    */
-  const highlightNodes = (nodeIds: readonly string[]): void => {
+  const highlightNodes = (nodeIds: readonly string[]): HighlightReport => {
     state.cy.nodes().removeClass("highlighted");
-    for (const id of nodeIds) {
+    const present = nodeIds.filter((id) => state.cy.getElementById(id).length > 0);
+    const types = present.map(
+      (id) => (state.cy.getElementById(id).data("nodeType") as string) ?? "",
+    );
+
+    const filter = filterAfterHighlight(state.currentFilter, types);
+    const filterCleared = filter !== state.currentFilter;
+    if (filterCleared) {
+      state.currentFilter = filter;
+      if (controls) controls.filterSelect.value = filter;
+      runLayout(state);
+    }
+
+    for (const id of present) {
       state.cy.getElementById(id).addClass("highlighted");
     }
+    return {
+      highlighted: [...present],
+      missing: missingFrom(present, nodeIds),
+      filterCleared,
+    };
   };
 
   /**
@@ -405,9 +530,13 @@ export const initGraphPanel = (
   const applyTheme = (): void => {
     // Neutrals live in the stylesheet; hues live in each element's data, so a
     // theme switch has to touch both or half the canvas keeps the old theme.
+    //
+    // Through `refreshedFill`, so focus survives. Recomputing from node type
+    // and theme alone — which this did — restored every node to full
+    // saturation and silently left focus mode.
     const theme = currentTheme();
     state.cy.nodes().forEach((n) => {
-      n.data("color", nodeColor(n.data("nodeType") ?? "", theme));
+      n.data("color", refreshedFill(n.data(), theme));
     });
     state.cy.edges().forEach((e) => {
       e.data("color", edgeColor(e.data("edgeType") ?? "", theme));
@@ -415,12 +544,30 @@ export const initGraphPanel = (
     state.cy.style(stylesheetFor(currentPalette()));
   };
 
+  const setFocus = (nodeIds: readonly string[] | null): void => {
+    focused = nodeIds === null ? null : new Set(nodeIds);
+    const theme = currentTheme();
+    state.cy.nodes().forEach((n) => {
+      const focus = inFocus(n.data("id"));
+      n.data("inFocus", focus);
+      n.data("color", nodeFill(n.data("nodeType") ?? "", theme, focus));
+    });
+  };
+
   const cleanup = (): void => {
     unsubs.forEach((u) => u());
     state.cy.destroy();
   };
 
-  return { cleanup, clearGraph, loadSnapshot, highlightNodes, applyTheme };
+  return {
+    cleanup,
+    clearGraph,
+    loadSnapshot,
+    highlightNodes,
+    applyTheme,
+    setFocus,
+    isInFocus: inFocus,
+  };
 };
 
 // --- Layout ---
