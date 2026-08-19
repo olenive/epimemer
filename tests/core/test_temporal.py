@@ -22,8 +22,10 @@ from epimemer.core.temporal import (
     UnboundedInstant,
     UnknownInstant,
     ValidityInterval,
+    ValidityVerdict,
     compare_intervals,
     merged_validity,
+    validity_at,
 )
 
 PACKAGE = Path(__file__).resolve().parents[2] / "epimemer"
@@ -350,6 +352,140 @@ class TestCollapsingTwoEdgesToOneSourceKeepsBothPeriods:
         merged_validity(kept, [_span(start=_at(2024))])
 
         assert len(kept) == 1
+
+
+class TestAskingWhetherAClaimHeldAtAMoment:
+    """T3's retrieval buckets, and the third one that cannot exist.
+
+    An interval says what a source *asserts* and asserts nothing about the
+    outside (T1 §6), so a moment nobody dated is `unknown` — never false. That is
+    why there are two verdicts rather than three, and it is what makes a
+    valid-time *filter* unimplementable rather than merely misleading: there is
+    no negative to filter on.
+    """
+
+    def test_a_moment_inside_a_stated_period_is_valid(self):
+        assert validity_at(
+            [_span(start=_at(1924), end=_at(1991))], datetime(1980, 1, 1, tzinfo=timezone.utc)
+        ) is ValidityVerdict.VALID
+
+    def test_a_moment_outside_every_stated_period_is_unknown_not_false(self):
+        """The open-world rule, and the whole reason nothing is ever excluded."""
+        assert validity_at(
+            [_span(start=_at(1924), end=_at(1991))], datetime(2000, 1, 1, tzinfo=timezone.utc)
+        ) is ValidityVerdict.UNKNOWN
+
+    def test_a_claim_nobody_dated_is_unknown(self):
+        assert validity_at([], datetime(1980, 1, 1, tzinfo=timezone.utc)) is (
+            ValidityVerdict.UNKNOWN
+        )
+
+    def test_unknown_endpoints_conclude_nothing(self):
+        assert validity_at(
+            [_span()], datetime(1980, 1, 1, tzinfo=timezone.utc)
+        ) is ValidityVerdict.UNKNOWN
+
+    def test_a_claim_asserted_to_have_always_held_covers_any_moment(self):
+        always = _span(start=UnboundedInstant(), end=UnboundedInstant())
+
+        assert validity_at(
+            [always], datetime(1980, 1, 1, tzinfo=timezone.utc)
+        ) is ValidityVerdict.VALID
+
+    def test_the_period_that_starts_on_an_instant_owns_it(self):
+        """Half-open, `[start, end)`. The renaming instant belongs to the new name."""
+        renamed = datetime(1991, 1, 1, tzinfo=timezone.utc)
+
+        assert validity_at([_span(start=_at(1924), end=_at(1991))], renamed) is (
+            ValidityVerdict.UNKNOWN
+        )
+        assert validity_at([_span(start=_at(1991), end=_at(2100))], renamed) is (
+            ValidityVerdict.VALID
+        )
+
+    def test_a_started_period_with_no_known_end_concludes_nothing_alone(self):
+        """The end could be anywhere, so the moment could be past it.
+
+        Not a defect: `unbounded` is how a source says a claim can never stop,
+        and reading `unknown` as though it meant that is the fabrication the two
+        values exist to keep apart.
+        """
+        assert validity_at(
+            [_span(start=_at(1991))], datetime(2010, 1, 1, tzinfo=timezone.utc)
+        ) is ValidityVerdict.UNKNOWN
+
+    def test_a_witness_reaches_from_the_start_to_itself(self):
+        """What witness points are for: concluding where an endpoint cannot.
+
+        A source that says *"called Saint Petersburg since 1991"* as of 2020 has
+        asserted the period was still running in 2020, so 2010 is provably inside
+        it — and 2021 is still not.
+        """
+        still_running = _span(
+            start=_at(1991), witnessed_at=_at(2020),
+        )
+
+        assert validity_at(
+            [still_running], datetime(2010, 1, 1, tzinfo=timezone.utc)
+        ) is ValidityVerdict.VALID
+        assert validity_at(
+            [still_running], datetime(2021, 1, 1, tzinfo=timezone.utc)
+        ) is ValidityVerdict.UNKNOWN
+
+    def test_a_witness_reaches_forward_to_a_known_end(self):
+        """The mirror: an unknown *start* with a witness bounds from the inside."""
+        span = _span(end=_at(1991), witnessed_at=_at(1950))
+
+        assert validity_at(
+            [span], datetime(1960, 1, 1, tzinfo=timezone.utc)
+        ) is ValidityVerdict.VALID
+        assert validity_at(
+            [span], datetime(1940, 1, 1, tzinfo=timezone.utc)
+        ) is ValidityVerdict.UNKNOWN
+
+    def test_the_witnessed_moment_itself_is_inside(self):
+        assert validity_at(
+            [_span(witnessed_at=_at(1990))], datetime(1990, 1, 1, tzinfo=timezone.utc)
+        ) is ValidityVerdict.VALID
+
+    def test_one_source_is_enough(self):
+        """Existential, not universal: two sources may describe two episodes.
+
+        Intersecting them would answer "never" for a claim both sources say was
+        true — the failure T1 §3 rules out a default collapse over.
+        """
+        sources = [_span(start=_at(1997), end=_at(2010)), _span(start=_at(2024))]
+
+        assert validity_at(sources, datetime(2000, 1, 1, tzinfo=timezone.utc)) is (
+            ValidityVerdict.VALID
+        )
+
+    def test_a_period_on_another_clock_answers_nothing(self):
+        """No conversion exists between an in-universe date and a real one."""
+        in_universe = _span(start=_at(1924), end=_at(1991), timeline_id="third-age")
+
+        assert validity_at(
+            [in_universe], datetime(1980, 1, 1, tzinfo=timezone.utc)
+        ) is ValidityVerdict.UNKNOWN
+        assert validity_at(
+            [in_universe],
+            datetime(1980, 1, 1, tzinfo=timezone.utc),
+            timeline_id="third-age",
+        ) is ValidityVerdict.VALID
+
+    def test_a_naive_moment_is_read_as_utc(self):
+        """Rather than raising from inside a comparison, as `PreciseInstant` does."""
+        assert validity_at(
+            [_span(start=_at(1924), end=_at(1991))], datetime(1980, 1, 1)
+        ) is ValidityVerdict.VALID
+
+    def test_there_are_exactly_two_verdicts(self):
+        """A value nothing can produce is worse than no value: callers branch on it.
+
+        If closed-world assertions ever land, a third member lands with them —
+        and this failing is the reminder to check that the producer landed too.
+        """
+        assert [verdict.value for verdict in ValidityVerdict] == ["valid", "unknown"]
 
 
 class TestTheEndpointKindIsReadInOnePlace:

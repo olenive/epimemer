@@ -36,7 +36,7 @@ def _record(record_id: str = "000000000001", **over) -> RetrievalRecord:
 class TestProvenance:
 
     def test_a_tool_that_does_not_rank_says_direct(self):
-        """§3: `find_nodes`, `as_of`, `query_changes` and `topic_tree` return
+        """§3: `find_nodes`, `graph_as_of`, `query_changes` and `topic_tree` return
         nodes without ranking them. `LEXICAL_SEARCH.md` §6 left room for this
         fifth value rather than pretending they were vector hits."""
         assert SeedProvenance.DIRECT.value == "direct"

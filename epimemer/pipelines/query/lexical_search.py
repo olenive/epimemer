@@ -119,7 +119,7 @@ async def _ranked(
     corpus: str,
     node_type: NodeType | None,
     k: int,
-    status: NodeStatus,
+    statuses: frozenset[NodeStatus],
     declared: bool,
 ) -> tuple[list[tuple[str, float]], list[str]]:
     """One partition's ranked hits, and the ids its declared terms protect.
@@ -142,7 +142,7 @@ async def _ranked(
     """
     if not declared:
         hits = await storage.text_search(
-            terms, corpus=corpus, node_type=node_type, k=k, status=status
+            terms, corpus=corpus, node_type=node_type, k=k, statuses=statuses
         )
         return list(hits), []
 
@@ -153,7 +153,7 @@ async def _ranked(
                 corpus=corpus,
                 node_type=node_type,
                 k=k,
-                status=status,
+                statuses=statuses,
                 verify_containment=True,
             )
         )
@@ -169,13 +169,13 @@ async def lexical_search(
     k: int = 10,
     node_types: Sequence[NodeType] | None = None,
     declared: bool = False,
-    status: NodeStatus = NodeStatus.ACTIVE,
+    statuses: frozenset[NodeStatus] = frozenset({NodeStatus.ACTIVE}),
 ) -> LexicalHits:
     """Everything BM25 found, over node content and over segment text.
 
     See `LexicalHits` for what each part is.
 
-    `status` gates both routes. Applying it to direct seeds and not to bridged
+    `statuses` gates both routes. Applying it to direct seeds and not to bridged
     ones would make the bridge a side door around the gate, and a CORRECTED node
     — a claim concluded *wrong* — would come back through it (R7).
     """
@@ -189,7 +189,7 @@ async def lexical_search(
     for node_type in types:
         hits, guarded = await _ranked(
             storage, terms, corpus="nodes", node_type=node_type,
-            k=k, status=status, declared=declared,
+            k=k, statuses=statuses, declared=declared,
         )
         rankings.append([node_id for node_id, _ in hits])
         protected.extend(guarded)
@@ -198,7 +198,7 @@ async def lexical_search(
 
     segment_hits, guarded_segments = await _ranked(
         storage, terms, corpus="segments", node_type=None,
-        k=k, status=status, declared=declared,
+        k=k, statuses=statuses, declared=declared,
     )
     if not segment_hits:
         return LexicalHits(
@@ -214,7 +214,7 @@ async def lexical_search(
         segment_id: [
             node.id
             for node in extracted[segment_id]
-            if node.status is status and isinstance(node, wanted)
+            if node.status in statuses and isinstance(node, wanted)
         ]
         for segment_id in segment_ids
     }

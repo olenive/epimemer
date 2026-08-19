@@ -9,7 +9,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
-from epimemer.core.types import EpistemicNode, NodeEdge, NodeType
+from epimemer.core.types import EpistemicNode, NodeEdge, NodeStatus, NodeType
 
 
 class SeedProvenance(StrEnum):
@@ -36,7 +36,7 @@ class SeedProvenance(StrEnum):
     SEGMENT = "segment"    # BM25 on a segment, bridged via source_id
     VECTOR = "vector"      # embedding similarity
     EXPANDED = "expanded"  # pulled in by graph expansion from a seed
-    DIRECT = "direct"      # returned unranked: find_nodes, as_of, topic_tree, …
+    DIRECT = "direct"      # returned unranked: find_nodes, graph_as_of, topic_tree, …
 
 
 class SegmentHit(BaseModel):
@@ -54,11 +54,20 @@ class SegmentHit(BaseModel):
 
 
 class QueryRequest(BaseModel):
-    """Input to the query pipeline."""
+    """Input to the query pipeline.
+
+    Two clocks reach this type and they are named apart, on #53 T3's rule: the
+    unmarked name inherits the default reading, and in a knowledge graph the
+    default reading of "as of 1980" is *what was true in 1980* — which is the
+    valid-time axis. So transaction time is marked too.
+    """
     query_text: str
     k: int = 10
     node_types: list[NodeType] | None = None  # filter by type, None = all
-    at_time: datetime | None = None  # temporal query
+    # Transaction time: the graph as it stood then. Not read by the net — the
+    # tool that answers this question is `graph_as_of`, which asks storage
+    # directly — and kept because it names the axis the field below is not.
+    graph_at_time: datetime | None = None
     graph_hops: int = 1  # how many hops for graph expansion
     model_id: str | None = None  # embedding model to use
     # Terms the caller declares load-bearing — identifiers, names, exact
@@ -66,6 +75,19 @@ class QueryRequest(BaseModel):
     # the top-k cut (R2). Omitted, the lexical arm falls back to the query's own
     # tokens with no such protection (R3).
     terms: list[str] | None = None
+    # Which node statuses either seed route may return (T3's reachability). Both
+    # arms are asked with this one set, so they cannot disagree about whether a
+    # node exists. Built by `reachable_statuses`; the bare default is what a
+    # caller gets who never heard of history.
+    statuses: frozenset[NodeStatus] = frozenset({NodeStatus.ACTIVE})
+    # Valid time: when the claim was true. Supplied, it labels each result
+    # `valid` or `unknown` and stops a claim provably valid then from being
+    # folded into a later version of itself. Never defaulted to the wall clock —
+    # "current" is the *timeline's* reference time, not the viewer's (T3).
+    valid_as_of: datetime | None = None
+    # The clock `valid_as_of` is read against. `None` is the wall-clock
+    # timeline, which is what real-world facts use.
+    timeline_id: str | None = None
 
 
 class QueryMetadata(BaseModel):
@@ -93,3 +115,8 @@ class QueryResult(BaseModel):
     provenance: dict[str, SeedProvenance] = Field(default_factory=dict)
     # Passages the lexical arm matched, whether or not they bridged to a node.
     segments: list[SegmentHit] = Field(default_factory=list)
+    # Retired versions folded into the result that superseded them, keyed by
+    # that result's id and ordered as they ranked. They matched on their own
+    # merits and gave up their slot rather than their place in the answer —
+    # which is what stops one claim's history from filling a top-10 (T3).
+    lineage: dict[str, list[EpistemicNode]] = Field(default_factory=dict)

@@ -111,7 +111,7 @@ restate the count.
 
 | Tool | Purpose |
 |------|---------|
-| `as_of` | Snapshot the active knowledge set as it stood at a past instant |
+| `graph_as_of` | Snapshot what the graph *held* at a past instant (transaction time; for what was *true* then, `search(valid_as_of=…)`) |
 | `query_changes` | Node births + retirements across one or more time windows |
 
 ### Archival

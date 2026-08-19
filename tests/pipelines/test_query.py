@@ -322,10 +322,10 @@ async def test_hybrid_retrieval_end_to_end(populated_graph):
     )
     graph = hybrid_retrieval_net(request, emb_provider, storage)
 
-    # Fork, two retrieval arms, fusion, expansion, assembly.
-    graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=6)
+    # Fork, two retrieval arms, fusion, lineage collapse, expansion, assembly.
+    graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=7)
 
-    assert fired == 6
+    assert fired == 7
 
     # Get the final result
     result_place = graph.place_named("QueryResult")
@@ -346,7 +346,7 @@ async def test_hybrid_retrieval_metadata_counts(populated_graph):
         graph_hops=1,
     )
     graph = hybrid_retrieval_net(request, emb_provider, storage)
-    graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=6)
+    graph, fired = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=7)
 
     result = graph.place_named("QueryResult").tokens[0]
     metadata = result.metadata
@@ -401,9 +401,14 @@ async def test_hybrid_retrieval_tokens_flow_correctly(populated_graph):
     assert len(graph.place_named("LexicalResults").tokens) == 0
     assert len(graph.place_named("Seeds").tokens) == 1
 
-    # Expansion, then assembly.
+    # The lineage collapse takes the fused set and cuts it back to k.
     graph, _ = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=1)
     assert len(graph.place_named("Seeds").tokens) == 0
+    assert len(graph.place_named("CollapsedSeeds").tokens) == 1
+
+    # Expansion, then assembly.
+    graph, _ = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=1)
+    assert len(graph.place_named("CollapsedSeeds").tokens) == 0
     assert len(graph.place_named("ExpandedResults").tokens) == 1
 
     graph, _ = await ExecutableGraphOperations.execute_graph(graph, stop_after_n_firings=1)

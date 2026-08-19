@@ -334,11 +334,12 @@ class TestEveryNetReachesQuiescence:
             None,
         )
 
-        # Six transitions: a fork, two retrieval arms, the fusion that joins
-        # them, expansion, assembly. This net is exactly why the old cap of 3
-        # happened to work back when it had three — and why a cap is the wrong
-        # mechanism, since adding an arm silently truncated it.
-        assert fired == 6
+        # Seven transitions: a fork, two retrieval arms, the fusion that joins
+        # them, the lineage collapse that cuts the fused set, expansion,
+        # assembly. This net is exactly why the old cap of 3 happened to work
+        # back when it had three — and why a cap is the wrong mechanism, since
+        # adding an arm silently truncated it.
+        assert fired == 7
         assert len(graph.place_named("QueryResult").tokens) == 1
 
     async def test_orchestration_net(self, storage, embedding_provider, config):

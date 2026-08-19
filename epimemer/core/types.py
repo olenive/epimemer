@@ -85,6 +85,42 @@ RESTORABLE_STATUSES: frozenset[NodeStatus] = frozenset({
 })
 
 
+def reachable_statuses(
+    *, include_historical: bool = True, include_corrected: bool = False
+) -> frozenset[NodeStatus]:
+    """Which statuses a search may return, from T3's two reachability switches.
+
+    **The asymmetry in the defaults is the decision.** Knowledge that is not
+    current is still knowledge — that is the whole reason `HISTORICAL` exists, so
+    it is on. A claim concluded *wrong* is kept for the audit trail rather than
+    for reading, so re-offering it should be deliberate — `CORRECTED` is off.
+
+    `CORRECTED` is reachable at all, rather than being walled off, for the
+    principle applied everywhere else in this design: report and let the caller
+    decide. *"What did we believe about X that turned out wrong?"* is a fair
+    question for an epistemic memory, and under an unreachable version it can be
+    answered only by already knowing the node id — an audit trail you must know
+    the answer to consult.
+
+    **Legacy `SUPERSEDED` rides with `include_corrected`.** Those rows do not
+    record which of the two events they were, and `LINEAGE_EDGE_TYPES` already
+    reads them as corrections on the grounds that `superseded_by` is what was
+    written at the time. Putting them behind the cautious switch keeps the two
+    readings of an unrecorded retirement from disagreeing.
+
+    `MERGED` and `ARCHIVED` have no switch and are in neither set. A merged node
+    is a husk whose content now lives on the survivor, so returning it duplicates
+    a result; an archived node was deliberately set aside as not worth keeping,
+    and `restore` is how it comes back.
+    """
+    statuses = {NodeStatus.ACTIVE}
+    if include_historical:
+        statuses.add(NodeStatus.HISTORICAL)
+    if include_corrected:
+        statuses |= {NodeStatus.CORRECTED, NodeStatus.SUPERSEDED}
+    return frozenset(statuses)
+
+
 # Why a node was superseded, as the caller states it. There is deliberately no
 # default: the whole finding behind #53 is that the two cases are opposite and
 # that picking either silently mislabels the other.

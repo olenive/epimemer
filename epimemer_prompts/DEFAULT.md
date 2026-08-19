@@ -57,26 +57,52 @@ Discovery & lookup:
 - Always read the `metacontexts` label on returned nodes, and read the `review`
   label if present (see Review labels).
 
-### Temporal queries (as_of vs query_changes)
+### Temporal queries — three axes, not one
 
-Two distinct time axes — pick by the question:
+**Two clocks run here and confusing them is the commonest mistake.** *Transaction
+time* is what this memory held and when. *Valid time* is when the claim was true
+in the world. A fact created last week can be about 1924.
 
-- **`as_of(at)` — state at an instant.** Returns the knowledge set that was active
-  *at* `at` (created by then, not yet retired). Use for "what did we believe on
-  date X" / reproducing a past answer. Caveat: it is a node-lifecycle snapshot
-  only — edges, metacontext, and review labels are present-state, not historized,
-  so they are omitted.
-- **`query_changes(...)` — deltas across a span.** Returns nodes whose **birth**
-  (`created_at`) or **retirement** (`superseded_at`, covering supersede and merge)
-  fell inside each half-open window `[start, end)`, each tagged with its `events`
-  (`created` / `superseded` / `merged`, with timestamps). Use for "what changed
-  recently". Specify by `last_hours`/`last_days`, an explicit `windows` list, or
-  nothing (defaults to the last 24h). Multiple windows are returned grouped; a node
-  that changed in several appears in each.
+- **`search(..., valid_as_of=…)` — what was **true** then.** Valid time. Results
+  are grouped rather than filtered: each carries `valid_at`, either `valid` (a
+  source asserts it held then) or `unknown` (nobody says). Nothing is excluded —
+  an undated claim is unknown, not false. Pass `timeline_id` to read against a
+  timeline other than the wall clock; for "is this current" inside a fictional
+  frame, use that timeline's own `reference_time` rather than today's date.
+- **`graph_as_of(at)` — what the graph **held** then.** Transaction time. Returns
+  the knowledge set that was active *at* `at` (created by then, not yet retired).
+  Use for "what did we believe on date X" / reproducing a past answer. Caveat: it
+  is a node-lifecycle snapshot only — edges, metacontext, and review labels are
+  present-state, not historized, so they are omitted.
+- **`query_changes(...)` — deltas across a span.** Transaction time. Returns nodes
+  whose **birth** (`created_at`) or **retirement** (`superseded_at`, covering
+  supersede and merge) fell inside each half-open window `[start, end)`, each
+  tagged with its `events` (`created` / `corrected` / `historical` / `merged` /
+  `archived` / `restored`, with timestamps). Use for "what changed recently".
+  Specify by `last_hours`/`last_days`, an explicit `windows` list, or nothing
+  (defaults to the last 24h). Multiple windows are returned grouped; a node that
+  changed in several appears in each.
 
-A node born long ago but still active shows up in `as_of` (it's live state) but not
-in a recent `query_changes` window (nothing happened to it there) — unless it was
-retired in that window, where it appears as a retirement event.
+A node born long ago but still active shows up in `graph_as_of` (it's live state)
+but not in a recent `query_changes` window (nothing happened to it there) — unless
+it was retired in that window, where it appears as a retirement event.
+
+### Reading a search result's history
+
+`search` returns claims the world has moved past as well as current ones, so
+**read each result's `status`**: `active` is current, `historical` was right of
+its period and is wrong to quote as current, `corrected` was concluded false and
+only appears if you passed `include_corrected=true`. Pass
+`include_historical=false` when you want only what holds now.
+
+A claim's retired versions do not each take a slot — when a retired node and the
+claim that replaced it both match, the replacement is the result and the retired
+one comes back as `earlier_versions` on it.
+
+Where sources dated a claim, the result carries `validity`: one entry per source,
+with the periods that source asserts. Two sources may disagree and neither is
+overwritten, so there is no single answer to read off — decide which source you
+trust, or report the disagreement.
 
 ### Reviewing and reconciling knowledge
 

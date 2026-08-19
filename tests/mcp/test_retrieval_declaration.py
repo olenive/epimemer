@@ -175,7 +175,7 @@ def _args(tool: str, seeded: dict) -> dict:
         ]},
         "query_graph": {"node_id": facts[0], "hops": 2},
         "topic_tree": {"topic_id": topics[0], "depth": 2},
-        "as_of": {"at": (now + timedelta(minutes=1)).isoformat()},
+        "graph_as_of": {"at": (now + timedelta(minutes=1)).isoformat()},
         "query_changes": {"last_days": 1.0},
         "find_nodes": {"sourced_from": seeded["document_id"], "limit": 100},
         "list_sources": {},
@@ -214,7 +214,7 @@ def _ids_in(text: str, known: list[str]) -> set[str]:
 ALL_TOOLS = [
     "segment", "store_decomposition", "search", "link", "update", "supersede_by",
     "judge_importance", "check_conflicts", "record_contradiction", "record_variant",
-    "reflect", "apply_reflection", "query_graph", "topic_tree", "as_of",
+    "reflect", "apply_reflection", "query_graph", "topic_tree", "graph_as_of",
     "query_changes", "find_nodes", "list_sources", "list_relations", "archive",
     "restore", "create_timeline", "set_reference_time", "add_timepoint",
     "query_timeline", "create_timelink", "create_metacontext", "get_metacontexts",

@@ -1545,7 +1545,7 @@ class SurrealDBStorage:
         corpus: Literal["nodes", "segments"],
         k: int = 10,
         node_type: NodeType | None = None,
-        status: NodeStatus = NodeStatus.ACTIVE,
+        statuses: frozenset[NodeStatus] = frozenset({NodeStatus.ACTIVE}),
         verify_containment: bool = False,
     ) -> Sequence[tuple[str, float]]:
         """Top-k rows by BM25, scored in-engine. See the protocol for the contract.
@@ -1581,8 +1581,11 @@ class SurrealDBStorage:
                     "would sort incomparable scores."
                 )
             table, field = _NODE_TYPE_TO_TABLE[node_type], "content"
-            carried, conditions = "status, ", ["status = $status"]
-            params = {"status": status.value}
+            carried, conditions = "status, ", ["status IN $statuses"]
+            # Bound rather than interpolated, as everywhere else a status set
+            # reaches a query: the values are an enum's, but the list is built
+            # from a caller's argument and the two facts are unrelated.
+            params = {"statuses": sorted(status.value for status in statuses)}
 
         # Match references are 1-based and each term gets its own. Each score is
         # floored at zero before the sum: the standalone engine already clamps

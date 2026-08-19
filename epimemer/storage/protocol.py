@@ -583,7 +583,7 @@ class StorageBackend(Protocol):
         corpus: Literal["nodes", "segments"],
         k: int = 10,
         node_type: NodeType | None = None,
-        status: NodeStatus = NodeStatus.ACTIVE,
+        statuses: frozenset[NodeStatus] = frozenset({NodeStatus.ACTIVE}),
         verify_containment: bool = False,
     ) -> Sequence[tuple[str, float]]:
         """Ids and BM25 scores for documents matching ANY term, best first.
@@ -635,18 +635,18 @@ class StorageBackend(Protocol):
         table boundary (§10, R5/R6). Raises `ValueError` if `node_type` is
         omitted for the node corpus.
 
-        `status` mirrors `vector_search`: ACTIVE by default, same meaning, so
-        the two seed routes cannot disagree about whether a node exists. Without
-        it a CORRECTED node — a claim concluded *wrong* — comes back as a
-        lexical seed, ranked high precisely when it holds a rare identifier
-        (§10, R7). Ignored for `corpus="segments"`; segments have no status.
+        `statuses` mirrors `vector_search` exactly — same default, same meaning,
+        same plurality — so the two seed routes cannot disagree about whether a
+        node exists. Without it a CORRECTED node — a claim concluded *wrong* —
+        comes back as a lexical seed, ranked high precisely when it holds a rare
+        identifier (§10, R7). Ignored for `corpus="segments"`; segments have no
+        status.
 
-        **Singular where `vector_search` is now plural**, and deliberately left
-        that way for the moment: recurrence needs two statuses at once and asks
-        only the vector route, so no caller can make the two disagree today.
-        This must widen to `statuses` when retrieval starts returning historical
-        nodes by default (#53 T3), or the lexical half of a hybrid search will
-        be the one that cannot see them.
+        It was singular until #53 T3 made retrieval return historical nodes by
+        default. A hybrid search asks both routes with one set, and had this
+        stayed singular the lexical half would have been the one that could not
+        see them — a node reachable only by a rare identifier would have gone
+        missing exactly when the caller asked for history.
 
         Filtering by status does **not** change the corpus IDF is computed over.
         The index counts every row in the table whatever its status, so scores

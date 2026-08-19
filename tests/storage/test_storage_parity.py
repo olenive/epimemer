@@ -1646,9 +1646,30 @@ class TestLexicalSearch:
             ["JIRA-4417"],
             corpus="nodes",
             node_type=NodeType.FACT,
-            status=NodeStatus.CORRECTED,
+            statuses=frozenset({NodeStatus.CORRECTED}),
         )
         assert [node_id for node_id, _ in corrected] == [facts[0].id]
+
+    async def test_both_seed_routes_take_the_same_status_set(self, store):
+        """#53 T3: a hybrid search asks one set of both arms, so both take a set.
+
+        The asymmetry this closes was real and one-sided — `vector_search` went
+        plural for recurrence while this stayed singular — and it would have
+        surfaced as a node reachable only by a rare identifier going missing
+        exactly when the caller asked to see history.
+        """
+        facts = await self._facts(store)
+        await store.set_node_status_tx(
+            [facts[0]], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
+        )
+
+        both = await store.text_search(
+            ["JIRA-4417", "rollback"],
+            corpus="nodes",
+            node_type=NodeType.FACT,
+            statuses=frozenset({NodeStatus.ACTIVE, NodeStatus.HISTORICAL}),
+        )
+        assert facts[0].id in {node_id for node_id, _ in both}
 
     async def test_retiring_a_node_does_not_change_what_the_rest_score(self, store):
         """The statistics note in R7, pinned so nobody chases it as a bug.

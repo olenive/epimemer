@@ -48,7 +48,7 @@ class RetrievedNode(BaseModel):
     node_id: str
     provenance: SeedProvenance
     # Similarity or BM25, where the tool has one. `None` where it does not —
-    # `find_nodes` and `as_of` rank nothing, and a fabricated 1.0 would read as
+    # `find_nodes` and `graph_as_of` rank nothing, and a fabricated 1.0 would read as
     # a perfect match (§9).
     score: float | None = None
 

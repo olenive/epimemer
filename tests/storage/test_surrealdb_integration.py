@@ -22,7 +22,7 @@ To drive it by hand, start a server and point the env var at it:
 
 If ``EPIMEMER_SURREAL_WS_URL`` is unset or the server is unreachable, the whole
 module is skipped (no connection is attempted by default) — and pytest reports
-skips as success, so check for ``12 passed`` rather than trusting the exit code.
+skips as success, so check for ``13 passed`` rather than trusting the exit code.
 A server that accepts connections without answering (another Docker/Colima
 profile holding the port, or a wedged container) reads as unreachable here.
 """
@@ -518,6 +518,49 @@ async def test_text_search_discriminates_a_near_miss_over_a_real_connection(surr
     await store.set_node_status_tx(
         [facts[0]], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
     )
+    assert await verifier.text_search(
+        ["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT
+    ) == []
+
+
+async def test_a_status_set_gates_without_losing_the_index(surreal):
+    """`status IN $statuses` sits where `status = $status` did, and must behave.
+
+    The gate went plural for #53 T3, so retrieval can ask both arms for history
+    with one set. The predicate is the reason to check it on the real engine
+    rather than only on the embedded one: this planner drops the full-text index
+    when the wrong predicate joins the match references, and `@@` then matches
+    any token of a term rather than all of them — which is `JIRA-4417` returning
+    `JIRA-4418`, at a score the zero rule does not catch.
+    """
+    from epimemer.core.types import NodeType
+
+    store = await surreal()
+    verifier = await surreal()
+
+    contents = [
+        "Ticket JIRA-4417 was closed after the deployment rollback",
+        "Ticket JIRA-4418 remains open pending the deployment review",
+        "The deployment pipeline was rewritten last quarter",
+        "Nothing here concerns tickets at all",
+        "A note about the weather this morning",
+    ]
+    facts = [Fact(content=text, source_id="s1") for text in contents]
+    for fact in facts:
+        await store.store_node(fact)
+    await store.set_node_status_tx(
+        [facts[0]], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
+    )
+
+    hits = await verifier.text_search(
+        ["JIRA-4417"],
+        corpus="nodes",
+        node_type=NodeType.FACT,
+        statuses=frozenset({NodeStatus.ACTIVE, NodeStatus.HISTORICAL}),
+    )
+    assert [node_id for node_id, _ in hits] == [facts[0].id]
+
+    # And the default set still refuses it, so the widening is opt-in.
     assert await verifier.text_search(
         ["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT
     ) == []

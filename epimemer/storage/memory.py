@@ -766,7 +766,7 @@ class InMemoryStorage:
         corpus: Literal["nodes", "segments"],
         k: int = 10,
         node_type: NodeType | None = None,
-        status: NodeStatus = NodeStatus.ACTIVE,
+        statuses: frozenset[NodeStatus] = frozenset({NodeStatus.ACTIVE}),
         verify_containment: bool = False,
     ) -> Sequence[tuple[str, float]]:
         """BM25 over one corpus partition. See the protocol for the contract.
@@ -801,7 +801,7 @@ class InMemoryStorage:
                 if isinstance(node, expected_class)
             ]
             documents = {node.id: node.content for node in partition}
-            eligible = {node.id for node in partition if node.status == status}
+            eligible = {node.id for node in partition if node.status in statuses}
 
         # `bm25_scores` returns every document the token match reached, scored
         # or floored — which is precisely the candidate set R8 partitions. The

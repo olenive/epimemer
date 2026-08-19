@@ -20,7 +20,7 @@ from petritype.core.executable_graph_components import (
     ReturnedEdgeFromTransition,
 )
 
-from epimemer.core.temporal import IntervalBasis, UnknownInstant
+from epimemer.core.temporal import IntervalBasis, UnknownInstant, ValidityInterval
 from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
@@ -41,7 +41,7 @@ from epimemer.mcp.tools import (
     add_timeline_timepoint,
     apply_reflection,
     archive,
-    as_of,
+    graph_as_of,
     check_conflicts,
     create_metacontext,
     events_in_window,
@@ -2987,7 +2987,7 @@ class TestGraphStats:
         assert result["metacontexts"] == 2
 
 
-# --- Temporal queries: as_of + query_changes ---
+# --- Temporal queries: graph_as_of + query_changes ---
 
 _W_START = datetime(2026, 6, 10, tzinfo=timezone.utc)
 _W_END = datetime(2026, 6, 20, tzinfo=timezone.utc)
@@ -3062,17 +3062,17 @@ class TestAsOf:
         await storage.store_node(new)
 
         # Before new is born and before old is retired: only old is live.
-        early, _ = await as_of(datetime(2026, 6, 10, tzinfo=timezone.utc), storage)
+        early, _ = await graph_as_of(datetime(2026, 6, 10, tzinfo=timezone.utc), storage)
         assert [n["id"] for n in early["nodes"]] == [old.id]
 
         # After old retired and new born: only new is live.
-        late, meta = await as_of(datetime(2026, 6, 20, tzinfo=timezone.utc), storage)
+        late, meta = await graph_as_of(datetime(2026, 6, 20, tzinfo=timezone.utc), storage)
         assert [n["id"] for n in late["nodes"]] == [new.id]
         assert meta.nodes_returned == 1
 
     async def test_omits_review_labels(self, storage):
         # A node with an incoming supersession_candidate edge would be labelled
-        # `superseded_candidate` by review_labels — as_of must not surface that.
+        # `superseded_candidate` by review_labels — graph_as_of must not surface that.
         old = _fact_at("old", datetime(2026, 6, 1, tzinfo=timezone.utc))
         new = _fact_at("new", datetime(2026, 6, 2, tzinfo=timezone.utc))
         await storage.store_node(old)
@@ -3080,7 +3080,7 @@ class TestAsOf:
         await storage.store_edge(
             NodeEdge(src_id=new.id, dst_id=old.id, type=EdgeType.SUPERSESSION_CANDIDATE)
         )
-        result, _ = await as_of(datetime(2026, 6, 10, tzinfo=timezone.utc), storage)
+        result, _ = await graph_as_of(datetime(2026, 6, 10, tzinfo=timezone.utc), storage)
         assert all("review" not in n for n in result["nodes"])
 
     async def test_node_type_filter(self, storage):
@@ -3089,7 +3089,7 @@ class TestAsOf:
                   created_at=datetime(2026, 6, 1, tzinfo=timezone.utc))
         await storage.store_node(f)
         await storage.store_node(t)
-        result, _ = await as_of(
+        result, _ = await graph_as_of(
             datetime(2026, 6, 10, tzinfo=timezone.utc), storage, node_types=["fact"]
         )
         assert [n["id"] for n in result["nodes"]] == [f.id]
@@ -3799,3 +3799,289 @@ class TestLexicalSearch:
         # really does contain the identifier. What it no longer does is smuggle
         # a retired claim back in behind it.
         assert [hit["segment_id"] for hit in result["segments"]] == [segments[0].id]
+
+
+class TestWhatARetrievalCanReach:
+    """#53 T3's two switches, and the asymmetry in their defaults.
+
+    Knowledge that is not current is still knowledge — the reason `HISTORICAL`
+    exists at all — so it comes back by default. A claim concluded *wrong* is
+    kept for the audit trail rather than for reading, so re-offering it is
+    something the caller has to ask for.
+    """
+
+    async def _retire(self, storage, embedding_provider, content: str, status):
+        fact = Fact(content=content, source_id="seg-1", value=ValueSignal())
+        await storage.store_node(fact)
+        vector = (await embedding_provider.embed([content]))[0]
+        await storage.store_embedding(EmbeddingRecord(
+            item_id=fact.id, model_id=embedding_provider.model_id, vector=vector,
+        ))
+        await storage.set_node_status_tx(
+            [fact], status=status, at=datetime.now(timezone.utc)
+        )
+        return fact
+
+    async def test_a_claim_the_world_moved_past_comes_back_by_default(
+        self, storage, embedding_provider
+    ):
+        retired = await self._retire(
+            storage, embedding_provider,
+            "the city is called Leningrad", NodeStatus.HISTORICAL,
+        )
+
+        result, _ = await search(
+            "what is the city called", storage, embedding_provider, k=5, graph_hops=0
+        )
+
+        found = {node["id"]: node for node in result["nodes"]}
+        assert retired.id in found
+        # And it says what it is, so nothing reads it as current.
+        assert found[retired.id]["status"] == "historical"
+
+    async def test_it_can_be_switched_off(self, storage, embedding_provider):
+        retired = await self._retire(
+            storage, embedding_provider,
+            "the city is called Leningrad", NodeStatus.HISTORICAL,
+        )
+
+        result, _ = await search(
+            "what is the city called", storage, embedding_provider,
+            k=5, graph_hops=0, include_historical=False,
+        )
+
+        assert retired.id not in {node["id"] for node in result["nodes"]}
+
+    async def test_a_claim_concluded_wrong_stays_out_until_asked_for(
+        self, storage, embedding_provider
+    ):
+        wrong = await self._retire(
+            storage, embedding_provider,
+            "the release shipped in March", NodeStatus.CORRECTED,
+        )
+
+        default, _ = await search(
+            "when did the release ship", storage, embedding_provider,
+            k=5, graph_hops=0,
+        )
+        assert wrong.id not in {node["id"] for node in default["nodes"]}
+
+        audited, _ = await search(
+            "when did the release ship", storage, embedding_provider,
+            k=5, graph_hops=0, include_corrected=True,
+        )
+        assert wrong.id in {node["id"] for node in audited["nodes"]}
+
+    async def test_a_retirement_that_never_said_which_it_was_is_treated_as_wrong(
+        self, storage, embedding_provider
+    ):
+        """Legacy `SUPERSEDED` rows do not record the event, and the lineage edge
+        already reads them as corrections. Putting them behind the cautious
+        switch keeps the two readings of one unrecorded retirement in step."""
+        legacy = await self._retire(
+            storage, embedding_provider,
+            "the release shipped in March", NodeStatus.SUPERSEDED,
+        )
+
+        default, _ = await search(
+            "when did the release ship", storage, embedding_provider,
+            k=5, graph_hops=0,
+        )
+        assert legacy.id not in {node["id"] for node in default["nodes"]}
+
+        audited, _ = await search(
+            "when did the release ship", storage, embedding_provider,
+            k=5, graph_hops=0, include_corrected=True,
+        )
+        assert legacy.id in {node["id"] for node in audited["nodes"]}
+
+
+class TestAClaimsHistoryHangsOffIt:
+    """The condition under which default-on history is not a ranking regression.
+
+    A historical claim and its replacement are near-identical text, so both
+    score near the top. Left competing, one claim's versions fill the result and
+    displace what the caller actually asked for.
+    """
+
+    async def _renaming(self, storage, embedding_provider):
+        old = Fact(
+            content="the city is called Leningrad",
+            source_id="seg-1", value=ValueSignal(),
+        )
+        current = Fact(
+            content="the city is called Saint Petersburg",
+            source_id="seg-1", value=ValueSignal(),
+        )
+        for node in (old, current):
+            await storage.store_node(node)
+            vector = (await embedding_provider.embed([node.content]))[0]
+            await storage.store_embedding(EmbeddingRecord(
+                item_id=node.id, model_id=embedding_provider.model_id, vector=vector,
+            ))
+        await storage.set_node_status_tx(
+            [old], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
+        )
+        await storage.store_edge(NodeEdge(
+            src_id=old.id, dst_id=current.id,
+            type=EdgeType.TEMPORALLY_FOLLOWED_BY,
+        ))
+        return old, current
+
+    async def test_the_replacement_takes_the_slot_and_carries_the_rest(
+        self, storage, embedding_provider
+    ):
+        old, current = await self._renaming(storage, embedding_provider)
+
+        result, _ = await search(
+            "what is the city called", storage, embedding_provider,
+            k=5, graph_hops=0,
+        )
+
+        found = {node["id"]: node for node in result["nodes"]}
+        assert old.id not in found
+        assert [
+            earlier["id"] for earlier in found[current.id]["earlier_versions"]
+        ] == [old.id]
+        # Enough to decide whether to fetch it, and not the whole node.
+        assert found[current.id]["earlier_versions"][0]["status"] == "historical"
+
+    async def test_nothing_is_folded_when_history_is_switched_off(
+        self, storage, embedding_provider
+    ):
+        old, current = await self._renaming(storage, embedding_provider)
+
+        result, _ = await search(
+            "what is the city called", storage, embedding_provider,
+            k=5, graph_hops=0, include_historical=False,
+        )
+
+        found = {node["id"]: node for node in result["nodes"]}
+        assert old.id not in found
+        assert "earlier_versions" not in found[current.id]
+
+
+class TestAskingWhatWasTrueThen:
+    """`valid_as_of` answers with groups rather than filtering (T3).
+
+    Validity is sparse, so a filter would turn a missing date into a confident
+    "no" — and under open-world semantics there is no provable "no" to filter
+    on in the first place.
+    """
+
+    async def _dated_renaming(self, storage, embedding_provider):
+        document = RawDocument(content="A history of the city", source="test")
+        await storage.store_document(document)
+
+        old = Fact(
+            content="the city is called Leningrad",
+            source_id="seg-1", value=ValueSignal(),
+        )
+        current = Fact(
+            content="the city is called Saint Petersburg",
+            source_id="seg-1", value=ValueSignal(),
+        )
+        periods = {
+            old.id: ValidityInterval(
+                start={"instant_kind": "precise", "at": "1924-01-26T00:00:00Z"},
+                end={"instant_kind": "precise", "at": "1991-09-06T00:00:00Z"},
+                basis=IntervalBasis.STATED,
+            ),
+            current.id: ValidityInterval(
+                start={"instant_kind": "precise", "at": "1991-09-06T00:00:00Z"},
+                basis=IntervalBasis.STATED,
+            ),
+        }
+        for node in (old, current):
+            await storage.store_node(node)
+            vector = (await embedding_provider.embed([node.content]))[0]
+            await storage.store_embedding(EmbeddingRecord(
+                item_id=node.id, model_id=embedding_provider.model_id, vector=vector,
+            ))
+            await storage.store_edge(NodeEdge(
+                src_id=node.id, dst_id=document.id, type=EdgeType.SOURCED_FROM,
+                validity=[periods[node.id]],
+            ))
+        await storage.set_node_status_tx(
+            [old], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
+        )
+        await storage.store_edge(NodeEdge(
+            src_id=old.id, dst_id=current.id,
+            type=EdgeType.TEMPORALLY_FOLLOWED_BY,
+        ))
+        return document, old, current
+
+    async def test_the_periods_come_back_attributed_to_their_source(
+        self, storage, embedding_provider
+    ):
+        """T1 §3's read surface: `(source, interval)` pairs, uncollapsed."""
+        document, _, current = await self._dated_renaming(
+            storage, embedding_provider
+        )
+
+        result, _ = await search(
+            "what is the city called", storage, embedding_provider,
+            k=5, graph_hops=0,
+        )
+
+        found = {node["id"]: node for node in result["nodes"]}
+        [source] = found[current.id]["validity"]
+        assert source["source_id"] == document.id
+        assert source["intervals"][0]["start"]["at"].startswith("1991-09-06")
+
+    async def test_the_claim_true_then_keeps_its_own_slot(
+        self, storage, embedding_provider
+    ):
+        """Otherwise the asked-for answer is a footnote on the wrong one."""
+        _, old, current = await self._dated_renaming(storage, embedding_provider)
+
+        result, _ = await search(
+            "what is the city called", storage, embedding_provider,
+            k=5, graph_hops=0,
+            valid_as_of=datetime(1980, 1, 1, tzinfo=timezone.utc),
+        )
+
+        found = {node["id"]: node for node in result["nodes"]}
+        assert found[old.id]["valid_at"] == "valid"
+        assert "earlier_versions" not in found.get(current.id, {})
+        assert result["valid_at"]["valid"] == [old.id]
+
+    async def test_a_moment_nobody_dated_is_unknown_and_still_returned(
+        self, storage, embedding_provider
+    ):
+        """The whole argument against a filter: absence of a date is not a no."""
+        undated = Fact(
+            content="the city is called Leningrad",
+            source_id="seg-1", value=ValueSignal(),
+        )
+        await storage.store_node(undated)
+        vector = (await embedding_provider.embed([undated.content]))[0]
+        await storage.store_embedding(EmbeddingRecord(
+            item_id=undated.id, model_id=embedding_provider.model_id, vector=vector,
+        ))
+
+        result, _ = await search(
+            "what is the city called", storage, embedding_provider,
+            k=5, graph_hops=0,
+            valid_as_of=datetime(1980, 1, 1, tzinfo=timezone.utc),
+        )
+
+        found = {node["id"]: node for node in result["nodes"]}
+        assert found[undated.id]["valid_at"] == "unknown"
+        assert "validity" not in found[undated.id]
+        assert result["valid_at"]["unknown"] == [undated.id]
+
+    async def test_no_moment_asked_means_no_verdict_invented(
+        self, storage, embedding_provider
+    ):
+        """"Current" is the timeline's reference time, never the wall clock, so
+        an unasked question gets no answer rather than today's."""
+        _, old, _ = await self._dated_renaming(storage, embedding_provider)
+
+        result, _ = await search(
+            "what is the city called", storage, embedding_provider,
+            k=5, graph_hops=0,
+        )
+
+        assert "valid_at" not in result
+        assert all("valid_at" not in node for node in result["nodes"])

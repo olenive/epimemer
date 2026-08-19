@@ -23,6 +23,7 @@ from epimemer.core.types import (
     NodeStatus,
     NOMINATED_STATUSES,
     RESTORABLE_STATUSES,
+    reachable_statuses,
     superseded_status_for,
     NodeType,
     RawDocument,
@@ -32,7 +33,7 @@ from epimemer.core.types import (
     ValueSignal,
     merged_value_signal,
 )
-from epimemer.core.temporal import ValidityInterval
+from epimemer.core.temporal import ValidityInterval, ValidityVerdict
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.mcp.config import (
     DEFAULT_IMPORTANCE_STEP,
@@ -849,6 +850,10 @@ async def search(
     metacontext_id: str | None = None,
     cross_frame: bool = False,
     terms: list[str] | None = None,
+    include_historical: bool = True,
+    include_corrected: bool = False,
+    valid_as_of: datetime | None = None,
+    timeline_id: str | None = None,
     record_retrieval: bool = DEFAULT_RECORD_RETRIEVAL,
     event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
@@ -887,11 +892,33 @@ async def search(
     carry `parents` / `subtopics` as id + preview, so the caller can drill via
     `topic_tree` instead of being handed the whole subtree.
 
+    **Knowledge that is not current is still knowledge**, so a claim retired
+    because the world moved on is returned by default and says so in its
+    `status`. Its earlier versions do not compete for slots: when a retired node
+    and the claim that replaced it both match, the replacement takes the slot and
+    the retired one comes back under `earlier_versions` on it. Claims retired for
+    being *wrong* are off by default (`include_corrected`), kept for the audit
+    trail rather than for reading.
+
+    Nodes whose sources dated them carry `validity` — one entry per source, with
+    the periods that source asserts. Nothing is collapsed across sources: union
+    takes one careful source and one sloppy one and yields a period neither
+    claims, and intersection turns two separate episodes into "never".
+
+    `valid_as_of` asks *what was true then*, and answers with two groups rather
+    than a filter: every result carries `valid_at`, either `valid` (some source
+    asserts it held then) or `unknown` (nobody says). It never excludes, because
+    an interval asserts nothing about the world outside itself — a moment nobody
+    dated is unknown, not false, so there is no third group to exclude into. A
+    claim provably valid then also keeps its own slot rather than being folded
+    into a later version of itself.
+
     Returned nodes have `retrieved_at` stamped (`record_retrieval=False`
     disables): being retrieved is what tells a used node from a merely old one.
     Ranking is unaffected — see `_record_retrieval`.
     """
     from epimemer.pipelines.query.types import QueryRequest, SeedProvenance
+    from epimemer.pipelines.query.validity import validity_for, verdict_for
     from epimemer.pipelines.reflection.review import review_labels_for
 
     # Map string node types to enums
@@ -906,6 +933,12 @@ async def search(
         graph_hops=graph_hops,
         model_id=embedding_provider.model_id,
         terms=terms,
+        statuses=reachable_statuses(
+            include_historical=include_historical,
+            include_corrected=include_corrected,
+        ),
+        valid_as_of=valid_as_of,
+        timeline_id=timeline_id,
     )
 
     if metacontext_id and not cross_frame:
@@ -930,6 +963,22 @@ async def search(
     hierarchy = await _hierarchy_annotations(nodes, storage)
     labels_by_node = await _metacontext_labels_for([n.id for n in nodes], storage)
     review_by_node = await review_labels_for(nodes, storage)
+    # Read over the final set, which expansion has added to since the collapse
+    # transition read the seeds. One batched edge query, and the only place the
+    # stored intervals become visible to a caller (T1 §3).
+    validity_by_node = await validity_for([n.id for n in nodes], storage)
+    verdicts = (
+        {
+            node.id: verdict_for(
+                validity_by_node.get(node.id, []),
+                valid_as_of,
+                timeline_id=timeline_id,
+            ).value
+            for node in nodes
+        }
+        if valid_as_of is not None
+        else {}
+    )
 
     nodes_data = []
     for node in nodes:
@@ -944,6 +993,18 @@ async def search(
             node_dict["metacontexts"] = labels_by_node[node.id]
         if node.id in review_by_node:
             node_dict["review"] = review_by_node[node.id]
+        if node.id in validity_by_node:
+            node_dict["validity"] = [
+                source.model_dump(mode="json")
+                for source in validity_by_node[node.id]
+            ]
+        if node.id in verdicts:
+            node_dict["valid_at"] = verdicts[node.id]
+        if node.id in query_result.lineage:
+            node_dict["earlier_versions"] = [
+                _content_preview(earlier) | {"status": earlier.status.value}
+                for earlier in query_result.lineage[node.id]
+            ]
         node_dict.update(hierarchy.get(node.id, {}))
         nodes_data.append(node_dict)
 
@@ -954,6 +1015,16 @@ async def search(
         # a graph node and must not be pretended into one.
         "segments": [hit.model_dump(mode="json") for hit in query_result.segments],
     }
+    if valid_as_of is not None:
+        # T3's groups, built from the per-node labels above rather than computed
+        # a second time: two places deriving one rule is how they come to
+        # disagree, and this response would then contradict itself.
+        result["valid_at"] = {
+            verdict.value: [
+                node_id for node_id, label in verdicts.items() if label == verdict.value
+            ]
+            for verdict in ValidityVerdict
+        }
     meta = ResponseMeta(
         nodes_searched=query_result.metadata.nodes_searched,
         nodes_returned=len(nodes),
@@ -1021,7 +1092,7 @@ def events_in_window(
     return sorted(events, key=lambda event: event.at)
 
 
-async def as_of(
+async def graph_as_of(
     at: datetime,
     storage: StorageBackend,
     *,
@@ -1034,6 +1105,14 @@ async def as_of(
     only: edges, metacontext, and review labels are *not* time-versioned, so they
     are intentionally omitted — they would reflect the present graph, not the
     graph at `at`.
+
+    **`graph_` is the whole point of the name.** This is *transaction* time —
+    what the graph held then — and the other axis, what was *true* then, is
+    `search(valid_as_of=…)`. SQL:2011 marks both (`FOR SYSTEM_TIME AS OF`, `FOR
+    APPLICATION_TIME AS OF`) because "as of" alone does not say which clock, and
+    an unmarked name inherits the default reading: in a knowledge graph, "as of
+    1980" reads as *what was true in 1980*, which is the axis this does not
+    answer. It was called `as_of` until #53 T3.
     """
     nt_enums = [NodeType(t) for t in node_types] if node_types else [None]
     nodes: list[EpistemicNode] = []

@@ -512,6 +512,10 @@ async def memory_search(
     metacontext_id: str | None = None,
     cross_frame: bool = False,
     terms: list[str] | None = None,
+    include_historical: bool = True,
+    include_corrected: bool = False,
+    valid_as_of: str | None = None,
+    timeline_id: str | None = None,
 ) -> str:
     """Search the epistemic memory graph.
 
@@ -535,6 +539,30 @@ async def memory_search(
     response also carries `segments` — the passages that matched, which answer
     *where did I read that?* rather than *what do I believe?*
 
+    **Read each result's `status` before leaning on it.** `active` is a current
+    claim. `historical` is one the world moved past — still right of its period,
+    which is why it is returned, and wrong to quote as current. `corrected` is
+    one concluded false, and only appears if you asked for it.
+
+    A claim's retired versions do not each take a slot. When a retired node and
+    the claim that replaced it both match, the replacement is the result and the
+    retired one comes back as `earlier_versions` on it — id, a content preview
+    and its status — so one answer arrives with its history attached instead of
+    four near-identical rows.
+
+    **`validity` says when a claim was true, per source.** Each entry is one
+    source and the periods it asserts; two sources may disagree and neither is
+    overwritten. Most nodes have none, and its absence means nobody dated the
+    claim — not that the claim is undated in the world.
+
+    **`valid_as_of` asks what was true then, and answers with groups.** Every
+    result gets `valid_at`: `valid` (some source asserts it held then) or
+    `unknown` (nobody says), with the same split repeated as id lists at the top
+    level. Nothing is excluded, and that is deliberate — an interval says what a
+    source asserts and asserts nothing about the outside, so a moment nobody
+    dated is unknown rather than false. A filter would turn a missing date into a
+    confident "no", which is the one answer this memory must not invent.
+
     For provenance/topic listings (which nodes came from X / are about Y), use
     find_nodes, not search.
 
@@ -551,6 +579,20 @@ async def memory_search(
             whole and ORed; each matches only documents containing all of its
             words. Omit and the keyword arm falls back to the query's own words,
             which still finds rare ones but guarantees nothing.
+        include_historical: Claims the world moved past. On by default —
+            knowledge that is not current is still knowledge. Turn it off when
+            you want only what holds now.
+        include_corrected: Claims concluded wrong. Off by default. Turn it on
+            for "what did we believe about X that turned out wrong?", and expect
+            to see things the graph has already ruled against.
+        valid_as_of: ISO datetime to judge validity at — *when the claim was
+            true*, not when the graph learned it. For "is this current" inside a
+            fictional or otherwise separate timeline, pass that timeline's own
+            reference time: its present is a fact about that world, not the wall
+            clock.
+        timeline_id: The clock `valid_as_of` is read against. Omit for the
+            wall-clock timeline, which is what real-world facts use. Periods
+            recorded on another clock are not comparable and count as unknown.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -565,6 +607,10 @@ async def memory_search(
             metacontext_id=metacontext_id,
             cross_frame=cross_frame,
             terms=terms,
+            include_historical=include_historical,
+            include_corrected=include_corrected,
+            valid_as_of=_parse_utc(valid_as_of) if valid_as_of else None,
+            timeline_id=timeline_id,
             record_retrieval=deps["config"].record_retrieval,
             event_bus=deps.get("event_bus"),
         ),
@@ -1117,13 +1163,13 @@ async def memory_topic_tree(
     )
 
 
-@mcp.tool(name="as_of")
-async def memory_as_of(
+@mcp.tool(name="graph_as_of")
+async def memory_graph_as_of(
     at: str,
     ctx: Context,
     node_types: list[str] | None = None,
 ) -> str:
-    """Snapshot the active knowledge set as it stood at a past instant.
+    """Snapshot what the graph *held* at a past instant.
 
     Returns the nodes that existed and were still active at `at` (an ISO
     datetime, normalized to UTC). This is a node-lifecycle snapshot only — edges,
@@ -1131,14 +1177,19 @@ async def memory_as_of(
     they would reflect the present graph rather than the graph at `at`. For the
     *changes* across a span (births + retirements), use query_changes instead.
 
+    **This is not "what was true then".** It answers *what did this memory
+    believe on that date* — a node created last week is absent from a snapshot of
+    last year even if the claim it makes has been true for a century. For when a
+    claim was true, use `search` with `valid_as_of`.
+
     Args:
         at: ISO datetime to snapshot at.
         node_types: Optional filter to "topic"/"fact"/"inference".
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
-        "epimemer.as_of",
-        lambda: tools.as_of(
+        "epimemer.graph_as_of",
+        lambda: tools.graph_as_of(
             at=_parse_utc(at),
             storage=deps["storage"],
             node_types=node_types,
@@ -1161,8 +1212,8 @@ async def memory_query_changes(
 
     Returns nodes whose creation or retirement fell inside each half-open window
     [start, end), each tagged with the lifecycle event(s) and enriched with
-    metacontext/review labels. Distinct from `as_of`, which snapshots state at a
-    single instant; this reports the *deltas* across a span.
+    metacontext/review labels. Distinct from `graph_as_of`, which snapshots state
+    at a single instant; this reports the *deltas* across a span.
 
     Each event carries a `kind` — created, corrected, historical, merged,
     archived, restored — and, where something replaced the node, the

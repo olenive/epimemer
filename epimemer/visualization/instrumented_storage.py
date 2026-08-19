@@ -445,7 +445,7 @@ class InstrumentedStorage:
         corpus: Literal["nodes", "segments"],
         k: int = 10,
         node_type: NodeType | None = None,
-        status: NodeStatus = NodeStatus.ACTIVE,
+        statuses: frozenset[NodeStatus] = frozenset({NodeStatus.ACTIVE}),
         verify_containment: bool = False,
     ) -> Sequence[tuple[str, float]]:
         return await self._inner.text_search(
@@ -453,7 +453,7 @@ class InstrumentedStorage:
             corpus=corpus,
             k=k,
             node_type=node_type,
-            status=status,
+            statuses=statuses,
             verify_containment=verify_containment,
         )
 

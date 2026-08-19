@@ -2,9 +2,9 @@
 
 This module is about when a claim was **true**. That is *valid time*, and it is
 a different axis from *transaction time* — `created_at`, `superseded_at` and
-`as_of`, which record what the graph held and when. The two blur silently once
-there is code and are near-impossible to separate afterwards, so #53 T1 fixed
-the vocabulary before the fields existed and this module keeps to it.
+`graph_as_of`, which record what the graph held and when. The two blur silently
+once there is code and are near-impossible to separate afterwards, so #53 T1
+fixed the vocabulary before the fields existed and this module keeps to it.
 
 Everything here is pure: no clock is read, no storage is touched, no network
 call is made, so every answer is a function of the arguments. Where validity
@@ -297,6 +297,70 @@ def compare_intervals(a: ValidityInterval, b: ValidityInterval) -> TemporalRelat
     return TemporalRelation.UNKNOWN
 
 
+class ValidityVerdict(str, Enum):
+    """What a set of intervals says about one moment (T3's retrieval buckets).
+
+    **There is no third member, and its absence is the design.** T3 named three
+    buckets — provably valid, unknown, and *excluded: provably not valid* — but
+    T1 §6 settled the semantics afterwards and governs: an interval says what a
+    source **asserts** and asserts nothing about the outside, so a moment outside
+    every stated interval is *unknown*, not false. Nothing in the model can prove
+    a claim was not true at a moment; only a closed-world marking
+    ("Labour governed *only* during…") could, and §6 proposes none.
+
+    So the excluded bucket is unreachable rather than merely empty, and a value
+    that can never be produced is worse than no value at all — a caller would
+    write a branch for it and the branch would be dead. If closed-world
+    assertions ever land, the member lands with them.
+
+    This sharpens T3's argument rather than weakening it. A valid-time *filter*
+    was rejected there for turning missing metadata into a silent false negative;
+    under §6 it is not merely dishonest but unimplementable, because there is no
+    negative to filter on.
+    """
+
+    VALID = "valid"
+    UNKNOWN = "unknown"
+
+
+def validity_at(
+    intervals: Sequence[ValidityInterval],
+    moment: datetime,
+    *,
+    timeline_id: str | None = None,
+) -> ValidityVerdict:
+    """Whether some interval provably has `moment` inside it, on one clock.
+
+    **This is a collapse across sources, and it is the caller's rule rather than
+    a default** (T1 §3). Retrieval is the caller here and T3 is the rule: *does
+    any source assert this claim held at `moment`?* The per-source intervals stay
+    visible beside the answer, so nothing is hidden by it — which is the whole
+    condition under which §3 permits a collapse at all. Existential rather than
+    universal on purpose: two sources describing two different episodes both
+    answer the question, and an intersection would call that "never".
+
+    Intervals on another clock contribute nothing, exactly as `compare_intervals`
+    answers `unknown` across clocks: there is no conversion between an in-universe
+    date and a real one, and applying one would invent it. `timeline_id=None` is
+    the default wall clock, which is what real-world facts use.
+
+    A node with no intervals is `unknown`, which is the common case and is meant
+    to be. Naive moments are read as UTC, on `PreciseInstant._assume_utc`'s
+    grounds.
+    """
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return (
+        ValidityVerdict.VALID
+        if any(
+            _definitely_holds_at(interval, moment)
+            for interval in intervals
+            if interval.timeline_id == timeline_id
+        )
+        else ValidityVerdict.UNKNOWN
+    )
+
+
 # --- Positions on the line ---
 #
 # The only place `instant_kind` is read. An endpoint becomes either a datetime
@@ -367,6 +431,32 @@ def _definitely_contains(interval: ValidityInterval, moment: datetime) -> bool:
     return _reaches_no_later_than(
         _start_position(interval.start), moment
     ) and _strictly_earlier(moment, _end_position(interval.end))
+
+
+def _definitely_holds_at(interval: ValidityInterval, moment: datetime) -> bool:
+    """Whether the interval provably contains `moment`, its witness included.
+
+    `_definitely_contains` above asks the endpoints alone, which is what the
+    overlap rule wants of *another* interval's witness. Asked about a moment of
+    the caller's choosing, an interval's **own** witness answers where an
+    endpoint cannot — and it has to, or the commonest shape of a current claim
+    is unreadable. *"Called Saint Petersburg since 1991"* has a located start
+    and an **unknown** end (the claim may stop tomorrow; `unbounded` would say it
+    never can), so its endpoints alone conclude nothing about 2010. A witness in
+    2020 does: the period was still running then, so 2010 is inside it.
+
+    A witness reaches from itself back to the start and forward to itself, and no
+    further. The same interval says nothing about 2021 — the end is still
+    unknown, and this is the reach of an inside bound rather than a new endpoint.
+    """
+    witness = _located(interval.witnessed_at)
+    at_or_after_start = _reaches_no_later_than(
+        _start_position(interval.start), moment
+    ) or (witness is not None and witness <= moment)
+    before_end = _strictly_earlier(moment, _end_position(interval.end)) or (
+        witness is not None and moment <= witness
+    )
+    return at_or_after_start and before_end
 
 
 def _definitely_overlap(a: ValidityInterval, b: ValidityInterval) -> bool:

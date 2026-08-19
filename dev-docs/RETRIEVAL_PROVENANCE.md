@@ -35,7 +35,7 @@ Six tools put node identity or content into the agent's context:
 
 | Tool | Serializer |
 |---|---|
-| `search`, `as_of`, `query_changes`, `find_nodes`, `query_graph` | `_node_to_dict` |
+| `search`, `graph_as_of`, `query_changes`, `find_nodes`, `query_graph` | `_node_to_dict` |
 | `topic_tree` | `_content_preview` (id + preview — still "the agent saw this node") |
 
 > **Corrected (2026-08-17, review): the census above counted serializer call
@@ -120,7 +120,7 @@ class RetrievedNode(BaseModel):
 
 `SeedProvenance` is the four-value enum from `LEXICAL_SEARCH.md` §6 —
 `vector` / `lexical` / `segment` / `expanded` — plus `direct` for tools that
-return nodes without ranking them (`find_nodes`, `as_of`, `query_changes`,
+return nodes without ranking them (`find_nodes`, `graph_as_of`, `query_changes`,
 `topic_tree`).
 
 > **Amended (2026-08-17, review), with the §2 census fix:** `check_conflicts`

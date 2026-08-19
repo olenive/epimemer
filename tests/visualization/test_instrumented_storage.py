@@ -369,3 +369,34 @@ def test_wrapper_implements_full_storage_protocol(bus):
     ]
     missing = [name for name in protocol_members if not hasattr(wrapped, name)]
     assert missing == [], f"InstrumentedStorage missing protocol members: {missing}"
+
+
+def test_wrapper_takes_the_same_arguments_as_the_protocol(bus):
+    """Presence is not enough — the wrapper re-declares every parameter by hand.
+
+    A protocol method that *gains* or *renames* one leaves the wrapper accepting
+    the old shape and raising `TypeError` from inside a search, which the
+    membership check above cannot see. That is not hypothetical: `text_search`
+    went from `status` to `statuses` under #53 T3 and this wrapper kept the
+    singular, so every visualised search would have failed on the keyword.
+    """
+    import inspect
+
+    from epimemer.storage.protocol import StorageBackend
+
+    wrapped = instrument_storage(InMemoryStorage(), bus)
+    drifted = {}
+    for name in dir(StorageBackend):
+        if name.startswith("_"):
+            continue
+        declared = getattr(StorageBackend, name)
+        if not callable(declared):
+            continue
+        expected = list(inspect.signature(declared).parameters)[1:]  # drop `self`
+        actual = list(inspect.signature(getattr(wrapped, name)).parameters)
+        if expected != actual:
+            drifted[name] = (expected, actual)
+
+    assert drifted == {}, (
+        f"the wrapper's arguments have drifted from the protocol's: {drifted}"
+    )

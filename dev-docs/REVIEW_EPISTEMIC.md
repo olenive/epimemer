@@ -971,6 +971,14 @@ document about what is now the same claim.
 surface — the whole edge is visible through `query_graph`, and the purpose-built
 read waits for §13.10 rather than being invented ahead of its naming decisions.
 
+> *Built with §13.10 (2026-08-19).* `search` reports the pairs per node, and
+> `valid_as_of` collapses them into a bucket only when a caller names a moment —
+> the collapse sits beside the pairs rather than replacing them, which is the
+> condition §3 sets for permitting one at all. Reading them also made the witness
+> point load-bearing for the first time: a claim with a located start and an
+> **unknown** end concludes nothing from its endpoints, and that is the shape
+> every still-current dated claim has.
+
 Two things this document leaves open and construction had to fix, recorded here
 because both are now load-bearing. Intervals are **half-open**, `[start, end)`:
 under closed intervals the exact instant of the 1991 renaming is one the city is
@@ -1026,8 +1034,9 @@ stays in the lifecycle history, which is what makes a second cycle describable.
 this edge type (Saint Petersburg's chain returns to its own node) and
 **parallel same-direction edges legal** (Labour → Conservatives, observed in
 1951, 1970, 1979 and 2010 — one edge per transition). Every walker must be
-cycle-safe — §13.10's lineage collapse is the first — and nothing may dedup
-this type by `(src, dst, type)` signature. The recurrence *detector* is
+cycle-safe — §13.10's lineage collapse is the first, and it was written that way
+because of this paragraph rather than despite it — and nothing may dedup this
+type by `(src, dst, type)` signature. The recurrence *detector* is
 similarity nomination **including `HISTORICAL` candidates**, resolved by the
 `recurs` verdict (§3) as an explicit reactivation: `restore` plus the new
 source's edge. And a world-change migrates **per edge type**: `sourced_from`
@@ -1050,11 +1059,23 @@ Review item 5, in two halves: `HISTORICAL` had no reader at retrieval, and
 #53 → *T3 decided*. **With this, #53's design is complete and none of it is
 built.**
 
-> *True on the day it was written.* Construction began 2026-08-19: the lineage
-> edge (§13.9), the interval type and its storage (§13.8) are built. **T3 itself
-> is still entirely unbuilt** — nothing below this line has been started, and
-> the missing retrieval surface is now the reason validity can be written but
-> not read.
+> *True on the day it was written.* **T3 is built (2026-08-19)**, and with it
+> everything below this line: reachability, lineage collapse, the buckets, the
+> rename, and the `(source, interval)` read the earlier steps deferred to it.
+> Validity can now be written *and* read. Only §11's soundness check remains
+> unbuilt in the whole of #53.
+>
+> **One decided detail did not survive its own document.** T3 names three
+> buckets, the third being *provably not valid at t*. §13.8's open-world rule
+> (T1 §6, settled after this was written and governing it) says an interval
+> asserts nothing about the outside — so a moment outside every stated period is
+> unknown, not false, and **nothing can prove a claim was not true at a moment**
+> without a closed-world marking, which none of this proposes. The excluded
+> bucket is therefore unreachable rather than empty, and `ValidityVerdict` ships
+> with two members: a value nothing can produce earns a dead branch in every
+> caller. This *strengthens* the paragraph below rather than weakening it — a
+> valid-time filter is not merely dishonest but unimplementable, because there is
+> no negative to filter on.
 
 **The same trap, a third time.** A valid-time *filter* is the obvious surface
 and is dishonest for the reason T1 and T2 already met: open-world data has to
@@ -1068,7 +1089,8 @@ answer has three values, and squeezing it into two is where the lie enters.*
 So valid-time retrieval returns **buckets** — *provably valid at t* and
 *unknown*, with *provably not valid* excluded — which is §13.8's
 `before | after | overlap | unknown` applied at retrieval. Shape decided now;
-code waits for validity.
+code waits for validity. *(Built 2026-08-19 as two buckets; the third is
+unreachable under open-world semantics — see the note above.)*
 
 **Reachability.** Two parameters. `include_historical` defaults **on**, because
 knowledge that is not current is still knowledge. `include_corrected` defaults
@@ -1086,6 +1108,16 @@ match, the successor takes the slot and the historical node attaches to it —
 computable precisely because §13.9 created `temporally_followed_by`. Without
 this, default-on is a regression; with it, it is strictly better than today.
 
+> *Built 2026-08-19, with three things construction had to settle.* The fold
+> reads the **status**, not the edge: two ACTIVE nodes joined by a lineage edge
+> are two current claims, which is the shape `restore` leaves behind, and folding
+> one would hide a live answer. The walk is **cycle-safe by requirement** —
+> §13.9 made cycles legal, so a recurrence closes one on ordinary data — and a
+> cycle has no last version, so its best-ranked member hosts the rest; letting
+> two nodes fold into each other terminated and still lost the answer. And the
+> top-k **cut moved after the fold**, since folding a result that has already
+> been cut rearranges what it was supposed to save.
+
 **`as_of` → `graph_as_of`**, reserving `valid_as_of`. SQL:2011 prefixes the
 phrase in both cases (`FOR SYSTEM_TIME AS OF`, `FOR APPLICATION_TIME AS OF`)
 because "as of" alone does not say which clock. The decisive argument is which
@@ -1101,6 +1133,11 @@ current?* must be asked against the relevant clock — a fictional claim is
 current when its interval contains that timeline's reference time, not
 wall-clock now. The first implementation will reach for `datetime.now()`;
 unpicking that later is painful.
+
+> *Honoured by not building the reader.* `valid_as_of` takes the moment and
+> `timeline_id` takes the clock, both from the caller, and neither defaults. An
+> unasked question gets no verdict rather than today's, so there is no clock for
+> the first implementation to reach for.
 
 **All six review findings are now answered** — 2, 4 and 6 by T1 (§13.8), 1 by T2
 (§13.9), 3 across both, 5 here. What remains in #53 is construction.

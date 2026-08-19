@@ -178,7 +178,7 @@ Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<
 - **Discovery & stats**: `query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`
 - **Conflict handling**: `check_conflicts`, `record_contradiction`, `record_variant`
 - **Reflection**: `reflect`, `configure_reflection`, `apply_reflection`
-- **Temporal access**: `as_of`, `query_changes`
+- **Temporal access**: `graph_as_of`, `query_changes`
 - **Archival**: `archive`, `restore`
 - **Timelines**: `create_timeline`, `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`
 - **Metacontexts**: `create_metacontext`, `get_metacontexts`
