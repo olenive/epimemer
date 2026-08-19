@@ -35,14 +35,8 @@ from epimemer.core.types import (
     NodeType,
 )
 from epimemer.pipelines.query.validity import validity_for
+from epimemer.pipelines.reflection.review import NodeRef
 from epimemer.storage.protocol import StorageBackend
-
-
-class NodeRef(BaseModel):
-    """A node named in a flag, with enough of it to judge without a fetch."""
-
-    id: str
-    content: str
 
 
 class PremisePeriods(BaseModel):

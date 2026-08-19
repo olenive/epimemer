@@ -191,10 +191,22 @@ useful:
   sessions.
 - `reflect` returns consolidation candidates (similar pairs, splits, enrichments —
   similar pairs also surface duplicate source/tag/entity Topics), same-frame
-  contradiction candidates, `recurrences`, `unsound_inferences` (see below),
-  `pending_review` — the worklist of nodes already flagged for resolution —
+  contradiction candidates, `recurrences`, `boundary_proposals` and
+  `unsound_inferences` (both below), `pending_review` — the worklist of nodes
+  already flagged for resolution —
   `archival_candidates` (see below), and `similar_relations`, likely-synonymous
   user relationship labels.
+- **`boundary_proposals`** offers to close a period where you have already
+  judged that the world moved on. Once `supersede_by(because="the_world_changed")`
+  has recorded the succession, reflect can take the successor's own start date and
+  propose it as the predecessor's end — a date the *other* document gave, which
+  is something no single ingest could supply. Each proposal shows `current` and
+  `proposed`; accept the ones you agree with via
+  `apply_reflection(boundaries=[{node_id, source_id, endpoint, at, timeline_id}])`.
+  **Check what changes before accepting**: the period's basis becomes `inferred`,
+  so one whose other end a document stated stops being reportable as stated. Do
+  not substitute a date you happen to know — the prohibition on world knowledge
+  applies here exactly as it does at ingest.
 - **`unsound_inferences`** names an inference whose premises no source puts in
   the same period — *"X held 1997–2010"* and *"Y held from 2024"*, combined into
   a conclusion — with the offending pairs and their dates. It reports; you

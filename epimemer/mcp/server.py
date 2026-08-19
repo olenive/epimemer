@@ -969,6 +969,13 @@ async def memory_reflect(
       claim is true again rather than in conflict. Resolve with restore
       (node_ids=[the historical id], sourced_from=<the document>) — not with
       supersede_by, and not by leaving two nodes saying the same thing
+    - boundary_proposals: where a succession lets one claim's period close and
+      the next one's open — the successor's own start date moved onto the
+      predecessor, which no single document could supply. Each shows `current`
+      and `proposed` for the period it would change, and the claim and source
+      that license it. Accept the ones you agree with via
+      apply_reflection(boundaries=[...]); the basis becomes `inferred`, and
+      nothing is written until you ask
     - unsound_inferences: an inference whose premises no source puts in the same
       period — *"X was true 1997–2010"* and *"Y was true from 2024"*, combined
       into a conclusion. It reports the pairs and their dates, never a verdict:
@@ -1031,6 +1038,7 @@ async def memory_apply_reflection(
     archivals: list[str] | None = None,
     judgments: list[dict] | None = None,
     relation_merges: list[dict] | None = None,
+    boundaries: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
 ) -> str:
     """Apply your reflection decisions to the memory graph.
@@ -1077,6 +1085,18 @@ async def memory_apply_reflection(
         relation_merges: Consolidate synonymous user relationship labels from
             reflect's similar_relations. Each: {labels: [str], into: str}. Every
             user-tier edge with a listed label is relabelled to `into`, in place.
+        boundaries: Accept boundary proposals from reflect's
+            `boundary_proposals` — where one claim's period ends and the next
+            begins. Each: {node_id, source_id, endpoint: "start"|"end", at: ISO
+            datetime, timeline_id: str | None}, copied from the proposal you
+            agree with. **Read the proposal's `current` and `proposed` before
+            passing it**: the period's basis becomes `inferred`, so an interval
+            whose other end a document *stated* stops being reportable as
+            stated. Change nothing you cannot defend from the two documents
+            named — a date you know and neither document gives must not be
+            passed here. Requests that no longer name exactly one open period
+            come back under `boundaries_refused` with a reason rather than being
+            applied to something adjacent.
         merge_similarity_threshold: Minimum pairwise cosine similarity required
             to allow a merge (default 0.92, deliberately high).
     """
@@ -1094,6 +1114,7 @@ async def memory_apply_reflection(
             archivals=archivals,
             judgments=judgments,
             relation_merges=relation_merges,
+            boundaries=boundaries,
             merge_similarity_threshold=merge_similarity_threshold,
         ),
         ctx,
@@ -1101,7 +1122,8 @@ async def memory_apply_reflection(
         f"enrichments={len(enrichments or [])} merges={len(merges or [])} "
         f"supersessions={len(supersessions or [])} archivals={len(archivals or [])} "
         f"judgments={len(judgments or [])} "
-        f"relation_merges={len(relation_merges or [])}",
+        f"relation_merges={len(relation_merges or [])} "
+        f"boundaries={len(boundaries or [])}",
         lambda r, m: f"applied={m.nodes_returned}",
     )
 

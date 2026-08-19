@@ -1832,6 +1832,7 @@ REFLECT_PHASES = (
     "contradiction_detection",
     "recurrence_detection",
     "soundness_check",
+    "boundary_proposals",
     "pending_review",
     "archival_nomination",
     "relation_consolidation",
@@ -1857,6 +1858,7 @@ async def reflect(
     from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
     from epimemer.pipelines.reflection.archival import nominate_archival_candidates
     from epimemer.pipelines.reflection.relation_consolidation import find_similar_relation_pairs
+    from epimemer.pipelines.reflection.boundaries import propose_boundaries
     from epimemer.pipelines.reflection.soundness import find_unsound_inferences
     from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
     from epimemer.pipelines.reflection.topic_enrichment import gather_associated_material_for, _should_enrich
@@ -2010,6 +2012,17 @@ async def reflect(
             for flagged in await find_unsound_inferences(storage)
         ]
 
+    # 5d. Where a succession lets a period close (#53 T1 §9). The other half of
+    #     "ingest extracts, reflect proposes": a document cannot know its claim
+    #     will ever stop being true, so only something seeing the next document
+    #     can close the first interval. Proposes, never writes — the boundary is
+    #     `inferred`, and `apply_reflection(boundaries=[...])` is what applies it.
+    async def _boundaries():
+        return [
+            proposal.model_dump(mode="json")
+            for proposal in await propose_boundaries(storage)
+        ]
+
     # 6. Surface the pending-review worklist: active nodes already carrying review
     #    state (a candidate to supersede, stale evidence, or an unresolved
     #    contest), with the related ids to act on via apply_reflection /
@@ -2054,6 +2067,9 @@ async def reflect(
         )
         recurrences = await phase("recurrence_detection", _recurrences, tokens=len)
         unsound_inferences = await phase("soundness_check", _unsound, tokens=len)
+        boundary_proposals = await phase(
+            "boundary_proposals", _boundaries, tokens=len
+        )
         pending_review = await phase("pending_review", _pending_review, tokens=len)
         archival_candidates = await phase(
             "archival_nomination", _archival, tokens=len
@@ -2069,6 +2085,7 @@ async def reflect(
         "contradictions": contradictions,
         "recurrences": recurrences,
         "unsound_inferences": unsound_inferences,
+        "boundary_proposals": boundary_proposals,
         "pending_review": pending_review,
         "archival_candidates": archival_candidates,
         "similar_relations": similar_relations,
@@ -2077,7 +2094,8 @@ async def reflect(
         nodes_returned=(
             len(similar_pairs) + len(split_candidates)
             + len(enrichment_candidates) + len(contradictions)
-            + len(recurrences) + len(unsound_inferences) + len(pending_review)
+            + len(recurrences) + len(unsound_inferences)
+            + len(boundary_proposals) + len(pending_review)
             + len(archival_candidates) + len(similar_relations)
         ),
         # Reflect **scans** the whole active graph and the agent sees only the
@@ -2104,6 +2122,7 @@ async def apply_reflection(
     archivals: list[str] | None = None,
     judgments: list[dict] | None = None,
     relation_merges: list[dict] | None = None,
+    boundaries: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
 ) -> tuple[dict, ResponseMeta]:
     """Apply agent-provided reflection decisions to the graph.
@@ -2144,6 +2163,16 @@ async def apply_reflection(
         relationship labels (from reflect's similar_relations). Every user-tier
         edge with a listed label is relabelled to ``into``, in place (edges are
         not versioned).
+    boundaries: [{node_id, source_id, endpoint, at, timeline_id?}] — accept a
+        boundary reflect proposed (#53 T1 §9), filling in one open endpoint of
+        one source's period. The written interval's basis becomes ``inferred``:
+        the date came from another document read against this one, and leaving
+        it ``stated`` would have this source appear to assert something it never
+        said. Each is re-derived from the graph as it stands and **refused**
+        rather than guessed at when the request no longer names exactly one open
+        period — refusals come back in ``boundaries_refused`` with a reason,
+        since a boundary silently not applied is worse than one rejected out
+        loud.
     """
     from epimemer.pipelines.graph_construction.versioning import (
         merge_nodes,
@@ -2151,6 +2180,7 @@ async def apply_reflection(
         supersede_by_existing,
         supersede_node,
     )
+    from epimemer.pipelines.reflection.boundaries import apply_boundary
     from epimemer.pipelines.reflection.topic_consolidation import all_pairs_above_threshold
 
     parents_created = 0
@@ -2352,6 +2382,26 @@ async def apply_reflection(
         if applied:
             relations_consolidated += 1
 
+    # 9. Accept boundaries reflect proposed. Last because it is the only step
+    #    that edits an existing assertion rather than adding one, so anything
+    #    that moves a node's status above has already happened.
+    boundaries_applied = 0
+    boundaries_refused: list[dict] = []
+    for spec in (boundaries or []):
+        refusal = await apply_boundary(
+            storage,
+            node_id=spec["node_id"],
+            source_id=spec["source_id"],
+            endpoint=spec["endpoint"],
+            at=spec["at"] if isinstance(spec["at"], datetime)
+            else datetime.fromisoformat(spec["at"]),
+            timeline_id=spec.get("timeline_id"),
+        )
+        if refusal is None:
+            boundaries_applied += 1
+        else:
+            boundaries_refused.append(refusal.model_dump(mode="json"))
+
     result = {
         "parents_created": parents_created,
         "topics_split": topics_split,
@@ -2364,12 +2414,14 @@ async def apply_reflection(
         "judgments_applied": judgments_applied,
         "relations_consolidated": relations_consolidated,
         "edges_relabeled": edges_relabeled,
+        "boundaries_applied": boundaries_applied,
+        "boundaries_refused": boundaries_refused,
     }
     meta = ResponseMeta(
         nodes_returned=(
             parents_created + topics_split + topics_enriched
             + topics_merged + supersessions_applied + len(to_archive)
-            + judgments_applied + relations_consolidated
+            + judgments_applied + relations_consolidated + boundaries_applied
         ),
     )
     return result, meta

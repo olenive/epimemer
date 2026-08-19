@@ -218,7 +218,7 @@ def interval_inconsistency(interval: ValidityInterval) -> str | None:
             f"at a single moment is a witness point, not a zero-width interval."
         )
 
-    witness = _located(interval.witnessed_at)
+    witness = located(interval.witnessed_at)
     outside = witness is not None and (
         (start is not None and witness < start) or (end is not None and witness >= end)
     )
@@ -437,12 +437,35 @@ def _end_position(instant: ImpreciseInstant) -> datetime | None:
     return None
 
 
-def _located(instant: ImpreciseInstant | None) -> datetime | None:
-    """The moment an instant names, if it names one. A witness is a point, so
-    `unbounded` is meaningless here and reads as no information."""
+def located(instant: ImpreciseInstant | None) -> datetime | None:
+    """The moment an instant names, if it names one — otherwise `None`.
+
+    Public because it is the question §4's rule expects consumers to ask instead
+    of reading the kind: *did a source put a date here?* `unbounded` answers
+    `None` rather than a sentinel, which is right for both callers. A witness is
+    a point, so unboundedness is meaningless there; and an endpoint that is
+    unbounded is a source saying there is no boundary, not a date it gave.
+    """
     if instant is None or instant.instant_kind != "precise":
         return None
     return instant.at
+
+
+def is_open_boundary(instant: ImpreciseInstant) -> bool:
+    """Whether this endpoint is one nothing has been said about at all.
+
+    The question a caller means by "can I fill this in": there is a boundary,
+    nobody located it, and no source gave words for it. `named` is excluded
+    because a label is what a source said and resolving one into a date is an
+    explicit act with a justification (§4), never something a sweep does
+    quietly; `unbounded` is excluded because a source saying there is no
+    boundary is not a gap to close.
+
+    It lives here rather than at the call site for §4's reason: the kind is read
+    in this module and nowhere else, so a fifth kind — a distribution, if that
+    day comes — decides how it answers here and touches nothing downstream.
+    """
+    return instant.instant_kind == "unknown"
 
 
 def _strictly_earlier(earlier: datetime | None, later: datetime | None) -> bool:
@@ -497,7 +520,7 @@ def _definitely_holds_at(interval: ValidityInterval, moment: datetime) -> bool:
     further. The same interval says nothing about 2021 — the end is still
     unknown, and this is the reach of an inside bound rather than a new endpoint.
     """
-    witness = _located(interval.witnessed_at)
+    witness = located(interval.witnessed_at)
     at_or_after_start = _reaches_no_later_than(
         _start_position(interval.start), moment
     ) or (witness is not None and witness <= moment)
@@ -525,7 +548,7 @@ def _definitely_overlap(a: ValidityInterval, b: ValidityInterval) -> bool:
     ) and _strictly_earlier(_start_position(b.start), _end_position(a.end)):
         return True
 
-    witness_a, witness_b = _located(a.witnessed_at), _located(b.witnessed_at)
+    witness_a, witness_b = located(a.witnessed_at), located(b.witnessed_at)
     if witness_a is not None and witness_a == witness_b:
         return True
     if witness_a is not None and _definitely_contains(b, witness_a):

@@ -2,13 +2,18 @@
 
 Living issue tracker. **Last review: 2026-08-12.**
 
-Open: **16**, **46**, **48**, **51**, **52**, **53**, **58**, **59**. **54**,
-**55**, **56** and **57** were resolved and merged to `main` on 2026-08-18;
-their entries are deleted per the workflow below, and what they taught is kept
-here and in the docs they name. New findings continue from **60**.
+Open: **16**, **51**, **52**, **58**, **59**. **46**, **48** and **53** were
+built on 2026-08-19 and their entries are kept — #53's because it is the design
+of record for validity and half this file points at it. **54**, **55**, **56**
+and **57** were resolved and merged to `main` on 2026-08-18; their entries are
+deleted per the workflow below, and what they taught is kept here and in the docs
+they name. New findings continue from **60**.
 
-**#53 is the most important thing in this file.** *Facts have no validity
-interval, so the graph cannot say when a claim was true.* Saint Petersburg was
+**#53 was the most important thing in this file, and it is now built
+(2026-08-19).** The statement of the problem is kept below because it is the
+argument the design rests on, and because nothing about *why* it mattered stops
+being true once it is fixed. *Facts have no validity interval, so the graph
+cannot say when a claim was true.* Saint Petersburg was
 Petrograd was Leningrad was Saint Petersburg; every one of those was true, and
 the model can only record a pair like that as a contradiction or a supersession,
 both of which are wrong. The consequences are not cosmetic: supersession files
@@ -44,40 +49,36 @@ restated twice before it named the code it changes.
   renamed **`graph_as_of`**, reserving `valid_as_of`, since the unmarked name
   inherits the wrong default reading.
 
-**#53's design is complete and its whole six-step build order is built.** All
-six review findings are answered — 2, 4 and 6 by T1; 1 by T2; 3 across both; 5 by
-T3 — and all six construction steps landed on 2026-08-19: T2's
+**#53 is built.** All six review findings are answered — 2, 4 and 6 by T1; 1 by
+T2; 3 across both; 5 by T3 — and everything decided landed on 2026-08-19: T2's
 `temporally_followed_by` edge; the interval type and its comparison
 (`core/temporal.py`); per-source intervals stored on `sourced_from`, with
 `published_at` on the document; recurrence — a retired claim can be nominated,
 judged and reactivated; T3's retrieval surface, so validity is finally **read**
 (history by default with a claim's earlier versions folded into it, per-source
 periods on results, `valid_as_of` answering in groups, `as_of` → `graph_as_of`);
-and §11's soundness check, which flags an inference whose premises no source puts
-in the same period. T2 unblocked **#54** and closed **#48**, which was fixed
-alongside step 4 as both entries asked.
+§11's soundness check, which flags an inference whose premises no source puts in
+the same period; and §9's boundary proposals, where a succession the agent has
+judged lets reflect propose that one claim's period closes where the next one's
+begins. T2 unblocked **#54** and closed **#48**, which was fixed alongside step 4
+as both entries asked.
 
-**One decided piece was never in that order and is still unbuilt**: §9's
-*reflect proposes a boundary* — two documents, neither stating an end date,
-where only reflect sees both and can propose that the first interval closes
-before the second opens. T1 calls it "not optional garnish". It needs its own
-decisions before code, and they are named at the end of the entry's construction
-note.
+Two decided details moved on contact with the rest of the design, both recorded
+in the entry: T3 named **three** valid-time buckets and T1 §6's open-world rule
+leaves only **two**, since nothing can prove a claim was *not* true at a moment;
+and §9's own worked example — two documents, neither carrying a date — yields no
+proposal, because a publication date bounds when a claim was *asserted* and using
+it as a period's end would have the graph assert something false. What §9 buys is
+still real: a date from the second document lands on the first document's fact,
+which no single-document ingest could do.
 
-One decided detail did not survive contact with another: T3 named **three**
-valid-time buckets and T1 §6's open-world rule leaves only **two**, since nothing
-can prove a claim was *not* true at a moment. The excluded bucket is unreachable
-rather than empty. Recorded in the entry, where a closed-world marking would
-attach if one is ever wanted.
-
-The rest: **51** is next and now unblocked, **52** is deferred behind **53**
-(its safety precondition is what uncovered the problem), **48** is a defect
-that does not hurt yet, and **16** stays deferred by design. **46**, **54**,
-**55**, **56** and **57** are done — and #55, #56 and #54 were the same shape:
-a rule stated in one place and re-derived, differently, somewhere else.
-**Nothing open *fails* at a size anyone is running** — #53 is a correctness
-ceiling rather than a crash, which is precisely why it is easy to keep not
-noticing.
+The rest: **51** is next, **52** is unblocked now that **53** has landed (its
+safety precondition is what uncovered the problem in the first place), and **16**
+stays deferred by design. **46**, **48**, **53**, **54**, **55**, **56** and
+**57** are done — and #55, #56 and #54 were the same shape: a rule stated in one
+place and re-derived, differently, somewhere else. **Nothing open *fails* at a
+size anyone is running**, and #53 never did either — it was a correctness ceiling
+rather than a crash, which is precisely why it was easy to keep not noticing.
 
 **A design review (2026-08-12) of the open set added amendments** — blockquotes
 marked *Review 2026-08-12* inside #46, #51, #52 and #53 — and filed **#54**.
@@ -740,7 +741,14 @@ node's document.
 
 ---
 
-### Issue 52 — facts are never deduplicated across documents — ⏸ DEFERRED, blocked on #53
+### Issue 52 — facts are never deduplicated across documents — ▶ UNBLOCKED (#53 built 2026-08-19)
+
+> **The trigger has fired.** #53 landed on 2026-08-19, so the precondition this
+> was deferred for now exists: facts carry per-source validity, and
+> `compare_intervals` answers `before | after | overlap | unknown` rather than
+> forcing a two-valued guess. Nothing else about the entry changes — in
+> particular the re-open still has to carry the event/state distinction below,
+> which is the thing #53 makes *expressible* rather than the thing it decides.
 
 > **Deferred 2026-08-12, the day it was filed** — not for want of value but
 > because the precondition that makes it safe turned out to be missing from the
@@ -863,15 +871,15 @@ stay two facts even under the #53 interval model.
 
 ---
 
-### Issue 53 — facts have no validity interval, so the graph cannot say *when* a claim was true — ◆ HIGH PRIORITY, BUILD ORDER COMPLETE / ONE DECIDED PIECE LEFT
+### Issue 53 — facts have no validity interval, so the graph cannot say *when* a claim was true — ✅ BUILT (2026-08-19)
 
 Filed 2026-08-12. Surfaced while asking whether fact deduplication (#52) could
 be made safe by requiring temporal agreement. It cannot, because the temporal
 information it would require is not in the model — and following that back
 showed the gap is not dedup's, it is the graph's.
 
-> **Construction note (2026-08-19) — the six-step build order is complete.
-> One decided piece outside it, §9's reflect-proposed boundaries, is not.**
+> **Construction note (2026-08-19) — #53 is built. The six-step order, plus
+> §9's boundary proposals, which the order had omitted.**
 >
 > The build order is not written down anywhere above, so it is recorded here as
 > it is worked: (1) the lineage edge, done; (2) the interval type and its
@@ -879,8 +887,8 @@ showed the gap is not dedup's, it is the graph's.
 > `sourced_from` edge, per source, done; (4) recurrence, bundled with #48 since
 > both visit `get_node_by_content`, done; (5) T3's retrieval surface, done;
 > (6) §11's soundness check, done. **The order itself omitted §9's
-> reflect-proposed boundaries**, which is the one decided thing still unbuilt —
-> see the end of this note.
+> reflect-proposed boundaries**, built afterwards as (7) — see the end of this
+> note, which records the three decisions it needed.
 >
 > **(1) is a gap-closing job rather than a new one.** #54 shipped the *status*
 > split on 2026-08-12 — `superseded_status_for(because)` returning `CORRECTED`
@@ -1202,6 +1210,92 @@ showed the gap is not dedup's, it is the graph's.
 > decisions before code — which pairs qualify, what the proposal looks like, and
 > how `apply_reflection` accepts one — so it is named here rather than
 > improvised at the end of a construction note.
+>
+> **(7) §9's boundary proposals are built (2026-08-19), and the three decisions
+> it needed are recorded here.** `propose_boundaries` is a reflect phase;
+> `apply_reflection(boundaries=[...])` is the only thing that writes one.
+>
+> *Which pairs qualify: a `temporally_followed_by` edge, and nothing else.* That
+> edge is the agent's recorded verdict that the world moved from one claim to the
+> next, so the interval consequence is bookkeeping rather than a second judgment.
+> Without it, deciding that two similar facts are successive **is** the judgment
+> §3 reserves for the agent, and a sweep making it would be guessing the
+> succession as well as the date. `superseded_by` licenses nothing: a correction
+> says the claim was never true, and a claim that was never true has no period to
+> close. It composes cleanly with what was already there — reflect nominates the
+> pair, the agent judges it `succeeds`, and the *next* reflect proposes the
+> boundary that judgment implies.
+>
+> *Which date: one a document actually gives.* The successor's own located start
+> moved onto the predecessor, or the predecessor's own located end moved onto the
+> successor — §9's *"the first interval closes before the second opens"* read as
+> a **relation** rather than as a date. Half-open intervals make it exact: the
+> instant belongs to the period that starts on it, so there is no overlap and no
+> gap to argue about.
+>
+> **Publication dates are deliberately not used, and that means §9's own worked
+> example yields nothing.** Two undated documents, 1970 and 2000: a publication
+> date bounds when a claim was *asserted*, never when the previous one stopped
+> holding, so closing Leningrad's period at the 2000 gazetteer would have the
+> graph assert the city was called Leningrad in 1995. Over-claiming is the one
+> direction this design never takes. What "reflect seeing two documents" buys is
+> real all the same, and it is what §13.8 item 5 promised: the 1991 date comes
+> from the *second* document and lands on the *first* document's fact, which no
+> single-document ingest could ever do. The worked example is the case where
+> nobody wrote a date down anywhere, and no amount of reading can recover one.
+>
+> *What the proposal looks like:* the interval as it stands and as it would
+> become, side by side, plus the claim and source that license it. Both are shown
+> because the change is easy to miss — **the revised interval's basis is
+> `inferred`**, so an interval whose start a document *stated* stops being
+> reportable as stated once the other end is worked out.
+>
+> **That is a real cost and it is `basis` being per interval (§8) rather than per
+> endpoint.** The alternatives are worse: leaving it `stated` has a source appear
+> to assert a date no document gave, which is the one thing §8 exists to prevent;
+> putting the closure on a second edge leaves the *open* interval in place, and
+> the existential union then keeps the claim open anyway, so nothing is closed
+> and §9's purpose is missed. Losing "the start was stated" under-claims, which
+> is this design's safe direction throughout. **If per-endpoint basis is ever
+> wanted, this paragraph is the reason**; it was not taken here because it
+> changes a decided type, every stored interval and both backends, for a
+> refinement to something that is already honest.
+>
+> *How it is accepted:* `apply_reflection(boundaries=[{node_id, source_id,
+> endpoint, at, timeline_id?}])`, re-derived from the graph as it stands rather
+> than trusting an echo of a proposal that may be stale. It **requires exactly
+> one candidate** — that source's period, on that clock, still open at that
+> endpoint — and refuses otherwise: several means ambiguous, none means already
+> answered. Refusals come back in `boundaries_refused` with a reason rather than
+> being skipped silently, because the thing being overwritten is what a source is
+> recorded as asserting. Construction is the consistency check, so a boundary the
+> evidence contradicts — a predecessor still being witnessed after the successor
+> began — is never proposed and never written.
+>
+> *Refusals worth naming*: a `named` endpoint is never proposed over, because
+> resolving a source's words into a date is an explicit act (§4) and not
+> something a sweep does quietly; an `unbounded` one is never proposed over,
+> because a source saying there is no boundary is not a gap to close; and periods
+> on different clocks never meet, exactly as `compare_intervals` refuses to place
+> them.
+>
+> **§4's structural test earned its place here.** The first draft read
+> `instant_kind` inside the boundary module — twice, for *is this located* and
+> *is this open* — and the test failed on the third file exactly as designed.
+> Both questions moved into `core/temporal.py` as `located` and
+> `is_open_boundary`, which is where a fifth endpoint kind will decide how they
+> answer. That is the rule working rather than the rule being annoying.
+>
+> **What accepting a boundary is *for*, stated because it is not obvious:** while
+> a period is open, nothing can be concluded about it and its successor together,
+> so §11's soundness check is blocked on exactly the pairs it most wants to see.
+> Closing it is what lets `assertions_are_disjoint` fire. The two halves of §9
+> and §11 are one loop: the agent judges a succession, reflect proposes the
+> boundary it implies, and the check can then see an inference that spans it.
+>
+> Cost: ~10% of a `reflect` call, linear, the same shape as the soundness phase —
+> measured in `BENCHMARKS.md`, along with the repeated active-node scan that
+> `reflect` now does several times over and that a pass-scoped cache would remove.
 
 #### The shape of it — the "Saint Petersburg Problem"
 
@@ -2364,9 +2458,9 @@ What to pick up, and what has to be true first:
 | ✅ | ~~54 (historical provenance and validity)~~ | **Done 2026-08-12.** `migration_disposition(edge_type, status)` is the policy; a world-change keeps provenance and judgments on the historical node and copies only the frame and tags |
 | ✅ | ~~57 (supersession events named no counterpart)~~ | **Done 2026-08-17** — counterpart ids on the live events and on `query_changes`, carried by the append-only lifecycle episodes (`EVENT_LOG.md` §6), which is what made the log panel readable |
 | ✅ | ~~46 (`confidence` becomes a supplied prior)~~ | **Done 2026-08-19.** Decided 2026-08-12, both review amendments signed off the day it was built: `float \| None` with unrated stored as absent, an optional `confidence_basis` asked for by guidance, and a consumer sweep saying what each reader does about absence. The deliverable was the tool guidance, as the entry predicted |
-| 1 | **53 (validity intervals)** | **Design complete (T1/T2/T3); the whole six-step build order is built.** Everything else on this list is a defect inside a sound model; this one says the model cannot express something true. Done (all 2026-08-19): the status split; T2's lineage edge, which closed a week in which a world-change wrote an edge contradicting its own node's status; the interval type with its four-value comparison; per-source intervals stored on `sourced_from`, supplied at ingest; recurrence — a retired claim can be nominated, judged and reactivated, which also closed #48; and T3's retrieval surface, which is where validity is finally read — history returned by default with a claim's earlier versions folded into it, per-source periods on results, `valid_as_of` answering in groups, and the `as_of` → `graph_as_of` rename, this design's one migration cost, now paid; and §11's soundness check, which flags an inference whose premises no source puts in the same period. **What is left is one decided piece the order omitted** — §9's reflect-proposed boundaries — plus one detail that moved: T3's third valid-time bucket is unreachable under T1 §6's open-world rule, and the soundness check inherits the same reading |
+| ✅ | ~~**53 (validity intervals)**~~ | **Built 2026-08-19.** Everything else on this list is a defect inside a sound model; this one says the model cannot express something true. Done (all 2026-08-19): the status split; T2's lineage edge, which closed a week in which a world-change wrote an edge contradicting its own node's status; the interval type with its four-value comparison; per-source intervals stored on `sourced_from`, supplied at ingest; recurrence — a retired claim can be nominated, judged and reactivated, which also closed #48; and T3's retrieval surface, which is where validity is finally read — history returned by default with a claim's earlier versions folded into it, per-source periods on results, `valid_as_of` answering in groups, and the `as_of` → `graph_as_of` rename, this design's one migration cost, now paid; §11's soundness check, which flags an inference whose premises no source puts in the same period; and §9's boundary proposals, which close a period where the succession the agent judged says the next one opens. **Two decided details moved on contact with the rest of the design**, both recorded in the entry: T3's third valid-time bucket is unreachable under T1 §6's open-world rule, and §9's own worked example yields no proposal because publication dates cannot end a period. **51 is now the top open item** |
 | 2 | 51 (corroboration derived at read time) | **Unblocked** — 46 is what makes this a separate signal rather than a rewrite of one, and 46 is done. Apply the review's neighbourhood exclusions (contradictors, variants). Measure the extra hop before putting it on the default `search` path. Ships with a known 53-shaped inaccuracy, stated in the entry. It also inherits 46's one accepted gap: per-source levels on the provenance edge, and with them any path for source discredit |
 | ✅ | ~~48 (`get_node_by_content` scans per ingest)~~ | **Done 2026-08-19**, in the same visit as #53 step 4 as this row predicted. The measurement decided it: an index on `content` changes nothing until the query names it, and then the lookup goes 4.0 ms → 0.53 ms at 3,000 nodes for under 5% on writes. Guarded by a plan assertion, since behaviour cannot see the defect |
 | 4 | 59 (embedding truncation) | **Ready to measure, not to fix.** Take the token-length distribution over a real graph first; the entry lists four options and says which measurement decides between them. Lexical search relieves the identifier case and none of the rest |
-| deferred | 52 (fact deduplication) | Re-open after 53 — and the re-open must carry the review's event/state distinction: interval union dedupes states, never events. Not before |
+| 3 | 52 (fact deduplication) | **Unblocked** — 53 landed 2026-08-19, which was the whole condition. The re-open must carry the review's event/state distinction: interval union dedupes states, never events |
 | deferred | 16 | The server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`) |

@@ -6,6 +6,8 @@ supersession or resolution must apply atomically.
 
 from collections.abc import Awaitable, Callable, Sequence
 
+from pydantic import BaseModel
+
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
     EdgeType,
@@ -16,6 +18,18 @@ from epimemer.core.types import (
     SUPERSEDED_STATUSES,
 )
 from epimemer.storage.protocol import StorageBackend
+
+
+class NodeRef(BaseModel):
+    """A node named in a reflect nominee, with enough of it to judge on sight.
+
+    `id` rather than `node_id`, matching every other nominee shape here — the
+    key is what `_ids_within` reads to declare what a response carried, and a
+    nominee whose ids are spelled differently goes silently undeclared.
+    """
+
+    id: str
+    content: str
 
 
 def _unique(ids: list[str]) -> list[str]:

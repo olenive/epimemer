@@ -908,7 +908,21 @@ off a new edge type. Six things decide the shape:
    indistinguishable from documented validity once stored, and the server makes
    no LLM calls. Accepted consequence: the Leningrad case cannot get its 1991
    boundary from world knowledge — only from a document, or from reflect seeing
-   two documents. Since the line between reading and inventing is not clean
+   two documents.
+
+   > *Built 2026-08-19, and "from reflect seeing two documents" turned out to
+   > mean something narrower than it reads.* `propose_boundaries` moves a date
+   > **one document gave** onto a fact from **another**, licensed by the
+   > `temporally_followed_by` edge the agent already wrote — so the 1991 date
+   > reaches the Leningrad fact from the Saint Petersburg document, which no
+   > single-document ingest could do. What it will not do is manufacture a date
+   > from the two *publication* dates: a publication date bounds when a claim was
+   > asserted, never when the previous one stopped holding, and closing
+   > Leningrad's period at a 2000 gazetteer would have the graph assert the city
+   > was called Leningrad in 1995. Two undated documents therefore still yield
+   > nothing, which is the honest reading of "cannot get its boundary from world
+   > knowledge".
+ Since the line between reading and inventing is not clean
    (judging tense is already reading), every interval is marked **stated** or
    **inferred**, and a caller can filter to stated-only. Without the marking,
    "stick to the source" is a prompt instruction with nothing checking it.
@@ -1076,9 +1090,9 @@ built.**
 > *True on the day it was written.* **T3 is built (2026-08-19)**, and with it
 > everything below this line: reachability, lineage collapse, the buckets, the
 > rename, and the `(source, interval)` read the earlier steps deferred to it.
-> Validity can now be written *and* read. §11's soundness check followed the
-> same day (see §13.8), which completes #53's six-step build order — leaving one
-> decided piece the order never listed: §9's *reflect proposes a boundary*.
+> Validity can now be written *and* read. §11's soundness check and §9's
+> boundary proposals followed the same day (see §13.8), which completes **all**
+> of #53 — the six-step order and the one decided piece it had omitted.
 >
 > **One decided detail did not survive its own document.** T3 names three
 > buckets, the third being *provably not valid at t*. §13.8's open-world rule

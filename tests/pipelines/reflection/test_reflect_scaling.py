@@ -451,6 +451,7 @@ class TestAnswersAreUnchanged:
             "contradictions",
             "recurrences",
             "unsound_inferences",
+            "boundary_proposals",
             "pending_review",
             "archival_candidates",
             "similar_relations",
@@ -658,3 +659,150 @@ class TestReflectFlagsAnInferenceItsPremisesCannotSupport:
         result, _ = await reflect(storage, embedding_provider)
 
         assert result["unsound_inferences"] == []
+
+
+class TestReflectProposesWhereOnePeriodEndsAndTheNextBegins:
+    """§9's other half reaching the tool an agent actually calls.
+
+    The rule itself is exercised in `test_boundaries.py`. What this pins is that
+    reflect surfaces the proposal, that `apply_reflection` is the only thing
+    that writes it, and that a quiet graph stays quiet.
+    """
+
+    async def _renaming(self, storage):
+        older = RawDocument(content="A 1970 gazetteer", source="doc-1970")
+        newer = RawDocument(content="A 2000 gazetteer", source="doc-2000")
+        for document in (older, newer):
+            await storage.store_document(document)
+
+        def period(start: int, end: int | None = None) -> ValidityInterval:
+            def at(year: int) -> dict:
+                return {
+                    "instant_kind": "precise",
+                    "at": datetime(year, 1, 1, tzinfo=timezone.utc).isoformat(),
+                }
+
+            return ValidityInterval(
+                start=at(start),
+                end=at(end) if end else {"instant_kind": "unknown"},
+                basis=IntervalBasis.STATED,
+            )
+
+        leningrad = Fact(
+            content="the city is called Leningrad", source_id="s1",
+            value=ValueSignal(),
+        )
+        petersburg = Fact(
+            content="the city is called Saint Petersburg", source_id="s1",
+            value=ValueSignal(),
+        )
+        for node, document, span in (
+            (leningrad, older, period(1924)),
+            (petersburg, newer, period(1991)),
+        ):
+            await storage.store_node(node)
+            await storage.store_edge(NodeEdge(
+                src_id=node.id, dst_id=document.id,
+                type=EdgeType.SOURCED_FROM, validity=[span],
+            ))
+        await storage.set_node_status_tx(
+            [leningrad], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
+        )
+        await storage.store_edge(NodeEdge(
+            src_id=leningrad.id, dst_id=petersburg.id,
+            type=EdgeType.TEMPORALLY_FOLLOWED_BY,
+        ))
+        return leningrad, older
+
+    async def test_it_is_reported_under_its_own_key(
+        self, storage, embedding_provider
+    ):
+        leningrad, older = await self._renaming(storage)
+
+        result, meta = await reflect(storage, embedding_provider)
+
+        [proposal] = result["boundary_proposals"]
+        assert proposal["node"]["id"] == leningrad.id
+        assert proposal["endpoint"] == "end"
+        assert proposal["at"].startswith("1991")
+        assert leningrad.id in {node.node_id for node in meta.retrieved}
+
+    async def test_reflect_alone_changes_nothing(
+        self, storage, embedding_provider
+    ):
+        leningrad, older = await self._renaming(storage)
+
+        await reflect(storage, embedding_provider)
+
+        [edge] = [
+            edge
+            for edge in await storage.get_edges_from(
+                leningrad.id, edge_type=EdgeType.SOURCED_FROM
+            )
+            if edge.dst_id == older.id
+        ]
+        assert edge.validity[0].end.instant_kind == "unknown"
+
+    async def test_apply_reflection_writes_the_one_you_accept(
+        self, storage, embedding_provider
+    ):
+        from epimemer.mcp.tools import apply_reflection
+
+        leningrad, older = await self._renaming(storage)
+        result, _ = await reflect(storage, embedding_provider)
+        [proposal] = result["boundary_proposals"]
+
+        applied, _ = await apply_reflection(
+            storage, embedding_provider,
+            boundaries=[{
+                "node_id": proposal["node"]["id"],
+                "source_id": proposal["source_id"],
+                "endpoint": proposal["endpoint"],
+                "at": proposal["at"],
+                "timeline_id": proposal["timeline_id"],
+            }],
+        )
+
+        assert applied["boundaries_applied"] == 1
+        assert applied["boundaries_refused"] == []
+        [edge] = [
+            edge
+            for edge in await storage.get_edges_from(
+                leningrad.id, edge_type=EdgeType.SOURCED_FROM
+            )
+            if edge.dst_id == older.id
+        ]
+        assert edge.validity[0].end.at.year == 1991
+        assert edge.validity[0].basis is IntervalBasis.INFERRED
+
+    async def test_a_refusal_comes_back_out_loud(
+        self, storage, embedding_provider
+    ):
+        """A boundary silently not applied is worse than one rejected loudly."""
+        from epimemer.mcp.tools import apply_reflection
+
+        leningrad, older = await self._renaming(storage)
+
+        applied, _ = await apply_reflection(
+            storage, embedding_provider,
+            boundaries=[{
+                "node_id": leningrad.id,
+                "source_id": older.id,
+                "endpoint": "end",
+                "at": "1900-01-01T00:00:00+00:00",
+            }],
+        )
+
+        assert applied["boundaries_applied"] == 0
+        [refusal] = applied["boundaries_refused"]
+        assert refusal["node_id"] == leningrad.id
+        assert "must start before it ends" in refusal["reason"]
+
+    async def test_an_undated_graph_proposes_nothing(
+        self, storage, embedding_provider
+    ):
+        await _facts_that_look_alike(storage, embedding_provider, 3)
+
+        result, _ = await reflect(storage, embedding_provider)
+
+        assert result["boundary_proposals"] == []

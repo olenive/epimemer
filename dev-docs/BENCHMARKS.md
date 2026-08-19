@@ -185,29 +185,39 @@ is also what flattened its exponent from 1.56 to ~1.
   both of which are larger changes than anything in #14 or #47, and neither is
   worth making while the crossing sits at ~26,000 nodes.
 
-### What the soundness phase adds to `reflect` (#53 T1 §11, 2026-08-19)
+### What the two validity phases add to `reflect` (#53 T1 §9 and §11, 2026-08-19)
 
-The one phase added to `reflect` since it became the limiting operation, so its
-cost is worth stating rather than assuming. In-memory, mock embeddings, median
-of three, measured against the same graph with the phase stubbed out — a
-difference of one phase rather than of two whole benchmarks:
+The only phases added to `reflect` since it became the limiting operation, so
+their cost is worth stating rather than assuming. In-memory, mock embeddings,
+median of three, each measured against the same graph with that one phase
+stubbed out — a difference of one phase rather than of two whole benchmarks:
 
-| nodes | `reflect` with | without | the phase alone |
-|---|---|---|---|
-| 1,000 | 95.7 ms | 83.1 ms | **10.1 ms** |
-| 3,000 | 295.4 ms | 266.7 ms | **27.7 ms** |
+| nodes | soundness check | boundary proposals |
+|---|---|---|
+| 1,000 | **10.1 ms** (of 95.7) | **9.7 ms** (of 101.4) |
+| 3,000 | **27.7 ms** (of 295.4) | **25.6 ms** (of 324.2) |
 
-Linear, and ~10% of a call at both sizes. All of it is the three batched reads
-it cannot avoid — the inferences, their premise edges both ways, and those
-premises' validity — since the graph measured carries **no intervals at all**
-and so produces no flags. That is the shape to expect: this feature is sparse by
-design, and the common case is the phase paying its floor and reporting nothing.
+Both linear, and ~10% of a call each at both sizes. Nearly all of it is batched
+reads neither can avoid, since the graph measured carries **no intervals at
+all** — so the soundness check finds no dated premises and the boundary phase
+finds no dated successions. That is the shape to expect: this feature is sparse
+by design, and the common case is a phase paying its floor and reporting
+nothing.
 
-**Ordering the reads is worth a third of it.** Fetching every premise fact and
-then discarding the undated ones cost 41.0 ms at 3,000 nodes; reading validity
-first and fetching only the premises that can still form a pair costs 27.7 ms.
-On an undated graph no nodes are fetched at all. The general form is the one
-this file keeps finding: narrow before you fetch, not after.
+**Ordering the reads is worth a third of the soundness check.** Fetching every
+premise fact and then discarding the undated ones cost 41.0 ms at 3,000 nodes;
+reading validity first and fetching only the premises that can still form a pair
+costs 27.7 ms. On an undated graph no nodes are fetched at all. The general form
+is the one this file keeps finding: narrow before you fetch, not after.
+
+**A duplication worth naming, not yet worth fixing.** `reflect` now scans the
+active node set several times over — `gather_pending_review` asks for it, the
+boundary phase asks for it plus the historical set, and the soundness check asks
+for the inferences. Each is one batched query rather than the per-node shape #14
+removed, so none of them is the old defect; but a pass-scoped node cache, of the
+kind `_active_topics` already is for topics, would remove three full scans.
+Measure before building it: on the numbers above the whole opportunity is under
+20% of a call.
 
 ### What retrieval reinforcement costs
 
