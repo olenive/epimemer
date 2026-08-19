@@ -253,7 +253,9 @@ const describeNode = (node: NodeView): string =>
     "",
     `created   ${node.created_at}`,
     `retrieved  ${node.retrieved_at ?? "never"}`,
-    `confidence ${node.confidence.toFixed(2)}`,
+    // A dash, not the 0.5 default: nobody rated this node, and printing the
+    // number would claim an assessment that was never made.
+    `confidence ${node.confidence?.toFixed(2) ?? "—"}`,
   ].join("\n");
 
 /**

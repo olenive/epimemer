@@ -47,7 +47,11 @@ class NodeView(BaseModel):
     status: str
     source_id: str | None = None  # tag/entity topics have no segment origin
     extraction_method: str
-    confidence: float
+    # Null when nobody rated the node (#46). Substituting the 0.5 default here
+    # would put a number on a tooltip that no agent ever supplied — a false
+    # statement about the graph, and the cheaper honest answer is for the panel
+    # to render a dash.
+    confidence: float | None
     retrieved_at: datetime | None      # None until a search has returned it
     created_at: datetime
     graph: str
@@ -216,11 +220,10 @@ class NodeStatusChanged(Event):
     """A node's status was updated (e.g., active → corrected).
 
     `counterpart` is the node that replaced, followed or absorbed this one. It
-    is carried here rather than left to the `SUPERSEDED_BY` edge that arrives as
-    its own `EdgeStored` a moment later, because joining those two by their
-    adjacency in the stream breaks as soon as anything interleaves — and "123
-    superseded by 124" is the one thing a reader of this event wants to know
-    (#57). `None` where nothing superseded the node: archival retires a node for
+    is carried here rather than left to the lineage edge that arrives as its own
+    `EdgeStored` a moment later, because joining those two by their adjacency in
+    the stream breaks as soon as anything interleaves — and "123 superseded by
+    124" is the one thing a reader of this event wants to know (#57). `None` where nothing superseded the node: archival retires a node for
     triviality, and there is no counterpart to name.
     """
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH

@@ -15,6 +15,7 @@ from typing import Literal, Sequence, TypeVar
 
 from pydantic import BaseModel
 
+from epimemer.core.temporal import merged_validity
 from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
@@ -492,7 +493,7 @@ class InMemoryStorage:
         duplicate (src, dst, type) edges, keeping one per group. The new node is
         assumed to start with no edges, so dedup only tracks edges handled here.
         """
-        seen_signatures: set[tuple[str, str, str]] = set()
+        survivors: dict[tuple[str, str, str], NodeEdge] = {}
         for edge in list(self._g.edges.values()):
             disposition = migration_disposition(edge.type, status)
             if disposition == "keep":
@@ -504,28 +505,35 @@ class InMemoryStorage:
             if new_src == edge.src_id and new_dst == edge.dst_id:
                 continue
             signature = (new_src, new_dst, edge.type.value)
-            if new_src == new_dst or signature in seen_signatures:
+            survivor = survivors.get(signature)
+            if new_src == new_dst or survivor is not None:
                 # A copy that would collide simply is not made; a move has to
                 # drop the edge, since leaving it would strand it on a retired
-                # endpoint it no longer describes.
+                # endpoint it no longer describes. What the dropped edge
+                # *asserted* is kept: collapsing two provenance edges to one
+                # document must not lose either one's periods (#53 T1 §2).
+                if survivor is not None:
+                    survivor.validity = merged_validity(survivor.validity, edge.validity)
                 if disposition == "move":
                     _drop_edge(self._g, edge.id)
                 continue
-            seen_signatures.add(signature)
             if disposition == "copy":
                 # Rebuilt rather than `model_copy`d so `id` and `created_at`
                 # come from their factories: this is a new edge made now, and
                 # inheriting the original's identity would overwrite it.
-                _put_edge(self._g, _store(NodeEdge(
+                copied = _store(NodeEdge(
                     **(edge.model_dump(exclude={"id", "created_at"})
                        | {"src_id": new_src, "dst_id": new_dst}),
-                )))
+                ))
+                _put_edge(self._g, copied)
+                survivors[signature] = copied
                 continue
             # Un-index against the old endpoints while they are still readable.
             _unindex_edge(self._g, edge)
             edge.src_id = new_src
             edge.dst_id = new_dst
             _index_edge(self._g, edge)
+            survivors[signature] = edge
 
     async def supersede_node_tx(
         self,
@@ -601,6 +609,7 @@ class InMemoryStorage:
         *,
         status: NodeStatus,
         at: datetime,
+        edges: Sequence[NodeEdge] = (),
     ) -> None:
         returning = status is NodeStatus.ACTIVE
         snapshot = copy.deepcopy(self._g)
@@ -615,6 +624,8 @@ class InMemoryStorage:
                     with_return(stored.lifecycle, at=at) if returning
                     else with_retirement(stored.lifecycle, at=at, because=status)
                 )
+            for edge in edges:
+                _put_edge(self._g, _store(edge))
         except Exception:
             self._graphs[self._database] = snapshot
             raise
@@ -723,16 +734,18 @@ class InMemoryStorage:
         *,
         k: int = 10,
         node_type: NodeType | None = None,
+        statuses: frozenset[NodeStatus] = frozenset({NodeStatus.ACTIVE}),
     ) -> Sequence[tuple[str, float]]:
         candidates: list[tuple[str, float]] = []
         for emb in self._g.embeddings.values():
             if emb.model_id != model_id:
                 continue
             node = self._g.nodes.get(emb.item_id)
-            # Only active epistemic nodes are retrievable. Superseded/merged
-            # nodes must never resurface via vector search, mirroring the
-            # status guard in query_nodes.
-            if node is None or node.status != NodeStatus.ACTIVE:
+            # Which nodes are retrievable is the caller's to say, and the
+            # default keeps the old guard: retired nodes do not resurface
+            # unless somebody asked for them by name. `{ACTIVE, HISTORICAL}` is
+            # what makes a recurrence visible (#53 T2).
+            if node is None or node.status not in statuses:
                 continue
             if node_type is not None:
                 expected_class = _NODE_TYPE_TO_CLASS[node_type]

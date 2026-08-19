@@ -420,11 +420,20 @@ class StorageBackend(Protocol):
         *,
         status: NodeStatus,
         at: datetime,
+        edges: Sequence[NodeEdge] = (),
     ) -> None:
         """Atomically move every node in ``nodes`` to ``status``, as of ``at``.
 
-        No node, edge or embedding is created or destroyed. ``status`` says
-        which direction this is and ``at`` is the instant it happened:
+        No node or embedding is created or destroyed, and ``edges`` is the one
+        exception on the edge side: edges given here are written in the same
+        transaction as the flip. Reactivating a claim needs it. A node put back
+        to ACTIVE with no edge recording *why* is an assertion the graph makes
+        and cannot attribute, and two transactions can leave exactly that state
+        behind (#53 T2). Omitted — which is every other caller — this creates
+        nothing, and archival's guarantee is unchanged.
+
+        ``status`` says which direction this is and ``at`` is the instant it
+        happened:
 
         - **A retirement** (any status but ACTIVE) sets ``superseded_at`` to
           ``at`` and appends a lifecycle episode with no counterpart, since
@@ -537,11 +546,31 @@ class StorageBackend(Protocol):
         *,
         k: int = 10,
         node_type: NodeType | None = None,
+        statuses: frozenset[NodeStatus] = frozenset({NodeStatus.ACTIVE}),
     ) -> Sequence[tuple[str, float]]:
         """Find the k nearest items by vector similarity.
 
         Returns a sequence of (item_id, similarity_score) pairs,
         ordered by descending similarity.
+
+        `statuses` says which nodes may be nominated, and the default preserves
+        the guard this method used to enforce by construction: only ACTIVE nodes
+        come back, so nothing resurfaces a claim the graph has retired.
+
+        It is a *set* because recurrence needs two at once (#53 T2). A claim
+        retired as HISTORICAL becoming true again can only be judged if the
+        historical twin is nominated beside the active candidates — otherwise
+        nobody is ever asked, and ingest quietly writes a second node saying
+        what the first one said. Passing `{ACTIVE, HISTORICAL}` is what makes
+        the `recurs` verdict reachable at all.
+
+        **CORRECTED is never a sensible member.** A node retired for being
+        wrong has no route back, so nominating it invites a verdict that cannot
+        be recorded. Nothing here refuses it — a caller auditing corrections has
+        a real use — but no retrieval path should ask for it.
+
+        `k` counts results the caller can use, not rows examined, so a backend
+        must not truncate before filtering.
         """
         ...
 
@@ -611,6 +640,13 @@ class StorageBackend(Protocol):
         it a CORRECTED node — a claim concluded *wrong* — comes back as a
         lexical seed, ranked high precisely when it holds a rare identifier
         (§10, R7). Ignored for `corpus="segments"`; segments have no status.
+
+        **Singular where `vector_search` is now plural**, and deliberately left
+        that way for the moment: recurrence needs two statuses at once and asks
+        only the vector route, so no caller can make the two disagree today.
+        This must widen to `statuses` when retrieval starts returning historical
+        nodes by default (#53 T3), or the lexical half of a hybrid search will
+        be the one that cannot see them.
 
         Filtering by status does **not** change the corpus IDF is computed over.
         The index counts every row in the table whatever its status, so scores

@@ -96,6 +96,28 @@ a claim that the pair comparison went away.
 **Ingest — not a problem.** Flat across every size measured on both backends. The
 write path has never been the ceiling.
 
+**The exact-content lookup, though, was linear in table size (#48, fixed
+2026-08-19).** `get_node_by_content` runs on the write path, and left to itself
+SurrealDB resolved it through `idx_{table}_status` — an index matching every
+active row — with `content` applied afterwards as a predicate. Measured per call
+on a real server:
+
+| topics | planner's own choice | with a `content` index defined | with the index named |
+|---|---|---|---|
+| 400 | 1.05 ms | 1.08 ms | — |
+| 1,200 | 2.63 ms | 2.04 ms | — |
+| 3,000 | 4.02 ms | 4.30 ms | **0.53 ms** |
+
+**Defining the index does nothing; naming it is the whole fix.** A composite
+`(content, status)` index plans the same way. `WITH INDEX idx_{table}_content`
+moves `content` into the access path and leaves `status` as the post-filter.
+
+The write cost that made this worth measuring rather than patching is not
+there: three seeds of 3,000 nodes each way came out at 1,944 ms median
+unindexed against 2,033 ms indexed — **+4.6%**, inside a run-to-run spread of
+1,728–2,721 ms. Cheap enough that ingest now affords one such lookup per fact,
+which is what the verbatim-recurrence check needs (#53 T2).
+
 **`search` — the cheapest of the three, on both backends.** In-memory it is
 linear and always was. On SurrealDB it is close to flat: ranking happens before
 the status filter, because SurrealDB re-runs such a subquery per embedding row

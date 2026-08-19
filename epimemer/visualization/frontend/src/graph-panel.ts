@@ -57,6 +57,12 @@ const EDGE_MEANINGS: Record<string, keyof SemanticPalette> = {
   contradiction: "contradiction",
   derived_from: "inference",
   superseded_by: "lineage",
+  // Lineage too, and deliberately the same hue: which of the two events
+  // happened is carried by the *node's* status colour, so tinting the edge
+  // would say it twice and leave the two readings free to disagree. Missing
+  // here it would fall through to `UNKNOWN_KIND` grey — the #55 failure, where
+  // a status the backend had grown drew as a kind the frontend never heard of.
+  temporally_followed_by: "lineage",
   merged_into: "lineage",
 };
 

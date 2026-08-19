@@ -293,6 +293,57 @@ async def test_merge_carries_the_higher_importance(embedding_provider):
     assert merged.value.importance == pytest.approx(0.9)
 
 
+class TestMergeConfidencePairing:
+    """Why `max` confidence is right here, which nobody had written down (#46).
+
+    For a caller-supplied prior `max` looks wrong on its own — the more
+    credulous assessment wins and the disagreement vanishes. It survives
+    because of what it pairs with: the higher-confidence description becomes
+    the *primary* content, so the merged node's confidence describes the
+    content it actually leads with. Break either half and the pair lies.
+    """
+
+    async def _pair(self, storage, confidence_i, confidence_j):
+        for node_id, content, confidence in (
+            ("topic-i", "gradient descent converges", confidence_i),
+            ("topic-j", "gradient descent diverges", confidence_j),
+        ):
+            await storage.store_node(Topic(
+                id=node_id, content=content, source_id="seg-1",
+                value=ValueSignal(confidence=confidence),
+            ))
+        return await storage.get_node("topic-i"), await storage.get_node("topic-j")
+
+    async def test_the_winning_confidence_belongs_to_the_primary_content(
+        self, embedding_provider
+    ):
+        storage = InMemoryStorage()
+        weak, strong = await self._pair(storage, 0.3, 0.9)
+
+        merged = await merge_similar_topics(weak, strong, storage, embedding_provider)
+
+        assert merged.value.confidence == pytest.approx(0.9)
+        assert merged.content.startswith(strong.content)
+
+    async def test_an_unrated_pair_still_resolves_to_the_first_argument(
+        self, embedding_provider
+    ):
+        """The honest remainder of #46's fix, not a regression.
+
+        Two nodes nobody rated tie at the default and the `>=` takes the first
+        — which is what the comparison did for *every* pair before priors
+        existed. What changed is that it is now the unrated case rather than
+        the only case.
+        """
+        storage = InMemoryStorage()
+        first, second = await self._pair(storage, None, None)
+
+        merged = await merge_similar_topics(first, second, storage, embedding_provider)
+
+        assert merged.value.confidence is None
+        assert merged.content.startswith(first.content)
+
+
 class TestMergeCarriesTheValueClocks:
     """A merge must carry *when* each signal was set, not only its value (#45).
 

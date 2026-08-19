@@ -13,6 +13,7 @@ What matters here is that frame resolution is proportional to *nodes*, not to
 """
 
 import contextlib
+from datetime import datetime, timezone
 
 import pytest
 
@@ -22,6 +23,7 @@ from epimemer.core.types import (
     Fact,
     Metacontext,
     NodeEdge,
+    NodeStatus,
     Topic,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
@@ -443,6 +445,7 @@ class TestAnswersAreUnchanged:
             "split_candidates",
             "enrichment_candidates",
             "contradictions",
+            "recurrences",
             "pending_review",
             "archival_candidates",
             "similar_relations",
@@ -484,3 +487,90 @@ class TestReflectWritesNothing:
         assert written == [], (
             f"reflect wrote {len(written)} nodes; it must only propose"
         )
+
+
+class TestReflectCatchesRecurrenceItsOwnWay:
+    """The safety net under the ingest-time detector (#53 T2).
+
+    `check_conflicts` is opt-in, so a graph whose agent never ran it can hold a
+    live claim beside the retired one it repeats and nobody would ever be asked.
+    Reflect nominates historical facts too — and reports them **apart from the
+    contradictions**, because a claim beside its own successor is not a
+    contradiction and filing it under that word is the misreading `recurs`
+    exists to prevent.
+    """
+
+    async def _retire(self, storage, node, status: NodeStatus) -> None:
+        await storage.set_node_status_tx(
+            [node], status=status, at=datetime.now(timezone.utc)
+        )
+
+    async def test_a_live_claim_repeating_a_retired_one_is_reported(
+        self, storage, embedding_provider
+    ):
+        facts = await _facts_that_look_alike(storage, embedding_provider, 2)
+        await self._retire(storage, facts[0], NodeStatus.HISTORICAL)
+
+        result, _ = await reflect(storage, embedding_provider)
+
+        pairs = result["recurrences"]
+        assert len(pairs) == 1
+        statuses = {pairs[0]["fact_a"]["status"], pairs[0]["fact_b"]["status"]}
+        assert statuses == {"active", "historical"}
+
+    async def test_it_is_not_filed_as_a_contradiction(
+        self, storage, embedding_provider
+    ):
+        facts = await _facts_that_look_alike(storage, embedding_provider, 2)
+        await self._retire(storage, facts[0], NodeStatus.HISTORICAL)
+
+        result, _ = await reflect(storage, embedding_provider)
+
+        assert result["contradictions"] == []
+
+    async def test_two_live_claims_stay_contradictions(
+        self, storage, embedding_provider
+    ):
+        """Two active facts saying the same thing is redundancy or conflict —
+        the older question, and still the one `contradictions` answers."""
+        await _facts_that_look_alike(storage, embedding_provider, 2)
+
+        result, _ = await reflect(storage, embedding_provider)
+
+        assert result["contradictions"]
+        assert result["recurrences"] == []
+
+    async def test_a_corrected_claim_is_never_nominated(
+        self, storage, embedding_provider
+    ):
+        facts = await _facts_that_look_alike(storage, embedding_provider, 2)
+        await self._retire(storage, facts[0], NodeStatus.CORRECTED)
+
+        result, _ = await reflect(storage, embedding_provider)
+
+        assert result["recurrences"] == []
+        assert result["contradictions"] == []
+
+    async def test_the_wider_sweep_still_scores_in_one_call(
+        self, storage, embedding_provider, monkeypatch
+    ):
+        """Widening what is compared must not mean scoring the matrix twice.
+
+        This phase is the one that crosses the tool timeout as a graph grows
+        (#39). The pairs are quadratic; splitting the scored set into
+        contradictions and recurrences is free, and computing it twice is not.
+        """
+        sizes: list[int] = []
+        original = contradiction_detection.similar_pairs
+
+        def counted(vectors, threshold, **kwargs):
+            sizes.append(len(vectors))
+            return original(vectors, threshold, **kwargs)
+
+        monkeypatch.setattr(contradiction_detection, "similar_pairs", counted)
+
+        facts = await _facts_that_look_alike(storage, embedding_provider, 6)
+        await self._retire(storage, facts[0], NodeStatus.HISTORICAL)
+        await reflect(storage, embedding_provider)
+
+        assert sizes == [6], "one batched call over active and historical alike"

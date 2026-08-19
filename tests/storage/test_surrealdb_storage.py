@@ -4,6 +4,7 @@ Uses mem:// (embedded) mode so no external SurrealDB instance is needed.
 """
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -608,7 +609,7 @@ class TestVectorSearchOverFetch:
                 "the exact query is the fallback, not the path for a healthy graph"
             )
 
-        monkeypatch.setattr(surrealdb_adapter, "_ranked_active_items", refuse)
+        monkeypatch.setattr(surrealdb_adapter, "_ranked_items_with_status", refuse)
 
         results = await store.vector_search([1.0, 0.0, 0.0], "test", k=5)
 
@@ -625,7 +626,7 @@ class TestVectorSearchOverFetch:
         async def refuse(*args, **kwargs):
             raise AssertionError("escalation should have filled k without falling back")
 
-        monkeypatch.setattr(surrealdb_adapter, "_ranked_active_items", refuse)
+        monkeypatch.setattr(surrealdb_adapter, "_ranked_items_with_status", refuse)
 
         results = await store.vector_search([1.0, 0.0, 0.0], "test", k=5)
 
@@ -665,7 +666,7 @@ class TestVectorSearchOverFetch:
         async def refuse(*args, **kwargs):
             raise AssertionError("the scan already reached the end of the embeddings")
 
-        monkeypatch.setattr(surrealdb_adapter, "_ranked_active_items", refuse)
+        monkeypatch.setattr(surrealdb_adapter, "_ranked_items_with_status", refuse)
 
         results = await store.vector_search([1.0, 0.0, 0.0], "test", k=10)
 
@@ -950,3 +951,50 @@ class TestFullTextDialectAndIdfFloor:
             ["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT
         )
         assert [node_id for node_id, _ in hits] == [facts[0].id]
+
+
+class TestContentLookupUsesTheContentIndex:
+    """A plan assertion, because behaviour cannot see this defect (#48).
+
+    `get_node_by_content` reads correctly whatever the planner chooses, so the
+    exact-name upsert tests pass either way. What they cannot notice is that
+    left to itself SurrealDB resolves the lookup through `idx_{table}_status`,
+    which matches every active row, and applies `content` as a predicate
+    afterwards — a scan of the whole live table on every ingest.
+
+    Adding an index on `content` does not fix it on its own: the planner keeps
+    choosing the status index, and so does a composite `(content, status)`.
+    Only naming the index moves `content` into the access path. Measured at
+    3,000 topics against a real server: 4.0 ms unhinted, 4.3 ms with an unused
+    content index, 0.53 ms hinted.
+    """
+
+    async def _plan(self, store, table: str) -> str:
+        """The plan of the query the adapter actually issues, not one like it."""
+        rows = await store._query(
+            surrealdb_adapter.CONTENT_LOOKUP.format(table=table) + " EXPLAIN",
+            {"content": "anything at all", "status": "active"},
+        )
+        return json.dumps(rows, default=str)
+
+    @pytest.mark.parametrize("table", ["topic", "fact", "inference"])
+    async def test_the_lookup_does_not_resolve_through_the_status_index(
+        self, store, table
+    ):
+        plan = await self._plan(store, table)
+
+        assert f"idx_{table}_content" in plan, (
+            f"the {table} lookup no longer reaches its content index, so it is "
+            f"scanning the table: {plan}"
+        )
+        assert f"idx_{table}_status" not in plan, (
+            f"the {table} lookup planned through the status index, which matches "
+            f"every active row — the scan #48 exists to remove: {plan}"
+        )
+
+    @pytest.mark.parametrize("table", ["topic", "fact", "inference"])
+    async def test_the_index_the_hint_names_exists(self, store, table):
+        """A hint naming an index that was never defined is a query that fails."""
+        defined = await store._query(f"INFO FOR TABLE {table}")
+
+        assert f"idx_{table}_content" in json.dumps(defined, default=str)

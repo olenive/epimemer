@@ -20,6 +20,7 @@ from petritype.core.executable_graph_components import (
     ReturnedEdgeFromTransition,
 )
 
+from epimemer.core.temporal import IntervalBasis, UnknownInstant
 from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
@@ -29,6 +30,7 @@ from epimemer.core.types import (
     NodeEdge,
     NodeStatus,
     NodeType,
+    RawDocument,
     Segment,
     Topic,
     ValueSignal,
@@ -423,53 +425,6 @@ class TestStoreDecomposition:
         total_nodes = sum(store_result["nodes_created"].values())
         assert total_nodes == 3  # 1 topic + 1 fact + 1 inference
 
-    async def test_importance_prior_applied_per_entry(
-        self, storage, embedding_provider, config
-    ):
-        """An entry may carry an importance prior; anything else gets the default.
-
-        A prior only — real judgment happens at reflect time, once the
-        neighbourhood exists to judge triviality against.
-        """
-        seg_result, _ = await segment_text(
-            "One paragraph.", storage, embedding_provider, config,
-        )
-        segment_id = seg_result["segments"][0]["segment_id"]
-        await store_decomposition(
-            document_id=seg_result["document_id"],
-            segments=[{
-                "segment_id": segment_id,
-                "facts": [
-                    {"content": "load-bearing fact", "importance": 0.9},
-                    "ordinary fact",
-                ],
-            }],
-            storage=storage,
-            embedding_provider=embedding_provider,
-        )
-
-        facts = await storage.query_nodes(node_type=NodeType.FACT)
-        by_content = {f.content: f.value.importance for f in facts}
-        assert by_content["load-bearing fact"] == pytest.approx(0.9)
-        assert by_content["ordinary fact"] == pytest.approx(0.5)
-
-    async def test_importance_prior_out_of_range_rejected(
-        self, storage, embedding_provider, config
-    ):
-        seg_result, _ = await segment_text(
-            "One paragraph.", storage, embedding_provider, config,
-        )
-        with pytest.raises(ValueError):
-            await store_decomposition(
-                document_id=seg_result["document_id"],
-                segments=[{
-                    "segment_id": seg_result["segments"][0]["segment_id"],
-                    "facts": [{"content": "too important", "importance": 1.5}],
-                }],
-                storage=storage,
-                embedding_provider=embedding_provider,
-            )
-
     async def test_with_metacontext(
         self, storage, embedding_provider, config
     ):
@@ -489,6 +444,345 @@ class TestStoreDecomposition:
             mc_edges = [e for e in edges if e.type == EdgeType.HAS_METACONTEXT]
             assert len(mc_edges) == 1
             assert mc_edges[0].dst_id == mc.id
+
+
+class TestIngestRecordsWhenAClaimWasTrue:
+    """Validity arrives at ingest and lands on the provenance edge (#53 T1 §9).
+
+    Ingest is the only place it can come from: tense and the dates written in
+    the text are visible here and nowhere afterwards. Reflect has facts and a
+    graph, not a document, so asking it to do this work means re-reading
+    segments to do ingest's job late with less context.
+    """
+
+    async def _ingest_with_validity(
+        self, storage, embedding_provider, config, validity: list[dict],
+        *, content: str = "The city is called Leningrad.",
+    ) -> str:
+        seg_result, _ = await segment_text(content, storage, embedding_provider, config)
+        await store_decomposition(
+            document_id=seg_result["document_id"],
+            segments=[{
+                "segment_id": seg_result["segments"][0]["segment_id"],
+                "facts": [{"content": content, "validity": validity}],
+            }],
+            storage=storage,
+            embedding_provider=embedding_provider,
+        )
+        return seg_result["document_id"]
+
+    async def _provenance_edge(self, storage, document_id: str):
+        facts = await storage.query_nodes(node_type=NodeType.FACT)
+        assert len(facts) == 1
+        edges = await storage.get_edges_from(
+            facts[0].id, edge_type=EdgeType.SOURCED_FROM
+        )
+        assert len(edges) == 1 and edges[0].dst_id == document_id
+        return edges[0]
+
+    async def test_the_period_lands_on_the_edge_naming_the_source(
+        self, storage, embedding_provider, config
+    ):
+        document_id = await self._ingest_with_validity(
+            storage, embedding_provider, config,
+            [{
+                "start": {"instant_kind": "unknown"},
+                "end": {"instant_kind": "precise", "at": "1991-09-06T00:00:00Z"},
+                "witnessed_at": {"instant_kind": "precise", "at": "1970-01-01T00:00:00Z"},
+                "basis": "inferred",
+            }],
+        )
+
+        edge = await self._provenance_edge(storage, document_id)
+        assert len(edge.validity) == 1
+        assert edge.validity[0].basis is IntervalBasis.INFERRED
+        assert edge.validity[0].end.at.year == 1991
+        # The one distinction the type exists for: the document does not say when
+        # the name was given, and ingest must not invent that it always was.
+        assert isinstance(edge.validity[0].start, UnknownInstant)
+
+    async def test_one_source_may_assert_several_separate_periods(
+        self, storage, embedding_provider, config
+    ):
+        document_id = await self._ingest_with_validity(
+            storage, embedding_provider, config,
+            [
+                {
+                    "start": {"instant_kind": "precise", "at": "1997-05-02T00:00:00Z"},
+                    "end": {"instant_kind": "precise", "at": "2010-05-11T00:00:00Z"},
+                    "basis": "stated",
+                },
+                {
+                    "start": {"instant_kind": "precise", "at": "2024-07-05T00:00:00Z"},
+                    "basis": "stated",
+                },
+            ],
+            content="Labour was in government.",
+        )
+
+        edge = await self._provenance_edge(storage, document_id)
+        assert [i.start.at.year for i in edge.validity] == [1997, 2024]
+
+    async def test_a_phrase_the_text_does_not_date_stays_a_phrase(
+        self, storage, embedding_provider, config
+    ):
+        document_id = await self._ingest_with_validity(
+            storage, embedding_provider, config,
+            [{
+                "start": {"instant_kind": "named", "label": "during the Renaissance"},
+                "basis": "stated",
+            }],
+        )
+
+        edge = await self._provenance_edge(storage, document_id)
+        assert edge.validity[0].start.label == "during the Renaissance"
+
+    async def test_ingest_without_dates_writes_no_intervals(
+        self, storage, embedding_provider, config
+    ):
+        """The overwhelming case. Absence must stay free of ceremony."""
+        _, _ = await _two_step_ingest(
+            "A paragraph with no dates in it.", storage, embedding_provider, config,
+        )
+
+        facts = await storage.query_nodes(node_type=NodeType.FACT)
+        for fact in facts:
+            for edge in await storage.get_edges_from(
+                fact.id, edge_type=EdgeType.SOURCED_FROM
+            ):
+                assert edge.validity == []
+
+    async def test_two_documents_disagreeing_are_both_kept(
+        self, storage, embedding_provider, config
+    ):
+        """No collapse (T1 §3): union widens a period nobody claims, and
+        intersection turns two different episodes into "never"."""
+        claim = "Labour was in government."
+        edges = []
+        for year, document in ((1997, "almanac"), (1995, "blog")):
+            seg_result, _ = await segment_text(
+                claim, storage, embedding_provider, config, source=document,
+            )
+            await store_decomposition(
+                document_id=seg_result["document_id"],
+                segments=[{
+                    "segment_id": seg_result["segments"][0]["segment_id"],
+                    "facts": [{
+                        "content": f"{claim} ({document})",
+                        "validity": [{
+                            "start": {
+                                "instant_kind": "precise",
+                                "at": f"{year}-05-02T00:00:00Z",
+                            },
+                            "basis": "stated",
+                        }],
+                    }],
+                }],
+                storage=storage,
+                embedding_provider=embedding_provider,
+            )
+        for fact in await storage.query_nodes(node_type=NodeType.FACT):
+            edges.extend(
+                await storage.get_edges_from(fact.id, edge_type=EdgeType.SOURCED_FROM)
+            )
+
+        starts = sorted(e.validity[0].start.at.year for e in edges)
+        assert starts == [1995, 1997], "each source keeps its own period"
+        assert len({e.dst_id for e in edges}) == 2, "and its own document"
+
+
+class TestDocumentsRecordWhenTheyWerePublished:
+    """`published_at` bounds what a source could have known (#53 T1 §7)."""
+
+    async def test_a_publication_date_is_stored_with_the_document(
+        self, storage, embedding_provider, config
+    ):
+        result, _ = await segment_text(
+            "A 1970 memoir.", storage, embedding_provider, config,
+            source="memoir",
+            published_at={"instant_kind": "precise", "at": "1970-06-01T00:00:00Z"},
+        )
+
+        doc = await storage.get_document(result["document_id"])
+        assert doc is not None and doc.published_at.at.year == 1970
+
+    async def test_an_undated_document_does_not_borrow_its_ingest_date(
+        self, storage, embedding_provider, config
+    ):
+        """The fallback is the bug with an extra step: every undated document
+        would claim its facts were witnessed on the day it was ingested."""
+        result, _ = await segment_text(
+            "No publication date.", storage, embedding_provider, config,
+        )
+
+        doc = await storage.get_document(result["document_id"])
+        assert doc is not None
+        assert doc.published_at is None
+        assert doc.created_at is not None
+
+
+class TestStoreDecompositionValuePriors:
+    """Both priors an ingesting agent may supply, and what absence means (#46).
+
+    They are priors, not verdicts, and they differ in what omitting them says.
+    `importance` has a real default — triviality is only visible once the
+    neighbourhood exists, so reflect does the judging and 0.5 is where every
+    node starts. `confidence` has none: the material is in front of the agent
+    at ingest and nothing later can go back and read it, so an omitted value
+    means the question was never put, and that is stored as absence.
+    """
+
+    async def _store(self, storage, embedding_provider, config, entries):
+        seg_result, _ = await segment_text(
+            "One paragraph.", storage, embedding_provider, config,
+        )
+        await store_decomposition(
+            document_id=seg_result["document_id"],
+            segments=[{
+                "segment_id": seg_result["segments"][0]["segment_id"],
+                "facts": entries,
+            }],
+            storage=storage,
+            embedding_provider=embedding_provider,
+        )
+        facts = await storage.query_nodes(node_type=NodeType.FACT)
+        return {f.content: f for f in facts}
+
+    async def test_importance_prior_applied_per_entry(
+        self, storage, embedding_provider, config
+    ):
+        by_content = await self._store(storage, embedding_provider, config, [
+            {"content": "load-bearing fact", "importance": 0.9},
+            "ordinary fact",
+        ])
+
+        assert by_content["load-bearing fact"].value.importance == pytest.approx(0.9)
+        assert by_content["ordinary fact"].value.importance == pytest.approx(0.5)
+
+    async def test_importance_prior_out_of_range_rejected(
+        self, storage, embedding_provider, config
+    ):
+        with pytest.raises(ValueError):
+            await self._store(storage, embedding_provider, config, [
+                {"content": "too important", "importance": 1.5},
+            ])
+
+    async def test_confidence_prior_applied_per_entry(
+        self, storage, embedding_provider, config
+    ):
+        """Per node, never per document — the same source states different
+        claims at different strengths, which matters most for conversation
+        with the user, this system's commonest ingest.
+        """
+        by_content = await self._store(storage, embedding_provider, config, [
+            {"content": "the user prefers a functional style", "confidence": 0.9},
+            {"content": "the user thinks DNS broke the deploy", "confidence": 0.3},
+        ])
+
+        assert by_content[
+            "the user prefers a functional style"
+        ].value.confidence == pytest.approx(0.9)
+        assert by_content[
+            "the user thinks DNS broke the deploy"
+        ].value.confidence == pytest.approx(0.3)
+
+    async def test_an_omitted_confidence_stores_absence_not_the_default(
+        self, storage, embedding_provider, config
+    ):
+        """The whole point of amendment 1: an unconsidered node is
+        distinguishable from one an agent read and rated middling."""
+        by_content = await self._store(storage, embedding_provider, config, [
+            "nobody rated this",
+            {"content": "considered, and middling", "confidence": 0.5},
+        ])
+
+        assert by_content["nobody rated this"].value.confidence is None
+        assert by_content[
+            "considered, and middling"
+        ].value.confidence == pytest.approx(0.5)
+
+    async def test_confidence_prior_out_of_range_rejected(
+        self, storage, embedding_provider, config
+    ):
+        """Refused by the `ValueSignal` bounds rather than silently clamped —
+        a clamp turns an agent's misreading of the scale into a plausible
+        number nobody can spot later."""
+        with pytest.raises(ValueError):
+            await self._store(storage, embedding_provider, config, [
+                {"content": "certain beyond revision", "confidence": 1.7},
+            ])
+
+    async def test_a_supplied_basis_is_recorded_beside_the_prior(
+        self, storage, embedding_provider, config
+    ):
+        """Amendment 2: a non-default prior with no reason recorded is the
+        unattributable judgment `judge_importance` already refuses."""
+        by_content = await self._store(storage, embedding_provider, config, [
+            {
+                "content": "the spec defines the retry budget as 3",
+                "confidence": 0.9,
+                "confidence_basis": "the spec, about its own behaviour",
+            },
+        ])
+        node = by_content["the spec defines the retry budget as 3"]
+
+        assert node.metadata["confidence_basis"] == (
+            "the spec, about its own behaviour"
+        )
+
+    async def test_a_missing_basis_does_not_fail_the_call(
+        self, storage, embedding_provider, config
+    ):
+        """Guidance, not refusal — narrowed that way when amendment 2 was
+        signed off, with the stated cost that absence then means nothing.
+        """
+        by_content = await self._store(storage, embedding_provider, config, [
+            {"content": "asserted without a stated reason", "confidence": 0.9},
+        ])
+        node = by_content["asserted without a stated reason"]
+
+        assert node.value.confidence == pytest.approx(0.9)
+        assert "confidence_basis" not in node.metadata
+
+    async def test_the_caller_sees_null_rather_than_a_substituted_default(
+        self, storage, embedding_provider, config
+    ):
+        """The one surface where absence is *not* read as 0.5.
+
+        An agent deciding how far to lean on a retrieved claim is the audience
+        the nullable field exists for, and `_node_to_dict` is what it reads.
+        Substituting the default here would put the distinction back exactly
+        where it was invisible before.
+        """
+        by_content = await self._store(storage, embedding_provider, config, [
+            "nobody rated this",
+            {"content": "rated ordinary", "confidence": 0.5},
+        ])
+
+        unrated = _node_to_dict(by_content["nobody rated this"])
+        rated = _node_to_dict(by_content["rated ordinary"])
+
+        assert unrated["value"]["confidence"] is None
+        assert rated["value"]["confidence"] == pytest.approx(0.5)
+
+    async def test_a_basis_without_a_prior_is_still_kept(
+        self, storage, embedding_provider, config
+    ):
+        """It reads as "why this is ordinary", which is worth as much as the
+        other direction and costs nothing to keep.
+        """
+        by_content = await self._store(storage, embedding_provider, config, [
+            {
+                "content": "plainly stated, no reason to doubt it",
+                "confidence_basis": "stated plainly, source has no stake",
+            },
+        ])
+        node = by_content["plainly stated, no reason to doubt it"]
+
+        assert node.value.confidence is None
+        assert node.metadata["confidence_basis"] == (
+            "stated plainly, source has no stake"
+        )
 
 
 # --- Search tests ---
@@ -1303,7 +1597,7 @@ class TestApplyReflectionArchivals:
             storage, embedding_provider, archivals=[node.id],
         )
 
-        await restore(result["archive_data"], storage)
+        await restore(storage, archive_data=result["archive_data"])
 
         assert (await storage.get_node(node.id)).status == NodeStatus.ACTIVE
 
@@ -1636,7 +1930,7 @@ class TestRestore:
                 }
             ],
         }
-        result, meta = await restore(archive_data, storage)
+        result, meta = await restore(storage, archive_data=archive_data)
         assert result["nodes_restored"] == 1
         assert result["edges_restored"] == 1
 
@@ -1653,7 +1947,7 @@ class TestRestore:
             [node], status=NodeStatus.ARCHIVED, at=datetime.now(timezone.utc)
         )
 
-        result, _ = await restore({"nodes": [_node_to_dict(node)]}, storage)
+        result, _ = await restore(storage, archive_data={"nodes": [_node_to_dict(node)]})
 
         assert result["nodes_reactivated"] == 1
         assert result["nodes_restored"] == 0
@@ -1670,7 +1964,7 @@ class TestRestore:
             [node], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
         )
 
-        result, _ = await restore({"nodes": [_node_to_dict(node)]}, storage)
+        result, _ = await restore(storage, archive_data={"nodes": [_node_to_dict(node)]})
 
         assert result["nodes_reactivated"] == 0
         assert (await storage.get_node(node.id)).status == NodeStatus.SUPERSEDED
@@ -1692,9 +1986,154 @@ class TestRestore:
             "edges": [{"id": "edge-bad", "src_id": "restore-atomic-1", "type": "supports"}],
         }
         with pytest.raises(Exception):
-            await restore(archive_data, storage)
+            await restore(storage, archive_data=archive_data)
 
         assert await storage.get_node("restore-atomic-1") is None
+
+
+class TestAClaimComesBack:
+    """Reactivation — the `recurs` verdict's write half (#53 T2).
+
+    Labour out of government in 2010 and back in 2024 is one claim recurring.
+    The alternative the graph used to produce is two nodes saying the same
+    thing, and it manufactured that duplication with its own bookkeeping: the
+    historical twin was invisible to every lookup, so nobody was ever asked.
+    """
+
+    async def _historical(self, storage, content="Labour is in government") -> Fact:
+        fact = Fact(content=content, source_id="s1")
+        await storage.store_node(fact)
+        await storage.set_node_status_tx(
+            [fact], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
+        )
+        return fact
+
+    async def _document(self, storage, source="2024 almanac") -> str:
+        doc = RawDocument(content="the 2024 result", source=source)
+        await storage.store_document(doc)
+        return doc.id
+
+    async def test_a_historical_claim_returns_with_its_new_source(self, storage):
+        fact = await self._historical(storage)
+        document_id = await self._document(storage)
+
+        result, _ = await restore(
+            storage, node_ids=[fact.id], sourced_from=document_id,
+            validity=[{
+                "start": {"instant_kind": "precise", "at": "2024-07-05T00:00:00Z"},
+                "basis": "stated",
+            }],
+        )
+
+        assert result["nodes_reactivated"] == 1
+        back = await storage.get_node(fact.id)
+        assert back.status is NodeStatus.ACTIVE
+        assert back.superseded_at is None
+        edges = await storage.get_edges_from(fact.id, edge_type=EdgeType.SOURCED_FROM)
+        assert [e.dst_id for e in edges] == [document_id]
+        assert edges[0].validity[0].start.at.year == 2024
+
+    async def test_the_retirement_stays_in_the_history(self, storage):
+        """Cycles are legal here, so the record has to survive the return —
+        a lifecycle that forgets the retirement cannot describe a second one."""
+        fact = await self._historical(storage)
+        document_id = await self._document(storage)
+
+        await restore(storage, node_ids=[fact.id], sourced_from=document_id)
+
+        back = await storage.get_node(fact.id)
+        assert len(back.lifecycle) == 1
+        assert back.lifecycle[0].because is NodeStatus.HISTORICAL
+        assert back.lifecycle[0].restored_at is not None
+
+    async def test_a_corrected_claim_cannot_come_back(self, storage):
+        """The one refusal this tool always meant, and could not previously
+        state: before the status split it could only say "not superseded"."""
+        fact = Fact(content="wrong all along", source_id="s1")
+        await storage.store_node(fact)
+        await storage.set_node_status_tx(
+            [fact], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
+        )
+        document_id = await self._document(storage)
+
+        with pytest.raises(ValueError, match="cannot be restored"):
+            await restore(storage, node_ids=[fact.id], sourced_from=document_id)
+
+        assert (await storage.get_node(fact.id)).status is NodeStatus.CORRECTED
+
+    async def test_reactivation_without_a_source_is_refused(self, storage):
+        """A claim the graph states and cannot attribute is what this system
+        exists not to produce."""
+        fact = await self._historical(storage)
+
+        with pytest.raises(ValueError, match="requires `sourced_from`"):
+            await restore(storage, node_ids=[fact.id])
+
+        assert (await storage.get_node(fact.id)).status is NodeStatus.HISTORICAL
+
+    async def test_one_refused_node_reactivates_none_of_them(self, storage):
+        """Checked before anything is written: a batch naming a corrected node
+        changes nothing rather than half-applying and reporting an error."""
+        good = await self._historical(storage)
+        bad = Fact(content="wrong all along", source_id="s1")
+        await storage.store_node(bad)
+        await storage.set_node_status_tx(
+            [bad], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
+        )
+        document_id = await self._document(storage)
+
+        with pytest.raises(ValueError):
+            await restore(
+                storage, node_ids=[good.id, bad.id], sourced_from=document_id
+            )
+
+        assert (await storage.get_node(good.id)).status is NodeStatus.HISTORICAL
+
+    async def test_an_unknown_document_is_refused(self, storage):
+        fact = await self._historical(storage)
+
+        with pytest.raises(ValueError, match="not found"):
+            await restore(storage, node_ids=[fact.id], sourced_from="no-such-doc")
+
+    async def test_asking_twice_is_not_an_error(self, storage):
+        fact = await self._historical(storage)
+        document_id = await self._document(storage)
+
+        await restore(storage, node_ids=[fact.id], sourced_from=document_id)
+        result, _ = await restore(
+            storage, node_ids=[fact.id], sourced_from=document_id
+        )
+
+        assert result["nodes_reactivated"] == 0
+        assert (await storage.get_node(fact.id)).status is NodeStatus.ACTIVE
+
+    async def test_the_earlier_provenance_is_left_alone(self, storage):
+        """The prior intervals and the lineage record are untouched, so the node
+        ends holding several disjoint periods — which is what a list was for."""
+        fact = await self._historical(storage)
+        first_document = await self._document(storage, source="2010 almanac")
+        await storage.store_edge(NodeEdge(
+            src_id=fact.id, dst_id=first_document, type=EdgeType.SOURCED_FROM,
+            validity=[{
+                "start": {"instant_kind": "precise", "at": "1997-05-02T00:00:00Z"},
+                "end": {"instant_kind": "precise", "at": "2010-05-11T00:00:00Z"},
+                "basis": "stated",
+            }],
+        ))
+        second_document = await self._document(storage, source="2024 almanac")
+
+        await restore(
+            storage, node_ids=[fact.id], sourced_from=second_document,
+            validity=[{
+                "start": {"instant_kind": "precise", "at": "2024-07-05T00:00:00Z"},
+                "basis": "stated",
+            }],
+        )
+
+        edges = await storage.get_edges_from(fact.id, edge_type=EdgeType.SOURCED_FROM)
+        assert {e.dst_id for e in edges} == {first_document, second_document}
+        years = sorted(e.validity[0].start.at.year for e in edges)
+        assert years == [1997, 2024]
 
 
 # --- Timeline tool tests ---
@@ -1944,6 +2383,133 @@ async def _store_fact_with_embedding(
             NodeEdge(src_id=f.id, dst_id=metacontext_id, type=EdgeType.HAS_METACONTEXT)
         )
     return f
+
+
+class TestRecurrenceIsNominated:
+    """A retired claim can only be judged if the pass that nominates sees it.
+
+    This is the detector half of `recurs` (#53 T2). Until `vector_search` could
+    be asked for historical nodes, no similarity pass ever surfaced the twin, no
+    verdict was ever invited, and ingest wrote a second node saying what the
+    first one said — the duplication the graph manufactured with its own
+    bookkeeping.
+    """
+
+    async def _retired(self, storage, node, status: NodeStatus) -> None:
+        await storage.set_node_status_tx(
+            [node], status=status, at=datetime.now(timezone.utc)
+        )
+
+    async def test_a_historical_twin_is_offered_for_judgment(
+        self, storage, embedding_provider
+    ):
+        model_id = embedding_provider.model_id
+        new_fact = await _store_fact_with_embedding(
+            storage, model_id, "Labour is in government", [1.0, 0.0]
+        )
+        twin = await _store_fact_with_embedding(
+            storage, model_id, "Labour forms the government", [1.0, 0.0]
+        )
+        await self._retired(storage, twin, NodeStatus.HISTORICAL)
+
+        result, _ = await check_conflicts(
+            [new_fact.id], storage, embedding_provider, threshold=0.5
+        )
+
+        candidates = result["conflicts"][0]["candidates"]
+        assert twin.id in {c["id"] for c in candidates}
+
+    async def test_each_candidate_says_which_status_it_has(
+        self, storage, embedding_provider
+    ):
+        """The distinction between `redundant` and `recurs` rests entirely on
+        it — a candidate list that hides it invites the misclassification the
+        verdict was added to prevent."""
+        model_id = embedding_provider.model_id
+        new_fact = await _store_fact_with_embedding(
+            storage, model_id, "Labour is in government", [1.0, 0.0]
+        )
+        active_twin = await _store_fact_with_embedding(
+            storage, model_id, "Labour leads the country", [1.0, 0.0]
+        )
+        historical_twin = await _store_fact_with_embedding(
+            storage, model_id, "Labour forms the government", [1.0, 0.0]
+        )
+        await self._retired(storage, historical_twin, NodeStatus.HISTORICAL)
+
+        result, _ = await check_conflicts(
+            [new_fact.id], storage, embedding_provider, threshold=0.5, k=5
+        )
+
+        by_id = {c["id"]: c["status"] for c in result["conflicts"][0]["candidates"]}
+        assert by_id[active_twin.id] == "active"
+        assert by_id[historical_twin.id] == "historical"
+
+    async def test_a_corrected_claim_is_never_nominated(
+        self, storage, embedding_provider
+    ):
+        """It has no route back, so nominating it invites a verdict nothing can
+        record — `restore` refuses it by design."""
+        model_id = embedding_provider.model_id
+        new_fact = await _store_fact_with_embedding(
+            storage, model_id, "the figure is four", [1.0, 0.0]
+        )
+        wrong = await _store_fact_with_embedding(
+            storage, model_id, "the figure is five", [1.0, 0.0]
+        )
+        await self._retired(storage, wrong, NodeStatus.CORRECTED)
+
+        result, _ = await check_conflicts(
+            [new_fact.id], storage, embedding_provider, threshold=0.5
+        )
+
+        assert result["conflicts"] == []
+
+
+class TestVerbatimRecurrenceIsFlaggedAtIngest:
+    """The cheap floor under the detector, affordable because #48 was fixed.
+
+    `check_conflicts` is opt-in, so an agent that never calls it gets no
+    recurrence detection at all. An exact-content match is the one case cheap
+    enough to check unasked — one indexed lookup per fact — and it reports
+    rather than acting, because flipping a node live on a string match is too
+    brittle to do silently.
+    """
+
+    async def test_a_word_for_word_historical_claim_is_reported(
+        self, storage, embedding_provider, config
+    ):
+        claim = "Labour is in government."
+        retired = Fact(content=claim, source_id="s1")
+        await storage.store_node(retired)
+        await storage.set_node_status_tx(
+            [retired], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
+        )
+
+        result = await _ingest_facts([claim], storage, embedding_provider, config)
+
+        assert [t["historical_id"] for t in result["historical_twins"]] == [retired.id]
+
+    async def test_an_ordinary_ingest_reports_none(
+        self, storage, embedding_provider, config
+    ):
+        result = await _ingest_facts(
+            ["Something nobody has said before."], storage, embedding_provider, config
+        )
+
+        assert result["historical_twins"] == []
+
+    async def test_an_active_twin_is_not_a_recurrence(
+        self, storage, embedding_provider, config
+    ):
+        """Two live nodes saying the same thing is redundancy, which is #52's
+        subject and a different verdict entirely."""
+        claim = "Labour is in government."
+        await storage.store_node(Fact(content=claim, source_id="s1"))
+
+        result = await _ingest_facts([claim], storage, embedding_provider, config)
+
+        assert result["historical_twins"] == []
 
 
 class TestCheckConflicts:

@@ -33,7 +33,7 @@ This document supersedes the scattered design discussion. Build against it.
 
 Epimemer is an append-only, immutable-history epistemic memory. Nodes are never
 mutated in content; corrections create new versions linked by history edges
-(`superseded_by`, `merged_into`). Lifecycle *metadata* (`status`, `superseded_at`,
+(`superseded_by`, `temporally_followed_by`, `merged_into`). Lifecycle *metadata* (`status`, `superseded_at`,
 `value` signals) is mutated in place — it is not the knowledge claim, so editing it
 rewrites no history (see SUMMARY.md → Node History).
 The guiding rhythm is **"write fast, organize slow"**: ingestion is mechanical and
@@ -122,8 +122,14 @@ is superseded, inferences derived from it become suspect.
 > alone. A **seventh** row, `recurs`, was added by the second pass (same date):
 > without it the taxonomy forces a recurrence into `redundant` (assumes an
 > active twin) or `succeeds` (assumes a different claim). It can only ever fire
-> if nomination includes `HISTORICAL` candidates — §5.1's note. Designed,
-> **not built** — see §13.9.
+> if nomination includes `HISTORICAL` candidates — §5.1's note.
+>
+> **`recurs` is built (2026-08-19).** Nomination sees `HISTORICAL` through
+> `vector_search(statuses=...)`, `check_conflicts` reports each candidate's
+> status because that is the whole basis for choosing between `redundant` and
+> `recurs`, and the verdict resolves through a `restore` that reactivates the
+> twin and writes the new source's edge in one transaction. `CORRECTED` is
+> refused at both ends — never nominated, never restored.
 
 > **And `redundant` is a dead branch (review 2026-08-12).** Its action column
 > says "dedup or ignore", but no fact-merge action exists — merge is wired for
@@ -233,6 +239,24 @@ bites.
 > **And the candidates must carry their `status`:** telling `redundant` from
 > `recurs` *is* the active/retired distinction, so a candidate list that hides
 > it invites the misclassification the verdict exists to prevent.
+>
+> **Built 2026-08-19, and both passes were widened, not just the ingest one.**
+> `vector_search` takes `statuses`, `check_conflicts` asks for
+> `{ACTIVE, HISTORICAL}` and returns each candidate's status. Reflect's sweep —
+> step 3's safety net, which matters because `check_conflicts` is opt-in and a
+> graph whose agent never ran it would never be asked — nominates the same set
+> and reports the mixed pairs under **`recurrences`**, separately from
+> `contradictions`. Separately on purpose: a claim beside its own successor is
+> not a contradiction, and filing it under that word is the misreading `recurs`
+> exists to prevent, arriving from the other side. The wider sweep still scores
+> one matrix — the set is partitioned after scoring, not scored twice — because
+> this is the phase that crosses the tool timeout as a graph grows (#39).
+>
+> A cheap floor sits under both: `store_decomposition` reports
+> **`historical_twins`**, facts just stored that are word-for-word a retired
+> claim. It reports and never acts, and it is affordable only because #48 was
+> fixed in the same visit — one indexed lookup per fact rather than a table
+> scan.
 
 ### 5.2 Case B — evidential staleness (reactive, at supersede)
 
@@ -311,8 +335,10 @@ without inheriting any facts.
 
 ## 9. Already in place (foundation)
 
-- Immutable history: `status` ∈ {ACTIVE, SUPERSEDED, MERGED}; `superseded_by` /
-  `merged_into` lineage; `query_nodes` filters to ACTIVE.
+- Immutable history: `status` ∈ {ACTIVE, CORRECTED, HISTORICAL, MERGED,
+  ARCHIVED} (plus legacy SUPERSEDED, which nothing writes any more);
+  `superseded_by` / `temporally_followed_by` / `merged_into` lineage;
+  `query_nodes` filters to ACTIVE.
 - `supersede`/`merge` are **atomic** (backend-native single transaction);
   `update` carries the node's value signal; edges migrate + dedupe on
   supersede/merge; `vector_search` excludes non-active nodes.
@@ -764,6 +790,12 @@ would be a fabrication — the same reasoning that keeps `retrieved_at` nullable
 (a claim becoming true again has nowhere to say so) and validity dates of any
 kind.
 
+> **Amended 2026-08-19.** Validity dates now exist and are stored — on the
+> `sourced_from` edge, supplied at ingest (§13.8). Recurrence still has nowhere
+> to say so: the detector is step 4 and the `recurs` verdict is unbuilt. Nothing
+> reads validity yet either, so the floor is wider than it was but the sentence
+> above still describes what the graph *does* with any of it.
+
 **Edge ownership was the third item and is now fixed** (ISSUES.md **#54**, built
 2026-08-12). It did not wait for the interval model, because migration was a
 **move** — `_migrate_edges_inplace` re-pointed edges in place — so every
@@ -908,6 +940,49 @@ Item 5's vocabulary half is fixed and its retrieval half is T3. **Item 1 — whi
 mechanism owns a world-change — is T2**, and it decides how #54 is written, so
 #54 no longer goes first.
 
+**Built 2026-08-19 — the type and the comparison.** `epimemer/core/temporal.py`:
+`ImpreciseInstant` (a discriminated union over precise / named / unknown /
+unbounded endpoints), `ValidityInterval` (endpoints, timeline, witness point,
+`stated` or `inferred` basis), and `compare_intervals` returning the four
+values. Pure, and offering **no collapse over sets** — the union/intersection
+trap §3 refuses is easy to add later and near-impossible to remove once callers
+depend on it.
+
+**Built the same day — storage and ingest.** `NodeEdge.validity` holds the list
+and **only a `sourced_from` edge may carry one**: anywhere else is a period
+attributed to nobody, which is the node-level set §2 rejected, reached by
+accident. `RawDocument.published_at` records publication and never falls back to
+ingest time. An ingesting agent supplies both, and the guidance is most of the
+deliverable — it names the endpoint shapes, says that omitting validity is the
+common and correct case, and states the prohibition the type cannot express: a
+date the agent knows and the document does not give is neither *stated* nor
+*inferred*, and must not be supplied.
+
+Building it found one defect the field would otherwise have shipped with. Edge
+migration collapses duplicates by `(src, dst, type)`, so merging two nodes from
+the same document dropped a provenance edge and everything it asserted —
+precisely where §2's "intervals survive merges for free" would have quietly
+stopped being true. Both backends now hand the loser's intervals to the
+survivor. That is not the union §3 forbids: that union is across *sources*,
+where a sloppy one widens a careful one's period, while these came from the same
+document about what is now the same claim.
+
+**Nothing reads validity yet.** There is no `(source, interval)` retrieval
+surface — the whole edge is visible through `query_graph`, and the purpose-built
+read waits for §13.10 rather than being invented ahead of its naming decisions.
+
+Two things this document leaves open and construction had to fix, recorded here
+because both are now load-bearing. Intervals are **half-open**, `[start, end)`:
+under closed intervals the exact instant of the 1991 renaming is one the city is
+provably called both names, and every adjacent pair of periods overlaps by a
+point, which would fire §11's check on ordinary succession. And the "point"
+state is **two classes**, `precise` and `named` — the single-class version is
+`at: datetime | None` with a label beside it, the same `None`-means-two-things
+shape that disqualified `Timepoint`. A named endpoint compares identically to
+`unknown` and differs only in carrying the source's words, which are the
+evidence for any later resolution. The full construction note is in `ISSUES.md`
+#53.
+
 ### 13.9 T2 decided (2026-08-12) — which mechanism owns a world-change
 
 Review item 1. Full statement in `ISSUES.md` #53 → *T2 decided*; this section
@@ -932,6 +1007,20 @@ of `SUPERSEDED_BY` denoting its opposite. The edge records one observed
 transition and never claims adjacency, so a later-discovered intermediate step
 makes no existing edge wrong. It joins `HISTORY_EDGE_TYPES`: lineage, not
 knowledge — excluded from migration and default traversal.
+
+**Built 2026-08-19.** `lineage_edge_type_for(status)` (`core/types.py`), paired
+with `superseded_status_for(because)` so the node and the edge cannot disagree
+about which act happened — they had disagreed for a week, the status split
+having shipped alone.
+
+**And the reversibility it exists for, the same day.** `HISTORICAL` is
+restorable and `CORRECTED` is not — `RESTORABLE_STATUSES` and
+`NOMINATED_STATUSES` in `core/types.py` say so once and both ends read it.
+`restore` reactivates a named node and writes the new source's `sourced_from`
+edge in the *same transaction*, because a claim back to ACTIVE with no edge
+saying what asserted it again is an assertion the graph makes and cannot
+attribute. Reactivating without naming that source is refused. The retirement
+stays in the lifecycle history, which is what makes a second cycle describable.
 
 **Second pass (2026-08-12), binding:** recurrence makes **cycles legal** for
 this edge type (Saint Petersburg's chain returns to its own node) and
@@ -960,6 +1049,12 @@ Review item 5, in two halves: `HISTORICAL` had no reader at retrieval, and
 `as_of` would be misread once valid time existed. Full statement in `ISSUES.md`
 #53 → *T3 decided*. **With this, #53's design is complete and none of it is
 built.**
+
+> *True on the day it was written.* Construction began 2026-08-19: the lineage
+> edge (§13.9), the interval type and its storage (§13.8) are built. **T3 itself
+> is still entirely unbuilt** — nothing below this line has been started, and
+> the missing retrieval surface is now the reason validity can be written but
+> not read.
 
 **The same trap, a third time.** A valid-time *filter* is the obvious surface
 and is dishonest for the reason T1 and T2 already met: open-world data has to

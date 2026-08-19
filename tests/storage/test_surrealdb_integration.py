@@ -22,7 +22,7 @@ To drive it by hand, start a server and point the env var at it:
 
 If ``EPIMEMER_SURREAL_WS_URL`` is unset or the server is unreachable, the whole
 module is skipped (no connection is attempted by default) — and pytest reports
-skips as success, so check for ``9 passed`` rather than trusting the exit code.
+skips as success, so check for ``12 passed`` rather than trusting the exit code.
 A server that accepts connections without answering (another Docker/Colima
 profile holding the port, or a wedged container) reads as unreachable here.
 """
@@ -35,6 +35,14 @@ from datetime import datetime, timezone
 
 import pytest
 
+from epimemer.core.temporal import (
+    IntervalBasis,
+    NamedInstant,
+    PreciseInstant,
+    UnboundedInstant,
+    UnknownInstant,
+    ValidityInterval,
+)
 from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
@@ -42,6 +50,7 @@ from epimemer.core.types import (
     NodeStatus,
     NodeType,
     NodeEdge,
+    RawDocument,
     Topic,
 )
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
@@ -298,7 +307,8 @@ async def test_lifecycle_episodes_round_trip_over_a_real_connection(surreal):
     await store.supersede_node_tx(
         old, new,
         EmbeddingRecord(item_id=new.id, model_id="test", vector=[1.0, 0.0, 0.0]),
-        NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY),
+        NodeEdge(src_id=old.id, dst_id=new.id,
+                 type=EdgeType.TEMPORALLY_FOLLOWED_BY),
         status=NodeStatus.HISTORICAL, superseded_at=at,
     )
 
@@ -325,6 +335,130 @@ async def test_lifecycle_episodes_round_trip_over_a_real_connection(surreal):
         end=datetime(2026, 6, 16, tzinfo=timezone.utc),
     )
     assert old.id in {n.id for n in changed}
+
+
+async def test_reactivation_writes_the_flip_and_its_edge_together(surreal):
+    """One transaction over a real connection, read back through another (#53 T2).
+
+    The embedded engine cannot vouch for this: the statement that carries the
+    provenance edge is appended to the same `BEGIN…COMMIT` batch as the status
+    flip and the lifecycle rewrite, and what must never be observable is a node
+    back to ACTIVE with no edge saying what asserted it again.
+    """
+    store = await surreal()
+    verifier = await surreal()
+
+    fact = Fact(content="Labour is in government", source_id="s1")
+    document = RawDocument(content="the 2024 result", source="almanac")
+    await store.store_node(fact)
+    await store.store_document(document)
+    retired = datetime(2010, 5, 11, tzinfo=timezone.utc)
+    await store.set_node_status_tx(
+        [fact], status=NodeStatus.HISTORICAL, at=retired,
+    )
+
+    came_back = datetime(2024, 7, 5, tzinfo=timezone.utc)
+    await store.set_node_status_tx(
+        [await verifier.get_node(fact.id)], status=NodeStatus.ACTIVE, at=came_back,
+        edges=[NodeEdge(
+            src_id=fact.id, dst_id=document.id, type=EdgeType.SOURCED_FROM,
+            validity=[ValidityInterval(
+                start=PreciseInstant(at=came_back), basis=IntervalBasis.STATED,
+            )],
+        )],
+    )
+
+    back = await verifier.get_node(fact.id)
+    assert back.status is NodeStatus.ACTIVE
+    assert back.superseded_at is None
+    # Cycles are legal for this claim, so the retirement has to survive its own
+    # reversal — a history that forgets it cannot describe the next one.
+    assert [(e.because, e.restored_at) for e in back.lifecycle] == [
+        (NodeStatus.HISTORICAL, came_back)
+    ]
+
+    edges = await verifier.get_edges_from(fact.id, edge_type=EdgeType.SOURCED_FROM)
+    assert [e.dst_id for e in edges] == [document.id]
+    assert edges[0].validity[0].start.at == came_back
+
+
+async def test_vector_search_status_filter_over_a_real_connection(surreal):
+    """`status IN $statuses` is SurrealQL the server parses for itself.
+
+    The parameter is bound rather than interpolated, and the over-fetch path and
+    the exact fallback have to agree about it — a filter that only worked on one
+    of the two would show up as candidates appearing or vanishing with `k`.
+    """
+    store = await surreal()
+    verifier = await surreal()
+
+    by_status = {}
+    for status in (NodeStatus.ACTIVE, NodeStatus.HISTORICAL, NodeStatus.CORRECTED):
+        fact = Fact(content=f"a claim, {status.value}", source_id="s1", status=status)
+        await store.store_node(fact)
+        await store.store_embedding(EmbeddingRecord(
+            item_id=fact.id, model_id="test", vector=[1.0, 0.0, 0.0],
+        ))
+        by_status[status] = fact
+
+    assert [i for i, _ in await verifier.vector_search([1.0, 0.0, 0.0], "test", k=10)] \
+        == [by_status[NodeStatus.ACTIVE].id]
+
+    nominated = await verifier.vector_search(
+        [1.0, 0.0, 0.0], "test", k=10,
+        statuses=frozenset({NodeStatus.ACTIVE, NodeStatus.HISTORICAL}),
+    )
+    assert {i for i, _ in nominated} == {
+        by_status[NodeStatus.ACTIVE].id, by_status[NodeStatus.HISTORICAL].id
+    }
+
+
+async def test_validity_intervals_round_trip_over_a_real_connection(surreal):
+    """Nested unions on an edge survive the server, not only the embedded engine.
+
+    Validity is a list of models whose endpoints are a discriminated union, sent
+    out through one connection and read back through another. The failure worth
+    catching is not loss but *substitution*: a discriminator that did not
+    survive would hand back a different endpoint state, turning "we do not know
+    when this started" into "it has no start" — the one distinction the type
+    exists to keep (#53 T1 §4).
+    """
+    store = await surreal()
+    verifier = await surreal()
+
+    fact = Fact(content="the city is called Leningrad", source_id="s1")
+    document = RawDocument(
+        content="a 1970 memoir",
+        published_at=PreciseInstant(at=datetime(1970, 6, 1, tzinfo=timezone.utc)),
+    )
+    await store.store_node(fact)
+    await store.store_document(document)
+    intervals = [
+        ValidityInterval(
+            start=UnknownInstant(),
+            end=PreciseInstant(at=datetime(1991, 9, 6, tzinfo=timezone.utc)),
+            witnessed_at=PreciseInstant(at=datetime(1970, 1, 1, tzinfo=timezone.utc)),
+            basis=IntervalBasis.INFERRED,
+        ),
+        ValidityInterval(
+            start=NamedInstant(label="during the Renaissance"),
+            end=UnboundedInstant(),
+            timeline_id="in-universe",
+            basis=IntervalBasis.STATED,
+        ),
+    ]
+    await store.store_edge(NodeEdge(
+        src_id=fact.id, dst_id=document.id, type=EdgeType.SOURCED_FROM,
+        validity=intervals,
+    ))
+
+    edges = await verifier.get_edges_from(fact.id, edge_type=EdgeType.SOURCED_FROM)
+    assert len(edges) == 1
+    assert edges[0].validity == intervals
+
+    stored_document = await verifier.get_document(document.id)
+    assert stored_document.published_at == document.published_at
+    assert stored_document.created_at.year != 1970
 
 
 # --- Lexical search ---

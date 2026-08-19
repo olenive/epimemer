@@ -11,7 +11,9 @@ from enum import Enum
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from epimemer.core.temporal import ImpreciseInstant, ValidityInterval
 
 
 def _now() -> datetime:
@@ -61,6 +63,28 @@ SUPERSEDED_STATUSES: frozenset[NodeStatus] = frozenset({
 })
 
 
+# Which statuses a claim can come back from, and it is the same question twice:
+# what a similarity pass may nominate for review, and what `restore` may
+# reactivate. `HISTORICAL` is in both because the world moving on is reversible
+# — the claim was right and may be right again. `CORRECTED` is in neither: a
+# claim concluded *wrong* has no route back, so nominating it would invite a
+# verdict nothing can record, and restoring it would resurrect an error the
+# graph already ruled on. That was always `restore`'s stated reason; before the
+# status split it could only be enforced as "not superseded", which caught the
+# world-change case too (#53 T2).
+NOMINATED_STATUSES: frozenset[NodeStatus] = frozenset({
+    NodeStatus.ACTIVE, NodeStatus.HISTORICAL,
+})
+
+# `ARCHIVED` joins it here and not above: archival retires a node for
+# triviality rather than for being wrong, so it is reversible — but a
+# similarity pass has no business nominating something the graph deliberately
+# set aside as not worth keeping.
+RESTORABLE_STATUSES: frozenset[NodeStatus] = frozenset({
+    NodeStatus.ARCHIVED, NodeStatus.HISTORICAL,
+})
+
+
 # Why a node was superseded, as the caller states it. There is deliberately no
 # default: the whole finding behind #53 is that the two cases are opposite and
 # that picking either silently mislabels the other.
@@ -105,7 +129,16 @@ class EdgeType(str, Enum):
     SUBTOPIC_OF = "subtopic_of"      # topic → parent topic
 
     # History
-    SUPERSEDED_BY = "superseded_by"  # node → node (update)
+    SUPERSEDED_BY = "superseded_by"  # node → node (correction)
+    # node → node (world-change). States temporal order, not replacement, which
+    # is what lets a claim become true *again* without contradicting the edge
+    # that recorded it stepping aside (#53). It deliberately does **not** claim
+    # adjacency: Saint Petersburg → Petrograd → Leningrad → Saint Petersburg is
+    # three separately observed transitions, and discovering a missing step
+    # later must not make an existing edge wrong. So the chain is walkable but
+    # not gapless, cycles are legal, and two transitions the same way round
+    # between one pair are two edges — never dedup these by (src, dst, type).
+    TEMPORALLY_FOLLOWED_BY = "temporally_followed_by"
     MERGED_INTO = "merged_into"      # node → node (merge)
 
     # Temporal
@@ -135,8 +168,41 @@ class EdgeType(str, Enum):
 # a specific node version and are excluded from edge migration on supersession /
 # merge, and from default graph traversal.
 HISTORY_EDGE_TYPES: frozenset[EdgeType] = frozenset(
-    {EdgeType.SUPERSEDED_BY, EdgeType.MERGED_INTO}
+    {EdgeType.SUPERSEDED_BY, EdgeType.TEMPORALLY_FOLLOWED_BY, EdgeType.MERGED_INTO}
 )
+
+# Which lineage edge a retirement writes, given the status it leaves behind.
+# The pair to `SUPERSESSION_REASONS`: that decides what the *node* becomes, this
+# decides what the *edge* says, and the two must agree. They did not for a
+# while — the status split shipped first, so a world-change left a node marked
+# "still true of its period" reached by an edge saying it had been replaced.
+LINEAGE_EDGE_TYPES: dict[NodeStatus, EdgeType] = {
+    NodeStatus.CORRECTED: EdgeType.SUPERSEDED_BY,
+    NodeStatus.HISTORICAL: EdgeType.TEMPORALLY_FOLLOWED_BY,
+    # Pre-split rows do not record which event they were, and `superseded_by`
+    # is what was written at the time. Reading them as the newer edge would
+    # claim a distinction nobody drew.
+    NodeStatus.SUPERSEDED: EdgeType.SUPERSEDED_BY,
+}
+
+
+def lineage_edge_type_for(status: NodeStatus) -> EdgeType:
+    """The edge joining a node retired as `status` to what came after it.
+
+    Refuses anything that is not a supersession, on the same grounds as
+    `superseded_status_for`: a merge writes `merged_into` through its own path,
+    and an active node has no successor at all. Answering for either would hand
+    a caller a plausible edge for an event that did not happen.
+    """
+    edge_type = LINEAGE_EDGE_TYPES.get(status)
+    if edge_type is None:
+        raise ValueError(
+            f"'{status.value}' is not a supersession, so there is no lineage "
+            f"edge for it. Expected one of: "
+            f"{', '.join(s.value for s in LINEAGE_EDGE_TYPES)}."
+        )
+    return edge_type
+
 
 # Edges that flag a node for epistemic review. They are computed into retrieval
 # labels (superseded_candidate / evidence_stale) rather than traversed as
@@ -278,9 +344,19 @@ class ValueSignal(BaseModel):
     or — as it did — silently recorded only the passive one under a name that
     read like the other.
     """
-    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    # How well the record would back this claim up if it were challenged —
+    # supplied by the ingesting agent, which is the only party that has read the
+    # material, and never computed (#46). `None` is the unrated case and is
+    # stored as absence: a deliberate middling 0.5 and a question nobody put
+    # are different states, and a default that cannot express "never happened"
+    # is the trap both clocks below were pulled out of. Read it through
+    # `rated_confidence`, which supplies the 0.5 every consumer expects.
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     # Moved only by judgment — the `judge_importance` tool, or a prior supplied
-    # at ingest. Nothing automatic touches it, which is the point.
+    # at ingest. Nothing automatic touches it, which is the point. Unlike
+    # `confidence` it keeps a real default: triviality is only visible once the
+    # neighbourhood exists, so reflect can always go back and judge it, and
+    # "unrated" is not a state anything would act on differently.
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
     # Both are None until the thing they name actually happens. "Never
     # retrieved" and "never judged" are states worth distinguishing from
@@ -291,10 +367,34 @@ class ValueSignal(BaseModel):
     importance_judged_at: datetime | None = None
 
 
+UNRATED_CONFIDENCE = 0.5
+
+
+def rated_confidence(confidence: float | None) -> float:
+    """`confidence` as a number, reading the unrated case as the default.
+
+    For code that must *rank or compare* nodes and has nowhere to put an
+    absence: 0.5 is what the ladder in the tool guidance documents as "no
+    specific reason to doubt or specially trust it", so an unrated node sorts
+    where an unremarkable one would.
+
+    Anything that *displays* or *relays* the number should pass `None` through
+    instead — a rendered 0.5 claims an assessment nobody made. So should the
+    merge rule, where an absence losing to a real value is the whole point.
+    """
+    return UNRATED_CONFIDENCE if confidence is None else confidence
+
+
 def _latest(times: Iterable[datetime | None]) -> datetime | None:
     """The most recent of these, or `None` if none of them happened."""
     happened = [t for t in times if t is not None]
     return max(happened) if happened else None
+
+
+def _highest(values: Iterable[float | None]) -> float | None:
+    """The greatest of these, or `None` if none of them was ever set."""
+    rated = [v for v in values if v is not None]
+    return max(rated) if rated else None
 
 
 def merged_value_signal(signals: Sequence[ValueSignal]) -> ValueSignal:
@@ -318,16 +418,23 @@ def merged_value_signal(signals: Sequence[ValueSignal]) -> ValueSignal:
       archival class permanently (#45). The same argument holds for retrieval —
       knowledge that has been retrieved does not become unretrieved by being
       merged.
-    - `confidence` takes the max, as both sites already did. Nothing computes it
-      yet (#46), so it is a placeholder preserving the existing behaviour rather
-      than a claim about merging.
+    - `confidence` takes the max — which looks wrong for a caller-supplied
+      prior, since the more credulous assessment wins and the disagreement
+      disappears. It is right because of what it pairs with: `merge_similar_topics`
+      makes the **higher-confidence description the primary content**, so the
+      merged node's confidence describes the content it actually leads with.
+      The two rules are one rule read from either end, and changing either
+      alone makes the merged node claim a strength for text it no longer
+      leads with. An unrated signal takes no part: `None` means nobody put the
+      question, so it loses to any real value the way the clocks do, and a
+      merge of unrated nodes stays unrated rather than inventing a judgment.
 
     Requires at least one signal; merging nothing has no meaning.
     """
     if not signals:
         raise ValueError("merged_value_signal requires at least one signal")
     return ValueSignal(
-        confidence=max(s.confidence for s in signals),
+        confidence=_highest(s.confidence for s in signals),
         importance=max(s.importance for s in signals),
         retrieved_at=_latest(s.retrieved_at for s in signals),
         importance_judged_at=_latest(s.importance_judged_at for s in signals),
@@ -343,6 +450,16 @@ class RawDocument(BaseModel):
     content: str
     source: str | None = None         # human-meaningful origin, e.g. "ISSUES.md"
     source_type: str | None = None    # free string; suggested: document|api|chat
+    # When the document was published, as against `created_at` below, which is
+    # when it was ingested — a 1970 memoir read today carries `created_at =
+    # 2026`. It bounds what this source could have known, and it is what anyone
+    # would sort or weigh sources by (#53 T1 §7).
+    #
+    # **Never fall back to `created_at`.** The fallback is the bug it exists to
+    # fix, with an extra step: every undated document would claim its facts were
+    # witnessed on the day it happened to be ingested, and a graph rebuilt next
+    # year would say something else. No publication date means no witness point.
+    published_at: ImpreciseInstant | None = None
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
 
@@ -521,8 +638,37 @@ class NodeEdge(BaseModel):
     label: str | None = None
     kind: Literal["relationship", "attribution"] = "relationship"
     weight: float = Field(default=1.0, ge=0.0)
+    # When *this source* asserts the claim was true (#53 T1 §2). A list, because
+    # one source can assert several disjoint periods — a party in government
+    # over five separate spans is one claim, not five.
+    #
+    # Per source rather than per node, and that is the whole decision. A
+    # node-level set has to union what its sources assert, and union takes one
+    # careful source and one sloppy one and produces a period **neither
+    # claims** — the same failure as a false dedup manufacturing corroboration.
+    # Living here also means intervals survive a merge for free, since merging
+    # migrates edges and there is no combination rule to invent.
+    validity: list[ValidityInterval] = Field(default_factory=list)
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
+
+    @model_validator(mode="after")
+    def _validity_needs_a_source(self) -> "NodeEdge":
+        """Only a provenance edge can carry validity.
+
+        An interval is what a source asserts, so it has to hang off the edge
+        naming that source. On a `similarity` or `tagged_with` edge it would be
+        a period attributed to nobody — unfalsifiable, unmergeable, and exactly
+        the node-level set this design rejected, reached by accident.
+        """
+        if self.validity and self.type not in PROVENANCE_EDGE_TYPES:
+            raise ValueError(
+                f"a '{self.type.value}' edge cannot carry validity intervals: an "
+                f"interval is one source's assertion and belongs on the edge "
+                f"naming that source. Expected one of: "
+                f"{', '.join(sorted(t.value for t in PROVENANCE_EDGE_TYPES))}."
+            )
+        return self
 
 
 # --- Embeddings ---

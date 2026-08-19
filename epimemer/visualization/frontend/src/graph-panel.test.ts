@@ -2,11 +2,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  edgeColor,
   filterAfterHighlight,
   highlightNote,
   missingFrom,
   statusOpacity,
 } from "./graph-panel";
+import { semanticPaletteFor, type Theme } from "./theme";
 
 // The hazard this guards is the gap between a Python enum and a TypeScript
 // lookup table: `NodeStatus` grew `corrected` and `historical` in 666904f and
@@ -37,6 +39,25 @@ describe("statusOpacity", () => {
     expect(statusOpacity("quarantined")).toBeLessThan(1.0);
     expect(statusOpacity("")).toBeLessThan(1.0);
   });
+});
+
+// The same Python-enum-to-lookup-table gap, one layer over: `EdgeType` grew
+// `temporally_followed_by` for #53's world-changes, and an edge kind this table
+// has never heard of draws in the unknown-kind neutral rather than as lineage.
+describe("edgeColor", () => {
+  const THEMES: Theme[] = ["light", "dark"];
+
+  for (const theme of THEMES) {
+    it(`draws a world-change transition as lineage (${theme})`, () => {
+      // Same hue as `superseded_by` on purpose: *which* retirement happened is
+      // the node's status colour to say, and saying it twice lets the two
+      // readings disagree.
+      expect(edgeColor("temporally_followed_by", theme))
+        .toBe(semanticPaletteFor(theme).lineage);
+      expect(edgeColor("temporally_followed_by", theme))
+        .toBe(edgeColor("superseded_by", theme));
+    });
+  }
 });
 
 // EVENT_LOG.md §7 / RETRIEVAL_PROVENANCE.md §4.4 — the same two silent failures,

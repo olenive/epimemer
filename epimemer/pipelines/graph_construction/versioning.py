@@ -13,6 +13,7 @@ from epimemer.core.types import (
     NodeEdge,
     NodeStatus,
     Topic,
+    lineage_edge_type_for,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.storage.protocol import StorageBackend
@@ -29,8 +30,8 @@ async def supersede_node(
     """Create a new version of a node.
 
     Marks the old node as superseded, stores and embeds the new node, carries
-    its edges over according to `status`, and creates a superseded_by edge from
-    old to new — all atomically (the storage backend applies it as a single
+    its edges over according to `status`, and creates a lineage edge from old to
+    new — all atomically (the storage backend applies it as a single
     transaction).
 
     Embedding and edge migration are part of the operation so that *every*
@@ -47,13 +48,16 @@ async def supersede_node(
         status: Why the old node is being retired — `CORRECTED` (it was wrong)
             or `HISTORICAL` (the world changed, and it is still right of its
             period). No default: the two are opposite events and only the
-            caller knows which one happened (#53). It also selects the edge
-            policy — see `migration_disposition` (#54). A `HISTORICAL` node
-            keeps its own provenance and the judgments made about it; only its
-            frame and tags are copied onto the replacement.
+            caller knows which one happened (#53). It selects two things
+            besides the status itself: the edge migration policy — see
+            `migration_disposition` (#54), under which a `HISTORICAL` node
+            keeps its own provenance and the judgments made about it while only
+            its frame and tags are copied onto the replacement — and which
+            lineage edge is written, see `lineage_edge_type_for`.
 
     Returns:
-        The superseded_by edge linking old to new.
+        The lineage edge linking old to new: `superseded_by` for a correction,
+        `temporally_followed_by` for a world-change.
     """
     from epimemer.pipelines.reflection.review import (
         find_candidate_edge_ids_into,
@@ -73,7 +77,7 @@ async def supersede_node(
     lineage_edge = NodeEdge(
         src_id=old_node.id,
         dst_id=new_node.id,
-        type=EdgeType.SUPERSEDED_BY,
+        type=lineage_edge_type_for(status),
     )
     # Flag dependent inferences (Case B) and clear any candidacy on the old node.
     evidence_edges = await plan_evidence_stale_edges(old_node.id, storage)
@@ -99,13 +103,15 @@ async def supersede_by_existing(
     Used where the current truth is a node that already exists (rather than
     freshly-written content) — either because the earlier claim was wrong or
     because the world changed, which ``status`` distinguishes (#53). Marks the
-    old node with ``status`` and a superseded_by edge (old → existing), flags
-    dependent
-    inferences (Case B), and clears any supersession_candidate edges on the old
-    node — atomically. The existing node is unchanged: its evidence is its own,
-    so the old node's edges are deliberately NOT migrated onto it.
+    old node with ``status`` and writes the lineage edge that goes with it
+    (old → existing) — `superseded_by` for a correction,
+    `temporally_followed_by` for a world-change, see `lineage_edge_type_for`.
+    Flags dependent inferences (Case B), and clears any supersession_candidate
+    edges on the old node — atomically. The existing node is unchanged: its
+    evidence is its own, so the old node's edges are deliberately NOT migrated
+    onto it.
 
-    Returns the superseded_by edge.
+    Returns the lineage edge.
     """
     from epimemer.pipelines.reflection.review import (
         find_candidate_edge_ids_into,
@@ -116,7 +122,7 @@ async def supersede_by_existing(
     lineage_edge = NodeEdge(
         src_id=old_node.id,
         dst_id=existing_id,
-        type=EdgeType.SUPERSEDED_BY,
+        type=lineage_edge_type_for(status),
     )
     evidence_edges = await plan_evidence_stale_edges(old_node.id, storage)
     clear_edge_ids = await find_candidate_edge_ids_into(old_node.id, storage)

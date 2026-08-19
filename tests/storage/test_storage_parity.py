@@ -14,6 +14,14 @@ from datetime import datetime, timezone
 
 import pytest
 
+from epimemer.core.temporal import (
+    IntervalBasis,
+    NamedInstant,
+    PreciseInstant,
+    UnboundedInstant,
+    UnknownInstant,
+    ValidityInterval,
+)
 from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
@@ -221,6 +229,34 @@ class TestPayloadFidelity:
         assert got is not None
         assert got.value.importance == pytest.approx(0.5)
 
+    async def test_an_unrated_confidence_round_trips_as_absent(self, store):
+        """#46: absence has to survive the trip, or the field is 0.5 again.
+
+        `confidence` is the one value field where "nobody rated this" is a
+        distinct state, and it is expressed by the key being missing. A backend
+        that writes `None` as a stored null, or refills the old 0.5 default on
+        read, turns the distinction back into the number it replaced.
+        """
+        topic = Topic(content="unrated", source_id="s1")
+        assert topic.value.confidence is None
+        await store.store_node(topic)
+
+        got = await store.get_node(topic.id)
+        assert got is not None
+        assert got.value.confidence is None
+
+    async def test_a_deliberate_middling_confidence_is_not_absence(self, store):
+        """The other half: a rated 0.5 must not come back as unrated."""
+        topic = Topic(
+            content="considered, and middling", source_id="s1",
+            value=ValueSignal(confidence=0.5),
+        )
+        await store.store_node(topic)
+
+        got = await store.get_node(topic.id)
+        assert got is not None
+        assert got.value.confidence == pytest.approx(0.5)
+
     async def test_nested_metadata_round_trips(self, store):
         metadata = {"k": "v", "nested": {"a": [1, 2]}, "empty": {}}
         topic = Topic(content="meta", source_id="s1", metadata=metadata)
@@ -284,6 +320,86 @@ class TestPayloadFidelity:
         assert got[0].vector == vector
 
 
+class TestValidityRoundTrips:
+    """Validity is a list of nested models on an edge — the shape most likely to
+    diverge between a backend that keeps objects and one that serializes them.
+
+    The endpoint union is the specific risk: it round-trips through a
+    discriminator, and a backend that lost the key would hand back a different
+    endpoint state — turning *we do not know when this started* into *it has no
+    start*, which is the one distinction the whole type exists to keep.
+    """
+
+    def _leningrad(self) -> list[ValidityInterval]:
+        return [
+            ValidityInterval(
+                start=UnknownInstant(),
+                end=PreciseInstant(at=datetime(1991, 9, 6, tzinfo=timezone.utc)),
+                witnessed_at=PreciseInstant(at=datetime(1970, 1, 1, tzinfo=timezone.utc)),
+                basis=IntervalBasis.INFERRED,
+            ),
+            ValidityInterval(
+                start=NamedInstant(label="during the Renaissance"),
+                end=UnboundedInstant(),
+                timeline_id="in-universe",
+                basis=IntervalBasis.STATED,
+            ),
+        ]
+
+    async def test_an_edges_intervals_survive_the_round_trip(self, store):
+        edge = NodeEdge(
+            src_id="fact-1", dst_id="doc-1", type=EdgeType.SOURCED_FROM,
+            validity=self._leningrad(),
+        )
+        await store.store_edge(edge)
+
+        got = await store.get_edges_from("fact-1")
+        assert len(got) == 1
+        assert got[0].validity == self._leningrad()
+
+    async def test_the_endpoint_states_stay_distinct(self, store):
+        """`unknown` must not read back as `unbounded`, or the reverse."""
+        edge = NodeEdge(
+            src_id="fact-2", dst_id="doc-1", type=EdgeType.SOURCED_FROM,
+            validity=self._leningrad(),
+        )
+        await store.store_edge(edge)
+
+        first, second = (await store.get_edges_from("fact-2"))[0].validity
+        assert isinstance(first.start, UnknownInstant)
+        assert isinstance(second.end, UnboundedInstant)
+        assert isinstance(second.start, NamedInstant)
+        assert second.start.label == "during the Renaissance"
+
+    async def test_an_edge_written_before_the_field_existed_reads_back_empty(self, store):
+        """Absence is the overwhelming case, and must not become a null."""
+        edge = NodeEdge(src_id="fact-3", dst_id="doc-1", type=EdgeType.SOURCED_FROM)
+        await store.store_edge(edge)
+
+        got = await store.get_edges_from("fact-3")
+        assert got[0].validity == []
+
+    async def test_a_documents_publication_date_survives_the_round_trip(self, store):
+        doc = RawDocument(
+            content="a 1970 memoir",
+            published_at=PreciseInstant(at=datetime(1970, 6, 1, tzinfo=timezone.utc)),
+        )
+        await store.store_document(doc)
+
+        got = await store.get_document(doc.id)
+        assert got is not None
+        assert got.published_at == doc.published_at
+        assert got.created_at != got.published_at.at
+
+    async def test_an_undated_document_reads_back_undated(self, store):
+        doc = RawDocument(content="undated")
+        await store.store_document(doc)
+
+        got = await store.get_document(doc.id)
+        assert got is not None
+        assert got.published_at is None
+
+
 HOSTILE_GRAPH_NAMES = [
     "pwn`; REMOVE DATABASE `victim",
     "a;b",
@@ -292,6 +408,128 @@ HOSTILE_GRAPH_NAMES = [
     "",
     "z" * 65,
 ]
+
+
+class TestVectorSearchStatusFilter:
+    """Which nodes may be nominated is the caller's to say, and the default is
+    the guard this method used to enforce by construction (#53 T2).
+
+    The whole of recurrence hangs off this parameter: until a historical twin
+    could be nominated, nobody was ever asked whether a claim had come back, and
+    ingest wrote a second node saying what the first one said.
+    """
+
+    async def _graph(self, store) -> dict[NodeStatus, Fact]:
+        by_status = {}
+        for status in (NodeStatus.ACTIVE, NodeStatus.HISTORICAL, NodeStatus.CORRECTED):
+            fact = Fact(content=f"a claim, {status.value}", source_id="s1", status=status)
+            await store.store_node(fact)
+            await store.store_embedding(EmbeddingRecord(
+                item_id=fact.id, model_id="m", vector=[1.0, 0.0, 0.0],
+            ))
+            by_status[status] = fact
+        return by_status
+
+    async def test_the_default_returns_only_active_nodes(self, store):
+        facts = await self._graph(store)
+
+        hits = await store.vector_search([1.0, 0.0, 0.0], "m", k=10)
+
+        assert [i for i, _ in hits] == [facts[NodeStatus.ACTIVE].id]
+
+    async def test_asking_for_historical_nominates_the_twin(self, store):
+        facts = await self._graph(store)
+
+        hits = await store.vector_search(
+            [1.0, 0.0, 0.0], "m", k=10,
+            statuses=frozenset({NodeStatus.ACTIVE, NodeStatus.HISTORICAL}),
+        )
+
+        assert {i for i, _ in hits} == {
+            facts[NodeStatus.ACTIVE].id, facts[NodeStatus.HISTORICAL].id
+        }
+
+    async def test_a_corrected_claim_stays_out_unless_named(self, store):
+        """A claim concluded *wrong* has no route back, so nominating it would
+        invite a verdict nothing can record."""
+        facts = await self._graph(store)
+
+        hits = await store.vector_search(
+            [1.0, 0.0, 0.0], "m", k=10,
+            statuses=frozenset({NodeStatus.ACTIVE, NodeStatus.HISTORICAL}),
+        )
+
+        assert facts[NodeStatus.CORRECTED].id not in {i for i, _ in hits}
+
+    async def test_an_empty_status_set_returns_nothing(self, store):
+        await self._graph(store)
+
+        assert await store.vector_search(
+            [1.0, 0.0, 0.0], "m", k=10, statuses=frozenset()
+        ) == []
+
+    async def test_k_counts_results_not_rows_examined(self, store):
+        """The filter runs before the truncation, on both backends.
+
+        A backend that truncated first would return fewer than `k` usable hits
+        whenever a retired node ranked above an active one — which is exactly
+        the graph shape recurrence creates.
+        """
+        for i in range(6):
+            fact = Fact(
+                content=f"claim {i}", source_id="s1",
+                status=NodeStatus.CORRECTED if i < 4 else NodeStatus.ACTIVE,
+            )
+            await store.store_node(fact)
+            await store.store_embedding(EmbeddingRecord(
+                item_id=fact.id, model_id="m", vector=[1.0, 0.0, 0.0],
+            ))
+
+        hits = await store.vector_search([1.0, 0.0, 0.0], "m", k=2)
+
+        assert len(hits) == 2
+
+
+class TestStatusFlipCanCarryAnEdge:
+    """Reactivation writes the flip and its provenance together (#53 T2).
+
+    A node back to ACTIVE with no edge recording *why* is an assertion the graph
+    makes and cannot attribute, and two transactions can leave exactly that
+    state behind.
+    """
+
+    async def test_the_edge_lands_with_the_flip(self, store):
+        fact = Fact(content="Labour is in government", source_id="s1",
+                    status=NodeStatus.HISTORICAL)
+        await store.store_node(fact)
+
+        await store.set_node_status_tx(
+            [fact], status=NodeStatus.ACTIVE, at=datetime.now(timezone.utc),
+            edges=[NodeEdge(
+                src_id=fact.id, dst_id="doc-2026", type=EdgeType.SOURCED_FROM,
+                validity=[ValidityInterval(
+                    start=PreciseInstant(at=datetime(2024, 7, 5, tzinfo=timezone.utc)),
+                    basis=IntervalBasis.STATED,
+                )],
+            )],
+        )
+
+        back = await store.get_node(fact.id)
+        assert back.status is NodeStatus.ACTIVE
+        edges = await store.get_edges_from(fact.id, edge_type=EdgeType.SOURCED_FROM)
+        assert len(edges) == 1
+        assert edges[0].validity[0].start.at.year == 2024
+
+    async def test_a_flip_without_edges_creates_nothing(self, store):
+        """Every other caller passes none, and archival's guarantee is unchanged."""
+        fact = Fact(content="trivial", source_id="s1", status=NodeStatus.ARCHIVED)
+        await store.store_node(fact)
+
+        await store.set_node_status_tx(
+            [fact], status=NodeStatus.ACTIVE, at=datetime.now(timezone.utc),
+        )
+
+        assert await store.get_edges_from(fact.id) == []
 
 
 class TestGraphNameValidation:
@@ -1166,7 +1404,8 @@ class TestArchivalStatus:
         await store.supersede_node_tx(
             old, new,
             EmbeddingRecord(item_id=new.id, model_id="test", vector=[1.0, 0.0, 0.0]),
-            NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY),
+            NodeEdge(src_id=old.id, dst_id=new.id,
+                     type=EdgeType.TEMPORALLY_FOLLOWED_BY),
             status=NodeStatus.HISTORICAL, superseded_at=at,
         )
 

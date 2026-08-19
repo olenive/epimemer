@@ -237,7 +237,7 @@ class TestFullPipeline:
         archive_data = archive_result["archive_data"]
 
         fresh_storage = InMemoryStorage()
-        restore_result, _ = await restore(archive_data, fresh_storage)
+        restore_result, _ = await restore(fresh_storage, archive_data=archive_data)
         assert restore_result["nodes_restored"] >= 1
 
     async def test_full_sequence(

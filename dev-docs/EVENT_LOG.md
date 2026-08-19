@@ -34,7 +34,8 @@ rather than merely useful to its agent.
 `NodeStatusChanged` (`visualization/events.py:215-221`) carries `node_id`,
 `old_status`, `new_status`. It does **not** carry the superseding node.
 
-The relation lives in a separate `SUPERSEDED_BY` edge, published as its own
+The relation lives in a separate lineage edge — `SUPERSEDED_BY` or, since
+2026-08-19, `TEMPORALLY_FOLLOWED_BY` for a world-change — published as its own
 `EdgeStored` a moment later (`visualization/instrumented_storage.py:234-243`).
 Rendering "123 superseded by 124" therefore means joining two events by their
 adjacency in the stream, which breaks the moment anything interleaves.

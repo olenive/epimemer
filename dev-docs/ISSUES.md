@@ -44,15 +44,21 @@ restated twice before it named the code it changes.
   renamed **`graph_as_of`**, reserving `valid_as_of`, since the unmarked name
   inherits the wrong default reading.
 
-**#53's design is complete and none of it is built.** All six review findings
-are answered — 2, 4 and 6 by T1; 1 by T2; 3 across both; 5 by T3. What remains
-is construction. T2 unblocked **#54** and added a second caller to **#48**.
+**#53's design is complete and construction has started.** All six review
+findings are answered — 2, 4 and 6 by T1; 1 by T2; 3 across both; 5 by T3. What
+remains is construction, in the six steps its entry's construction note lists:
+steps 1–4 landed 2026-08-19 — T2's `temporally_followed_by` edge, the interval
+type and its comparison (`core/temporal.py`), per-source intervals stored on
+`sourced_from` with `published_at` on the document, and recurrence: a retired
+claim can now be nominated, judged and reactivated. Nothing **reads** validity
+yet; step 5 is T3's retrieval surface. T2 unblocked **#54** and closed **#48**,
+which was fixed alongside step 4 as both entries asked.
 
-The rest: **46** is decided and ready, **51** follows it, **52** is deferred
-behind **53** (its safety precondition is what uncovered the problem), **48**
-is a defect that does not hurt yet, and **16** stays deferred by design.
-**54**, **55**, **56** and **57** are done — and the first three were the same
-shape: a rule stated in one place and re-derived, differently, somewhere else.
+The rest: **51** is next and now unblocked, **52** is deferred behind **53**
+(its safety precondition is what uncovered the problem), **48** is a defect
+that does not hurt yet, and **16** stays deferred by design. **46**, **54**,
+**55**, **56** and **57** are done — and #55, #56 and #54 were the same shape:
+a rule stated in one place and re-derived, differently, somewhere else.
 **Nothing open *fails* at a size anyone is running** — #53 is a correctness
 ceiling rather than a crash, which is precisely why it is easy to keep not
 noticing.
@@ -63,8 +69,10 @@ Nothing already decided was overturned; each amendment is either a problem the
 decided design must answer before implementation (#46, #51), a condition the
 re-open trigger must carry (#52), or a place where the recommendation is not
 yet decidable as written (#53). Three of #53's six are closed by T1 (items 2, 4
-and 6); item 1 *is* T2. #46's amendments still need developer sign-off, since
-they change the decided field shape.
+and 6); item 1 *is* T2. **#46's two amendments were signed off on 2026-08-19**
+— amendment 1 as written, amendment 2 narrowed to a single optional basis
+carried by guidance rather than by refusal — **and built the same day**, so
+only #51's amendment is still waiting on construction.
 
 **That review's one unfiled finding was closed by #55.** Commit `666904f` had
 widened `NodeStatus` without updating the frontend's status→opacity map, whose
@@ -186,13 +194,47 @@ is entirely sequential.
 
 Listed by issue number, not by priority — for priority see *Recommended order*
 at the end. **The one to read first is #53**, whose T1 section is the design of
-record for validity, and it is also the one to *build* first. The cheapest piece
+record for validity, and it is also the one being *built* — its construction
+note carries the step order and what is done so far. The cheapest piece
 independent of it is **#59's measurement** — a token-length distribution, which
-decides that issue without deciding anything else. **#48 is ready but should not
-be taken alone**: #53 T2 adds a second caller to the same query, and the entry
-asks for both in one visit.
+decides that issue without deciding anything else. **#48 is closed** (2026-08-19),
+taken together with #53 step 4 as its entry asked.
 
-### Issue 48 — `get_node_by_content` scans the node table on every ingest — ▶ ACTIONABLE
+### Issue 48 — `get_node_by_content` scans the node table on every ingest — ✅ DONE (2026-08-19)
+
+> **Fixed 2026-08-19, bundled with #53 step 4 as the entry below asked.** The
+> diagnosis was exactly right and the fix was not the obvious one.
+>
+> **An index on `content` changes nothing on its own.** Measured at 3,000 topics
+> against a real server: 4.0 ms unhinted, **4.3 ms with the index defined**, and
+> the EXPLAIN says why — the planner still resolves through `idx_topic_status`,
+> matching every active row, with `content` as a post-filter. A composite
+> `(content, status)` index does the same. What moves `content` into the access
+> path is naming the index: `SELECT * FROM {table} WITH INDEX
+> idx_{table}_content …` plans through it and leaves `status` as the cheap
+> post-filter, at **0.53 ms** — 8× faster and flat where the old one was linear.
+>
+> **The write cost, which is why this was an issue rather than a patch, is not
+> there.** Three seeds of 3,000 nodes each way: 1,944 ms median unindexed
+> against 2,033 ms indexed, +4.6%, inside a run-to-run spread of 1,728–2,721 ms.
+> So the option list resolves to *define the index* rather than to *hash the
+> content* or *scope it to the topic tables* — neither of which was needed.
+>
+> The guard is a **plan assertion**, as the entry specified, in
+> `tests/storage/test_surrealdb_storage.py`: the SQL lives in one named
+> constant (`CONTENT_LOOKUP`) so the test explains the query the adapter
+> actually issues, and it fails if the plan ever reaches `idx_{table}_status`
+> again. Behaviour tests cannot see this defect — the lookup answers correctly
+> either way.
+>
+> **What the second caller does with it.** `store_decomposition` now checks each
+> stored fact for a word-for-word `HISTORICAL` twin and reports it as
+> `historical_twins` — the cheap floor under recurrence detection (#53 T2). One
+> indexed lookup per fact was worth adding; one table scan per fact was not,
+> which is exactly why the two were bundled.
+
+<details>
+<summary>The original entry</summary>
 
 Found by the same query-plan audit as #14 step 4, on the *write* path rather
 than the read path.
@@ -226,6 +268,8 @@ the measurement recorded.
 `tests/storage/test_surrealdb_storage.py`: `EXPLAIN` the lookup and assert it
 does not resolve through a status index. Behaviour is already covered by the
 exact-name upsert tests, which must keep passing unchanged.
+
+</details>
 
 ---
 
@@ -276,7 +320,47 @@ while the server is single-client stdio; keep this issue open as the reminder.
 
 ---
 
-### Issue 46 — `confidence` is a constant that documentation describes as a measurement — ▶ ACTIONABLE
+### Issue 46 — `confidence` is a constant that documentation describes as a measurement — ✅ DONE (2026-08-19)
+
+> **Built 2026-08-19.** `confidence` is `float | None = None` on `ValueSignal`,
+> supplied per entry at `store_decomposition` alongside an optional one-line
+> `confidence_basis` in node metadata, and read as 0.5 through
+> `rated_confidence` at every consumer but two — `merged_value_signal`, where an
+> unrated signal loses to a rated one, and `_node_to_dict`, where it stays
+> `null` because the agent reading a search result is who the nullable field is
+> for. The ladder lives in `server.py`'s `store_decomposition` docstring and in
+> `AGENTS.md`; the reasoning stays here.
+>
+> **Three things worth carrying forward.** *(1)* No migration and none wanted:
+> every node written before today carries a literal `0.5`, so those rows read as
+> *rated* ordinary rather than unrated. That overstates what was considered, and
+> it is the only honest reading available — the row does not record whether
+> anyone looked. Absence starts meaning something for nodes written from here on.
+> *(2)* The consumer sweep found one reader the sign-off had not named:
+> `NodeView` (`visualization/events.py`). It was **first built reading absence
+> as 0.5**, on the reasoning that the frontend types it `number`, that a
+> tooltip has nowhere to put "unassessed", and that the distinction serves the
+> merge rule and auditing rather than a label. **Corrected the same day on
+> review:** that reasoning weighed the frontend's convenience against a false
+> statement, and the false statement is worse — a tooltip reading
+> `confidence 0.50` asserts an assessment no agent ever made. `NodeView.confidence`
+> is `float | None`, `types.ts` is `number | null`, and the panel prints a dash,
+> which is the idiom it already uses to print `never` for an unretrieved node.
+> The general rule, now in `rated_confidence`'s docstring: **substitute the
+> default only to rank or compare, never to display or relay.**
+> *(3)* `merge_similar_topics`'s
+> primary-description comparison is now a real comparison rather than a
+> permanent tie, which is the behavioural change this entry was filed over.
+>
+> **Left open deliberately**, and both belong to #51 rather than here: per-source
+> support levels on the `sourced_from` edge, and with them the missing path for
+> **source discredit** — a document that turns out fabricated still leaves every
+> prior derived from it overstating, with nothing able to sweep per-source.
+>
+> **The revisit trigger from amendment 2's sign-off is now live**: measure the
+> share of non-default priors that arrive carrying a `confidence_basis`. If
+> guidance is not producing them, the fallback is refusal at the tool boundary,
+> the same shape `judge_importance` already uses.
 
 Found by the audit that resolved #44: having established that `relevance` was
 written but never read, the obvious next question was whether its siblings were
@@ -480,32 +564,63 @@ resolve to "whichever was passed first" — but that is now honestly the
 
 #### Work
 
-1. `store_decomposition` accepts `confidence` per entry alongside `importance`
-   (`_decomposition_entry`, `tools.py:175`; `ValueSignal` bounds already reject
-   out-of-range without a clamp).
-2. Tool guidance in `server.py` and `tools.py` — definition sentence, ladder,
+> **Restated 2026-08-19** to match the two sign-offs above. The list below
+> originally described the pre-amendment field — `confidence: float = 0.5`,
+> no basis — and would have built the shape the amendments replaced. Items 2,
+> 4 and 5 are unchanged; 1 and 3 grew, and the consumer sweep is new.
+
+1. **The field becomes `confidence: float | None = None`** (`core/types.py:281`),
+   unrated stored as absent and read as 0.5 at each consumer. `ValueSignal`'s
+   bounds still reject out-of-range without a clamp; `None` is not a value on
+   the scale, so it passes them by being absent rather than by widening them.
+2. `store_decomposition` accepts `confidence` per entry alongside `importance`
+   (`_decomposition_entry`), plus an optional one-line `confidence_basis` that
+   lands in node metadata beside the `reinforcements` trail. Guidance asks for
+   the basis whenever the supplied value is not 0.5; a missing one does not
+   fail the call, per amendment 2's sign-off.
+3. **The consumer sweep** — every place that reads the number has to say what
+   it does about absence:
+   - `topic_consolidation.py:164`'s primary-description comparison — reads
+     `None` as 0.5, which keeps the unrated tie resolving as it does today.
+   - `merged_value_signal`'s `max` (`core/types.py:330`) — `None` loses to any
+     real value, as the clocks in the same function already do, and an
+     all-unrated merge stays unrated.
+   - `_node_to_dict`'s dump — relays `None` as JSON `null` rather than
+     substituting 0.5, since a caller reading a search result is the audience
+     amendment 1 exists for.
+   - `NodeView` (`visualization/events.py:50`), which the sign-off did not
+     name — relays `None`, so `types.ts` types it `number | null` and the
+     timeline tooltip prints a dash. Displaying the 0.5 default would assert
+     an assessment nobody made, and the panel already has the idiom: it prints
+     `never` for an unretrieved node rather than inventing a timestamp.
+   - Round-trip on both backends: SurrealDB needs nothing, since
+     `drop_none_values` already recurses into `value` and Pydantic refills the
+     `= None` default on read. Worth a test rather than a change.
+4. Tool guidance in `server.py` and `tools.py` — definition sentence, ladder,
    omit-by-default, plus the short forms of edge cases 2, 4, 5 and 6. The
    reasoning stays here; the docstring stays short, because a long one costs
    ingest quality on every other field.
-3. `merged_value_signal`'s `confidence` docstring bullet gets the justification
+5. `merged_value_signal`'s `confidence` docstring bullet gets the justification
    above, replacing "as both sites already did".
-4. Docs: `SUMMARY.md:232` (`creation-time only so far`), `:295` (mutation
+6. Docs: `SUMMARY.md:232` (`creation-time only so far`), `:295` (mutation
    table), `:143`, and the promise at `:39`/`:55` — a prior, not a measurement.
    Resolve the open question at `:450` per edge case 2.
-5. `CLAUDE.md`'s memory-system section says nothing about value priors; the
+7. `CLAUDE.md`'s memory-system section says nothing about value priors; the
    ladder belongs there too, since that is what an agent reads before ingesting.
 
 **Failing test first**:
 `tests/mcp/test_tools.py::TestStoreDecompositionValuePriors` — an entry carrying
-`confidence` stores it; one omitting it keeps the documented default; an
-out-of-range value is refused by the `ValueSignal` bounds rather than silently
-clamped. Plus `tests/core/test_types.py` for the merge pairing: the signal whose
-confidence wins the `max` is the one belonging to the description chosen as
-primary.
+`confidence` stores it; one omitting it stores *absence* rather than 0.5, and
+reads back as the documented default at every consumer; an out-of-range value is
+refused by the `ValueSignal` bounds rather than silently clamped; a supplied
+basis lands in metadata and a missing one does not fail the call. Plus
+`tests/core/test_types.py` for the merge pairing — the signal whose confidence
+wins the `max` is the one belonging to the description chosen as primary — and
+for the `None` rule in both directions.
 
 ---
 
-### Issue 51 — corroboration is documented, wanted, and computed nowhere — ▷ READY (after 46)
+### Issue 51 — corroboration is documented, wanted, and computed nowhere — ▶ ACTIONABLE (46 landed 2026-08-19)
 
 Split out of #46 on 2026-08-12. The `ValueSignal` documentation promises two
 things and the split gave each its own home: *"how well-supported by evidence"*
@@ -732,12 +847,208 @@ stay two facts even under the #53 interval model.
 
 ---
 
-### Issue 53 — facts have no validity interval, so the graph cannot say *when* a claim was true — ◆ HIGH PRIORITY, DESIGN COMPLETE / NOT BUILT
+### Issue 53 — facts have no validity interval, so the graph cannot say *when* a claim was true — ◆ HIGH PRIORITY, DESIGN COMPLETE / IN CONSTRUCTION
 
 Filed 2026-08-12. Surfaced while asking whether fact deduplication (#52) could
 be made safe by requiring temporal agreement. It cannot, because the temporal
 information it would require is not in the model — and following that back
 showed the gap is not dedup's, it is the graph's.
+
+> **Construction note (2026-08-19) — T2's lineage edge and the interval type
+> are built; nothing stores an interval yet.**
+>
+> The build order is not written down anywhere above, so it is recorded here as
+> it is worked: (1) the lineage edge, done; (2) the interval type and its
+> comparison, pure functions with no storage, done; (3) intervals onto the
+> `sourced_from` edge, per source, done; (4) recurrence, bundled with #48 since
+> both visit `get_node_by_content`, done; (5) T3's retrieval surface; (6) §11's
+> soundness check. Nothing after (4) is started.
+>
+> **(1) is a gap-closing job rather than a new one.** #54 shipped the *status*
+> split on 2026-08-12 — `superseded_status_for(because)` returning `CORRECTED`
+> or `HISTORICAL`, with `migration_disposition` branching on it — and the
+> *edge* split stayed on paper. For the week between, every world-change wrote
+> `superseded_by`: a node whose status said *still true of its period*, reached
+> by an edge that said *replaced*. One of the two was wrong and it was always
+> the edge, because the status is what the caller judged and the edge was a
+> constant.
+>
+> The rule is `lineage_edge_type_for(status)`, deliberately shaped as the pair
+> to `SUPERSESSION_REASONS`: one decides what the node becomes, the other what
+> the edge says, and reading both from `status` is what stops them drifting
+> apart again. It refuses any status that is not a supersession, on
+> `superseded_status_for`'s grounds — a merge writes `merged_into` through its
+> own path, and answering for it would hand back a plausible edge for an event
+> that did not happen.
+>
+> **What it buys immediately is small and worth naming honestly**: nothing
+> reads the new edge yet. The value is that the graph stops making two
+> contradictory statements about the same event, and that the recurrence work
+> in (4) has an edge it can attach to. `HISTORY_EDGE_TYPES` membership carries
+> the three behaviours T2 asked for — not traversed, not migrated, anchored to
+> its version — without a line of new policy.
+>
+> **Two fixture drifts fixed on the way.** Four tests paired `HISTORICAL` with
+> a hand-built `superseded_by` edge, a combination production can no longer
+> produce; they now derive the type from the status. And the frontend's
+> `EDGE_MEANINGS` gained the new type, which is #55 exactly — a Python enum
+> growing a member a TypeScript lookup table never heard of. Same hue as
+> `superseded_by` on purpose: *which* retirement happened is the node's status
+> colour to say, and saying it twice lets the two readings disagree.
+>
+> **Left alone, and noted rather than fixed:** `link(A, B, "superseded_by")`
+> still writes a lineage edge without flipping A's status, and now accepts
+> `temporally_followed_by` on the same terms. That hole is older than this
+> issue and `REVIEW_EPISTEMIC.md` §6.1 already records the decision — the
+> answer was to add `supersede`, not to forbid `link` — so this slice widens
+> the enum by one and changes nothing about it.
+>
+> **(2) is built (2026-08-19): `epimemer/core/temporal.py`.** `ImpreciseInstant`
+> (T1 §4), `ValidityInterval` (§4, §5, §7, §8), `TemporalRelation` and
+> `compare_intervals` (§10). Pure — it reads no clock, touches no storage and
+> makes no network call — and deliberately offers **no collapse over sets**
+> (§3), because the union/intersection trap is the thing §3 exists to refuse and
+> a default is near-impossible to remove once callers depend on it. `published_at`
+> (§7) is not here: it changes a stored model and belongs with (3).
+>
+> **Two things T1 specified and construction had to make exact.**
+>
+> *Four endpoint classes for §4's three states.* `precise`, `named`, `unknown`,
+> `unbounded`. §4 groups the first two as one "point (concrete instant or
+> free-text label)" state, but the implementation of that grouping is
+> `at: datetime | None` with a label beside it — the exact `None`-means-two-things
+> shape §4 rejects `Timepoint` for, one level further down. So a named endpoint
+> is its own class: it compares *identically* to `unknown`, and differs only in
+> carrying the words the source used, which are the evidence for any later
+> resolution. Resolving one produces a `PreciseInstant` that keeps the label. The
+> three-state argument is untouched — `unknown` still is not `unbounded` — and
+> the extensibility rule holds either way.
+>
+> *Intervals are half-open, `[start, end)`.* T1 does not decide this and it
+> cannot be left undecided in code. Closed intervals make the exact instant of
+> the 1991 renaming a moment the city is provably called both names, and every
+> adjacent pair of periods overlap by a point — which would fire §11's check on
+> ordinary succession. So an instant belongs to the period that starts on it.
+> A claim true at a single moment is a witness point, not a zero-width interval,
+> and a zero-width interval is refused as empty.
+>
+> **Comparison concludes only what cannot be otherwise.** Unknown and named
+> endpoints withhold, and `unknown` is the majority answer by design. Two
+> refinements were needed to keep it from withholding where it actually knows:
+> an unbounded endpoint settles a comparison even against an unlocated one
+> (every moment of a non-empty interval falls after the beginning of time and
+> before the end of it, so a claim asserted to have always held overlaps a period
+> nobody has dated); and witness points can only ever *add* an overlap, never an
+> ordering, since a witness bounds an endpoint from the inside and an inside
+> bound cannot show a period stops before a moment. Both are pinned by tests,
+> along with a matrix asserting `before` one way is `after` the other for every
+> pair — the failure that guards against is a rule added to one branch and not
+> its mirror, which no single example catches.
+>
+> **A self-contradictory interval is refused at construction**, on *definite*
+> violations only: start at or after end, or a witness its own endpoints exclude.
+> That is a construction error rather than a source disagreeing with itself — no
+> document says *"as of 1990, Labour governed 1997–2010"* — and left standing it
+> would let the comparison derive an overlap from a premise that cannot hold.
+> Unknown endpoints never trip it, which keeps it from becoming a check on
+> unknown. Naive datetimes are read as UTC once, at construction, because a
+> hand-typed historical date is naive far more often than not and mixing it with
+> an aware one raises from inside a comparison rather than answering.
+>
+> **§4's structural test exists**: `instant_kind` is read in exactly two files —
+> `core/temporal.py`, which defines it, and the ingest guidance, which has to
+> name the shapes an agent writes. It fails the moment a third appears, which is
+> what keeps "adding a kind is a known, small change" true rather than
+> aspirational.
+>
+> **(3) is built (2026-08-19): intervals are stored, per source.**
+> `NodeEdge.validity` is a list of `ValidityInterval`, and **only a
+> `sourced_from` edge may carry one** — on a `similarity` or `tagged_with` edge
+> it would be a period attributed to nobody, which is §2's node-level set
+> reached by accident. `RawDocument.published_at` is an `ImpreciseInstant`, and
+> the no-fallback rule is in the field comment because a fallback to
+> `created_at` is the natural thing for someone to add later.
+>
+> An ingesting agent supplies both: `validity` per decomposition entry (it lands
+> on that node's provenance edge), `published_at` on `segment`. The guidance is
+> the deliverable here, as #46 found — it names the four endpoint shapes, says
+> that omitting the field entirely is the common and correct case, and states
+> the one prohibition that has no representation in the type: **a date the agent
+> knows and the document does not give is neither `stated` nor `inferred`, and
+> must not be supplied at all**.
+>
+> **One defect found while building it, which the field would otherwise have
+> shipped with.** Edge migration collapses duplicates by `(src, dst, type)`, so
+> merging two nodes extracted from the same document dropped one provenance edge
+> — and with it everything that edge asserted. "Intervals survive a merge for
+> free" (§2) is the property that put validity on the edge, and the dedup is
+> exactly where it would quietly stop being true. Both backends now hand the
+> loser's intervals to the survivor through `merged_validity`. That is **not**
+> the union §3 forbids: that union is across *sources*, where a sloppy source
+> widens a careful one's period; both lists here came from the same document
+> about what is now the same claim, so the list is doing what it was always for.
+> Exact duplicates are dropped, since one source asserting a period twice is one
+> assertion. The SurrealDB planner also iterated a *set* of source ids, which
+> made which duplicate survived depend on hash order; it now follows the
+> caller's order.
+>
+> **What still does not exist, stated so it is not assumed:** nothing *reads*
+> validity. There is no `(source, interval)` retrieval surface yet — the whole
+> edge is visible through `query_graph`, and the purpose-built read belongs with
+> T3 (step 5) rather than being invented ahead of its naming decisions. Reflect
+> does not yet propose the boundaries §9 describes, and §11's check is step 6.
+>
+> **(4) is built (2026-08-19): a retired claim can be seen, judged and brought
+> back.** T2's reversibility, in four pieces.
+>
+> *Nomination sees it.* `vector_search` takes `statuses`, defaulting to
+> `{ACTIVE}` so nothing resurfaces by accident, and `check_conflicts` asks for
+> `{ACTIVE, HISTORICAL}`. This was the whole blocker: the guard that said
+> *superseded and merged nodes must never resurface here* was also what made
+> `recurs` unreachable, so the verdict existed on paper and could never fire.
+> Every candidate now carries its `status`, because telling `redundant` from
+> `recurs` *is* the active-or-retired distinction and a list that hides it
+> invites the misclassification the verdict was added to prevent. The two
+> policy sets live in `core/types.py` — `NOMINATED_STATUSES` and
+> `RESTORABLE_STATUSES` — so "what can come back" is answered once.
+>
+> *Reflect catches what ingest missed.* `check_conflicts` is opt-in, so a graph
+> whose agent never called it would never be asked. The sweep nominates the same
+> set and reports mixed pairs under **`recurrences`**, apart from
+> `contradictions` — a claim beside its own successor is not a contradiction,
+> and filing it under that word is the same misreading from the other side. The
+> wider set is scored **once** and partitioned after, because this is the phase
+> that crosses the tool timeout as a graph grows (#39); a test pins the single
+> batched call.
+>
+> *A verbatim floor under both.* `store_decomposition` reports
+> `historical_twins`: facts just stored that are word-for-word a retired claim.
+> It reports and never acts — flipping a node live on a string match is too
+> brittle to do silently — and it is affordable only because #48 was fixed in
+> the same visit, one indexed lookup per fact rather than a table scan. That
+> bundling was the point of doing the two together.
+>
+> *Reactivation is one transaction.* `restore` gained `node_ids`,
+> `sourced_from` and `validity`. A `HISTORICAL` node comes back **only** when
+> the caller names the document asserting it again, and the flip and that edge
+> land together — `set_node_status_tx` grew an `edges` parameter for exactly
+> this, since a node back to ACTIVE with no edge recording why is an assertion
+> the graph makes and cannot attribute. `CORRECTED` is refused, which is what
+> this tool's docstring always literally said and could not enforce before the
+> status split. Refusals are checked before anything is written, so a batch
+> naming one corrected node changes nothing rather than half-applying.
+>
+> The prior intervals and the `temporally_followed_by` record are untouched, so
+> a reactivated node holds several disjoint periods — the shape a list of
+> intervals was for. The retirement stays in the lifecycle history, which is
+> what makes a *second* cycle describable; the `EVENT_LOG.md` §6 constraint is
+> already satisfied by the append-only episodes.
+>
+> **One asymmetry left deliberately.** `vector_search` takes `statuses`;
+> `text_search` still takes a singular `status`. Recurrence asks only the vector
+> route, so no caller can make the two seed routes disagree today — but this
+> must close at step 5, or the lexical half of a hybrid search will be the one
+> that cannot see historical nodes. Noted in `text_search`'s own contract.
 
 #### The shape of it — the "Saint Petersburg Problem"
 
@@ -1851,18 +2162,20 @@ is prospective, not a backlog.
 that `666904f` left behind, drawing corrected and historical nodes at full
 opacity against its own comment's warning.
 
-**#48 is a defect that does not hurt yet** — an O(N) scan per ingested node,
-invisible at today's sizes. Worth doing before the graph sizes that make it
-visible, and worth measuring rather than patching: the obvious fix (index the
-content) may cost more than it saves.
+**#48 was a defect that did not hurt yet** — an O(N) scan per ingested node,
+invisible at today's sizes. Fixed 2026-08-19, and the "measure rather than
+patch" instinct earned its keep: the obvious fix, indexing the content, changed
+nothing at all until the query named the index, and the write cost it was
+feared for turned out to be under 5%.
 
-**#46 is decided and #51 follows it.** Neither fails; both exist because the
-docs describe measurements the code does not take, which is the same trap #44
-was. Do them in order — #51's whole justification is that `confidence` is not
-the place to put a corroboration count, which only reads as a decision once
-`confidence` is something else. Between them the deliverable is written
-guidance rather than code: the field and the derivation are both small, and a
-prior no agent knows how to set is worth less than the constant it replaces.
+**#46 is done and #51 follows it.** Neither failed; both exist because the docs
+described measurements the code does not take, which is the same trap #44 was.
+The order mattered — #51's whole justification is that `confidence` is not the
+place to put a corroboration count, which only reads as a decision once
+`confidence` is something else, and now it is. The deliverable was written
+guidance rather than code, as predicted: the field and its consumer sweep are a
+handful of lines, and the ladder is the rest, because a prior no agent knows
+how to set is worth less than the constant it replaces.
 
 **On building 46 and 51 "assuming 52 lands" — split which part waits.** Putting
 per-source support on the provenance edge is right whether or not dedup ever
@@ -1897,10 +2210,10 @@ What to pick up, and what has to be true first:
 | ✅ | ~~55, 56~~ | **Done 2026-08-12** — the two frontend lookup tables that had drifted from what they encode |
 | ✅ | ~~54 (historical provenance and validity)~~ | **Done 2026-08-12.** `migration_disposition(edge_type, status)` is the policy; a world-change keeps provenance and judgments on the historical node and copies only the frame and tags |
 | ✅ | ~~57 (supersession events named no counterpart)~~ | **Done 2026-08-17** — counterpart ids on the live events and on `query_changes`, carried by the append-only lifecycle episodes (`EVENT_LOG.md` §6), which is what made the log panel readable |
-| 1 | **53 (validity intervals)** | **Design complete (T1/T2/T3), nothing built.** Everything else on this list is a defect inside a sound model; this one says the model cannot express something true. The floor (splitting `SUPERSEDED`) is done; the rest is construction against the entry, and `graph_as_of` is the only piece carrying a migration cost |
-| 2 | 46 (`confidence` becomes a supplied prior) | Decided 2026-08-12, but **two review amendments change the field shape and need sign-off first** (store the unrated case as absent; record a basis alongside a non-default prior). The work remains the tool guidance more than the field. Independent of 53 |
-| 3 | 51 (corroboration derived at read time) | After 46, which is what makes it a separate signal rather than a rewrite of one. Apply the review's neighbourhood exclusions (contradictors, variants). Measure the extra hop before putting it on the default `search` path. Ships with a known 53-shaped inaccuracy, stated in the entry |
-| 4 | 48 (`get_node_by_content` scans per ingest) | **Ready now** but not urgent, and the fix needs measuring before it is chosen. **T2 added a second caller** — the verbatim-twin floor; the load-bearing recurrence detector is nomination including `HISTORICAL` (#53 T2 second pass) — so do both in one visit to this path |
-| 5 | 59 (embedding truncation) | **Ready to measure, not to fix.** Take the token-length distribution over a real graph first; the entry lists four options and says which measurement decides between them. Lexical search relieves the identifier case and none of the rest |
+| ✅ | ~~46 (`confidence` becomes a supplied prior)~~ | **Done 2026-08-19.** Decided 2026-08-12, both review amendments signed off the day it was built: `float \| None` with unrated stored as absent, an optional `confidence_basis` asked for by guidance, and a consumer sweep saying what each reader does about absence. The deliverable was the tool guidance, as the entry predicted |
+| 1 | **53 (validity intervals)** | **Design complete (T1/T2/T3); in construction.** Everything else on this list is a defect inside a sound model; this one says the model cannot express something true. Done (all 2026-08-19): the status split; T2's lineage edge, which closed a week in which a world-change wrote an edge contradicting its own node's status; the interval type with its four-value comparison; per-source intervals stored on `sourced_from`, supplied at ingest; and recurrence — a retired claim can be nominated, judged and reactivated, which also closed #48. Next is T3's retrieval surface. Nothing **reads** validity yet; the six-step order is in the entry's construction note, and `graph_as_of` is the only piece carrying a migration cost |
+| 2 | 51 (corroboration derived at read time) | **Unblocked** — 46 is what makes this a separate signal rather than a rewrite of one, and 46 is done. Apply the review's neighbourhood exclusions (contradictors, variants). Measure the extra hop before putting it on the default `search` path. Ships with a known 53-shaped inaccuracy, stated in the entry. It also inherits 46's one accepted gap: per-source levels on the provenance edge, and with them any path for source discredit |
+| ✅ | ~~48 (`get_node_by_content` scans per ingest)~~ | **Done 2026-08-19**, in the same visit as #53 step 4 as this row predicted. The measurement decided it: an index on `content` changes nothing until the query names it, and then the lookup goes 4.0 ms → 0.53 ms at 3,000 nodes for under 5% on writes. Guarded by a plan assertion, since behaviour cannot see the defect |
+| 4 | 59 (embedding truncation) | **Ready to measure, not to fix.** Take the token-length distribution over a real graph first; the entry lists four options and says which measurement decides between them. Lexical search relieves the identifier case and none of the rest |
 | deferred | 52 (fact deduplication) | Re-open after 53 — and the re-open must carry the review's event/state distinction: interval union dedupes states, never events. Not before |
 | deferred | 16 | The server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`) |

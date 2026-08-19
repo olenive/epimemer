@@ -388,6 +388,27 @@ describe("buildRecordRows", () => {
     expect(buildRecordRows(snapshot)[0].dated[0].detail).toContain("never");
   });
 
+  it("shows a dash for an unrated confidence rather than the 0.5 default", () => {
+    const snapshot: SnapshotLike = {
+      nodes: [node({ node_id: "n1", confidence: null })],
+      edges: [],
+    };
+
+    const detail = buildRecordRows(snapshot)[0].dated[0].detail;
+
+    expect(detail).toContain("confidence —");
+    expect(detail).not.toContain("0.50");
+  });
+
+  it("still shows the number when an agent supplied one", () => {
+    const snapshot: SnapshotLike = {
+      nodes: [node({ node_id: "n1", confidence: 0.3 })],
+      edges: [],
+    };
+
+    expect(buildRecordRows(snapshot)[0].dated[0].detail).toContain("confidence 0.30");
+  });
+
   it("orders each row by creation time", () => {
     const snapshot: SnapshotLike = {
       nodes: [

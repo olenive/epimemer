@@ -12,7 +12,9 @@ it. The scoring itself now lives in `pair_scoring`, shared with the topic phase
 
 from epimemer.core.types import (
     EdgeType,
+    EpistemicNode,
     Fact,
+    NodeStatus,
     NodeType,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
@@ -36,30 +38,41 @@ async def detect_contradictions(
     *,
     similarity_threshold: float = 0.80,
     model_id: str | None = None,
+    statuses: frozenset[NodeStatus] = frozenset({NodeStatus.ACTIVE}),
 ) -> list[tuple[Fact, Fact, float]]:
-    """Find pairs of active facts with high embedding similarity.
+    """Find pairs of facts with high embedding similarity.
 
     High semantic similarity between facts can indicate either:
     - Redundancy (same fact stated differently)
     - Contradiction (opposing claims about the same thing)
+    - Recurrence, when one side is HISTORICAL: the same claim true again (#53)
 
     Returns candidate pairs for further analysis. Excludes pairs already
     linked by SIMILARITY or CONTRADICTION edges.
+
+    `statuses` widens what is compared, and the default keeps this pass to the
+    active set as before. Reflect asks twice rather than once: an active pair
+    and a historical/active pair mean different things, and a caller that mixed
+    them would file a claim beside its own successor under the word
+    *contradiction* — which is precisely the misreading the `recurs` verdict
+    exists to prevent.
 
     Args:
         storage: The storage backend.
         embedding_provider: Used to determine the model_id for embeddings.
         similarity_threshold: Minimum cosine similarity for a pair to be included.
         model_id: Override the model_id used for embedding lookup.
+        statuses: Which nodes are compared. ACTIVE alone by default.
 
     Returns:
         A list of (fact_a, fact_b, similarity_score) sorted by score descending.
     """
     effective_model_id = model_id or embedding_provider.model_id
 
-    # Get all active facts
-    active_facts = await storage.query_nodes(node_type=NodeType.FACT)
-    facts: list[Fact] = [f for f in active_facts if isinstance(f, Fact)]
+    candidates: list[EpistemicNode] = []
+    for status in sorted(statuses, key=lambda s: s.value):
+        candidates.extend(await storage.query_nodes(node_type=NodeType.FACT, status=status))
+    facts: list[Fact] = [f for f in candidates if isinstance(f, Fact)]
 
     if len(facts) < 2:
         return []

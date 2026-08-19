@@ -30,6 +30,7 @@ from epimemer.core.types import (
     NodeStatus,
     SUPERSEDED_STATUSES,
     ValueSignal,
+    traversal_excluded,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
@@ -231,7 +232,9 @@ class TestWorldChangeKeepsTheHistoricalNodesEdges:
             storage=storage,
             embedding_provider=embedding_provider,
         )
-        edges = await storage.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)
+        edges = await storage.get_edges_from(
+            old.id, edge_type=EdgeType.TEMPORALLY_FOLLOWED_BY
+        )
         return (await storage.get_node(edges[0].dst_id))
 
     async def test_the_historical_node_keeps_its_source_and_the_replacement_does_not_gain_it(
@@ -338,6 +341,176 @@ class TestWorldChangeKeepsTheHistoricalNodesEdges:
 
         new = await self._world_change(storage, embedding_provider, old)
 
-        lineage = await storage.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)
+        lineage = await storage.get_edges_from(
+            old.id, edge_type=EdgeType.TEMPORALLY_FOLLOWED_BY
+        )
         assert [e.dst_id for e in lineage] == [new.id]
-        assert len(await storage.get_edges_from(new.id, edge_type=EdgeType.SUPERSEDED_BY)) == 0
+        assert len(await storage.get_edges_from(
+            new.id, edge_type=EdgeType.TEMPORALLY_FOLLOWED_BY
+        )) == 0
+
+
+class TestTheLineageEdgeRecordsWhichEventHappened:
+    """#53 T2, the half the status split left behind.
+
+    Retiring a node writes two things: a status on the node and an edge to its
+    successor. The status learned the difference between *we were wrong* and
+    *the world moved* and the edge did not, so every world-change produced a
+    node marked `HISTORICAL` — still true of its period — reached by an edge
+    that said it had been replaced. One of the two was lying and it was always
+    the edge.
+
+    `temporally_followed_by` says only that one claim came after another, which
+    is what makes recurrence expressible later: Leningrad becoming Saint
+    Petersburg in 1991 stays true even when a claim becomes current again.
+    """
+
+    async def test_a_world_change_writes_temporal_order_and_not_replacement(
+        self, storage, embedding_provider
+    ):
+        old = await _fact(storage, embedding_provider, "The city is called Leningrad.")
+
+        await tools.update(
+            node_id=old.id,
+            new_content="The city is called Saint Petersburg.",
+            because="the_world_changed",
+            storage=storage,
+            embedding_provider=embedding_provider,
+        )
+
+        followed = await storage.get_edges_from(
+            old.id, edge_type=EdgeType.TEMPORALLY_FOLLOWED_BY
+        )
+        assert len(followed) == 1
+        assert len(await storage.get_edges_from(
+            old.id, edge_type=EdgeType.SUPERSEDED_BY
+        )) == 0
+
+    async def test_a_correction_writes_replacement_and_not_temporal_order(
+        self, storage, embedding_provider
+    ):
+        old = await _fact(storage, embedding_provider, "The capital is Bonn.")
+
+        await tools.update(
+            node_id=old.id,
+            new_content="The capital is Berlin.",
+            because="it_was_wrong",
+            storage=storage,
+            embedding_provider=embedding_provider,
+        )
+
+        assert len(await storage.get_edges_from(
+            old.id, edge_type=EdgeType.SUPERSEDED_BY
+        )) == 1
+        assert len(await storage.get_edges_from(
+            old.id, edge_type=EdgeType.TEMPORALLY_FOLLOWED_BY
+        )) == 0
+
+    async def test_the_same_split_applies_when_the_successor_already_exists(
+        self, storage, embedding_provider
+    ):
+        """`supersede_by` is the other writer, and a split honoured on one path
+        and not the other is worse than no split: the edge would then depend on
+        how the claim happened to arrive."""
+        old = await _fact(storage, embedding_provider, "The city is called Leningrad.")
+        existing = await _fact(
+            storage, embedding_provider, "The city is called Saint Petersburg."
+        )
+        wrong = await _fact(storage, embedding_provider, "The capital is Bonn.")
+        right = await _fact(storage, embedding_provider, "The capital is Berlin.")
+
+        await tools.supersede_by(
+            old_id=old.id, existing_id=existing.id,
+            because="the_world_changed", storage=storage,
+        )
+        await tools.supersede_by(
+            old_id=wrong.id, existing_id=right.id,
+            because="it_was_wrong", storage=storage,
+        )
+
+        assert [e.dst_id for e in await storage.get_edges_from(
+            old.id, edge_type=EdgeType.TEMPORALLY_FOLLOWED_BY
+        )] == [existing.id]
+        assert [e.dst_id for e in await storage.get_edges_from(
+            wrong.id, edge_type=EdgeType.SUPERSEDED_BY
+        )] == [right.id]
+
+    async def test_the_transition_edge_is_not_traversed_as_knowledge(
+        self, storage, embedding_provider
+    ):
+        """It joins `HISTORY_EDGE_TYPES`, so retrieval does not walk from a
+        historical claim into its successor as though the two were related by
+        content. Making historical claims *reachable* is T3's job, through
+        status recall rather than through this edge."""
+        old = await _fact(storage, embedding_provider, "The city is called Leningrad.")
+
+        new = await self._world_change(storage, embedding_provider, old)
+        [edge] = await storage.get_edges_from(
+            old.id, edge_type=EdgeType.TEMPORALLY_FOLLOWED_BY
+        )
+
+        assert traversal_excluded(edge)
+        assert edge.dst_id == new.id
+
+    async def _world_change(self, storage, embedding_provider, old):
+        await tools.update(
+            node_id=old.id,
+            new_content="The city is called Saint Petersburg.",
+            because="the_world_changed",
+            storage=storage,
+            embedding_provider=embedding_provider,
+        )
+        edges = await storage.get_edges_from(
+            old.id, edge_type=EdgeType.TEMPORALLY_FOLLOWED_BY
+        )
+        return await storage.get_node(edges[0].dst_id)
+
+
+class TestRepeatedTransitionsBetweenOnePair:
+    """Two transitions the same way round are two facts about the world, not a
+    duplicate row (#53 T2, second pass).
+
+    *"Labour is in government"* gives way to *"the Conservatives are in
+    government"* in 1951, and again in 1970, and again in 1979, and again in
+    2010. Each is a separate observed transition between the same pair of
+    claims. Collapsing them by `(src, dst, type)` would leave the graph
+    asserting that the change happened once.
+
+    Reactivating a `HISTORICAL` node is not built yet — that is the `recurs`
+    verdict, and it needs validity intervals to be worth anything — so this
+    asserts the storage guarantee the mechanism will stand on rather than
+    driving it through `update`. The migration path is safe by construction:
+    `migration_disposition` answers `keep` for every history edge, so the one
+    signature-dedup site never sees these.
+    """
+
+    async def test_parallel_transitions_survive_as_separate_edges(self, storage):
+        for _ in range(2):
+            await storage.store_edge(NodeEdge(
+                src_id="labour-in-government",
+                dst_id="conservatives-in-government",
+                type=EdgeType.TEMPORALLY_FOLLOWED_BY,
+            ))
+
+        edges = await storage.get_edges_from(
+            "labour-in-government", edge_type=EdgeType.TEMPORALLY_FOLLOWED_BY
+        )
+        assert len(edges) == 2
+        assert len({e.id for e in edges}) == 2
+
+    async def test_a_transition_cycle_is_legal(self, storage):
+        """The chain returns to its own node — Saint Petersburg to Leningrad
+        and back — so any future walker over these edges has to be cycle-safe.
+        Recorded here because the edge that made recurrence expressible is the
+        same edge that made the graph cyclic."""
+        for src, dst in (("spb", "leningrad"), ("leningrad", "spb")):
+            await storage.store_edge(NodeEdge(
+                src_id=src, dst_id=dst, type=EdgeType.TEMPORALLY_FOLLOWED_BY,
+            ))
+
+        assert len(await storage.get_edges_from(
+            "spb", edge_type=EdgeType.TEMPORALLY_FOLLOWED_BY
+        )) == 1
+        assert len(await storage.get_edges_from(
+            "leningrad", edge_type=EdgeType.TEMPORALLY_FOLLOWED_BY
+        )) == 1

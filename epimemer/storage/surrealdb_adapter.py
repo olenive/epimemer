@@ -15,6 +15,7 @@ from typing import Any, Awaitable, Callable, Literal, Sequence
 from surrealdb import AsyncSurreal
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
+from epimemer.core.temporal import merged_validity
 from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
@@ -123,38 +124,54 @@ async def _ranked_items(
     return [(r["item_id"], r["score"]) for r in rows]
 
 
-async def _active_ids(
-    query, node_type: NodeType | None, *, among: list[str] | None = None
+async def _ids_with_status(
+    query,
+    node_type: NodeType | None,
+    statuses: frozenset[NodeStatus],
+    *,
+    among: list[str] | None = None,
 ) -> list[str]:
-    """Uids of active nodes — all of them, or only those in `among`.
+    """Uids of nodes in any of `statuses` — all of them, or only those in `among`.
 
     Restricting to `among` is the cheap direction: a handful of candidate ids
     checked against the unique index on `uid`. Passing `among=None` reads every
-    active id, which is only worth doing to feed the exact query below.
+    matching id, which is only worth doing to feed the exact query below.
+
+    The status list is a bound parameter rather than an interpolated literal:
+    these values come from an enum today, and a filter built by string-joining
+    caller-shaped values is how the next one stops being safe.
     """
     tables = _node_tables(node_type)
+    if not statuses:
+        return []
+    wanted = sorted(status.value for status in statuses)
     if among is None:
         return list(
-            await query(f"SELECT VALUE uid FROM {tables} WHERE status = 'active'")
+            await query(
+                f"SELECT VALUE uid FROM {tables} WHERE status IN $statuses",
+                {"statuses": wanted},
+            )
         )
     if not among:
         return []
     return list(
         await query(
-            f"SELECT VALUE uid FROM {tables} WHERE status = 'active' AND uid IN $ids",
-            {"ids": among},
+            f"SELECT VALUE uid FROM {tables} "
+            f"WHERE status IN $statuses AND uid IN $ids",
+            {"statuses": wanted, "ids": among},
         )
     )
 
 
-async def _ranked_active_items(
+async def _ranked_items_with_status(
     query,
     query_vector: list[float],
     model_id: str,
     k: int,
     node_type: NodeType | None,
+    statuses: frozenset[NodeStatus],
 ) -> list[tuple[str, float]]:
-    """Exact top-k over active nodes only: rank what survives the filter.
+    """Exact top-k over the retrievable nodes only: rank what survives the filter.
 
     Two round-trips rather than one query with a subquery. Expressing the filter
     as `item_id IN (SELECT ...)` reads well but makes SurrealDB re-run that
@@ -163,16 +180,16 @@ async def _ranked_active_items(
     its tool timeout. Fetching the ids first and binding them as a parameter
     turns the per-row work into an array membership test.
 
-    Still linear in (rows × active nodes) in-engine, so this is the fallback
-    rather than the usual path — correct at any ratio of retired nodes, and
-    bounded, but it grows.
+    Still linear in (rows × retrievable nodes) in-engine, so this is the
+    fallback rather than the usual path — correct at any ratio of retired nodes,
+    and bounded, but it grows.
 
-    (It cannot be written as one `LET $active = (...); SELECT ...` call: this
+    (It cannot be written as one `LET $wanted = (...); SELECT ...` call: this
     driver returns the *first* statement's result, so the select's rows would be
     thrown away and `LET`'s `None` returned in their place.)
     """
-    active = await _active_ids(query, node_type)
-    if not active:
+    wanted = await _ids_with_status(query, node_type, statuses)
+    if not wanted:
         return []
     rows = await query(
         """
@@ -180,7 +197,7 @@ async def _ranked_active_items(
             item_id,
             vector::similarity::cosine(vector, $query_vector) AS score
         FROM embedding
-        WHERE model_id = $model_id AND item_id IN $active
+        WHERE model_id = $model_id AND item_id IN $wanted
         ORDER BY score DESC
         LIMIT $k
         """,
@@ -188,10 +205,24 @@ async def _ranked_active_items(
             "query_vector": query_vector,
             "model_id": model_id,
             "k": k,
-            "active": active,
+            "wanted": wanted,
         },
     )
     return [(r["item_id"], r["score"]) for r in rows]
+
+
+# The exact-content lookup, named so a test can assert its *plan* rather than
+# only its answer. `WITH INDEX` is the whole point: without it SurrealDB
+# resolves this through `idx_{table}_status`, which matches every active row,
+# and applies `content` as a predicate afterwards — a scan of the live table on
+# every ingest (#48). Defining a `content` index does not fix that on its own;
+# the planner keeps choosing the status index, and so does a composite
+# `(content, status)`. Only naming the index moves `content` into the access
+# path and leaves `status` as the cheap post-filter.
+CONTENT_LOOKUP = (
+    "SELECT * FROM {table} WITH INDEX idx_{table}_content "
+    "WHERE content = $content AND status = $status LIMIT 1"
+)
 
 
 # `IN` does not use an index in this SurrealDB. Verified with EXPLAIN on
@@ -682,6 +713,7 @@ class SurrealDBStorage:
                 DEFINE TABLE IF NOT EXISTS {table} SCHEMALESS;
                 DEFINE INDEX IF NOT EXISTS idx_{table}_uid ON {table} FIELDS uid UNIQUE;
                 DEFINE INDEX IF NOT EXISTS idx_{table}_status ON {table} FIELDS status;
+                DEFINE INDEX IF NOT EXISTS idx_{table}_content ON {table} FIELDS content;
             """)
 
         await query("""
@@ -853,11 +885,18 @@ class SurrealDBStorage:
         node_type: NodeType | None = None,
         status: NodeStatus = NodeStatus.ACTIVE,
     ) -> EpistemicNode | None:
-        """First active node with exactly this content (for exact-name upsert)."""
+        """First node with exactly this content and status (for exact-name upsert).
+
+        Measured at 3,000 topics against a real server (#48): 4.0 ms with the
+        planner's own choice, 4.3 ms with an unused content index, **0.53 ms**
+        once the index is named — and the write side pays under 5% for that
+        index, inside the run-to-run spread, which was the cost that made this
+        an issue rather than a patch. See `CONTENT_LOOKUP`.
+        """
         tables = [_NODE_TYPE_TO_TABLE[node_type]] if node_type else ["topic", "fact", "inference"]
         for table in tables:
             rows = await self._query(
-                f"SELECT * FROM {table} WHERE content = $content AND status = $status LIMIT 1",
+                CONTENT_LOOKUP.format(table=table),
                 {"content": content, "status": status.value},
             )
             if rows:
@@ -1175,6 +1214,7 @@ class SurrealDBStorage:
         *,
         status: NodeStatus,
         at: datetime,
+        edges: Sequence[NodeEdge] = (),
     ) -> None:
         if not nodes:
             return
@@ -1217,6 +1257,11 @@ class SurrealDBStorage:
                 f"UPDATE {_node_to_table(node)} SET lifecycle = $lifecycle_{i} "
                 f"WHERE uid = $uid_{i}"
             )
+        # Inside the same transaction, so a reactivated node can never be left
+        # ACTIVE without the edge saying what asserted it again (#53 T2).
+        if edges:
+            statements.append("INSERT INTO node_edge $new_edges")
+            params["new_edges"] = [_edge_row(edge) for edge in edges]
         await self._run_transaction(statements, params)
 
     @staticmethod
@@ -1252,16 +1297,18 @@ class SurrealDBStorage:
         # deterministic — in-transaction GROUP BY dedup proved unreliable. The
         # reads are pre-transaction; the adapter is single-connection (already
         # documented as not safe for concurrent callers), so nothing interleaves.
+        # Walked in the caller's source order, not `source_ids`' — iterating a
+        # set makes which duplicate survives a collapse depend on hash order.
         incident: dict[str, NodeEdge] = {}
-        for sid in source_ids:
-            for edge in await self.get_edges_from(sid):
+        for source in source_nodes:
+            for edge in await self.get_edges_from(source.id):
                 incident[edge.id] = edge
-            for edge in await self.get_edges_to(sid):
+            for edge in await self.get_edges_to(source.id):
                 incident[edge.id] = edge
 
         old_edge_ids: list[str] = []
-        repointed_data: list[dict] = []
-        seen: set[tuple[str, str, str]] = set()
+        repointed: list[NodeEdge] = []
+        survivors: dict[tuple[str, str, str], NodeEdge] = {}
         for edge in incident.values():
             if migration_disposition(edge.type, NodeStatus.MERGED) == "keep":
                 continue
@@ -1269,10 +1316,22 @@ class SurrealDBStorage:
             new_src = merged_node.id if edge.src_id in source_ids else edge.src_id
             new_dst = merged_node.id if edge.dst_id in source_ids else edge.dst_id
             signature = (new_src, new_dst, edge.type.value)
-            if new_src == new_dst or signature in seen:
-                continue  # ...self-loops and duplicates are not recreated
-            seen.add(signature)
-            row = _serialize(edge.model_copy(update={"src_id": new_src, "dst_id": new_dst}))
+            survivor = survivors.get(signature)
+            if new_src == new_dst or survivor is not None:
+                # ...self-loops and duplicates are not recreated, but what a
+                # duplicate *asserted* is: collapsing two provenance edges to one
+                # document must not lose either one's periods (#53 T1 §2).
+                # Rebound rather than appended — `model_copy` shares the list.
+                if survivor is not None:
+                    survivor.validity = merged_validity(survivor.validity, edge.validity)
+                continue
+            moved = edge.model_copy(update={"src_id": new_src, "dst_id": new_dst})
+            survivors[signature] = moved
+            repointed.append(moved)
+
+        repointed_data: list[dict] = []
+        for edge in repointed:
+            row = _serialize(edge)
             row["type"] = edge.type.value
             repointed_data.append(row)
 
@@ -1433,12 +1492,15 @@ class SurrealDBStorage:
         *,
         k: int = 10,
         node_type: NodeType | None = None,
+        statuses: frozenset[NodeStatus] = frozenset({NodeStatus.ACTIVE}),
     ) -> Sequence[tuple[str, float]]:
-        """Top-k active nodes by cosine similarity.
+        """Top-k nodes by cosine similarity, filtered to `statuses`.
 
-        Superseded and merged nodes must never resurface here, and `k` counts
-        results the caller can use rather than rows examined — so the filter
-        cannot simply be applied to an already-truncated ranking.
+        The default is ACTIVE alone, which is the guard this method used to
+        enforce by construction: retired nodes do not resurface unless a caller
+        names them. `k` counts results the caller can use rather than rows
+        examined, so the filter cannot simply be applied to an already-truncated
+        ranking.
 
         Rank first, filter after, over-fetching enough that the filter has
         candidates to keep. Retired nodes are a small minority of a healthy
@@ -1446,11 +1508,12 @@ class SurrealDBStorage:
         one cheap scan and one membership check on ~30 ids. When it does not —
         a graph with a lot of history, or a typed search where the requested
         type is a minority of the embeddings — reach further, and only then pay
-        for the exact query.
+        for the exact query. A wider `statuses` only ever makes the over-fetch
+        *more* likely to suffice, since fewer candidates are discarded.
 
         The obvious formulation, filtering inside the ranking query with
         `item_id IN (SELECT ...)`, is the one thing to avoid: SurrealDB re-runs
-        that subquery per embedding row. See `_ranked_active_items`.
+        that subquery per embedding row. See `_ranked_items_with_status`.
 
         TODO: When SurrealDB adds native HNSW vector indexes, switch to those.
         For now, brute-force via SurrealQL vector::similarity::cosine().
@@ -1459,8 +1522,9 @@ class SurrealDBStorage:
             limit = k * factor
             candidates = await _ranked_items(self._query, query_vector, model_id, limit)
             keep = set(
-                await _active_ids(
-                    self._query, node_type, among=[item_id for item_id, _ in candidates]
+                await _ids_with_status(
+                    self._query, node_type, statuses,
+                    among=[item_id for item_id, _ in candidates],
                 )
             )
             active = [(i, score) for i, score in candidates if i in keep]
@@ -1468,8 +1532,8 @@ class SurrealDBStorage:
             # embeddings, so a deeper reach cannot find anything more.
             if len(active) >= k or len(candidates) < limit:
                 return active[:k]
-        return await _ranked_active_items(
-            self._query, query_vector, model_id, k, node_type
+        return await _ranked_items_with_status(
+            self._query, query_vector, model_id, k, node_type, statuses
         )
 
     # --- Lexical search ---

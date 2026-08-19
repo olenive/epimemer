@@ -17,6 +17,7 @@ from epimemer.core.types import (
     NodeEdge,
     NodeStatus,
     Topic,
+    lineage_edge_type_for,
 )
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization.event_bus import create_event_bus
@@ -47,7 +48,7 @@ async def _supersede(bus, *, status: NodeStatus, evidence: int = 0):
     await wrapped.supersede_node_tx(
         old, new,
         EmbeddingRecord(item_id=new.id, model_id="test", vector=[1.0, 0.0]),
-        NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY),
+        NodeEdge(src_id=old.id, dst_id=new.id, type=lineage_edge_type_for(status)),
         status=status,
         superseded_at=datetime.now(timezone.utc),
         evidence_edges=[

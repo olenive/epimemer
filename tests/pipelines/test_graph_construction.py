@@ -17,6 +17,11 @@ import pytest
 
 from petritype.core.executable_graph_components import ExecutableGraphOperations
 
+from epimemer.core.temporal import (
+    IntervalBasis,
+    PreciseInstant,
+    ValidityInterval,
+)
 from epimemer.core.types import (
     EdgeType,
     Fact,
@@ -492,6 +497,53 @@ class TestVersioning:
         # The source-to-source edge did not survive as a self-loop.
         out = await storage.get_edges_from("merge-mig-dst")
         assert [e for e in out if e.dst_id == "merge-mig-dst"] == []
+
+    @pytest.mark.asyncio
+    async def test_merge_keeps_the_periods_of_the_edge_it_collapses(
+        self, storage: InMemoryStorage, embedding_provider: MockEmbeddingProvider
+    ) -> None:
+        """Two provenance edges to one document become one, keeping both periods.
+
+        "Intervals survive a merge for free" is the property that put validity on
+        the edge (#53 T1 §2), and the dedup is where it would quietly stop being
+        true: the collapse is by `(src, dst, type)`, so the loser's intervals go
+        with it unless they are handed over. Both nodes were extracted from the
+        same document, so this is one source's several periods — not the
+        cross-source union §3 forbids.
+        """
+        first_period = ValidityInterval(
+            start=PreciseInstant(at=datetime(1997, 5, 2, tzinfo=timezone.utc)),
+            end=PreciseInstant(at=datetime(2010, 5, 11, tzinfo=timezone.utc)),
+            basis=IntervalBasis.STATED,
+        )
+        second_period = ValidityInterval(
+            start=PreciseInstant(at=datetime(2024, 7, 5, tzinfo=timezone.utc)),
+            basis=IntervalBasis.STATED,
+        )
+        t1 = Topic(id="merge-val-1", content="Labour in government", source_id="seg-1")
+        t2 = Topic(id="merge-val-2", content="Labour governs", source_id="seg-1")
+        merged = Topic(id="merge-val-dst", content="Labour in government", source_id="seg-1")
+        for node in (t1, t2):
+            await storage.store_node(node)
+        for node, period in ((t1, first_period), (t2, second_period)):
+            await storage.store_edge(NodeEdge(
+                src_id=node.id, dst_id="merge-val-doc", type=EdgeType.SOURCED_FROM,
+                validity=[period],
+            ))
+
+        await merge_nodes([t1, t2], merged, storage, embedding_provider)
+
+        provenance = await storage.get_edges_from(
+            "merge-val-dst", edge_type=EdgeType.SOURCED_FROM
+        )
+        assert len(provenance) == 1, "one edge per (node, document)"
+        # Compared without regard to order: which of the collapsing edges is the
+        # survivor is a backend's own business, and nothing reads these
+        # positionally. What must not vary is that both periods are still there.
+        by_value = sorted(provenance[0].validity, key=lambda i: i.model_dump_json())
+        assert by_value == sorted(
+            [first_period, second_period], key=lambda i: i.model_dump_json()
+        )
 
 
 # --- Storage Round-Trip Tests ---

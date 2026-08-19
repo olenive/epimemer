@@ -8,6 +8,8 @@ calls these and wraps the results.
 from datetime import datetime, timezone
 from typing import Iterable, Iterator, Literal, Mapping, Sequence
 
+from pydantic import BaseModel, Field
+
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
     EdgeType,
@@ -19,6 +21,8 @@ from epimemer.core.types import (
     NodeChangeEvent,
     NodeEdge,
     NodeStatus,
+    NOMINATED_STATUSES,
+    RESTORABLE_STATUSES,
     superseded_status_for,
     NodeType,
     RawDocument,
@@ -28,6 +32,7 @@ from epimemer.core.types import (
     ValueSignal,
     merged_value_signal,
 )
+from epimemer.core.temporal import ValidityInterval
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.mcp.config import (
     DEFAULT_IMPORTANCE_STEP,
@@ -157,6 +162,7 @@ async def segment_text(
     source: str | None = None,
     source_type: str | None = None,
     published_by: str | None = None,
+    published_at: dict | None = None,
     metadata: dict | None = None,
     segmentation_strategy: str | None = None,
     event_bus: InProcessEventBus | None = None,
@@ -170,7 +176,9 @@ async def segment_text(
     source/source_type describe the originating document; every node decomposed
     from it gets a `sourced_from` edge to this document. `published_by` names a
     publishing/authoring entity — resolved-or-created as an entity Topic and linked
-    to the document by a `published_by` (attribution) edge.
+    to the document by a `published_by` (attribution) edge. `published_at` is when
+    the document was published, which bounds what it could have known; it is left
+    absent rather than falling back to the ingest time (#53 T1 §7).
     """
     from epimemer.pipelines.segmentation.paragraph_split import paragraph_split_segmentation_net
     from epimemer.pipelines.segmentation.semantic_similarity import semantic_similarity_segmentation_net
@@ -178,7 +186,8 @@ async def segment_text(
     strategy = segmentation_strategy or config.segmentation_strategy
 
     doc = RawDocument(
-        content=content, source=source, source_type=source_type, metadata=metadata or {},
+        content=content, source=source, source_type=source_type,
+        published_at=published_at, metadata=metadata or {},
     )
     await storage.store_document(doc)
 
@@ -240,21 +249,64 @@ async def _upsert_entity_topic(
     return topic
 
 
-def _decomposition_entry(entry) -> tuple[str, list[str], float | None]:
-    """Unpack a decomposition entry: a bare content string, or
-    `{"content": str, "tags": [name, ...], "importance": float}`.
+class DecompositionEntry(BaseModel):
+    """One extracted node as the agent supplied it.
 
-    `importance` is a *prior*, not a verdict: triviality is only visible once
-    the neighbourhood exists, so the real judgment happens at reflect time.
-    Omitting it leaves the node at the `ValueSignal` default.
+    Both value fields are *priors*, not verdicts, and they differ in what
+    omitting one says. `importance` has a real default: triviality is only
+    visible once the neighbourhood exists, so the judgment happens at reflect
+    time and a node that arrives unrated is simply waiting for it.
+    `confidence` cannot be judged later by anything — the material is in front
+    of the agent now and nothing downstream will read it again — so an omitted
+    value means the question was never put, and stays absent rather than
+    landing on the default number (#46).
+
+    No bounds here: `ValueSignal` already holds them, and restating a range in
+    two places is how the two come to disagree.
     """
+    content: str
+    tags: list[str] = Field(default_factory=list)
+    importance: float | None = None
+    confidence: float | None = None
+    # One line, optional, and asked for by guidance rather than enforced. A
+    # non-default prior with no reason recorded is the unattributable judgment
+    # `judge_importance` refuses outright; here the same argument buys a
+    # request, not a refusal, because failing an ingest over it costs more
+    # than the missing line.
+    confidence_basis: str | None = None
+    # When this document says the claim was true (#53 T1 §9). Ingest is the only
+    # place that can supply it: tense and the dates written in the text are
+    # visible here and nowhere later, and reflect has facts and a graph rather
+    # than a document. It lands on the node's `sourced_from` edge, so it is
+    # always attributable to the document it came from.
+    validity: list[ValidityInterval] = Field(default_factory=list)
+
+
+def _decomposition_entry(entry) -> DecompositionEntry:
+    """Unpack a decomposition entry: a bare content string, or a dict of the
+    fields above. A bare string is the common case and carries no priors."""
     if isinstance(entry, dict):
-        return (
-            entry["content"],
-            list(entry.get("tags", [])),
-            entry.get("importance"),
+        return DecompositionEntry.model_validate(entry)
+    return DecompositionEntry(content=entry)
+
+
+def _entry_value_signal(entry: DecompositionEntry) -> ValueSignal:
+    """The priors the agent supplied, and nothing it did not.
+
+    Naming a field at all is what distinguishes "rated 0.5" from "unrated", so
+    an omitted one is left out of the call rather than passed as `None` — the
+    model's own default is then the single place each field's absence is
+    defined.
+    """
+    supplied = {
+        name: value
+        for name, value in (
+            ("importance", entry.importance),
+            ("confidence", entry.confidence),
         )
-    return entry, [], None
+        if value is not None
+    }
+    return ValueSignal(**supplied)
 
 
 EXTRACTED_TIMELINE_NAME = "Extracted"
@@ -306,9 +358,13 @@ async def store_decomposition(
 
     Each entry in segments should have:
         segment_id: str
-        topics/facts/inferences: each a content string, or {"content": str,
-            "tags": [name, ...], "importance": float} for per-node tags and an
-            optional importance prior (default 0.5).
+        topics/facts/inferences: each a content string, or a dict of the
+            `DecompositionEntry` fields — per-node tags plus the two value
+            priors. `importance` defaults to 0.5; `confidence` is left *unrated*
+            when omitted rather than defaulting, and an optional
+            `confidence_basis` records why a supplied one was chosen. The ladder
+            an agent calibrates against lives in `server.py`'s tool docstring,
+            which is what an agent actually reads before ingesting.
 
     Every node gets a `sourced_from` edge to the originating document. `tags`
     (document-level) and per-node tags are resolved-or-created (by exact name) as
@@ -370,23 +426,29 @@ async def store_decomposition(
         facts: list[Fact] = []
         inferences: list[Inference] = []
         tag_assignments: list[tuple[EpistemicNode, list[str]]] = []
+        validity_by_node: dict[str, list[ValidityInterval]] = {}
         for cls, entries, bucket in (
             (Topic, seg_data.get("topics", []), topics),
             (Fact, seg_data.get("facts", []), facts),
             (Inference, seg_data.get("inferences", []), inferences),
         ):
             for entry in entries:
-                content, node_tag_names, importance = _decomposition_entry(entry)
-                value = (
-                    ValueSignal() if importance is None
-                    else ValueSignal(importance=importance)
-                )
+                parsed = _decomposition_entry(entry)
                 node = cls(
-                    content=content, source_id=segment_id,
-                    value=value, extraction_method="agent",
+                    content=parsed.content, source_id=segment_id,
+                    value=_entry_value_signal(parsed), extraction_method="agent",
+                    # Beside the `reinforcements` trail rather than on the
+                    # signal: the basis is prose about one judgment, and
+                    # `ValueSignal` is the numbers every ranker reads.
+                    metadata=(
+                        {"confidence_basis": parsed.confidence_basis}
+                        if parsed.confidence_basis else {}
+                    ),
                 )
                 bucket.append(node)
-                names = doc_tag_names + node_tag_names
+                if parsed.validity:
+                    validity_by_node[node.id] = parsed.validity
+                names = doc_tag_names + parsed.tags
                 if names:
                     tag_assignments.append((node, names))
 
@@ -409,10 +471,13 @@ async def store_decomposition(
                     item_id=node.id, model_id=embedding_provider.model_id, vector=vector,
                 ))
 
-        # Provenance: every node is sourced_from the originating document.
+        # Provenance: every node is sourced_from the originating document, and
+        # the periods this document asserts the claim held ride on that edge —
+        # the only place they are attributable to the source that made them.
         for node in seg_nodes:
             batch_edges.append(NodeEdge(
                 src_id=node.id, dst_id=document_id, type=EdgeType.SOURCED_FROM,
+                validity=validity_by_node.get(node.id, []),
             ))
         # Tags: each becomes (or reuses) a Topic linked by tagged_with.
         for node, names in tag_assignments:
@@ -466,12 +531,48 @@ async def store_decomposition(
         "nodes_created": nodes_created,
         "edges_created": len(batch_edges),
         "timepoints_proposed": timepoints_proposed,
+        "historical_twins": await _historical_twins(batch_nodes, storage),
     }
     meta = ResponseMeta(
         nodes_returned=total_topics + total_facts + total_inferences,
         source_types={k: v for k, v in nodes_created.items() if v > 0},
     )
     return result, meta
+
+
+async def _historical_twins(nodes: Sequence[EpistemicNode], storage) -> list[dict]:
+    """Facts just stored that are word-for-word a claim the graph retired.
+
+    The cheap floor under recurrence detection (#53 T2). `check_conflicts` is
+    the load-bearing detector — it nominates by similarity, so it sees the
+    recurrence two documents phrase differently, which is nearly all of them —
+    but it is opt-in, and an agent that never calls it gets no recurrence
+    detection at all. An exact-content match is the one case cheap enough to
+    check unasked.
+
+    **It reports and never acts.** Reactivation stays explicit: flipping a node
+    live behind the caller's back on a string match is too brittle to do
+    silently, and the agent has the new document in front of it and can tell a
+    recurrence from a coincidence.
+
+    Affordable only because #48 was fixed in the same visit: this is one indexed
+    lookup per fact, 0.53 ms at 3,000 nodes against a real server, where the
+    unhinted query it replaced was a table scan at 4.0 ms and climbing.
+    """
+    twins: list[dict] = []
+    for node in nodes:
+        if not isinstance(node, Fact):
+            continue
+        twin = await storage.get_node_by_content(
+            node.content, node_type=NodeType.FACT, status=NodeStatus.HISTORICAL,
+        )
+        if twin is not None:
+            twins.append({
+                "fact_id": node.id,
+                "content": node.content,
+                "historical_id": twin.id,
+            })
+    return twins
 
 
 
@@ -1239,6 +1340,10 @@ async def update(
     and the replacement is the same claim, corrected. A world-change hands over
     the frame and the tags only — the retired node keeps its own provenance,
     because it is still true of its period and its sources are what say so.
+
+    And it decides which lineage edge records the step: `superseded_by` says
+    *replaced* and is terminal, `temporally_followed_by` says only *came after*
+    and survives the same claim becoming true again (#53).
     """
     from epimemer.pipelines.graph_construction.versioning import supersede_node
 
@@ -1425,9 +1530,11 @@ async def supersede_by(
     arriving as new content). `because` distinguishes the two reasons that can
     be true of — `"it_was_wrong"` (a correction) or `"the_world_changed"` (the
     old claim still holds of its period); see #53. The old
-    node is marked accordingly (superseded_by → existing); inferences that
-    depended on it are flagged evidence_stale; the existing node keeps its own
-    edges. Unlike `update`, no new node is created.
+    node is marked accordingly and joined to `existing_id` by the lineage edge
+    that matches — `superseded_by` for a correction, `temporally_followed_by`
+    for a world-change; inferences that depended on it are flagged
+    evidence_stale; the existing node keeps its own edges. Unlike `update`, no
+    new node is created.
     """
     from epimemer.pipelines.graph_construction.versioning import supersede_by_existing
 
@@ -1460,15 +1567,29 @@ async def check_conflicts(
     threshold: float = 0.83,
     k: int = 5,
 ) -> tuple[dict, ResponseMeta]:
-    """Find active facts similar to the given facts, for the agent to judge.
+    """Find facts similar to the given facts, for the agent to judge.
 
     The recall stage of the review loop (REVIEW_EPISTEMIC.md §5.1): for each fact,
-    vector-searches active facts above ``threshold`` (excluding the fact itself)
-    and returns the candidates with their similarity score, metacontext labels,
-    and a same_frame flag. Similarity only *nominates* — the agent then classifies
-    each candidate (redundant / supersedes / contradicts / cross-frame /
-    compatible) and records the verdict via supersede_by / record_contradiction /
-    record_variant. Opt-in and cheap: a single vector lookup per fact at a high bar.
+    vector-searches above ``threshold`` (excluding the fact itself) and returns the
+    candidates with their similarity score, status, metacontext labels, and a
+    same_frame flag. Similarity only *nominates* — the agent then classifies each
+    candidate (redundant / supersedes / recurs / contradicts / cross-frame /
+    compatible) and records the verdict via supersede_by / restore /
+    record_contradiction / record_variant. Opt-in and cheap: a single vector
+    lookup per fact at a high bar.
+
+    **Candidates include `historical` nodes, and that is what makes `recurs`
+    reachable.** A claim retired because the world moved on can become true
+    again — Labour out of government in 2010 and back in 2024 — and until this
+    nomination included it, nobody was ever asked: ingest saw no twin and wrote
+    a second node saying what the first one said. `corrected` nodes stay out,
+    because a claim concluded *wrong* has no route back and nominating it would
+    invite a verdict that cannot be recorded (#53 T2).
+
+    Each candidate carries its `status` for the same reason. Once retired nodes
+    can appear, an agent cannot tell an active twin from a historical one — and
+    that distinction is the entire basis for choosing between `redundant` and
+    `recurs`.
     """
     from epimemer.pipelines.reflection.review import same_frame
 
@@ -1486,6 +1607,7 @@ async def check_conflicts(
         # k + 1 because the fact is its own nearest neighbour; trim back to k.
         hits = await storage.vector_search(
             embeddings[0].vector, model_id, k=k + 1, node_type=NodeType.FACT,
+            statuses=NOMINATED_STATUSES,
         )
         candidates: list[dict] = []
         for item_id, score in hits:
@@ -1498,6 +1620,7 @@ async def check_conflicts(
                 "id": cand.id,
                 "content": cand.content,
                 "score": round(score, 4),
+                "status": cand.status.value,
                 "metacontexts": await _metacontext_labels(cand.id, storage),
                 "same_frame": await same_frame(fact_id, cand.id, storage),
             })
@@ -1628,6 +1751,7 @@ REFLECT_PHASES = (
     "split_detection",
     "enrichment_scan",
     "contradiction_detection",
+    "recurrence_detection",
     "pending_review",
     "archival_nomination",
     "relation_consolidation",
@@ -1737,15 +1861,13 @@ async def reflect(
     # 5. Detect contradictions (safety net for anything ingest-time check missed).
     #    Similarity nominates; keep only same-frame pairs — a high-similarity pair
     #    across disjoint metacontext frames is coexistence, not a contradiction.
-    async def _contradictions():
-        raw = await detect_contradictions(
-            storage, embedding_provider,
-            similarity_threshold=0.80,
-            model_id=model_id,
-        )
-        # One resolver for the whole pass, warmed in a single query: candidate
-        # pairs are quadratic in facts while the facts themselves are not, so
-        # the set to load is known from `raw` before any pair is checked.
+    async def _same_frame_pairs(raw):
+        """Drop cross-frame pairs — coexistence, not conflict — and shape them.
+
+        One resolver for the whole pass, warmed in a single query: candidate
+        pairs are quadratic in facts while the facts themselves are not, so the
+        set to load is known from `raw` before any pair is checked.
+        """
         candidate_ids = list({fact.id for pair in raw for fact in pair[:2]})
         resolve_frames = frame_resolver(
             storage,
@@ -1756,11 +1878,43 @@ async def reflect(
             if not await same_frame(a.id, b.id, storage, resolve=resolve_frames):
                 continue
             found.append({
-                "fact_a": {"id": a.id, "content": a.content},
-                "fact_b": {"id": b.id, "content": b.content},
+                "fact_a": {"id": a.id, "content": a.content, "status": a.status.value},
+                "fact_b": {"id": b.id, "content": b.content, "status": b.status.value},
                 "similarity": round(score, 4),
             })
         return found
+
+    # Scored once over the nominated set and partitioned twice. This phase is
+    # the one that crosses the tool timeout as a graph grows (#39), so widening
+    # it to see historical facts must not also mean scoring the matrix twice —
+    # the pairs are quadratic and the split is free.
+    nominated_pairs: list = []
+
+    async def _contradictions():
+        nominated_pairs.extend(await detect_contradictions(
+            storage, embedding_provider,
+            similarity_threshold=0.80,
+            model_id=model_id,
+            statuses=NOMINATED_STATUSES,
+        ))
+        return await _same_frame_pairs([
+            pair for pair in nominated_pairs
+            if pair[0].status is NodeStatus.ACTIVE
+            and pair[1].status is NodeStatus.ACTIVE
+        ])
+
+    # 5b. Recurrence, the safety net's other half: a live claim that says what a
+    #     retired-because-the-world-moved-on one said (#53 T2). Reported apart
+    #     from the contradictions, because a claim beside its own successor is
+    #     not a contradiction and filing it under that word is the misreading
+    #     `recurs` exists to prevent. Only mixed pairs qualify: two active facts
+    #     are redundancy, two historical ones are both past.
+    async def _recurrences():
+        return await _same_frame_pairs([
+            pair for pair in nominated_pairs
+            if {pair[0].status, pair[1].status}
+            == {NodeStatus.ACTIVE, NodeStatus.HISTORICAL}
+        ])
 
     # 6. Surface the pending-review worklist: active nodes already carrying review
     #    state (a candidate to supersede, stale evidence, or an unresolved
@@ -1804,6 +1958,7 @@ async def reflect(
         contradictions = await phase(
             "contradiction_detection", _contradictions, tokens=len
         )
+        recurrences = await phase("recurrence_detection", _recurrences, tokens=len)
         pending_review = await phase("pending_review", _pending_review, tokens=len)
         archival_candidates = await phase(
             "archival_nomination", _archival, tokens=len
@@ -1817,6 +1972,7 @@ async def reflect(
         "split_candidates": split_candidates,
         "enrichment_candidates": enrichment_candidates,
         "contradictions": contradictions,
+        "recurrences": recurrences,
         "pending_review": pending_review,
         "archival_candidates": archival_candidates,
         "similar_relations": similar_relations,
@@ -1825,7 +1981,7 @@ async def reflect(
         nodes_returned=(
             len(similar_pairs) + len(split_candidates)
             + len(enrichment_candidates) + len(contradictions)
-            + len(pending_review) + len(archival_candidates)
+            + len(recurrences) + len(pending_review) + len(archival_candidates)
             + len(similar_relations)
         ),
         # Reflect **scans** the whole active graph and the agent sees only the
@@ -2217,12 +2373,16 @@ async def archive(
 
 
 async def restore(
-    archive_data: dict,
     storage: StorageBackend,
+    *,
+    archive_data: dict | None = None,
+    node_ids: list[str] | None = None,
+    sourced_from: str | None = None,
+    validity: list[dict] | None = None,
 ) -> tuple[dict, ResponseMeta]:
-    """Restore nodes and edges from archive data.
+    """Bring nodes back: from an archive blob, or by id when a claim recurs.
 
-    Two shapes of archive reach this, and they need different writes.
+    Three shapes reach this, and they need different writes.
 
     A *cold-storage reimport* brings back records the graph no longer holds:
     those are reconstructed first (so a malformed record fails before anything
@@ -2232,10 +2392,29 @@ async def restore(
     An *un-archival* is the reversal of the hygiene sweep, and there the rows
     are still present: `archive` never deletes, it flips status. Re-inserting
     them would write nothing, so anything already stored as ARCHIVED is flipped
-    back to ACTIVE instead. Records present under any other status are left
-    alone — restoring an archive must not resurrect a node that was superseded
-    for being wrong.
+    back to ACTIVE instead.
+
+    A *reactivation* names `node_ids` directly: a claim retired as HISTORICAL
+    because the world moved on, asserted true again by a new source (#53 T2).
+    Labour out of government in 2010 and back in 2024 is one claim recurring,
+    not two claims, and the alternative — a second node saying what the first
+    one said — is the duplication this graph exists to avoid, manufactured by
+    its own bookkeeping.
+
+    **What may come back is `RESTORABLE_STATUSES`, and CORRECTED is not in it.**
+    That was always this tool's stated reason — *restoring an archive must not
+    resurrect a node that was superseded for being wrong* — but before the
+    status split it could only be enforced as "not superseded", which refused
+    the world-change case too. Now it says what it means.
+
+    **A reactivation must name the source asserting the claim again**, and the
+    flip and that edge land in one transaction. A node back to ACTIVE with no
+    edge recording why is an assertion the graph makes and cannot attribute.
+    The prior intervals and the `temporally_followed_by` record are untouched,
+    so the node ends holding several disjoint periods — which is what a list of
+    intervals was for.
     """
+    archive_data = archive_data or {}
     nodes = [_reconstruct_node(nd) for nd in archive_data.get("nodes", [])]
     edges = [NodeEdge(**ed) for ed in archive_data.get("edges", [])]
 
@@ -2248,6 +2427,10 @@ async def restore(
         elif stored.status is NodeStatus.ARCHIVED:
             archived.append(stored)
 
+    reactivated, new_edges = await _reactivation(
+        node_ids or [], sourced_from, validity, storage
+    )
+
     # Only edges reaching a node that was itself missing can be missing: an
     # edge between two nodes still in the graph was never removed.
     missing_ids = {node.id for node in missing}
@@ -2257,25 +2440,91 @@ async def restore(
     ]
 
     await storage.write_batch_tx(nodes=missing, edges=missing_edges)
-    if archived:
+    coming_back = archived + reactivated
+    if coming_back:
         await storage.set_node_status_tx(
-            archived, status=NodeStatus.ACTIVE, at=datetime.now(timezone.utc)
+            coming_back, status=NodeStatus.ACTIVE,
+            at=datetime.now(timezone.utc), edges=new_edges,
         )
 
     result = {
         "nodes_restored": len(missing),
-        "nodes_reactivated": len(archived),
-        "edges_restored": len(missing_edges),
+        "nodes_reactivated": len(coming_back),
+        "edges_restored": len(missing_edges) + len(new_edges),
     }
-    meta = ResponseMeta(nodes_returned=len(missing) + len(archived))
+    meta = ResponseMeta(nodes_returned=len(missing) + len(coming_back))
     return result, meta
+
+
+async def _reactivation(
+    node_ids: list[str],
+    sourced_from: str | None,
+    validity: list[dict] | None,
+    storage: StorageBackend,
+) -> tuple[list[EpistemicNode], list[NodeEdge]]:
+    """The nodes a `recurs` verdict brings back, and the provenance it brings.
+
+    Every refusal here is checked before anything is written, so a batch naming
+    one CORRECTED node changes nothing at all rather than reactivating the rest
+    and reporting an error about the one.
+    """
+    if not node_ids:
+        return [], []
+
+    nodes: list[EpistemicNode] = []
+    for node_id in node_ids:
+        node = await storage.get_node(node_id)
+        if node is None:
+            raise ValueError(f"Node '{node_id}' not found.")
+        if node.status is NodeStatus.ACTIVE:
+            continue  # already back; asking twice is not an error
+        if node.status not in RESTORABLE_STATUSES:
+            raise ValueError(
+                f"'{node_id}' is {node.status.value} and cannot be restored. A "
+                f"claim retired for being wrong has no route back — supersede "
+                f"the correction instead if the graph now says otherwise. "
+                f"Restorable: "
+                f"{', '.join(sorted(s.value for s in RESTORABLE_STATUSES))}."
+            )
+        nodes.append(node)
+
+    if not nodes:
+        return [], []
+
+    historical = [n for n in nodes if n.status is NodeStatus.HISTORICAL]
+    if historical and sourced_from is None:
+        raise ValueError(
+            "reactivating a historical claim requires `sourced_from`: the "
+            "document asserting it is true again. Without it the graph would "
+            "state the claim and be unable to say who says so."
+        )
+    if sourced_from is not None and await storage.get_document(sourced_from) is None:
+        raise ValueError(f"Document '{sourced_from}' not found.")
+
+    intervals = [ValidityInterval.model_validate(v) for v in (validity or [])]
+    edges = [
+        NodeEdge(
+            src_id=node.id, dst_id=sourced_from, type=EdgeType.SOURCED_FROM,
+            validity=intervals,
+        )
+        for node in nodes
+        if sourced_from is not None
+    ]
+    return nodes, edges
 
 
 # --- Helpers ---
 
 
 def _node_to_dict(node: EpistemicNode) -> dict:
-    """Serialize a node to dict with its type tag."""
+    """Serialize a node to dict with its type tag.
+
+    `value.confidence` goes out as `null` when nobody rated the node, and is
+    deliberately not substituted with the 0.5 that `rated_confidence` supplies
+    elsewhere. This is the surface an agent reads, and it is the audience the
+    nullable field exists for: "no one has assessed this" is worth knowing when
+    deciding how far to lean on a retrieved claim, and 0.5 cannot say it (#46).
+    """
     data = node.model_dump(mode="json")
     data["node_type"] = _node_type_key(node)
     return data

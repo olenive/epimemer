@@ -305,6 +305,7 @@ async def memory_segment(
     source: str | None = None,
     source_type: str | None = None,
     published_by: str | None = None,
+    published_at: dict | None = None,
     metadata: dict | None = None,
     segmentation_strategy: str | None = None,
 ) -> str:
@@ -327,6 +328,14 @@ async def memory_segment(
             api, chat).
         published_by: Optional publishing/authoring entity (e.g. "BBC"). Resolved-
             or-created as an entity Topic and linked to the document.
+        published_at: When the document was published, as an imprecise instant:
+            {"instant_kind": "precise", "at": "1970-06-01"} for a date, or
+            {"instant_kind": "named", "label": "spring 1970"} for a phrase the
+            text gives without a date. Omit it when the document carries no
+            publication date — it is deliberately **not** defaulted to now, since
+            an undated document must not end up claiming its facts were witnessed
+            on the day you happened to ingest it. Supply only what the document
+            says, never a date you know from elsewhere.
         metadata: Optional metadata to attach to the document.
         segmentation_strategy: "paragraph" or "semantic". Uses server default if omitted.
     """
@@ -341,6 +350,7 @@ async def memory_segment(
             source=source,
             source_type=source_type,
             published_by=published_by,
+            published_at=published_at,
             metadata=metadata,
             segmentation_strategy=segmentation_strategy,
             event_bus=deps.get("event_bus"),
@@ -371,17 +381,80 @@ async def memory_store_decomposition(
     belongs to the active graph, so it accumulates across reconnects and follows
     a use_graph switch.
 
+    It also includes **historical_twins**: facts you just stored that are
+    word-for-word a claim the graph previously retired as `historical`. That is
+    a recurrence — the same claim true again — and the fix is `restore` with the
+    named `historical_id`, not two nodes saying the same thing. It only catches
+    verbatim matches; run check_conflicts for the ones phrased differently,
+    which is most of them.
+
     Args:
         document_id: The document ID returned by segment.
         segments: List of decomposed segments. Each entry:
             segment_id: str — from segment result
             topics/facts/inferences: each item is either a content string, or
               an object {"content": str, "tags": ["billing", ...],
-              "importance": 0.8} to attach per-node tags and an optional
-              importance prior (0.0–1.0, default 0.5). Set it only when you
-              already know a node is unusually consequential or unusually
-              disposable — importance is properly judged at reflect time, and
-              `reinforce` is how it rises later.
+              "importance": 0.8, "confidence": 0.9, "confidence_basis": "..."}
+              to attach per-node tags and either value prior.
+            importance: 0.0–1.0, default 0.5. Set it only when you already know
+              a node is unusually consequential or unusually disposable —
+              importance is properly judged at reflect time, and `reinforce` is
+              how it rises later.
+            confidence: 0.0–1.0 — how well the record would back this claim up
+              if it were challenged. A property of the evidence, not of how far
+              you agree with the conclusion, and not of how much it matters.
+              **Omit it** unless one of these fits; omitting means "stated
+              plainly, no specific reason to doubt or specially trust it", and
+              is recorded as unrated rather than as a middling score.
+                0.3 — the source hedges ("reportedly", "one account says"), is
+                     partisan on this point, or the claim is your reading of
+                     the text rather than something it states
+                0.7 — stated as established, by a source in a position to know
+                0.9 — a primary or authoritative source *for this claim*: the
+                     person about their own preference, the spec about its own
+                     behaviour, the original announcement
+              Rate per node, never per document — one message can carry a 0.9
+              preference and a 0.3 guess from the same person. Inside a
+              metacontext the frame is the record, so a fictional fact can
+              honestly be 0.9. Never lower it for contradiction or for age:
+              record_contradiction and created_at carry those already, and
+              unlike a frozen prior they stay current.
+            confidence_basis: one line saying why. Asked for whenever you
+              supply a confidence other than the 0.5 default — a high prior
+              nobody can review later is worth little — but never required.
+            validity: when *this document* says the claim was true. A list,
+              because one source can assert several separate periods ("Labour
+              governed 1997–2010, and again from 2024"). It is recorded against
+              this document, so two sources may disagree without either being
+              overwritten. **Omit it entirely unless the text tells you** — that
+              is the common case and costs nothing.
+              Each entry: {"start": <instant>, "end": <instant>, "basis":
+              "stated" | "inferred", "witnessed_at": <instant>, "timeline_id":
+              "..."}. An <instant> is one of:
+                {"instant_kind": "precise", "at": "1924-01-31"} — a date given
+                {"instant_kind": "named", "label": "during the Renaissance"} —
+                     a period the text names but does not date. Store the words;
+                     do not convert them to a date yourself
+                {"instant_kind": "unknown"} — there is a boundary and the text
+                     does not give it. The default for a missing endpoint
+                {"instant_kind": "unbounded"} — there is no boundary at all
+                     ("water is H₂O"). Never use it for "not stated"
+              `unknown` and `unbounded` are the distinction the whole field
+              exists for: *"the city is named Leningrad"* has an unknown start,
+              and guessing either way invents information.
+              basis: "stated" if the dates are in the text; "inferred" if you
+              read them off tense or context ("the city *is* called Leningrad"
+              in a 1970 document leaves the end open). Both are honest; **a date
+              you know from world knowledge and the document does not give is
+              neither, and must not be supplied at all** — an invented interval
+              is indistinguishable from a documented one once stored.
+              witnessed_at: a moment the document asserts the claim held at
+              ("as of March 1990…"). Worth giving when the period itself is
+              unknown: it is the only thing that lets two undated facts be shown
+              to have held at the same time.
+              timeline_id: omit for real-world dates. Give it for in-universe
+              time (a novel's chronology), so fictional and real dates are never
+              compared as though they shared a clock.
         metacontext_id: Optional metacontext ID — all nodes will inherit this.
         tags: Optional document-level tag names applied to every node. Each tag
             becomes (or reuses) a Topic linked by a tagged_with edge. Every node
@@ -556,8 +629,11 @@ async def memory_update(
 ) -> str:
     """Update a node by creating a new version (immutable history).
 
-    The old node is retired; a new node is created with a superseded_by edge
-    linking old to new.
+    The old node is retired and a new node is created, joined by a lineage edge
+    that names which of the two retirements happened: `superseded_by` for a
+    correction, `temporally_followed_by` for a world-change. The second states
+    temporal order rather than replacement, so a claim that becomes true again
+    later does not contradict it.
 
     Args:
         node_id: ID of the node to update.
@@ -611,10 +687,12 @@ async def memory_supersede_by(
 ) -> str:
     """Supersede a node by an already-existing node (resolve outdated/contradiction).
 
-    Marks old_id retired and superseded by existing_id (superseded_by edge), flags
-    inferences that depended on old_id as evidence_stale, and clears any
-    supersession candidacy on it. The existing node is unchanged. Use when the
-    current truth is already in the graph; use `update` when you have new content.
+    Marks old_id retired and joins it to existing_id with the lineage edge that
+    matches `because` — `superseded_by` for a correction,
+    `temporally_followed_by` for a world-change. Flags inferences that depended
+    on old_id as evidence_stale, and clears any supersession candidacy on it.
+    The existing node is unchanged. Use when the current truth is already in the
+    graph; use `update` when you have new content.
 
     Args:
         old_id: The node being retired.
@@ -708,12 +786,40 @@ async def memory_check_conflicts(
 ) -> str:
     """Find existing facts that may conflict with the given facts (you then judge).
 
-    Recall stage of the review loop: for each fact, returns similar active facts
-    above `threshold` with their similarity score, metacontext labels, and a
-    same_frame flag. Similarity only nominates — classify each candidate yourself
-    (redundant / supersedes / contradicts / cross-frame / compatible) and record
-    the verdict with supersede_by, record_contradiction, or record_variant. Run
-    this on freshly-ingested fact ids to catch outdated or conflicting knowledge.
+    Recall stage of the review loop: for each fact, returns similar facts above
+    `threshold` with their similarity score, **status**, metacontext labels, and
+    a same_frame flag. Similarity only nominates — classify each candidate
+    yourself and record the verdict. Run this on freshly-ingested fact ids to
+    catch outdated or conflicting knowledge.
+
+    **Read the candidate's `status` first — it decides which verdicts are even
+    available.**
+
+      `active`      — the graph currently asserts it. Any verdict below applies.
+      `historical`  — it was retired because the world moved on, and it may be
+                      true again. This is the one that makes `recurs` possible.
+
+    The verdicts:
+
+      redundant   — an *active* candidate says the same thing. Keep one; no
+                    tool call is needed for the duplicate.
+      supersedes  — your new fact replaces the candidate. Call supersede_by,
+                    and say which happened: it_was_wrong, or the_world_changed.
+      recurs      — a *historical* candidate says what your new fact says: the
+                    same claim, true again. Call restore with node_ids=[that
+                    candidate] and sourced_from=<your document id>, rather than
+                    letting a second node be stored alongside it. Labour out of
+                    government in 2010 and back in 2024 is one claim recurring.
+      contradicts — both claim to hold now and they cannot both. Call
+                    record_contradiction.
+      cross-frame — same words, different frames (fiction vs. reality). Call
+                    record_variant.
+      compatible  — related but not in tension. Nothing to record.
+
+    `recurs` and `supersedes` are the pair worth getting right, and the question
+    that separates them is which node the new source agrees with. If the new
+    fact says what the historical one said, it recurs. If it says something
+    *different* that follows it, it supersedes.
 
     Args:
         fact_ids: Fact node ids to check (e.g. facts just stored).
@@ -811,7 +917,12 @@ async def memory_reflect(
       covers duplicate source/tag/entity Topics)
     - Topics with high internal variance that could be split
     - Topics with thin descriptions but rich associated material
-    - Potential contradictions between facts (same-frame only)
+    - Potential contradictions between facts (same-frame only) — both sides
+      active, since that is what makes them rivals
+    - recurrences: a live fact saying what a `historical` one said, meaning the
+      claim is true again rather than in conflict. Resolve with restore
+      (node_ids=[the historical id], sourced_from=<the document>) — not with
+      supersede_by, and not by leaving two nodes saying the same thing
     - pending_review: active nodes already flagged for resolution
       (superseded_candidate / evidence_stale / contested), with the related
       ids to act on via apply_reflection supersessions / supersede_by
@@ -1193,23 +1304,52 @@ async def memory_archive(
 
 @mcp.tool(name="restore")
 async def memory_restore(
-    archive_data: dict,
     ctx: Context,
+    archive_data: dict | None = None,
+    node_ids: list[str] | None = None,
+    sourced_from: str | None = None,
+    validity: list[dict] | None = None,
 ) -> str:
-    """Restore previously archived nodes and edges into the graph.
+    """Bring nodes back — from an archive, or when a retired claim is true again.
+
+    Two uses. Pass `archive_data` to reverse an `archive` sweep or reimport
+    cold storage. Pass `node_ids` to **reactivate** a claim a new source says is
+    true again: this is how you record the `recurs` verdict from
+    check_conflicts, where a candidate whose status is `historical` says the
+    same thing your new fact does. Labour out of government in 2010 and back in
+    2024 is one claim recurring — reactivate it rather than storing a second
+    node that says what the first one said.
+
+    A node whose status is `corrected` cannot come back. It was retired for
+    being *wrong*, and there is no evidence that makes a past error un-happen;
+    if the graph now says otherwise, supersede the correction instead.
 
     Args:
         archive_data: The archive dict (as returned by archive).
+        node_ids: Nodes to reactivate by id. Anything already active is skipped.
+        sourced_from: **Required when reactivating a `historical` node** — the
+            document id that asserts the claim again. A claim the graph states
+            but cannot attribute is exactly what this system exists not to
+            produce. It gets a new `sourced_from` edge, written in the same
+            transaction as the reactivation; the node's earlier provenance and
+            its lineage record are left untouched.
+        validity: What that document says about *when* the claim is true again,
+            in the same form `store_decomposition` takes. Omit it when the
+            document gives no dates — the common case, and better than a guess.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
         "epimemer.restore",
         lambda: tools.restore(
-            archive_data=archive_data,
             storage=deps["storage"],
+            archive_data=archive_data,
+            node_ids=node_ids,
+            sourced_from=sourced_from,
+            validity=validity,
         ),
         ctx,
-        f"nodes={len(archive_data.get('nodes', []))}",
+        f"nodes={len((archive_data or {}).get('nodes', []))} "
+        f"reactivate={len(node_ids or [])}",
         lambda r, m: f"restored={r['nodes_restored']}",
     )
 

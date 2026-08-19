@@ -12,6 +12,7 @@ from epimemer.core.types import (
     NodeStatus,
     Timeline,
     Topic,
+    lineage_edge_type_for,
 )
 from epimemer.pipelines.timeline.functions import add_timepoint
 from epimemer.storage.memory import InMemoryStorage
@@ -126,7 +127,8 @@ class TestSupersessionCounterpart:
         await wrapped.supersede_node_tx(
             old, new,
             EmbeddingRecord(item_id=new.id, model_id="test", vector=[1.0, 0.0]),
-            NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY),
+            NodeEdge(src_id=old.id, dst_id=new.id,
+                     type=lineage_edge_type_for(status)),
             status=status,
             superseded_at=datetime.now(timezone.utc),
         )

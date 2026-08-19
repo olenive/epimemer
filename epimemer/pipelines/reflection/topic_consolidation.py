@@ -12,6 +12,7 @@ from epimemer.core.types import (
     NodeType,
     Topic,
     merged_value_signal,
+    rated_confidence,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.pipelines.graph_construction.versioning import merge_nodes
@@ -160,8 +161,14 @@ async def merge_similar_topics(
     Returns:
         The newly created merged Topic.
     """
-    # Determine primary (higher confidence) and secondary
-    if topic_a.value.confidence >= topic_b.value.confidence:
+    # Determine primary (higher confidence) and secondary. An unrated topic
+    # reads as the default rather than losing outright: this is a choice
+    # between two pieces of text, and one of them has to lead. Two unrated
+    # topics tie and the `>=` takes the first — honestly the *unrated* case
+    # now, where before priors existed it was every case (#46).
+    if rated_confidence(topic_a.value.confidence) >= rated_confidence(
+        topic_b.value.confidence
+    ):
         primary, secondary = topic_a, topic_b
     else:
         primary, secondary = topic_b, topic_a

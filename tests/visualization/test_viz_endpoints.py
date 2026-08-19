@@ -18,6 +18,7 @@ from epimemer.core.types import (
     NodeStatus,
     Timeline,
     Topic,
+    ValueSignal,
 )
 from epimemer.pipelines.timeline.functions import add_timepoint
 from epimemer.storage.memory import InMemoryStorage
@@ -198,7 +199,7 @@ class TestViewConversion:
         assert view.graph == "my-graph"
         assert view.source_id == "s1"
         assert view.extraction_method == "unspecified"
-        assert 0.0 <= view.confidence <= 1.0
+        assert view.confidence is None      # nothing has rated it
 
     def test_the_view_does_not_carry_novelty(self):
         """The frontend contract drops it with the field (#46).
@@ -210,6 +211,28 @@ class TestViewConversion:
         view = node_to_view(Topic(content="A topic", source_id="s1"), "g")
 
         assert "novelty" not in view.model_dump()
+
+    def test_an_unrated_node_reaches_the_frontend_as_null(self):
+        """The view relays absence rather than substituting the default (#46).
+
+        Reading `None` as 0.5 here would put a number on the panel's tooltip
+        that no agent ever supplied — a false statement about the graph, made
+        to save the frontend a `??`. The panel renders a dash instead, the same
+        way it already renders "never" for an unretrieved node.
+        """
+        node = Topic(content="A topic", source_id="s1")
+        assert node.value.confidence is None
+
+        view = node_to_view(node, "g")
+
+        assert view.confidence is None
+
+    def test_a_rated_node_still_reaches_the_frontend_as_its_number(self):
+        node = Topic(
+            content="A topic", source_id="s1", value=ValueSignal(confidence=0.9),
+        )
+
+        assert node_to_view(node, "g").confidence == pytest.approx(0.9)
 
     def test_node_to_view_fact(self):
         f = Fact(content="A fact", source_id="s2")

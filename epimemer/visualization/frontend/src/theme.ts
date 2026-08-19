@@ -142,7 +142,8 @@ export interface SemanticPalette {
   /** Edge meanings with no node kind of their own. */
   similarity: string;
   abstracts: string;
-  /** Lineage rather than knowledge: superseded_by, merged_into. */
+  /** Lineage rather than knowledge: superseded_by, temporally_followed_by,
+   *  merged_into. */
   lineage: string;
 }
 

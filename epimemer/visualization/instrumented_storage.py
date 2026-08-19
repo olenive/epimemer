@@ -276,8 +276,9 @@ class InstrumentedStorage:
         *,
         status: NodeStatus,
         at: datetime,
+        edges: Sequence[NodeEdge] = (),
     ) -> None:
-        await self._inner.set_node_status_tx(nodes, status=status, at=at)
+        await self._inner.set_node_status_tx(nodes, status=status, at=at, edges=edges)
         graph = self._inner.current_database
         for node in nodes:
             await self._bus.publish(NodeStatusChanged(
@@ -431,9 +432,10 @@ class InstrumentedStorage:
         *,
         k: int = 10,
         node_type: NodeType | None = None,
+        statuses: frozenset[NodeStatus] = frozenset({NodeStatus.ACTIVE}),
     ) -> Sequence[tuple[str, float]]:
         return await self._inner.vector_search(
-            query_vector, model_id, k=k, node_type=node_type,
+            query_vector, model_id, k=k, node_type=node_type, statuses=statuses,
         )
 
     async def text_search(
