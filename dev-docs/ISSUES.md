@@ -44,19 +44,25 @@ restated twice before it named the code it changes.
   renamed **`graph_as_of`**, reserving `valid_as_of`, since the unmarked name
   inherits the wrong default reading.
 
-**#53's design is complete and five of its six steps are built.** All six review
-findings are answered — 2, 4 and 6 by T1; 1 by T2; 3 across both; 5 by T3. What
-remains is construction, in the six steps its entry's construction note lists,
-all of them worked on 2026-08-19: T2's `temporally_followed_by` edge; the
-interval type and its comparison (`core/temporal.py`); per-source intervals
-stored on `sourced_from`, with `published_at` on the document; recurrence — a
-retired claim can be nominated, judged and reactivated; and T3's retrieval
-surface, so validity is finally **read**: history comes back by default with a
-claim's earlier versions folded into it, corrections are reachable but off,
-`search` reports per-source periods, `valid_as_of` answers in groups, and `as_of`
-is now `graph_as_of`. **Step 6, §11's soundness check over stored inferences, is
-all that is left.** T2 unblocked **#54** and closed **#48**, which was fixed
+**#53's design is complete and its whole six-step build order is built.** All
+six review findings are answered — 2, 4 and 6 by T1; 1 by T2; 3 across both; 5 by
+T3 — and all six construction steps landed on 2026-08-19: T2's
+`temporally_followed_by` edge; the interval type and its comparison
+(`core/temporal.py`); per-source intervals stored on `sourced_from`, with
+`published_at` on the document; recurrence — a retired claim can be nominated,
+judged and reactivated; T3's retrieval surface, so validity is finally **read**
+(history by default with a claim's earlier versions folded into it, per-source
+periods on results, `valid_as_of` answering in groups, `as_of` → `graph_as_of`);
+and §11's soundness check, which flags an inference whose premises no source puts
+in the same period. T2 unblocked **#54** and closed **#48**, which was fixed
 alongside step 4 as both entries asked.
+
+**One decided piece was never in that order and is still unbuilt**: §9's
+*reflect proposes a boundary* — two documents, neither stating an end date,
+where only reflect sees both and can propose that the first interval closes
+before the second opens. T1 calls it "not optional garnish". It needs its own
+decisions before code, and they are named at the end of the entry's construction
+note.
 
 One decided detail did not survive contact with another: T3 named **three**
 valid-time buckets and T1 §6's open-world rule leaves only **two**, since nothing
@@ -857,22 +863,24 @@ stay two facts even under the #53 interval model.
 
 ---
 
-### Issue 53 — facts have no validity interval, so the graph cannot say *when* a claim was true — ◆ HIGH PRIORITY, DESIGN COMPLETE / IN CONSTRUCTION
+### Issue 53 — facts have no validity interval, so the graph cannot say *when* a claim was true — ◆ HIGH PRIORITY, BUILD ORDER COMPLETE / ONE DECIDED PIECE LEFT
 
 Filed 2026-08-12. Surfaced while asking whether fact deduplication (#52) could
 be made safe by requiring temporal agreement. It cannot, because the temporal
 information it would require is not in the model — and following that back
 showed the gap is not dedup's, it is the graph's.
 
-> **Construction note (2026-08-19) — five of the six steps are built; only
-> §11's soundness check is left.**
+> **Construction note (2026-08-19) — the six-step build order is complete.
+> One decided piece outside it, §9's reflect-proposed boundaries, is not.**
 >
 > The build order is not written down anywhere above, so it is recorded here as
 > it is worked: (1) the lineage edge, done; (2) the interval type and its
 > comparison, pure functions with no storage, done; (3) intervals onto the
 > `sourced_from` edge, per source, done; (4) recurrence, bundled with #48 since
 > both visit `get_node_by_content`, done; (5) T3's retrieval surface, done;
-> (6) §11's soundness check. Only (6) is left.
+> (6) §11's soundness check, done. **The order itself omitted §9's
+> reflect-proposed boundaries**, which is the one decided thing still unbuilt —
+> see the end of this note.
 >
 > **(1) is a gap-closing job rather than a new one.** #54 shipped the *status*
 > split on 2026-08-12 — `superseded_status_for(because)` returning `CORRECTED`
@@ -1145,6 +1153,55 @@ showed the gap is not dedup's, it is the graph's.
 > (step 6), and reflect proposing the boundaries §9 describes. Graph expansion
 > still traverses only ACTIVE neighbours — history edges are excluded from
 > traversal anyway, so a retired node arrives as a seed or not at all.
+>
+> **(6) is built (2026-08-19): the soundness check, and with it the whole build
+> order.** `find_unsound_inferences` reports, as a reflect phase, an active
+> inference whose premises no source puts in the same period. This is the
+> strongest form of what #53 exists for — not a display defect but a soundness
+> defect in the layer the system provides — and it could not be written before
+> now because there was nothing to compare.
+>
+> *The rule is named once, in `assertions_are_disjoint`.* Per premise, the
+> collapse is the **existential union** — the moments *some* source asserts the
+> claim held — and the flag fires only when every cross pair provably falls
+> clear. §11's second pass demanded that be written down because the error
+> direction is the whole argument: a sloppy, over-wide source can *suppress* a
+> flag and never manufacture one, while an implementer reaching for the
+> intersection instead gets false flags. A test pins the suppressing case, and
+> stripping the definiteness requirement fails seven.
+>
+> **A pair that cannot be placed blocks the finding rather than counting as
+> disjoint.** Every cross pair must compare `before` or `after`; `unknown` is
+> not a weak yes. That is §11's *never fires on unknown* taken literally, and it
+> is the same open-world rule that emptied T3's third retrieval bucket at step 5
+> — an interval asserts nothing about the outside, so what the flag says is *no
+> source asserts these were ever both true*, never *they never were*. Both
+> readings were available in the prose; only one of them is a check on evidence
+> rather than on ignorance.
+>
+> *It runs at reflect and not at ingest*, which §11 permits either way and the
+> motivating case decides: an inference joining a 1970 document's fact to a 2000
+> document's is invisible while either is being stored, because the other is not
+> in front of the agent. Reflect is the only vantage point where both premises
+> are present. Four batched queries whatever the graph's size, and the phase
+> sits beside the two other *is this graph consistent* arms.
+>
+> *What it reports is evidence, not a verdict.* Each flag names the inference and
+> the offending premise pairs **with their periods**, because the agent's move —
+> re-derive, narrow, or retire — is a judgment, and a verdict with its dates
+> hidden cannot be argued with. Pairs are reported once rather than in both
+> orders, and one entry per inference rather than per pair, since the decision is
+> about the inference.
+>
+> **With this the six-step order is complete. One decided piece of #53 was never
+> in it**: §9's *reflect proposes a boundary*. Two documents, 1970 and 2000,
+> neither stating an end date — only reflect, seeing both, can propose that the
+> first interval closes before the second opens, as an `inferred` boundary
+> surfaced for review and never written silently. That is decided design and
+> explicitly *"not optional garnish"*, and it is unbuilt. It needs its own
+> decisions before code — which pairs qualify, what the proposal looks like, and
+> how `apply_reflection` accepts one — so it is named here rather than
+> improvised at the end of a construction note.
 
 #### The shape of it — the "Saint Petersburg Problem"
 
@@ -2307,7 +2364,7 @@ What to pick up, and what has to be true first:
 | ✅ | ~~54 (historical provenance and validity)~~ | **Done 2026-08-12.** `migration_disposition(edge_type, status)` is the policy; a world-change keeps provenance and judgments on the historical node and copies only the frame and tags |
 | ✅ | ~~57 (supersession events named no counterpart)~~ | **Done 2026-08-17** — counterpart ids on the live events and on `query_changes`, carried by the append-only lifecycle episodes (`EVENT_LOG.md` §6), which is what made the log panel readable |
 | ✅ | ~~46 (`confidence` becomes a supplied prior)~~ | **Done 2026-08-19.** Decided 2026-08-12, both review amendments signed off the day it was built: `float \| None` with unrated stored as absent, an optional `confidence_basis` asked for by guidance, and a consumer sweep saying what each reader does about absence. The deliverable was the tool guidance, as the entry predicted |
-| 1 | **53 (validity intervals)** | **Design complete (T1/T2/T3); five of six steps built.** Everything else on this list is a defect inside a sound model; this one says the model cannot express something true. Done (all 2026-08-19): the status split; T2's lineage edge, which closed a week in which a world-change wrote an edge contradicting its own node's status; the interval type with its four-value comparison; per-source intervals stored on `sourced_from`, supplied at ingest; recurrence — a retired claim can be nominated, judged and reactivated, which also closed #48; and T3's retrieval surface, which is where validity is finally read — history returned by default with a claim's earlier versions folded into it, per-source periods on results, `valid_as_of` answering in groups, and the `as_of` → `graph_as_of` rename, this design's one migration cost, now paid. **Only §11's soundness check is left**, and one decided detail moved: T3's third valid-time bucket is unreachable under T1 §6's open-world rule |
+| 1 | **53 (validity intervals)** | **Design complete (T1/T2/T3); the whole six-step build order is built.** Everything else on this list is a defect inside a sound model; this one says the model cannot express something true. Done (all 2026-08-19): the status split; T2's lineage edge, which closed a week in which a world-change wrote an edge contradicting its own node's status; the interval type with its four-value comparison; per-source intervals stored on `sourced_from`, supplied at ingest; recurrence — a retired claim can be nominated, judged and reactivated, which also closed #48; and T3's retrieval surface, which is where validity is finally read — history returned by default with a claim's earlier versions folded into it, per-source periods on results, `valid_as_of` answering in groups, and the `as_of` → `graph_as_of` rename, this design's one migration cost, now paid; and §11's soundness check, which flags an inference whose premises no source puts in the same period. **What is left is one decided piece the order omitted** — §9's reflect-proposed boundaries — plus one detail that moved: T3's third valid-time bucket is unreachable under T1 §6's open-world rule, and the soundness check inherits the same reading |
 | 2 | 51 (corroboration derived at read time) | **Unblocked** — 46 is what makes this a separate signal rather than a rewrite of one, and 46 is done. Apply the review's neighbourhood exclusions (contradictors, variants). Measure the extra hop before putting it on the default `search` path. Ships with a known 53-shaped inaccuracy, stated in the entry. It also inherits 46's one accepted gap: per-source levels on the provenance edge, and with them any path for source discredit |
 | ✅ | ~~48 (`get_node_by_content` scans per ingest)~~ | **Done 2026-08-19**, in the same visit as #53 step 4 as this row predicted. The measurement decided it: an index on `content` changes nothing until the query names it, and then the lookup goes 4.0 ms → 0.53 ms at 3,000 nodes for under 5% on writes. Guarded by a plan assertion, since behaviour cannot see the defect |
 | 4 | 59 (embedding truncation) | **Ready to measure, not to fix.** Take the token-length distribution over a real graph first; the entry lists four options and says which measurement decides between them. Lexical search relieves the identifier case and none of the rest |

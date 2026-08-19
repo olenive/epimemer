@@ -934,6 +934,20 @@ only when both facts carry intervals and those intervals do not intersect. It
 flags and never blocks, and never fires on `unknown`. Narrower than originally
 written, and the wording of the guarantee matters more than its strength.
 
+> *Built 2026-08-19 to that wording exactly.* `assertions_are_disjoint` holds
+> only when both sides carry periods and **every** cross pair compares `before`
+> or `after`; a pair that cannot be placed blocks the finding rather than
+> counting as disjoint, so the check reads evidence and never ignorance. The
+> collapse per side is the existential union, and its error direction is the
+> argument for it: an over-wide source suppresses a flag and can never
+> manufacture one. `find_unsound_inferences` runs it as a reflect phase over
+> active inferences and reports the offending premise pairs **with their
+> periods** — the agent's move is a judgment, and a verdict with its evidence
+> hidden cannot be argued with. Reflect rather than ingest, because an inference
+> joining a 1970 document to a 2000 one is invisible while either is stored
+> alone. This is the same open-world reading that emptied T3's third retrieval
+> bucket at §13.10; the two now agree by construction rather than by coincidence.
+
 **Where the six review findings stand.** Items 2 (empty set), 4 (three-valued
 check) and 6 (a home for timepoints) are closed by T1. Item 3 is partly closed.
 Item 5's vocabulary half is fixed and its retrieval half is T3. **Item 1 — which
@@ -1062,8 +1076,9 @@ built.**
 > *True on the day it was written.* **T3 is built (2026-08-19)**, and with it
 > everything below this line: reachability, lineage collapse, the buckets, the
 > rename, and the `(source, interval)` read the earlier steps deferred to it.
-> Validity can now be written *and* read. Only §11's soundness check remains
-> unbuilt in the whole of #53.
+> Validity can now be written *and* read. §11's soundness check followed the
+> same day (see §13.8), which completes #53's six-step build order — leaving one
+> decided piece the order never listed: §9's *reflect proposes a boundary*.
 >
 > **One decided detail did not survive its own document.** T3 names three
 > buckets, the third being *provably not valid at t*. §13.8's open-world rule

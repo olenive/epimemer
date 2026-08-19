@@ -969,6 +969,13 @@ async def memory_reflect(
       claim is true again rather than in conflict. Resolve with restore
       (node_ids=[the historical id], sourced_from=<the document>) — not with
       supersede_by, and not by leaving two nodes saying the same thing
+    - unsound_inferences: an inference whose premises no source puts in the same
+      period — *"X was true 1997–2010"* and *"Y was true from 2024"*, combined
+      into a conclusion. It reports the pairs and their dates, never a verdict:
+      decide whether the inference survives, narrow it to a period, or retire it
+      with supersede_by. It stays silent unless both premises carry dates and
+      those dates provably fall clear, so it says *no source asserts these were
+      ever both true* — not that they never were
     - pending_review: active nodes already flagged for resolution
       (superseded_candidate / evidence_stale / contested), with the related
       ids to act on via apply_reflection supersessions / supersede_by

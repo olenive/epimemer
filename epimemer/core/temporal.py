@@ -10,10 +10,17 @@ Everything here is pure: no clock is read, no storage is touched, no network
 call is made, so every answer is a function of the arguments. Where validity
 *lives* — one list per `sourced_from` edge, so a period is always attributable
 to the source that asserted it — is a separate step and not this module's
-business. Its absence is why nothing here unions or intersects anything: with
-several sources per node, union takes one careful source and one sloppy one and
-yields a period neither claims, while intersection turns two different episodes
-into "never" (T1 §3). Callers that want one answer supply their own rule.
+business.
+
+**No collapse is ever applied by default, and none of it produces a new
+interval.** Union takes one careful source and one sloppy one and yields a
+period neither claims; intersection turns two different episodes into "never"
+(T1 §3). Nothing here does either. What it does offer is two *named questions* a
+caller can ask of a set — `validity_at` and `assertions_are_disjoint` — each
+stating the rule it applies and each answering with a verdict rather than an
+interval. Asking one is a caller supplying its own rule, which is what §3 asks
+of it; the rules live here so that each is written once and tested once rather
+than re-derived at every call site.
 """
 
 from collections.abc import Sequence
@@ -358,6 +365,47 @@ def validity_at(
             if interval.timeline_id == timeline_id
         )
         else ValidityVerdict.UNKNOWN
+    )
+
+
+def assertions_are_disjoint(
+    a: Sequence[ValidityInterval], b: Sequence[ValidityInterval]
+) -> bool:
+    """Whether every period asserted of `a` provably falls clear of every one of `b`.
+
+    The rule behind T1 §11's soundness check, and the reason it is written here
+    rather than at the call site: the wording is the whole of the guarantee, and
+    two implementations of it would not agree.
+
+    **It does not say the two were never both true.** §6 settles that nothing
+    can: an interval says what a source asserts and asserts nothing about the
+    outside, so no arrangement of intervals rules out a moment neither of them
+    mentions. What this says is the honest, narrower thing — *no source asserts
+    them true at a common moment* — and that is exactly the claim an unsoundness
+    flag should make.
+
+    **The collapse per side is the existential union**, the set of moments *some*
+    source asserts the claim held (§11, second pass). It is the one collapse §3
+    permits, and only because its error direction is safe: a sloppy, over-wide
+    source can *suppress* a flag and never manufacture one. Reaching for the
+    intersection instead produces false flags, which is the dangerous direction
+    and the reason the rule is spelled out.
+
+    **A pair that is merely `unknown` blocks the answer**, rather than counting
+    as disjoint. Every cross pair must compare `before` or `after`: one that
+    cannot be placed might well overlap, and firing on it would make this a check
+    on ignorance — which §11 rules out and which is what a sparse feature would
+    turn into if the default went the other way. An empty side answers `False`
+    for the same reason: a claim nobody dated is not evidence of anything, and
+    intervals on different clocks compare `unknown` and so never fire either.
+    """
+    if not a or not b:
+        return False
+    return all(
+        compare_intervals(one, other)
+        in (TemporalRelation.BEFORE, TemporalRelation.AFTER)
+        for one in a
+        for other in b
     )
 
 

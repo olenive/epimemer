@@ -17,14 +17,18 @@ from datetime import datetime, timezone
 
 import pytest
 
+from epimemer.core.temporal import IntervalBasis, ValidityInterval
 from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
     Fact,
+    Inference,
     Metacontext,
     NodeEdge,
     NodeStatus,
+    RawDocument,
     Topic,
+    ValueSignal,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.tools import reflect
@@ -446,6 +450,7 @@ class TestAnswersAreUnchanged:
             "enrichment_candidates",
             "contradictions",
             "recurrences",
+            "unsound_inferences",
             "pending_review",
             "archival_candidates",
             "similar_relations",
@@ -574,3 +579,82 @@ class TestReflectCatchesRecurrenceItsOwnWay:
         await reflect(storage, embedding_provider)
 
         assert sizes == [6], "one batched call over active and historical alike"
+
+
+class TestReflectFlagsAnInferenceItsPremisesCannotSupport:
+    """#53 T1 §11 reaching the surface an agent actually reads.
+
+    The check itself is exercised in `test_soundness.py`; what this pins is that
+    reflect runs it, reports it under its own key, and — the part that matters
+    for a phase added to the slowest tool in the system — that it does not turn
+    a quiet graph noisy.
+    """
+
+    async def _premise(self, storage, document, content, *periods):
+        fact = Fact(content=content, source_id="s1", value=ValueSignal())
+        await storage.store_node(fact)
+        await storage.store_edge(NodeEdge(
+            src_id=fact.id,
+            dst_id=document.id,
+            type=EdgeType.SOURCED_FROM,
+            validity=list(periods),
+        ))
+        return fact
+
+    def _period(self, start: int, end: int):
+        def at(year: int) -> dict:
+            return {
+                "instant_kind": "precise",
+                "at": datetime(year, 1, 1, tzinfo=timezone.utc).isoformat(),
+            }
+
+        return ValidityInterval(
+            start=at(start), end=at(end), basis=IntervalBasis.STATED
+        )
+
+    async def _drawn_across_two_periods(self, storage):
+        document = RawDocument(content="A history", source="test")
+        await storage.store_document(document)
+        early = await self._premise(
+            storage, document, "Labour was in government", self._period(1997, 2010)
+        )
+        late = await self._premise(
+            storage, document, "the policy was in force", self._period(2024, 2030)
+        )
+        inference = Inference(
+            content="Labour introduced the policy",
+            source_id="s1",
+            value=ValueSignal(),
+        )
+        await storage.store_node(inference)
+        for premise in (early, late):
+            await storage.store_edge(NodeEdge(
+                src_id=inference.id,
+                dst_id=premise.id,
+                type=EdgeType.DERIVED_FROM,
+            ))
+        return inference
+
+    async def test_it_is_reported_under_its_own_key(
+        self, storage, embedding_provider
+    ):
+        inference = await self._drawn_across_two_periods(storage)
+
+        result, meta = await reflect(storage, embedding_provider)
+
+        [flagged] = result["unsound_inferences"]
+        assert flagged["inference"]["id"] == inference.id
+        assert len(flagged["disjoint_premises"]) == 1
+        # The ids it names are declared, like every other nominee reflect
+        # returns — nested under `id`, which is what `_ids_within` reads.
+        assert inference.id in {node.node_id for node in meta.retrieved}
+
+    async def test_an_undated_graph_reports_nothing(
+        self, storage, embedding_provider
+    ):
+        """Silence is the common case, and the reason the flag is worth reading."""
+        await _facts_that_look_alike(storage, embedding_provider, 3)
+
+        result, _ = await reflect(storage, embedding_provider)
+
+        assert result["unsound_inferences"] == []

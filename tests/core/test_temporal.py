@@ -23,6 +23,7 @@ from epimemer.core.temporal import (
     UnknownInstant,
     ValidityInterval,
     ValidityVerdict,
+    assertions_are_disjoint,
     compare_intervals,
     merged_validity,
     validity_at,
@@ -486,6 +487,94 @@ class TestAskingWhetherAClaimHeldAtAMoment:
         and this failing is the reminder to check that the producer landed too.
         """
         assert [verdict.value for verdict in ValidityVerdict] == ["valid", "unknown"]
+
+
+class TestWhetherTwoClaimsWereEverBothAsserted:
+    """The rule behind the soundness check (T1 §11, second pass).
+
+    The collapse per side is the **existential union** — the moments *some*
+    source asserts the claim held — and the check fires only when every cross
+    pair provably falls clear. The error direction is what makes that the one
+    collapse §3 permits: a sloppy, over-wide source can suppress a flag and
+    never manufacture one. An implementer reaching for the intersection instead
+    gets false flags, which is why the rule is pinned here rather than left to
+    the call site.
+    """
+
+    def test_two_dated_claims_that_fall_clear_are_disjoint(self):
+        governed = [_span(start=_at(1997), end=_at(2010))]
+        later = [_span(start=_at(2024), end=_at(2030))]
+
+        assert assertions_are_disjoint(governed, later) is True
+        assert assertions_are_disjoint(later, governed) is True
+
+    def test_overlapping_periods_are_not(self):
+        assert assertions_are_disjoint(
+            [_span(start=_at(1997), end=_at(2010))],
+            [_span(start=_at(2005), end=_at(2030))],
+        ) is False
+
+    def test_one_source_asserting_a_second_episode_suppresses_the_finding(self):
+        """The union per side, and the safe error direction it buys.
+
+        The 2024 episode is asserted by somebody, so the two claims *were* held
+        together as far as the record goes — an intersection rule would call
+        that disjoint and flag a sound inference.
+        """
+        two_episodes = [
+            _span(start=_at(1997), end=_at(2010)),
+            _span(start=_at(2024), end=_at(2030)),
+        ]
+
+        assert assertions_are_disjoint(
+            two_episodes, [_span(start=_at(2025), end=_at(2026))]
+        ) is False
+
+    def test_every_pair_must_fall_clear(self):
+        """Two episodes either side of a period is still disjoint from it."""
+        two_episodes = [
+            _span(start=_at(1997), end=_at(2010)),
+            _span(start=_at(2024), end=_at(2030)),
+        ]
+
+        assert assertions_are_disjoint(
+            two_episodes, [_span(start=_at(2011), end=_at(2012))]
+        ) is True
+
+    def test_a_pair_that_cannot_be_placed_blocks_the_finding(self):
+        """Never fires on unknown — otherwise it is a check on ignorance."""
+        assert assertions_are_disjoint(
+            [_span(start=_at(1997), end=_at(2010))], [_span()]
+        ) is False
+
+    def test_one_vague_period_beside_a_definite_one_still_blocks_it(self):
+        """Adding an unplaceable period suppresses; it must never manufacture."""
+        definite_and_vague = [_span(start=_at(1997), end=_at(2010)), _span()]
+
+        assert assertions_are_disjoint(
+            definite_and_vague, [_span(start=_at(2024), end=_at(2030))]
+        ) is False
+
+    def test_a_claim_nobody_dated_is_not_evidence(self):
+        dated = [_span(start=_at(1997), end=_at(2010))]
+
+        assert assertions_are_disjoint(dated, []) is False
+        assert assertions_are_disjoint([], dated) is False
+        assert assertions_are_disjoint([], []) is False
+
+    def test_periods_on_different_clocks_never_fire(self):
+        """There is no conversion between an in-universe date and a real one."""
+        assert assertions_are_disjoint(
+            [_span(start=_at(1997), end=_at(2010))],
+            [_span(start=_at(2024), end=_at(2030), timeline_id="third-age")],
+        ) is False
+
+    def test_a_claim_asserted_to_have_always_held_is_disjoint_from_nothing(self):
+        always = [_span(start=UnboundedInstant(), end=UnboundedInstant())]
+
+        assert assertions_are_disjoint(
+            always, [_span(start=_at(1997), end=_at(2010))]
+        ) is False
 
 
 class TestTheEndpointKindIsReadInOnePlace:

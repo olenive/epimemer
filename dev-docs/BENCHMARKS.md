@@ -185,6 +185,30 @@ is also what flattened its exponent from 1.56 to ~1.
   both of which are larger changes than anything in #14 or #47, and neither is
   worth making while the crossing sits at ~26,000 nodes.
 
+### What the soundness phase adds to `reflect` (#53 T1 §11, 2026-08-19)
+
+The one phase added to `reflect` since it became the limiting operation, so its
+cost is worth stating rather than assuming. In-memory, mock embeddings, median
+of three, measured against the same graph with the phase stubbed out — a
+difference of one phase rather than of two whole benchmarks:
+
+| nodes | `reflect` with | without | the phase alone |
+|---|---|---|---|
+| 1,000 | 95.7 ms | 83.1 ms | **10.1 ms** |
+| 3,000 | 295.4 ms | 266.7 ms | **27.7 ms** |
+
+Linear, and ~10% of a call at both sizes. All of it is the three batched reads
+it cannot avoid — the inferences, their premise edges both ways, and those
+premises' validity — since the graph measured carries **no intervals at all**
+and so produces no flags. That is the shape to expect: this feature is sparse by
+design, and the common case is the phase paying its floor and reporting nothing.
+
+**Ordering the reads is worth a third of it.** Fetching every premise fact and
+then discarding the undated ones cost 41.0 ms at 3,000 nodes; reading validity
+first and fetching only the premises that can still form a pair costs 27.7 ms.
+On an undated graph no nodes are fetched at all. The general form is the one
+this file keeps finding: narrow before you fetch, not after.
+
 ### What retrieval reinforcement costs
 
 `search` writes every returned node back with a fresh `retrieved_at` — k extra
@@ -315,6 +339,17 @@ index, which would leave `text_search` silently returning nothing.
 - **Real embeddings.** `--real-embeddings` adds the constant this deliberately
   omits, for an end-to-end figure.
 - **Embedding throughput on its own**, separated from ingest.
+- **The soundness phase on SurrealDB.** Measured in-memory only (above), where
+  its cost is three batched reads and no round-trips. On a networked backend
+  those three are round-trips rather than arithmetic, which is the axis that
+  actually binds `reflect` there — so the ~10% share does not transfer, and the
+  number to take is the query count (three, flat) rather than the milliseconds.
+- **A graph that actually carries intervals.** Every `reflect` figure here is
+  over an undated corpus, so the soundness phase pays its floor and compares
+  nothing. The pairwise part is quadratic in a single inference's *dated*
+  premises, which is a small number in every case anyone has described — but it
+  is unmeasured, and "small in every case described" is how a ceiling gets
+  missed.
 - **`query_changes` after #57 (2026-08-17).** The window predicate now adds two
   array-filter scans per row (lifecycle episodes) on top of the existing full
   scan, on SurrealDB. Correct, unindexed, unmeasured — flagged at resolution

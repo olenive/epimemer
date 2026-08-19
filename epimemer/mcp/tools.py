@@ -1831,6 +1831,7 @@ REFLECT_PHASES = (
     "enrichment_scan",
     "contradiction_detection",
     "recurrence_detection",
+    "soundness_check",
     "pending_review",
     "archival_nomination",
     "relation_consolidation",
@@ -1848,13 +1849,15 @@ async def reflect(
     """Analyse the memory graph and return candidates for the agent to act on.
 
     Reads only. Returns split candidates, similar topic pairs, enrichment
-    candidates, contradiction pairs, archival nominations and similar
-    relationship-label pairs for the agent to review and act on via
-    memory.apply_reflection — nothing here changes the graph.
+    candidates, contradiction pairs, recurrences, temporally unsound inferences,
+    archival nominations and similar relationship-label pairs for the agent to
+    review and act on via memory.apply_reflection — nothing here changes the
+    graph.
     """
     from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
     from epimemer.pipelines.reflection.archival import nominate_archival_candidates
     from epimemer.pipelines.reflection.relation_consolidation import find_similar_relation_pairs
+    from epimemer.pipelines.reflection.soundness import find_unsound_inferences
     from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
     from epimemer.pipelines.reflection.topic_enrichment import gather_associated_material_for, _should_enrich
     from epimemer.pipelines.reflection.topic_splitting import should_split
@@ -1995,6 +1998,18 @@ async def reflect(
             == {NodeStatus.ACTIVE, NodeStatus.HISTORICAL}
         ])
 
+    # 5c. The temporal soundness check (#53 T1 §11): an inference whose premises
+    #     no source puts in the same period. The graph stores inferences it did
+    #     not draw, so this is the only place the combination is ever looked at
+    #     — and reflect rather than ingest because the motivating case spans two
+    #     documents, neither of which is in front of the agent while the other
+    #     is being stored. Flags, never blocks; never fires on unknown.
+    async def _unsound():
+        return [
+            flagged.model_dump(mode="json")
+            for flagged in await find_unsound_inferences(storage)
+        ]
+
     # 6. Surface the pending-review worklist: active nodes already carrying review
     #    state (a candidate to supersede, stale evidence, or an unresolved
     #    contest), with the related ids to act on via apply_reflection /
@@ -2038,6 +2053,7 @@ async def reflect(
             "contradiction_detection", _contradictions, tokens=len
         )
         recurrences = await phase("recurrence_detection", _recurrences, tokens=len)
+        unsound_inferences = await phase("soundness_check", _unsound, tokens=len)
         pending_review = await phase("pending_review", _pending_review, tokens=len)
         archival_candidates = await phase(
             "archival_nomination", _archival, tokens=len
@@ -2052,6 +2068,7 @@ async def reflect(
         "enrichment_candidates": enrichment_candidates,
         "contradictions": contradictions,
         "recurrences": recurrences,
+        "unsound_inferences": unsound_inferences,
         "pending_review": pending_review,
         "archival_candidates": archival_candidates,
         "similar_relations": similar_relations,
@@ -2060,8 +2077,8 @@ async def reflect(
         nodes_returned=(
             len(similar_pairs) + len(split_candidates)
             + len(enrichment_candidates) + len(contradictions)
-            + len(recurrences) + len(pending_review) + len(archival_candidates)
-            + len(similar_relations)
+            + len(recurrences) + len(unsound_inferences) + len(pending_review)
+            + len(archival_candidates) + len(similar_relations)
         ),
         # Reflect **scans** the whole active graph and the agent sees only the
         # nominees, so a reflect record dims everything except them. That is

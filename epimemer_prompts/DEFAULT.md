@@ -191,9 +191,18 @@ useful:
   sessions.
 - `reflect` returns consolidation candidates (similar pairs, splits, enrichments —
   similar pairs also surface duplicate source/tag/entity Topics), same-frame
-  contradiction candidates, `pending_review` — the worklist of nodes already
-  flagged for resolution — `archival_candidates` (see below), and
-  `similar_relations`, likely-synonymous user relationship labels.
+  contradiction candidates, `recurrences`, `unsound_inferences` (see below),
+  `pending_review` — the worklist of nodes already flagged for resolution —
+  `archival_candidates` (see below), and `similar_relations`, likely-synonymous
+  user relationship labels.
+- **`unsound_inferences`** names an inference whose premises no source puts in
+  the same period — *"X held 1997–2010"* and *"Y held from 2024"*, combined into
+  a conclusion — with the offending pairs and their dates. It reports; you
+  decide: re-derive the inference, narrow it to a period it can support, or
+  retire it with `supersede_by(because="it_was_wrong")`. Read it as *no source
+  asserts these were ever both true*, not as *they never were*: it stays silent
+  unless both premises carry dates and those dates provably fall clear, so a
+  flag is rare and worth reading, and its absence proves nothing.
 - Apply your decisions with `apply_reflection`. To resolve flagged nodes in batch,
   pass `supersessions=[{old_id, by_id}]`. Resolving a loser automatically clears
   the winner's `contested` / `superseded_candidate` labels. Escalate anything you
