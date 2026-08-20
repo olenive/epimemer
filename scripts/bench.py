@@ -17,11 +17,22 @@ costs this is built to expose; the vector *width* is kept because scan cost
 scales with it. Numbers are therefore a floor: real ingest is slower by the
 embedding time, real search by roughly one query embedding.
 
+The corpus is deliberately plain: no publisher attribution and no similarity
+edges, which is what every figure recorded before 2026-08-20 was taken over.
+`--publishers` and `--similarity-degree` add each, and exist because the
+read-time annotations cost what the graph has *become* rather than what size it
+is — corroboration walks the similarity neighbourhood and counts publishers, so
+against the plain corpus it would measure an empty walk over nothing.
+
 Usage:
     uv run python scripts/bench.py                      # mem://, N ∈ {100, 1000}
     uv run python scripts/bench.py --n 100,1000,10000
     uv run python scripts/bench.py --quick --n 10       # smoke test
     EPIMEMER_BENCH_URL=ws://localhost:8000/rpc uv run python scripts/bench.py
+
+    # the annotation costs behind BENCHMARKS.md's corroboration table (#51)
+    uv run python scripts/bench.py --n 400,2000 --skip-reflect \
+        --publishers 4 --similarity-degree 10
 
 One JSON object per (operation, backend, n) is written to stdout; progress goes
 to stderr, so `bench.py > run.jsonl` yields a clean record.
@@ -37,9 +48,12 @@ import sys
 import time
 from datetime import datetime, timezone
 
+from epimemer.core.types import EdgeType, NodeEdge, NodeType, Topic
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.tools import (
+    _hierarchy_annotations,
+    _metacontext_labels_for,
     graph_stats,
     list_sources,
     reflect,
@@ -47,8 +61,13 @@ from epimemer.mcp.tools import (
     segment_text,
     store_decomposition,
 )
+from epimemer.pipelines.query.corroboration import corroboration_for
+from epimemer.pipelines.query.validity import validity_for
+from epimemer.pipelines.reflection.review import review_labels_for
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
+
+_PUBLISHERS = ("Alpha Wire", "Beta Press", "Gamma Times", "Delta News")
 
 _WORDS = (
     "memory graph topic fact inference segment vector embedding reflection decay "
@@ -103,13 +122,36 @@ def _progress(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
-async def _seed(storage, provider, config, *, docs: int, segments: int, rng) -> float:
-    """Ingest `docs` documents. Returns elapsed seconds."""
+async def _seed(
+    storage, provider, config, *, docs: int, segments: int, publishers: int, rng
+) -> float:
+    """Ingest `docs` documents. Returns elapsed seconds.
+
+    `publishers` spreads the documents over that many `published_by` entities;
+    0 attributes nothing, which is the corpus every figure recorded before
+    2026-08-20 was taken over. Attribution is what corroboration counts, so a
+    run measuring it needs some.
+    """
+    entities: dict[str, Topic] = {}
     start = time.perf_counter()
     for i in range(docs):
         seg_result, _ = await segment_text(
             _document(rng, segments), storage, provider, config, source=f"bench-doc-{i}"
         )
+        if publishers:
+            # Resolve-or-create by exact name, as `_upsert_entity_topic` does —
+            # a fresh Topic per document would make every document its own
+            # publisher and the count meaningless.
+            name = _PUBLISHERS[i % min(publishers, len(_PUBLISHERS))]
+            if name not in entities:
+                entities[name] = Topic(
+                    content=name, source_id=None, extraction_method="agent:source"
+                )
+                await storage.store_node(entities[name])
+            await storage.store_edge(NodeEdge(
+                src_id=seg_result["document_id"], dst_id=entities[name].id,
+                type=EdgeType.RELATED, label="published_by", kind="attribution",
+            ))
         await store_decomposition(
             seg_result["document_id"],
             _decomposition(rng, [s["segment_id"] for s in seg_result["segments"]]),
@@ -117,6 +159,63 @@ async def _seed(storage, provider, config, *, docs: int, segments: int, rng) -> 
             provider,
         )
     return time.perf_counter() - start
+
+
+async def _wire_similarity(storage, *, degree: int, rng) -> int:
+    """Give each fact `degree` similarity partners. Returns the edge count.
+
+    Stands in for what `apply_reflection` writes over a reflected-over graph.
+    **Synthetic, and the distinction matters**: the degree is a dial here, not
+    an observation, so it shows how a cost scales with edge density without
+    saying what density a real graph reaches.
+    """
+    if degree <= 0:
+        return 0
+    facts = list(await storage.query_nodes(node_type=NodeType.FACT))
+    if len(facts) < 2:
+        return 0
+    written = 0
+    for fact in facts:
+        for partner in rng.sample(facts, min(degree, len(facts))):
+            if partner.id == fact.id:
+                continue
+            await storage.store_edge(NodeEdge(
+                src_id=fact.id, dst_id=partner.id, type=EdgeType.SIMILARITY,
+            ))
+            written += 1
+    return written
+
+
+async def _time_annotations(storage, provider, *, runs: int, rng) -> dict:
+    """Each read-time annotation `search` applies, over a real result set.
+
+    Timed separately from `search` itself because they are the part that grows
+    with what the graph has *become* rather than with its size — and because
+    corroboration is opt-in on exactly this evidence (ISSUES.md #51). The node
+    set is whatever a real `search(k=10, graph_hops=1)` returns, expansion
+    included, since that is what the annotations are handed.
+    """
+    result, _ = await search(_sentence(rng, 5), storage, provider, k=10, graph_hops=1)
+    node_ids = [n["id"] for n in result["nodes"]]
+    nodes = list((await storage.get_nodes(node_ids)).values())
+
+    async def median_ms(factory) -> float:
+        return round(
+            statistics.median([await _timed(factory) for _ in range(runs)]), 3
+        )
+
+    return {
+        "result_set": len(node_ids),
+        "hierarchy_ms": await median_ms(lambda: _hierarchy_annotations(nodes, storage)),
+        "metacontexts_ms": await median_ms(
+            lambda: _metacontext_labels_for(node_ids, storage)
+        ),
+        "review_labels_ms": await median_ms(lambda: review_labels_for(nodes, storage)),
+        "validity_ms": await median_ms(lambda: validity_for(node_ids, storage)),
+        "corroboration_ms": await median_ms(
+            lambda: corroboration_for(node_ids, storage)
+        ),
+    }
 
 
 async def _time_search(storage, provider, *, runs: int, rng) -> list[float]:
@@ -136,11 +235,19 @@ async def _timed(coro_factory) -> float:
     return (time.perf_counter() - start) * 1000
 
 
-async def _open_storage(backend: str, url: str | None, database: str):
+async def _open_storage(backend: str, url: str | None, namespace: str, database: str):
+    """Open one backend.
+
+    `namespace` defaults away from `epimemer` on purpose. This script creates
+    and drops databases, and pointing it at a server holding real graphs should
+    not put throwaway ones in the same namespace as them — the prefix guard in
+    `_drop` protects against deleting the wrong database, not against writing in
+    the wrong place.
+    """
     if backend == "memory":
         storage = InMemoryStorage()
     else:
-        storage = SurrealDBStorage(url=url, database=database)
+        storage = SurrealDBStorage(url=url, namespace=namespace, database=database)
     await storage.connect()
     return storage
 
@@ -154,6 +261,9 @@ async def _run_one(
     searches: int,
     skip_reflect: bool,
     real_embeddings: bool,
+    namespace: str,
+    publishers: int,
+    similarity_degree: int,
     seed: int,
     common: dict,
 ) -> str | None:
@@ -170,12 +280,18 @@ async def _run_one(
         provider = MockEmbeddingProvider(model_id="bench-embed", dimension=384)
 
     config = ServerConfig(embedding_provider="mock", segmentation_strategy="paragraph")
-    storage = await _open_storage(backend, url, database)
+    storage = await _open_storage(backend, url, namespace, database)
     tags = {**common, "backend": backend, "nodes_target": nodes, "documents": docs}
 
     try:
         _progress(f"[{backend}] seeding ~{nodes} nodes ({docs} docs × {segments} segments)...")
-        elapsed = await _seed(storage, provider, config, docs=docs, segments=segments, rng=rng)
+        elapsed = await _seed(
+            storage, provider, config,
+            docs=docs, segments=segments, publishers=publishers, rng=rng,
+        )
+        similarity_edges = await _wire_similarity(
+            storage, degree=similarity_degree, rng=rng
+        )
         stats, _ = await graph_stats(storage, default_reflect_threshold=10)
         _emit({
             **tags,
@@ -204,6 +320,17 @@ async def _run_one(
             "ms": round(await _timed(lambda: list_sources(storage)), 2),
         })
 
+        _progress(f"[{backend}] read-time annotations...")
+        _emit({
+            **tags,
+            "operation": "annotations",
+            "runs": min(searches, 15),
+            "similarity_edges": similarity_edges,
+            **await _time_annotations(
+                storage, provider, runs=min(searches, 15), rng=rng
+            ),
+        })
+
         if not skip_reflect:
             _progress(f"[{backend}] reflect (slowest step; minutes at 10k)...")
             _emit({
@@ -217,10 +344,12 @@ async def _run_one(
     return database if backend == "surrealdb" else None
 
 
-async def _drop(url: str, databases: list[str]) -> None:
+async def _drop(url: str, namespace: str, databases: list[str]) -> None:
     """Remove the databases this run created. Prefix-guarded: it will not touch
     anything it did not name itself."""
-    storage = SurrealDBStorage(url=url, database="bench_cleanup")
+    storage = SurrealDBStorage(
+        url=url, namespace=namespace, database="bench_cleanup"
+    )
     await storage.connect()
     try:
         for name in databases:
@@ -242,6 +371,8 @@ async def _main(args) -> None:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "segments_per_doc": args.segments,
         "embeddings": "real" if args.real_embeddings else "mock-384",
+        "publishers": args.publishers,
+        "similarity_degree": args.similarity_degree,
     }
     created: list[str] = []
 
@@ -255,6 +386,9 @@ async def _main(args) -> None:
                 searches=args.searches,
                 skip_reflect=args.skip_reflect or args.quick,
                 real_embeddings=args.real_embeddings,
+                namespace=args.namespace,
+                publishers=args.publishers,
+                similarity_degree=args.similarity_degree,
                 seed=args.seed,
                 common=common,
             )
@@ -262,7 +396,7 @@ async def _main(args) -> None:
                 created.append(name)
 
     if created and not args.keep:
-        await _drop(args.url, created)
+        await _drop(args.url, args.namespace, created)
     elif created:
         _progress(f"kept: {', '.join(created)}")
 
@@ -282,6 +416,35 @@ def main() -> None:
     parser.add_argument("--skip-reflect", action="store_true", help="skip the reflect timing")
     parser.add_argument(
         "--real-embeddings", action="store_true", help="use sentence-transformers"
+    )
+    parser.add_argument(
+        "--namespace",
+        default="epimemer_bench",
+        help=(
+            "SurrealDB namespace for the throwaway databases. Deliberately not "
+            "`epimemer`, which is where real graphs live."
+        ),
+    )
+    parser.add_argument(
+        "--publishers",
+        type=int,
+        default=0,
+        help=(
+            "spread documents over this many published_by entities (max 4). "
+            "0, the default, attributes nothing — the corpus every figure "
+            "recorded before 2026-08-20 was taken over. Corroboration counts "
+            "publishers, so a run measuring it wants some."
+        ),
+    )
+    parser.add_argument(
+        "--similarity-degree",
+        type=int,
+        default=0,
+        help=(
+            "similarity partners per fact, standing in for a reflected-over "
+            "graph. Synthetic: a dial on edge density, not an observation of "
+            "one. 0 by default, again to leave the historical corpus unchanged."
+        ),
     )
     parser.add_argument(
         "--keep", action="store_true", help="keep the SurrealDB databases this run creates"

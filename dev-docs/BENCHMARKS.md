@@ -22,13 +22,44 @@ trustworthy; a cross-run comparison is not.
   a constant per text that would dominate and hide the graph costs this exists to
   expose. Every number here is therefore a **floor** — real ingest is slower by
   the embedding time, real search by roughly one query embedding.
-- **The synthetic corpus is unrealistically self-similar.** Documents are drawn
-  from a 17-word vocabulary, so most fact pairs clear the 0.80 contradiction
-  threshold. Measured: 19% of unrelated pairs under the mock, 49% under real
-  `all-MiniLM-L6-v2` on similarly templated text. Anything scaling with
-  *surviving candidate pairs* — the contradiction phase of `reflect` — is
-  overstated here relative to a diverse corpus. Node- and edge-scaled costs are
-  not affected.
+- **The synthetic corpus produces almost no candidate pairs, which is the
+  opposite of what this note used to say.** It read: *unrealistically
+  self-similar … 19% of unrelated pairs clear 0.80 under the mock … anything
+  scaling with surviving candidate pairs is **overstated** here.* Re-measured
+  2026-08-20 over 400 bench sentences, by the mock's vector width:
+
+  | width | mean pair similarity | share clearing 0.80 |
+  |---|---|---|
+  | 8 | 0.762 | 40.9% |
+  | 64 | 0.752 | 10.8% |
+  | **384 — what the bench runs** | 0.749 | **0.05%** |
+
+  The mock builds vectors from hash bytes scaled to `[0, 1]`, so every pair sits
+  near 0.75 and the spread narrows as the width grows; at 384 almost nothing
+  crosses the threshold. The 19% figure was taken at some narrower width and no
+  longer describes this configuration. **Every `reflect` figure below is
+  therefore measured on a corpus that generates essentially no surviving pairs**,
+  and understates anything scaling with them. Node- and edge-scaled costs are
+  unaffected and remain trustworthy. What this hid is filed as ISSUES.md **#60**.
+- **The 49% did not stand, and why it did not is the more useful finding**
+  (measured 2026-08-20, `scripts/corpus_measure.py`). It was carried here as
+  "49% for real `all-MiniLM-L6-v2` on similarly templated text" and used to
+  project `reflect`'s memory. Re-measured through the real model at the real
+  0.80 threshold, over the bench's own generator:
+
+  | text scored | words | median pair similarity | share clearing 0.80 |
+  |---|---|---|---|
+  | bench paragraph / segment | ~36 | 0.842 | **74.9%** |
+  | bench fact — **what `reflect` scores** | 8 | 0.500 | **1.11%** |
+  | bench topic | 4 | 0.328 | 0.62% |
+
+  **Pair similarity is dominated by text length**, and over a fixed 17-word
+  vocabulary it climbs steeply with it: 0.62% at 4 words, 1.11% at 8, 3.70% at
+  12, 21.8% at 20, 74.9% at a paragraph. So 49% is a real number for *some*
+  templated text and the wrong number for the pairs `reflect` actually forms,
+  which are fact-length. **A survival rate is meaningless without the text
+  length it was measured at** — that is the correction worth carrying forward,
+  and it is why the row above names the words as well as the rate.
 - **Node counts are exact**: 4 nodes per segment, 5 segments per document.
 - **All network numbers are loopback.** A remote SurrealDB is worse by the RTT
   difference times the round-trip count.
@@ -88,6 +119,12 @@ inside two matrix products whose constant is small enough that the linear costs
 to climb toward 2 well beyond 8,000 nodes. In-memory measuring 0.99 is a
 statement about where the crossover between those two costs currently sits, not
 a claim that the pair comparison went away.
+
+**And the crossings above are time only.** `reflect` also allocates ~580 bytes
+per *surviving* pair, which nothing caps — on a corpus where pairs actually
+survive, memory can fail before the timeout does, at a size below the ~26,000
+crossing. The corpus here produces almost none, so these figures cannot show it.
+Measurements and projection: ISSUES.md **#60**.
 
 ---
 
@@ -210,14 +247,68 @@ reading validity first and fetching only the premises that can still form a pair
 costs 27.7 ms. On an undated graph no nodes are fetched at all. The general form
 is the one this file keeps finding: narrow before you fetch, not after.
 
-**A duplication worth naming, not yet worth fixing.** `reflect` now scans the
-active node set several times over — `gather_pending_review` asks for it, the
-boundary phase asks for it plus the historical set, and the soundness check asks
-for the inferences. Each is one batched query rather than the per-node shape #14
-removed, so none of them is the old defect; but a pass-scoped node cache, of the
-kind `_active_topics` already is for topics, would remove three full scans.
-Measure before building it: on the numbers above the whole opportunity is under
-20% of a call.
+### `reflect` reads the node set 13 times (2026-08-20)
+
+Counted rather than estimated, because a first pass at this note guessed
+"three full scans" and guessed low. One `reflect` over a 1,000-node graph issues
+**13 `query_nodes` calls** and materialises **5,250 node copies** — 5.25× the
+graph — split like this:
+
+| # | Call | Phase | Rows at n=1,000 |
+|---|---|---|---|
+| 1 | `topic` | topic consolidation | 250 |
+| 2 | `topic` | split detection (cached on for enrichment) | 250 |
+| 3–4 | `fact` × active, historical | contradiction + recurrence | 500, 0 |
+| 5 | `inference` | soundness check | 250 |
+| 6–7 | *all* × active, historical | boundary proposals | **1,000**, 0 |
+| 8 | *all* × active | `gather_pending_review` | **1,000** |
+| 9–11 | *all* × superseded, corrected, merged | archival candidates | 0, 0, 0 |
+| 12 | *all* × active | archival nomination | **1,000** |
+| 13 | *all* × active | relation consolidation | **1,000** |
+
+**Four of them are the same query.** Rows 6, 8, 12 and 13 each read the whole
+active set, and row 13 uses nothing but the ids. None is the per-node shape #14
+removed — every one is a single batched call — which is exactly why they went
+unnoticed: the round-trip count stayed flat while the payload multiplied.
+
+What that costs, and what a fix could recover (median of three, same graph,
+same session):
+
+| | in-memory | SurrealDB |
+|---|---|---|
+| share of `reflect` inside `query_nodes` | 39–43% | 17–23% |
+| …just the four untyped active scans | ~30% | 13–16% |
+| recovered by memoising identical calls | **18%** | **5%** |
+| recovered by one read per status, filtered in Python | **27%** | **8%** |
+
+The gap between the last two rows is the typed reads (rows 1–5), which a shared
+active set could serve by filtering. **The share is lower on SurrealDB, not
+higher**, which is the opposite of the usual shape here and worth knowing before
+anyone optimises for the wrong backend: there the embedding reads dominate, so
+the node scans are a smaller slice of a bigger number.
+
+**Not yet built, and the memo is only safe because `reflect` writes nothing** —
+pinned by `TestReflectWritesNothing`, so two reads of one status inside a single
+pass cannot disagree. 27% of the fastest backend is real but it is not what
+binds the crossing, which is on SurrealDB at ~26,000 nodes; measure again there
+before spending anything on it.
+
+**If it is built, the shape is constrained by two things already decided.** The
+cache must be **lazy, not a prefetch**: `reflect` already caches its topic set
+and the comment says *"lazy rather than hoisted so the fetch stays attributed to
+the phase that needs it first"* — a prelude that read everything up front would
+show all the cost landing on phase one, in the pipeline strip built to show
+where the time goes. And it should arrive as the storage handle rather than as a
+parameter on eight phase functions, which keeps each of them answerable from
+`storage` alone.
+
+**Only part of the separation is accretion.** Of the 13 reads, five ask for
+genuinely different statuses and no cache removes them; four ask for one *type*
+of the active set, which is strictly cheaper than a shared read in isolation and
+redundant only because three other phases read the whole set anyway; four are
+the same query. The "each phase is independently reusable" argument does not
+hold up — of the eight phase functions, only `find_archival_candidates` has a
+caller outside `reflect` today.
 
 ### What retrieval reinforcement costs
 
@@ -231,6 +322,147 @@ Cheap, and **flat in graph size**: k does not grow with the graph, so the cost i
 a constant — visible on SurrealDB where each write is a round-trip, near-invisible
 in-memory. It changes no crossing. Since value decay was removed this is the only
 per-node write left in the read path, so it is what a batched write would serve.
+
+### What corroboration costs, and why it is opt-in (#51, 2026-08-20)
+
+`ISSUES.md` #51 asked for this number before deciding whether corroboration
+could go on the default `search` path. It could not. Median ms per call, over
+the node set a real `search(k=10, graph_hops=1)` returns, against a localhost
+SurrealDB 3.0.5 and the in-memory store, mock embeddings at 384 dimensions:
+
+| backend | nodes | sim/fact | sim edges | result set | `review_labels_for` | `validity_for` | `corroboration_for` | `search` p50 |
+|---|---|---|---|---|---|---|---|---|
+| memory | 400 | 0 | 0 | 37 | 0.11 | 0.29 | **1.46** | 18.2 |
+| memory | 400 | 3 | 595 | 55 | 0.16 | 0.39 | **5.36** | 19.8 |
+| memory | 400 | 10 | 1,991 | 100 | 0.42 | 0.76 | **17.3** | 23.1 |
+| memory | 2000 | 0 | 0 | 37 | 0.09 | 0.23 | **1.28** | 83.1 |
+| memory | 2000 | 3 | 3,000 | 46 | 0.13 | 0.32 | **5.37** | 86.1 |
+| memory | 2000 | 10 | 9,993 | 107 | 0.51 | 0.84 | **34.0** | 89.8 |
+| surrealdb | 400 | 0 | 0 | 36 | 9.48 | 3.17 | **30.1** | 139 |
+| surrealdb | 400 | 3 | 595 | 56 | 14.4 | 4.78 | **52.1** | 182 |
+| surrealdb | 400 | 10 | 1,991 | 93 | 29.7 | 10.0 | **109** | 267 |
+| surrealdb | 2000 | 0 | 0 | 37 | 33.1 | 10.8 | **108** | 346 |
+| surrealdb | 2000 | 3 | 3,000 | 51 | 63.5 | 19.6 | **235** | 420 |
+| surrealdb | 2000 | 10 | 9,993 | 111 | 41.6 | 37.4 | **540** | 545 |
+
+The `search` column is the plain call, without corroboration — the annotation is
+opt-in, so it is not in that number. Compare the two columns to see what asking
+for it costs.
+
+**Two costs, and they are separable.** With no similarity edges at all it is
+~3× `review_labels_for` on SurrealDB, which is round-trips: twelve batched
+queries against that function's four. With edges it is the fan-out — the walk
+leaves the result set for each node's similarity neighbourhood, and nothing
+bounds how large that is. At degree 10 it is nearly the whole call.
+
+**The direction is what settles it.** Similarity edges are written by
+`apply_reflection`, so this gets more expensive the more a graph has been
+reflected over — and a reflected-over graph is exactly where corroboration has
+something to say. Default-on would have got slower the more useful it became.
+So it is `include_corroboration=False`, and the cost is stated in the tool
+description rather than discovered.
+
+Two caveats on these numbers. The similarity edges are **synthetic** — assigned
+at a fixed degree by `--similarity-degree`, not produced by `reflect` over a real
+corpus — so that column is a dial rather than an observation, and what a real
+graph sits at is unmeasured. And the corpus is the standard synthetic one, so
+this inherits its vocabulary limits like everything else here.
+
+Reproduce with, one run per degree:
+
+```bash
+uv run python scripts/bench.py --n 400,2000 --skip-reflect \
+    --publishers 4 --similarity-degree 10 --url ws://localhost:8000/rpc
+```
+
+The `annotations` record carries every column above. Both new flags default to
+**off**, so every figure recorded elsewhere in this file was taken over the same
+plain corpus it always was.
+
+The lever, if it is ever wanted on the default path: the six typed neighbourhood
+queries collapse into one untyped `get_edges_for` per direction, trading
+round-trips for bytes. Indicated by the degree-0 column and contraindicated by
+the degree-10 one, which is why it was left alone rather than guessed at.
+
+---
+
+## What real text actually looks like (#59 and #60, 2026-08-20)
+
+Everything above is measured on generated text. Two open issues turned on what
+*real* text does instead, so this takes it directly from graphs of real ingested
+content — `epimemer/memory` (Epimemer's own dev history, 568 nodes / 80
+segments) and `epimemer/petritype-server` (136 nodes / 28 segments) — read
+**without opening a storage backend**, since those namespaces must not be
+written to. `scripts/corpus_measure.py`.
+
+### Node text does not reach the embedding window; segment text does
+
+`all-MiniLM-L6-v2` truncates at 256 word-pieces, counted with `[CLS]`/`[SEP]`
+inside the budget. Tokenized lengths over both graphs:
+
+| corpus | n | median | p95 | max | over 256 |
+|---|---|---|---|---|---|
+| fact | 350 | 30 | 56 | 81 | **0** |
+| inference | 124 | 38 | 56 | 63 | **0** |
+| topic | 150 | 20 | 38 | 69 | **0** |
+| **segment** | **108** | **148** | **305** | **496** | **12 (11.1%)** |
+
+**Nodes have 3× headroom at their worst** — the longest of 624 real nodes is 81
+word-pieces against a 256 window — so decomposed claims are simply not at risk,
+and no amount of graph growth changes that: a fact is one sentence by
+construction.
+
+**Segments cross it routinely.** 10.0% of `memory`'s and 14.3% of
+`petritype-server`'s exceed the window, and the worst loses **48% of its text**
+to truncation. Segments are a *searchable corpus* in their own right
+(`docs/RETRIEVAL.md` §3), so this is the silent under-return #59 describes,
+confined entirely to the half nobody suspected — the entry guessed at "`Segment`
+text and unusually long inference content", and inferences turn out to top out
+at 63 word-pieces.
+
+### `reflect`'s surviving-pair rate on real prose is ~0.01%, not 49%
+
+Same model, the real 0.80 threshold, and the real stored vectors — the ones
+written at ingest, so this is the distribution `reflect` sees rather than one
+re-derived here:
+
+| corpus | items | pairs | survivors | rate | median pair similarity | p99.9 |
+|---|---|---|---|---|---|---|
+| bench fact text (control) | 400 | 79,800 | 887 | 1.11% | 0.500 | 0.883 |
+| real facts, `memory` | 277 | 38,226 | 4 | **0.0105%** | **0.164** | 0.683 |
+| real facts, `petritype-server` | 73 | 2,628 | 0 | **0.0%** | 0.160 | 0.720 |
+| real topics, `memory` | 112 | 6,216 | 1 | 0.0161% | 0.153 | 0.707 |
+
+**Read the distribution, not the rate.** Four survivors is too few to trust as a
+rate, but 38,226 pairs is plenty to locate the distribution, and it sits nowhere
+near the threshold: the median real fact pair scores **0.164**, and 99.9% of
+them stay under **0.683**. For #60's projection to bite, the whole distribution
+would have to move — not its tail.
+
+What that projects to at the sizes #60 names, at ~580 bytes per surviving pair:
+
+| facts | surviving pairs | pair memory |
+|---|---|---|
+| 2,000 | ~210 | ~0.1 MB |
+| 5,000 | ~1,300 | ~0.8 MB |
+| 10,000 | ~5,200 | **~3 MB** |
+
+against the ~14 GB the borrowed rate predicted at 10,000 — **four orders of
+magnitude**, and the difference between an urgent fix and cheap insurance.
+
+**Three things this does not establish**, because the temptation is to read it
+as an all-clear:
+
+- **A near-duplicate corpus is untested and was #60's actual worst case.** The
+  same news story from fifty outlets is claim-duplicate; dev notes are
+  subject-similar, which is a much weaker thing. No claim-duplicate corpus
+  exists here to measure, so the honest scope is *the alarm does not fire on any
+  corpus that has actually been ingested*.
+- **The rate's behaviour with size is unmeasured.** Subsets at n = 50/100/200
+  produced 0, 0 and 1 survivors — too few to fit a trend. If mutual similarity
+  rises as a graph fills in one domain, the projection above is a floor.
+- **Nothing here caps anything.** The bound #60 proposes is still absent; the
+  measurement changes its priority, not its correctness.
 
 ---
 
@@ -379,6 +611,11 @@ EPIMEMER_BENCH_URL=ws://localhost:8001/rpc make bench BENCH_N=1000,2000
 docker rm -f bench-surreal
 ```
 
+Against a throwaway container the namespace is irrelevant, but `bench.py`
+creates and drops databases and defaults to the `epimemer_bench` namespace
+rather than `epimemer` — pointing a run at a server that holds real graphs
+should not put scratch ones beside them. `--namespace` overrides it.
+
 `--skip-reflect` drops the slowest step when only `search` and `list_sources`
 are of interest. `BENCH_N=10000` is about two minutes, dominated by `reflect`.
 
@@ -386,3 +623,23 @@ To measure a change against its own baseline, stash the changed file rather than
 checking out an older commit — the test suite may reference symbols the benchmark
 does not, so `git stash push <file>` gives a clean baseline with everything else
 identical.
+
+### The real-corpus figures (#59, #60)
+
+```bash
+uv run python scripts/corpus_measure.py \
+  --database memory,petritype-server --synthetic-control 400
+```
+
+Reads whatever graphs are named, **without opening a storage backend** —
+`connect()` defines tables and runs the FTS backfill, and these are the real
+namespaces. It reads the stored vectors rather than re-embedding, so the pair
+scores are the ones `reflect` sees, and it reads both thresholds out of
+`detect_contradictions` and `find_similar_topic_pairs` rather than restating
+them. `--synthetic-control` scores the same number of `bench.py`-generated
+sentences through the real model, which is what located the 49% discrepancy.
+
+**The numbers above are specific to these two graphs and do not travel.** Anyone
+reproducing this on a different corpus should expect different rates — that is
+the point of the measurement, and the reason the tables name the corpus and its
+size in every row. Guarded by `tests/test_corpus_measure_smoke.py`.

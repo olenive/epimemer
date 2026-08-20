@@ -267,7 +267,7 @@ async def nominate_archival_candidates(
 ) -> list[ArchivalCandidate]:
     """Propose nodes worth archiving, worst first.
 
-    Three classes, in the priority order §12.3 sets out:
+    Four classes, in the priority order §12.3 sets out:
 
     1. **retired** — SUPERSEDED/MERGED past `max_age_days` and not judged
        important. These are the existing age-based candidates, now value-aware.

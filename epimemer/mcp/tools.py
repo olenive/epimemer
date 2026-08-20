@@ -854,6 +854,7 @@ async def search(
     include_corrected: bool = False,
     valid_as_of: datetime | None = None,
     timeline_id: str | None = None,
+    include_corroboration: bool = False,
     record_retrieval: bool = DEFAULT_RECORD_RETRIEVAL,
     event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
@@ -913,10 +914,18 @@ async def search(
     claim provably valid then also keeps its own slot rather than being folded
     into a later version of itself.
 
+    `include_corroboration` adds, per node, how many *independent* sources back
+    it — distinct publishers across its similarity neighbourhood, with the
+    contributing nodes so the number can be checked. **Off by default, on a
+    measurement** (#51): it is the most expensive annotation on this path by a
+    wide margin, and it costs more the more similarity edges `reflect` has
+    written, so it grows fastest on exactly the graphs where it says most.
+
     Returned nodes have `retrieved_at` stamped (`record_retrieval=False`
     disables): being retrieved is what tells a used node from a merely old one.
     Ranking is unaffected — see `_record_retrieval`.
     """
+    from epimemer.pipelines.query.corroboration import corroboration_for
     from epimemer.pipelines.query.types import QueryRequest, SeedProvenance
     from epimemer.pipelines.query.validity import validity_for, verdict_for
     from epimemer.pipelines.reflection.review import review_labels_for
@@ -967,6 +976,15 @@ async def search(
     # transition read the seeds. One batched edge query, and the only place the
     # stored intervals become visible to a caller (T1 §3).
     validity_by_node = await validity_for([n.id for n in nodes], storage)
+    # Asked for rather than always run. Every other annotation here is a fixed
+    # number of batched queries over the result set; this one walks out to each
+    # node's similarity neighbourhood, so its cost follows an edge density
+    # nothing bounds (#51, and #60's shape one path along).
+    corroboration_by_node = (
+        await corroboration_for([n.id for n in nodes], storage)
+        if include_corroboration
+        else {}
+    )
     verdicts = (
         {
             node.id: verdict_for(
@@ -998,6 +1016,10 @@ async def search(
                 source.model_dump(mode="json")
                 for source in validity_by_node[node.id]
             ]
+        if node.id in corroboration_by_node:
+            node_dict["corroboration"] = corroboration_by_node[node.id].model_dump(
+                mode="json"
+            )
         if node.id in verdicts:
             node_dict["valid_at"] = verdicts[node.id]
         if node.id in query_result.lineage:

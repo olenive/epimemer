@@ -52,10 +52,39 @@ Discovery & lookup:
 ### When to search (search)
 - Before answering questions that might benefit from prior context, or when the
   user asks "do you remember…" / references past conversations.
+- **Pass exact strings you care about as `terms`.** A ticket id, an error code, a
+  person's name, a filename, a version number. Embeddings shred those:
+  `JIRA-4417` becomes word pieces mean-pooled with the rest of the sentence, so
+  the query embeds to roughly "short alphanumeric string" and *every other ticket
+  id in the graph* scores about as well. A keyword arm runs alongside the vector
+  one and supplies the term rarity similarity has no notion of. Terms are matched
+  whole and ORed, and **each declared term's best hit is kept in the results**
+  even if rank fusion would have cut it. Omit `terms` and the keyword arm falls
+  back to the query's own words, with no such guarantee — declaring is the
+  reliable path.
+- Read each result's **`provenance`**: `lexical` (a term matched the node's
+  content), `segment` (a term matched the passage it was extracted from),
+  `vector` (similarity), `expanded` (reached by an edge from one of those). When
+  a search disappoints, this is what tells you *why* something came back — or
+  which arm failed to bring back what you wanted.
+- The response also carries **`segments`** — passages that matched, whether or not
+  anything was extracted from them. *Where did I read that?* is a different
+  question from *what do I believe?*, and if you paraphrased an identifier out of
+  a fact when you stored it, the segment is the only thing that still holds it.
 - `search` is frame-scoped: passing `metacontext_id` returns that frame **plus**
   untagged base-reality nodes; set `cross_frame=true` to search across all frames.
 - Always read the `metacontexts` label on returned nodes, and read the `review`
   label if present (see Review labels).
+- **`include_corroboration=true` when independence is the question** — *is this
+  one report repeated, or several outlets agreeing?* It is off by default because
+  it is the most expensive thing on this path, so ask for it when you will act on
+  the answer, not routinely. Read what it counts: **distinct publishers**, so
+  three hedged reports from three outlets score 3 exactly as three confident ones
+  would. It does not interact with `confidence` and neither replaces the other.
+  Documents naming no publisher count as their own source, and
+  `unattributed_documents` says how many did — a low count may mean nobody
+  attributed the ingest rather than nobody corroborated the claim. Each source
+  names the nodes behind it, so check the working before quoting the number.
 
 ### Temporal queries — three axes, not one
 
@@ -111,17 +140,24 @@ differently. Detection is cheap recall; **judgment is yours** — similarity onl
 nominates candidates, it does not decide the relationship.
 
 **Detect (`check_conflicts`).** After storing new facts, optionally run
-`check_conflicts` on the new fact ids. It returns, per fact, similar active facts
-with a similarity `score`, their `metacontexts`, and a `same_frame` flag. Classify
-each candidate:
+`check_conflicts` on the new fact ids. It returns, per fact, similar facts with a
+similarity `score`, their `status`, their `metacontexts`, and a `same_frame` flag.
+Classify each candidate:
 
 | Verdict | What it means | What to do |
 | --- | --- | --- |
-| redundant | the same claim restated | nothing (or rely on the existing node) |
-| supersedes | the new fact replaces an outdated one | `supersede_by(old_id, existing_id, because=…)`; or `update` if you have corrected *content* |
+| redundant | the same claim restated, and the twin is **active** | nothing (or rely on the existing node) |
+| supersedes | the new fact corrects an outdated one — the old was **wrong** | `supersede_by(old_id, existing_id, because="it_was_wrong")`; or `update` if you have corrected *content* |
+| succeeds | both true, over different periods — **the world moved** | `supersede_by(old_id, existing_id, because="the_world_changed")` |
+| recurs | the same claim, previously retired as `historical`, is true again | `restore(node_ids=[…], sourced_from=…)` — reactivating requires naming the new source |
 | contradicts | genuine conflict, **same frame**, unclear which holds | `record_contradiction(a, b)` |
 | cross-frame | only "conflicts" because the frames differ | `record_variant(a, b)` — not a conflict |
 | compatible | no conflict | nothing |
+
+**Read the candidate's `status` before choosing between the first and fourth
+rows.** An identical claim beside an *active* twin is `redundant`; beside a
+`historical` one it is `recurs` — the world came back around, and the right move
+is to bring the existing node back rather than mint a second copy of it.
 
 **`because` is a judgment, and it has no safe default.** Retiring a node says
 *why*: `"it_was_wrong"` (it should not have been believed) or

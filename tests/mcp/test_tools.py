@@ -4085,3 +4085,95 @@ class TestAskingWhatWasTrueThen:
 
         assert "valid_at" not in result
         assert all("valid_at" not in node for node in result["nodes"])
+
+
+class TestCorroborationOnTheSearchPath:
+    """How many independent sources back a result — asked for, never assumed.
+
+    Off by default **on a measurement**, which is the condition `ISSUES.md` #51
+    set before it could go on the default path. Timed against the annotations
+    `search` already runs, over the node set a real k=10 search returns: it cost
+    3× `review_labels_for` on a graph with no similarity edges at all, and rose
+    with edge density until it was the largest single cost in the call. It grows
+    fastest on the graphs that have been reflected over most — which are exactly
+    the graphs where it has something to say — so a default-on version would
+    have got slower the more useful it became.
+    """
+
+    async def _two_outlets(self, storage, embedding_provider):
+        """One claim, reported by two publishers, joined by `similarity`."""
+        nodes = []
+        for outlet in ("Alpha Wire", "Beta Press"):
+            document = RawDocument(content=f"{outlet} copy", source=outlet.lower())
+            await storage.store_document(document)
+            entity = Topic(content=outlet, source_id=None)
+            await storage.store_node(entity)
+            await storage.store_edge(NodeEdge(
+                src_id=document.id, dst_id=entity.id, type=EdgeType.RELATED,
+                label="published_by", kind="attribution",
+            ))
+            fact = Fact(
+                content="the harbour bridge closed for repairs",
+                source_id="seg-1", value=ValueSignal(),
+            )
+            await storage.store_node(fact)
+            vector = (await embedding_provider.embed([fact.content]))[0]
+            await storage.store_embedding(EmbeddingRecord(
+                item_id=fact.id, model_id=embedding_provider.model_id, vector=vector,
+            ))
+            await storage.store_edge(NodeEdge(
+                src_id=fact.id, dst_id=document.id, type=EdgeType.SOURCED_FROM,
+            ))
+            nodes.append(fact)
+        await storage.store_edge(NodeEdge(
+            src_id=nodes[0].id, dst_id=nodes[1].id, type=EdgeType.SIMILARITY,
+        ))
+        return nodes
+
+    async def test_it_is_absent_unless_asked_for(self, storage, embedding_provider):
+        """The default path pays nothing for it — not even an empty key."""
+        await self._two_outlets(storage, embedding_provider)
+
+        result, _ = await search(
+            "harbour bridge", storage, embedding_provider, k=5, graph_hops=0,
+        )
+
+        assert result["nodes"]
+        assert all("corroboration" not in node for node in result["nodes"])
+
+    async def test_asking_for_it_counts_distinct_publishers(
+        self, storage, embedding_provider
+    ):
+        first, _ = await self._two_outlets(storage, embedding_provider)
+
+        result, _ = await search(
+            "harbour bridge", storage, embedding_provider, k=5, graph_hops=0,
+            include_corroboration=True,
+        )
+
+        found = {node["id"]: node for node in result["nodes"]}
+        corroboration = found[first.id]["corroboration"]
+        assert corroboration["count"] == 2
+        assert {source["publisher"] for source in corroboration["sources"]} == {
+            "Alpha Wire", "Beta Press"
+        }
+
+    async def test_the_contributing_nodes_ride_along(
+        self, storage, embedding_provider
+    ):
+        """A number computed over a similarity neighbourhood has to be
+        checkable, because the neighbourhood is sometimes wrong."""
+        first, second = await self._two_outlets(storage, embedding_provider)
+
+        result, _ = await search(
+            "harbour bridge", storage, embedding_provider, k=5, graph_hops=0,
+            include_corroboration=True,
+        )
+
+        found = {node["id"]: node for node in result["nodes"]}
+        contributed = {
+            node_id
+            for source in found[first.id]["corroboration"]["sources"]
+            for node_id in source["node_ids"]
+        }
+        assert contributed == {first.id, second.id}

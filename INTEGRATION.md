@@ -65,7 +65,7 @@ In Claude Code, run `/mcp` to check the server status. You should see `epimemer`
 ## Available Tools
 
 Tools are auto-prefixed as `mcp__epimemer__<name>` by Claude Code. This table is
-the canonical list of the 32 tools — other docs should link here rather than
+the canonical list of the 34 tools — other docs should link here rather than
 restate the count.
 
 ### Core Memory Operations
@@ -74,7 +74,7 @@ restate the count.
 |------|---------|
 | `segment` | Split text into chunks (step 1 of ingest) |
 | `store_decomposition` | Store agent-extracted topics/facts/inferences (step 2 of ingest) |
-| `search` | Hybrid retrieval — vector similarity + graph expansion |
+| `search` | Hybrid retrieval — embedding similarity **and** keyword matching, fused, then graph expansion. Pass exact identifiers as `terms`; `include_corroboration=True` adds how many independent publishers back each result. See [docs/RETRIEVAL.md](docs/RETRIEVAL.md) |
 | `link` | Create typed edges between nodes |
 | `update` | Create a new node version (immutable history). `because` is required — `"it_was_wrong"` or `"the_world_changed"` |
 | `supersede_by` | Retire a node in favour of an already-existing one. `because` as above; if you cannot tell which happened, `record_contradiction` instead of guessing |

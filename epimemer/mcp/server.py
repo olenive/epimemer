@@ -516,6 +516,7 @@ async def memory_search(
     include_corrected: bool = False,
     valid_as_of: str | None = None,
     timeline_id: str | None = None,
+    include_corroboration: bool = False,
 ) -> str:
     """Search the epistemic memory graph.
 
@@ -563,6 +564,21 @@ async def memory_search(
     dated is unknown rather than false. A filter would turn a missing date into a
     confident "no", which is the one answer this memory must not invent.
 
+    **`include_corroboration` asks how many independent sources back a claim.**
+    Off by default because it is expensive, not because it is unimportant. Turn
+    it on when independence is the question — *is this one report repeated, or
+    several outlets agreeing?* — and expect the search to take noticeably
+    longer.
+
+    Read the number for what it counts: **distinct publishers**, not strength of
+    evidence. Three hedged reports from three outlets score 3, exactly as three
+    confident ones would, so it does not interact with `confidence` and neither
+    substitutes for the other. Documents naming no publisher stand as their own
+    source, and `unattributed_documents` says how many did — a graph ingested
+    without attribution scores lower for that reason alone. Every source names
+    the nodes and documents behind it, so an implausible number can be checked
+    rather than taken on trust.
+
     For provenance/topic listings (which nodes came from X / are about Y), use
     find_nodes, not search.
 
@@ -593,6 +609,10 @@ async def memory_search(
         timeline_id: The clock `valid_as_of` is read against. Omit for the
             wall-clock timeline, which is what real-world facts use. Periods
             recorded on another clock are not comparable and count as unknown.
+        include_corroboration: How many independent sources back each result.
+            Off by default on cost — it is several times the price of every
+            other annotation and rises with how much the graph has been
+            reflected over. Turn it on when you need to weigh independence.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -611,6 +631,7 @@ async def memory_search(
             include_corrected=include_corrected,
             valid_as_of=_parse_utc(valid_as_of) if valid_as_of else None,
             timeline_id=timeline_id,
+            include_corroboration=include_corroboration,
             record_retrieval=deps["config"].record_retrieval,
             event_bus=deps.get("event_bus"),
         ),

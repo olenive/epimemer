@@ -183,6 +183,7 @@ Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<
 - **Timelines**: `create_timeline`, `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`
 - **Metacontexts**: `create_metacontext`, `get_metacontexts`
 - **Graph management**: `list_graphs`, `use_graph`, `delete_graph`
+- **Visualization**: `viz_status`
 
 See [INTEGRATION.md](INTEGRATION.md#available-tools) for the canonical table with one-line descriptions and the authoritative tool count.
 
@@ -357,8 +358,20 @@ deferred fixes are separate, in [dev-docs/ISSUES.md](dev-docs/ISSUES.md).
 
 ## Documentation
 
-- [SUMMARY.md](SUMMARY.md) — Architectural design
+**How the system works** — read these to understand the behaviour:
+
+- [SUMMARY.md](SUMMARY.md) — Architectural design: the concepts and their rationale
+- [docs/RETRIEVAL.md](docs/RETRIEVAL.md) — How `search` is answered: the two arms, rank fusion, result provenance, lineage collapse
+- [docs/VALIDITY.md](docs/VALIDITY.md) — When a claim was true: intervals per source, correction vs world-change, recurrence, the soundness check
+- [docs/REFLECTION.md](docs/REFLECTION.md) — The review loop: verdicts, what `reflect` nominates, what `apply_reflection` writes
+- [INTEGRATION.md](INTEGRATION.md) — Claude Code integration guide and the canonical tool table
+
+**How it got that way** — design history, appended to rather than rewritten:
+
 - [dev-docs/ISSUES.md](dev-docs/ISSUES.md) — Known issues and deferred fixes
 - [dev-docs/PROPOSED_FEATURES.md](dev-docs/PROPOSED_FEATURES.md) — Backlog of work not yet built
-- [INTEGRATION.md](INTEGRATION.md) — Claude Code integration guide
 - [dev-docs/DEVELOPER_GUIDE.md](dev-docs/DEVELOPER_GUIDE.md) — Development and debugging guide
+- [dev-docs/BENCHMARKS.md](dev-docs/BENCHMARKS.md) — Measured scaling limits and where they come from
+- [dev-docs/REVIEW_EPISTEMIC.md](dev-docs/REVIEW_EPISTEMIC.md) — The review loop's design, including the validity model (§13)
+- [dev-docs/LEXICAL_SEARCH.md](dev-docs/LEXICAL_SEARCH.md), [dev-docs/RETRIEVAL_PROVENANCE.md](dev-docs/RETRIEVAL_PROVENANCE.md), [dev-docs/EVENT_LOG.md](dev-docs/EVENT_LOG.md) — Feature designs
+- [dev-docs/VISUALISATION.md](dev-docs/VISUALISATION.md), [dev-docs/TIMELINE_VISUALISATION.md](dev-docs/TIMELINE_VISUALISATION.md) — Dashboard design

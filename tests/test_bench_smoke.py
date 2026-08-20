@@ -33,7 +33,9 @@ def test_quick_run_emits_one_json_record_per_operation():
     records = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
     operations = [r["operation"] for r in records]
 
-    assert operations == ["store_decomposition", "search", "list_sources"]
+    assert operations == [
+        "store_decomposition", "search", "list_sources", "annotations",
+    ]
     assert all(r["backend"] == "memory" for r in records)
 
 
@@ -53,6 +55,40 @@ def test_records_carry_the_measurements_they_promise():
     assert by_op["search"]["p50_ms"] >= 0
     assert by_op["search"]["p95_ms"] >= by_op["search"]["p50_ms"]
     assert by_op["list_sources"]["ms"] >= 0
+
+    annotations = by_op["annotations"]
+    assert annotations["result_set"] > 0
+    for annotation in ("review_labels", "validity", "corroboration"):
+        assert annotations[f"{annotation}_ms"] >= 0
+
+
+def test_the_corpus_flags_default_to_the_plain_corpus():
+    """Every figure in BENCHMARKS.md predating them was taken without either, so
+    a changed default would silently make the historical numbers incomparable."""
+    result = _run("--quick", "--n", "10")
+    records = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+
+    assert all(r["publishers"] == 0 for r in records)
+    assert all(r["similarity_degree"] == 0 for r in records)
+    assert next(r for r in records if r["operation"] == "annotations")[
+        "similarity_edges"
+    ] == 0
+
+
+def test_the_corpus_flags_actually_change_the_corpus():
+    """Otherwise the annotation timings would measure an empty walk and report
+    it as a cost — the failure mode where a benchmark looks cheap because it
+    benchmarks nothing."""
+    result = _run(
+        "--quick", "--n", "40", "--publishers", "4", "--similarity-degree", "3"
+    )
+
+    assert result.returncode == 0, result.stderr
+    records = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+    annotations = next(r for r in records if r["operation"] == "annotations")
+
+    assert annotations["similarity_edges"] > 0
+    assert annotations["corroboration_ms"] > 0
 
 
 def test_reflect_is_timed_unless_skipped():

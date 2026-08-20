@@ -2,12 +2,21 @@
 
 Living issue tracker. **Last review: 2026-08-12.**
 
-Open: **16**, **51**, **52**, **58**, **59**. **46**, **48** and **53** were
-built on 2026-08-19 and their entries are kept — #53's because it is the design
-of record for validity and half this file points at it. **54**, **55**, **56**
-and **57** were resolved and merged to `main` on 2026-08-18; their entries are
-deleted per the workflow below, and what they taught is kept here and in the docs
-they name. New findings continue from **60**.
+Open: **16**, **52**, **58**, **59**, **60**. **46**, **48** and **51** were built
+and merged (2026-08-19, -19, -20); their entries are deleted per the workflow
+below, and what they taught is kept here and in the docs they name —
+`SUMMARY.md` and `AGENTS.md` for #46's ladder, `BENCHMARKS.md` for #48's
+measurement, `docs/RETRIEVAL.md` §8 for #51. **54**, **55**, **56** and **57**
+went the same way on 2026-08-18. New findings continue from **61**.
+
+**#53's entry stays, and the reason is specific rather than sentimental.**
+`REVIEW_EPISTEMIC.md` §13.8 says in as many words that the full statement of T1
+— "eleven numbered sections, with the arguments and the rejected alternatives" —
+lives here, and `docs/VALIDITY.md` sends design history here too. Two documents
+name this entry as the primary, so it is one, and deleting it would leave both
+pointing at a hole. **The condition for pruning it is that the design history
+moves somewhere of its own first** — not that the work is finished, which it
+already is.
 
 **#53 was the most important thing in this file, and it is now built
 (2026-08-19).** The statement of the problem is kept below because it is the
@@ -72,24 +81,40 @@ it as a period's end would have the graph assert something false. What §9 buys 
 still real: a date from the second document lands on the first document's fact,
 which no single-document ingest could do.
 
-The rest: **51** is next, **52** is unblocked now that **53** has landed (its
-safety precondition is what uncovered the problem in the first place), and **16**
-stays deferred by design. **46**, **48**, **53**, **54**, **55**, **56** and
-**57** are done — and #55, #56 and #54 were the same shape: a rule stated in one
-place and re-derived, differently, somewhere else. **Nothing open *fails* at a
-size anyone is running**, and #53 never did either — it was a correctness ceiling
-rather than a crash, which is precisely why it was easy to keep not noticing.
+The rest: **52** is unblocked now that **53** has landed (its safety
+precondition is what uncovered the problem in the first place), **59** and
+**60** were both measured on 2026-08-20 and both shrank — #59 to segments only,
+#60 from a memory failure to an unbounded response — and **16** stays deferred
+by design.
+
+**The measurement sitting (2026-08-20) is worth reading as a method, not just
+two outcomes.** Both entries had guessed, both guesses were wrong in ways that
+would have produced real work: #59 named inferences as a risk when they are the
+safest corpus measured, and #60 projected gigabytes from a survival rate
+measured on text several times longer than the text it was applied to. Neither
+error was visible from inside the entry. **The reusable finding is that a rate
+measured on one corpus must carry the shape of that corpus with it** — pair
+similarity over a fixed vocabulary runs from 0.62% at four words to 74.9% at a
+paragraph, so a survival rate quoted without its text length is not a number. **46**, **48**, **51** and **53**–**57** are done — and #54, #55 and
+#56 were the same shape: a rule stated in one place and re-derived,
+differently, somewhere else. **Nothing open *fails* at a size anyone is
+running** except possibly **#60**, whose projection rests on a survival rate
+borrowed from a corpus the same entry calls degenerate — which is why its first
+option is to measure rather than to fix. #53 never failed either: it was a
+correctness ceiling rather than a crash, which is precisely why it was easy to
+keep not noticing.
 
 **A design review (2026-08-12) of the open set added amendments** — blockquotes
 marked *Review 2026-08-12* inside #46, #51, #52 and #53 — and filed **#54**.
-Nothing already decided was overturned; each amendment is either a problem the
-decided design must answer before implementation (#46, #51), a condition the
-re-open trigger must carry (#52), or a place where the recommendation is not
-yet decidable as written (#53). Three of #53's six are closed by T1 (items 2, 4
-and 6); item 1 *is* T2. **#46's two amendments were signed off on 2026-08-19**
-— amendment 1 as written, amendment 2 narrowed to a single optional basis
-carried by guidance rather than by refusal — **and built the same day**, so
-only #51's amendment is still waiting on construction.
+Nothing already decided was overturned; each amendment was either a problem the
+decided design had to answer before implementation (#46, #51), a condition the
+re-open trigger must carry (#52, still live), or a place where the
+recommendation was not yet decidable as written (#53). Every one is now
+answered: #46's two were signed off and built on 2026-08-19, #51's three on
+2026-08-20, and #53's six by T1, T2 and T3. **The method is the carry-forward:
+review the open set before building it, and record the amendments against the
+entries rather than in a separate document**, so the thing being built and the
+objection to it stay in one place.
 
 **That review's one unfiled finding was closed by #55.** Commit `666904f` had
 widened `NodeStatus` without updating the frontend's status→opacity map, whose
@@ -101,15 +126,31 @@ today's instances**, is the carry-forward.
 
 **46 was decided on 2026-08-12, and the decision split it again.** The
 documentation promised two things in one sentence — "how well-supported by
-evidence" and "multiple independent sources increase confidence" — and they want
-opposite implementations. Support is a judgment about material only the
-ingesting agent has read, so `confidence` becomes a caller-supplied prior with
-a four-value ladder and written guidance. Corroboration is a fact about the
-graph that changes as the graph does, so it is derived at read time under its
-own name (**#51**) and never writes the field. The general lesson, the third in
-this file to arrive by the same route: **when one field is documented with an
-"and", check whether the two halves want the same storage.** They did not for
-`relevance`, they did not for `novelty`, and they do not here.
+evidence" and "multiple independent sources increase confidence" — and they
+wanted opposite implementations. Support is a judgment about material only the
+ingesting agent has read, so `confidence` became a caller-supplied prior with a
+four-value ladder and written guidance. Corroboration is a fact about the graph
+that changes as the graph does, so it is derived at read time under its own name
+(**#51**) and never writes the field. The general lesson, the third in this file
+to arrive by the same route: **when one field is documented with an "and", check
+whether the two halves want the same storage.** They did not for `relevance`,
+they did not for `novelty`, and they did not here.
+
+Two lessons from building it outlived the entries and are kept because nothing
+else records them:
+
+- **Substitute a default only to rank or compare, never to display or relay.**
+  `confidence` is nullable so that *unrated* and *rated ordinary* are different
+  states; `rated_confidence` reads absence as 0.5 for ordering, and every
+  display path passes the absence through — the tooltip prints a dash rather
+  than asserting an assessment nobody made. The first build of `NodeView` got
+  this wrong in the frontend's favour and was corrected the same day.
+- **An index changes nothing until the query names it.** #48's `content` lookup
+  was 4.0 ms unindexed and 4.3 ms with the index merely *defined*, because the
+  planner still resolved through the status index; `WITH INDEX` took it to
+  0.53 ms. Query plans, not schema, are where an index decision is verified —
+  and the guard has to be a plan assertion, since behaviour cannot see it.
+  `BENCHMARKS.md` holds the numbers.
 
 **49 and 50 are resolved, and the thread is worth the space.** Two notebooks had
 been broken for four months because nothing imported them; the guard is
@@ -166,9 +207,15 @@ merge reset both value clocks) are also resolved; see `REVIEW_EPISTEMIC.md`
 
 Resolved entries are **removed from this file** once merged — their resolution
 lives in git history and the merged code. Issue numbers are stable IDs; the gaps
-(1–15, 17–45, 47, 49, 50, 54–57) are deleted-resolved items, not missing work,
-and code comments citing a number no longer listed here are pointing at one of
-them.
+(1–15, 17–46, 47, 48, 49, 50, 51, 54–57) are deleted-resolved items, not missing
+work, and code comments citing a number no longer listed here are pointing at one
+of them.
+
+**Deleting an entry has one precondition beyond "merged":** nothing else may
+name it as the primary record. A pointer *to* an issue number is fine and
+expected; a document saying "the full statement lives in ISSUES.md #N" means
+that entry is load-bearing and must be moved before it is dropped. #53 is the
+standing example.
 
 35–38 were the value model & graph hygiene plan
 (`dev-docs/REVIEW_EPISTEMIC.md` §12, which records what the plan did not
@@ -179,7 +226,6 @@ are gone. **`dev-docs/BENCHMARKS.md`** carries the state those fixes left the sy
 in and the conclusions still worth acting on, but not the runs themselves — it
 describes where things stand, not how they got there, and superseded
 measurements are deleted rather than kept. The blow-by-blow is in `git log`.
-#48 below depends on the current numbers.
 
 **Workflow (required for every fix):**
 
@@ -210,85 +256,15 @@ is entirely sequential.
 ## Open issues
 
 Listed by issue number, not by priority — for priority see *Recommended order*
-at the end. **The one to read first is #53**, whose T1 section is the design of
-record for validity, and it is also the one being *built* — its construction
-note carries the step order and what is done so far. The cheapest piece
-independent of it is **#59's measurement** — a token-length distribution, which
-decides that issue without deciding anything else. **#48 is closed** (2026-08-19),
-taken together with #53 step 4 as its entry asked.
+at the end. Five entries remain, and only three of them are work: **#52** is the
+substantial one and needs a design decision before any code; **#59** and **#60**
+were measured on 2026-08-20 and both came back smaller than filed, leaving each
+with a small decided fix and no urgency. **#16** and **#58** are deferred with
+their triggers stated.
 
-### Issue 48 — `get_node_by_content` scans the node table on every ingest — ✅ DONE (2026-08-19)
-
-> **Fixed 2026-08-19, bundled with #53 step 4 as the entry below asked.** The
-> diagnosis was exactly right and the fix was not the obvious one.
->
-> **An index on `content` changes nothing on its own.** Measured at 3,000 topics
-> against a real server: 4.0 ms unhinted, **4.3 ms with the index defined**, and
-> the EXPLAIN says why — the planner still resolves through `idx_topic_status`,
-> matching every active row, with `content` as a post-filter. A composite
-> `(content, status)` index does the same. What moves `content` into the access
-> path is naming the index: `SELECT * FROM {table} WITH INDEX
-> idx_{table}_content …` plans through it and leaves `status` as the cheap
-> post-filter, at **0.53 ms** — 8× faster and flat where the old one was linear.
->
-> **The write cost, which is why this was an issue rather than a patch, is not
-> there.** Three seeds of 3,000 nodes each way: 1,944 ms median unindexed
-> against 2,033 ms indexed, +4.6%, inside a run-to-run spread of 1,728–2,721 ms.
-> So the option list resolves to *define the index* rather than to *hash the
-> content* or *scope it to the topic tables* — neither of which was needed.
->
-> The guard is a **plan assertion**, as the entry specified, in
-> `tests/storage/test_surrealdb_storage.py`: the SQL lives in one named
-> constant (`CONTENT_LOOKUP`) so the test explains the query the adapter
-> actually issues, and it fails if the plan ever reaches `idx_{table}_status`
-> again. Behaviour tests cannot see this defect — the lookup answers correctly
-> either way.
->
-> **What the second caller does with it.** `store_decomposition` now checks each
-> stored fact for a word-for-word `HISTORICAL` twin and reports it as
-> `historical_twins` — the cheap floor under recurrence detection (#53 T2). One
-> indexed lookup per fact was worth adding; one table scan per fact was not,
-> which is exactly why the two were bundled.
-
-<details>
-<summary>The original entry</summary>
-
-Found by the same query-plan audit as #14 step 4, on the *write* path rather
-than the read path.
-
-`SELECT * FROM {table} WHERE content = $content AND status = $status LIMIT 1`
-has no index on `content`, so the planner takes `idx_{table}_status` — which
-matches every active row — and filters afterwards.
-
-> **#53 T2 (2026-08-12) added a second caller to this path.** Recurrence — a
-> claim retired as `HISTORICAL` becoming true again — requires the lookup to
-> surface historical twins as well as active ones, or ingest silently creates a
-> duplicate node. That widens the status filter this query already carries, so
-> the index decision and the recurrence lookup should be made in one visit
-> rather than two. Measured per call: **1.3 ms
-at 400 facts, 2.1 at 1,200, 4.3 at 3,000**, linear in table size.
-
-It is called during ingest to make a repeated source/tag name reuse one node, so
-ingest is O(N) per node and O(N²) overall. **It does not hurt yet**: ingest is
-flat to 2,000 nodes in `BENCHMARKS.md` because 4 ms against the rest of a
-`store_decomposition` is nothing. It is filed because it is the same defect as
-the embedding one, on a path whose cost currently hides it.
-
-**The fix is not obvious and that is why this is an issue rather than a patch.**
-An index on `content` means indexing full node text, which is heavy and may cost
-more on the write side than it saves. Options worth measuring: index a hash of
-the content instead; scope the lookup to the node types that actually use exact
--name upsert (source/tag topics) rather than all three tables; or accept it with
-the measurement recorded.
-
-**Failing test first** — a plan assertion is the honest guard here, in
-`tests/storage/test_surrealdb_storage.py`: `EXPLAIN` the lookup and assert it
-does not resolve through a status index. Behaviour is already covered by the
-exact-name upsert tests, which must keep passing unchanged.
-
-</details>
-
----
+**#53 is built and its entry is documentation, not a task.** It is here because
+two other documents name it as the design of record for validity — read it for
+that, not as something outstanding.
 
 ### Issue 16 — Multi-graph state is process-global; viz reads re-point the shared connection — ⏸ DEFERRED (by design)
 
@@ -334,410 +310,6 @@ exact-name upsert tests, which must keep passing unchanged.
 `asyncio.Lock` around switch + query in the adapter (or per-call
 `USE ns db` scoping if the client library supports it). Acceptable to defer
 while the server is single-client stdio; keep this issue open as the reminder.
-
----
-
-### Issue 46 — `confidence` is a constant that documentation describes as a measurement — ✅ DONE (2026-08-19)
-
-> **Built 2026-08-19.** `confidence` is `float | None = None` on `ValueSignal`,
-> supplied per entry at `store_decomposition` alongside an optional one-line
-> `confidence_basis` in node metadata, and read as 0.5 through
-> `rated_confidence` at every consumer but two — `merged_value_signal`, where an
-> unrated signal loses to a rated one, and `_node_to_dict`, where it stays
-> `null` because the agent reading a search result is who the nullable field is
-> for. The ladder lives in `server.py`'s `store_decomposition` docstring and in
-> `AGENTS.md`; the reasoning stays here.
->
-> **Three things worth carrying forward.** *(1)* No migration and none wanted:
-> every node written before today carries a literal `0.5`, so those rows read as
-> *rated* ordinary rather than unrated. That overstates what was considered, and
-> it is the only honest reading available — the row does not record whether
-> anyone looked. Absence starts meaning something for nodes written from here on.
-> *(2)* The consumer sweep found one reader the sign-off had not named:
-> `NodeView` (`visualization/events.py`). It was **first built reading absence
-> as 0.5**, on the reasoning that the frontend types it `number`, that a
-> tooltip has nowhere to put "unassessed", and that the distinction serves the
-> merge rule and auditing rather than a label. **Corrected the same day on
-> review:** that reasoning weighed the frontend's convenience against a false
-> statement, and the false statement is worse — a tooltip reading
-> `confidence 0.50` asserts an assessment no agent ever made. `NodeView.confidence`
-> is `float | None`, `types.ts` is `number | null`, and the panel prints a dash,
-> which is the idiom it already uses to print `never` for an unretrieved node.
-> The general rule, now in `rated_confidence`'s docstring: **substitute the
-> default only to rank or compare, never to display or relay.**
-> *(3)* `merge_similar_topics`'s
-> primary-description comparison is now a real comparison rather than a
-> permanent tie, which is the behavioural change this entry was filed over.
->
-> **Left open deliberately**, and both belong to #51 rather than here: per-source
-> support levels on the `sourced_from` edge, and with them the missing path for
-> **source discredit** — a document that turns out fabricated still leaves every
-> prior derived from it overstating, with nothing able to sweep per-source.
->
-> **The revisit trigger from amendment 2's sign-off is now live**: measure the
-> share of non-default priors that arrive carrying a `confidence_basis`. If
-> guidance is not producing them, the fallback is refusal at the tool boundary,
-> the same shape `judge_importance` already uses.
-
-Found by the audit that resolved #44: having established that `relevance` was
-written but never read, the obvious next question was whether its siblings were
-any better off. They are worse in a different direction — **read, but never
-written.**
-
-> **Narrowed 2026-08-11.** This entry originally covered `novelty` as well.
-> **`novelty` was removed** rather than decided; the two fields shared a symptom
-> and nothing else, and bundling them was hiding that they had different answers.
-> See `REVIEW_EPISTEMIC.md` §12.1 for the reasoning and the naming conclusion
-> ("surprise", reserved for a caller-supplied signal).
->
-> **Decided 2026-08-12: option (2), and the sentence about independent sources
-> becomes #51.** The documented promise is really two claims bolted together —
-> *"how well-supported by evidence"* and *"multiple independent sources increase
-> confidence"* — and they want opposite implementations. The first is a judgment
-> about the material, which only the ingesting agent has read; it stays a stored
-> field and the caller supplies it. The second is a fact about the graph, which
-> changes as the graph does; it is derived at read time under its own name and
-> never writes `confidence`. One number cannot carry both without becoming the
-> thing that killed `relevance`.
-
-> **Review 2026-08-12 — two amendments to the decided design. Both change the
-> field shape, so they need sign-off before implementation starts:**
->
-> 1. **Store the unrated case as absent, not as 0.5.** The ladder below says
->    "0.5 = default, omit the field" — so a *deliberate* middling rating and an
->    *unconsidered* one land as the same stored number. That is the trap this
->    file has now caught three times (`retrieved_at`, `importance_judged_at`,
->    and the `now`-default lesson in `ValueSignal`'s own docstring): a default
->    that cannot express "never happened". The merge-rule section below even
->    names the 0.5 tie "honestly the *unrated* case" — it should be
->    distinguishable in storage, not only in prose. Shape:
->    `confidence: float | None = None`, with `None` *read as* 0.5 wherever the
->    number is consumed. Cost: the two readers
->    (`topic_consolidation.py:164`'s comparison and `_node_to_dict`'s dump)
->    handle `None`, and `merged_value_signal` needs a rule for it — `None`
->    loses to any real value, by the same argument its clocks already use.
-> 2. **Record why alongside the prior.** `judge_importance` refuses a raw
->    setter because "an unattributable judgment cannot be reviewed later"
->    (`server.py:570`). A caller-written 0.9 with no reason recorded is exactly
->    that — the same argument, unapplied to the field it was learned on. An
->    optional one-line basis per entry (e.g. `confidence_basis`, stored in node
->    metadata the way the `reinforcements` trail is) makes a high prior
->    auditable without burdening the omit-it default: guidance should ask for
->    it whenever the supplied value is not 0.5.
->
-> **Signed off 2026-08-19: amendment 2 is accepted, narrowed on both open
-> points.** The basis is **a single optional value**, not a trail — confidence
-> is supplied once at creation, and a correction mints a new node rather than
-> rewriting one; a trail becomes necessary only if a setter for confidence ever
-> appears, which this design refuses. And it is carried by **guidance, not
-> refusal**: unlike `judge_importance`, a missing basis does not fail the call.
-> The stated risk of that choice is that absence then means nothing — "no basis
-> given" and "guidance not read" are indistinguishable. **Trigger for
-> revisiting:** measure the share of non-default priors that arrive with a
-> basis; if guidance is not producing them, the refusal at the tool boundary is
-> the fallback, and it is the same shape as `judge_importance` already uses.
-
-> **Signed off 2026-08-19: amendment 1 is accepted as written.** `confidence`
-> becomes `float | None = None`, unrated stored as absent and read as 0.5 at
-> every consumer. The three touch points are `topic_consolidation.py:164`'s
-> comparison, `merged_value_signal`'s `max` (`core/types.py:330`) — where `None`
-> loses to any real value, as the clocks in that same function already do — and
-> `_node_to_dict`'s dump, plus the round-trip on both backends. Accepted with
-> its stated limit: `None` only earns its keep where something reads it *as*
-> `None`, which today is the merge rule and any later audit of how much of a
-> graph has actually been judged.
-
-> And a known gap, accepted rather than solved — record it in the docs, do not
-> build it: **there is no path for source discredit.** The guidance below is
-> right that contradiction and age must not lower the prior, but when a
-> *document* turns out fabricated, every prior derived from it overstates, and
-> nothing can sweep per-source. When provenance-edge-level support lands (see
-> *Recommended order*), that is the natural place for it; until then it is a
-> stated limitation.
-
-Every node created by ingest gets `ValueSignal()` (`mcp/tools.py:313`), so
-`confidence` is **always 0.5**, against documentation promising "how
-well-supported by evidence; multiple independent sources increase confidence".
-
-Nothing computes it. The only writer after creation is topic merge
-(`merged_value_signal`, `core/types.py`), which takes the `max` over inputs that
-are themselves the constant, so the result is the same constant again.
-`store_decomposition` accepts an importance prior but nothing equivalent.
-
-**One behavioural consequence.** `merge_similar_topics` reads `confidence` to
-choose which description becomes primary (`topic_consolidation.py:164`). Since
-every node ties at 0.5, the `>=` always takes `topic_a`, so the
-"higher-confidence description wins" rule is really "whichever was passed first
-wins". The merged content is a concatenation, so nothing is lost — but the
-ordering is arbitrary while reading as if it were principled.
-
-Not a failure. What makes it worth an entry is the same thing that made #44 one:
-**the documentation describes a mechanism that does not exist**, so the next
-person to reach for a "how well-supported is this?" signal finds one that is
-documented, populated, rendered, and meaningless.
-
-#### Why not the other two
-
-**(1) Compute it — rejected on its premise, not its cost.** The proposal was to
-derive confidence from `knowledge_in_degree_for`. That function's own docstring
-calls what it returns *"their **structural importance**"* (`archival.py:188`),
-and archival consumes it as exactly that. Deriving `confidence` from it too
-would make `confidence` and `importance` the same number computed twice under
-two names — a fresh instance of the bug family #44, #45 and the `novelty` half
-of this entry were clearing, arrived at by trying to close it. **In-degree is
-connectedness, not corroboration.** Ten inferences drawn from one document raise
-in-degree tenfold and add no support whatever.
-
-**(3) Remove it — rejected because the claim it makes is worth making.** Unlike
-`relevance` and `novelty`, the question "how well-supported is this?" is one
-callers actually want answered, it has a live reader, and the field is already
-returned to the caller (`_node_to_dict`, `tools.py:2038`, dumps the whole model,
-so `value.confidence` rides along in every `search` result). The defect is that
-nothing writes it, not that nobody wants it.
-
-#### What (2) requires
-
-The field is the easy part. **A prior nobody supplies is worse than the constant
-it replaces** — same number, more API surface, and now documentation claiming a
-knob that turns nothing. So the tool guidance is the deliverable, not a
-trimming, and it needs to survive the ways an agent will get it wrong.
-
-**One definition sentence, chosen to exclude the three things it keeps getting
-confused with:**
-
-> Confidence is how well the record would back this claim up if it were
-> challenged — a property of the evidence, not of how far you agree with the
-> conclusion, and not of how much the claim matters.
-
-**A four-value ladder rather than a continuum.** Agents calibrate poorly across
-a float and well across labelled buckets, and a continuum makes every node a
-near-tie for a comparison (`topic_consolidation.py:164`) that reads the number
-ordinally anyway:
-
-| Value | When |
-|---|---|
-| **0.3** | The source hedges — "reportedly", "may have", "one account says" — or the claim is your reading of the text rather than something it states, or the source is partisan on this particular point |
-| **0.5** | Default. Stated plainly, no specific reason to doubt or specially trust it. **Omit the field** |
-| **0.7** | Stated as established by a source in a position to know |
-| **0.9** | A primary or authoritative source *for this claim*: the person about their own preference, the spec about its own behaviour, the original announcement |
-
-**0.0 and 1.0 are reserved.** 1.0 asserts a claim that cannot be revised, which
-no ingested statement earns; 0.0 asserts one certainly false, which is a reason
-not to store it — or to store it and `record_contradiction`.
-
-#### Edge cases the guidance has to answer
-
-Worked through before writing it, because each is a way the field silently
-becomes something else:
-
-1. **Agreement is not evidence.** A confidently-worded source for a claim the
-   agent knows to be contradicted still scores low — the record does not back
-   it. The counterfactual phrasing gets this right where "how the source states
-   it" does not; what is excluded is the agent's *preference*, not its
-   knowledge.
-2. **Inside a metacontext, the frame is the record.** A fictional fact can
-   honestly be 0.9. Without this the agent conflates "is this true?" with "does
-   the frame assert this?", every fiction node lands at 0.3, and confidence
-   quietly becomes a fiction detector — duplicating, badly, what metacontexts
-   already carry. This also answers the standing open question in `SUMMARY.md`
-   (*"does confidence mean the same thing in a fictional metacontext?"*): the
-   scale is the same, the record it measures against is the frame's.
-3. **The rule survives one level down.** A legend *within* the fiction, or an
-   unreliable narrator, is hedged by the frame's own text and scores 0.3 in-frame
-   — which is the right answer and evidence the rule generalises rather than
-   being a special case bolted on for fiction.
-4. **Same source, different claims.** "I prefer a functional style" from the
-   user is 0.9; "I think the deploy failed because of DNS" from the same user in
-   the same message is 0.3. Confidence is per-node, never per-document — which
-   matters here more than anywhere, since conversation with the user is this
-   system's most common ingest.
-5. **Do not lower it for contradiction.** `record_contradiction` and the
-   computed `contested` review label already carry that, and they update as the
-   graph does. Encoding it in the prior double-counts and goes stale.
-6. **Do not lower it for age.** A 2019 document was well-supported in 2019 and
-   still is; what has aged is currency, not support. Exactly the argument that
-   gives `importance` no decay (`archival.py:166-169`), and `created_at` plus
-   supersession already expresses it.
-7. **Inferences do not start low for being inferences.** Confidence measures the
-   strength of the derivation, not the fact of being derived. Guidance, not a
-   constraint: an inference should not generally exceed its weakest support, but
-   enforcing that means computing it, which is #51's business.
-
-#### The merge rule turns out to be right, for a reason nobody had written down
-
-`merged_value_signal` takes `max` confidence, currently justified only as "both
-sites already did". For a caller-supplied prior, `max` looks wrong — the more
-credulous assessment wins and the disagreement disappears. It survives because
-of what it pairs with: `merge_similar_topics` selects the **higher-confidence
-description as primary**, so the merged node's confidence describes its primary
-content, which is by construction the one that held the max. The two rules are
-consistent, and the docstring should say that instead.
-
-This is also the sense in which (2) repairs `topic_consolidation.py:164` rather
-than leaving it: once agents supply real values the ordinal comparison starts
-meaning what it claims. Nodes neither agent rated still tie at 0.5 and still
-resolve to "whichever was passed first" — but that is now honestly the
-*unrated* case rather than every case.
-
-#### Work
-
-> **Restated 2026-08-19** to match the two sign-offs above. The list below
-> originally described the pre-amendment field — `confidence: float = 0.5`,
-> no basis — and would have built the shape the amendments replaced. Items 2,
-> 4 and 5 are unchanged; 1 and 3 grew, and the consumer sweep is new.
-
-1. **The field becomes `confidence: float | None = None`** (`core/types.py:281`),
-   unrated stored as absent and read as 0.5 at each consumer. `ValueSignal`'s
-   bounds still reject out-of-range without a clamp; `None` is not a value on
-   the scale, so it passes them by being absent rather than by widening them.
-2. `store_decomposition` accepts `confidence` per entry alongside `importance`
-   (`_decomposition_entry`), plus an optional one-line `confidence_basis` that
-   lands in node metadata beside the `reinforcements` trail. Guidance asks for
-   the basis whenever the supplied value is not 0.5; a missing one does not
-   fail the call, per amendment 2's sign-off.
-3. **The consumer sweep** — every place that reads the number has to say what
-   it does about absence:
-   - `topic_consolidation.py:164`'s primary-description comparison — reads
-     `None` as 0.5, which keeps the unrated tie resolving as it does today.
-   - `merged_value_signal`'s `max` (`core/types.py:330`) — `None` loses to any
-     real value, as the clocks in the same function already do, and an
-     all-unrated merge stays unrated.
-   - `_node_to_dict`'s dump — relays `None` as JSON `null` rather than
-     substituting 0.5, since a caller reading a search result is the audience
-     amendment 1 exists for.
-   - `NodeView` (`visualization/events.py:50`), which the sign-off did not
-     name — relays `None`, so `types.ts` types it `number | null` and the
-     timeline tooltip prints a dash. Displaying the 0.5 default would assert
-     an assessment nobody made, and the panel already has the idiom: it prints
-     `never` for an unretrieved node rather than inventing a timestamp.
-   - Round-trip on both backends: SurrealDB needs nothing, since
-     `drop_none_values` already recurses into `value` and Pydantic refills the
-     `= None` default on read. Worth a test rather than a change.
-4. Tool guidance in `server.py` and `tools.py` — definition sentence, ladder,
-   omit-by-default, plus the short forms of edge cases 2, 4, 5 and 6. The
-   reasoning stays here; the docstring stays short, because a long one costs
-   ingest quality on every other field.
-5. `merged_value_signal`'s `confidence` docstring bullet gets the justification
-   above, replacing "as both sites already did".
-6. Docs: `SUMMARY.md:232` (`creation-time only so far`), `:295` (mutation
-   table), `:143`, and the promise at `:39`/`:55` — a prior, not a measurement.
-   Resolve the open question at `:450` per edge case 2.
-7. `CLAUDE.md`'s memory-system section says nothing about value priors; the
-   ladder belongs there too, since that is what an agent reads before ingesting.
-
-**Failing test first**:
-`tests/mcp/test_tools.py::TestStoreDecompositionValuePriors` — an entry carrying
-`confidence` stores it; one omitting it stores *absence* rather than 0.5, and
-reads back as the documented default at every consumer; an out-of-range value is
-refused by the `ValueSignal` bounds rather than silently clamped; a supplied
-basis lands in metadata and a missing one does not fail the call. Plus
-`tests/core/test_types.py` for the merge pairing — the signal whose confidence
-wins the `max` is the one belonging to the description chosen as primary — and
-for the `None` rule in both directions.
-
----
-
-### Issue 51 — corroboration is documented, wanted, and computed nowhere — ▶ ACTIONABLE (46 landed 2026-08-19)
-
-Split out of #46 on 2026-08-12. The `ValueSignal` documentation promises two
-things and the split gave each its own home: *"how well-supported by evidence"*
-became the caller-supplied prior, and *"multiple independent sources increase
-confidence"* is this entry. It is a fact about the graph rather than about the
-material, so it changes as the graph changes — which is precisely why it must
-be **derived at read time and never stored**. A stored corroboration count is
-the trap that removed `novelty`: an answer frozen at the moment it was taken,
-against a baseline nothing records.
-
-> **Review 2026-08-12 — three amendments and a planning note:**
->
-> 1. **Exclude contradictors from the neighbourhood.** Contradicting pairs are
->    near-maximally similar ("the deploy failed" / "the deploy succeeded"), and
->    a `SIMILARITY` edge recorded before the contradiction verdict stays in the
->    walk — so a document that *contradicts* the claim counts as **support**
->    for it. Exclude nodes joined to the subject by `CONTRADICTION`, and by
->    `VARIANT_OF` (a cross-frame variant is that frame's resolution, not
->    corroboration of this one). Cheap: both are edge-type filters on a walk
->    already being made.
-> 2. **State the non-interaction with `confidence`.** Three hedged 0.3 reports
->    from three publishers score corroboration 3 — the same as three 0.9s.
->    Defensible, since independence is the thing being counted, but callers
->    will read the count as support, so the response and the docs must say the
->    two signals do not interact rather than leaving it to be discovered.
-> 3. **Publisher identity is name-brittle.** `published_by` entities are
->    deduplicated by exact content match (`get_node_by_content`), so "BBC" and
->    "BBC News" are two publishers and the distinct-publisher count inherits
->    the over-split. Fine at current scale; say so in the response rather than
->    silently, alongside the no-`published_by` fallback caveat below.
->
-> **Planning note: the semantics migrate twice.** This ships computed over
-> duplicates (the similarity neighbourhood); when #52 lands it moves to
-> identity (merged nodes, unions of provenance). Callers will have learned to
-> read the number by then. Plan the second migration here — what changes, what
-> stays comparable — rather than discovering it when #52 re-opens.
-
-**In-degree is the wrong proxy and should not be reached for.** See #46 for the
-full argument; the short form is that `knowledge_in_degree_for` is already
-consumed by archival as structural importance, and ten inferences drawn from a
-single document raise it tenfold while adding no support at all.
-
-**The right shape follows the provenance edges.** For a node, walk incoming
-`SUPPORTS` / `DERIVED_FROM` edges to its supporting nodes, take each one's
-`SOURCED_FROM` document, and count the **distinct** documents. Better still,
-count distinct `published_by` entities: two BBC articles are one source, not
-two, and independence is the whole content of the claim. That dimension is
-already modelled — `segment` resolves `published_by` into an entity topic joined
-to the document by an attribution edge (`tools.py:117-121`) — so this needs no
-new schema.
-
-**Compute it over a similarity neighbourhood, not over node identity
-(revised 2026-08-12).** The obvious reading of the above assumes the same claim
-is one node. It is not — facts are never deduplicated (#52), and that issue is
-now deferred behind #53, so waiting for identity means waiting on the two
-hardest things open. Include `{this node} ∪ {nodes joined to it by SIMILARITY}`
-in the walk instead. This is not a workaround; it is better in three ways:
-
-- **Nothing is destroyed.** A wrong similarity edge overstates a reported
-  number. A wrong merge destroys a node and cannot be undone.
-- **The error is auditable.** Return the contributing nodes alongside the count,
-  and an inflated figure is visible and checkable. A merged node hides its own
-  mistake.
-- **It works today.** `SIMILARITY` is already a `fact ↔ fact` edge type and
-  `pair_scoring.similar_pairs` already builds the matrix, made fast by #47.
-
-**Honest caveat:** the Saint Petersburg case still bites in softer form. "The
-city is called Leningrad" and "the city is called Saint Petersburg" are similar,
-so under this scheme they corroborate each other. The damage is a wrong number
-whose workings can be inspected rather than a fabricated node — a difference in
-kind, not degree — but it is a real defect and #53 is what removes it.
-
-Decisions the implementation has to make, none of them obvious:
-
-- **Documents with no `published_by`.** Most of them, today. Falling back to the
-  document as its own source is the honest default, but it means an ingest habit
-  (whether the caller bothers to attribute) shows up as a corroboration
-  difference — the `relevance` confound in miniature, and worth stating in the
-  response rather than hiding.
-- **Whether the node's own source counts.** It should, as 1: a fact from one
-  document is corroborated once, not zero times, and 0 would make the common
-  case look like an error.
-- **Depth.** One hop is defensible and cheap. Transitive support through
-  inferences is more faithful and risks counting the same document repeatedly
-  along different paths, so it needs the distinct-set semantics anyway.
-- **Where it surfaces.** Alongside the computed `review` labels on `search`
-  results, which is the existing precedent for a derived-at-read-time annotation.
-
-**Cost, which decides whether it goes on the default path.** It is a second
-edge hop per result set on top of `review_labels_for`. `get_edges_for` is
-batched since #14, so it is round-trip-cheap, but it has not been measured and
-`search` is the hottest path in the system. Measure before making it
-unconditional; an opt-in flag is the fallback.
-
-**Failing test first**: `tests/pipelines/test_corroboration.py` — a fact
-supported by three nodes drawn from **one** document scores 1, not 3; the same
-fact supported from two documents with distinct publishers scores 2; two
-documents sharing a publisher score 1; and (review 2026-08-12) a fact whose
-similarity neighbourhood includes a node it **contradicts** does not count that
-node's document.
 
 ---
 
@@ -868,6 +440,26 @@ entity stay two facts; the same sentence in two metacontexts stays two facts
 joined by `variant_of`; and (review 2026-08-12) two near-identical **event**
 claims from different periods — "Labour won the election", 1997 and 2024 —
 stay two facts even under the #53 interval model.
+
+> **Inherited from #51 when its entry was deleted (2026-08-20): corroboration's
+> second migration is this issue's to make.** Corroboration ships computed over
+> a **similarity neighbourhood** because facts are not deduplicated; when they
+> are, it moves to identity — merged nodes with unions of provenance — and
+> callers will have learned to read the number by then. Planned here rather
+> than discovered later:
+>
+> - **What changes.** The neighbourhood walk collapses into the node itself, so
+>   the count stops being able to over-report through a wrong `similarity`
+>   edge, and `docs/RETRIEVAL.md` §8's Saint Petersburg caveat goes with it.
+> - **What stays comparable.** The unit is unchanged — distinct publishers,
+>   with the node's own source counting as 1 — so a count taken before and
+>   after means the same thing and can only get *more* accurate. The `sources`
+>   list on every result is what makes that checkable across the change.
+> - **What this issue must not break.** Publishers are keyed by entity **id**,
+>   deferring to `_upsert_entity_topic`'s exact-content match rather than
+>   re-deriving identity. A graph holding duplicate entity nodes over-counts
+>   until `reflect` merges them, and that is the right place for the repair —
+>   fact dedup should not grow a second, different notion of entity identity.
 
 ---
 
@@ -2309,7 +1901,49 @@ that a schema that cannot be set up is a failed connection.
 
 ---
 
-### Issue 59 — embeddings are truncated at 256 word-pieces with no guard anywhere — ▶ ACTIONABLE
+### Issue 59 — embeddings are truncated at 256 word-pieces with no guard anywhere — ▶ MEASURED (2026-08-20), scope halved
+
+> **Measured 2026-08-20 — the suspicion was half right, and the wrong half is
+> the one that matters.** Token lengths over 624 real nodes and 108 real
+> segments from two graphs of genuinely ingested content
+> (`scripts/corpus_measure.py`; full tables in `BENCHMARKS.md`):
+>
+> | corpus | n | median | p95 | max | over 256 |
+> |---|---|---|---|---|---|
+> | fact | 350 | 30 | 56 | 81 | **0** |
+> | inference | 124 | 38 | 56 | 63 | **0** |
+> | topic | 150 | 20 | 38 | 69 | **0** |
+> | **segment** | **108** | **148** | **305** | **496** | **12 (11.1%)** |
+>
+> **Nodes are not at risk and structurally cannot become so.** The longest of
+> 624 real nodes reaches 81 word-pieces against a 256 window — 3× headroom — and
+> a decomposed claim is one sentence by construction, so this does not drift
+> with graph size. The entry guessed the exceptions would be "`Segment` text and
+> unusually long inference content"; **inferences top out at 63**, making them
+> the *safest* corpus measured rather than a risk.
+>
+> **Segments cross the window routinely, and they are a search corpus.** 11.1%
+> exceed it and the worst loses **48% of its text**. `docs/RETRIEVAL.md` §3 has
+> segments answering a different question from nodes and being searched in their
+> own right, so a truncated segment is exactly the silent under-return this
+> entry describes — just confined to one of the two corpora.
+>
+> **This resolves the four options, differently per corpus, which is why the
+> measurement was worth taking before choosing:**
+>
+> - **Nodes: accept it, with the number recorded** (option 4). Refusing or
+>   chunking would add a guard to a path nothing reaches.
+> - **Segments: store the truncation as a fact about the record** (option 3) —
+>   the measured token count or a flag on `EmbeddingRecord`, converting a silent
+>   gap into a visible one. Refusing (option 1) would fail ingest on 11% of real
+>   segments, which is not a defensible answer to "this document has a long
+>   paragraph"; chunk-and-pool (option 2) changes what a segment vector *means*
+>   and wants its own justification rather than arriving as a truncation fix.
+>
+> **The failing test the entry asks for is unchanged and still owed**: a text
+> over the window and a prefix of it must stop embedding to the same vector
+> indistinguishably. Under option 3 they still embed alike — what changes is
+> that the record says one was cut.
 
 Filed 2026-08-18. **Called for in `LEXICAL_SEARCH.md` §9 on 2026-08-18 and not
 filed at the time** — the same omission that let #57 sit unfiled for a month
@@ -2368,13 +2002,167 @@ than in `LEXICAL_SEARCH.md` §9 for that reason; §9 keeps the pointer.
 
 ---
 
+### Issue 60 — `reflect` holds every candidate pair in memory, with no cap — ▶ MEASURED (2026-08-20), downgraded to cheap insurance
+
+> **Measured 2026-08-20, and the projection below does not survive it.** The
+> entry's own first option was "measure it honestly first", on the grounds that
+> everything else was guesswork until the real survival rate was known. It was
+> guesswork, and by four orders of magnitude.
+>
+> Real stored vectors, real 0.80 threshold, real `all-MiniLM-L6-v2`
+> (`scripts/corpus_measure.py`; full tables in `BENCHMARKS.md`):
+>
+> | corpus | pairs | survivors | rate | median pair similarity | p99.9 |
+> |---|---|---|---|---|---|
+> | bench fact text (control) | 79,800 | 887 | 1.11% | 0.500 | 0.883 |
+> | real facts, `memory` | 38,226 | 4 | **0.0105%** | **0.164** | 0.683 |
+> | real facts, `petritype-server` | 2,628 | 0 | **0.0%** | 0.160 | 0.720 |
+>
+> At the real rate, 10,000 facts project to **~5,200 surviving pairs and ~3 MB**
+> — against the ~14 GB predicted below. **Read the distribution rather than the
+> rate**: 4 survivors is too few to trust as a rate, but 38,226 pairs locate the
+> distribution firmly, and the median real fact pair scores 0.164 with 99.9% of
+> pairs under 0.683. The threshold is 0.80. For this to bite, the whole
+> distribution has to move, not its tail.
+>
+> **Where the 49% came from, which is the more reusable finding.** It was
+> measured on "similarly templated text" and applied to a fact count — but pair
+> similarity is dominated by **text length**, and over the bench's 17-word
+> vocabulary it climbs steeply: 0.62% at 4 words, 1.11% at 8 (what `reflect`
+> actually scores), 3.70% at 12, 21.8% at 20, **74.9% at a paragraph**. So 49%
+> is a real number for some templated text and the wrong number for the pairs
+> this issue counts. **A survival rate without the text length it was measured
+> at is not a number** — `BENCHMARKS.md` now names the length in every row.
+>
+> **What this does not establish**, since the temptation is to read it as an
+> all-clear: a **claim-duplicate** corpus (the same story from fifty outlets)
+> remains untested and was this entry's actual worst case — dev notes are
+> subject-similar, which is much weaker; the rate's behaviour *with size* is
+> unmeasured, since subsets at n = 50/100/200 gave 0, 0 and 1 survivors, too few
+> to fit a trend, so if mutual similarity rises as a graph fills in one domain
+> the figures above are a floor; and **nothing here caps anything** — the bound
+> is still absent.
+>
+> **Verdict: option 2 (cap the nominations and say so), demoted from urgent to
+> cheap insurance.** It bounds the response as well as the memory, it costs
+> little, and it is right independent of the rate — but it is no longer racing a
+> failure. The unbounded response, not the memory, is now the better argument
+> for it. **Options 3 and 4 are withdrawn**: streaming the phase is a large
+> change against a 3 MB problem, and an adaptive threshold was already the
+> "invented threshold" trap the lexical work refused twice.
+
+Filed 2026-08-20, from a question about whether `reflect` pulls the whole graph
+into memory. It does not — the node reads are linear and modest — but the
+**candidate pair lists are quadratic and unbounded**, and the benchmark cannot
+see it because of the corpus it uses.
+
+**Measured, in-memory, peak allocation on top of the store:**
+
+| nodes | facts | peak | contradiction candidates |
+|---|---|---|---|
+| 500 | 250 | 3.9 MB | 16 |
+| 1,000 | 500 | 8.5 MB | 58 |
+| 2,000 | 1,000 | 20.0 MB | 275 |
+| 4,000 | 2,000 | 40.2 MB | 923 |
+| 8,000 | 4,000 | 80.4 MB | 3,921 |
+
+Peak is **linear at ~10 KB per node** — that is the node copies and the
+embedding matrix, and it is fine. The pair count is **quadratic**, roughly 4×
+per doubling, and here it stays small only because almost nothing clears the
+threshold.
+
+**The cost of a pair, measured directly.** Same 2,000-node graph, topic
+threshold dropped to 0.0 so every pair survives: 124,750 pairs, peak 89.6 MB
+against 20.0 MB — **~580 bytes per surviving pair**, across the scored tuples,
+the nominated list and the response dicts.
+
+**Nothing bounds the survivor count** — no limit parameter, no top-k, no size
+check anywhere on the path, and every survivor goes into the response. The only
+thing that shrinks the set is `already_linked`, which excludes pairs an agent
+has already joined by a `similarity` or `contradiction` edge: real mitigation on
+a worked-over graph, none at all on a fresh one.
+
+**What that projects to.** At the 49% survival rate `BENCHMARKS.md` measured for
+real embeddings on similarly-templated text — **superseded 2026-08-20; the
+measured rate on real prose is 0.0105% and the note at the top of this entry
+carries the corrected table. Kept because the arithmetic is right and only its
+input was wrong, which is the failure worth remembering:**
+
+| facts | surviving pairs | pair memory |
+|---|---|---|
+| 2,000 | ~1.0 M | ~0.6 GB |
+| 5,000 | ~6.1 M | ~3.5 GB |
+| 10,000 | ~24.5 M | ~14 GB |
+
+So on a corpus of genuinely similar documents, `reflect` can want multiple
+gigabytes at ~10,000 facts — **below the ~26,000-node timeout crossing the
+benchmarks quote**, which means memory can fail before time does. The response
+would be hundreds of megabytes of JSON before that, so in practice the transport
+or the timeout goes first; none of the three is a good failure.
+
+**Why the benchmark was blind to it.** Its corpus caveat claimed to
+*overstate* anything scaling with surviving pairs; at the vector width the bench
+actually runs, 0.05% of pairs clear the threshold rather than the 19% recorded,
+so it understates by three orders of magnitude. The measurement by width, and
+the corrected caveat, are in `BENCHMARKS.md` — not repeated here.
+
+**Options, in the order they are worth considering:**
+
+- **Measure it honestly first.** Re-run `reflect` scaling with
+  `--real-embeddings`, or with a mock whose similarity distribution is not
+  degenerate. Everything below is guesswork until the real survival rate on a
+  real corpus is known, and this file's own policy is to act on a profile.
+- **Cap the nominations, and say so in the response.** A top-k by score with an
+  explicit `truncated: true` and the count omitted. Cheap, bounds both memory
+  and the response, and fits the house style — report the limit rather than
+  silently drop. The judgement call is what a caller does with "there were
+  40,000 more": the honest answer is probably that the graph needs a different
+  operation, not a longer list.
+- **Stream or page the phase**, so the pairs never all exist at once. Correct
+  and much larger; it changes the tool's shape from one call returning
+  everything to something resumable.
+- **Raise the floor adaptively** — pick the threshold from the score
+  distribution rather than a constant. Attractive and dangerous: it makes the
+  answer depend on the corpus in a way nobody can reproduce, which is the
+  "invented threshold" trap the lexical work already refused twice.
+
+**Failing test first**, per the workflow: `tests/pipelines/reflection/` — build a
+graph whose facts all clear the threshold, and assert `reflect`'s nomination
+lists are bounded rather than quadratic in the fact count. It must fail on
+current `main` by returning every pair, and the assertion should be on the count
+the response carries, not on wall-clock or bytes.
+
+**Not the node scans.** The 13 `query_nodes` calls per `reflect` are a separate
+finding, recorded in `BENCHMARKS.md`; they are linear and cost time rather than
+headroom. Fixing them does nothing for this.
+
+---
+
 ## Older carry-overs (open, low priority)
 
 From the original live-graph walkthrough (issues 1–5, otherwise resolved or kept
 by design — see git history of this file, commit `22fc874` and follow-ups):
 
 - **No retroactive repair of old graphs.** Fixes apply to new operations;
-  pre-existing graphs keep stale state until rebuilt. Accepted.
+  pre-existing graphs keep stale state until rebuilt. Accepted. #46 left one
+  concrete instance: every node written before 2026-08-19 carries a literal
+  `0.5` confidence, so those rows read as *rated ordinary* when nobody rated
+  them. Absence means something only for nodes written since.
+
+Two live triggers, kept when their entries were deleted:
+
+- **From #46 — does guidance actually produce a `confidence_basis`?** The basis
+  is asked for by tool guidance rather than enforced at the boundary, and the
+  accepted risk is that absence then means nothing: *no basis given* and
+  *guidance not read* are indistinguishable. **Measure the share of non-default
+  priors that arrive carrying one.** If guidance is not producing them, the
+  fallback is refusal at the tool boundary — the shape `judge_importance`
+  already uses. Nothing measures this today.
+- **From #46/#51 — there is still no path for source discredit.** When a
+  document turns out fabricated, every prior derived from it overstates and
+  nothing can sweep per-source, because support levels live on the node rather
+  than on the `sourced_from` edge. Accepted and recorded rather than built; the
+  provenance edge is where it would go. Also stated in `SUMMARY.md`.
 
 Merge being Topic-only on the wired path is a scope question rather than a bug —
 it lives in README → *Not yet built*.
@@ -2415,14 +2203,18 @@ patch" instinct earned its keep: the obvious fix, indexing the content, changed
 nothing at all until the query named the index, and the write cost it was
 feared for turned out to be under 5%.
 
-**#46 is done and #51 follows it.** Neither failed; both exist because the docs
-described measurements the code does not take, which is the same trap #44 was.
-The order mattered — #51's whole justification is that `confidence` is not the
-place to put a corroboration count, which only reads as a decision once
-`confidence` is something else, and now it is. The deliverable was written
-guidance rather than code, as predicted: the field and its consumer sweep are a
-handful of lines, and the ladder is the rest, because a prior no agent knows
-how to set is worth less than the constant it replaces.
+**#46 and #51 are both done, in that order, and the order mattered.** Neither
+failed; both existed because the docs described measurements the code does not
+take, which is the same trap #44 was. #51's whole justification is that
+`confidence` is not the place to put a corroboration count — which only reads as
+a decision once `confidence` is something else, and #46 is what made it
+something else. For #46 the deliverable was written guidance rather than code,
+as predicted: the field and its consumer sweep are a handful of lines and the
+ladder is the rest, because a prior no agent knows how to set is worth less than
+the constant it replaces. For #51 the deliverable was a **measurement that said
+no** — it is the most expensive annotation on the retrieval path, and its cost
+rises with similarity-edge density, so a default-on version would have got
+slower exactly as it got more useful.
 
 **On building 46 and 51 "assuming 52 lands" — split which part waits.** Putting
 per-source support on the provenance edge is right whether or not dedup ever
@@ -2458,9 +2250,10 @@ What to pick up, and what has to be true first:
 | ✅ | ~~54 (historical provenance and validity)~~ | **Done 2026-08-12.** `migration_disposition(edge_type, status)` is the policy; a world-change keeps provenance and judgments on the historical node and copies only the frame and tags |
 | ✅ | ~~57 (supersession events named no counterpart)~~ | **Done 2026-08-17** — counterpart ids on the live events and on `query_changes`, carried by the append-only lifecycle episodes (`EVENT_LOG.md` §6), which is what made the log panel readable |
 | ✅ | ~~46 (`confidence` becomes a supplied prior)~~ | **Done 2026-08-19.** Decided 2026-08-12, both review amendments signed off the day it was built: `float \| None` with unrated stored as absent, an optional `confidence_basis` asked for by guidance, and a consumer sweep saying what each reader does about absence. The deliverable was the tool guidance, as the entry predicted |
-| ✅ | ~~**53 (validity intervals)**~~ | **Built 2026-08-19.** Everything else on this list is a defect inside a sound model; this one says the model cannot express something true. Done (all 2026-08-19): the status split; T2's lineage edge, which closed a week in which a world-change wrote an edge contradicting its own node's status; the interval type with its four-value comparison; per-source intervals stored on `sourced_from`, supplied at ingest; recurrence — a retired claim can be nominated, judged and reactivated, which also closed #48; and T3's retrieval surface, which is where validity is finally read — history returned by default with a claim's earlier versions folded into it, per-source periods on results, `valid_as_of` answering in groups, and the `as_of` → `graph_as_of` rename, this design's one migration cost, now paid; §11's soundness check, which flags an inference whose premises no source puts in the same period; and §9's boundary proposals, which close a period where the succession the agent judged says the next one opens. **Two decided details moved on contact with the rest of the design**, both recorded in the entry: T3's third valid-time bucket is unreachable under T1 §6's open-world rule, and §9's own worked example yields no proposal because publication dates cannot end a period. **51 is now the top open item** |
-| 2 | 51 (corroboration derived at read time) | **Unblocked** — 46 is what makes this a separate signal rather than a rewrite of one, and 46 is done. Apply the review's neighbourhood exclusions (contradictors, variants). Measure the extra hop before putting it on the default `search` path. Ships with a known 53-shaped inaccuracy, stated in the entry. It also inherits 46's one accepted gap: per-source levels on the provenance edge, and with them any path for source discredit |
+| ✅ | ~~**53 (validity intervals)**~~ | **Built 2026-08-19.** Everything else on this list is a defect inside a sound model; this one says the model cannot express something true. Done (all 2026-08-19): the status split; T2's lineage edge, which closed a week in which a world-change wrote an edge contradicting its own node's status; the interval type with its four-value comparison; per-source intervals stored on `sourced_from`, supplied at ingest; recurrence — a retired claim can be nominated, judged and reactivated, which also closed #48; and T3's retrieval surface, which is where validity is finally read — history returned by default with a claim's earlier versions folded into it, per-source periods on results, `valid_as_of` answering in groups, and the `as_of` → `graph_as_of` rename, this design's one migration cost, now paid; §11's soundness check, which flags an inference whose premises no source puts in the same period; and §9's boundary proposals, which close a period where the succession the agent judged says the next one opens. **Two decided details moved on contact with the rest of the design**, both recorded in the entry: T3's third valid-time bucket is unreachable under T1 §6's open-world rule, and §9's own worked example yields no proposal because publication dates cannot end a period. **The entry is kept** — `REVIEW_EPISTEMIC.md` §13.8 and `docs/VALIDITY.md` both name it as the full statement of the design |
+| ✅ | ~~51 (corroboration derived at read time)~~ | **Done 2026-08-20.** Both review exclusions applied, and the extra hop measured before it went anywhere: it is the most expensive annotation on the retrieval path and its cost rises with similarity-edge density, so it ships as `search(include_corroboration=True)` rather than by default. The row asked for the measurement and the measurement said no, which is the outcome this column exists to produce. Two status rules were decided during construction rather than inherited (`corrected` does not corroborate, `historical` does); `archived` left unpinned. Still carries the known 53-shaped inaccuracy and 46's accepted gap — per-source levels on the provenance edge, and with them any path for source discredit |
 | ✅ | ~~48 (`get_node_by_content` scans per ingest)~~ | **Done 2026-08-19**, in the same visit as #53 step 4 as this row predicted. The measurement decided it: an index on `content` changes nothing until the query names it, and then the lookup goes 4.0 ms → 0.53 ms at 3,000 nodes for under 5% on writes. Guarded by a plan assertion, since behaviour cannot see the defect |
-| 4 | 59 (embedding truncation) | **Ready to measure, not to fix.** Take the token-length distribution over a real graph first; the entry lists four options and says which measurement decides between them. Lexical search relieves the identifier case and none of the rest |
-| 3 | 52 (fact deduplication) | **Unblocked** — 53 landed 2026-08-19, which was the whole condition. The re-open must carry the review's event/state distinction: interval union dedupes states, never events |
-| deferred | 16 | The server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`) |
+| ✅ | ~~**59 + 60, as one measurement sitting**~~ | **Measured 2026-08-20, together, as this row asked** — one read of two real graphs answered both. Both shrank. #59 is **segments only**: 624 real nodes top out at 81 word-pieces against a 256 window, while 11.1% of segments cross it and the worst loses 48% of its text, so nodes get option 4 (accept, recorded) and segments get option 3 (say the record was cut). #60 loses its headline: the real fact-pair survival rate is **0.0105%**, not 49%, projecting ~3 MB at 10,000 facts rather than ~14 GB — because the 49% was measured on longer templated text (it sits between the 20-word and paragraph points) and applied to fact-length pairs. Both entries keep their fixes, at much lower priority; `scripts/corpus_measure.py` is the instrument and `BENCHMARKS.md` holds the tables |
+| 1 | 52 (fact deduplication) | **Unblocked** — 53 landed 2026-08-19, which was the whole condition. What blocks it now is not a precondition but a **decision**: the classifier needs an explicit event/state judgment ahead of the merge, since interval union dedupes states and must never dedupe events. It also inherits #51's second migration, recorded in the entry. **Now the top open item**, the measurement sitting having cleared the two ahead of it |
+| 2 | 59's segment flag, 60's nomination cap | Both are small, both are decided, and neither is urgent. #59: record the measured token count or a truncation flag on `EmbeddingRecord` for segments. #60: top-k with an explicit `truncated: true`, wanted now for the **unbounded response** rather than for memory |
+| deferred | 16, 58 | 16: the server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`). 58: a graph large enough that the FTS backfill inside `connect()` is worth reporting on |

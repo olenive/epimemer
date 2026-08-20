@@ -219,9 +219,14 @@ and are not repeated here: a remote (non-loopback) SurrealDB, a diverse corpus,
 real embeddings end to end, and embedding throughput separated from ingest.
 
 **Why.** Every current number is a floor measured against mocked embeddings on
-loopback. The diverse-corpus gap is the one that most affects conclusions — the
-17-word synthetic vocabulary inflates anything scaling with surviving candidate
-pairs, which is exactly the phase that fails first.
+loopback. The diverse-corpus gap is the one that most affects conclusions, and
+**it runs the opposite way from what this entry originally claimed**: the mock's
+similarity distribution degenerates as vector width grows, so at the width the
+bench actually runs only ~0.05% of pairs clear the threshold against ~19% for
+real embeddings. Anything scaling with surviving candidate pairs is therefore
+**understated by about three orders of magnitude** — which is exactly why the
+quadratic memory growth in `ISSUES.md` #60 was invisible here. The measured table
+by width is in `BENCHMARKS.md`.
 
 **Cost.** Small per item. Embedding throughput is a `scripts/bench.py` flag; a
 diverse corpus is a fixture; a remote SurrealDB is a deployment, not code.
@@ -282,21 +287,28 @@ than the convenience, and it is far easier to give up later than to win back.
 
 ## Tracked elsewhere, listed so the backlog is complete
 
-- **Batched node and embedding reads** — `ISSUES.md` #14, step 4. Not a
-  proposal: `reflect` on SurrealDB is the one thing in the system that currently
-  *fails* at a size real use reaches (~2,000 nodes), and after the batched edge
-  fetch landed this is what its remaining round-trips are. Ahead of everything
-  in this file.
+- ~~**Batched node and embedding reads**~~ — `ISSUES.md` #14, step 4. **Done.**
+  This row read "ahead of everything in this file" while `reflect` on SurrealDB
+  was the one operation failing at a size real use reaches (~2,000 nodes). #14
+  and #47 took that crossing to ~26,000 on SurrealDB and ~320,000 in-memory, and
+  what binds it now is the bytes moved to compare vectors. **The successor
+  concern is memory, not time**: `reflect`'s candidate pair lists are quadratic
+  and uncapped (`ISSUES.md` #60), and can exhaust memory *below* the timeout
+  crossing.
 - **A dedicated read connection for viz snapshots** — `ISSUES.md` #16, deferred
   until the server gains concurrent clients.
 - **Native HNSW vector indexes** — `surrealdb_adapter.py:1105`. Waiting on
   SurrealDB, not on us.
 - **Valid-time rendering on the timeline panel** — designed:
   `TIMELINE_VISUALISATION.md` §13, with a checked-in visual reference at
-  `dev-docs/mockups/valid-time-grammar.html`. Blocked on #53 construction (the
-  data it renders does not exist yet); the grammar was designed early because it
-  pins two decisions — gaps are never styled as false, bars fade through the
-  now-line — that would otherwise be made by accident in the first renderer.
+  `dev-docs/mockups/valid-time-grammar.html`. **Unblocked 2026-08-19** — #53 is
+  built, so the intervals it renders now exist. One leg the entry did not
+  anticipate has to come first: the viz snapshot carries no validity at all, so
+  the grammar currently has nothing to draw. Two parts, then — per-source
+  intervals into `snapshot.py`, then the SVG grammar. The grammar was designed
+  early because it pins two decisions — gaps are never styled as false, bars fade
+  through the now-line — that would otherwise be made by accident in the first
+  renderer.
   **Its colour set shipped ahead of it** (2026-08-12, ISSUES.md #56): the
   palette was promoted to serve both panels and now lives in
   `VISUALISATION.md` C.6, built as `SemanticPalette` in `theme.ts`. A shared
