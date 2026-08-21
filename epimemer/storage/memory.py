@@ -638,6 +638,7 @@ class InMemoryStorage:
         lineage_edges: Sequence[NodeEdge],
         *,
         merged_at: datetime,
+        evidence_edges: Sequence[NodeEdge] = (),
     ) -> None:
         snapshot = copy.deepcopy(self._g)
         try:
@@ -659,6 +660,10 @@ class InMemoryStorage:
                     counterpart=merged_node.id,
                 )
             for edge in lineage_edges:
+                _put_edge(self._g, _store(edge))
+            # After migration, so the flag stays on the source whose wording
+            # went away rather than being re-pointed at the survivor.
+            for edge in evidence_edges:
                 _put_edge(self._g, _store(edge))
         except Exception:
             self._graphs[self._database] = snapshot

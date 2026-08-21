@@ -16,6 +16,21 @@ the history linked. Your job is to write fast and organize deliberately.
   when you already know it is unusually consequential or unusually disposable.
   Usually leave it alone: importance is properly judged at reflect time, when the
   surrounding graph exists to judge it against.
+- **Give every fact a `claim_kind`** (`{"content": ..., "claim_kind": "state"}`).
+  Facts only — it is an error on a topic or an inference. Ask what kind of thing
+  is being claimed:
+  - `"state"` — a condition that holds over a period, and may hold again later.
+    *"Labour is in government"*, *"the city is called Leningrad"*.
+  - `"event"` — something that happened on an occasion. *"Labour won the
+    election"*, *"the city was renamed"*.
+
+  This is the one judgment nothing downstream can make. Two documents years
+  apart yield near-identical sentences, and collapsing them is right for a state
+  (one condition, two periods) and fabricates history for an event (two
+  elections become one twenty-seven-year victory). Only you have the document —
+  the tense, the sentences either side, whether *"the election"* is a particular
+  one. **Omit it when you genuinely cannot tell**; the fact simply never merges,
+  which costs less than a guess.
 
 ### Sources, tags, and relations (all nodes & edges, not strings)
 
@@ -85,6 +100,14 @@ Discovery & lookup:
   `unattributed_documents` says how many did — a low count may mean nobody
   attributed the ingest rather than nobody corroborated the claim. Each source
   names the nodes behind it, so check the working before quoting the number.
+  **Read `adjacent_periods` — it is not a reject list.** A look-alike whose
+  source dates put it in a different period stops counting: *the city was called
+  Leningrad* is not a second witness to *the city is called Saint Petersburg*,
+  it is the claim about the period before. Nothing is removed from the graph and
+  both are true of their own stretch, so the uncounted node comes back named
+  there with its publisher and periods. Where a search returns one of a pair,
+  that block is the only place the other appears — treat it as *the graph also
+  knows what was true next door*, and say so rather than dropping it.
 
 ### Temporal queries — three axes, not one
 
@@ -146,7 +169,7 @@ Classify each candidate:
 
 | Verdict | What it means | What to do |
 | --- | --- | --- |
-| redundant | the same claim restated, and the twin is **active** | nothing (or rely on the existing node) |
+| redundant | the same claim restated, and the twin is **active** | `merge_facts([a, b], content=…)` — one node keeping both sources; or `link(a, b, edge_type="similarity")` and keep both when unsure |
 | supersedes | the new fact corrects an outdated one — the old was **wrong** | `supersede_by(old_id, existing_id, because="it_was_wrong")`; or `update` if you have corrected *content* |
 | succeeds | both true, over different periods — **the world moved** | `supersede_by(old_id, existing_id, because="the_world_changed")` |
 | recurs | the same claim, previously retired as `historical`, is true again | `restore(node_ids=[…], sourced_from=…)` — reactivating requires naming the new source |
@@ -169,9 +192,26 @@ first — do not pick one. Use `record_contradiction(a, b)` and leave the pair
 contested for someone who can resolve it. A guessed `because` is
 indistinguishable afterwards from a judged one.
 
+**Merging is the one verdict that is worse to get wrong than to skip.** Two
+distinct claims fused into one node with two independent sources read as *better
+supported* than either was — the mistake does not lose information, it
+manufactures agreement. So `merge_facts` refuses on doubt and says why: an
+**event** never merges, nor does a pair in different frames (that is
+`record_variant`), a retired twin (that is `restore`), or a fact ingested
+without a `claim_kind`. Read the `refused` line — it names which. When in doubt,
+record a `similarity` edge and keep both; nothing downstream is harmed by two
+nodes saying one thing, and corroboration already reads a similarity
+neighbourhood.
+
 **Record verdicts.**
 - `record_contradiction(a, b)` — both facts stay active and become `contested`;
   the response includes a `notify_user` signal.
+- `merge_facts(source_ids, content)` — collapse facts restating one claim into a
+  single node. Every source is retired as `merged` and linked to the survivor,
+  which keeps one `sourced_from` edge per contributing document, each with that
+  document's own periods — so provenance becomes plural rather than being
+  overwritten. Write `content` as the clearest phrasing of the shared claim;
+  that is what gets embedded.
 - `record_variant(a, b)` — records a cross-frame divergence so it stays queryable.
 - `supersede_by(old_id, existing_id, because=…)` — retire an outdated node in
   favour of one already in the graph (dependent inferences are flagged
@@ -196,6 +236,9 @@ useful:
 - `superseded_candidate` → a newer fact may replace this one.
 - `evidence_stale` → an inference whose supporting evidence was superseded; its
   basis changed and it may need re-deriving.
+- `evidence_merged` → an inference whose premise absorbed another claim. Nothing
+  was overturned and the premise gained provenance, so this asks for a re-read,
+  not a re-derivation; the ids name the phrasings that went away.
 - `contested` → an unresolved same-frame contradiction; do not trust it blindly.
 
 ### Recording that something matters (judge_importance)
@@ -232,6 +275,15 @@ useful:
   already flagged for resolution —
   `archival_candidates` (see below), and `similar_relations`, likely-synonymous
   user relationship labels.
+- **Check `truncated`.** Four of the lists are built out of *pairs* —
+  `similar_pairs`, `contradictions`, `recurrences`, `similar_relations` — and
+  pairs grow quadratically where every other list grows with the node count. Each
+  is capped to its highest-scoring `max_nominations` (200 by default), and any
+  that was cut is named in `truncated`. An empty `truncated` means you saw
+  everything. **When a list is named there, act on what came back and reflect
+  again** rather than raising the number: what was dropped is the weakest end of
+  the ranking, and a graph dense enough to hit the cap wants repeated passes, not
+  a longer response to read in one go.
 - **`boundary_proposals`** offers to close a period where you have already
   judged that the world moved on. Once `supersede_by(because="the_world_changed")`
   has recorded the succession, reflect can take the successor's own start date and

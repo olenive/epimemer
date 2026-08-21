@@ -121,6 +121,55 @@ def _texts(sql, table: str, field: str) -> list[str]:
     return [row[field] for row in rows if row.get(field)]
 
 
+def _priors(sql) -> dict:
+    """How many supplied priors arrive carrying a reason (#46's open trigger).
+
+    `confidence` is a prior the agent supplies and `confidence_basis` is the one
+    line saying why. The basis is asked for by tool guidance rather than enforced
+    at the boundary, and the accepted risk was that absence would then mean
+    nothing — *no basis given* and *guidance not read* being indistinguishable.
+    This is what tells the two apart, and the fallback if guidance is not
+    producing them is refusal at the tool boundary.
+
+    Three populations, and only the first owes a basis:
+
+    - **rated non-default** — a supplied 0.3/0.7/0.9. Guidance asks for a line.
+    - **unrated** — the field absent, which is what the ladder says to store
+      when there is no specific reason to doubt or trust. Owes nothing.
+    - **legacy 0.5** — written before #46 landed on 2026-08-19, when the field
+      was a non-nullable default. These read as *rated ordinary* though nobody
+      rated them, which is the carry-over #46 left behind.
+
+    `confidence_basis` lives in `node.metadata`, deliberately apart from the
+    numbers every ranker reads (`tools.py`) — so a query looking for it beside
+    `value.confidence`, where it reads as though it belongs, finds nothing and
+    reports a confident zero.
+    """
+    tables = ",".join(NODE_TABLES)
+    rows = sql(
+        f"SELECT count() AS n, value.confidence AS confidence, "
+        f"metadata.confidence_basis IS NOT NONE AS basis "
+        f"FROM {tables} GROUP BY confidence, basis;"
+    )
+    counts = {"rated_non_default": 0, "with_basis": 0, "unrated": 0, "legacy_default": 0}
+    for row in rows:
+        confidence, count = row.get("confidence"), row["n"]
+        if confidence is None:
+            counts["unrated"] += count
+        elif confidence == 0.5:
+            counts["legacy_default"] += count
+        else:
+            counts["rated_non_default"] += count
+            if row.get("basis"):
+                counts["with_basis"] += count
+    owed = counts["rated_non_default"]
+    return {
+        **counts,
+        "nodes": sum(counts[key] for key in ("rated_non_default", "unrated", "legacy_default")),
+        "basis_pct": round(100.0 * counts["with_basis"] / owed, 2) if owed else None,
+    }
+
+
 def _distribution(lengths: list[int], window: int) -> dict:
     """Where the lengths sit, and how many cross the window.
 
@@ -305,6 +354,8 @@ def _token_lengths(texts: list[str]) -> list[int]:
 
 def _measure(sql, database: str, *, skip_survival: bool) -> dict[str, list[str]]:
     """Emit this database's measurements; return its texts for the pooled pass."""
+    _emit({"measurement": "priors", "database": database, **_priors(sql)})
+
     _progress(f"[{database}] tokenizing...")
     texts = {table: _texts(sql, table, "content") for table in NODE_TABLES}
     texts["segment"] = _texts(sql, SEGMENT_TABLE, "text")

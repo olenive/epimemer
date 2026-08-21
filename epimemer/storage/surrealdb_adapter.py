@@ -1288,6 +1288,7 @@ class SurrealDBStorage:
         lineage_edges: Sequence[NodeEdge],
         *,
         merged_at: datetime,
+        evidence_edges: Sequence[NodeEdge] = (),
     ) -> None:
         source_ids = {s.id for s in source_nodes}
 
@@ -1368,20 +1369,23 @@ class SurrealDBStorage:
                 counterpart=merged_node.id,
             ))
 
-        await self._run_transaction(
-            statements,
-            {
-                **source_params,
-                "merged_data": _serialize(merged_node),
-                "emb_data": _serialize(merged_embedding),
-                "old_edge_ids": old_edge_ids,
-                "repointed_data": repointed_data,
-                "sources": list(source_ids),
-                "status": NodeStatus.MERGED.value,
-                "merged_at": merged_at.isoformat(),
-                "lineage_data": lineage_data,
-            },
-        )
+        params: dict = {
+            **source_params,
+            "merged_data": _serialize(merged_node),
+            "emb_data": _serialize(merged_embedding),
+            "old_edge_ids": old_edge_ids,
+            "repointed_data": repointed_data,
+            "sources": list(source_ids),
+            "status": NodeStatus.MERGED.value,
+            "merged_at": merged_at.isoformat(),
+            "lineage_data": lineage_data,
+        }
+        # Appended last, after the migration's DELETE: the flags are anchored to
+        # the sources, and `old_edge_ids` names only edges that were incident
+        # before this transaction, so nothing here is deleted by it.
+        self._append_review_writes(statements, params, evidence_edges, ())
+
+        await self._run_transaction(statements, params)
 
     async def write_batch_tx(
         self,

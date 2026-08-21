@@ -41,15 +41,25 @@ Each topic/fact/inference may be an object rather than a bare string, carrying p
   - Never lower it for contradiction or for age — `record_contradiction` and `created_at` carry those and stay current, while a prior freezes.
 - **`confidence_basis`** — one line saying why, whenever you supply a confidence other than 0.5. Not required, but a high prior nobody can review later is worth little.
 
+### The claim kind at ingest (facts only)
+- **`claim_kind`** — `"state"` or `"event"`. An error on a topic or an inference; they are not claims.
+  - `"state"` — a condition that holds over a period and may hold again later: *"Labour is in government"*, *"the city is called Leningrad"*.
+  - `"event"` — something that happened on an occasion: *"Labour won the election"*, *"the city was renamed"*.
+- **Only you can judge it.** Two documents years apart yield near-identical sentences, so nothing computed from the text can separate them — and the two merge in opposite directions. Collapsing a state read from 1997 and from 2024 gives one condition with two periods, which is right; collapsing an event gives one twenty-seven-year victory neither source claims.
+- **Omit it when you genuinely cannot tell.** Unjudged simply never merges, which costs a tidier graph. A guess costs corroboration that was never earned — a false merge does not lose information, it manufactures agreement.
+- `merge_facts(source_ids, content)` is what reads it: the action for a `redundant` verdict, keeping one `sourced_from` edge per contributing document. It refuses events, cross-frame pairs, retired twins and unjudged facts, and says which in `refused`.
+
 ### When to search (search)
 - Before answering questions that might benefit from prior context
 - When the user asks "do you remember..." or references past conversations
 - Use metacontext_id to filter results when the context is clear (e.g., discussing a specific fictional universe)
+- With `include_corroboration=True`, read `adjacent_periods` as well as the count. It names similar claims whose source dates put them in a *different* period, which therefore do not corroborate — they are the neighbouring truth, not a rejection, and often the more useful half of the answer.
 
 ### When to reflect (reflect)
 - After ingesting several documents (the system auto-suggests reflection once a configured threshold of ingestions is reached — it flags the suggestion, it does not reflect on its own)
 - When explicitly asked to consolidate or organize knowledge
 - Periodically during long sessions
+- Check `truncated` in the response. The four pair-built lists (`similar_pairs`, `contradictions`, `recurrences`, `similar_relations`) are capped at `max_nominations` (200), and any that was cut is named there. Empty means you saw everything; named means act on what came back and reflect again, rather than raising the number.
 
 ### Interpreting _meta
 Every tool response includes a _meta field with:

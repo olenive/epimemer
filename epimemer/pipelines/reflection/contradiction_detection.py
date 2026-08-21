@@ -18,6 +18,7 @@ from epimemer.core.types import (
     NodeType,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
+from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
 from epimemer.pipelines.reflection.pair_scoring import (
     SCORE_BLOCK,
     similar_pairs,
@@ -36,7 +37,7 @@ async def detect_contradictions(
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
     *,
-    similarity_threshold: float = 0.80,
+    similarity_threshold: float = SIMILARITY_NOMINATION_THRESHOLD,
     model_id: str | None = None,
     statuses: frozenset[NodeStatus] = frozenset({NodeStatus.ACTIVE}),
 ) -> list[tuple[Fact, Fact, float]]:

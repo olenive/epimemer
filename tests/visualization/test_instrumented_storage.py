@@ -8,6 +8,7 @@ from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
     Fact,
+    Inference,
     NodeEdge,
     NodeStatus,
     Timeline,
@@ -19,6 +20,7 @@ from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization import instrumented_storage as instrumented_storage_mod
 from epimemer.visualization.event_bus import create_event_bus
 from epimemer.visualization.events import (
+    EdgeStored,
     GraphSwitched,
     NodeStatusChanged,
     NodeStored,
@@ -189,6 +191,36 @@ class TestSupersessionCounterpart:
 
         assert {e.node_id for e in received} == {s.id for s in sources}
         assert {e.counterpart for e in received} == {merged.id}
+
+
+    async def test_merge_publishes_the_flags_it_wrote_on_dependents(self, bus):
+        """Both supersession paths publish their evidence edges; a merge writes
+        the same kind of flag (#61) and the dashboard has to see it, or the live
+        graph is missing an edge the store has."""
+        inner = InMemoryStorage()
+        wrapped = instrument_storage(inner, bus)
+        received: list[EdgeStored] = []
+        bus.subscribe(EdgeStored, handler=lambda e: received.append(e))
+
+        sources = [Fact(content=f"duplicate {i}", source_id="s1") for i in range(2)]
+        for node in sources:
+            await wrapped.store_node(node)
+        merged = Fact(content="the one kept", source_id="s1")
+        dependent = Inference(content="what rests on them", source_id="s1")
+        await wrapped.store_node(dependent)
+        flag = NodeEdge(
+            src_id=sources[0].id, dst_id=dependent.id, type=EdgeType.EVIDENCE_MERGED,
+        )
+        await wrapped.merge_nodes_tx(
+            sources, merged,
+            EmbeddingRecord(item_id=merged.id, model_id="test", vector=[1.0, 0.0]),
+            [NodeEdge(src_id=s.id, dst_id=merged.id, type=EdgeType.MERGED_INTO)
+             for s in sources],
+            merged_at=datetime.now(timezone.utc),
+            evidence_edges=[flag],
+        )
+
+        assert flag.id in {event.edge.edge_id for event in received}
 
 
 class TestMultiGraphPassThrough:

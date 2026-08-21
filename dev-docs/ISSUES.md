@@ -1,13 +1,17 @@
 # Epimemer — Known Issues
 
-Living issue tracker. **Last review: 2026-08-12.**
+Living issue tracker. **Last review: 2026-08-21.**
 
-Open: **16**, **52**, **58**, **59**, **60**. **46**, **48** and **51** were built
+Open: nothing but **16** and **58**, both deferred with their triggers stated.
+**61**, **62** and **63** were built on 2026-08-21. **46**, **48** and **51** were built
 and merged (2026-08-19, -19, -20); their entries are deleted per the workflow
 below, and what they taught is kept here and in the docs they name —
 `SUMMARY.md` and `AGENTS.md` for #46's ladder, `BENCHMARKS.md` for #48's
 measurement, `docs/RETRIEVAL.md` §8 for #51. **54**, **55**, **56** and **57**
-went the same way on 2026-08-18. New findings continue from **61**.
+went the same way on 2026-08-18. **59** and **60** closed on 2026-08-21 — #60
+built, #59 closed with no code once its premise failed — and both entries are
+kept until the next prune, since each records a lesson not yet rehoused. New
+findings continue from **61**.
 
 **#53's entry stays, and the reason is specific rather than sentimental.**
 `REVIEW_EPISTEMIC.md` §13.8 says in as many words that the full statement of T1
@@ -243,6 +247,27 @@ measurements are deleted rather than kept. The blow-by-blow is in `git log`.
    are the durable record.
 5. One commit per issue (or per tightly-coupled group), so each is reviewable.
 
+**Every entry is written to be picked up cold, by someone — or something — that
+has read none of this conversation.** Added 2026-08-21, after a review round
+produced findings that were true, actionable, and impossible to start from. An
+actionable entry carries all six:
+
+| | |
+|---|---|
+| **What breaks** | The behaviour, not the code smell. Ideally reproduced: the call, and what came back. |
+| **Why it matters** | What a caller gets wrong today. An entry that cannot say this belongs in `PROPOSED_FEATURES.md`, not here. |
+| **Files** | Module and function names, so nobody re-derives the search. Name the rule to reuse, not just the site to change. |
+| **The decision, if any** | Stated as an open question with its options — never prejudged, never omitted. `#61` and `#62` are the pattern. |
+| **Guarding tests** | Module, names, assertions, and *why they fail on `main`* — step 1 above is unrunnable without this. |
+| **Verify** | The commands, including `make test-integration` where storage is touched. |
+
+**Two agents on this file at once:** claim an entry by its number in your commit
+message, and check the **Files** rows before starting — entries whose file sets
+are disjoint are safe to run in parallel, and entries that share one are not,
+however unrelated they read. The four `dev-docs/` design documents are shared
+state: amend them in place with a dated note (the blockquote convention used
+throughout) rather than rewriting a section someone else may be editing.
+
 **Backend parity is structural.** `tests/conftest.py` parameterizes a `storage`
 fixture over `InMemoryStorage` and `SurrealDBStorage(url="mem://")`, so every
 test taking it runs against both backends. Storage-behaviour bugs must be tested
@@ -256,11 +281,21 @@ is entirely sequential.
 ## Open issues
 
 Listed by issue number, not by priority — for priority see *Recommended order*
-at the end. Five entries remain, and only three of them are work: **#52** is the
-substantial one and needs a design decision before any code; **#59** and **#60**
-were measured on 2026-08-20 and both came back smaller than filed, leaving each
-with a small decided fix and no urgency. **#16** and **#58** are deferred with
-their triggers stated.
+at the end. **Nothing here is outstanding work.** **#16** and **#58** are
+deferred with their triggers stated; the designed-but-unbuilt queue lives in
+`WARNINGS_AND_SETTINGS.md` and `PROPOSED_FEATURES.md`, which is where an agent
+looking for the next thing should go.
+
+**#61, #62 and #63 were built on 2026-08-21** and are kept until the next prune,
+each for a decision the code alone does not explain: `evidence_merged` is its own
+edge type rather than a qualified supersession flag (#61); a look-alike about
+another period stops counting *and* comes back named, because the two were never
+alternatives (#62); and the nomination bar is one constant at 0.80 rather than
+two numbers (#63). **#52**, **#59** and
+**#60** are closed and kept as records: #52 built on 2026-08-21 with one
+migration deliberately left for a corpus that has merges in it, #59 closed
+without code because its premise failed, #60 built at the scope the measurement
+left it.
 
 **#53 is built and its entry is documentation, not a task.** It is here because
 two other documents name it as the design of record for validity — read it for
@@ -313,7 +348,93 @@ while the server is single-client stdio; keep this issue open as the reminder.
 
 ---
 
-### Issue 52 — facts are never deduplicated across documents — ▶ UNBLOCKED (#53 built 2026-08-19)
+### Issue 52 — facts are never deduplicated across documents — ✅ BUILT (2026-08-21), one migration outstanding
+
+> **Built 2026-08-21, and the decision this waited on was made rather than
+> deferred: the event/state judgment is recorded at ingest.** `Fact.claim_kind`
+> is `"state" | "event" | None`, supplied on a `store_decomposition` entry, and
+> `merge_facts(source_ids, content)` is the action `redundant` never had. Sources
+> are retired as `MERGED` and the survivor keeps **one `sourced_from` edge per
+> contributing document**, each carrying that document's own periods — the
+> plurality this issue was wanted for, and it needed no new code: edge migration
+> already collapses two edges to the *same* document while preserving both sets
+> of intervals (#53 T1 §2), which is exactly why validity was put on the edge.
+>
+> **Why ingest, and what it costs.** The judgment wants the document — the tense,
+> the sentences either side, whether *"the election"* is a particular one — and a
+> merge is offered two stripped sentences with none of that. The cost is paid
+> immediately and in full, and it is measured rather than estimated: the two real
+> graphs hold **350 facts (277 + 73) and 0 of them carry a `claim_kind`**, so the
+> entire existing corpus is unmergeable and no later pass can repair it, because
+> the repair needs the document. (Counted 2026-08-21 by raw HTTP `SELECT`, which
+> is how the real namespace is read without `connect()` defining tables — #58.)
+> That is the safe direction — a missed merge undercounts, a false one
+> manufactures corroboration — and it was the price of the decision rather than
+> an oversight in it.
+>
+> **Seven decisions made during construction rather than inherited from above:**
+>
+> 1. **Frame *equality*, not `same_frame`.** `same_frame` asks whether two nodes
+>    share at least one frame, which is right for a contradiction — an overlap
+>    makes the conflict real — and wrong here, because the survivor inherits the
+>    union. A base-reality claim merged with one also framed as fiction would
+>    assert in a world only one source ever stood in. The precondition above says
+>    "different metacontexts"; a partial overlap is the case it does not name, and
+>    it refuses.
+> 2. **The similarity floor *is* the nomination bar**, not a second, higher one.
+>    `SIMILARITY_NOMINATION_THRESHOLD` moved to `review.py` and both readers take
+>    it from there, so the rule can be stated as *a merge may only collapse facts
+>    that could have been offered to each other as candidates* rather than as two
+>    numbers that happen to agree. It is not a second opinion on the agent's
+>    judgment — the entry is right that this is an LLM judgment about
+>    propositions — it catches a pairing named by mistake.
+> 3. **Refusals are returned with prose; only unresolvable ids raise.** A refusal
+>    is a judgment the graph made and the agent has a real alternative to take
+>    (record `SIMILARITY` and keep both); an id naming nothing, or naming a
+>    topic, is a request that was never well-formed. Follows `BoundaryRefused`.
+> 4. **Refusals are ordered permanent-first.** A cross-frame pair will never
+>    merge however the graph changes; an unjudged one merges as soon as somebody
+>    judges it. Reporting the fixable obstacle while a permanent one also stands
+>    sends an agent to do work that changes nothing.
+> 5. **No new `reflect` nominee list.** The entry proposed a new consumer of
+>    `pair_scoring.similar_pairs`. It turned out not to need one: reflect's
+>    `contradictions` already nominates same-frame fact pairs above 0.80, which
+>    is the same population — a merge candidate *is* a contradiction nominee the
+>    agent judges as "same claim". Adding a fifth quadratic list the day after
+>    #60 capped the four that exist would have been perverse.
+>
+> **Amended 2026-08-21 (#63): decision 5 was false as written, and decision 2
+> was true only of the two readers it named.** The sweeps nominated at 0.80
+> while the merge gate refused below 0.83, so "the same population" was a
+> superset, and a pair in [0.80, 0.83) was offered by reflect and then refused
+> by `merge_facts`. The conclusion survives — no fifth list is needed — but it
+> needed the numbers to agree, which they now do at 0.80. The reasoning to keep
+> is that **"already nominated by X" is a claim about X's threshold**, and it is
+> worth reading the constant rather than the sentence next to it.
+> 6. **Every `EVENT` is refused, including unique ones.** *"Napoleon was born in
+>    1769"* can only happen once and could be merged safely. Separating "can
+>    happen twice" from "happened once" is a third judgment to get wrong and its
+>    error direction is the unsafe one, so the vocabulary stays two-valued and
+>    the over-refusal is taken knowingly.
+> 7. **The survivor is stamped `STATE` and carries the basis of the confidence it
+>    keeps.** Every source cleared the gate as a state, so a survivor left
+>    unjudged could never merge again for want of a judgment its own parts
+>    carried. And `merged_value_signal` takes the highest confidence while the
+>    prose explaining it lives in `metadata` (#46) — rebuilding one without the
+>    other leaves a prior nobody can review, which is the state #46's guidance
+>    exists to prevent, reached by a path nobody chose.
+>
+> **What is still outstanding is the corroboration migration below** —
+> neighbourhood to identity. It is not broken by this: the neighbourhood walk
+> over a merged node is still correct and merely stops being necessary, and the
+> `sources` list on every result is what makes a count taken before and after
+> comparable. Revisiting it wants a corpus with merges in it, and there is none
+> yet.
+>
+> Also settled here: the recommended order's *"keep the nullable scalar
+> `confidence` until dedup lands, then revisit"*. Dedup has landed and the
+> scalar stays — merging is rare and gated, so nearly every fact still has one
+> source, and a read-time derivation would be a hop paid to combine one number.
 
 > **The trigger has fired.** #53 landed on 2026-08-19, so the precondition this
 > was deferred for now exists: facts carry per-source validity, and
@@ -1901,7 +2022,60 @@ that a schema that cannot be set up is a failed connection.
 
 ---
 
-### Issue 59 — embeddings are truncated at 256 word-pieces with no guard anywhere — ▶ MEASURED (2026-08-20), scope halved
+### Issue 59 — embeddings are truncated at 256 word-pieces with no guard anywhere — ✅ CLOSED (2026-08-21), no defect reachable
+
+> **Closed 2026-08-21 without code, because the remaining half had no target.**
+> The 2026-08-20 measurement below halved the scope to segments and prescribed
+> option 3 — a truncation flag on `EmbeddingRecord`. Building it turned up the
+> premise underneath: **segments are never embedded.**
+>
+> Four independent checks, and they agree:
+>
+> - **No path writes one.** All seven `EmbeddingRecord(...)` construction sites
+>   take a node id (`tools.py:247, 415, 471, 2241, 2266`;
+>   `graph_construction/versioning.py:72, 168`).
+> - **No stored record points at one.** 624 embeddings across the two real
+>   graphs against 624 nodes — 488/488 in `memory`, 136/136 in
+>   `petritype-server` — and zero whose `item_id` is a segment.
+> - **Nothing could return one.** `vector_search` resolves every hit through
+>   `storage.get_node(item_id)`, so a segment record would be fetched and
+>   dropped even if some path wrote one.
+> - **Segmentation's own embeddings are transient.** `semantic_similarity.py`
+>   embeds sentences to find boundaries and stores nothing.
+>
+> **So the 256 word-piece window never touches segment text.** Segments reach
+> retrieval through BM25 alone (`lexical_search.py`, `corpus="segments"`), which
+> indexes the whole field — and that is not incidental, it is why they answer
+> §3's question well: *a rare identifier* is exactly what lexical search finds
+> and vectors lose.
+>
+> **What the entry got wrong is worth naming, because it is this file's own
+> recurring shape.** "Segments cross the window and they are a search corpus"
+> is two true claims with a false join. The measurement was sound — 11.1% of
+> real segment text does cross 256 word-pieces, and the worst does lose 48% —
+> but a cost was inferred from it without checking that anything pays it. **A
+> measured quantity is not yet a measured consequence.** The instrument read
+> segment *text* out of the `segment` table, which is exactly where the
+> tokenizer question lives, and told us nothing about whether that text is ever
+> handed to the tokenizer. It is not.
+>
+> **The failing test the entry owed is withdrawn with the fix.** A text over the
+> window and a prefix of it still embed to the same vector — that is
+> unchanged — but for nodes, whose longest real instance reaches 81 word-pieces
+> against a 256 window and which are one sentence by construction. Asserting on
+> a path with 3× headroom is the guard on an unreachable path that the entry's
+> own option 4 declined.
+>
+> **What is kept instead is the precondition, stated where it would be
+> violated.** `EmbeddingRecord.item_id` said "node or segment id" and now says
+> what is true, plus the consequence: embedding segments would make this
+> truncation real on the day it was added, so the guard belongs with that work
+> if it is ever done. Recorded there rather than here because the comment is
+> what someone adding it will actually read.
+>
+> **Not a reason to embed segments.** Whether they should be is a feature
+> question and belongs in `PROPOSED_FEATURES.md`, not in a defect entry — and
+> `docs/RETRIEVAL.md` §3's argument runs the other way.
 
 > **Measured 2026-08-20 — the suspicion was half right, and the wrong half is
 > the one that matters.** Token lengths over 624 real nodes and 108 real
@@ -2002,7 +2176,51 @@ than in `LEXICAL_SEARCH.md` §9 for that reason; §9 keeps the pointer.
 
 ---
 
-### Issue 60 — `reflect` holds every candidate pair in memory, with no cap — ▶ MEASURED (2026-08-20), downgraded to cheap insurance
+### Issue 60 — `reflect` holds every candidate pair in memory, with no cap — ✅ BUILT (2026-08-21)
+
+> **Built 2026-08-21, as option 2 and at the demoted priority the measurement
+> left it at.** `reflect(max_nominations=200)` caps each of the four quadratic
+> lists — `similar_pairs`, `contradictions`, `recurrences`,
+> `similar_relations`, named in `CAPPED_KEYS` — to its highest-scoring entries,
+> and the response carries `truncated: [<list names>]`, empty on an ordinary
+> graph.
+>
+> **The scope is the response, and saying so is part of the fix.** The scored
+> tuples inside `similar_pairs` are still one per surviving pair, so peak
+> allocation is *not* bounded by this. That is the honest reading of what the
+> measurement changed: at 0.0105% real survival the memory argument became ~3
+> MB and the unbounded response became the reason to act, so a cap advertised as
+> a memory bound would be claiming something it does not deliver. Bounding
+> allocation means capping inside the scorer, which is a larger change against a
+> problem nobody has.
+>
+> **Three decisions made during construction rather than inherited:**
+>
+> - **The count of what was dropped is not reported**, as the entry proposed.
+>   A caller told "there were 40,000 more" has no better move than the one it
+>   already has, and the tool guidance now says that outright: act on what came
+>   back and reflect again, rather than reaching for a bigger number.
+> - **Each list is capped after the contradiction/recurrence partition, never
+>   before.** One scored set feeds both, so a cap on the set would let the
+>   larger half starve the other — and recurrence is the safety net under an
+>   opt-in detector (#53 T2). Pinned by a test.
+> - **The cap is applied at response assembly, in one place over `CAPPED_KEYS`,
+>   not inside each phase.** The phase events keep reporting what the pass
+>   actually found, which is what makes a truncated response visible in the
+>   viz strip instead of indistinguishable from a quiet graph. The server log
+>   line says so too.
+>
+> **200 is chosen against the distribution, not picked.** Real corpora yield 4
+> surviving fact pairs out of 38,226, and the measured rate projects ~5,200 at
+> 10,000 facts — so the default sits ~3 orders of magnitude above what a real
+> graph returns and still well under a response no agent can read. This is not
+> the "invented threshold" trap options 3 and 4 were withdrawn for: that
+> objection is about a bar derived from the corpus at run time and therefore
+> irreproducible, where this is a fixed, documented, overridable constant.
+>
+> Tests: `tests/pipelines/reflection/test_nomination_cap.py` (23 across both
+> backends). The failing test the entry asked for is
+> `TestThePairListsAreBounded`, which returned all 435 pairs before the fix.
 
 > **Measured 2026-08-20, and the projection below does not survive it.** The
 > entry's own first option was "measure it honestly first", on the grounds that
@@ -2138,6 +2356,241 @@ headroom. Fixing them does nothing for this.
 
 ---
 
+### Issue 61 — a fact merge does not flag its dependent inferences — ✅ RESOLVED (2026-08-21)
+
+Found the day `merge_facts` shipped (#52), while designing inference merge.
+Small, real, and a regression in the sense that the path it breaks was
+previously exhaustive.
+
+**Every other event that changes a premise flags what rests on it.**
+`supersede_node` and `supersede_by_existing` both call
+`plan_evidence_stale_edges`, writing `evidence_superseded` edges to dependent
+inferences; `review_labels_for` additionally derives `evidence_stale` from any
+`derived_from` edge into a retired fact; `evidence_gone_for` covers the case
+where the whole evidence set is archived. A **merge does none of them**, because
+`merge_nodes` never calls the planner and the merged sources leave the active
+set as `MERGED`, which is not in `SUPERSEDED_STATUSES`.
+
+**What that leaves.** The `derived_from` edge migrates onto the survivor, the
+survivor is `ACTIVE`, and nothing fires — so a dependent inference now rests on
+**agent-written text it was never drawn from**. Verified by construction:
+merging *"the deploy failed"* and *"the deployment did not succeed"* into
+*"deployments have been failing"* leaves the dependent inference's review labels
+`{}`.
+
+The justification for flagging is the one correction already uses: the wording
+under the inference changed. A merge asserts the claim is the same, but that is
+the *agent's* judgment about two source phrasings, made without reference to
+what was derived from either.
+
+**Smallest correct fix**: `merge_nodes` plans `plan_evidence_stale_edges` for
+each source and carries the edges into `merge_nodes_tx`, exactly as the two
+supersession paths do.
+
+**The decision it needed, made 2026-08-21: a sibling edge type.**
+`EdgeType.EVIDENCE_MERGED` (absorbed fact → dependent inference), in
+`REVIEW_EDGE_TYPES` so it is neither migrated nor traversed, deriving its own
+review label `evidence_merged`. The alternative — `evidence_superseded` with a
+reason in metadata — was rejected on where the distinction would live: all three
+consumers (labels, archival, migration) route on edge *type*, so a reader that
+had not been taught to check the metadata would keep reporting an overturning
+that did not happen. **The argument that settled it was a consequence rather
+than a principle**: `nominate_archival_candidates` nominates on `evidence_stale`,
+so sharing the label would propose discarding an inference because its premise
+gained provenance — on every merge, for every dependent.
+
+**Built the same day.** `plan_evidence_merged_edges` beside
+`plan_evidence_stale_edges` (both now over a shared `dependent_inference_ids`,
+so *what depends on this fact* is answered once); `merge_nodes` plans one flag
+per source, so an inference resting on two of them is told about both, and each
+flag names the wording that went away rather than the survivor; `merge_nodes_tx`
+grows `evidence_edges` across the protocol, both backends and the instrumented
+wrapper, written after migration so a flag is never re-pointed onto the
+survivor. The wrapper publishes them and counts them, as both supersession paths
+already did — otherwise the dashboard's live graph is missing an edge the store
+has.
+
+**What this cost that a live check would not have.** `evidence_stale` has two
+halves — an explicit flag *and* a scan for `derived_from` into a retired fact —
+and the second is what makes it self-healing. A merge gets no such half: the
+`derived_from` edge is migrated onto the survivor by the same transaction, so
+after it commits nothing distinguishes a dependent of an absorbed fact from an
+inference drawn on the survivor directly. **The flag is the only record the
+event will ever leave**, which is why it is planned at the merge rather than
+derived at read time, and why a merge that fails to write it cannot be repaired
+afterwards. Recorded here because it is the general shape: *a derived label can
+only be derived while its evidence is still in the graph.*
+
+Guarding tests: `TestADependentInferenceIsToldItsPremiseChanged` (four, both
+backends) in `tests/pipelines/test_fact_dedup.py`;
+`test_review_labels_evidence_merged_is_not_evidence_stale` and
+`test_a_merged_premise_does_not_nominate_its_inference_for_archival` in
+`tests/pipelines/test_reflection.py`;
+`test_merge_publishes_the_flags_it_wrote_on_dependents` in
+`tests/visualization/test_instrumented_storage.py`.
+
+Designed alongside the inference-merge work in
+`dev-docs/WARNINGS_AND_SETTINGS.md` §1 and §7.
+
+### Issue 62 — corroboration counts a claim's own successor as independent support — ✅ RESOLVED (2026-08-21)
+
+**The defect.** `corroboration_for` counts distinct publishers over
+``{node} ∪ {SIMILARITY neighbours}``, excluding only `contradiction` /
+`variant_of` partners and `CORRECTED` nodes. Nothing asks whether two
+neighbours were ever asserted to hold *at the same time*. So "the city is
+called Leningrad" and "the city is called Saint Petersburg" corroborate each
+other, and the count rises exactly where the graph already knows better —
+those two are what `temporally_followed_by` links, and a claim and its own
+successor are near-maximally similar.
+
+**Stated in three places already, filed in none.** The module docstring
+(`epimemer/pipelines/query/corroboration.py`, "#53 was expected to remove that
+and did not"), `docs/RETRIEVAL.md` §8's Saint Petersburg caveat, and #52's
+inherited blockquote below. This entry exists because those record the
+*inaccuracy* while the remedy the docstring names has never been tracked as
+work — the filing precedent #59 set: file it before the detail is lost.
+
+**Not the same fix as #52's inherited corroboration migration**, and closing
+one must not be read as closing the other. That migration moves the count from
+a *neighbourhood* reading to an *identity* reading once facts deduplicate, and
+waits on a corpus with merges in it. This is a filter inside the neighbourhood
+walk and works today, on a corpus with no merges at all.
+
+**Files.** `epimemer/pipelines/query/corroboration.py` — `_documents_by_node`
+(currently discards everything but `dst_id`) and `corroboration_for`'s
+neighbourhood step. The rule is `assertions_are_disjoint` in
+`epimemer/core/temporal.py`, which the temporal soundness check
+(`pipelines/reflection/soundness.py`) already applies to premise pairs; reuse
+it rather than restating the comparison.
+
+**It costs no round trips.** The walk already reads the `sourced_from` edges of
+the subject *and* every neighbour, and those edges carry the per-source
+`validity` intervals (#53 T1). The change is to stop throwing them away.
+
+**It is conservative by construction.** `assertions_are_disjoint` answers False
+for an undated side, for intervals on different timelines, and for any cross
+pair that compares `unknown` (`temporal.py` §6's open-world rule) — so it can
+only ever drop a neighbour whose periods *provably* fall clear. On today's
+corpora, where most nodes carry no intervals, it will fire rarely; that is the
+correct amount, not a reason to widen it.
+
+**One decision it needs first, and only one: disqualify or annotate?**
+Dropping the neighbour changes a number callers read — the same objection
+`WARNINGS_AND_SETTINGS.md` §7 raises against inference-to-inference similarity
+edges. The alternative is to keep counting it and mark the source, letting the
+reader discount it, which is what `unattributed_documents` already does for a
+different weakness. Decide before writing code; the entry does not prejudge it.
+
+**Guarding tests** (write first, must fail on `main` for the stated reason):
+`tests/pipelines/test_corroboration.py` — a `temporally_followed_by` pair
+with disjoint stated periods must not corroborate; an undated pair must still
+corroborate (the open-world rule); a pair whose periods overlap must still
+corroborate. Both backends via the `storage` fixture.
+
+**Verify.** `uv run python -m pytest tests/ -q`, and re-read
+`docs/RETRIEVAL.md` §8 — the Saint Petersburg caveat is part of this fix, not a
+separate chore.
+
+> **✅ Resolved 2026-08-21.** Guarded by
+> `tests/pipelines/test_corroboration.py::TestAClaimAboutAnotherPeriodIsNotASecondWitness`
+> — thirteen tests on both backends. Three fail on `main` for the stated reason
+> (the Leningrad pair scores 2), the rest pin the boundary: undated,
+> half-dated, overlapping, touching and differently-clocked pairs all go on
+> corroborating, and a source asserting one overlapping period among several
+> still witnesses the claim.
+>
+> **The decision was not disqualify *or* annotate — it was both, and the
+> question was mis-framed.** Framing it as a choice assumed the fix removes
+> something, and it removes nothing: both claims stay in the graph, true of
+> their own periods, with the succession between them recorded three times over
+> (the dates on each provenance edge, `temporally_followed_by`, the
+> predecessor's status). The only thing that narrows is an integer computed on
+> the way out and never stored. Once that is clear the two halves stop
+> competing — the count becomes honest *and* the look-alike comes back named,
+> in `adjacent_periods`, with its publisher, documents and periods.
+>
+> **Reporting is not a consolation prize for the exclusion; it is the half that
+> carries new information.** Where a search returns the subject but not the
+> neighbour, this block is the only place the adjacent claim appears at all — so
+> a silent filter would cost the caller a fact the graph holds, on top of
+> leaving a shrunken number with its working hidden. That is the reverse of the
+> usual argument for silence, and it is why the module's three existing
+> exclusions stay silent while this one does not: a contradicted or corrected
+> neighbour is *not knowledge the caller wants*, and an adjacent period is.
+>
+> **One thing the entry did not anticipate: where in the walk it lands.** It has
+> to run *before* the supporter hop. A look-alike left in until the neighbourhood
+> is assembled walks its own supporters in behind it, and their documents with
+> them — so a comparison made even one stage later lets the same publisher back
+> through the side door by a different path. `adjacent` is therefore subtracted
+> in both places `excluded` already was, since a supporter can reach it by a
+> second route.
+>
+> **And one thing the entry got wrong: "it costs no round trips."** Nearly. The
+> periods do ride on edges the walk already read — but it read them at stage 4,
+> and they are needed at stage 1.5, so the provenance read is now split in two:
+> subjects and look-alikes first, then a top-up for whatever the supporter hop
+> added, skipped entirely when it added nothing. Thirteen calls, or twelve; still
+> constant in the size of the result set. `_documents_by_node` is gone,
+> replaced by `_source_edges_by_node` plus two pure readers, because taking
+> `dst_id` and discarding the rest of the edge on one line *was* the whole
+> defect.
+>
+> **Carry-forward — an invisible exclusion is indistinguishable from a graph
+> that never held the claim.** Whenever a filter's output is a number someone
+> reads, the thing filtered out has to be reachable from the same response, or
+> the reader cannot tell a corrected count from a smaller world. `#51` already
+> knew this about the count (`sources` exists so an inflated figure stays
+> checkable) and the same reasoning simply had not been applied to what the walk
+> leaves behind.
+
+---
+
+### Issue 63 — the nomination bar was two numbers, and the lower one nominated what the higher one refused — ✅ RESOLVED (2026-08-21)
+
+Found by review the same day #61 shipped. Not a crash and not a data defect: a
+false statement made to an agent, produced by a constant that existed in two
+places.
+
+**What it was.** `SIMILARITY_NOMINATION_THRESHOLD` was 0.83 and read by
+`check_conflicts` and `merge_facts`; reflect's contradiction and recurrence
+sweeps passed a literal `0.80` (`tools.py`, `contradiction_detection.py`), and
+`server.py` re-declared `0.83` as its own literal at the MCP boundary. A pair
+scoring 0.81 was therefore nominated by reflect, judged `redundant` by the
+agent, and refused by `merge_facts` — with a message saying these were "not
+facts the graph would have offered each other as candidates", which the graph
+had just done.
+
+**Fixed by unifying downwards, to 0.80**, with every path — both
+`check_conflicts` declarations, `merge_facts`, `detect_contradictions` — reading
+the one constant. Raising the sweeps to 0.83 instead would have bought the
+invariant by narrowing contradiction *and* recurrence nomination, which is a
+worse trade: the merge floor is explicitly not a second opinion on the agent's
+judgment (`fact_dedup.merge_refusal`), so 0.83-vs-0.80 was never what separated
+a duplicate from a pairing named by mistake.
+
+**The invariant, now pinned rather than implied: merge floor ≤ every nomination
+bar.** `test_every_nomination_path_is_gated_at_the_merge_floor`
+(`tests/pipelines/test_fact_dedup.py`) checks it by *signature*, across the MCP
+boundary too, because a drifted default is invisible to any call that passes the
+argument explicitly — and the MCP copy was the one nothing would have caught.
+`test_a_pair_reflect_nominates_can_be_merged` checks the band from outside, at
+a measured 0.8099.
+
+**Two carry-forwards, both instances of a class this file keeps meeting:**
+
+- **A constant with a stated invariant needs a test that reads every
+  declaration of it**, not one. #52's decision 2 said "both readers take it from
+  there" and was true of the two readers it named; the sweep and the MCP
+  boundary were a third and fourth nobody counted.
+- **A refusal message must not assert what the system would have done.** The
+  threshold is an argument, so the string could be false for a caller passing
+  its own — and it was. It now names the bar the call applied and leaves the
+  claim about the graph to the constant.
+
+
+---
+
 ## Older carry-overs (open, low priority)
 
 From the original live-graph walkthrough (issues 1–5, otherwise resolved or kept
@@ -2151,13 +2604,40 @@ by design — see git history of this file, commit `22fc874` and follow-ups):
 
 Two live triggers, kept when their entries were deleted:
 
-- **From #46 — does guidance actually produce a `confidence_basis`?** The basis
-  is asked for by tool guidance rather than enforced at the boundary, and the
-  accepted risk is that absence then means nothing: *no basis given* and
-  *guidance not read* are indistinguishable. **Measure the share of non-default
-  priors that arrive carrying one.** If guidance is not producing them, the
-  fallback is refusal at the tool boundary — the shape `judge_importance`
-  already uses. Nothing measures this today.
+- **From #46 — does guidance actually produce a `confidence_basis`?**
+  **Measured 2026-08-21: yes, 163 of 163 — 100%.** The basis is asked for by
+  tool guidance rather than enforced at the boundary, and the accepted risk was
+  that absence would then mean nothing: *no basis given* and *guidance not read*
+  indistinguishable. The census over both real graphs
+  (`corpus_measure.py --skip-survival`, `measurement: priors`):
+
+  | population | `memory` | `petritype-server` | owes a basis |
+  |---|---|---|---|
+  | rated non-default (161×0.9, 2×0.7) | 163 | 0 | yes — **163 carry one** |
+  | unrated (field absent) | 125 | 0 | no |
+  | legacy literal `0.5` (pre-2026-08-19) | 200 | 136 | no |
+
+  **So the fallback is not needed** — refusal at the tool boundary, the shape
+  `judge_importance` uses, stays unbuilt. Two further readings, both of which
+  the raw rate would hide:
+
+  - **Zero post-#46 nodes sit at a rated `0.5`.** They are stored absent
+    instead, which is the ladder's "omit the field" rule being followed
+    exactly — and it is what makes absence informative rather than ambiguous,
+    which was the whole point of `float | None`.
+  - **The legacy population is now sized: 336 of 624 nodes.** They read as
+    *rated ordinary* though nobody rated them. That is the retroactive-repair
+    carry-over above, not a new defect, and it shrinks only as graphs are
+    rebuilt.
+
+  **The trap this measurement sets, recorded because it produced a confident
+  wrong answer first:** `confidence_basis` lives in `node.metadata`, apart from
+  `value.confidence` — deliberately, since the basis is prose about one judgment
+  and `ValueSignal` is the numbers every ranker reads. A query for
+  `value.confidence_basis`, where it reads as though it belongs, returns 0% and
+  looks like a finding. **A field's home is part of its definition**; asking the
+  store the wrong question is not a null result. Pinned in
+  `tests/test_corpus_measure_smoke.py`.
 - **From #46/#51 — there is still no path for source discredit.** When a
   document turns out fabricated, every prior derived from it overstates and
   nothing can sweep per-source, because support levels live on the node rather
@@ -2254,6 +2734,10 @@ What to pick up, and what has to be true first:
 | ✅ | ~~51 (corroboration derived at read time)~~ | **Done 2026-08-20.** Both review exclusions applied, and the extra hop measured before it went anywhere: it is the most expensive annotation on the retrieval path and its cost rises with similarity-edge density, so it ships as `search(include_corroboration=True)` rather than by default. The row asked for the measurement and the measurement said no, which is the outcome this column exists to produce. Two status rules were decided during construction rather than inherited (`corrected` does not corroborate, `historical` does); `archived` left unpinned. Still carries the known 53-shaped inaccuracy and 46's accepted gap — per-source levels on the provenance edge, and with them any path for source discredit |
 | ✅ | ~~48 (`get_node_by_content` scans per ingest)~~ | **Done 2026-08-19**, in the same visit as #53 step 4 as this row predicted. The measurement decided it: an index on `content` changes nothing until the query names it, and then the lookup goes 4.0 ms → 0.53 ms at 3,000 nodes for under 5% on writes. Guarded by a plan assertion, since behaviour cannot see the defect |
 | ✅ | ~~**59 + 60, as one measurement sitting**~~ | **Measured 2026-08-20, together, as this row asked** — one read of two real graphs answered both. Both shrank. #59 is **segments only**: 624 real nodes top out at 81 word-pieces against a 256 window, while 11.1% of segments cross it and the worst loses 48% of its text, so nodes get option 4 (accept, recorded) and segments get option 3 (say the record was cut). #60 loses its headline: the real fact-pair survival rate is **0.0105%**, not 49%, projecting ~3 MB at 10,000 facts rather than ~14 GB — because the 49% was measured on longer templated text (it sits between the 20-word and paragraph points) and applied to fact-length pairs. Both entries keep their fixes, at much lower priority; `scripts/corpus_measure.py` is the instrument and `BENCHMARKS.md` holds the tables |
-| 1 | 52 (fact deduplication) | **Unblocked** — 53 landed 2026-08-19, which was the whole condition. What blocks it now is not a precondition but a **decision**: the classifier needs an explicit event/state judgment ahead of the merge, since interval union dedupes states and must never dedupe events. It also inherits #51's second migration, recorded in the entry. **Now the top open item**, the measurement sitting having cleared the two ahead of it |
-| 2 | 59's segment flag, 60's nomination cap | Both are small, both are decided, and neither is urgent. #59: record the measured token count or a truncation flag on `EmbeddingRecord` for segments. #60: top-k with an explicit `truncated: true`, wanted now for the **unbounded response** rather than for memory |
+| ✅ | ~~59's segment flag, 60's nomination cap~~ | **Done 2026-08-21**, and the two halves ended differently. **#60** shipped as option 2: each of the four quadratic lists capped to its highest-scoring 200 with `truncated: [...]` in the response, bounding the *response* rather than the peak allocation — the honest scope once the measurement moved the argument off memory. **#59 closed with no code**, because the segment flag it prescribed had nothing to attach to: segments are never embedded, on four independent checks, so the 256 word-piece window never reaches them and BM25 (which indexes the whole field) is how they are searched. The entry had joined two true claims — segment text crosses the window, segments are a search corpus — into a false one. **A measured quantity is not yet a measured consequence**; the instrument read the text without checking that anything hands it to the tokenizer. The precondition is now recorded on `EmbeddingRecord.item_id`, where whoever embeds segments will read it |
+| ✅ | ~~52 (fact deduplication)~~ | **Built 2026-08-21.** The decision the row asked for was made rather than deferred: **the event/state judgment is recorded at ingest**, on `Fact.claim_kind`, because it wants the document and a merge sees two stripped sentences. `merge_facts` gives `redundant` the action it never had, keeping one `sourced_from` edge per contributing document — which needed no new code, since edge migration already preserves both sets of intervals when two edges to one document collapse. The cost is paid in full and up front: **the corpus written before today is unjudged and so unmergeable**, and no later pass can repair it, which is the under-merge direction the entry chose. The proposed new `reflect` nominee list was not built — reflect's `contradictions` already nominates the same population, and adding a fifth quadratic list the day after #60 capped four would be perverse. **#51's second migration stays open on purpose**: it is not broken by this, and revisiting it wants a corpus that has merges in it |
+| ✅ | ~~61 (a fact merge does not flag its dependents)~~ | **Done 2026-08-21**, decision and build in one sitting. The decision the row asked for went to a **sibling edge type**, `evidence_merged`, rather than a qualified `evidence_superseded` — and what settled it was a consequence rather than a principle: archival nominates on `evidence_stale`, so one shared label would have every merge propose discarding its own dependents. The build is the shape the row predicted (`merge_nodes` calls a planner beside the two supersession paths, both now over one `dependent_inference_ids`), plus the seam the row did not: `merge_nodes_tx` grows `evidence_edges` across the protocol, both backends and the instrumented wrapper. **One thing learned that is worth more than the fix**: unlike `evidence_stale`, this label has no live-check half and never can, because the `derived_from` edge is migrated onto the survivor by the same transaction — *a derived label can only be derived while its evidence is still in the graph* |
+| ✅ | ~~63 (the nomination bar was two numbers)~~ | **Done 2026-08-21.** Found by review, fixed the same day: the sweeps nominated at 0.80 while the merge gate refused below 0.83, so reflect offered pairs `merge_facts` then rejected — telling the agent the graph would never have paired them, right after it had. One constant at 0.80 now, read by both `check_conflicts` declarations, `merge_facts` and `detect_contradictions`, with the invariant **merge floor ≤ every nomination bar** pinned by signature across the MCP boundary. The carry-forward is the shape of the miss: **a constant with a stated invariant needs a test that reads every declaration of it** — #52's "both readers take it from there" was true of the two it named, and there were four |
+| ✅ | ~~62 (corroboration does not read validity)~~ | **Done 2026-08-21.** The one decision the row asked for turned out to be **mis-framed**: dropping and marking are not alternatives, because nothing is dropped from the *graph* — both claims stay, true of their own periods, and only a read-time integer narrows. So the count became honest and the uncounted look-alike comes back named in `adjacent_periods`, which is the half that carries new information: where a search returns one of the pair, that block is the only place the other appears at all. Two things the row had wrong. **Placement** it did not mention and which decides correctness: the comparison must run before the supporter hop, or the look-alike walks its own supporters — and their publishers — in behind it. **Cost** it stated as "no round trips": nearly, but the periods were being read at stage 4 and are needed at stage 1.5, so the provenance read splits in two, thirteen calls or twelve, still constant in result-set size. #52's inherited corroboration migration stays open and separate, as the row said |
+| designed | inference merge, advisories, node notes | Not on this board — `dev-docs/WARNINGS_AND_SETTINGS.md`, designed 2026-08-21 and deliberately unbuilt. The duplication it addresses does not exist yet: 123 active inferences across both real graphs yield 5,053 pairs and **zero** at the nomination bar. It becomes real once fact merges start collecting inferences onto one survivor |
 | deferred | 16, 58 | 16: the server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`). 58: a graph large enough that the FTS backfill inside `connect()` is worth reporting on |

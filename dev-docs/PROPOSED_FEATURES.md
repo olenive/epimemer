@@ -19,6 +19,22 @@ Nothing is duplicated across them. An item here that turns out to be a defect
 moves to `ISSUES.md`; an item that gets picked up grows a design document and is
 reduced here to a pointer.
 
+**Entries are written to be picked up cold** (2026-08-21). The six things an
+actionable entry carries are listed in `ISSUES.md` → *Workflow*, and they apply
+here too, with **Blockers** standing in for that list's *decision* row. The
+difference in kind: an issue must say what breaks, and an entry here must say
+what does not exist — an entry that can only be justified as "this is currently
+wrong" belongs in `ISSUES.md` instead.
+
+**Running two of these in parallel.** The ready-to-build set below touches
+mostly disjoint trees, which is what makes it parallelisable — *Colour
+customisation* is `epimemer/visualization/frontend/`, *the three missing
+notebooks* are `notebooks/`, *Benchmark coverage* is `scripts/bench.py` plus
+fixtures, and *Specialized timelines* is `epimemer/core/` and both storage
+backends. The last one is the only member that collides with ordinary backend
+work, and it is also the only one asked to settle a modelling question first.
+Claim an entry by name in your commit message.
+
 ---
 
 ## Built and merged
@@ -220,13 +236,34 @@ real embeddings end to end, and embedding throughput separated from ingest.
 
 **Why.** Every current number is a floor measured against mocked embeddings on
 loopback. The diverse-corpus gap is the one that most affects conclusions, and
-**it runs the opposite way from what this entry originally claimed**: the mock's
-similarity distribution degenerates as vector width grows, so at the width the
-bench actually runs only ~0.05% of pairs clear the threshold against ~19% for
-real embeddings. Anything scaling with surviving candidate pairs is therefore
-**understated by about three orders of magnitude** — which is exactly why the
-quadratic memory growth in `ISSUES.md` #60 was invisible here. The measured table
-by width is in `BENCHMARKS.md`.
+**it has now been measured twice, each time smaller than the last**:
+
+| corpus scored | pairs clearing 0.80 |
+|---|---|
+| bench text, mock at 384 (what the bench runs) | 0.05% |
+| bench text, real `all-MiniLM-L6-v2`, fact length | 1.11% |
+| real facts, `memory` graph | **0.0105%** |
+
+So the mock understates the *bench's own* corpus by about 20×, and **overstates
+the real one by about 5×**. Both readings are in `BENCHMARKS.md`; the tables
+there are the record.
+
+> **Corrected 2026-08-21.** This entry read "~19% for real embeddings …
+> understated by about three orders of magnitude … which is exactly why the
+> quadratic memory growth in `ISSUES.md` #60 was invisible here". Every clause
+> of that is now withdrawn elsewhere in the repo and was left standing here:
+> `BENCHMARKS.md` records that the 19% was taken at a narrower mock width and
+> "no longer describes this configuration", and this file's own *Tracked
+> elsewhere* bullet says #60's memory projection was measured and withdrawn with
+> "no successor concern". **A retraction has to be carried to every entry that
+> was resting on the retracted number** — a backlog entry keeping a motivation
+> the rest of the repo has dropped will send somebody to do work for a reason
+> that no longer exists.
+
+**The case survives the correction, and is narrower.** A diverse corpus is still
+worth having, because every pair-scaled figure here is measured on text whose
+survival rate matches nothing real in either direction — but it buys accuracy,
+not a hidden failure.
 
 **Cost.** Small per item. Embedding throughput is a `scripts/bench.py` flag; a
 diverse corpus is a fixture; a remote SurrealDB is a deployment, not code.
@@ -237,21 +274,58 @@ diverse corpus is a fixture; a remote SurrealDB is a deployment, not code.
 
 ## Needs a decision before it needs code
 
-### Merge for Facts and Inferences
+### Merge for Inferences
 
-**The state.** `merge_nodes` is already type-agnostic — it embeds, migrates and
-dedupes edges, and retires sources as MERGED with `merged_into` lineage. But
-`apply_reflection(merges=...)` accepts **Topics only**, so the capability exists
-and is unreachable for two of the three node types.
+> **The Facts half was decided and built on 2026-08-21** (`ISSUES.md` #52). It
+> did not extend `apply_reflection(merges=...)`: the `redundant` verdict is
+> judged at ingest, on the `check_conflicts` path, so the action is its own tool
+> — `merge_facts(source_ids, content)` — beside the other resolution actions.
+> `merge_nodes` being type-agnostic paid off exactly as this entry predicted; all
+> the new code is the **gate**, not the merge. What the entry did not anticipate
+> is that facts needed a decision of their own, and a harder one than
+> reachability: interval union dedupes *states* and fabricates history for
+> *events*, so a `claim_kind` judgment is recorded at ingest and an unjudged fact
+> never merges.
 
-**The question, which is not a coding one.** Should near-duplicate Facts merge?
-Probably, and it is the obvious next step. Should Inferences? Inferences are
+**The state.** `merge_nodes` is type-agnostic — it embeds, migrates and dedupes
+edges, and retires sources as MERGED with `merged_into` lineage. Topics reach it
+through `apply_reflection(merges=...)`, facts through `merge_facts`. Inferences
+reach it through nothing.
+
+**The question, which is not a coding one.** Should Inferences merge? They are
 deliberately designed to let competing derivations coexist, so merging them
 risks collapsing a disagreement the graph is supposed to preserve.
 
 **What would settle it.** A rule for when two derivations are the same claim
 rather than two claims that agree. Until that exists, extending the wired path
 would be guessing.
+
+**#52 did not settle it, and is evidence it is a separate question.** Facts got
+a merge because two documents restating one claim is redundancy worth
+collapsing; the same argument does not carry, because two inferences agreeing is
+not obviously redundancy — it may be independent support, which is the thing
+corroboration exists to count. `claim_kind` does not transfer either: it asks
+whether a claim is a condition or an occurrence, and an inference's
+provisionality is a different axis entirely.
+
+> **Designed 2026-08-21 — `dev-docs/WARNINGS_AND_SETTINGS.md`.** The question is
+> answered and the answer is *yes, on shared evidence, with a pre-decision
+> warning*. What settles it is that the merge's one dangerous outcome —
+> combining premises that never held together — is **computable before the agent
+> decides**, so it belongs in the nomination rather than in a refusal. The
+> earlier reading here, that a merge *fabricates* a derivation, was wrong: the
+> agent writes fresh content asserting one claim over the combined premises, so a
+> disjoint premise pair is a real unsoundness correctly flagged, not an invented
+> one.
+>
+> Not built, deliberately: measured on both real graphs the same day, **123
+> active inferences yield 5,053 pairs and zero at the nomination bar** (p99
+> 0.44–0.55, max 0.66 — measured at 0.83 and unchanged by the move to 0.80,
+> `ISSUES.md` #63). The duplication this addresses does not exist yet
+> and will not until fact merges start collecting inferences onto one survivor.
+> The design also carries three things that outlived it — a general advisory
+> facility, a per-graph warning policy, and the live defect that **a fact merge
+> does not flag its dependent inferences**.
 
 **Cost once decided.** Small — the machinery is built. This is a gate on
 judgment, not on work.
@@ -291,10 +365,16 @@ than the convenience, and it is far easier to give up later than to win back.
   This row read "ahead of everything in this file" while `reflect` on SurrealDB
   was the one operation failing at a size real use reaches (~2,000 nodes). #14
   and #47 took that crossing to ~26,000 on SurrealDB and ~320,000 in-memory, and
-  what binds it now is the bytes moved to compare vectors. **The successor
+  what binds it now is the bytes moved to compare vectors. ~~**The successor
   concern is memory, not time**: `reflect`'s candidate pair lists are quadratic
   and uncapped (`ISSUES.md` #60), and can exhaust memory *below* the timeout
-  crossing.
+  crossing.~~ **Measured 2026-08-20 and withdrawn.** Real fact pairs clear the
+  0.80 threshold at **0.0105%**, projecting ~5,200 surviving pairs and ~3 MB at
+  10,000 facts — not the ~14 GB the estimate implied, which had been taken from
+  longer templated text and applied to fact-length pairs. The four quadratic
+  lists are capped anyway as of 2026-08-21 (#60), but as a **response** bound
+  for readability, not as a memory fix. There is no successor concern; the next
+  performance issue should come from a profile.
 - **A dedicated read connection for viz snapshots** — `ISSUES.md` #16, deferred
   until the server gains concurrent clients.
 - **Native HNSW vector indexes** — `surrealdb_adapter.py:1105`. Waiting on

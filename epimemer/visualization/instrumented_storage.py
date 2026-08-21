@@ -306,10 +306,11 @@ class InstrumentedStorage:
         lineage_edges: Sequence[NodeEdge],
         *,
         merged_at: datetime,
+        evidence_edges: Sequence[NodeEdge] = (),
     ) -> None:
         await self._inner.merge_nodes_tx(
             source_nodes, merged_node, merged_embedding, lineage_edges,
-            merged_at=merged_at,
+            merged_at=merged_at, evidence_edges=evidence_edges,
         )
         graph = self._inner.current_database
         await self._bus.publish(NodeStored(graph=graph, node=node_to_view(merged_node, graph)))
@@ -321,7 +322,7 @@ class InstrumentedStorage:
                 new_status=NodeStatus.MERGED.value,
                 counterpart=merged_node.id,
             ))
-        for edge in lineage_edges:
+        for edge in [*lineage_edges, *evidence_edges]:
             await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
         await self._bus.publish(graph_action(
             graph=graph,
@@ -329,7 +330,7 @@ class InstrumentedStorage:
             # The survivor first: "merged 2 nodes into 5e6f7g8h" is the line, and
             # where the content went is the part worth reading.
             subjects=[merged_node.id, *(s.id for s in source_nodes)],
-            counts={"nodes": 1, "edges": len(lineage_edges)},
+            counts={"nodes": 1, "edges": len(lineage_edges) + len(evidence_edges)},
         ))
 
     async def write_batch_tx(

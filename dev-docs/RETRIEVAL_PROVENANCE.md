@@ -451,6 +451,17 @@ suites green. **Where these conflict with earlier sections, these win.**
    the structure it built three lines earlier is the opposite case.
    `test_a_reflect_record_names_its_nominees_not_its_scan` pins the semantics
    from the other side: nominees, never the scan.
+
+   > **The oracle caught the next one, as promised (2026-08-21).** `merge_facts`
+   > (#52) was written returning `source_ids` and a survivor id with no
+   > declaration, and the parametrised test failed on it before the tool was ever
+   > run by hand — the thirty-fifth tool, found the way §10 said the fourteenth
+   > would be. Worth recording because it is the first time the census cost
+   > nobody anything: the rule was enforced by a test rather than remembered.
+   > It also settled a question the rule does not spell out — **a refusal
+   > declares too.** `merge_facts` names its sources whether or not it merges
+   > them, and the rule is about what the agent can read, not about whether the
+   > call changed the graph.
 3. **The guard is applied at the producer, keyed on the bind.** §3.2 says the
    hub's mirror holds structural metadata only on a non-loopback bind. It is
    the *session* that strips, reading `config.viz_host` — the same env var the

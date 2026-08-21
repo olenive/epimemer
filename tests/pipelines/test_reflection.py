@@ -668,6 +668,30 @@ async def test_review_labels_evidence_stale_via_flag():
     assert labels["evidence_stale"] == [fact.id]
 
 
+async def test_review_labels_evidence_merged_is_not_evidence_stale():
+    """A merged premise gets its own label (#61).
+
+    The two events are not the same one: a correction says the claim under the
+    inference was wrong, a merge says two phrasings of it collapsed into one.
+    Sharing a label would report the first when the second happened — and would
+    put the inference in front of archival, which nominates on `evidence_stale`.
+    """
+    from epimemer.pipelines.reflection.review import review_labels
+
+    storage = InMemoryStorage()
+    fact = Fact(content="evidence", source_id="s1", status=NodeStatus.MERGED)
+    inf = Inference(content="conclusion", source_id="s1")
+    await storage.store_node(fact)
+    await storage.store_node(inf)
+    await storage.store_edge(
+        NodeEdge(src_id=fact.id, dst_id=inf.id, type=EdgeType.EVIDENCE_MERGED)
+    )
+
+    labels = await review_labels(inf, storage)
+    assert labels["evidence_merged"] == [fact.id]
+    assert "evidence_stale" not in labels
+
+
 async def test_review_labels_evidence_stale_via_superseded_evidence():
     """An inference derived_from a now-superseded fact is stale even without a flag."""
     from epimemer.pipelines.reflection.review import review_labels
@@ -1018,6 +1042,40 @@ async def test_archived_evidence_strands_its_inference():
     assert stranded[0].reason == "evidence_stale"
     # ...and the archived evidence is gone from the active set, not re-nominated.
     assert "fact-swept" not in {c.node_id for c in after}
+
+
+async def test_a_merged_premise_does_not_nominate_its_inference_for_archival():
+    """`evidence_merged` is a re-read request, not an archival claim (#61).
+
+    The basis did not change — the same claim now has one node and every
+    document that asserted it. Nominating here would propose discarding an
+    inference because its premise got *better* provenance, and it would fire
+    on every dependent of every merge.
+    """
+    storage = InMemoryStorage()
+    absorbed = Fact(
+        id="fact-absorbed", content="the deploy failed", source_id="seg-1",
+        status=NodeStatus.MERGED,
+    )
+    survivor = Fact(
+        id="fact-survivor", content="deployments have been failing", source_id="seg-1",
+    )
+    inference = Inference(
+        id="inference-dependent", content="the pipeline is unreliable", source_id="seg-1",
+        value=ValueSignal(importance=0.9),
+    )
+    for node in (absorbed, survivor, inference):
+        await storage.store_node(node)
+    await storage.store_edge(NodeEdge(
+        src_id=inference.id, dst_id=survivor.id, type=EdgeType.DERIVED_FROM,
+    ))
+    await storage.store_edge(NodeEdge(
+        src_id=absorbed.id, dst_id=inference.id, type=EdgeType.EVIDENCE_MERGED,
+    ))
+
+    candidates = await nominate_archival_candidates(storage)
+
+    assert "inference-dependent" not in {c.node_id for c in candidates}
 
 
 async def test_partly_archived_evidence_does_not_strand_an_inference():

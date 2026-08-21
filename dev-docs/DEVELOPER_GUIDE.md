@@ -166,11 +166,14 @@ asyncio.run(main())
 ### Reflection
 
 Reflection is not a single net — it is a set of analysis functions in
-`epimemer/pipelines/reflection/` (topic consolidation, splitting, enrichment,
-contradiction detection, relation consolidation, archival nomination) composed
-by the `reflect` tool. Every one of them reads only — results come back as
-candidates for the agent to act on via `apply_reflection`, and `reflect` itself
-never changes the graph. Debug the whole thing through the tool function:
+`epimemer/pipelines/reflection/` composed by the `reflect` tool: topic
+consolidation, splitting, enrichment and hierarchy; contradiction detection and
+the pair scoring under it; relation consolidation; archival nomination;
+inference soundness; boundary proposals; and the review-loop helpers (`review`,
+and the merge gate in `fact_dedup`). Every one of them reads only — results come
+back as candidates for the agent to act on via `apply_reflection` or a
+resolution tool, and `reflect` itself never changes the graph. Debug the whole
+thing through the tool function:
 
 ```python
 import asyncio

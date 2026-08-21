@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
+    ClaimKind,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
@@ -44,6 +45,7 @@ from epimemer.mcp.retrieval_records import RetrievedNode
 from epimemer.mcp.types import ResponseMeta
 from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment
 from epimemer.pipelines.query.types import SeedProvenance
+from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
 from epimemer.storage.protocol import (
     StorageBackend,
     resolve_reflect_threshold,
@@ -134,11 +136,15 @@ _NESTED_ID_KEYS = ("id", "node_id", "topic_id")
 def _ids_within(value: object) -> Iterator[str]:
     """Every node id nested anywhere in a result structure this tool just built.
 
-    Used by `reflect` alone, whose seven nominee lists have seven shapes.
-    Reading them off a hand-written list of key paths is how the eighth shape
-    would go undeclared, and §2.1's objection does not apply here: it is about
-    the *choke point* guessing across tools it knows nothing about, where this
-    is a tool reading the structure it wrote three lines earlier.
+    Used by `reflect` alone, whose ten nominee lists have ten shapes — seven
+    when this was written, which is the argument making itself. Reading them off
+    a hand-written list of key paths is how the eleventh would go undeclared, and
+    §2.1's objection does not apply here: it is about the *choke point* guessing
+    across tools it knows nothing about, where this is a tool reading the
+    structure it wrote three lines earlier.
+
+    `truncated` rides along harmlessly: it is a list of bare key names, and a
+    string outside a mapping matches no id key.
     """
     if isinstance(value, Mapping):
         for key, item in value.items():
@@ -275,6 +281,11 @@ class DecompositionEntry(BaseModel):
     # request, not a refusal, because failing an ingest over it costs more
     # than the missing line.
     confidence_basis: str | None = None
+    # Condition or occurrence — the judgment dedup is gated on (#52). Facts
+    # only; supplying it on a topic or an inference is refused rather than
+    # dropped, since a judgment silently discarded is one the agent believes it
+    # made. Omitted is *unjudged*, and unjudged never merges.
+    claim_kind: ClaimKind | None = None
     # When this document says the claim was true (#53 T1 §9). Ingest is the only
     # place that can supply it: tense and the dates written in the text are
     # visible here and nowhere later, and reflect has facts and a graph rather
@@ -308,6 +319,37 @@ def _entry_value_signal(entry: DecompositionEntry) -> ValueSignal:
         if value is not None
     }
     return ValueSignal(**supplied)
+
+
+def _claim_kind_field(entry: DecompositionEntry, cls: type) -> dict:
+    """`claim_kind` as a constructor keyword, refused where it would mean nothing.
+
+    Absence is passed as absence rather than as `None`, on `_entry_value_signal`'s
+    grounds: the model's own default is the single place unjudged is defined.
+
+    Supplying it on a topic or an inference **raises**, where a missing
+    `confidence_basis` only prompts. The two are different failures. A basis
+    nobody wrote is a gap the agent can see in its own output; a judgment written
+    into a field that does not exist is one the agent believes it made, and it
+    would be discovered — if ever — as a merge that quietly never happens.
+
+    The message says *no field to gate* rather than *inferences never merge*:
+    inference merge is designed (`dev-docs/WARNINGS_AND_SETTINGS.md` §6) and
+    reads its premises' validity periods rather than a `claim_kind`, so a
+    refusal phrased as a policy about merging would be overturned by a feature
+    that does not change this rule at all.
+    """
+    if entry.claim_kind is None:
+        return {}
+    if cls is not Fact:
+        raise ValueError(
+            f"claim_kind was supplied on a {cls.__name__.lower()} "
+            f"({entry.content[:60]!r}). Only facts carry it: a topic is a theme "
+            f"rather than a claim, so neither answer is about it, and an "
+            f"inference is judged on the periods its premises assert rather "
+            f"than on a kind of its own."
+        )
+    return {"claim_kind": entry.claim_kind}
 
 
 EXTRACTED_TIMELINE_NAME = "Extracted"
@@ -363,9 +405,12 @@ async def store_decomposition(
             `DecompositionEntry` fields — per-node tags plus the two value
             priors. `importance` defaults to 0.5; `confidence` is left *unrated*
             when omitted rather than defaulting, and an optional
-            `confidence_basis` records why a supplied one was chosen. The ladder
-            an agent calibrates against lives in `server.py`'s tool docstring,
-            which is what an agent actually reads before ingesting.
+            `confidence_basis` records why a supplied one was chosen. A fact may
+            also carry `claim_kind` — condition or occurrence — which is the
+            judgment fact dedup is gated on and which only this step can make
+            (#52). The ladder an agent calibrates against lives in `server.py`'s
+            tool docstring, which is what an agent actually reads before
+            ingesting.
 
     Every node gets a `sourced_from` edge to the originating document. `tags`
     (document-level) and per-node tags are resolved-or-created (by exact name) as
@@ -445,6 +490,7 @@ async def store_decomposition(
                         {"confidence_basis": parsed.confidence_basis}
                         if parsed.confidence_basis else {}
                     ),
+                    **_claim_kind_field(parsed, cls),
                 )
                 bucket.append(node)
                 if parsed.validity:
@@ -888,8 +934,8 @@ async def search(
     plus untagged base-reality nodes (set cross_frame=True to ignore frames).
     Frame-scoping over-fetches so an in-frame node ranked below the vector top-k
     is still found (see `_retrieve_frame_scoped`). Metacontext labels and computed
-    review labels (superseded_candidate / evidence_stale / contested) are always
-    included on returned nodes. Returned Topics that sit in a split hierarchy also
+    review labels (superseded_candidate / evidence_stale / evidence_merged /
+    contested) are always included on returned nodes. Returned Topics that sit in a split hierarchy also
     carry `parents` / `subtopics` as id + preview, so the caller can drill via
     `topic_tree` instead of being handed the whole subtree.
 
@@ -916,7 +962,11 @@ async def search(
 
     `include_corroboration` adds, per node, how many *independent* sources back
     it — distinct publishers across its similarity neighbourhood, with the
-    contributing nodes so the number can be checked. **Off by default, on a
+    contributing nodes so the number can be checked. A look-alike whose stated
+    periods provably fall clear of this claim's is a claim about *another*
+    stretch of time rather than a witness to this one, so it does not count; it
+    comes back named under `adjacent_periods`, which is often the only place a
+    caller learns the adjacent claim exists (#62). **Off by default, on a
     measurement** (#51): it is the most expensive annotation on this path by a
     wide margin, and it costs more the more similarity edges `reflect` has
     written, so it grows fastest on exactly the graphs where it says most.
@@ -1665,7 +1715,7 @@ async def check_conflicts(
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
     *,
-    threshold: float = 0.83,
+    threshold: float = SIMILARITY_NOMINATION_THRESHOLD,
     k: int = 5,
 ) -> tuple[dict, ResponseMeta]:
     """Find facts similar to the given facts, for the agent to judge.
@@ -1842,6 +1892,107 @@ async def record_variant(
     return result, meta
 
 
+async def merge_facts(
+    source_ids: list[str],
+    content: str,
+    storage: StorageBackend,
+    embedding_provider: EmbeddingProvider,
+    *,
+    similarity_threshold: float = SIMILARITY_NOMINATION_THRESHOLD,
+) -> tuple[dict, ResponseMeta]:
+    """Collapse facts that restate one claim into a single node (#52).
+
+    The action the `redundant` verdict never had. Until this existed the verdict
+    either no-opped or tempted the agent into a supersession whose required
+    `because` has no honest answer — "same claim" is neither *it was wrong* nor
+    *the world changed* (REVIEW_EPISTEMIC.md §3).
+
+    **The plurality of provenance is the point, not a side-effect.** The survivor
+    keeps one `sourced_from` edge per contributing document, carrying each
+    source's own validity periods, because that is what makes per-source
+    confidence and corroboration mean anything. Edge migration already collapses
+    two edges to the *same* document into one while preserving both sets of
+    periods, so nothing has to be reassembled here.
+
+    **Every refusal comes back rather than raising**, with a reason: an agent
+    told no has a real alternative available — record `SIMILARITY` and keep both
+    — and refusing out loud is how it gets to choose it. See
+    `fact_dedup.merge_refusal` for the rules and why they lean towards refusing.
+    Ids that name nothing, or name something that is not a fact, do raise: those
+    are malformed requests rather than judgments the graph declines.
+
+    **Inferences drawn on the sources are flagged `evidence_merged`** (#61), not
+    `evidence_stale`: their premise was reworded and better sourced, not
+    overturned. The flag asks for a re-read against the survivor's wording, and
+    it is where the merge records which phrasing went away — afterwards the
+    `derived_from` edge points at the survivor and nothing else remembers.
+    """
+    from epimemer.pipelines.graph_construction.versioning import merge_nodes
+    from epimemer.pipelines.reflection.fact_dedup import (
+        merge_refusal,
+        merged_confidence_basis,
+    )
+
+    sources: list[Fact] = []
+    for source_id in source_ids:
+        node = await storage.get_node(source_id)
+        if node is None:
+            raise ValueError(f"Node '{source_id}' not found")
+        if not isinstance(node, Fact):
+            raise ValueError(
+                f"Node '{source_id}' is a {type(node).__name__.lower()}, and "
+                f"only facts merge here — topics consolidate through reflect."
+            )
+        sources.append(node)
+
+    refusal = await merge_refusal(
+        sources,
+        storage,
+        model_id=embedding_provider.model_id,
+        similarity_threshold=similarity_threshold,
+    )
+    if refusal is not None:
+        return (
+            {"merged": False, "refused": refusal.reason, "source_ids": source_ids},
+            # Declared even on a refusal: the ids are readable in the response,
+            # and the rule is about what the agent can see rather than about
+            # whether the call changed anything (RETRIEVAL_PROVENANCE §2).
+            ResponseMeta(
+                nodes_returned=len(sources), retrieved=_declare(source_ids)
+            ),
+        )
+
+    basis = merged_confidence_basis(sources)
+    merged = Fact(
+        content=content,
+        source_id=sources[0].source_id,
+        # Every source cleared the gate, so all of them are states — and the
+        # survivor has to say so, or the merge would leave behind a node that
+        # can never merge again for want of the judgment its own parts carried.
+        claim_kind=ClaimKind.STATE,
+        value=merged_value_signal([source.value for source in sources]),
+        extraction_method="agent:merge",
+        metadata=(
+            {"merged_from": source_ids}
+            | ({"confidence_basis": basis} if basis else {})
+        ),
+    )
+    await merge_nodes(list(sources), merged, storage, embedding_provider)
+
+    result = {
+        "merged": True,
+        "fact_id": merged.id,
+        "source_ids": source_ids,
+        "sources_retired": len(sources),
+    }
+    meta = ResponseMeta(
+        nodes_returned=1,
+        source_types={"facts": 1},
+        retrieved=_declare([merged.id, *source_ids]),
+    )
+    return result, meta
+
+
 # --- Reflect (analysis — no LLM) ---
 
 
@@ -1861,12 +2012,51 @@ REFLECT_PHASES = (
 )
 
 
+# The four nominee lists built out of *pairs*. Pairs are quadratic in the node
+# set while every other list reflect returns is linear in it, so these are the
+# only ones that can run away — and nothing bounded them: no limit parameter, no
+# top-k, no size check anywhere on the path (#60). Named here for the same
+# reason as the phases above: a fifth pair list added without this line would be
+# unbounded again and nothing would say so.
+CAPPED_KEYS = (
+    "similar_pairs",
+    "contradictions",
+    "recurrences",
+    "similar_relations",
+)
+
+# The most nominees any one of them returns.
+#
+# Chosen against the measured distribution rather than picked: real corpora
+# yield 4 surviving fact pairs out of 38,226 at the 0.80 threshold, and the
+# 0.0105% rate projects ~5,200 at 10,000 facts (`BENCHMARKS.md`). So this sits
+# roughly three orders of magnitude above what a real graph returns today —
+# insurance, not a working limit — and still well below a response no agent can
+# read. `reflect(max_nominations=...)` raises it for a caller who means to.
+MAX_NOMINATIONS = 200
+
+
+def _capped(items: list, limit: int) -> tuple[list, bool]:
+    """The first `limit` items, and whether anything was dropped.
+
+    Callers hand this an already score-sorted list, so "first" is "highest
+    scoring" — top-k rather than an arbitrary slice, which would offer the agent
+    the weakest candidates as readily as the strongest.
+
+    **How many were dropped is deliberately not returned.** A caller told there
+    are 40,000 more pairs has no better move available than the one it already
+    has: a graph that dense wants a different operation, not a longer list.
+    """
+    return items[:limit], len(items) > limit
+
+
 async def reflect(
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
     *,
     similarity_threshold: float = 0.85,
     relation_similarity_threshold: float = 0.9,
+    max_nominations: int = MAX_NOMINATIONS,
     event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Analyse the memory graph and return candidates for the agent to act on.
@@ -1999,7 +2189,7 @@ async def reflect(
     async def _contradictions():
         nominated_pairs.extend(await detect_contradictions(
             storage, embedding_provider,
-            similarity_threshold=0.80,
+            similarity_threshold=SIMILARITY_NOMINATION_THRESHOLD,
             model_id=model_id,
             statuses=NOMINATED_STATUSES,
         ))
@@ -2112,14 +2302,36 @@ async def reflect(
         "archival_candidates": archival_candidates,
         "similar_relations": similar_relations,
     }
+
+    # Cap the quadratic lists, and say which ones were cut (#60). Applied here,
+    # in one place over `CAPPED_KEYS`, rather than inside each phase: the phase
+    # events above keep reporting what the pass actually found, which is what
+    # makes a truncated response legible in the strip rather than invisible.
+    #
+    # Each list is capped *after* the contradiction/recurrence partition above,
+    # never before — one scored set feeds both, and a cap applied to the set
+    # would let the larger half starve the other.
+    #
+    # **This bounds the response, not the peak allocation.** The scored tuples
+    # in `similar_pairs` are still one per surviving pair; what goes away is the
+    # response dicts and the unbounded JSON. That is the honest scope: the
+    # measurement that demoted #60 from urgent also moved its argument from
+    # memory to the response.
+    truncated: list[str] = []
+    for key in CAPPED_KEYS:
+        result[key], was_cut = _capped(result[key], max_nominations)
+        if was_cut:
+            truncated.append(key)
+
+    # Summed while `result` still holds nothing but nominee lists, so the count
+    # cannot be thrown off by a key that is not one — and so a phase added later
+    # is counted without anyone remembering to add a term, which the hand-written
+    # sum this replaced would have needed.
+    nominees_returned = sum(len(value) for value in result.values())
+    result["truncated"] = truncated
+
     meta = ResponseMeta(
-        nodes_returned=(
-            len(similar_pairs) + len(split_candidates)
-            + len(enrichment_candidates) + len(contradictions)
-            + len(recurrences) + len(unsound_inferences)
-            + len(boundary_proposals) + len(pending_review)
-            + len(archival_candidates) + len(similar_relations)
-        ),
+        nodes_returned=nominees_returned,
         # Reflect **scans** the whole active graph and the agent sees only the
         # nominees, so a reflect record dims everything except them. That is
         # accurate rather than a special case: `retrieved` is what the response

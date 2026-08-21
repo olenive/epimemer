@@ -219,7 +219,8 @@ the unmarked name inherits the default reading.
 - **Metacontext labels**, always. Fiction and fact must never come back mixed
   without the distinction surfacing.
 - **Computed review labels** — `superseded_candidate`, `evidence_stale`,
-  `contested` — derived at read time from edges, never stored. See
+  `evidence_merged`, `contested` — derived at read time from edges, never
+  stored. See
   [REFLECTION.md](REFLECTION.md#4-review-labels).
 - **Hierarchy neighbours** on topics that sit in a split hierarchy (`parents` /
   `subtopics`, as id + preview), so a caller can drill via `topic_tree` rather
@@ -240,7 +241,7 @@ ingest, about the material; corroboration is a fact about the *graph*, so it
 changes as the graph does — which is why it is derived at read time and never
 stored. A stored count would be an answer frozen at the moment it was taken.
 
-Four things to know before reading the number:
+Five things to know before reading the number:
 
 - **It counts independence, not strength.** Three hedged reports from three
   outlets score 3, exactly as three confident ones would. The two signals do not
@@ -251,16 +252,36 @@ Four things to know before reading the number:
 - **Documents naming no publisher stand as their own source.** Most do today, so
   a graph ingested without attribution scores lower for that reason alone.
   `unattributed_documents` says how many did.
-- **It is computed over a similarity neighbourhood**, because facts are not
-  deduplicated yet. That is deliberate — a wrong `similarity` edge overstates a
-  number you can inspect, where a wrong merge would destroy a node — but it
-  means "the city is called Leningrad" and "the city is called Saint Petersburg"
-  currently corroborate each other.
+- **It is computed over a similarity neighbourhood**, because facts are only
+  deduplicated where an agent judged them the same claim *and* the merge cleared
+  its gate — which is nothing written before 2026-08-21, since dedup reads a
+  judgment recorded at ingest (#52). That is deliberate: a wrong `similarity`
+  edge overstates a number you can inspect, where a wrong merge would destroy a
+  node. Merging moves a pair from the neighbourhood reading to the identity one;
+  the `sources` list on every result is what makes a count taken before and
+  after comparable.
+- **A claim about another period is not a second witness.** "The city is called
+  Leningrad" (BBC, 1924–1991) and "the city is called Saint Petersburg"
+  (Reuters, 1991–) are near-identical sentences, so `reflect` pairs them — and
+  Reuters is not backing the Leningrad claim. Where the periods two sources
+  state provably fall clear of each other, the look-alike stops counting and
+  comes back under **`adjacent_periods`** instead, with its publisher, its
+  documents and its own periods.
+
+  Nothing is removed from the graph and nothing is rejected: both claims are
+  true of their own stretches of time, both stay, and the succession between
+  them is what [VALIDITY.md](VALIDITY.md) records. Only the tally narrows.
+
+  It fires **only where the dates provably clear each other** — an undated side,
+  a half-dated pair, or intervals kept on different timelines all go on
+  corroborating, per the open-world rule. Most nodes carry no intervals, so on
+  most graphs this changes nothing; where it fires, the graph knew.
 
 Retired neighbours are read the way [VALIDITY.md](VALIDITY.md) reads them
 everywhere else: a `corrected` claim does not corroborate, because it was
 concluded false; a `historical` one does, because it was right and is still
-right of its period.
+right of its period — it is the *dates*, not the status, that decide whether a
+retired claim witnessed this one.
 
 **Off by default on a measurement**, not on taste. It is several times the cost
 of every other annotation here, and its price rises with how many `similarity`

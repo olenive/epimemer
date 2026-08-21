@@ -101,7 +101,7 @@ classifies the pair:
 
 | Verdict | Meaning | Action |
 | --- | --- | --- |
-| **redundant** | same claim restated | dedup or ignore |
+| **redundant** | same claim restated | `merge_facts(source_ids, content)` — one node keeping a `sourced_from` edge per contributing document; refused (event, unjudged, retired, cross-frame, below the bar) → record `SIMILARITY` and keep both (#52, built 2026-08-21) |
 | **supersedes** | new corrects old — the old claim was wrong | correction (label old `superseded_candidate`; resolves via `superseded_by`, old → `CORRECTED`) |
 | **contradicts** | conflicting claims, same frame, unclear which holds | record `CONTRADICTION`; resolve (agent/human) |
 | **cross-frame** | "conflict" only because frames differ (fiction vs real) | not a conflict; both coexist; optional `variant_of` |
@@ -141,6 +141,34 @@ is superseded, inferences derived from it become suspect.
 > the honest action for `redundant` is **record `SIMILARITY` and keep both** —
 > which is also exactly what corroboration (#51) consumes.
 
+> **`redundant` has an action (2026-08-21).** `merge_facts(source_ids, content)`
+> collapses facts restating one claim into a single node that keeps one
+> `sourced_from` edge per contributing document, each carrying that document's
+> own periods — so the plurality of provenance the verdict was always about
+> survives the merge rather than being overwritten by it. The action column
+> above reads "dedup or ignore"; "dedup" now names something.
+>
+> **Recording `SIMILARITY` and keeping both is not superseded by this, it is the
+> documented fallback.** A merge is refused, out loud and with a reason,
+> whenever the graph cannot vouch for it: a retired twin (that is `recurs`, and
+> `restore`), a pair not standing in exactly the same frames (that is
+> `cross-frame`, and `record_variant`), a pair below the nomination bar, or —
+> the rule this waited on — a claim that is an **event** rather than a state, or
+> one ingested before anyone judged which it was. Every one of those leaves the
+> agent where it was before: two nodes, one `similarity` edge, corroboration
+> reading the neighbourhood.
+>
+> **The event/state judgment is recorded at ingest** (`claim_kind` on `Fact`),
+> because it cannot be recovered later. *"Labour won the election"* from a 1997
+> document and from a 2024 one is two victories wearing one sentence; under the
+> interval model a merge unions their periods into a single twenty-seven-year
+> win. Nothing computable from the two stored sentences separates that from
+> *"Labour is in government"*, where the union is exactly right — only the
+> document does, and the document is gone by the time anything asks. The
+> consequence, measured on the day: the two real graphs hold **350 facts and 0
+> judged ones**, so the whole existing corpus is unmergeable. That is the safe
+> direction and was the price of the decision rather than an oversight in it.
+
 ---
 
 ## 4. Data model
@@ -153,11 +181,28 @@ Edges are the source of truth; retrieval **computes** a label per returned node:
 | --- | --- | --- |
 | `superseded_candidate` | node has an incoming `supersession_candidate` edge | A — temporal |
 | `evidence_stale` | inference has `evidence_superseded` edge / `derived_from` a superseded fact | B — evidential |
+| `evidence_merged` | inference has an `evidence_merged` edge | B — evidential |
 | `contested` | node has a `contradiction` edge unresolved in its own frame | contradiction |
 
 The node stays `ACTIVE`. Labels are surfaced the same way `metacontexts` already
 are on search results, alongside the contesting/retired node id so the caller
 can hop to it.
+
+> **Case B split in two (2026-08-21, #61).** A merge changes a premise without
+> retiring it, and until this row existed it fired nothing at all: the
+> `derived_from` edge migrates onto the survivor in the same transaction, the
+> survivor is `ACTIVE`, and `MERGED` is not in `SUPERSEDED_STATUSES`, so both
+> halves of the `evidence_stale` condition come back false and the inference sat
+> on agent-written text it was never drawn from with `review_labels` empty.
+>
+> **Its own label rather than a qualified `evidence_stale`, for a reason that is
+> not tidiness.** §12.3's archival arm nominates on `evidence_stale`, so sharing
+> the label would propose discarding an inference because its premise got
+> *better* provenance — on every merge, for every dependent. The two events also
+> want different work from the agent: a correction says re-derive, a merge says
+> re-read against the new wording. **Note there is no live-check half here and
+> there never can be** — the flag edge is the only record the event will ever
+> leave, which is why it is planned in `merge_nodes` rather than derived later.
 
 ### 4.2 New / newly-used edge types
 
@@ -165,6 +210,7 @@ can hop to it.
 | --- | --- | --- |
 | `supersession_candidate` | newer fact → older fact | "this may replace that — review" (Case A) |
 | `evidence_superseded` | superseded fact → dependent inference | "this inference's basis changed" (Case B) |
+| `evidence_merged` | absorbed fact → dependent inference | "the premise you were drawn from absorbed another claim" (Case B, 2026-08-21, #61). The src is the fact that *went away*: which wording is gone is the whole content of the flag |
 | `contradiction` | fact ↔ fact | genuine same-frame conflict (the enum exists today but is **never created** — wire it up) |
 | `variant_of` | fact ↔ fact (across frames) | "same proposition, resolved differently per frame" — makes divergence queryable |
 | `temporally_followed_by` | older fact → newer fact | "both true, over different periods" — order, **not** replacement, so it survives recurrence (#53 T2; designed, not built) |
@@ -381,16 +427,23 @@ human-in-the-loop; no metacontext association; inferences never revisited.
   direct dependent inferences) folded atomically into *both* supersede paths;
   candidate-edge clearing on supersession. Helpers in
   `pipelines/reflection/review.py` (`plan_evidence_stale_edges`,
-  `find_candidate_edge_ids_into`).
+  `find_candidate_edge_ids_into`). **Merge joined them 2026-08-21 (#61)** with
+  its own flag — `plan_evidence_merged_edges`, carried into `merge_nodes_tx` on
+  both backends and the wrapper. Both planners now share
+  `dependent_inference_ids`, so "what depends on this fact" is answered in one
+  place; the two events differ only in the edge they write.
 - 2b.2. ✅ **Done.** Detection & recording tools (all opt-in, agent-driven):
   - `frames_of(node_id, storage)` / `same_frame(a, b, storage)` in `review.py` —
     metacontexts of a node, treating untagged as `BASE_METACONTEXT_ID`; two nodes
     share a frame if their frame sets overlap (untagged⇒base, so two untagged are
     same-frame; disjoint frames are not).
-  - `check_conflicts(fact_ids, storage, embedding_provider, *, threshold=0.83,
-    k=5)` — per fact, vector-search active facts (exclude self) above threshold;
+  - `check_conflicts(fact_ids, storage, embedding_provider, *,
+    threshold=SIMILARITY_NOMINATION_THRESHOLD, k=5)` — per fact, vector-search
+    active facts (exclude self) above threshold;
     returns candidates with score + the candidate's metacontext labels + same-frame
     flag. Tool + MCP. Opt-in; the agent calls it on freshly-ingested facts.
+    *(The threshold was a literal 0.83 here and 0.80 in reflect's sweeps until
+    2026-08-21; it is one constant at 0.80 now, ISSUES.md #63.)*
   - `record_contradiction(a_id, b_id, storage)` — idempotent `contradiction` edge
     (one per pair, either direction); both stay active; returns `notify_user`
     (= same-frame) and a warning when cross-frame. Tool + MCP.

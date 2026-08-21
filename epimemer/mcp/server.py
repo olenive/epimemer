@@ -17,6 +17,7 @@ from uuid import uuid4
 from fastmcp import Context, FastMCP
 
 from epimemer.logging.structured import ToolInvocationLog, log_tool_call, setup_logging
+from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
 from epimemer.mcp import tools
 from epimemer.mcp.config import (
     create_embedding_provider,
@@ -394,8 +395,9 @@ async def memory_store_decomposition(
             segment_id: str — from segment result
             topics/facts/inferences: each item is either a content string, or
               an object {"content": str, "tags": ["billing", ...],
-              "importance": 0.8, "confidence": 0.9, "confidence_basis": "..."}
-              to attach per-node tags and either value prior.
+              "importance": 0.8, "confidence": 0.9, "confidence_basis": "...",
+              "claim_kind": "state"} to attach per-node tags, either value
+              prior, and (on facts) the condition-or-occurrence judgment.
             importance: 0.0–1.0, default 0.5. Set it only when you already know
               a node is unusually consequential or unusually disposable —
               importance is properly judged at reflect time, and `reinforce` is
@@ -422,6 +424,26 @@ async def memory_store_decomposition(
             confidence_basis: one line saying why. Asked for whenever you
               supply a confidence other than the 0.5 default — a high prior
               nobody can review later is worth little — but never required.
+            claim_kind: "state" or "event" — **facts only**, and supplying it on
+              a topic or inference is an error. Ask what kind of thing is being
+              claimed, not how strongly:
+                "state" — a condition that holds over a period, and can hold
+                     again later. "Labour is in government", "the city is called
+                     Leningrad", "the service runs on port 8080"
+                "event" — something that happened on an occasion. "Labour won
+                     the election", "the city was renamed", "the deploy failed
+                     at 14:02"
+              This is the judgment fact deduplication is gated on, and it is the
+              one nothing downstream can make: two documents years apart yield
+              near-identical sentences, and merging them is right for a state
+              (one condition, two periods) and fabricates history for an event
+              (two elections become one twenty-seven-year victory). You have the
+              document in front of you — the tense, the sentences either side,
+              whether "the election" is a particular one — and a later merge
+              sees two stripped sentences with none of it.
+              **Omit it when you genuinely cannot tell.** Omitted means unjudged
+              and the fact simply never merges, which costs a tidier graph;
+              guessing costs corroboration that was never earned.
             validity: when *this document* says the claim was true. A list,
               because one source can assert several separate periods ("Labour
               governed 1997–2010, and again from 2024"). It is recorded against
@@ -523,9 +545,10 @@ async def memory_search(
     Hybrid retrieval: embedding similarity and keyword matching run
     independently and are fused by rank, then graph expansion pulls in what the
     winners connect to. Results always include metacontext labels and computed
-    review labels (superseded_candidate / evidence_stale / contested) so you can
-    see when a node may be outdated, have stale evidence, or be contested before
-    relying on it.
+    review labels (superseded_candidate / evidence_stale / evidence_merged /
+    contested) so you can see when a node may be outdated, have stale evidence,
+    rest on a premise that absorbed another claim, or be contested before relying
+    on it.
 
     **Pass identifiers, names and exact phrases you care about as `terms`.** A
     ticket id, an error code, a person's name, a filename. Embeddings shred
@@ -578,6 +601,15 @@ async def memory_search(
     without attribution scores lower for that reason alone. Every source names
     the nodes and documents behind it, so an implausible number can be checked
     rather than taken on trust.
+
+    **`adjacent_periods` is not a rejection list — read it.** A claim whose
+    stated periods provably fall clear of this one's is about a *different*
+    stretch of time, so it is not a second witness and does not count; it comes
+    back here instead, with its publisher and its own periods. Both claims are
+    true and both remain in the graph. Where your search returned one of the
+    pair and not the other, this is the only place the other appears — so treat
+    an entry as *"the graph also knows what was true next door"*, and follow it
+    if the period matters to the question you were asked.
 
     For provenance/topic listings (which nodes came from X / are about Y), use
     find_nodes, not search.
@@ -848,7 +880,7 @@ async def memory_judge_importance(
 async def memory_check_conflicts(
     fact_ids: list[str],
     ctx: Context,
-    threshold: float = 0.83,
+    threshold: float = SIMILARITY_NOMINATION_THRESHOLD,
     k: int = 5,
 ) -> str:
     """Find existing facts that may conflict with the given facts (you then judge).
@@ -890,7 +922,9 @@ async def memory_check_conflicts(
 
     Args:
         fact_ids: Fact node ids to check (e.g. facts just stored).
-        threshold: Minimum cosine similarity for a candidate (default 0.83, high).
+        threshold: Minimum cosine similarity for a candidate (default 0.80 —
+            the one nomination bar; `merge_facts` refuses below the same
+            number, so anything nominated here is mergeable).
         k: Max candidates returned per fact.
     """
     deps = ctx.lifespan_context
@@ -971,11 +1005,73 @@ async def memory_record_variant(
     )
 
 
+@mcp.tool(name="merge_facts")
+async def memory_merge_facts(
+    source_ids: list[str],
+    content: str,
+    ctx: Context,
+) -> str:
+    """Collapse facts that restate one claim into a single node.
+
+    The action for the `redundant` verdict: two documents assert the same thing
+    in different words, and the graph should hold one fact with both sources
+    rather than two facts each with one. The survivor keeps a sourced_from edge
+    per contributing document, with each document's own validity periods, so
+    provenance becomes plural rather than being overwritten — which is what
+    makes corroboration mean anything.
+
+    **Merge only what you would defend as the same proposition.** A wrong merge
+    is worse than a missed one and not symmetrically so: two distinct claims
+    fused into one node with two independent sources read as *better supported*
+    than either was, so the mistake does not lose information, it manufactures
+    agreement. When unsure, use link(type="similarity") and keep both — nothing
+    downstream is harmed by two nodes saying one thing.
+
+    Merges are refused, with a reason, when: any fact is not active (a
+    recurring historical twin is `restore`, not a merge); the facts do not stand
+    in exactly the same frames (that is `record_variant`); any of them is an
+    **event** rather than a state; any of them was ingested without a
+    `claim_kind`; or a pair falls below the similarity nomination bar. A refusal
+    comes back as `merged: false` with `refused` — read it, it says which.
+
+    The event rule is the one worth understanding. "Labour won the election"
+    from a 1997 document and from a 2024 one are two victories that look like
+    one sentence; merging unions their periods into a single win spanning both.
+    Facts stored as "state" — conditions that hold over a period — are the ones
+    a merge is safe for, because their periods genuinely do union.
+
+    Args:
+        source_ids: Two or more fact ids to collapse. All are retired as MERGED
+            and linked to the survivor by merged_into, so nothing is lost.
+        content: The claim as the surviving fact should state it. Write the
+            clearest phrasing of the shared claim rather than picking one
+            source's wording — this is new text and it is what gets embedded.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.merge_facts",
+        lambda: tools.merge_facts(
+            source_ids=source_ids,
+            content=content,
+            storage=deps["storage"],
+            embedding_provider=deps["embedding_provider"],
+        ),
+        ctx,
+        f"sources={len(source_ids)}",
+        lambda r, m: (
+            f"merged={r['fact_id']} from={r['sources_retired']}"
+            if r["merged"]
+            else f"refused: {r['refused']}"
+        ),
+    )
+
+
 @mcp.tool(name="reflect")
 async def memory_reflect(
     ctx: Context,
     similarity_threshold: float = 0.85,
     relation_similarity_threshold: float = 0.9,
+    max_nominations: int = tools.MAX_NOMINATIONS,
 ) -> str:
     """Analyse the memory graph and return candidates for you to act on.
 
@@ -1005,10 +1101,18 @@ async def memory_reflect(
       those dates provably fall clear, so it says *no source asserts these were
       ever both true* — not that they never were
     - pending_review: active nodes already flagged for resolution
-      (superseded_candidate / evidence_stale / contested), with the related
-      ids to act on via apply_reflection supersessions / supersede_by
+      (superseded_candidate / evidence_stale / evidence_merged / contested),
+      with the related ids to act on via apply_reflection supersessions /
+      supersede_by. evidence_merged asks for a re-read rather than a
+      resolution: the premise absorbed another claim, so check the inference
+      still says what the survivor's wording supports
     - similar_relations: likely-synonymous user relationship labels to consolidate
       via apply_reflection relation_merges
+    - truncated: the names of any lists that hit `max_nominations` and were cut
+      to their highest-scoring entries. Empty on an ordinary graph. When a list
+      is named here, treat it as *this graph is denser than one pass can
+      report*: act on what came back and reflect again, rather than reaching for
+      a bigger number — the remainder is the weakest end of the ranking
 
     Review the candidates and call apply_reflection with your decisions.
 
@@ -1019,6 +1123,8 @@ async def memory_reflect(
         similarity_threshold: Cosine similarity threshold for finding similar pairs.
         relation_similarity_threshold: Similarity bar for proposing relationship-
             label consolidations.
+        max_nominations: Most entries returned in any one pair list. The pair
+            lists are quadratic in the graph; this bounds the response.
     """
     deps = ctx.lifespan_context
     # Read for the log line only; the authoritative value is what the reset
@@ -1031,6 +1137,7 @@ async def memory_reflect(
             embedding_provider=deps["embedding_provider"],
             similarity_threshold=similarity_threshold,
             relation_similarity_threshold=relation_similarity_threshold,
+            max_nominations=max_nominations,
             event_bus=deps.get("event_bus"),
         )
         result["stores_since_last_reflect"] = await deps["storage"].reset_reflect_counter()
@@ -1044,6 +1151,9 @@ async def memory_reflect(
         lambda r, m: (
             f"pairs={len(r['similar_pairs'])} "
             f"pending={len(r['pending_review'])} relations={len(r['similar_relations'])}"
+            # A cut response should say so where the operator reads, not only
+            # where the agent does.
+            + (f" truncated={','.join(r['truncated'])}" if r["truncated"] else "")
         ),
     )
 

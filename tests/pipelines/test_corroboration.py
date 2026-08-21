@@ -23,12 +23,16 @@ never deduplicated (#52), so the same claim is many nodes. Including
 similarity edge overstates a number whose workings are returned and can be
 checked, where a wrong merge destroys a node and cannot be undone.
 
-The known inaccuracy ships with it, per the entry: "the city is called
-Leningrad" and "the city is called Saint Petersburg" are similar, so under this
-scheme they corroborate each other. #53 is what removes that, and until then the
-defect is a wrong number rather than a fabricated node.
+The inaccuracy the entry shipped with — "the city is called Leningrad" and
+"the city is called Saint Petersburg" are similar, so they corroborated each
+other — is closed by #62, at the bottom of this file. The rule it applies is
+#53's, which was expected to remove the defect and did not until something read
+the intervals it stores.
 """
 
+from datetime import datetime, timezone
+
+from epimemer.core.temporal import IntervalBasis, ValidityInterval
 from epimemer.core.types import (
     EdgeType,
     Fact,
@@ -96,6 +100,53 @@ async def _inference(storage, content: str, doc: RawDocument | None = None) -> I
             src_id=node.id, dst_id=doc.id, type=EdgeType.SOURCED_FROM
         ))
     return node
+
+
+def _period(
+    start: int | None = None, end: int | None = None, timeline: str | None = None
+) -> ValidityInterval:
+    """A period a source asserts, by year, with `None` for an endpoint nobody stated.
+
+    Deliberately the same shape as `test_soundness.py`'s: the rule under test is
+    the same one, `assertions_are_disjoint`, and two spellings of one fixture
+    drift apart exactly where the rule is subtle.
+    """
+
+    def instant(year: int | None) -> dict:
+        if year is None:
+            return {"instant_kind": "unknown"}
+        return {
+            "instant_kind": "precise",
+            "at": datetime(year, 1, 1, tzinfo=timezone.utc).isoformat(),
+        }
+
+    return ValidityInterval(
+        start=instant(start),
+        end=instant(end),
+        timeline_id=timeline,
+        basis=IntervalBasis.STATED,
+    )
+
+
+async def _dated_fact(
+    storage, content: str, doc: RawDocument, *periods: ValidityInterval
+) -> Fact:
+    """A fact whose *source note* carries the periods that source asserts.
+
+    The periods ride on the `sourced_from` edge rather than on the node (#53
+    T1), which is the whole reason they are reachable here: it is the source
+    being counted, so the source's dates are the ones that decide whether it
+    witnessed this claim.
+    """
+    fact = Fact(content=content, source_id="seg-1", value=ValueSignal())
+    await storage.store_node(fact)
+    await storage.store_edge(NodeEdge(
+        src_id=fact.id,
+        dst_id=doc.id,
+        type=EdgeType.SOURCED_FROM,
+        validity=list(periods),
+    ))
+    return fact
 
 
 async def _join(storage, src, dst, edge_type: EdgeType) -> None:
@@ -415,3 +466,280 @@ class TestTheNonInteractionWithConfidence:
             await _join(storage, hedged, other, EdgeType.SIMILARITY)
 
         assert await _count(storage, hedged) == 3
+
+
+class TestAClaimAboutAnotherPeriodIsNotASecondWitness:
+    """#62 — the Leningrad defect this module shipped with, and what closed it.
+
+    "The city is called Leningrad" (BBC, 1924–1991) and "the city is called
+    Saint Petersburg" (Reuters, 1991–) are near-identical sentences, so
+    `reflect` pairs them. Every exclusion above misses it, and correctly so:
+    the two do not contradict — the city really was renamed — and the
+    predecessor is `historical` rather than `corrected`, which the test above
+    pins as *still corroborating*. So Reuters was counted as a second witness
+    to a sentence it never wrote, and the count rose exactly where the graph
+    already knew better.
+
+    **Nothing is removed from the graph.** Both claims are true of their own
+    periods, both stay, and the succession between them is already recorded.
+    What changes is one integer computed on the way out — and the uncounted
+    look-alike comes back *named*, because "someone has a claim about the
+    adjacent period" is real information and this response is the only place a
+    caller who searched for one period would learn it.
+
+    **It fires only where the dates provably clear each other.** Everything
+    below the first three tests is that boundary: undated, half-dated,
+    overlapping and differently-clocked pairs all still corroborate, per
+    `temporal.py` §6's open-world rule. A check that fired on ignorance would
+    be a check on how diligently the corpus was dated.
+    """
+
+    async def test_a_successor_claim_does_not_corroborate_its_predecessor(
+        self, storage
+    ):
+        """The defect, stated as the entry states it. Two before #62, one after."""
+        bbc = await _document(storage, "bbc-1970", publisher="BBC")
+        reuters = await _document(storage, "reuters-2020", publisher="Reuters")
+        leningrad = await _dated_fact(
+            storage, "the city on the Neva is called Leningrad", bbc,
+            _period(1924, 1991),
+        )
+        petersburg = await _dated_fact(
+            storage, "the city on the Neva is called Saint Petersburg", reuters,
+            _period(1991, None),
+        )
+        await _join(storage, leningrad, petersburg, EdgeType.SIMILARITY)
+
+        assert await _count(storage, leningrad) == 1
+
+    async def test_neither_direction_corroborates_the_other(self, storage):
+        """Symmetric, because the rule is. The successor is no better evidence
+        for the predecessor than the predecessor is for it, and each subject
+        gets its own walk."""
+        bbc = await _document(storage, "bbc-1970", publisher="BBC")
+        reuters = await _document(storage, "reuters-2020", publisher="Reuters")
+        leningrad = await _dated_fact(
+            storage, "the city is called Leningrad", bbc, _period(1924, 1991)
+        )
+        petersburg = await _dated_fact(
+            storage, "the city is called Saint Petersburg", reuters,
+            _period(1991, None),
+        )
+        await _join(storage, leningrad, petersburg, EdgeType.SIMILARITY)
+
+        assert await _count(storage, petersburg) == 1
+
+    async def test_the_uncounted_look_alike_comes_back_named(self, storage):
+        """The half that makes this a marking rather than a deletion.
+
+        If the search returned only the Leningrad claim, this block is the
+        single place the Saint Petersburg claim appears at all — so a silent
+        exclusion would cost the caller a fact the graph holds, on top of
+        leaving a shrunken number with no working shown.
+        """
+        bbc = await _document(storage, "bbc-1970", publisher="BBC")
+        reuters = await _document(storage, "reuters-2020", publisher="Reuters")
+        leningrad = await _dated_fact(
+            storage, "the city is called Leningrad", bbc, _period(1924, 1991)
+        )
+        petersburg = await _dated_fact(
+            storage, "the city is called Saint Petersburg", reuters,
+            _period(1991, None),
+        )
+        await _join(storage, leningrad, petersburg, EdgeType.SIMILARITY)
+
+        [result] = (await corroboration_for([leningrad.id], storage)).values()
+
+        assert result.count == 1
+        assert [source.publisher for source in result.sources] == ["BBC"]
+        [adjacent] = result.adjacent_periods
+        assert adjacent.node_id == petersburg.id
+        assert adjacent.publisher == "Reuters"
+        assert adjacent.document_ids == [reuters.id]
+        assert [period.start.at.year for period in adjacent.periods] == [1991]
+
+    async def test_an_undated_look_alike_still_corroborates(self, storage):
+        """The open-world rule, and the reason this cannot be a check on
+        ignorance: an interval asserts nothing about the world outside itself,
+        so a claim nobody dated might well hold in the same period."""
+        bbc = await _document(storage, "bbc-1970", publisher="BBC")
+        reuters = await _document(storage, "reuters-2020", publisher="Reuters")
+        leningrad = await _dated_fact(
+            storage, "the city is called Leningrad", bbc, _period(1924, 1991)
+        )
+        undated = await _fact(storage, "the city is called Leningrad", reuters)
+        await _join(storage, leningrad, undated, EdgeType.SIMILARITY)
+
+        assert await _count(storage, leningrad) == 2
+
+    async def test_a_look_alike_dated_on_one_side_only_still_corroborates(
+        self, storage
+    ):
+        """An empty side answers `False` outright — the subject being dated is
+        not enough on its own, and most of today's corpus is this case."""
+        bbc = await _document(storage, "bbc-1970", publisher="BBC")
+        reuters = await _document(storage, "reuters-2020", publisher="Reuters")
+        undated = await _fact(storage, "the city is called Leningrad", bbc)
+        dated = await _dated_fact(
+            storage, "the city is called Saint Petersburg", reuters,
+            _period(1991, None),
+        )
+        await _join(storage, undated, dated, EdgeType.SIMILARITY)
+
+        assert await _count(storage, undated) == 2
+
+    async def test_overlapping_periods_still_corroborate(self, storage):
+        """Two sources placing the claim in a shared stretch of time are two
+        witnesses to it, which is the ordinary case this must not break."""
+        bbc = await _document(storage, "bbc-report", publisher="BBC")
+        reuters = await _document(storage, "reuters-report", publisher="Reuters")
+        ours = await _dated_fact(
+            storage, "the city is called Leningrad", bbc, _period(1924, 1991)
+        )
+        theirs = await _dated_fact(
+            storage, "the city is called Leningrad", reuters, _period(1950, 1980)
+        )
+        await _join(storage, ours, theirs, EdgeType.SIMILARITY)
+
+        assert await _count(storage, ours) == 2
+
+    async def test_touching_periods_still_corroborate(self, storage):
+        """Adjacent but not disjoint under `[start, end)`: one period ends where
+        the next begins. The rule compares intervals rather than restating the
+        comparison here, which is what keeps this consistent with the soundness
+        check to the boundary."""
+        bbc = await _document(storage, "bbc-report", publisher="BBC")
+        reuters = await _document(storage, "reuters-report", publisher="Reuters")
+        ours = await _dated_fact(
+            storage, "the city is called Leningrad", bbc, _period(1924, 1991)
+        )
+        theirs = await _dated_fact(
+            storage, "the city is called Leningrad", reuters, _period(1960, 1999)
+        )
+        await _join(storage, ours, theirs, EdgeType.SIMILARITY)
+
+        assert await _count(storage, ours) == 2
+
+    async def test_periods_on_different_clocks_still_corroborate(self, storage):
+        """Intervals on different timelines compare `unknown` and so never fire.
+        A fiction's internal calendar and the wall clock are not one line, and
+        subtracting across them would be arithmetic on incomparable numbers."""
+        bbc = await _document(storage, "bbc-report", publisher="BBC")
+        gollancz = await _document(storage, "the-novel", publisher="Gollancz")
+        ours = await _dated_fact(
+            storage, "the city is called Leningrad", bbc, _period(1924, 1991)
+        )
+        in_universe = await _dated_fact(
+            storage, "the city is called Leningrad", gollancz,
+            _period(2100, 2200, timeline="tl-novel"),
+        )
+        await _join(storage, ours, in_universe, EdgeType.SIMILARITY)
+
+        assert await _count(storage, ours) == 2
+
+    async def test_one_overlapping_period_is_enough_to_keep_counting(
+        self, storage
+    ):
+        """The collapse per side is the *existential union* — the moments some
+        source says the claim held. A source asserting two periods, one of them
+        overlapping, has witnessed the claim, so every cross pair must clear
+        before the look-alike stops counting."""
+        bbc = await _document(storage, "bbc-report", publisher="BBC")
+        reuters = await _document(storage, "reuters-report", publisher="Reuters")
+        ours = await _dated_fact(
+            storage, "the city is called Leningrad", bbc, _period(1924, 1991)
+        )
+        twice = await _dated_fact(
+            storage, "the city is called Leningrad", reuters,
+            _period(1991, None), _period(1930, 1940),
+        )
+        await _join(storage, ours, twice, EdgeType.SIMILARITY)
+
+        assert await _count(storage, ours) == 2
+        assert (await corroboration_for([ours.id], storage))[
+            ours.id
+        ].adjacent_periods == []
+
+    async def test_an_inference_from_the_other_period_brings_nothing_back(
+        self, storage
+    ):
+        """Why the comparison runs *before* the supporter hop.
+
+        Stage 2 collects whatever reasons from the neighbourhood, so a
+        look-alike left in until stage 3 walks its own supporters — and their
+        documents — in behind it. Reuters would come back through the side
+        door, by a different path to the same wrong number.
+        """
+        bbc = await _document(storage, "bbc-1970", publisher="BBC")
+        reuters = await _document(storage, "reuters-2020", publisher="Reuters")
+        leningrad = await _dated_fact(
+            storage, "the city is called Leningrad", bbc, _period(1924, 1991)
+        )
+        petersburg = await _dated_fact(
+            storage, "the city is called Saint Petersburg", reuters,
+            _period(1991, None),
+        )
+        reading = await _inference(
+            storage, "the city was renamed after 1991", reuters
+        )
+        await _join(storage, leningrad, petersburg, EdgeType.SIMILARITY)
+        await _join(storage, reading, petersburg, EdgeType.DERIVED_FROM)
+
+        assert await _count(storage, leningrad) == 1
+
+    async def test_a_shared_publisher_keeps_the_count_and_still_reports(
+        self, storage
+    ):
+        """The count is publishers, not nodes, so leaving a look-alike out only
+        lowers it where that look-alike was the sole route to a publisher. The
+        report is not conditional on the number having moved."""
+        morning = await _document(storage, "bbc-1970", publisher="BBC")
+        evening = await _document(storage, "bbc-2020", publisher="BBC")
+        leningrad = await _dated_fact(
+            storage, "the city is called Leningrad", morning, _period(1924, 1991)
+        )
+        petersburg = await _dated_fact(
+            storage, "the city is called Saint Petersburg", evening,
+            _period(1991, None),
+        )
+        await _join(storage, leningrad, petersburg, EdgeType.SIMILARITY)
+
+        [result] = (await corroboration_for([leningrad.id], storage)).values()
+
+        assert result.count == 1
+        assert [source.document_ids for source in result.sources] == [[morning.id]]
+        assert [a.node_id for a in result.adjacent_periods] == [petersburg.id]
+
+    async def test_a_contradicting_look_alike_is_not_reported_as_adjacent(
+        self, storage
+    ):
+        """Already excluded, and for a different reason: it is not a claim about
+        another period, it is a claim this one denies. Reporting it here would
+        relabel a contradiction as a compatible neighbour."""
+        ours = await _document(storage, "our-report", publisher="BBC")
+        theirs = await _document(storage, "their-report", publisher="Reuters")
+        claim = await _dated_fact(
+            storage, "the deploy failed", ours, _period(2020, 2021)
+        )
+        denial = await _dated_fact(
+            storage, "the deploy succeeded", theirs, _period(2022, 2023)
+        )
+        await _join(storage, claim, denial, EdgeType.SIMILARITY)
+        await _join(storage, claim, denial, EdgeType.CONTRADICTION)
+
+        [result] = (await corroboration_for([claim.id], storage)).values()
+
+        assert result.count == 1
+        assert result.adjacent_periods == []
+
+    async def test_a_node_with_no_look_alikes_reports_nothing(self, storage):
+        """The field is empty rather than absent for the ordinary case, so a
+        caller reads one shape."""
+        doc = await _document(storage, "only-report", publisher="BBC")
+        claim = await _dated_fact(
+            storage, "the deploy failed", doc, _period(2020, 2021)
+        )
+
+        [result] = (await corroboration_for([claim.id], storage)).values()
+
+        assert result.adjacent_periods == []

@@ -470,6 +470,13 @@ returns, so the first four can land without touching agent-visible behaviour.
   not here. **Filed 2026-08-18 as `ISSUES.md` #59**, which carries the options
   and the measurement that has to come first.
 
+  > **Resolved 2026-08-21, and the incidental mitigation turned out to be the
+  > whole story for segments.** The measurement found no node anywhere near the
+  > window — 81 word-pieces at worst against 256, three times the headroom —
+  > and segment text, which does cross it, is never embedded at all: BM25 is not
+  > *mitigating* the truncation for segments, it is the only thing that ever
+  > reads them. #59 closed with no code.
+
 ---
 
 ## 10. Post-review revisions (2026-08-17)

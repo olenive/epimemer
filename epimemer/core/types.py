@@ -146,6 +146,42 @@ def superseded_status_for(because: str) -> NodeStatus:
     return status
 
 
+class ClaimKind(str, Enum):
+    """Whether a fact describes a condition that holds, or an occurrence.
+
+    The distinction fact dedup cannot be built without (#52). Under the validity
+    model two ingests of one claim over separate periods are one node whose
+    intervals union — correct for a **state**, and fabricated history for an
+    **event**. *"Labour is in government"* read from a 1997 document and from a
+    2024 one is one condition holding over two spans, and the union is exactly
+    right. *"Labour won the election"* read from those same two documents is two
+    victories, and the union is a single win spanning twenty-seven years that
+    neither source claims.
+
+    Nothing already in the model separates them. The two sentences are
+    near-identical as text and therefore near-identical as embeddings, so
+    similarity nominates them equally; and the verdict taxonomy asks *what is the
+    relationship between these two claims* rather than *what kind of thing is
+    being claimed*, which is a different question that happens to decide this one.
+
+    **Judged at ingest, and effectively only there.** The judgment wants the
+    document — the tense, the sentences either side, whether "the election" is a
+    particular one — and a merge is offered two stripped sentences with none of
+    that. Same argument that put `confidence` and `validity` at ingest (#46,
+    #53 T1 §9). What it costs is that a claim nobody judged stays unjudged; see
+    `Fact.claim_kind`, where an absence refuses rather than guesses.
+
+    Two members, not three. A unique occurrence — *"Napoleon was born in
+    1769"* — is an `EVENT` that could in principle be deduped safely, and
+    refusing it is a real cost knowingly taken: separating "can happen twice"
+    from "happened once" is a third judgment to get wrong, and its error
+    direction is the unsafe one.
+    """
+
+    STATE = "state"
+    EVENT = "event"
+
+
 class EdgeType(str, Enum):
     # Segment anchoring
     ABOUT = "about"                  # segment → topic
@@ -191,6 +227,14 @@ class EdgeType(str, Enum):
     # Epistemic review (see REVIEW_EPISTEMIC.md)
     SUPERSESSION_CANDIDATE = "supersession_candidate"  # newer fact → older fact
     EVIDENCE_SUPERSEDED = "evidence_superseded"        # superseded fact → dependent inference
+    # merged fact → dependent inference. Its own type rather than a qualified
+    # `evidence_superseded`, because the two events say opposite things about
+    # the claim: a correction says it was wrong, a merge says two phrasings of
+    # it collapsed and the survivor carries every source (#61). Consumers route
+    # on the type — labels, archival, migration all do — so a reader that has
+    # never heard of this one sees an edge it does not handle rather than a
+    # familiar edge that has quietly grown a second meaning.
+    EVIDENCE_MERGED = "evidence_merged"
     VARIANT_OF = "variant_of"                          # fact ↔ fact, across frames
     BASED_ON = "based_on"                              # metacontext → metacontext (association)
 
@@ -241,10 +285,15 @@ def lineage_edge_type_for(status: NodeStatus) -> EdgeType:
 
 
 # Edges that flag a node for epistemic review. They are computed into retrieval
-# labels (superseded_candidate / evidence_stale) rather than traversed as
-# knowledge, and are anchored to a node version (not migrated on supersession).
+# labels (superseded_candidate / evidence_stale / evidence_merged) rather than
+# traversed as knowledge, and are anchored to a node version (not migrated on
+# supersession or merge — a flag records what happened to *that* wording).
 REVIEW_EDGE_TYPES: frozenset[EdgeType] = frozenset(
-    {EdgeType.SUPERSESSION_CANDIDATE, EdgeType.EVIDENCE_SUPERSEDED}
+    {
+        EdgeType.SUPERSESSION_CANDIDATE,
+        EdgeType.EVIDENCE_SUPERSEDED,
+        EdgeType.EVIDENCE_MERGED,
+    }
 )
 
 # Metadata / signal edges (history + review): excluded from edge migration on
@@ -456,14 +505,23 @@ def merged_value_signal(signals: Sequence[ValueSignal]) -> ValueSignal:
       merged.
     - `confidence` takes the max — which looks wrong for a caller-supplied
       prior, since the more credulous assessment wins and the disagreement
-      disappears. It is right because of what it pairs with: `merge_similar_topics`
+      disappears. **The two callers reach it by different routes, and both are
+      recorded here because one of them used to be**: `merge_similar_topics`
       makes the **higher-confidence description the primary content**, so the
-      merged node's confidence describes the content it actually leads with.
-      The two rules are one rule read from either end, and changing either
-      alone makes the merged node claim a strength for text it no longer
-      leads with. An unrated signal takes no part: `None` means nobody put the
-      question, so it loses to any real value the way the clocks do, and a
-      merge of unrated nodes stays unrated rather than inventing a judgment.
+      merged topic's confidence describes the text it actually leads with —
+      one rule read from either end, and changing either alone makes the node
+      claim a strength for wording it no longer leads with. `merge_facts` (#52)
+      does *not* work that way: the survivor's content is written fresh by the
+      agent, so nothing is inherited to lead with. Max is still right there, for
+      the field's own definition (#46) — confidence asks *how well would the
+      record back this claim up*, and a survivor keeping one `sourced_from` edge
+      per contributing document is backed by every one of them, so the
+      best-supported rating is a floor rather than a ceiling. `merged_confidence_basis`
+      carries that rating's stated reason across with it, or the prior arrives
+      stripped of the reason #46 asks for. An unrated signal takes no part:
+      `None` means nobody put the question, so it loses to any real value the
+      way the clocks do, and a merge of unrated nodes stays unrated rather than
+      inventing a judgment.
 
     Requires at least one signal; merging nothing has no meaning.
     """
@@ -599,6 +657,21 @@ class Fact(BaseModel):
     id: str = Field(default_factory=_new_id)
     content: str
     source_id: str                    # Segment.id that generated this
+    # Condition or occurrence, judged by the ingesting agent (#52). `None` is
+    # *unjudged* — the state every fact written before this field existed is in
+    # — and never a third kind of claim. Dedup refuses on it rather than picking
+    # a side: the two answers have opposite consequences, and the safe direction
+    # is to under-merge, since a missed merge only undercounts while a false one
+    # manufactures corroboration out of two distinct claims.
+    #
+    # On facts alone. A topic is a theme rather than a claim, so neither answer
+    # is about it. Inferences are provisional by design and competing ones are
+    # meant to coexist, so nothing here gates them today — and when inference
+    # merge lands (`dev-docs/WARNINGS_AND_SETTINGS.md` §6) it will not want this
+    # field either: it is nominated on *shared evidence* and warned by
+    # `assertions_are_disjoint` over its premises' periods, which is the same
+    # hazard answered where the dates actually are.
+    claim_kind: ClaimKind | None = None
     status: NodeStatus = NodeStatus.ACTIVE
     superseded_at: datetime | None = None
     # Every spell this node has spent out of the active set. Append-only; the
@@ -713,7 +786,18 @@ class NodeEdge(BaseModel):
 class EmbeddingRecord(BaseModel):
     """An embedding vector associated with a specific item and model."""
     id: str = Field(default_factory=_new_id)
-    item_id: str                      # node or segment id
+    # A node id, in practice always. This was written as "node or segment id",
+    # but no path writes a segment: all 624 records across the real graphs point
+    # at nodes, and `vector_search` resolves every hit through `get_node`, so a
+    # segment record would be fetched and dropped (#59, measured 2026-08-21).
+    # Segments reach retrieval through BM25 instead, which indexes the whole
+    # field — that is why they answer *where did I read that?* well.
+    #
+    # **That absence is what keeps the 256 word-piece window off them.** 11.1%
+    # of real segment text crosses it and the worst loses 48%, so embedding
+    # segments would make a silent truncation real on the day it was added. It
+    # is a precondition of doing so, not a detail — ISSUES.md #59 carries it.
+    item_id: str
     model_id: str                     # e.g. "all-mpnet-base-v2"
     vector: list[float]
     created_at: datetime = Field(default_factory=_now)

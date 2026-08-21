@@ -455,6 +455,9 @@ class TestAnswersAreUnchanged:
             "pending_review",
             "archival_candidates",
             "similar_relations",
+            # Not a nominee list: the names of any quadratic lists that hit the
+            # cap and were cut (#60). Empty here, and on any ordinary graph.
+            "truncated",
         }
         assert meta.nodes_returned >= len(result["contradictions"])
 

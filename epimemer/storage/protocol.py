@@ -463,6 +463,7 @@ class StorageBackend(Protocol):
         lineage_edges: Sequence[NodeEdge],
         *,
         merged_at: datetime,
+        evidence_edges: Sequence[NodeEdge] = (),
     ) -> None:
         """Atomically merge ``source_nodes`` into ``merged_node``.
 
@@ -474,6 +475,12 @@ class StorageBackend(Protocol):
         content went rather than only that the node left — and persists
         ``lineage_edges`` (the merged_into edges). If any step fails, the whole
         operation is rolled back.
+
+        ``evidence_edges`` are the review flags on dependent inferences
+        (``evidence_merged``, #61), inserted inside the same transaction. They
+        are anchored to the sources rather than the survivor, so they must be
+        written *after* migration — a flag re-pointed onto the survivor would
+        say a fact absorbed itself.
         """
         ...
 

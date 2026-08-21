@@ -42,7 +42,7 @@ consequence:
 
 | Verdict | Meaning | Action |
 |---|---|---|
-| **redundant** | same claim restated | record `similarity`, keep both |
+| **redundant** | same claim restated | `merge_facts`; refused → record `similarity`, keep both |
 | **supersedes** | the new one corrects the old — the old was **wrong** | `superseded_by`; old → `corrected` |
 | **succeeds** | both true, over different periods — **the world moved** | `temporally_followed_by`; old → `historical`, restorable |
 | **recurs** | a previously retired `historical` claim is true again | `restore` + a new `sourced_from` edge, one transaction |
@@ -57,13 +57,22 @@ the world as an error is how a graph forgets its own history, so `because` is
 required and has no default — if you cannot tell which happened, leave the pair
 contested rather than guessing. See [VALIDITY.md](VALIDITY.md#5-the-world-changing-is-not-the-same-as-being-wrong).
 
-There is one non-similarity trigger: when a fact is superseded, inferences derived
-from it become **evidentially stale** and are flagged automatically.
+There are two non-similarity triggers, and they are deliberately different
+labels. When a fact is superseded, inferences derived from it become
+**evidentially stale** and are flagged automatically. When a fact is *merged*,
+its dependents are flagged **`evidence_merged`** instead: the claim under them
+did not change, only the wording that states it and the documents behind it, so
+what is wanted is a re-read rather than a re-derivation.
 
-`redundant` currently has no fact-merge to route into — merge is Topic-only on the
-wired path — so its recorded action is *keep both, joined by `similarity`*, which
-is also what corroboration will read. Fact deduplication is
-`dev-docs/ISSUES.md` #52.
+`redundant` routes into `merge_facts(source_ids, content)` (built 2026-08-21,
+`dev-docs/ISSUES.md` #52): one node keeping a `sourced_from` edge per
+contributing document, so provenance becomes plural rather than being
+overwritten. It refuses — with a reason — an **event** rather than a state, a
+fact ingested without a `claim_kind`, a retired twin (that is `recurs`, and
+`restore`), a pair not standing in exactly the same frames (that is
+`record_variant`), and anything below the nomination bar. Every refusal leaves
+the older action available and correct: *keep both, joined by `similarity`*,
+which is what corroboration reads.
 
 ---
 
@@ -76,13 +85,31 @@ Ten phases, ten keys. Each is a worklist, not a verdict:
 | `similar_pairs` | topics above the similarity threshold | `merges` or `parents` |
 | `split_candidates` | topics whose material has high internal variance | `splits` |
 | `enrichment_candidates` | thin descriptions with rich underlying material | `enrichments` |
-| `contradictions` | same-frame active fact pairs above 0.80 | `record_contradiction`, then `supersessions` |
+| `contradictions` | same-frame active fact pairs above 0.80 — the one nomination bar, which `merge_facts` also gates on, so a pair listed here is mergeable | `record_contradiction`, then `supersessions` |
 | `recurrences` | an active claim beside its own `historical` twin | `restore` |
 | `unsound_inferences` | inferences whose premises no source puts in one period | agent judgment |
 | `boundary_proposals` | where a succession lets a period close or open | `boundaries` |
 | `pending_review` | active nodes already carrying review state | `supersessions`, `record_variant` |
 | `archival_candidates` | nodes worth setting aside | `archivals`, `judgments` |
 | `similar_relations` | likely-synonymous user relationship labels | `relation_merges` |
+
+An eleventh key, `truncated`, is not a worklist: it names any of the lists that
+hit `max_nominations` and were cut.
+
+**Four of the ten are built out of pairs** — `similar_pairs`,
+`contradictions`, `recurrences`, `similar_relations` — and pairs are quadratic
+in the node set where every other list is linear in it. Those four are capped to
+their highest-scoring `max_nominations` (200 by default), and a cut list is
+named in `truncated` rather than silently shortened, because a caller otherwise
+cannot tell an exhausted graph from a trimmed answer. **When a list is named
+there, the move is to act on what came back and reflect again**, not to raise the
+number: the remainder is the weakest end of the ranking, and a graph that dense
+wants a different operation than a longer list.
+
+The cap bounds the **response**, not `reflect`'s peak allocation — the scored
+pairs still exist upstream. That is the scope the measurement asked for: real
+corpora clear the 0.80 threshold at 0.0105%, which projects to ~3 MB at 10,000
+facts, so the response was the thing worth bounding (`ISSUES.md` #60).
 
 Two of them exist to keep a distinction that a single list would destroy:
 
@@ -118,10 +145,16 @@ cannot freeze against a graph that has moved on. They ride on `search` and
 |---|---|
 | `superseded_candidate` | something has been nominated as replacing this |
 | `evidence_stale` | *(inferences only)* a fact this was derived from has been superseded |
+| `evidence_merged` | *(inferences only)* a fact this rests on absorbed another claim; the ids are the phrasings that went away |
 | `contested` | this has a `contradiction` edge to a live, same-frame node |
 
 `contested` resolves itself when the partner is retired — the label is derived, so
 there is nothing to clean up.
+
+**`evidence_merged` is not a weaker `evidence_stale`, and the difference is
+visible in §5**: staleness is an archival class, and a merged premise is not.
+Nothing was overturned — the premise gained provenance — so proposing to discard
+what rests on it would have every merge nominate its own dependents.
 
 ---
 

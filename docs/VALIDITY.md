@@ -277,12 +277,18 @@ a boundary silently not applied is worse than one rejected out loud.
   stated. The alternative — leaving it `stated` — would have a source appear to
   assert a date no document gave, which is the one thing the rule exists to
   prevent. Under-claiming is the safe direction.
-- **Fact deduplication is still open** (`dev-docs/ISSUES.md` #52). The interval
-  model is what makes it *safe* to attempt: identical claims recurring over
-  disjoint periods are one node with several intervals. But it dedupes **states**
-  and must never dedupe **events** — *"Labour is in government"* in 1997 and 2024
-  is one state whose intervals union; *"Labour won the election"* in 1997 and 2024
-  is two events, and merging them fabricates one victory spanning both.
+- **Fact deduplication is built** (2026-08-21, `dev-docs/ISSUES.md` #52), and
+  this model is what made it safe: identical claims recurring over disjoint
+  periods are one node with several intervals, and because validity lives on the
+  `sourced_from` edge the intervals survive a merge with no combination rule to
+  invent. But it dedupes **states** and never **events** — *"Labour is in
+  government"* in 1997 and 2024 is one state whose intervals union; *"Labour won
+  the election"* in 1997 and 2024 is two events, and merging them would fabricate
+  one victory spanning both. The two sentences are near-identical, so nothing
+  computed from them separates the cases: the judgment is made at ingest, where
+  the document is still readable, and stored as `Fact.claim_kind`. A fact
+  ingested without one never merges, which is the whole corpus written before
+  that date.
 - **Valid-time rendering is designed and not built.** The timeline panel does not
   yet draw intervals; the grammar is `dev-docs/TIMELINE_VISUALISATION.md` §13,
   with a checked-in visual reference at `dev-docs/mockups/valid-time-grammar.html`.

@@ -36,7 +36,7 @@ Every ingested text is decomposed into three types of nodes:
 Paragraph-length semantic summaries — not keywords or short labels. Topics act as "soft ontological nodes" that embed well, support clustering, and can evolve over time. They describe the underlying theme of a segment in enough detail to preserve nuance.
 
 ### Facts
-Atomic, verifiable, grounded statements tied to source material. Minimal ambiguity. Each fact tracks provenance (source, extraction method) and may carry a confidence prior — the ingesting agent's reading of how well the record backs the claim, supplied once and never measured.
+Atomic, verifiable, grounded statements tied to source material. Minimal ambiguity. Each fact tracks provenance (source, extraction method) and may carry a confidence prior — the ingesting agent's reading of how well the record backs the claim, supplied once and never measured. A fact also carries a **claim kind** — `state` (a condition holding over a period) or `event` (an occurrence) — judged at ingest and read by deduplication, which merges states and never events. Nullable, and an unjudged fact simply never merges (#52).
 
 ### Inferences
 Higher-level interpretive derivations reasoned from facts and context. Explicitly provisional and revisable. Multiple competing inferences from the same evidence are permitted to coexist. Distinguished from facts to maintain epistemic clarity.
@@ -137,7 +137,7 @@ Every node carries a `ValueSignal`. One member is a score, one is a judgment, an
 
 Both clocks are nullable because "never" and "long ago" are different states, and only a nullable timestamp can tell them apart.
 
-A merge collapses several nodes into a fresh one, so its signal is built by `merged_value_signal` — max importance and confidence, and **the later of each clock**, with null losing to any real value. Max confidence looks wrong for a supplied prior until you see what it pairs with: the higher-confidence description becomes the merged node's *primary* content, so the number describes the text the node leads with, and breaking either half makes the pair lie. Carrying the number without its date would be worse than losing both: the merged node would claim a judgment nobody made, and since `stale_judgment` reads the *pair*, an unjudged node is never stale and the merged node stayed exempt from every archival class forever (#45). One shared function, because a merge rebuilds the signal field by field and silently resets whatever it forgets to name.
+A merge collapses several nodes into a fresh one, so its signal is built by `merged_value_signal` — max importance and confidence, and **the later of each clock**, with null losing to any real value. Max confidence looks wrong for a supplied prior until you see what it pairs with: in a topic merge the higher-confidence description becomes the merged node's *primary* content, so the number describes the text the node leads with, and breaking either half makes the pair lie. **A fact merge pairs it differently** (#52): the agent writes fresh content for the survivor, so there is no winning description to point at — instead the `confidence_basis` of whichever source supplied the kept confidence travels with it into the survivor's metadata, since a prior separated from its reason is the state that guidance exists to prevent (#46). Carrying the number without its date would be worse than losing both: the merged node would claim a judgment nobody made, and since `stale_judgment` reads the *pair*, an unjudged node is never stale and the merged node stayed exempt from every archival class forever (#45). One shared function, because a merge rebuilds the signal field by field and silently resets whatever it forgets to name.
 
 `reflect` reads these to nominate candidates — it never writes them:
 
@@ -300,7 +300,12 @@ is derived at read time and never stored — a stored count is an answer frozen
 against a baseline nothing records.
 
 It counts *independence*, not strength: three hedged reports from three outlets
-score 3, exactly as three confident ones would. It is off by default because it
+score 3, exactly as three confident ones would. **A claim about another period is
+not a second witness** (#62): where source dates put a similar node provably
+outside the subject's periods, it stops counting and is returned separately as
+`adjacent_periods` — nothing leaves the graph, both claims stay true of their
+own stretch, and the caller is told what was set aside rather than left with a
+number that quietly shrank. It is off by default because it
 is the most expensive annotation on the retrieval path, and because its cost
 rises with how many similarity edges reflection has written — it grows fastest
 on the graphs where it says most. See [docs/RETRIEVAL.md](docs/RETRIEVAL.md).
@@ -314,6 +319,8 @@ Fields are either *content* (immutable — corrections create new nodes) or
 nodes (
   id, type, content, source_id, embedding_id, metadata,   -- content (immutable)
   extraction_method, created_at,                           -- content (immutable)
+  claim_kind,      -- facts only: "state" | "event" | null (content, immutable)
+                   -- judged at ingest; null is unjudged, and never merges (#52)
   status,          -- "active" | "corrected" | "historical" |
                    -- "merged" | "archived"                 (mutated in place)
                    -- ("superseded" is the pre-#53 legacy value: retired by
@@ -399,7 +406,7 @@ knowledge claim and editing it rewrites no history:
 | Mutated in place | Set by | Why it's not a version |
 |---|---|---|
 | `status`, `superseded_at` | supersede / merge | this is precisely how a node is *retired*, and how "what the graph held at time T" is reconstructed — **transaction time, not validity**: it says when belief changed, never when the claim was true (#53) |
-| `value.confidence` | the ingesting agent's prior at `store_decomposition`, or absent; topic merge combines it via `merged_value_signal`, clocks included | supplied once at creation and never re-set — a correction mints a new node rather than rewriting this one, which is why the basis beside it is a single line and not a trail |
+| `value.confidence` | the ingesting agent's prior at `store_decomposition`, or absent; a topic or fact merge combines it via `merged_value_signal`, clocks included | supplied once at creation and never re-set — a correction mints a new node rather than rewriting this one, which is why the basis beside it is a single line and not a trail |
 | `importance`, `importance_judged_at` | `judge_importance` | a recorded assessment of the same claim, with its own provenance trail |
 | `retrieved_at` | `search` | a record that the node was read, not a change to what it says |
 | edge `label` (user relations) | reflection (relation consolidation) | edges are not versioned; relabelling a synonym is a plain update |
@@ -524,9 +531,13 @@ conflict with it. And **cross-frame pairs are dropped rather than reported**: hi
 similarity across disjoint metacontexts is coexistence, and calling it a
 contradiction is the misreading metacontexts exist to prevent.
 
-`apply_reflection` writes nine kinds of decision. `merges` is the only one that
-retires nodes from the active graph, so its bar is deliberately high — every pair
-of sources must clear the threshold or the merge is rejected and reported.
+`apply_reflection` writes nine kinds of decision. `merges` is the only
+*consolidation* among them that retires nodes from the active graph, so its bar
+is deliberately high — every pair of sources must clear the threshold or the
+merge is rejected and reported. It is **Topics only**: facts collapse through
+`merge_facts`, which is a resolution action on the review-loop path rather than a
+reflection decision, because `redundant` is judged when a document arrives and
+not when the graph is next swept (#52).
 
 ## Agent Interface (MCP)
 
@@ -534,7 +545,7 @@ Memory is exposed as tools, not as a raw database. Claude Code auto-prefixes the
 
 Ingestion is a two-step process: `segment` breaks text into chunks, then the agent extracts topics/facts/inferences and passes them to `store_decomposition`. Epimemer does not decompose text itself — that is the calling agent's job.
 
-The tools group into: **core memory** (`segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`, `judge_importance`); **discovery & stats** (`query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`); **conflict handling** (`check_conflicts`, `record_contradiction`, `record_variant`); **reflection** (`reflect`, `configure_reflection`, `apply_reflection`); **temporal access** (`graph_as_of`, `query_changes`); **archival** (`archive`, `restore`); **timelines** (`create_timeline`, `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`); **metacontexts** (`create_metacontext`, `get_metacontexts`); **graph management** (`list_graphs`, `use_graph`, `delete_graph`); and **visualization** (`viz_status`).
+The tools group into: **core memory** (`segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`, `judge_importance`); **discovery & stats** (`query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`); **conflict handling** (`check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`); **reflection** (`reflect`, `configure_reflection`, `apply_reflection`); **temporal access** (`graph_as_of`, `query_changes`); **archival** (`archive`, `restore`); **timelines** (`create_timeline`, `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`); **metacontexts** (`create_metacontext`, `get_metacontexts`); **graph management** (`list_graphs`, `use_graph`, `delete_graph`); and **visualization** (`viz_status`).
 
 See [INTEGRATION.md](INTEGRATION.md#available-tools) for the canonical table with one-line descriptions and the authoritative tool count — this document intentionally does not restate the count so it can only drift in one place.
 
@@ -562,7 +573,7 @@ These limits are **measured** rather than estimated — see [dev-docs/BENCHMARKS
 
 So: `reflect` is the limiting operation on both backends, and everything else has been pushed past any size worth quoting. Ingest is flat and not a concern. Don't point a large persistent graph at this unwarned.
 
-**Those are time limits only.** `reflect` also allocates ~580 bytes per *surviving* candidate pair and nothing caps how many survive, so the pair lists are quadratic and unbounded. **Measured on real prose 2026-08-20: 0.0105% of fact pairs clear the 0.80 threshold, which projects to ~3 MB at 10,000 facts** — not the gigabytes an earlier estimate predicted from a rate measured on templated text. The unbounded *response* is now the better reason to cap it than the memory. What that measurement does not cover is a corpus of genuine near-duplicates, which nothing here has ingested. Measurements, the corrected projection and the options: ISSUES.md **#60**.
+**Those are time limits only.** `reflect` also allocates ~580 bytes per *surviving* candidate pair, and the pair lists are quadratic in the node set. **Measured on real prose 2026-08-20: 0.0105% of fact pairs clear the 0.80 threshold, which projects to ~3 MB at 10,000 facts** — not the gigabytes an earlier estimate predicted from a rate measured on templated text. That moved the argument from memory to the *response*, and **the response is now capped (2026-08-21)**: each of the four pair lists returns its highest-scoring `max_nominations` (200 by default) and any list that was cut is named in the response's `truncated` key. The peak allocation is deliberately not bounded by that — it would mean capping inside the scorer, which is a large change against a 3 MB problem. What the measurement does not cover is a corpus of genuine near-duplicates, which nothing here has ingested. Measurements, the corrected projection and what was built: ISSUES.md **#60**.
 
 These figures depend on two optimisations worth knowing about, because the naive form of each is what a reader would otherwise expect: in-memory edge lookups go through endpoint indexes (`by_src` / `by_dst` in `storage/memory.py`) rather than scanning the edge set, and SurrealDB's `vector_search` ranks before filtering by status rather than filtering inside the ranking query — SurrealDB re-runs such a subquery per row, which cost `search` two orders of magnitude. What remains under `search` on SurrealDB is ~120 ms of per-result enrichment round-trips, the N+1 pattern ISSUES.md #14 tracks.
 
@@ -694,5 +705,5 @@ MCP process exiting; pointed at a non-loopback address, sessions mirror
 - **Metacontext inheritance scope**: how deep does inheritance go? If a metacontext is inherited from a document, do inferences derived from those facts also inherit it? Probably yes, but edge cases need thought.
 - **Metacontext-aware value signals**: *answered 2026-08-12, and now stated in the `store_decomposition` guidance an agent reads (#46)* — the scale is the same, the record it measures against is the frame's. A fictional fact can honestly score 0.9: the question is how well that frame's material backs the claim, not whether the frame is real. Left here because the reasoning matters — without it an agent conflates "is this true?" with "does the frame assert this?", every fiction node lands at the bottom of the scale, and confidence quietly becomes a fiction detector, duplicating badly what metacontexts already carry.
 - **Temporal validity — the "Saint Petersburg Problem"** — *answered, and built in full 2026-08-19 (ISSUES.md #53).* It was the largest gap this document ever recorded: **the graph could not say when a claim was true**, so historical truth was filed as error, contradiction detection was unsound in both directions, corroboration inflated, fact dedup could not be made safe, and inference could combine claims that were never simultaneously true. The model, its retrieval surface, recurrence, the soundness check and boundary proposals all now exist — see **Valid Time** above and [docs/VALIDITY.md](docs/VALIDITY.md), with the design history in ISSUES.md #53 and `dev-docs/REVIEW_EPISTEMIC.md` §13.
-  - **What it left open**, all recorded rather than forgotten: `basis` is per interval rather than per endpoint, so accepting a proposed boundary makes a *stated* start unreportable as stated (under-claiming, the safe direction); fact deduplication is unblocked but unbuilt, and must dedupe **states** without ever deduping **events** (#52); and the timeline panel does not yet draw intervals, though the grammar is designed (`dev-docs/TIMELINE_VISUALISATION.md` §13).
+  - **What it left open**, all recorded rather than forgotten: `basis` is per interval rather than per endpoint, so accepting a proposed boundary makes a *stated* start unreportable as stated (under-claiming, the safe direction); fact deduplication was unblocked by it and is now **built** (2026-08-21, #52) — it dedupes **states** and never **events**, on a `claim_kind` judgment recorded at ingest because two documents years apart yield near-identical sentences and nothing computed from them separates the cases; and the timeline panel does not yet draw intervals, though the grammar is designed (`dev-docs/TIMELINE_VISUALISATION.md` §13).
 - **Cross-metacontext retrieval**: when a query straddles metacontexts (e.g., "compare real AI with sci-fi AI"), how should retrieval compose results from multiple metacontexts?

@@ -176,7 +176,7 @@ Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<
 
 - **Core memory**: `segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`, `judge_importance`
 - **Discovery & stats**: `query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`
-- **Conflict handling**: `check_conflicts`, `record_contradiction`, `record_variant`
+- **Conflict handling**: `check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`
 - **Reflection**: `reflect`, `configure_reflection`, `apply_reflection`
 - **Temporal access**: `graph_as_of`, `query_changes`
 - **Archival**: `archive`, `restore`
@@ -374,4 +374,5 @@ deferred fixes are separate, in [dev-docs/ISSUES.md](dev-docs/ISSUES.md).
 - [dev-docs/BENCHMARKS.md](dev-docs/BENCHMARKS.md) — Measured scaling limits and where they come from
 - [dev-docs/REVIEW_EPISTEMIC.md](dev-docs/REVIEW_EPISTEMIC.md) — The review loop's design, including the validity model (§13)
 - [dev-docs/LEXICAL_SEARCH.md](dev-docs/LEXICAL_SEARCH.md), [dev-docs/RETRIEVAL_PROVENANCE.md](dev-docs/RETRIEVAL_PROVENANCE.md), [dev-docs/EVENT_LOG.md](dev-docs/EVENT_LOG.md) — Feature designs
+- [dev-docs/WARNINGS_AND_SETTINGS.md](dev-docs/WARNINGS_AND_SETTINGS.md) — Advisories, per-graph warning policy, node notes, inference merge (designed, not built)
 - [dev-docs/VISUALISATION.md](dev-docs/VISUALISATION.md), [dev-docs/TIMELINE_VISUALISATION.md](dev-docs/TIMELINE_VISUALISATION.md) — Dashboard design

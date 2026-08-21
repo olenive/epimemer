@@ -169,6 +169,10 @@ def _args(tool: str, seeded: dict) -> dict:
         "check_conflicts": {"fact_ids": facts, "threshold": 0.0},
         "record_contradiction": {"a_id": facts[0], "b_id": inferences[0]},
         "record_variant": {"a_id": facts[0], "b_id": inferences[0]},
+        # Refused (the seeded facts carry no claim_kind), and that is the
+        # call worth making the oracle watch: a refusal still names the ids
+        # it was handed, so it still has to declare them.
+        "merge_facts": {"source_ids": facts[:2], "content": "One claim."},
         "reflect": {"similarity_threshold": 0.0},
         "apply_reflection": {"judgments": [
             {"node_id": facts[0], "direction": "up", "reason": "central"}
@@ -214,6 +218,7 @@ def _ids_in(text: str, known: list[str]) -> set[str]:
 ALL_TOOLS = [
     "segment", "store_decomposition", "search", "link", "update", "supersede_by",
     "judge_importance", "check_conflicts", "record_contradiction", "record_variant",
+    "merge_facts",
     "reflect", "apply_reflection", "query_graph", "topic_tree", "graph_as_of",
     "query_changes", "find_nodes", "list_sources", "list_relations", "archive",
     "restore", "create_timeline", "set_reference_time", "add_timepoint",

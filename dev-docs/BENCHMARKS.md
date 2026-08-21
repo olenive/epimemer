@@ -420,6 +420,28 @@ confined entirely to the half nobody suspected — the entry guessed at "`Segmen
 text and unusually long inference content", and inferences turn out to top out
 at 63 word-pieces.
 
+> **Correction, 2026-08-21: the numbers above stand, the conclusion drawn from
+> them does not.** Segment text does cross the window at the rates given — that
+> was measured and is unchanged. But **segments are never embedded**, so nothing
+> ever hands that text to the tokenizer: no code path constructs an
+> `EmbeddingRecord` for a segment, all 624 stored embeddings across both graphs
+> point at nodes (488/488 and 136/136), `vector_search` resolves hits through
+> `get_node` so a segment record could not be returned anyway, and
+> segmentation's own sentence embeddings are transient. Segments are searched by
+> **BM25 alone**, which indexes the whole field — which is precisely why they
+> answer §3's *where did I read that?* question well, since a rare identifier is
+> what lexical search finds and vectors lose.
+>
+> **The mistake is a reusable one, and it is this instrument's characteristic
+> failure.** *Segment text crosses the window* and *segments are a search
+> corpus* are both true, and the join between them is not. `corpus_measure.py`
+> read segment text out of the `segment` table — the right place to ask the
+> tokenizer question — and had no way to see whether that text is ever
+> tokenized. **A measured quantity is not yet a measured consequence:** before a
+> distribution becomes a cost, something has to be shown to pay it. #59 closed
+> on this without code; the precondition now lives on
+> `EmbeddingRecord.item_id`, where anyone adding segment embedding will meet it.
+
 ### `reflect`'s surviving-pair rate on real prose is ~0.01%, not 49%
 
 Same model, the real 0.80 threshold, and the real stored vectors — the ones
@@ -643,3 +665,34 @@ sentences through the real model, which is what located the 49% discrepancy.
 reproducing this on a different corpus should expect different rates — that is
 the point of the measurement, and the reason the tables name the corpus and its
 size in every row. Guarded by `tests/test_corpus_measure_smoke.py`.
+
+### Do supplied priors carry a reason? (#46's trigger, 2026-08-21)
+
+The same read answers a question #46 left open and nothing measured: whether tool
+guidance actually produces a `confidence_basis`, given it is asked for rather
+than enforced.
+
+| population | `memory` | `petritype-server` | carries a basis |
+|---|---|---|---|
+| rated non-default (161×0.9, 2×0.7) | 163 | 0 | **163 — 100%** |
+| unrated (field absent) | 125 | 0 | n/a, owes none |
+| legacy literal `0.5` (pre-2026-08-19) | 200 | 136 | n/a, owes none |
+
+Emitted as `measurement: priors`, so `--skip-survival` is enough:
+
+```bash
+uv run python scripts/corpus_measure.py \
+  --database memory,petritype-server --skip-survival
+```
+
+**Guidance is producing them, so the enforcement fallback stays unbuilt.** The
+second reading is the one a bare rate would hide: **no post-#46 node sits at a
+rated `0.5`** — they are stored absent instead, which is the ladder's own
+instruction and what makes absence informative rather than ambiguous.
+
+**One measurement trap, worth the line because it produced a confident wrong
+answer first.** `confidence_basis` is stored in `node.metadata`, not beside the
+number it explains in `value` — deliberately, since the basis is prose about one
+judgment while `ValueSignal` holds the numbers every ranker reads. Querying
+`value.confidence_basis` returns a clean 0% that looks like a finding. **Asking
+the store the wrong question is not a null result.**

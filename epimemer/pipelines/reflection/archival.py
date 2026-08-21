@@ -275,6 +275,10 @@ async def nominate_archival_candidates(
        those whose entire evidence set has since been archived (the follow-on
        to class 1 and 3). Their basis changed; they are the
        expensive-to-recreate layer, so they are flagged rather than swept.
+       **`evidence_merged` is deliberately not read here** (#61): a premise that
+       absorbed another claim gained provenance rather than losing its basis, so
+       nominating on it would have every merge propose discarding its own
+       dependents. That label asks the agent for a re-read, not for a verdict.
     3. **never_retrieved** — active facts never returned by a search, not judged
        important, and with nothing depending on them.
     4. **stale_judgment** — active nodes held above the ceiling by an upward

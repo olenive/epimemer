@@ -151,6 +151,16 @@ async def merge_nodes(
     operation so the merged node is searchable and inherits its sources'
     supporting evidence rather than being orphaned.
 
+    **Dependent inferences are flagged, as they are on every other event that
+    changes a premise** (#61). A merge is the only one that does not retire the
+    claim — the survivor is ACTIVE and carries every source — so it writes
+    `evidence_merged` rather than `evidence_superseded`: the wording under the
+    inference changed, which is worth a re-read, and nothing was overturned,
+    which is what the supersession flag would have said. This is also the only
+    chance to record it: the `derived_from` edge migrates onto the survivor in
+    the same transaction, so afterwards nothing distinguishes the dependent
+    from one drawn on the survivor directly.
+
     Args:
         source_nodes: The nodes being merged.
         merged_node: The new combined node.
@@ -160,6 +170,8 @@ async def merge_nodes(
     Returns:
         A list of merged_into edges, one per source node.
     """
+    from epimemer.pipelines.reflection.review import plan_evidence_merged_edges
+
     now = datetime.now(timezone.utc)
 
     # The merged node inherits its sources' sources/tags/relationships via edge
@@ -175,8 +187,23 @@ async def merge_nodes(
         for source in source_nodes
     ]
 
+    # Planned per source, so each flag names the wording that went away rather
+    # than the survivor that replaced it. An inference resting on two of the
+    # sources is told about both.
+    #
+    # Run for every source kind rather than guarded to facts: a topic has no
+    # dependents of this shape, so it plans nothing and costs two reads, while a
+    # type guard is one more place inference merge would have to remember to
+    # widen.
+    evidence_edges = [
+        edge
+        for source in source_nodes
+        for edge in await plan_evidence_merged_edges(source.id, storage)
+    ]
+
     await storage.merge_nodes_tx(
         source_nodes, merged_node, merged_embedding, lineage_edges, merged_at=now,
+        evidence_edges=evidence_edges,
     )
     return lineage_edges
 

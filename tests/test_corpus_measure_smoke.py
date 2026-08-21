@@ -131,6 +131,75 @@ class TestTheScoreSpreadIsWhatSeparatesNoiseFromDistance:
         assert measure._score_spread(np.ones((1, 4))) == {}
 
 
+class TestPriorsSeparateThreePopulationsThatLookAlike:
+    """#46's open trigger, and the whole difficulty is the classification.
+
+    A supplied 0.9, an omitted confidence and a legacy literal 0.5 are three
+    different things stored in one field, and only the first owes a
+    `confidence_basis`. Counting them together is how "100% of priors carry a
+    reason" and "34% do" become the same query.
+    """
+
+    def _sql(self, rows):
+        return lambda _query: rows
+
+    def test_a_rated_non_default_owes_a_basis(self, measure):
+        result = measure._priors(self._sql([
+            {"n": 9, "confidence": 0.9, "basis": True},
+            {"n": 1, "confidence": 0.7, "basis": False},
+        ]))
+
+        assert result["rated_non_default"] == 10
+        assert result["with_basis"] == 9
+        assert result["basis_pct"] == 90.0
+
+    def test_the_legacy_default_is_not_counted_as_a_supplied_prior(self, measure):
+        """Nodes written before #46 carry a literal 0.5 nobody chose. Counting
+        them as rated would report a basis rate near zero for a population that
+        was never asked for one."""
+        result = measure._priors(self._sql([
+            {"n": 200, "confidence": 0.5, "basis": False},
+            {"n": 2, "confidence": 0.9, "basis": True},
+        ]))
+
+        assert result["legacy_default"] == 200
+        assert result["rated_non_default"] == 2
+        assert result["basis_pct"] == 100.0
+
+    def test_unrated_owes_nothing(self, measure):
+        """An absent confidence is the ladder's own instruction at 0.5, not an
+        omission — so it must not drag the rate down."""
+        result = measure._priors(self._sql([
+            {"n": 125, "confidence": None, "basis": False},
+            {"n": 4, "confidence": 0.3, "basis": True},
+        ]))
+
+        assert result["unrated"] == 125
+        assert result["basis_pct"] == 100.0
+
+    def test_every_node_lands_in_exactly_one_population(self, measure):
+        result = measure._priors(self._sql([
+            {"n": 200, "confidence": 0.5, "basis": False},
+            {"n": 125, "confidence": None, "basis": False},
+            {"n": 163, "confidence": 0.9, "basis": True},
+        ]))
+
+        assert result["nodes"] == 488
+        assert (
+            result["legacy_default"] + result["unrated"] + result["rated_non_default"]
+            == result["nodes"]
+        )
+
+    def test_nothing_owed_reports_no_rate_rather_than_a_perfect_one(self, measure):
+        """A graph written entirely before #46 has no supplied priors at all.
+        Reporting 100% there would read as guidance succeeding."""
+        result = measure._priors(self._sql([
+            {"n": 136, "confidence": 0.5, "basis": False},
+        ]))
+
+        assert result["basis_pct"] is None
+
+
 class TestScalingStepsStayInsideTheCorpus:
     def test_steps_never_exceed_the_items_available(self, measure):
         steps = measure._scaling(np.eye(120), 0.80)
