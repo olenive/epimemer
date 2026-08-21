@@ -327,6 +327,15 @@ provisionality is a different axis entirely.
 > facility, a per-graph warning policy, and the live defect that **a fact merge
 > does not flag its dependent inferences**.
 
+> **Amended 2026-08-21 — the "does not exist yet" is now dated.** The same day,
+> the first `merge_facts` calls on a real corpus collected duplicate inferences
+> onto shared premises (`ISSUES.md` #52), which is precisely the population this
+> entry says will not exist until fact merges start doing so. It is a handful of
+> candidates rather than a backlog, so the entry stays here rather than moving to
+> *Ready to build* — but **the blocker is no longer "there is nothing to
+> merge"**, and whoever picks it up should re-measure against a merged corpus
+> rather than quote the zero above.
+
 **Cost once decided.** Small — the machinery is built. This is a gate on
 judgment, not on work.
 

@@ -368,6 +368,19 @@ That last measurement is why this whole section is designed and not built: the
 duplication it addresses does not exist yet, and will not until fact merges start
 collecting inferences together.
 
+> **Amended 2026-08-21 — the precondition has since been created.** Later the
+> same day, five `merge_facts` calls on the `memory` graph (`ISSUES.md` #52) did
+> exactly what the first bullet above anticipates: a fact merge collected
+> duplicate inferences onto one survivor. The merged fact *"Corroboration is off
+> by default…"* now `supports` three inferences, two of which state one claim in
+> different words and previously rested on different premises. **So the
+> shared-evidence population is no longer empty, and the measurement above no
+> longer describes the graph it was taken on.** What it still describes correctly
+> is the *global* sweep, which remains the wrong shape for the same three
+> reasons. Building this now wants a fresh count of grouped candidates rather
+> than a repeat of the pair census — the zero was a fact about a corpus with no
+> merges in it, and there is no longer one.
+
 Each candidate carries its advisory, computed before the agent decides:
 
 ```json

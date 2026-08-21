@@ -350,6 +350,47 @@ while the server is single-client stdio; keep this issue open as the reminder.
 
 ### Issue 52 — facts are never deduplicated across documents — ✅ BUILT (2026-08-21), one migration outstanding
 
+> **First merges taken on a real corpus, 2026-08-21.** Three revisions of
+> today's own documentation — `docs/RETRIEVAL.md` §8, `SUMMARY.md`'s
+> corroboration section, and `docs/REFLECTION.md` §2 and §4 — were ingested into
+> the `memory` graph with `claim_kind` set on all **44 facts, every one a
+> `state`**. `reflect` nominated **18 pairs** above the bar with `truncated`
+> empty; **five were merged and thirteen declined**, and that ratio is the design
+> working rather than a disappointment. Similarity paired *"most nodes carry no
+> validity intervals"* with *"nothing leaves the graph under `adjacent_periods`"*
+> at 0.89, and *"Issue 55 and 56 were fixed"* with *"Issue 54 was fixed"* at
+> 0.87 — the second pair events besides. Judgment is what the nomination bar was
+> always deferring to, and it declined most of what it was handed.
+>
+> **Three things the corpus showed that the tests could not.**
+>
+> 1. **The comparability claim holds, and the count did not move.** This entry
+>    and `docs/RETRIEVAL.md` both assert that *"the `sources` list on every
+>    result is what makes a count taken before and after comparable"*. Measured:
+>    each survivor carries **two `document_ids` under one publisher**, and
+>    `corroboration.count` stayed at **1** across the merge. All three documents
+>    are honestly `published_by: epimemer`, and three files from one project are
+>    not three witnesses — so the number that did *not* move is the correct
+>    reading, and the plural `sources` list is the only place the merge shows. A
+>    merge that raised the count would have been the bug.
+> 2. **The pre-`claim_kind` island is now concrete rather than projected.** A
+>    cross-generation merge was attempted and refused verbatim: *"1 of these
+>    facts were stored without a claim_kind, so nothing knows whether they
+>    describe conditions or occurrences — and the two answers merge in opposite
+>    directions."* Five facts from document `279f9f42` now sit un-mergeable
+>    beside near-identical twins ingested the same day. **The island does not
+>    shrink by waiting**: the only exit is re-ingest, so the migration this entry
+>    still lists is one of content rather than of code, and its cost scales with
+>    the corpus rather than with the fix.
+> 3. **The merge collected inferences onto one survivor**, which is the
+>    precondition `WARNINGS_AND_SETTINGS.md` §6 was waiting on and had measured
+>    at zero the same morning. The survivor *"Corroboration is off by default…"*
+>    now `supports` three inferences, two of which — *"Corroboration grows
+>    fastest on the graphs where it has the most to say"* and *"…grows most
+>    expensive on exactly the graphs where it has the most to say"* — state one
+>    claim and previously hung off different premises. See #61 and that
+>    document's §6.1.
+
 > **Built 2026-08-21, and the decision this waited on was made rather than
 > deferred: the event/state judgment is recorded at ingest.** `Fact.claim_kind`
 > is `"state" | "event" | None`, supplied on a `store_decomposition` entry, and
@@ -2357,6 +2398,20 @@ headroom. Fixing them does nothing for this.
 ---
 
 ### Issue 61 — a fact merge does not flag its dependent inferences — ✅ RESOLVED (2026-08-21)
+
+> **Exercised outside the test suite, 2026-08-21 — the same day.** The first
+> five `merge_facts` calls on a real corpus (#52) wrote **14 `evidence_merged`
+> edges** and put the label on **seven inferences**, each naming the retired
+> phrasings rather than the survivor, as designed.
+>
+> **The invariant that could only be checked here held.** `docs/REFLECTION.md`
+> §4 asserts that `evidence_merged` is not a weaker `evidence_stale` — that
+> staleness is an archival class and a merged premise is not, because otherwise
+> every merge would nominate its own dependents for discard. Re-running
+> `reflect` after the merges: all seven appear in `pending_review`, and **none
+> of them appears in `archival_candidates`**, whose `evidence_stale` class held
+> six unrelated nodes. Before this corpus there were no merged premises
+> anywhere, so the claim had nothing to fail against.
 
 Found the day `merge_facts` shipped (#52), while designing inference merge.
 Small, real, and a regression in the sense that the path it breaks was
