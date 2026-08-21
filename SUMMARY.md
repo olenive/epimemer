@@ -307,8 +307,15 @@ outside the subject's periods, it stops counting and is returned separately as
 own stretch, and the caller is told what was set aside rather than left with a
 number that quietly shrank. It is off by default because it
 is the most expensive annotation on the retrieval path, and because its cost
-rises with how many similarity edges reflection has written — it grows fastest
-on the graphs where it says most. See [docs/RETRIEVAL.md](docs/RETRIEVAL.md).
+rises with the density of `similarity` edges — it would grow fastest on the
+graphs where it says most.
+
+**Today it says less than that implies**, and the reason is worth knowing before
+you read a count: nothing currently *writes* a `similarity` edge
+(`dev-docs/ISSUES.md` #64), so on every real graph the neighbourhood is the node
+itself and the number is a count of publishers behind one node. That makes it
+correct and cheap rather than wrong — but it is not yet the cross-restatement
+reading described here. See [docs/RETRIEVAL.md](docs/RETRIEVAL.md).
 
 ## Data Model (Minimal)
 

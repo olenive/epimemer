@@ -368,6 +368,34 @@ corpus — so that column is a dial rather than an observation, and what a real
 graph sits at is unmeasured. And the corpus is the standard synthetic one, so
 this inherits its vocabulary limits like everything else here.
 
+> **Amended 2026-08-21 — what a real graph sits at is now measured, and it is
+> zero.** Both statements above need correcting, and the second caveat was
+> pointing straight at the first without either being followed up.
+>
+> **"Similarity edges are written by `apply_reflection`" is false.** It writes
+> nine kinds of decision and none of them is a `similarity` edge; nothing in the
+> codebase writes one at all (`ISSUES.md` #64). The census: **0 of 4,386** edges
+> on `memory`, **0 of 1,028** on `petritype-server`.
+>
+> **What survives.** The *shape* of the finding is untouched — the fan-out is
+> unbounded, degree 10 really is nearly the whole call, and the with-edges and
+> without-edges costs really are separable. The measurement was taken against a
+> dial and reported as one, which is why the numbers stand.
+>
+> **What does not.** The argument that settled default-off. "This gets more
+> expensive the more a graph has been reflected over" is not true of any graph
+> that exists: reflecting writes no similarity edges, so no amount of reflection
+> moves this cost. The right reading is the *without-edges* column — ~3×
+> `review_labels_for`, entirely round-trips — and that is still several times
+> every other annotation, so **default-off survives on the round-trip cost
+> alone**. The conclusion was right and one of its two reasons was not.
+>
+> **The order this leaves things in.** Whatever #64 builds will be the first
+> thing that puts real similarity edges in a graph, and the degree column
+> becomes an observation the first time it does. Re-measure then, against a
+> graph whose edges came from judgments rather than from `--similarity-degree`.
+
+
 Reproduce with, one run per degree:
 
 ```bash

@@ -28,6 +28,19 @@ one. Three reasons it was right not to wait: nothing is destroyed, a wrong
 similarity edge overstates a number whose workings come back with it, and it
 works today.
 
+**No similarity edge is written anywhere, so today this walk always returns
+`{node}`** (#64, measured 2026-08-21: zero on both real graphs). The reads here
+are correct and the neighbourhood is the right design; it simply has no input
+yet, because the "record `SIMILARITY` and keep both" action every refusal
+recommends is reachable only through the generic `link` tool and is therefore
+never taken. Two consequences worth knowing before changing anything here: every
+count in production is currently the *identity* reading, and the cost measured
+in `BENCHMARKS.md` was taken against edges assigned by a dial rather than
+produced by judgment. **This is not a reason to collapse the walk** — that
+migration was proposed under #52 and declined for exactly this reason, since
+removing the neighbourhood would delete the only consumer of the judgment #64
+exists to start recording.
+
 **A claim about another period is not a second witness (#62).** "The city is
 called Leningrad" (BBC, 1924–1991) and "the city is called Saint Petersburg"
 (Reuters, 1991–) are near-identical sentences, so `reflect` pairs them — and

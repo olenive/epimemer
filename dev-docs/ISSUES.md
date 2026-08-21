@@ -2,7 +2,8 @@
 
 Living issue tracker. **Last review: 2026-08-21.**
 
-Open: nothing but **16** and **58**, both deferred with their triggers stated.
+Open: **64** (found 2026-08-21, wants a decision), plus **16** and **58**, both
+deferred with their triggers stated.
 **61**, **62** and **63** were built on 2026-08-21. **46**, **48** and **51** were built
 and merged (2026-08-19, -19, -20); their entries are deleted per the workflow
 below, and what they taught is kept here and in the docs they name —
@@ -348,7 +349,7 @@ while the server is single-client stdio; keep this issue open as the reminder.
 
 ---
 
-### Issue 52 — facts are never deduplicated across documents — ✅ BUILT (2026-08-21), one migration outstanding
+### Issue 52 — facts are never deduplicated across documents — ✅ BUILT (2026-08-21), migration declined the same day
 
 > **First merges taken on a real corpus, 2026-08-21.** Three revisions of
 > today's own documentation — `docs/RETRIEVAL.md` §8, `SUMMARY.md`'s
@@ -379,9 +380,11 @@ while the server is single-client stdio; keep this issue open as the reminder.
 >    describe conditions or occurrences — and the two answers merge in opposite
 >    directions."* Five facts from document `279f9f42` now sit un-mergeable
 >    beside near-identical twins ingested the same day. **The island does not
->    shrink by waiting**: the only exit is re-ingest, so the migration this entry
->    still lists is one of content rather than of code, and its cost scales with
->    the corpus rather than with the fix.
+>    shrink by waiting**: the only exit is re-ingest, and its cost scales with
+>    the corpus rather than with any fix. *(Written when this entry still listed
+>    an outstanding migration, and pointing at the wrong one — the migration in
+>    the heading was corroboration's, now declined below. Re-ingesting the island
+>    remains the only way out of it, and nobody has scheduled it.)*
 > 3. **The merge collected inferences onto one survivor**, which is the
 >    precondition `WARNINGS_AND_SETTINGS.md` §6 was waiting on and had measured
 >    at zero the same morning. The survivor *"Corroboration is off by default…"*
@@ -622,6 +625,50 @@ stay two facts even under the #53 interval model.
 >   re-deriving identity. A graph holding duplicate entity nodes over-counts
 >   until `reflect` merges them, and that is the right place for the repair —
 >   fact dedup should not grow a second, different notion of entity identity.
+>
+> **Declined 2026-08-21, with no code, because its premise is inverted.** The
+> migration assumed corroboration counts over a *populated* neighbourhood that
+> merging would shrink toward identity. It does not. **No similarity edge exists
+> on any real graph** — 0 of 4,386 on `memory`, 0 of 1,028 on
+> `petritype-server` — because nothing in the codebase writes one, which is now
+> **#64**. So the neighbourhood is already `{node}`, corroboration is already the
+> identity reading, and collapsing the walk would change no count anywhere.
+>
+> Both stated payoffs are gone on inspection, and by different routes:
+>
+> - **"The Saint Petersburg caveat goes with it"** — already collected, by #62,
+>   on 2026-08-21, through a different mechanism. `assertions_are_disjoint` and
+>   `adjacent_periods` settle the Leningrad pair *inside* the neighbourhood
+>   reading. §8's caveat was rewritten then and no longer says what this bullet
+>   was written against.
+> - **"Stops over-reporting through a wrong `similarity` edge"** — an
+>   over-report needs an edge, and there are none. What the bullet describes is
+>   the risk `corroboration.py` explicitly accepts in exchange for auditability:
+>   a wrong edge inflates a number **whose workings come back with it**, in
+>   `sources[].node_ids`. That trade was argued, not overlooked, and it does not
+>   become a defect by being restated as a migration.
+>
+> **And it would now be the wrong direction.** Collapsing the walk removes the
+> only consumer of a judgment #64 exists to start recording. The two changes are
+> not independent: **the neighbourhood is the mechanism by which "keep both,
+> joined by `similarity`" means anything at all**, and this migration would
+> delete it on the grounds that a *different* mechanism had superseded it —
+> which merging has not, and structurally cannot.
+>
+> **Merging structurally cannot replace it, and this is the load-bearing
+> point.** `merge_refusal` refuses an **event** outright, refuses an unjudged
+> fact, and refuses a cross-frame pair. So identity can never count the
+> paradigm case corroboration exists for: *two publishers reporting the same
+> occurrence*. Under an identity-only reading, BBC and Reuters on one election
+> score 1 for ever, because the gate that would unify them refuses every event
+> by design. The live corpus says the same thing about the other refusal —
+> **305 of 356 active facts (86%) carry no `claim_kind`** and never will, so
+> identity is permanently unreachable for them too.
+>
+> Kept in place of the migration: **the `sources` list is still what makes
+> counts comparable**, and that claim survives intact — it was verified across
+> the five merges of 2026-08-21, where each survivor gained a second
+> `document_id` under one publisher and the count correctly did not move.
 
 ---
 
@@ -2646,6 +2693,94 @@ a measured 0.8099.
 
 ---
 
+### Issue 64 — `EdgeType.SIMILARITY` has three readers and no writer — 🔴 OPEN (found 2026-08-21)
+
+Found while taking #52's outstanding corroboration migration, which is what
+sent anyone looking at the neighbourhood in the first place. The migration is
+declined on the strength of this (see #52); the defect it uncovered is real and
+separate.
+
+**Nothing in the codebase ever writes a `similarity` edge.** `grep` for
+`EdgeType.SIMILARITY` returns three sites and all three read:
+
+| site | reads it for | what an empty set does |
+|---|---|---|
+| `pipelines/query/corroboration.py` | forms the neighbourhood the count is taken over | every count becomes the identity reading |
+| `pipelines/reflection/contradiction_detection.py` | `already_linked`, to skip pairs already assessed | nothing is ever skipped |
+| — | — | there is no third; the rest of the grep is `types.py` |
+
+`record_contradiction` and `record_variant` each write their edge type from a
+tool of their own. `similarity` has no such tool. The action the design names
+over and over — *"record `SIMILARITY` and keep both"*, in `fact_dedup`'s refusal
+prose, in `REVIEW_EPISTEMIC.md` §3, in the `redundant` row of
+`docs/REFLECTION.md` §2 — is reachable only through the generic
+`link(edge_type="similarity")`, and so is never taken.
+
+**Measured on every real graph, 2026-08-21.** Across 5,414 edges on the two
+graphs that hold real ingested text:
+
+| graph | edges | `similarity` | `contradiction` | `variant_of` |
+|---|---|---|---|---|
+| `memory` | 4,386 | **0** | 0 | 0 |
+| `petritype-server` | 1,028 | **0** | 0 | 0 |
+
+The zeroes in the last two columns mean only that nobody has called those tools.
+The `similarity` zero is different in kind: **no call exists that would make it
+non-zero**, short of hand-writing edges through `link`.
+
+**Two live consequences, both verified rather than inferred.**
+
+1. **Corroboration's documented behaviour does not happen.** `docs/RETRIEVAL.md`
+   §8 and this repo's summary both say the count is *"computed over a similarity
+   neighbourhood"*. On every real graph the neighbourhood is `{node}` and the
+   count is already the identity reading — which is why merging five pairs on
+   2026-08-21 moved no count. That was read at the time as the publisher rule
+   working correctly, and it was, but it was **also** this: there was no
+   neighbourhood on either side of the merge to move away from.
+2. **Declined pairs are re-nominated for ever.** `already_linked` is built from
+   `SIMILARITY ∪ CONTRADICTION` and is therefore always empty, so a pair the
+   agent looked at and deliberately kept apart comes back on the next sweep with
+   nothing recording that it was judged. Of the 18 pairs `reflect` nominated on
+   2026-08-21, five merged and **thirteen were declined and left no trace**;
+   they are still nominated today. The `redundant` verdict's fallback is not a
+   no-op by design, it is a no-op by omission.
+
+**What this is not.** It is not an argument for writing `similarity` edges
+automatically at nomination time. The edge is supposed to record a *judgment* —
+these two are one claim's neighbourhood and were kept apart on purpose — and a
+sweep that wrote them for every pair over the bar would fill the graph with
+assertions nobody made, and would suppress its own future nominations while
+doing it. The nomination bar defers to judgment (#63); so must this.
+
+**Wants a decision before it wants code**, and the shapes differ in what they
+record:
+
+- **`apply_reflection(similarities=[…])`** — a tenth kind of decision beside the
+  nine, so *declining* a nomination is an outcome the agent can apply in the
+  same call as everything else it decided. Matches the existing surface, and the
+  edge then carries the same provenance as every other applied verdict.
+- **`merge_facts` writes the edge when it refuses** — appealing, because the
+  refusal already holds the pair and has just argued for this exact fallback.
+  Wrong for at least the cross-frame refusal, where `record_variant` is the
+  right action and a `similarity` edge would assert the wrong relation; and it
+  turns a call the agent expects to change nothing on refusal into one that
+  writes.
+- **A `record_similarity` tool**, symmetric with `record_contradiction` and
+  `record_variant`. Smallest and most obvious, and the least connected to the
+  loop that produces the judgments.
+
+The first is the recommendation. **Whichever is taken, #52's migration stays
+declined** — collapsing the walk would remove the reading that this issue exists
+to make reachable.
+
+**Fixing this changes what corroboration costs**, which is the third thing to
+carry: every measurement of that cost was taken against synthetic edges at a
+fixed degree (`BENCHMARKS.md`), because real ones did not exist to measure. A
+graph that starts recording judgments is the first one where the fan-out is an
+observation.
+
+---
+
 ## Older carry-overs (open, low priority)
 
 From the original live-graph walkthrough (issues 1–5, otherwise resolved or kept
@@ -2794,5 +2929,6 @@ What to pick up, and what has to be true first:
 | ✅ | ~~61 (a fact merge does not flag its dependents)~~ | **Done 2026-08-21**, decision and build in one sitting. The decision the row asked for went to a **sibling edge type**, `evidence_merged`, rather than a qualified `evidence_superseded` — and what settled it was a consequence rather than a principle: archival nominates on `evidence_stale`, so one shared label would have every merge propose discarding its own dependents. The build is the shape the row predicted (`merge_nodes` calls a planner beside the two supersession paths, both now over one `dependent_inference_ids`), plus the seam the row did not: `merge_nodes_tx` grows `evidence_edges` across the protocol, both backends and the instrumented wrapper. **One thing learned that is worth more than the fix**: unlike `evidence_stale`, this label has no live-check half and never can, because the `derived_from` edge is migrated onto the survivor by the same transaction — *a derived label can only be derived while its evidence is still in the graph* |
 | ✅ | ~~63 (the nomination bar was two numbers)~~ | **Done 2026-08-21.** Found by review, fixed the same day: the sweeps nominated at 0.80 while the merge gate refused below 0.83, so reflect offered pairs `merge_facts` then rejected — telling the agent the graph would never have paired them, right after it had. One constant at 0.80 now, read by both `check_conflicts` declarations, `merge_facts` and `detect_contradictions`, with the invariant **merge floor ≤ every nomination bar** pinned by signature across the MCP boundary. The carry-forward is the shape of the miss: **a constant with a stated invariant needs a test that reads every declaration of it** — #52's "both readers take it from there" was true of the two it named, and there were four |
 | ✅ | ~~62 (corroboration does not read validity)~~ | **Done 2026-08-21.** The one decision the row asked for turned out to be **mis-framed**: dropping and marking are not alternatives, because nothing is dropped from the *graph* — both claims stay, true of their own periods, and only a read-time integer narrows. So the count became honest and the uncounted look-alike comes back named in `adjacent_periods`, which is the half that carries new information: where a search returns one of the pair, that block is the only place the other appears at all. Two things the row had wrong. **Placement** it did not mention and which decides correctness: the comparison must run before the supporter hop, or the look-alike walks its own supporters — and their publishers — in behind it. **Cost** it stated as "no round trips": nearly, but the periods were being read at stage 4 and are needed at stage 1.5, so the provenance read splits in two, thirteen calls or twelve, still constant in result-set size. #52's inherited corroboration migration stays open and separate, as the row said |
+| **next** | **64 (`similarity` has no writer)** | **Found 2026-08-21**, while taking #52's outstanding corroboration migration — which is declined on the strength of it, with no code. The migration assumed a populated neighbourhood that merging would shrink toward identity; the neighbourhood is **empty on every real graph** (0 of 4,386 edges on `memory`, 0 of 1,028 on `petritype-server`), so collapsing the walk would change no count and would delete the only consumer of a judgment nothing yet records. Both of the migration's stated payoffs were already gone: the Saint Petersburg caveat was collected by #62 through `adjacent_periods`, and "stops over-reporting through a wrong edge" describes a trade `corroboration.py` argued for rather than a defect. **Merging structurally cannot replace the walk** — `merge_refusal` refuses every event, so identity can never count two publishers on one occurrence, the paradigm case the whole annotation exists for. The decision this row wants is *which surface records the judgment*: a tenth `apply_reflection` argument (recommended), a write on `merge_facts`' refusal, or a `record_similarity` tool. Carry-forward: **an edge type with readers and no writer is not a feature with low adoption, it is a feature that has never run** — three documents described its cost curve and one named the wrong writer |
 | designed | inference merge, advisories, node notes | Not on this board — `dev-docs/WARNINGS_AND_SETTINGS.md`, designed 2026-08-21 and deliberately unbuilt. The duplication it addresses does not exist yet: 123 active inferences across both real graphs yield 5,053 pairs and **zero** at the nomination bar. It becomes real once fact merges start collecting inferences onto one survivor |
 | deferred | 16, 58 | 16: the server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`). 58: a graph large enough that the FTS backfill inside `connect()` is worth reporting on |

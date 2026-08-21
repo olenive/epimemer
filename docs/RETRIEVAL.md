@@ -284,9 +284,19 @@ right of its period — it is the *dates*, not the status, that decide whether a
 retired claim witnessed this one.
 
 **Off by default on a measurement**, not on taste. It is several times the cost
-of every other annotation here, and its price rises with how many `similarity`
-edges `reflect` has written — so it grows fastest on the graphs where it says
-most. `dev-docs/BENCHMARKS.md` has the table.
+of every other annotation here, and its price rises with the density of
+`similarity` edges — so it would grow fastest on the graphs where it says most.
+`dev-docs/BENCHMARKS.md` has the table, measured against edges assigned at a
+fixed degree.
+
+**One thing to know before reading any count today.** Nothing in the system
+writes a `similarity` edge — the neighbourhood bullet above describes a walk
+whose input no tool produces, and both real graphs carry zero of them
+(`dev-docs/ISSUES.md` #64). So every count you will currently see is the
+identity reading: the distinct publishers behind *that node's own* documents,
+with no restatement folded in. The number is honest and the annotation is
+cheaper than the table suggests; what it is not yet is the cross-restatement
+count this section describes.
 
 ### Frame scoping
 
