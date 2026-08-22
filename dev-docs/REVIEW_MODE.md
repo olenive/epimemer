@@ -580,14 +580,22 @@ with every merge taken before it is captured.
 
 Distributed across three places, none of them complete:
 
-| Where | What | Bounded |
+| Where | What | Grows with |
 |---|---|---|
-| survivor node, `metadata.merged_from` | the ids that merged in, appended per merge | **no** |
-| each retired source, `lifecycle` | `{because: merged, counterpart: <survivor>, retired_at}` | append-only |
-| graph edges | `merged_into` (source→survivor), `evidence_merged` (to dependents) | grows with merges |
+| survivor node, `metadata.merged_from` | the ids that merged into **this** survivor | nothing — set once |
+| each retired source, `lifecycle` | `{because: merged, counterpart: <survivor>, retired_at}` | every merge that node takes part in |
+| graph edges | `merged_into` (source→survivor), `evidence_merged` (to dependents) | every merge |
 
-The survivor already carries a per-node, unbounded, append-on-every-merge list.
-It holds ids rather than the partition, but the structure to extend is there.
+> **Corrected 2026-08-22.** This table previously said `merged_from` was
+> "appended per merge, unbounded". It is not: `merge_facts` constructs a **new**
+> `Fact` on every call with `merged_from` set once at construction, so a single
+> survivor's list never grows.
+>
+> **What grows is the chain**, and that is what §7.4 bounds. `A+B→S1`, then
+> `S1+C→S2`: `S1` is retired `MERGED` and linked to `S2` by `merged_into`, so
+> unwinding `S2` back to `A, B, C` needs `S2`'s partition *and* `S1`'s. Depth is
+> a property of the lineage, not of any one node's list — which is what the
+> user's original framing said and this table did not.
 
 ### 7.3 The split: audit in the journal, payload on the node
 
@@ -609,8 +617,11 @@ size would have thrown away its tail.
 ### 7.4 The bound
 
 **`merge_undo_depth`, default 10, a per-graph setting** — the per-graph override
-pattern, no singleton. The survivor keeps the partitions of its last ten merges;
-an eleventh pushes the oldest out.
+pattern, no singleton. Each survivor carries the partition of the one merge that
+created it; the setting bounds **how far back along the `merged_into` chain
+those partitions are retained.** On each merge, walk the chain back from the new
+survivor and clear `merge_undo` on any ancestor deeper than the limit. Ten
+levels of a lineage stay reversible; the eleventh and beyond become permanent.
 
 **Ten, and not more, because of what the bound actually targets.** It is not
 storage: merge does not shrink this graph. Sources are retired, not deleted —
@@ -667,7 +678,7 @@ indistinguishable from doing it once.** Every flag the merge set is returned.
 | wrote `merged_into` A→S, B→S | deletes them | ✅ |
 | wrote `evidence_merged` on dependents | deletes them | ✅ |
 | appended a lifecycle episode to A and B | closes it with `restored_at` | status ✅, history appended |
-| created survivor S | §12's remaining question | |
+| created survivor S | **deletes it** (§7.7) | ✅ |
 | — | appends a reversal `DecisionRecord` | new, by design |
 
 **No new flag is raised on the dependents, and that is the principle working
@@ -684,6 +695,206 @@ leaving the active set twice is the Saint Petersburg case #53 legalised — so a
 merge/reverse cycle leaves a closed episode behind, and the journal keeps both
 decisions. That is the record that it happened, which is not a flag and is not
 returned.
+
+---
+
+### 7.7 The survivor is deleted, and `delete_node` is never exposed
+
+**Reversal deletes S rather than retiring it** (user's decision, 2026-08-22).
+Two reasons, and the second is the stronger one:
+
+1. **Exactness.** Retiring leaves one husk per merge/reverse cycle, each keeping
+   its own 384-dimension vector, visible to `include_corrected` searches and to
+   archival nomination. N cycles would stop being equal to one, and §7.6's
+   principle would hold only approximately.
+2. **A later re-merge must synthesise afresh.** If the same sources are merged
+   again, the new survivor should be written from what is known *then* — more
+   sources, a different judge, a later reading. Resurrecting the old S would
+   silently import a previous agent's wording into a decision nobody made with
+   it. This also rules out the tempting optimisation of *reusing* a retired
+   survivor on re-merge, and rules it out on principle rather than for being
+   fiddly.
+
+**Nothing knowable is lost.** S's content is `extraction_method: "agent:merge"`
+— a synthesis sourced from no document. Every claim it carried is back on the
+sources with their own provenance, and the merge itself stays in the journal.
+
+**This needs `delete_node` on the storage protocol, which nothing has ever
+had.** `delete_edge` exists; no node has ever been hard-deleted, because
+retirement is how this system removes things and archival is an export.
+
+> **`delete_node` must never be reachable from an MCP tool, and the note
+> belongs in three places** (user's direction): on the protocol method itself,
+> on **both** backend implementations, and here. Reversal is its only caller.
+> Without that, a system whose central rule is *nothing is destroyed* has
+> quietly acquired *delete anything*, and the next person wanting a hard delete
+> will find it already built.
+
+What makes it safe is §7.5's guard: by the time reversal is permitted, the only
+edges pointing at S are ones the merge itself created.
+
+### 7.8 Futile cycles
+
+A merge reversed, re-made, reversed again is an agent burning tokens on an
+oscillation nobody wants. It is not expected — but it is **hard to catch after
+the fact and cheap to catch now**, which is the whole case for building it
+before it happens.
+
+**The signal already exists and needs no new storage.** Every merge appends a
+`LifecycleEpisode` to each source with `because: MERGED`; every reversal closes
+that episode with `restored_at`. So one completed cycle leaves one **closed
+`merged` episode** on each source, in an append-only list that is never trimmed:
+
+```python
+def completed_merge_cycles(node: EpistemicNode) -> int:
+    """How many times this node has been merged and then brought back."""
+    return sum(
+        1 for episode in node.lifecycle
+        if episode.because is NodeStatus.MERGED and episode.restored_at is not None
+    )
+```
+
+**It is also free at the point of use.** `merge_facts` already loads every
+source node before calling `merge_refusal`, so `lifecycle` is in hand — the
+check costs no round trip and no extra field.
+
+**Counted per node, not per pair.** Pair matching would miss `A+B`, then `A+C`,
+then `A+D` — the same node oscillating against different partners. Per-node
+catches that, on data that is there either way.
+
+**`merge_cycle_limit`, default 2, a per-graph setting.** One merge-then-reverse
+is an ordinary correction. Two can be two judges disagreeing. The third attempt
+is oscillation, and that is where the merge refuses:
+
+```
+this fact has already been merged and un-merged 2 times, which is the
+`merge_cycle_limit` for this graph. Merging it again is likely to be
+reversed again. Ask the user before proceeding — and if the merge is
+right, the limit is a per-graph setting.
+```
+
+**Refusal rather than a warning, deliberately.** `merge_refusal` already returns
+prose the caller must act on, and `docs/REFLECTION.md` §1 is explicit that the
+agent handles mechanical calls and **escalates consequential ones to the
+human**. A warning is something an agent reads and proceeds past, which is the
+failure this is for.
+
+**Accepted gap:** an agent could evade the check by merging a different source
+set. Recorded rather than closed — the simple version is worth having, and a
+system that tried to detect deliberate evasion here would be solving a problem
+nobody has.
+
+### 7.9 Implementation notes
+
+Enough to build from, in the order the pieces depend on each other.
+
+**The payload type.** Store the edge *values*, not references: migration
+collapses duplicates by `(src, dst, type)`, so the original rows may no longer
+exist to point at.
+
+```python
+class MergedEdge(BaseModel):
+    """One edge as it stood before the merge moved it."""
+    owner_id: str                 # which merging source it belonged to
+    src_id: str
+    dst_id: str
+    type: EdgeType
+    label: str | None = None
+    kind: Literal["relationship", "attribution"] = "relationship"
+    weight: float = 1.0
+    validity: list[ValidityInterval] = Field(default_factory=list)
+
+
+class MergeUndo(BaseModel):
+    """Everything needed to replay one merge backwards."""
+    source_ids: list[str]
+    edges: list[MergedEdge]
+    merged_at: datetime
+    decision_id: str | None = None      # the DecisionRecord (§4)
+```
+
+**Where it lives.** `metadata["merge_undo"]`, parsed through `MergeUndo` on read
+and write. `Topic`, `Fact` and `Inference` share no base class — each redeclares
+`lifecycle`, `value` and `metadata` — so a typed field would have to be added
+three times for a payload that only ever exists on merge survivors. `metadata`
+already carries `merged_from`, and `merge_nodes` is generic over
+`EpistemicNode`, so topics merged through `apply_reflection` get the same
+treatment for free.
+
+**Capture point.** `merge_nodes` (`pipelines/graph_construction/versioning.py`),
+which already reads every source's edges to migrate them — build `MergeUndo`
+from that same read, before migration mutates anything, and store it on the
+merged node in the same transaction. Then walk `merged_into` back from the new
+survivor and clear `merge_undo` on ancestors past `merge_undo_depth`.
+
+**The protocol.**
+
+```python
+async def delete_node(self, node_id: str) -> None:
+    """Remove a node permanently. **Reversal of a merge is the only caller.**
+
+    Never expose this through an MCP tool. Nothing else in this system hard-
+    deletes a node: retirement is how things leave the active set and archival
+    is an export. The one exception is a merge survivor being reversed, whose
+    content was written by an agent, sourced from no document, and whose every
+    claim is restored to the sources it came from (REVIEW_MODE.md §7.7).
+    """
+```
+
+The same paragraph goes on both `InMemoryStorage` and `SurrealDBStorage`
+implementations — the standing rule is the full protocol on every backend, and
+a guard stated only on the protocol is a guard the next implementer does not
+read.
+
+**The reversal.**
+
+```python
+async def reverse_merge(
+    survivor_id: str, storage: StorageBackend, *, judge: JudgeRef,
+) -> ReverseRefused | ReverseResult:
+```
+
+1. Load the survivor. Refuse if it is not `ACTIVE`, or carries no
+   `merge_undo` — the latter meaning either it was never a merge survivor or
+   its payload aged past `merge_undo_depth`, and **the refusal must say
+   which**, since one is permanent and the other is a mistake.
+2. **§7.5's guard.** Refuse if the survivor has an outgoing `merged_into` (it
+   was merged again), is superseded, or carries `derived_from` / `supports`
+   edges from inferences that are not in the payload — meaning something was
+   drawn on the survivor's own wording rather than migrated onto it.
+3. Load the sources. Each must be `MERGED` with an open lifecycle episode whose
+   `counterpart` is this survivor.
+4. **One transaction**, on both backends:
+   - recreate each `MergedEdge` on its `owner_id`, splitting any edge the merge
+     collapsed;
+   - delete the edges the merge left on the survivor;
+   - sources → `ACTIVE`, closing the open episode with `restored_at`;
+   - delete the `merged_into` and `evidence_merged` edges the merge wrote;
+   - `delete_node(survivor_id)`;
+   - append a reversal `DecisionRecord` with `reviews` and `supersedes` set.
+5. Return what changed, in the shape `merge_facts` returns.
+
+**The cycle check** goes in `merge_refusal`
+(`pipelines/reflection/fact_dedup.py`), ordered with the other refusals —
+**after** the permanent ones (cross-frame, event, unjudged) and before the
+similarity bar, since it is fixable by a human decision rather than by the
+graph changing.
+
+**Tests.** `tests/pipelines/test_merge_reversal.py`:
+
+- merge → reverse restores every source to `ACTIVE` with its original edges,
+  including the case where two sources cited **one** document and the
+  `sourced_from` edges collapsed;
+- merge → reverse → merge → reverse leaves the active graph identical to one
+  cycle, and `lifecycle` two episodes longer (§7.6's boundary);
+- the survivor is gone from `get_node` and from search on both backends;
+- each guard in step 2 refuses, with a distinguishable reason;
+- a payload cleared by `merge_undo_depth` refuses differently from a node that
+  never had one;
+- the third merge of an oscillating pair refuses on `merge_cycle_limit`, and
+  raising the setting lets it through;
+- a partial failure mid-transaction leaves the graph as it was, on both
+  backends.
 
 ---
 
@@ -744,7 +955,9 @@ Each step is useful alone, and each is a precondition for the next.
 
 | # | Step | Why here |
 |---|---|---|
-| **0** | **`merge_facts` captures the pre-merge edge partition on the survivor**, bounded by `merge_undo_depth` (§7) | **Capture or lose.** The partition exists only at merge time (§7.1), so every merge taken before this lands is permanently irreversible. Independent of the rest, smallest change here, and the only step with a deadline. |
+| **0a** | **`merge_nodes` captures the pre-merge edge partition** as `MergeUndo` on the survivor, with chain eviction past `merge_undo_depth` (§7.4, §7.9) | **Capture or lose.** The partition exists only at merge time (§7.1), so every merge taken before this lands is permanently irreversible. The only step with a deadline. |
+| **0b** | **`merge_cycle_limit` in `merge_refusal`** (§7.8) | Same file, same sitting, no new storage — the lifecycle episodes it counts already exist. Cheap now, and near-impossible to reconstruct once an oscillation has run. |
+| 0c | `delete_node` on the protocol and both backends, plus `reverse_merge` (§7.7, §7.9) | Needs 0a to have run for anything to be reversible. Carries the never-expose guard in all three places. |
 | 1 | `apply_reflection(similarities=[…])` + `ASSESSED` edge | #64's fix. Stops the re-nomination treadmill, and gives corroboration its first real input — **only from `one_claim` verdicts** (§1.2). Independent of everything below. |
 | 2 | `agent` table, approved-id settings, `claim_agent`, approval over `ctx.elicit` with `epimemer agents confirm` as fallback | Registry with nothing yet pointing at it. Full protocol on both backends, per the standing rule. |
 | 3 | `judge` threaded through the reflect-side write paths | Smallest surface producing attributed decisions, so step 5 has something to read. |
@@ -753,9 +966,11 @@ Each step is useful alone, and each is a precondition for the next.
 | 6 | `review()` with `difficult` and `all`, capped | Works on the existing corpus, since derived signals need no attribution. |
 | 7 | `uncertain`, `by_agent`, `since`, `unreviewed`, `advisory`; `apply_review` | Need attributed decisions to exist; useful from the first session after step 4. |
 
-**Step 0 goes first, and not because it is a precondition** — nothing below
-needs it. It is first because it is the only step whose cost rises while it
-waits. Steps 1 and 2 are independent of it and of each other.
+**Steps 0a and 0b go first, and not because anything below needs them** —
+nothing does. They are first because they are the only steps whose cost rises
+while they wait: both record something that exists at merge time and nowhere
+else. 0c can follow whenever. Steps 1 and 2 are independent of all of them and
+of each other.
 
 ---
 
@@ -790,14 +1005,19 @@ before journal before modes.
 1. **What is the `uncertain` floor?** §5 settles the ladder but not the
    threshold. Likely below 0.5, but it wants the same treatment as every other
    bar here: one named constant, documented, read everywhere (#63).
-2. **Is the survivor deleted or retired on reversal?** Deleting gives the exact
-   idempotence §7.6 states, and needs `delete_node` added to the protocol and
-   both backends — a first for this system, since nothing has ever hard-deleted
-   a node. Retiring needs nothing new but leaves one husk per merge/reverse
-   cycle, so N cycles stop being equal to one. What makes deletion defensible is
-   §7.5's guard: by the time reversal is permitted, the only edges pointing at
-   the survivor are ones the merge itself created.
 
+> **The survivor is deleted on reversal, not retired** — decided 2026-08-22,
+> and §7.7 has the reasoning. The decisive argument is not exactness but that a
+> later re-merge must synthesise from what is known then; resurrecting the old
+> survivor would import a previous agent's wording into a decision nobody made
+> with it. `delete_node` joins the protocol and **is never exposed through an
+> MCP tool**, with that guard written on the method, on both backends, and in
+> §7.7.
+>
+> **Futile merge/reverse cycles refuse rather than warn** — decided 2026-08-22,
+> §7.8. `merge_cycle_limit`, default 2, counted per node from closed `merged`
+> lifecycle episodes, which already exist and cost no round trip.
+>
 > **A reversal raises no new flag on its dependents** — decided 2026-08-22 by
 > §7.6's principle, which was a question here. The merge's `evidence_merged`
 > edges are deleted rather than mirrored by a second label.
