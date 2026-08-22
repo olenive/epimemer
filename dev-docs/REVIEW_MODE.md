@@ -4,6 +4,13 @@
 user's direction. Nothing here is implemented; where it says "does", read
 "would".
 
+**Written to be implemented from.** §10 breaks the build into eight steps with
+the types, protocol methods, call sites and tests each one needs; §7.9 does the
+same for merge reversal in more detail, because it is the step with a deadline.
+An implementer should be able to start from this document without reconstructing
+the reasoning — but §11 and §12 record what was rejected and why, and are worth
+reading before changing any of it.
+
 **Revised 2026-08-22 after review**, which found seven defects in the first
 draft. Five were mechanical; two changed the design. What moved is recorded in
 §11 rather than quietly rewritten, because two of the corrections are the same
@@ -1019,7 +1026,7 @@ costs a paragraph rather than a migration.
 
 ---
 
-## 10. Build order
+## 10. Build order, and what each step involves
 
 Each step is useful alone, and each is a precondition for the next.
 
@@ -1041,6 +1048,167 @@ nothing does. They are first because they are the only steps whose cost rises
 while they wait: both record something that exists at merge time and nowhere
 else. 0c can follow whenever. Steps 1 and 2 are independent of all of them and
 of each other.
+
+### 10.1 Step 0 — capture, cycle limit, reversal
+
+§7.9 has it in full: the `MergedEdge` / `MergeUndo` types, where the capture
+goes inside `merge_nodes`, the `delete_node` protocol addition and its
+never-expose guard, the five-step reversal algorithm, where the cycle check
+sits in the refusal ordering, and the eight tests.
+
+### 10.2 Step 1 — `similarities` and the `ASSESSED` edge
+
+**The edge type.** Add `ASSESSED = "assessed"` to `EdgeType`
+(`core/types.py`) and put it in **`REVIEW_EDGE_TYPES`**, widening that set's
+docstring: the operative property is *anchored to a node version, not migrated
+on supersession or merge*, and `ASSESSED` is the first member with no retrieval
+label. It must not migrate — *"A and B are different claims"* is a judgment
+about those two nodes, and carrying it onto a later survivor `S = A + C` would
+assert something nobody decided.
+
+**`SIMILARITY` stays a knowledge edge and does migrate**, which is the right
+behaviour and a useful check on §1.2's split: `S` contains `A`'s claim, so if
+`A` and `B` were one claim then `S` and `B` still are. Two records, two
+migration behaviours, because they say different things.
+
+**The argument.** `apply_reflection` (`mcp/tools.py:2347`) gains
+`similarities: list[dict] | None = None`, each
+`{"pair": [str, str], "verdict": "one_claim" | "distinct", "because": str}`.
+`because` is required — the same rule `supersessions` already applies, for the
+same reason. An unknown verdict is rejected and reported rather than defaulted;
+an unknown or retired id is **skipped**, matching how the other nine arguments
+already treat them.
+
+Writes, per §1.2: `one_claim` → a `SIMILARITY` **and** an `ASSESSED` edge;
+`distinct` → `ASSESSED` only.
+
+**The reader.** `contradiction_detection.py`'s `already_linked` loop
+(lines ~93–102) iterates `(EdgeType.SIMILARITY, EdgeType.CONTRADICTION)`.
+Extend to `(SIMILARITY, CONTRADICTION, VARIANT_OF, ASSESSED)`. This is four
+typed queries becoming eight, on a phase already batched over the whole fact
+set — measure before assuming it matters, and if it does, the lever is one
+untyped `get_edges_for` per direction.
+
+**Corroboration is untouched.** `corroboration.py` reads `SIMILARITY` only, and
+must keep doing so — that is the entire point of the split, and a test should
+assert that an `ASSESSED`-only pair does not corroborate.
+
+**Tests** (`tests/pipelines/test_similarity_decisions.py`): a `one_claim`
+verdict raises corroboration for both nodes from 1 to 2 where the publishers
+differ; a `distinct` verdict does not; both suppress re-nomination on the next
+`detect_contradictions`; `ASSESSED` does not migrate through a merge and
+`SIMILARITY` does; an unknown verdict is reported, not applied.
+
+### 10.3 Step 2 — the registry
+
+**Storage protocol** (`storage/protocol.py`), implemented in full on both
+`memory.py` and `surrealdb_adapter.py` — the standing rule, no flags and no
+`hasattr`:
+
+```python
+async def get_agent(self, agent_id: str) -> Agent | None: ...
+async def upsert_agent(self, agent: Agent) -> None: ...
+async def list_agents(self) -> list[Agent]: ...
+async def get_approved_agent_ids(self) -> list[str]: ...
+async def set_approved_agent_ids(self, ids: list[str]) -> None: ...
+```
+
+The approved-id list is per-graph settings, stored **exactly** the way
+`get_reflect_threshold_override` / `set_reflect_threshold_override` already are
+(`protocol.py:747-761`) — beside the reflect counter, scoped per graph,
+surviving restarts. SurrealDB gets an `agent` table beside `fact` / `topic` /
+`inference`; in-memory gets a dict on the store.
+
+**`claim_agent(agent_id, description)`** (MCP). Refuses an id not in the
+approved list, with prose the agent puts to the user (§2.2). On success:
+upserts the `Agent`, appends an `AgentDescription` if `text` differs from the
+current one, updates `last_seen_at`, and binds `(agent_id, digest)` to the
+session via `ctx.set_state`.
+
+**Approval** goes over `ctx.elicit` where the client supports it, else the
+`epimemer agents confirm <id>` CLI (§2.3). Both terminate at the user; neither
+is reachable by the agent alone.
+
+**Session detection** uses `ctx.session_id` and `ctx.client_id`, both already
+on FastMCP's `Context`, which `server.py` already threads into every tool.
+Neither identifies the *model* (§2.2) — do not try to infer one.
+
+### 10.4 Steps 3–4 — threading the judge
+
+```python
+class JudgeRef(BaseModel):
+    agent_id: str
+    digest: str          # the AgentDescription version current at this call
+```
+
+Resolved once at the MCP boundary from session state, then passed explicitly —
+never read from a module global (§3.2). Step 3 covers the reflect-side writers
+(`apply_reflection`, `merge_facts`, `supersede_by`, `record_contradiction`,
+`record_variant`, `judge_importance`, `archive`, `restore`); step 4 covers
+`store_decomposition` and `segment`.
+
+**Step 4 is the cutover.** From that release `judge` is required and a write
+without one is **refused, not defaulted** — §3.3's whole rule rests on it. The
+release note must say that approved ids have to be configured first, or an
+upgraded server refuses every write.
+
+### 10.5 Step 5 — the journal
+
+A `decision` table on both backends, with `DecisionRecord` as §4 defines it.
+Reads needed: by `judged_by`, by `decided_at` range, by `subject_ids` contains,
+and *"is there a record whose `reviews` is this id"* — the last is what makes
+`unreviewed` derived rather than stored (§3.4), so it wants an index on
+`reviews` and on `judged_by`.
+
+**Append-only in the strict sense**: no update path exists on this table. A
+reversal, a confirmation and an overturn are all new rows.
+
+**Fold W&S §9 here** (§9): `NodeNote` never ships; `node.notes` becomes a
+derived read over records whose `subject_ids` contains the node, and W&S §5.3's
+`contested_decisions` becomes `review(mode="advisory")`.
+
+### 10.6 Steps 6–7 — `review()`
+
+```python
+async def review(
+    storage: StorageBackend,
+    *,
+    mode: ReviewMode = "all",
+    agent_id: str | None = None,
+    since: datetime | None = None,
+    between: tuple[datetime, datetime] | None = None,
+    certainty_ceiling: float | None = None,
+    include_pre_attribution: bool = False,
+    max_results: int = 200,
+) -> tuple[dict, ResponseMeta]:
+```
+
+Read-only, like `reflect`. Ordering per §6.2 — tier 1 (declared `certainty`
+ascending) before tier 2 (unrated, ordered by count of §5's derived signals
+descending). Capped at `max_results` with `truncated` named in the response,
+#60's treatment. The response always reports `unrated_count` and
+`pre_attribution_excluded`, and — when `certainty_ceiling` was supplied — the
+value **this call** used (§6.3, #63).
+
+**`apply_review(confirmations=[…], reversals=[…])`** is the only writer;
+`review()` never writes.
+
+**Step 6 ships before any decision has a judge**, and works: the whole existing
+corpus is tier 2, so the ordering is entirely derived and still useful (§6.2).
+
+### 10.7 Cross-cutting
+
+- **Both backends, always.** Every protocol method above lands on `memory.py`
+  and `surrealdb_adapter.py` in the same change. No capability flags.
+- **Settings** follow the reflect-threshold pattern: per-graph override,
+  explicit default, no singleton. Three new ones — `merge_undo_depth` (10),
+  `merge_cycle_limit` (2), approved agent ids.
+- **Named constants, one declaration each**, with a test that reads every
+  declaration — #63's carry-forward, which is what caught two numbers pretending
+  to be one.
+- **Transactions.** Reversal (§7.9 step 4) and `apply_review` are each one
+  transaction on both backends, with a test that a mid-way failure leaves the
+  graph unchanged.
 
 ---
 
