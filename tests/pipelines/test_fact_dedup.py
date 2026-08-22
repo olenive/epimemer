@@ -44,6 +44,7 @@ from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
 from epimemer.pipelines.reflection.fact_dedup import merged_confidence_basis
+from epimemer.storage.protocol import MergeOverrides
 from epimemer.pipelines.reflection.review import (
     SIMILARITY_NOMINATION_THRESHOLD,
     review_labels,
@@ -504,10 +505,7 @@ class TestAFutileMergeCycleIsRefused:
         )
         other = await _fact(storage, embedding_provider, "Bonn is the capital.")
 
-        result = await _merge(
-            storage, embedding_provider, [never_returned, other],
-            merge_cycle_limit=2,
-        )
+        result = await _merge(storage, embedding_provider, [never_returned, other])
 
         assert result["merged"] is True
 
@@ -555,16 +553,20 @@ class TestAFutileMergeCycleIsRefused:
     ):
         """The refusal tells the agent to ask the user, so the escape hatch has
         to be real — otherwise a legitimate third merge is blocked with no
-        recourse, which is worse than the oscillation."""
+        recourse, which is worse than the oscillation.
+
+        Raised through the *graph's* setting rather than a call argument,
+        because that is the path the message points at: `merge_facts` resolves
+        the limit from the active graph, so a caller cannot merge past it by
+        passing a number of its own."""
         oscillated = await _fact(
             storage, embedding_provider, "The capital is Bonn.",
             lifecycle=_completed_cycles(2),
         )
         other = await _fact(storage, embedding_provider, "Bonn is the capital.")
+        await storage.set_merge_overrides(MergeOverrides(cycle_limit=3))
 
-        result = await _merge(
-            storage, embedding_provider, [oscillated, other], merge_cycle_limit=3,
-        )
+        result = await _merge(storage, embedding_provider, [oscillated, other])
 
         assert result["merged"] is True
 

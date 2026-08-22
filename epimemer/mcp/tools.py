@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
     ClaimKind,
-    DEFAULT_MERGE_CYCLE_LIMIT,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
@@ -48,7 +47,9 @@ from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegmen
 from epimemer.pipelines.query.types import SeedProvenance
 from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
 from epimemer.storage.protocol import (
+    MergeOverrides,
     StorageBackend,
+    resolve_merge_settings,
     resolve_reflect_threshold,
     validate_graph_name,
 )
@@ -1905,7 +1906,6 @@ async def merge_facts(
     embedding_provider: EmbeddingProvider,
     *,
     similarity_threshold: float = SIMILARITY_NOMINATION_THRESHOLD,
-    merge_cycle_limit: int = DEFAULT_MERGE_CYCLE_LIMIT,
 ) -> tuple[dict, ResponseMeta]:
     """Collapse facts that restate one claim into a single node (#52).
 
@@ -1964,7 +1964,9 @@ async def merge_facts(
         storage,
         model_id=embedding_provider.model_id,
         similarity_threshold=similarity_threshold,
-        cycle_limit=merge_cycle_limit,
+        cycle_limit=resolve_merge_settings(
+            await storage.get_merge_overrides()
+        ).cycle_limit,
     )
     if refusal is not None:
         return (
@@ -2006,6 +2008,118 @@ async def merge_facts(
         retrieved=_declare([merged.id, *source_ids]),
     )
     return result, meta
+
+
+async def reverse_merge(
+    survivor_id: str,
+    storage: StorageBackend,
+) -> tuple[dict, ResponseMeta]:
+    """Undo a merge: restore the sources and destroy the survivor (§7 of
+    `dev-docs/REVIEW_MODE.md`).
+
+    **The one action in this system that destroys a node.** Everything else
+    retires — a corrected claim, a historical one and a merged source all stay
+    in the graph as history. A merge survivor is the exception, and narrowly:
+    its content was written by an agent rather than drawn from a document, and
+    every claim it carried goes back to the sources it came from, so nothing
+    knowable is lost. That reasoning does not generalise, and no tool here
+    deletes anything else.
+
+    **Reversing returns the graph to the status it had before the merge.** The
+    sources go back to active with their own edges — including one that
+    collapsed when two of them cited the same document — and the `merged_into`
+    and `evidence_merged` edges the merge wrote are removed. Reversing back and
+    forth any number of times leaves the same active graph as doing it once. The
+    only trace is in each source's `lifecycle`, which is append-only and records
+    that it happened.
+
+    **Refused, with a reason, when:** the fact was not made by a merge; the
+    record of which source held which edge has aged past the graph's
+    `merge_undo_depth` (permanent — the partition existed only at merge time);
+    the survivor has since been merged again or retired; or **anything has been
+    added to the survivor since the merge** — a contradiction, a tag, a
+    similarity verdict, a relation. That last one matters: reversal deletes the
+    node those edges point at, so a refusal is the only thing standing between a
+    contested claim and the silent loss of its contest record.
+
+    A later re-merge writes a new survivor from what is known then. The old
+    wording is returned here as `survivor_content` and is not resurrected.
+    """
+    from epimemer.pipelines.graph_construction.versioning import (
+        ReverseRefused,
+        reverse_merge as _reverse_merge,
+    )
+
+    outcome = await _reverse_merge(survivor_id, storage)
+    if isinstance(outcome, ReverseRefused):
+        return (
+            {"reversed": False, "refused": outcome.reason, "survivor_id": survivor_id},
+            ResponseMeta(retrieved=_declare([survivor_id])),
+        )
+    return outcome, ResponseMeta(
+        nodes_returned=len(outcome["restored_ids"]),
+        source_types={"facts": len(outcome["restored_ids"])},
+        retrieved=_declare(outcome["restored_ids"]),
+    )
+
+
+async def configure_merge(
+    storage: StorageBackend,
+    *,
+    undo_depth: int | None = None,
+    cycle_limit: int | None = None,
+    clear: bool = False,
+) -> tuple[dict, ResponseMeta]:
+    """Set the active graph's merge settings, or clear them back to the defaults.
+
+    `undo_depth` bounds how far back along a merge lineage the graph keeps what
+    a reversal needs. **Lowering it destroys reversal capability on the next
+    merge and cannot be undone**, because the payload it drops existed only at
+    merge time — which is the same reason the capture had to be built before
+    anything read it.
+
+    `cycle_limit` is how many times one fact may be merged and un-merged before
+    the next merge refuses and asks for a human. Raising it is the escape hatch
+    that refusal points at.
+
+    `clear=True` returns both to the process defaults — deliberately the
+    defaults *at the time*, not today's values frozen in, so a default changed
+    later still reaches a graph that was once configured and then cleared.
+    """
+    if undo_depth is not None and undo_depth < 1:
+        raise ValueError(
+            f"undo_depth must be at least 1, got {undo_depth}: the merge being "
+            f"made is level 1, so a lower bound would capture the partition and "
+            f"discard it in the same call."
+        )
+    if cycle_limit is not None and cycle_limit < 1:
+        raise ValueError(
+            f"cycle_limit must be at least 1, got {cycle_limit}: zero refuses "
+            f"every merge of a fact that has ever been un-merged, including the "
+            f"first ordinary correction."
+        )
+
+    if clear:
+        await storage.set_merge_overrides(MergeOverrides())
+    elif undo_depth is not None or cycle_limit is not None:
+        current = await storage.get_merge_overrides()
+        await storage.set_merge_overrides(current.model_copy(update={
+            field: value
+            for field, value in (
+                ("undo_depth", undo_depth), ("cycle_limit", cycle_limit),
+            )
+            if value is not None
+        }))
+
+    overrides = await storage.get_merge_overrides()
+    settings = resolve_merge_settings(overrides)
+    result = {
+        "graph": storage.current_database,
+        "merge_undo_depth": settings.undo_depth,
+        "merge_cycle_limit": settings.cycle_limit,
+        "overridden": overrides.model_dump(exclude_none=True),
+    }
+    return result, ResponseMeta()
 
 
 # --- Reflect (analysis — no LLM) ---

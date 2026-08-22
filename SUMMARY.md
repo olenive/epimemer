@@ -546,13 +546,28 @@ merge is rejected and reported. It is **Topics only**: facts collapse through
 reflection decision, because `redundant` is judged when a document arrives and
 not when the graph is next swept (#52).
 
+**A fact merge is reversible, and it is the one operation in the system that
+destroys anything** (built 2026-08-22, `dev-docs/REVIEW_MODE.md` §7). The
+information a reversal needs — which source held which edge — exists only while
+the merge is being made, since migration re-points edges onto the survivor and
+collapses duplicates, so `merge_nodes` captures it on the survivor at merge
+time; `merge_undo_depth` bounds how far back along a lineage those payloads are
+kept. `reverse_merge` restores the sources, replays their edges (splitting one
+that collapsed when two sources cited a single document) and **deletes the
+survivor** rather than retiring it, so that reversing back and forth any number
+of times leaves the same active graph as doing it once. It refuses whenever
+anything has accrued to the survivor since the merge, because the delete would
+take those edges with it. Repeated merge/reverse cycles on one fact are refused
+by `merge_cycle_limit`, which reads the append-only lifecycle rather than any new
+state.
+
 ## Agent Interface (MCP)
 
 Memory is exposed as tools, not as a raw database. Claude Code auto-prefixes these as `mcp__epimemer__<name>`.
 
 Ingestion is a two-step process: `segment` breaks text into chunks, then the agent extracts topics/facts/inferences and passes them to `store_decomposition`. Epimemer does not decompose text itself — that is the calling agent's job.
 
-The tools group into: **core memory** (`segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`, `judge_importance`); **discovery & stats** (`query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`); **conflict handling** (`check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`); **reflection** (`reflect`, `configure_reflection`, `apply_reflection`); **temporal access** (`graph_as_of`, `query_changes`); **archival** (`archive`, `restore`); **timelines** (`create_timeline`, `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`); **metacontexts** (`create_metacontext`, `get_metacontexts`); **graph management** (`list_graphs`, `use_graph`, `delete_graph`); and **visualization** (`viz_status`).
+The tools group into: **core memory** (`segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`, `judge_importance`); **discovery & stats** (`query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`); **conflict handling** (`check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`, `reverse_merge`, `configure_merge`); **reflection** (`reflect`, `configure_reflection`, `apply_reflection`); **temporal access** (`graph_as_of`, `query_changes`); **archival** (`archive`, `restore`); **timelines** (`create_timeline`, `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`); **metacontexts** (`create_metacontext`, `get_metacontexts`); **graph management** (`list_graphs`, `use_graph`, `delete_graph`); and **visualization** (`viz_status`).
 
 See [INTEGRATION.md](INTEGRATION.md#available-tools) for the canonical table with one-line descriptions and the authoritative tool count — this document intentionally does not restate the count so it can only drift in one place.
 

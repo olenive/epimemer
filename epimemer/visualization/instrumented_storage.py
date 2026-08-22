@@ -29,7 +29,11 @@ from epimemer.core.types import (
     Segment,
     Timeline,
 )
-from epimemer.storage.protocol import EdgeDirection, resolve_reflect_threshold
+from epimemer.storage.protocol import (
+    EdgeDirection,
+    MergeOverrides,
+    resolve_reflect_threshold,
+)
 from epimemer.visualization.event_bus import InProcessEventBus
 from epimemer.visualization.events import (
     ActionVerb,
@@ -333,6 +337,42 @@ class InstrumentedStorage:
             counts={"nodes": 1, "edges": len(lineage_edges) + len(evidence_edges)},
         ))
 
+    async def reverse_merge_tx(
+        self,
+        survivor: EpistemicNode,
+        source_nodes: Sequence[EpistemicNode],
+        restored_edges: Sequence[NodeEdge],
+        *,
+        restored_at: datetime,
+        delete_edge_ids: Sequence[str],
+    ) -> None:
+        await self._inner.reverse_merge_tx(
+            survivor, source_nodes, restored_edges,
+            restored_at=restored_at, delete_edge_ids=delete_edge_ids,
+        )
+        graph = self._inner.current_database
+        for source in source_nodes:
+            await self._bus.publish(NodeStatusChanged(
+                graph=graph,
+                node_id=source.id,
+                old_status=NodeStatus.MERGED.value,
+                new_status=NodeStatus.ACTIVE.value,
+                counterpart=survivor.id,
+            ))
+        for edge in restored_edges:
+            await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
+        # RESTORED rather than a verb of its own: what a reader needs from the
+        # strip is that these nodes are back in the active set. **The survivor's
+        # deletion is not published** — there is no node-deleted event and no
+        # renderer for one, so a viewer keeps showing it until the next
+        # snapshot. Recorded as a known gap rather than half-built here.
+        await self._bus.publish(graph_action(
+            graph=graph,
+            verb=ActionVerb.RESTORED,
+            subjects=[source.id for source in source_nodes],
+            counts={"nodes": len(source_nodes), "edges": len(restored_edges)},
+        ))
+
     async def write_batch_tx(
         self,
         *,
@@ -539,6 +579,14 @@ class InstrumentedStorage:
     async def set_reflect_threshold_override(self, threshold: int | None) -> None:
         await self._inner.set_reflect_threshold_override(threshold)
         await self._publish_reflect_state(await self._inner.get_reflect_counter())
+
+    async def get_merge_overrides(self) -> MergeOverrides:
+        return await self._inner.get_merge_overrides()
+
+    async def set_merge_overrides(self, overrides: MergeOverrides) -> None:
+        # No event: nothing in the strip shows the merge settings, and a badge
+        # that never renders is not worth an event type nobody consumes.
+        await self._inner.set_merge_overrides(overrides)
 
     # --- Multi-graph management (pass-through) ---
 

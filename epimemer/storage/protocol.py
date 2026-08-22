@@ -12,6 +12,8 @@ from typing import Literal, Protocol, Sequence, TypeVar
 from pydantic import BaseModel
 
 from epimemer.core.types import (
+    DEFAULT_MERGE_CYCLE_LIMIT,
+    DEFAULT_MERGE_UNDO_DEPTH,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
@@ -61,6 +63,43 @@ def resolve_reflect_threshold(override: int | None, default: int) -> int:
     starts showing a number the ingest path does not judge against.
     """
     return default if override is None else override
+
+
+class MergeOverrides(BaseModel):
+    """A graph's own answers about merging, where it has any.
+
+    `None` on a field means *follow the process default* — deliberately not the
+    default's current value, so that changing a default later still reaches a
+    graph that was once overridden and then cleared. Same rule as the reflect
+    threshold, and stated again rather than shared because the two are stored
+    apart and a reader of one should not have to find the other.
+    """
+
+    undo_depth: int | None = None
+    cycle_limit: int | None = None
+
+
+class MergeSettings(BaseModel):
+    """The numbers actually in force for a merge on this graph."""
+
+    undo_depth: int = DEFAULT_MERGE_UNDO_DEPTH
+    cycle_limit: int = DEFAULT_MERGE_CYCLE_LIMIT
+
+
+def resolve_merge_settings(overrides: MergeOverrides | None) -> MergeSettings:
+    """The merge numbers in force: the graph's overrides, else the defaults.
+
+    Shared for the reason `resolve_reflect_threshold` is shared — the tools, the
+    merge path and anything reporting the settings all resolve them, and a
+    second copy is how a reported number drifts from the one the gate applies.
+    """
+    if overrides is None:
+        return MergeSettings()
+    return MergeSettings(**{
+        field: value
+        for field, value in overrides.model_dump().items()
+        if value is not None
+    })
 
 
 def drop_none_values(value):
@@ -489,6 +528,47 @@ class StorageBackend(Protocol):
         """
         ...
 
+    async def reverse_merge_tx(
+        self,
+        survivor: EpistemicNode,
+        source_nodes: Sequence[EpistemicNode],
+        restored_edges: Sequence[NodeEdge],
+        *,
+        restored_at: datetime,
+        delete_edge_ids: Sequence[str],
+    ) -> None:
+        """Atomically undo one merge: put the sources back and destroy `survivor`.
+
+        **This is the only hard delete in the system, and the only place a node
+        is ever destroyed rather than retired.** Retirement is how things leave
+        the active set and archival is an export; a merge survivor is the single
+        exception, because its content was written by an agent, sourced from no
+        document, and every claim it carried is restored to the sources it came
+        from (REVIEW_MODE.md §7.7). **Never expose a general node delete through
+        an MCP tool.** A system whose central rule is *nothing is destroyed*
+        must not quietly acquire *delete anything* — and the next person wanting
+        a hard delete will find whatever is built here and use it.
+
+        Deleting the survivor also deletes its `EmbeddingRecord`s: the vector is
+        stored per item, so removing the node alone strands an entry the index
+        still returns. The cascade belongs here rather than to the caller.
+
+        `restored_edges` are replayed exactly as they stood before the merge,
+        including any that were between two merging sources and so were dropped
+        outright as self-loops. `delete_edge_ids` names the edges the merge left
+        behind — those it moved onto the survivor, its `merged_into` lineage,
+        and the `evidence_merged` flags it wrote. Both are planned by
+        `reverse_merge`, which also runs the guard deciding whether a reversal
+        is permitted at all; a backend applies the plan and does not second-
+        guess it. If any step fails, the whole operation is rolled back.
+
+        Implementations must refuse rather than proceed if `survivor` still has
+        edges after `delete_edge_ids` is applied. Reaching that state means the
+        guard let something through, and a silent drop would destroy exactly
+        what the guard exists to protect.
+        """
+        ...
+
     async def write_batch_tx(
         self,
         *,
@@ -763,6 +843,25 @@ class StorageBackend(Protocol):
 
     async def set_reflect_threshold_override(self, threshold: int | None) -> None:
         """Set the active graph's threshold override, or clear it with None."""
+        ...
+
+    async def get_merge_overrides(self) -> MergeOverrides:
+        """The active graph's own merge settings, where it has set any.
+
+        Stored beside the reflect counter and scoped the same way, so a graph
+        carries its own answers across restarts. Every field defaults to `None`,
+        meaning *follow the process default*; a graph that has never been
+        configured returns an all-`None` record rather than raising.
+        """
+        ...
+
+    async def set_merge_overrides(self, overrides: MergeOverrides) -> None:
+        """Replace the active graph's merge overrides.
+
+        Whole-record rather than per-field, so "clear this one" and "leave this
+        one alone" cannot be confused: the caller reads, edits and writes back.
+        A `None` field clears that override.
+        """
         ...
 
     # --- Multi-graph management ---

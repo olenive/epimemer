@@ -1066,6 +1066,98 @@ async def memory_merge_facts(
     )
 
 
+@mcp.tool(name="reverse_merge")
+async def memory_reverse_merge(
+    survivor_id: str,
+    ctx: Context,
+) -> str:
+    """Undo a merge: restore the merged facts and remove the survivor.
+
+    Use it when a merge turns out to have collapsed two claims that were not the
+    same one. The sources come back active with their own sources and edges, and
+    the graph is left as it was before the merge — including the case where two
+    of them cited the same document, which the merge had collapsed into one
+    edge.
+
+    **This is the only action that destroys a node**, and only this node: a
+    merge survivor's wording was written by an agent rather than drawn from a
+    document, and every claim it carried goes back to the facts it came from.
+    Nothing else here deletes anything — a wrong claim is `update`, a claim the
+    world moved past is `update` with because="the_world_changed", and both keep
+    the old node as history.
+
+    Refused, with a reason, when the fact was not made by a merge, when the
+    record needed to replay it has aged out (permanent), when the survivor has
+    since been merged again, or when **anything has been added to it since the
+    merge** — a contradiction, a tag, a similarity verdict. In that last case
+    the edges would be destroyed along with the node, so deal with them first.
+
+    If you merge, reverse, and merge the same facts repeatedly, the merge will
+    refuse and ask you to bring in the user. That is deliberate: it means the
+    judgment is contested and another round trip will not settle it.
+
+    Args:
+        survivor_id: The id of the fact a merge produced — the one `merge_facts`
+            returned as `fact_id`.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.reverse_merge",
+        lambda: tools.reverse_merge(
+            survivor_id=survivor_id,
+            storage=deps["storage"],
+        ),
+        ctx,
+        f"survivor={survivor_id}",
+        lambda r, m: (
+            f"restored={len(r['restored_ids'])} edges={r['edges_restored']}"
+            if r["reversed"]
+            else f"refused: {r['refused']}"
+        ),
+    )
+
+
+@mcp.tool(name="configure_merge")
+async def memory_configure_merge(
+    ctx: Context,
+    undo_depth: int | None = None,
+    cycle_limit: int | None = None,
+    clear: bool = False,
+) -> str:
+    """Read or change this graph's merge settings.
+
+    Called with no arguments it reports what is in force. Ask the user before
+    changing either — both are policy about how much the graph keeps and how
+    hard it argues back, which is not the agent's call to make alone.
+
+    Args:
+        undo_depth: How far back along a chain of merges the graph keeps what a
+            reversal needs (default 10). **Lowering this cannot be undone**: the
+            record it drops exists only at merge time, so a merge made under a
+            lower setting is permanently irreversible.
+        cycle_limit: How many times one fact may be merged and un-merged before
+            the next merge refuses and asks for a human (default 2). Raise it
+            when a refusal is wrong and the merge is right.
+        clear: Return both to the defaults.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.configure_merge",
+        lambda: tools.configure_merge(
+            storage=deps["storage"],
+            undo_depth=undo_depth,
+            cycle_limit=cycle_limit,
+            clear=clear,
+        ),
+        ctx,
+        f"undo_depth={undo_depth} cycle_limit={cycle_limit} clear={clear}",
+        lambda r, m: (
+            f"undo_depth={r['merge_undo_depth']} "
+            f"cycle_limit={r['merge_cycle_limit']}"
+        ),
+    )
+
+
 @mcp.tool(name="reflect")
 async def memory_reflect(
     ctx: Context,

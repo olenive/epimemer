@@ -6,8 +6,9 @@ Handles node supersession (creating a new version) and node merging
 
 from datetime import datetime, timezone
 
+from pydantic import BaseModel
+
 from epimemer.core.types import (
-    DEFAULT_MERGE_UNDO_DEPTH,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
@@ -22,7 +23,7 @@ from epimemer.core.types import (
     with_merge_undo,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
-from epimemer.storage.protocol import StorageBackend
+from epimemer.storage.protocol import StorageBackend, resolve_merge_settings
 
 
 async def supersede_node(
@@ -258,7 +259,7 @@ async def merge_nodes(
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
     *,
-    undo_depth: int = DEFAULT_MERGE_UNDO_DEPTH,
+    undo_depth: int | None = None,
 ) -> list[NodeEdge]:
     """Merge multiple nodes into one.
 
@@ -296,15 +297,21 @@ async def merge_nodes(
         storage: The storage backend.
         embedding_provider: Used to embed the merged node's content.
         undo_depth: How far back along the lineage merge payloads are kept.
-            Passed rather than read from a module-level default at the call
-            site, so a graph's own value can be threaded here without a
-            singleton. Must be at least 1 — the merge being made now is level 1,
-            and a depth below that would discard the payload in the same breath
-            as capturing it.
+            `None` reads the active graph's setting, which is what every
+            production caller wants and none of them can forget: resolving here
+            rather than at each call site is why a new merge path cannot ship
+            with the bound quietly missing. Pass a number to override it. Must
+            be at least 1 — the merge being made now is level 1, and a depth
+            below that would discard the payload in the same breath as
+            capturing it.
 
     Returns:
         A list of merged_into edges, one per source node.
     """
+    if undo_depth is None:
+        undo_depth = (
+            resolve_merge_settings(await storage.get_merge_overrides())
+        ).undo_depth
     if undo_depth < 1:
         raise ValueError(
             f"undo_depth must be at least 1, got {undo_depth}: the merge being "
@@ -361,6 +368,211 @@ async def merge_nodes(
     # longer than the bound.
     await evict_deep_merge_undo(merged_node, storage, depth=undo_depth)
     return lineage_edges
+
+
+class ReverseRefused(BaseModel):
+    """Why a merge was not reversed, in words the caller can act on.
+
+    Prose rather than a code, matching `MergeRefused` and `BoundaryRefused`: the
+    reasons do not form a vocabulary anything branches on, and each is only
+    useful to the extent it says which of several near-identical situations
+    occurred. The distinction that matters most is between a refusal that will
+    never lift (the payload aged out) and one a person can clear (something has
+    come to depend on the survivor).
+    """
+
+    reason: str
+
+
+def _repointed(edge_id: str, source_ids: set[str], survivor_id: str) -> str:
+    return survivor_id if edge_id in source_ids else edge_id
+
+
+async def reversal_refusal(
+    survivor: EpistemicNode,
+    undo: MergeUndo,
+    storage: StorageBackend,
+) -> ReverseRefused | None:
+    """Why this merge must not be reversed, or `None` if nothing objects.
+
+    Reversal ends in a hard delete of the survivor, so **an edge this check does
+    not notice is an edge the reversal destroys.** That is why the last rule is
+    a set *difference* rather than a list of edge types: a contradiction
+    recorded against the survivor after the merge, a `distinct` verdict, a tag,
+    a user relation — none is in the payload, none was written by the merge, and
+    a contested claim losing its contest record is exactly the loss *nothing is
+    destroyed* exists to prevent. An edge type invented next year is refused by
+    default rather than deleted by omission.
+    """
+    if survivor.status is not NodeStatus.ACTIVE:
+        # Merged-again is not a separate check: a node with an outgoing
+        # `merged_into` is always `MERGED`, so a second condition would be
+        # unreachable. It is the common case, though, and it has a next step,
+        # so the message says so rather than making the caller work it out.
+        merged_again = await storage.get_edges_from(
+            survivor.id, edge_type=EdgeType.MERGED_INTO
+        )
+        if merged_again:
+            return ReverseRefused(
+                reason=(
+                    f"this fact has since been merged into "
+                    f"{merged_again[0].dst_id}, which now carries its claim. "
+                    f"Reverse that merge first."
+                )
+            )
+        return ReverseRefused(
+            reason=(
+                f"only an active survivor can be un-merged, and this one is "
+                f"{survivor.status.value}. Reversing it would restore sources "
+                f"beneath a node the graph has already retired."
+            )
+        )
+
+    source_ids = set(undo.source_ids)
+    expected = {
+        (
+            _repointed(captured.edge["src_id"], source_ids, survivor.id),
+            _repointed(captured.edge["dst_id"], source_ids, survivor.id),
+            captured.edge["type"],
+        )
+        for captured in undo.edges
+        if not captured.intra_set
+    } | {
+        (source_id, survivor.id, EdgeType.MERGED_INTO.value)
+        for source_id in source_ids
+    }
+
+    incident = {edge.id: edge for edge in await storage.get_edges_from(survivor.id)}
+    incident |= {edge.id: edge for edge in await storage.get_edges_to(survivor.id)}
+    unexpected = [
+        edge for edge in incident.values()
+        if (edge.src_id, edge.dst_id, edge.type.value) not in expected
+    ]
+    if unexpected:
+        kinds = ", ".join(sorted({edge.type.value for edge in unexpected}))
+        return ReverseRefused(
+            reason=(
+                f"{len(unexpected)} edges have been added to this fact since "
+                f"the merge ({kinds}), and reversing deletes the node they "
+                f"point at. Remove or re-point them first if the reversal is "
+                f"right — they were judgments made about this wording, and "
+                f"nothing here can move them for you."
+            )
+        )
+    return None
+
+
+async def reverse_merge(
+    survivor_id: str,
+    storage: StorageBackend,
+) -> ReverseRefused | dict:
+    """Undo one merge: restore the sources, replay their edges, delete the survivor.
+
+    **Reversing returns the graph to the status it had before the merge, and
+    reversing back and forth N times is indistinguishable from doing it once**
+    (REVIEW_MODE.md §7.6). Every flag the merge set is returned: the sources go
+    back to `ACTIVE`, their edges are replayed from the captured partition —
+    splitting an edge that collapsed when two sources cited one document — the
+    `merged_into` and `evidence_merged` edges the merge wrote are deleted, and
+    the survivor is destroyed rather than retired.
+
+    **One boundary, and it is the only place exactness does not hold: status is
+    restored, history is appended.** `lifecycle` is append-only by design — a
+    node leaving the active set twice is the recurrence #53 legalised — so a
+    merge/reverse cycle leaves a closed episode behind. That is the record that
+    it happened, which is not a flag and is not returned.
+
+    **No new flag is raised on dependent inferences, and that is the principle
+    working rather than an omission.** The merge re-pointed each dependent's
+    `derived_from` onto the survivor and flagged it `evidence_merged` — *your
+    premise was reworded, go re-read it*. Reversal re-points it back to the
+    premise it was actually drawn from, so there is nothing left to re-read, and
+    a flag would assert a change the reversal has just undone.
+
+    Returns `ReverseRefused` rather than raising when the graph objects, on the
+    same grounds as `merge_refusal`: the caller has real alternatives and can
+    only choose one knowing which obstacle it hit. Ids that name nothing raise.
+    """
+    survivor = await storage.get_node(survivor_id)
+    if survivor is None:
+        raise ValueError(f"Node '{survivor_id}' not found")
+
+    undo = read_merge_undo(survivor)
+    if undo is None:
+        # The two absences are different events and the message has to say
+        # which: one is a mistake the caller can correct by naming the right
+        # node, the other is permanent and no setting brings it back.
+        if survivor.metadata.get("merged_from"):
+            return ReverseRefused(
+                reason=(
+                    "this fact was made by a merge, but the record of which "
+                    "source held which edge has aged past merge_undo_depth for "
+                    "this graph. That is permanent: the partition existed only "
+                    "at merge time. The sources are still present and still "
+                    "linked by merged_into."
+                )
+            )
+        return ReverseRefused(
+            reason=(
+                "this fact was not made by a merge, so there is no merge to "
+                "reverse. A claim that was wrong is `update`; one the world "
+                "moved past is `update` with because='the_world_changed'."
+            )
+        )
+
+    refusal = await reversal_refusal(survivor, undo, storage)
+    if refusal is not None:
+        return refusal
+
+    sources = await storage.get_nodes(undo.source_ids)
+    missing = [node_id for node_id in undo.source_ids if node_id not in sources]
+    if missing:
+        return ReverseRefused(
+            reason=(
+                f"{len(missing)} of the merged sources are no longer in the "
+                f"graph, so restoring them is not possible. Reversal puts back "
+                f"what the merge retired; it cannot recreate what has since "
+                f"been removed."
+            )
+        )
+    source_nodes = [sources[node_id] for node_id in undo.source_ids]
+
+    # Rebuilt rather than `model_copy`d: these are new rows written now, and an
+    # edge carrying its old id would collide with nothing but would also claim
+    # an identity the graph no longer holds. Everything else — `metadata`,
+    # `created_at`, `validity` — is replayed exactly, which is what keeps a
+    # judgment's attribution and date intact across the cycle.
+    restored_edges = [
+        NodeEdge(**captured.edge) for captured in undo.edges
+    ]
+
+    incident = {edge.id: edge for edge in await storage.get_edges_from(survivor.id)}
+    incident |= {edge.id: edge for edge in await storage.get_edges_to(survivor.id)}
+    delete_edge_ids = list(incident)
+    # `evidence_merged` is anchored to the sources rather than the survivor, so
+    # it is not in the sweep above. A source is retired by the merge that wrote
+    # these, and stays retired until this reversal, so every such edge on it
+    # belongs to the merge being undone.
+    for source in source_nodes:
+        for edge in await storage.get_edges_from(
+            source.id, edge_type=EdgeType.EVIDENCE_MERGED
+        ):
+            delete_edge_ids.append(edge.id)
+
+    now = datetime.now(timezone.utc)
+    await storage.reverse_merge_tx(
+        survivor, source_nodes, restored_edges,
+        restored_at=now, delete_edge_ids=delete_edge_ids,
+    )
+    return {
+        "reversed": True,
+        "survivor_id": survivor.id,
+        # The withdrawn wording, quotable after the node holding it is gone.
+        "survivor_content": undo.survivor_content or survivor.content,
+        "restored_ids": [node.id for node in source_nodes],
+        "edges_restored": len(restored_edges),
+        "edges_removed": len(delete_edge_ids),
+    }
 
 
 async def plan_subtopic_edges(

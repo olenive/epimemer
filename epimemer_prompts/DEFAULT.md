@@ -212,6 +212,12 @@ neighbourhood.
   document's own periods — so provenance becomes plural rather than being
   overwritten. Write `content` as the clearest phrasing of the shared claim;
   that is what gets embedded.
+- `reverse_merge(survivor_id)` — undo a merge that turned out to collapse two
+  different claims. The sources come back active with their own edges and the
+  survivor is deleted; this is the **only** tool that deletes a node, and it is
+  refused if anything has been added to the survivor since the merge, because
+  reversing would take those edges with it. Merging and reversing the same facts
+  repeatedly will refuse and ask you to bring in the user — that is deliberate.
 - `record_variant(a, b)` — records a cross-frame divergence so it stays queryable.
 - `supersede_by(old_id, existing_id, because=…)` — retire an outdated node in
   favour of one already in the graph (dependent inferences are flagged

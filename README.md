@@ -176,7 +176,7 @@ Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<
 
 - **Core memory**: `segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`, `judge_importance`
 - **Discovery & stats**: `query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`
-- **Conflict handling**: `check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`
+- **Conflict handling**: `check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`, `reverse_merge`, `configure_merge`
 - **Reflection**: `reflect`, `configure_reflection`, `apply_reflection`
 - **Temporal access**: `graph_as_of`, `query_changes`
 - **Archival**: `archive`, `restore`

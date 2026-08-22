@@ -39,6 +39,7 @@ from epimemer.core.types import (
 from epimemer.storage.bm25 import containment_first
 from epimemer.storage.protocol import (
     EdgeDirection,
+    MergeOverrides,
     drop_none_values,
     validate_graph_name,
 )
@@ -417,6 +418,33 @@ def _threshold_override(rows) -> int | None:
         return None
     value = rows[0].get(_THRESHOLD_FIELD)
     return None if value is None else int(value)
+
+
+# The per-graph merge overrides share the reflect record, on the same grounds as
+# the threshold: one graph-state row, same scope, same lifetime, never the same
+# field. Written whole rather than per field so that clearing one override and
+# leaving the other alone is a single unambiguous write. A `None` field encodes
+# as NONE and so removes the key, which is what "follow the process default"
+# has to mean — a stored 0 would read back as a limit of zero.
+_MERGE_FIELD = "merge_overrides"
+
+_MERGE_GET = f"SELECT {_MERGE_FIELD} FROM {_REFLECT_RECORD};"
+_MERGE_SET = (
+    f"UPSERT {_REFLECT_RECORD} SET {_MERGE_FIELD} = $overrides RETURN AFTER;"
+)
+
+
+def _merge_overrides(rows) -> MergeOverrides:
+    """Read the merge overrides out of a reflect-state row set.
+
+    No row, a null row, or a row without the field all mean "nothing
+    overridden", which is an all-`None` record rather than an absence: every
+    field independently answers *follow the default*.
+    """
+    if not rows or rows[0] is None:
+        return MergeOverrides()
+    stored = rows[0].get(_MERGE_FIELD)
+    return MergeOverrides() if not stored else MergeOverrides.model_validate(stored)
 
 
 def _serialize(model) -> dict:
@@ -1362,11 +1390,19 @@ class SurrealDBStorage:
         if lineage_data:
             statements.append("INSERT INTO node_edge $lineage_data")
 
+        # The *stored* lifecycle, not the caller's copy. A node object handed in
+        # by a caller that loaded it before an earlier merge carries a stale
+        # list, and appending to that silently drops every episode since —
+        # which is how a second merge/reverse cycle came back looking like the
+        # first. `InMemoryStorage` reads the stored node here, so trusting the
+        # argument also made the two backends disagree.
+        stored = await self.get_nodes([source.id for source in source_nodes])
         source_params: dict = {}
         for i, source in enumerate(source_nodes):
+            current = stored.get(source.id, source)
             source_params[f"source_{i}"] = source.id
             source_params[f"lifecycle_{i}"] = _episode_rows(with_retirement(
-                source.lifecycle, at=merged_at, because=NodeStatus.MERGED,
+                current.lifecycle, at=merged_at, because=NodeStatus.MERGED,
                 counterpart=merged_node.id,
             ))
 
@@ -1385,6 +1421,75 @@ class SurrealDBStorage:
         # the sources, and `old_edge_ids` names only edges that were incident
         # before this transaction, so nothing here is deleted by it.
         self._append_review_writes(statements, params, evidence_edges, ())
+
+        await self._run_transaction(statements, params)
+
+    async def reverse_merge_tx(
+        self,
+        survivor: EpistemicNode,
+        source_nodes: Sequence[EpistemicNode],
+        restored_edges: Sequence[NodeEdge],
+        *,
+        restored_at: datetime,
+        delete_edge_ids: Sequence[str],
+    ) -> None:
+        """See the protocol. **The only hard delete in this backend**, and it
+        must never be reachable from an MCP tool (REVIEW_MODE.md §7.7)."""
+        # Read before the transaction, like every other plan here: the adapter
+        # is single-connection and documented as unsafe for concurrent callers.
+        # The check is the protocol's requirement — a survivor still carrying an
+        # edge after the planned deletions means the guard let something
+        # through, and deleting the node anyway would take that edge with it.
+        remaining = {
+            edge.id for edge in await self.get_edges_from(survivor.id)
+        } | {
+            edge.id for edge in await self.get_edges_to(survivor.id)
+        }
+        remaining -= set(delete_edge_ids)
+        if remaining:
+            raise ValueError(
+                f"node {survivor.id} still has {len(remaining)} edges and must "
+                f"not be deleted: a hard delete would take them with it."
+            )
+
+        statements: list[str] = []
+        params: dict = {"survivor_uid": survivor.id}
+
+        if delete_edge_ids:
+            statements.append("DELETE node_edge WHERE uid IN $delete_edge_ids")
+            params["delete_edge_ids"] = list(delete_edge_ids)
+        if restored_edges:
+            rows = []
+            for edge in restored_edges:
+                row = _serialize(edge)
+                row["type"] = edge.type.value
+                rows.append(row)
+            statements.append("INSERT INTO node_edge $restored_rows")
+            params["restored_rows"] = rows
+
+        # One statement per source: the status and instant are shared, each
+        # source's history is its own.
+        # Stored rather than passed, for the reason `merge_nodes_tx` states.
+        stored = await self.get_nodes([source.id for source in source_nodes])
+        for i, source in enumerate(source_nodes):
+            current = stored.get(source.id, source)
+            params[f"source_{i}"] = source.id
+            params[f"lifecycle_{i}"] = _episode_rows(
+                with_return(current.lifecycle, at=restored_at)
+            )
+            statements.append(
+                f"UPDATE {_node_to_table(source)} SET status = $status, "
+                f"superseded_at = NONE, lifecycle = $lifecycle_{i} "
+                f"WHERE uid = $source_{i}"
+            )
+        params["status"] = NodeStatus.ACTIVE.value
+
+        statements.append(
+            f"DELETE {_node_to_table(survivor)} WHERE uid = $survivor_uid"
+        )
+        # The vector is stored per item, so deleting the node alone would strand
+        # an entry the index still returns.
+        statements.append("DELETE embedding WHERE item_id = $survivor_uid")
 
         await self._run_transaction(statements, params)
 
@@ -1733,3 +1838,12 @@ class SurrealDBStorage:
 
     async def set_reflect_threshold_override(self, threshold: int | None) -> None:
         await self._query(_THRESHOLD_SET, {"threshold": threshold})
+
+    async def get_merge_overrides(self) -> MergeOverrides:
+        rows = await self._query(_MERGE_GET)
+        return _merge_overrides(rows)
+
+    async def set_merge_overrides(self, overrides: MergeOverrides) -> None:
+        await self._query(
+            _MERGE_SET, {"overrides": drop_none_values(overrides.model_dump())},
+        )

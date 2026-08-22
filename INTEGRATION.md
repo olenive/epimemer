@@ -60,12 +60,12 @@ the knowledge graph and pipeline execution in real time.
 
 ### Verify Connection
 
-In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 35 tools.
+In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 37 tools.
 
 ## Available Tools
 
 Tools are auto-prefixed as `mcp__epimemer__<name>` by Claude Code. This table is
-the canonical list of the 35 tools — other docs should link here rather than
+the canonical list of the 37 tools — other docs should link here rather than
 restate the count.
 
 ### Core Memory Operations
@@ -99,6 +99,8 @@ restate the count.
 | `record_contradiction` | Record a same-frame contradiction between two facts (both stay active) |
 | `record_variant` | Record two facts as cross-frame variants of one proposition |
 | `merge_facts` | Collapse facts that restate one claim into a single node, keeping every source. Refuses events, cross-frame pairs, and facts ingested without a `claim_kind` |
+| `reverse_merge` | Undo a merge: restore the sources with their own edges and destroy the survivor. The only tool that deletes a node. Refuses when anything has been added to the survivor since |
+| `configure_merge` | Read or set this graph's `merge_undo_depth` (how far back a merge stays reversible) and `merge_cycle_limit` (how many merge/un-merge rounds before a merge refuses) |
 
 ### Reflection
 

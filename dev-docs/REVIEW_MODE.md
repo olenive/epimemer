@@ -1,9 +1,9 @@
 # Review mode: who judged this, and can someone else check it
 
-**Status: designed, mostly not built (2026-08-22).** Built so far: §10.2.1's
-precondition (`ISSUES.md` #65) and **steps 0a and 0b** — the merge-undo capture
-and the futile-cycle refusal, the ones whose cost rose while they waited.
-Everything else below is design. Written
+**Status: §7 built, the rest designed (2026-08-22).** Built so far: §10.2.1's
+precondition (`ISSUES.md` #65) and **steps 0a, 0b and 0c** — the whole of merge
+reversal, from capture through the futile-cycle refusal to `reverse_merge`
+itself. Steps 1 through 7 below are design. Written
 before any code, at the user's direction; where an unbuilt section says "does",
 read "would". #65 went first because it is a defect in shipped code that
 step 1 would make reachable, and fixing it after would mean shipping it
@@ -11,11 +11,14 @@ knowingly. Steps 0a and 0b went next because both read something that exists at
 merge time and nowhere else: the edge partition, destroyed as the merge migrates
 it, and the lifecycle episodes an oscillation would leave behind. Every merge
 taken before 0a landed is permanently irreversible, which is a running cost no
-other step has.
+other step has. 0c followed immediately because 0a and 0b are both *dormant*
+without it — nothing read the payload and no fact could reach a non-zero cycle
+count until reversal existed to write `restored_at`.
 
 **Written to be implemented from.** §10 breaks the build into eight steps with
 the types, protocol methods, call sites and tests each one needs; §7.9 does the
-same for merge reversal in more detail, because it is the step with a deadline.
+same for merge reversal, which is built — read §7 as a record of what was
+built and why, and §10 for the seven steps still to come.
 An implementer should be able to start from this document without reconstructing
 the reasoning — but §11 and §12 record what was rejected and why, and are worth
 reading before changing any of it.
@@ -938,6 +941,28 @@ sources with their own provenance, and the merge itself stays in the journal.
 had.** `delete_edge` exists; no node has ever been hard-deleted, because
 retirement is how this system removes things and archival is an export.
 
+> **Built 2026-08-22, and *without* a `delete_node` method — deliberately.**
+> The deletion lives inside `reverse_merge_tx`, with the never-expose note on
+> that protocol method and on both backends' implementations. Two reasons, and
+> the second is the stronger:
+>
+> 1. **Atomicity.** A standalone `delete_node` called after the reversal
+>    transaction would put the one irreversible step outside the rollback. The
+>    delete has to be *in* the transaction, so the transaction is where it goes.
+> 2. **The safest way to never expose a hard delete is not to have one.** A
+>    public `delete_node(node_id)` guarded by a comment is a capability plus a
+>    request not to use it; no such method is the same protection without
+>    relying on the next reader agreeing. This is a stricter reading of the
+>    instruction below rather than a departure from it — the note is in all
+>    three places the instruction names, attached to the code that actually
+>    deletes.
+>
+> `InMemoryStorage` keeps a module-level `_destroy_node` helper carrying the
+> same note; SurrealDB emits the DELETE statements inline. Both **refuse** a
+> survivor that still has edges rather than dropping them, so a guard bug fails
+> loudly inside a transaction that rolls back instead of silently destroying the
+> contradiction the guard was meant to protect.
+
 > **`delete_node` must never be reachable from an MCP tool, and the note
 > belongs in three places** (user's direction): on the protocol method itself,
 > on **both** backend implementations, and here. Reversal is its only caller.
@@ -1016,6 +1041,11 @@ system that tried to detect deliberate evasion here would be solving a problem
 nobody has.
 
 ### 7.9 Implementation notes
+
+**✅ Built 2026-08-22** (step 0c). What follows is the design; the amendments
+record where building it changed something. Two things are **not** built and are
+waiting on later steps, both noted below: the reversal `DecisionRecord` (needs
+§4's journal, step 5) and the `judge` argument (needs §2's registry, step 2).
 
 Enough to build from, in the order the pieces depend on each other.
 
@@ -1104,17 +1134,24 @@ ancestors past `merge_undo_depth`.
 > edges — same lineage, already in hand, one `get_nodes` per level. In practice
 > the walk terminates immediately: every merge on both real graphs is depth 1.
 
-**The protocol.**
+**The protocol.** As built, one method rather than two — see §7.7 for why the
+deletion is not a `delete_node` of its own:
 
 ```python
-async def delete_node(self, node_id: str) -> None:
-    """Remove a node permanently. **Reversal of a merge is the only caller.**
+async def reverse_merge_tx(
+    self,
+    survivor: EpistemicNode,
+    source_nodes: Sequence[EpistemicNode],
+    restored_edges: Sequence[NodeEdge],
+    *,
+    restored_at: datetime,
+    delete_edge_ids: Sequence[str],
+) -> None:
+    """Atomically undo one merge: put the sources back and destroy `survivor`.
 
-    Never expose this through an MCP tool. Nothing else in this system hard-
-    deletes a node: retirement is how things leave the active set and archival
-    is an export. The one exception is a merge survivor being reversed, whose
-    content was written by an agent, sourced from no document, and whose every
-    claim is restored to the sources it came from (REVIEW_MODE.md §7.7).
+    **This is the only hard delete in the system.** Never expose a general node
+    delete through an MCP tool: a system whose central rule is *nothing is
+    destroyed* must not quietly acquire *delete anything* (§7.7).
     """
 ```
 
@@ -1123,13 +1160,24 @@ implementations — the standing rule is the full protocol on every backend, and
 a guard stated only on the protocol is a guard the next implementer does not
 read.
 
+The backend applies a plan; it does not build one. `reverse_merge` in
+`pipelines/graph_construction/versioning.py` runs the guard, replays the payload
+into `restored_edges` and collects `delete_edge_ids`, so the two backends cannot
+develop different opinions about what a reversal means.
+
 **The reversal.**
 
 ```python
 async def reverse_merge(
-    survivor_id: str, storage: StorageBackend, *, judge: JudgeRef,
-) -> ReverseRefused | ReverseResult:
+    survivor_id: str, storage: StorageBackend,
+) -> ReverseRefused | dict:
 ```
+
+> **As built, without `judge`.** The registry is step 2 and `JudgeRef` does not
+> exist yet; adding the parameter now would mean either a type with no contents
+> or a string nothing validates. It arrives with steps 3–4, which thread the
+> judge through every write path at once — one change rather than a parameter
+> that means nothing until then.
 
 1. Load the survivor. Refuse if it is not `ACTIVE`, or carries no
    `merge_undo` — the latter meaning either it was never a merge survivor or
@@ -1161,7 +1209,10 @@ async def reverse_merge(
      remember;
    - append a reversal `DecisionRecord` with `reviews` and `supersedes` set,
      carrying `survivor_content` so the withdrawn wording stays quotable after
-     the node holding it is gone.
+     the node holding it is gone. **(Deferred to step 5** — the journal does not
+     exist yet. `reverse_merge` returns `survivor_content` in its result today,
+     so the wording is not lost; what is missing is the durable record, which
+     arrives with the type that holds it.)
 5. Return what changed, in the shape `merge_facts` returns.
 
 **The cycle check** goes in `merge_refusal`
@@ -1260,8 +1311,8 @@ Each step is useful alone, and each is a precondition for the next.
 | # | Step | Why here |
 |---|---|---|
 | **0a** ✅ | **`merge_nodes` captures the pre-merge edge partition** as `MergeUndo` on the survivor, with chain eviction past `merge_undo_depth` (§7.4, §7.9) | **Capture or lose.** The partition exists only at merge time (§7.1), so every merge taken before this lands is permanently irreversible. The only step with a deadline. **Built 2026-08-22**; the five merges of 2026-08-21 predate it and stay irreversible. |
-| **0b** ✅ | **`merge_cycle_limit` in `merge_refusal`** (§7.8) | Same file, same sitting, no new storage — the lifecycle episodes it counts already exist. Cheap now, and near-impossible to reconstruct once an oscillation has run. **Built 2026-08-22**; dormant until 0c, since reversal is the only writer of the `restored_at` it counts. |
-| 0c | `delete_node` on the protocol and both backends, plus `reverse_merge` (§7.7, §7.9), **and the two stored per-graph settings** — `merge_undo_depth`, `merge_cycle_limit` — with the tool that configures them | Needs 0a to have run for anything to be reversible. Carries the never-expose guard in all three places. **The settings are not optional here**: 0b's refusal tells the agent the limit is configurable, and this is the step where that stops being dormant, so shipping reversal without them leaves a promise the code does not keep. |
+| **0b** ✅ | **`merge_cycle_limit` in `merge_refusal`** (§7.8) | Same file, same sitting, no new storage — the lifecycle episodes it counts already exist. Cheap now, and near-impossible to reconstruct once an oscillation has run. **Built 2026-08-22**; live since 0c, which is what writes the `restored_at` it counts. |
+| 0c ✅ | `reverse_merge_tx` on the protocol and both backends (the hard delete lives *inside* it, §7.7), plus `reverse_merge`, the `reverse_merge` and `configure_merge` tools, and the two stored per-graph settings | Needs 0a to have run for anything to be reversible. Carries the never-expose guard in all three places. **The settings are not optional here**: 0b's refusal tells the agent the limit is configurable, and this is the step where that stops being dormant, so shipping reversal without them leaves a promise the code does not keep. **Built 2026-08-22**, minus the reversal `DecisionRecord` (step 5) and the `judge` argument (steps 2–4). |
 | 1 | `apply_reflection(similarities=[…])` + `ASSESSED` edge | #64's fix. Stops the re-nomination treadmill, and gives corroboration its first real input — **only from `one_claim` verdicts** (§1.2). Independent of everything below. |
 | 2 | `agent` table, approved-id settings, `claim_agent`, approval over `ctx.elicit` with `epimemer agents confirm` as fallback | Registry with nothing yet pointing at it. Full protocol on both backends, per the standing rule. |
 | 3 | `judge` threaded through the reflect-side write paths | Smallest surface producing attributed decisions, so step 5 has something to read. |

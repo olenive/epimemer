@@ -304,16 +304,16 @@ moved, including `NodeNote` folding into the decision journal (which supersedes
 edge partition an undo needs is destroyed at merge time, so every merge taken
 before it is captured is permanently irreversible.
 
-**Progress.** **Steps 0a and 0b are built (2026-08-22)** — `merge_nodes`
-captures the pre-merge partition on the survivor with chain eviction past a depth
-bound, and `merge_refusal` refuses a fact that has already oscillated
-`merge_cycle_limit` times. That closes the running costs in the plan; the five
-merges taken on 2026-08-21 predate the capture and stay irreversible. **Both are
-dormant by design** — nothing reads the payload and nothing can reach a non-zero
-cycle count until `reverse_merge` exists — which is the point: each reads
-something that exists at merge time and nowhere else. Next is **0c**
-(`delete_node`, `reverse_merge`, and the two stored per-graph settings the
-earlier steps deliberately deferred), then 1 onward.
+**Progress. The whole of §7 — merge reversal — is built (2026-08-22),** across
+steps 0a, 0b and 0c: the pre-merge partition is captured on the survivor with
+chain eviction past `merge_undo_depth`, a fact that has oscillated
+`merge_cycle_limit` times is refused, and `reverse_merge` restores the sources
+and destroys the survivor. The five merges taken on 2026-08-21 predate the
+capture and stay irreversible. Two tools are new — `reverse_merge` and
+`configure_merge` — and two pieces wait on later steps by design: the reversal
+`DecisionRecord` (step 5, needs the journal) and the `judge` argument (steps
+2–4, needs the registry). **Next is step 1**, `apply_reflection(similarities=…)`
+and the `ASSESSED` edge, whose precondition (#65) is already fixed.
 
 ---
 

@@ -76,6 +76,13 @@ to bring in the user rather than try again), and anything below the nomination
 bar. Every refusal leaves the older action available and correct: *keep both,
 joined by `similarity`*, which is what corroboration reads.
 
+A merge that turns out to be wrong is undone with `reverse_merge(survivor_id)`:
+the sources come back active with their own edges and the survivor is deleted,
+leaving the graph as it was before. It refuses if anything has been added to the
+survivor since — a contradiction, a tag, a verdict — because the delete would
+take those with it. `configure_merge` reads and sets the two settings involved,
+`merge_undo_depth` and `merge_cycle_limit`.
+
 ---
 
 ## 3. What `reflect` returns

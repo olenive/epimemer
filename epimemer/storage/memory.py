@@ -37,6 +37,7 @@ from epimemer.core.types import (
 from epimemer.storage.bm25 import bm25_scores, containment_first
 from epimemer.storage.protocol import (
     EdgeDirection,
+    MergeOverrides,
     normalize_for_storage,
     validate_graph_name,
 )
@@ -110,6 +111,7 @@ class _GraphStore:
     metacontexts: dict[str, Metacontext] = field(default_factory=dict)
     stores_since_reflect: int = 0
     reflect_threshold_override: int | None = None
+    merge_overrides: MergeOverrides = field(default_factory=MergeOverrides)
 
 
 def _put_embedding(g: _GraphStore, embedding: EmbeddingRecord) -> str:
@@ -184,6 +186,32 @@ def _drop_edge(g: _GraphStore, edge_id: str) -> None:
     edge = g.edges.pop(edge_id, None)
     if edge is not None:
         _unindex_edge(g, edge)
+
+
+def _destroy_node(g: _GraphStore, node_id: str) -> None:
+    """Remove a node and its embeddings outright. **Merge reversal only.**
+
+    The one hard delete in this backend. Nothing else destroys a node —
+    retirement is how things leave the active set, archival is an export — and
+    this must never be reachable from an MCP tool (REVIEW_MODE.md §7.7). The
+    embeddings go with it because the vector is stored per item, so removing the
+    node alone strands an entry the index still returns.
+
+    Refuses a node that still has edges. Reaching that state means the reversal
+    guard let something through, and quietly dropping the edges would destroy
+    the contradiction, tag or verdict the guard exists to protect.
+    """
+    incident = g.by_src.get(node_id, set()) | g.by_dst.get(node_id, set())
+    if incident:
+        raise ValueError(
+            f"node {node_id} still has {len(incident)} edges and must not be "
+            f"deleted: a hard delete would take them with it."
+        )
+    g.nodes.pop(node_id, None)
+    for embedding_id in list(g.by_item.get(node_id, set())):
+        _drop_embedding(g, embedding_id)
+    g.by_src.pop(node_id, None)
+    g.by_dst.pop(node_id, None)
 
 
 def _edges_at(
@@ -671,6 +699,41 @@ class InMemoryStorage:
             self._graphs[self._database] = snapshot
             raise
 
+    async def reverse_merge_tx(
+        self,
+        survivor: EpistemicNode,
+        source_nodes: Sequence[EpistemicNode],
+        restored_edges: Sequence[NodeEdge],
+        *,
+        restored_at: datetime,
+        delete_edge_ids: Sequence[str],
+    ) -> None:
+        snapshot = copy.deepcopy(self._g)
+        try:
+            # Deletions first: a restored edge may reuse a (src, dst, type) the
+            # merge had moved onto the survivor, and the endpoint indexes are
+            # exact rather than deduplicating.
+            for edge_id in delete_edge_ids:
+                _drop_edge(self._g, edge_id)
+            for edge in restored_edges:
+                _put_edge(self._g, _store(edge))
+            for source in source_nodes:
+                node = self._g.nodes.get(source.id)
+                if node is None:
+                    raise KeyError(f"Node {source.id} not found")
+                node.status = NodeStatus.ACTIVE
+                # Cleared rather than left: the field is the current-state
+                # snapshot of the last retirement, and a node that is back in
+                # the active set is not retired. The *history* stays in
+                # `lifecycle`, which is what makes N cycles cost N episodes and
+                # no flags (§7.6).
+                node.superseded_at = None
+                node.lifecycle = with_return(node.lifecycle, at=restored_at)
+            _destroy_node(self._g, survivor.id)
+        except Exception:
+            self._graphs[self._database] = snapshot
+            raise
+
     async def write_batch_tx(
         self,
         *,
@@ -889,6 +952,12 @@ class InMemoryStorage:
 
     async def set_reflect_threshold_override(self, threshold: int | None) -> None:
         self._g.reflect_threshold_override = threshold
+
+    async def get_merge_overrides(self) -> MergeOverrides:
+        return self._g.merge_overrides.model_copy()
+
+    async def set_merge_overrides(self, overrides: MergeOverrides) -> None:
+        self._g.merge_overrides = overrides.model_copy()
 
     # --- Multi-graph management ---
 

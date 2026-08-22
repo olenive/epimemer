@@ -2,9 +2,9 @@
 
 Living issue tracker. **Last review: 2026-08-22.**
 
-Open: **64** (2026-08-21, decided — `dev-docs/REVIEW_MODE.md` is the design) and
-**66** (2026-08-22, not blocking), plus **16** and **58**, both deferred with
-their triggers stated. **65** was found and built on 2026-08-22, ahead of #64's
+Open: **64** (2026-08-21, decided — `dev-docs/REVIEW_MODE.md` is the design),
+**66** (2026-08-22, not blocking) and **67** (2026-08-22, latent), plus **16**
+and **58**, both deferred with their triggers stated. **65** was found and built on 2026-08-22, ahead of #64's
 first step, which is what would have made it reachable; its entry is kept until
 the next prune for the two carry-forwards it earned.
 **61**, **62** and **63** were built on 2026-08-21. **46**, **48** and **51** were built
@@ -2902,6 +2902,56 @@ branch carried the same risk and no argument, and the two sat four lines apart.
 
 ---
 
+### Issue 67 — SurrealDB's supersede paths trust the caller's lifecycle — 🟠 OPEN (found 2026-08-22)
+
+Found while building merge reversal (#64 step 0c), which made a *second*
+retirement of the same node reachable for the first time and so exposed the
+class of bug.
+
+**What it is.** `SurrealDBStorage` builds a node's new `lifecycle` from the node
+object the caller passed, not from the row in the database:
+
+```python
+"lifecycle": _episode_rows(with_retirement(
+    old_node.lifecycle, at=superseded_at, because=status, ...
+)),
+```
+
+A caller holding a node it loaded *before* an earlier retirement passes a stale
+list, and `with_retirement` appends to that — so the UPDATE writes a lifecycle
+missing every episode since. `InMemoryStorage` reads the stored node instead, so
+the two backends give different histories for the same call, which is precisely
+what `test_storage_parity.py` exists to prevent.
+
+**The merge instance is fixed** (`merge_nodes_tx`, and `reverse_merge_tx` was
+written the same way from the start): both now read the stored lifecycle before
+the transaction. It was not optional there — a second merge/reverse cycle came
+back looking like the first, which would have made `merge_cycle_limit` blind to
+exactly the oscillation it exists to catch.
+
+**Three instances remain**, all in `surrealdb_adapter.py`: `supersede_node_tx`,
+`supersede_by_existing_tx`, and the restore path that builds `with_retirement`
+from `node.lifecycle`. Left rather than swept in with the merge fix, so that one
+commit does not quietly rewrite three transaction builders — and they are not
+reachable today, because every production caller (`tools.update`,
+`tools.restore`) loads the node immediately before retiring it.
+
+**Why it is 🟠 rather than 🔴.** Latent, with no path to it in shipped code. But
+it is latent the way #64 was latent: the day a caller caches a node across two
+supersessions, the graph loses history silently and no test outside parity would
+notice.
+
+**Fix.** The same three lines each: read the stored node in the same
+pre-transaction batch the method already performs, and build the episode list
+from that. A parity test per path is what stops it coming back.
+
+**Carry-forward.** *A transaction that takes a domain object as an argument has
+to decide whether the argument is a request or a snapshot, and say which.* Here
+`source_nodes` is a request (which nodes to retire) whose `lifecycle` field was
+silently being read as a snapshot.
+
+---
+
 ### Issue 66 — two ingest-time judgments have no way to be revised — 🔴 OPEN (found 2026-08-22)
 
 Surfaced by surveying what `rejudge` should cover (`dev-docs/REVIEW_MODE.md`
@@ -3093,6 +3143,7 @@ What to pick up, and what has to be true first:
 | ✅ | ~~63 (the nomination bar was two numbers)~~ | **Done 2026-08-21.** Found by review, fixed the same day: the sweeps nominated at 0.80 while the merge gate refused below 0.83, so reflect offered pairs `merge_facts` then rejected — telling the agent the graph would never have paired them, right after it had. One constant at 0.80 now, read by both `check_conflicts` declarations, `merge_facts` and `detect_contradictions`, with the invariant **merge floor ≤ every nomination bar** pinned by signature across the MCP boundary. The carry-forward is the shape of the miss: **a constant with a stated invariant needs a test that reads every declaration of it** — #52's "both readers take it from there" was true of the two it named, and there were four |
 | ✅ | ~~62 (corroboration does not read validity)~~ | **Done 2026-08-21.** The one decision the row asked for turned out to be **mis-framed**: dropping and marking are not alternatives, because nothing is dropped from the *graph* — both claims stay, true of their own periods, and only a read-time integer narrows. So the count became honest and the uncounted look-alike comes back named in `adjacent_periods`, which is the half that carries new information: where a search returns one of the pair, that block is the only place the other appears at all. Two things the row had wrong. **Placement** it did not mention and which decides correctness: the comparison must run before the supporter hop, or the look-alike walks its own supporters — and their publishers — in behind it. **Cost** it stated as "no round trips": nearly, but the periods were being read at stage 4 and are needed at stage 1.5, so the provenance read splits in two, thirteen calls or twelve, still constant in result-set size. #52's inherited corroboration migration stays open and separate, as the row said |
 | ✅ | ~~65 (a correction re-points judgment edges)~~ | **Found and built 2026-08-22**, in that order and on the same day, because it is a defect in shipped code that #64's step 1 would have made reachable — fixing it after would have meant shipping it knowingly. `JUDGMENT_EDGE_TYPES` in `core/types.py`, consulted by `migration_disposition` before the status branch, so `similarity`, `contradiction` and `variant_of` are anchored on **every** retirement. Four lines, because both backends derive their answers from that one function and hold no policy of their own. **Two things the design had wrong surfaced only on building it**: `REVIEW_MODE.md` §10.2 and §10.2.1 gave opposite answers for `similarity` on a merge, and the issue's stated reasoning (*a correction changes the wording, not the claim*) contradicts `migration_disposition`'s own account of a correction. The verdict survived both; the reason did not, and the real one — the **substantive** correction, "500,000" → "5,000,000", leaving a counterpart judged against a number that is gone — is what shows a merge belongs in the same rule. Carry-forward: **when a fix is derived from an argument, check the argument against the code before trusting the fix** — right for the wrong reason generalises wrongly |
+| ✅ | ~~64's steps 0a–0c (merge reversal)~~ | **Built 2026-08-22**, in one sitting, because the three depend on each other in a way that made any subset useless: 0a captures the pre-merge edge partition (destroyed by migration, so **capture or lose**), 0b refuses an oscillating merge, and both are **dormant** until 0c writes the `restored_at` and reads the payload. `reverse_merge` restores the sources and **deletes** the survivor — the only hard delete in the system, and it lives *inside* `reverse_merge_tx` rather than behind a `delete_node` method, because the safest way never to expose a hard delete is not to have one. New tools: `reverse_merge`, `configure_merge`. Deferred by design: the reversal `DecisionRecord` (step 5) and the `judge` argument (steps 2–4). Building it found **#67**, a backend divergence that made a second merge/reverse cycle look like the first — which would have blinded `merge_cycle_limit` to the exact oscillation it exists to catch |
 | **next** | **64 (`similarity` has no writer)** | **Found 2026-08-21**, while taking #52's outstanding corroboration migration — which is declined on the strength of it, with no code. The migration assumed a populated neighbourhood that merging would shrink toward identity; the neighbourhood is **empty on every real graph** (0 of 4,386 edges on `memory`, 0 of 1,028 on `petritype-server`), so collapsing the walk would change no count and would delete the only consumer of a judgment nothing yet records. Both of the migration's stated payoffs were already gone: the Saint Petersburg caveat was collected by #62 through `adjacent_periods`, and "stops over-reporting through a wrong edge" describes a trade `corroboration.py` argued for rather than a defect. **Merging structurally cannot replace the walk** — `merge_refusal` refuses every event, so identity can never count two publishers on one occurrence, the paradigm case the whole annotation exists for. The decision this row wants is *which surface records the judgment*: a tenth `apply_reflection` argument (recommended), a write on `merge_facts`' refusal, or a `record_similarity` tool. Carry-forward: **an edge type with readers and no writer is not a feature with low adoption, it is a feature that has never run** — three documents described its cost curve and one named the wrong writer |
 | designed | inference merge, advisories, node notes | Not on this board — `dev-docs/WARNINGS_AND_SETTINGS.md`, designed 2026-08-21 and deliberately unbuilt. The duplication it addresses does not exist yet: 123 active inferences across both real graphs yield 5,053 pairs and **zero** at the nomination bar. It becomes real once fact merges start collecting inferences onto one survivor |
 | deferred | 16, 58 | 16: the server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`). 58: a graph large enough that the FTS backfill inside `connect()` is worth reporting on |
