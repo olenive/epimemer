@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
     ClaimKind,
+    DEFAULT_MERGE_CYCLE_LIMIT,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
@@ -1904,6 +1905,7 @@ async def merge_facts(
     embedding_provider: EmbeddingProvider,
     *,
     similarity_threshold: float = SIMILARITY_NOMINATION_THRESHOLD,
+    merge_cycle_limit: int = DEFAULT_MERGE_CYCLE_LIMIT,
 ) -> tuple[dict, ResponseMeta]:
     """Collapse facts that restate one claim into a single node (#52).
 
@@ -1925,6 +1927,13 @@ async def merge_facts(
     `fact_dedup.merge_refusal` for the rules and why they lean towards refusing.
     Ids that name nothing, or name something that is not a fact, do raise: those
     are malformed requests rather than judgments the graph declines.
+
+    **`merge_cycle_limit` refuses an oscillation** (REVIEW_MODE.md §7.8): a fact
+    already merged and un-merged this many times is refused with a message
+    asking the caller to bring in the user, rather than a warning it would read
+    and proceed past. Dormant until merge reversal exists, since nothing writes
+    the `restored_at` the count reads — built alongside the episodes it counts,
+    because a limit added after an oscillation has run has nothing to look at.
 
     **Inferences drawn on the sources are flagged `evidence_merged`** (#61), not
     `evidence_stale`: their premise was reworded and better sourced, not
@@ -1955,6 +1964,7 @@ async def merge_facts(
         storage,
         model_id=embedding_provider.model_id,
         similarity_threshold=similarity_threshold,
+        cycle_limit=merge_cycle_limit,
     )
     if refusal is not None:
         return (

@@ -24,7 +24,13 @@ from collections.abc import Sequence
 
 from pydantic import BaseModel
 
-from epimemer.core.types import ClaimKind, Fact, NodeStatus
+from epimemer.core.types import (
+    DEFAULT_MERGE_CYCLE_LIMIT,
+    ClaimKind,
+    Fact,
+    NodeStatus,
+    completed_merge_cycles,
+)
 from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD, frames_for
 from epimemer.pipelines.reflection.topic_consolidation import all_pairs_above_threshold
 from epimemer.storage.protocol import StorageBackend
@@ -47,6 +53,7 @@ async def merge_refusal(
     *,
     model_id: str,
     similarity_threshold: float = SIMILARITY_NOMINATION_THRESHOLD,
+    cycle_limit: int = DEFAULT_MERGE_CYCLE_LIMIT,
 ) -> MergeRefused | None:
     """Why these facts must not be collapsed into one, or `None` if nothing objects.
 
@@ -123,6 +130,41 @@ async def merge_refusal(
                 f"claim_kind, so nothing knows whether they describe conditions "
                 f"or occurrences — and the two answers merge in opposite "
                 f"directions. Facts ingested with `claim_kind` set are eligible."
+            )
+        )
+
+    oscillating = [
+        fact for fact in sources
+        if completed_merge_cycles(fact) >= cycle_limit
+    ]
+    if oscillating:
+        # Merged, reversed, merged again is an agent burning tokens on an
+        # oscillation nobody wants. Not expected — but hard to catch after the
+        # fact and nearly free to catch here, since `merge_facts` has already
+        # loaded every source, so `lifecycle` is in hand and the check costs no
+        # round trip.
+        #
+        # **A refusal rather than a warning, deliberately.** A warning is
+        # something an agent reads and proceeds past, which is the exact failure
+        # this exists for; `docs/REFLECTION.md` §1 puts consequential calls in
+        # front of the human. Placed among the fixable refusals rather than the
+        # permanent ones: a person can settle it, or raise the limit.
+        #
+        # **Accepted gap:** an agent could evade this by merging a different
+        # source set. Recorded rather than closed — the simple version is worth
+        # having, and detecting deliberate evasion here would be solving a
+        # problem nobody has.
+        counts = ", ".join(
+            str(completed_merge_cycles(fact)) for fact in oscillating
+        )
+        return MergeRefused(
+            reason=(
+                f"{len(oscillating)} of these facts have already been merged and "
+                f"un-merged before ({counts} times), reaching the "
+                f"merge_cycle_limit of {cycle_limit} this merge was gated at. "
+                f"Merging again is likely to be reversed again. Ask the user "
+                f"before proceeding — and if the merge is right, the limit is "
+                f"configurable per graph."
             )
         )
 

@@ -1,14 +1,17 @@
 # Review mode: who judged this, and can someone else check it
 
 **Status: designed, mostly not built (2026-08-22).** Built so far: §10.2.1's
-precondition (`ISSUES.md` #65) and **step 0a**, the merge-undo capture — the two
-whose cost rose while they waited. Everything else below is design. Written
+precondition (`ISSUES.md` #65) and **steps 0a and 0b** — the merge-undo capture
+and the futile-cycle refusal, the ones whose cost rose while they waited.
+Everything else below is design. Written
 before any code, at the user's direction; where an unbuilt section says "does",
 read "would". #65 went first because it is a defect in shipped code that
 step 1 would make reachable, and fixing it after would mean shipping it
-knowingly. Step 0a went next because **the partition it captures is destroyed at
-merge time**: every merge taken before it landed is permanently irreversible, so
-waiting had a running cost that no other step has.
+knowingly. Steps 0a and 0b went next because both read something that exists at
+merge time and nowhere else: the edge partition, destroyed as the merge migrates
+it, and the lifecycle episodes an oscillation would leave behind. Every merge
+taken before 0a landed is permanently irreversible, which is a running cost no
+other step has.
 
 **Written to be implemented from.** §10 breaks the build into eight steps with
 the types, protocol methods, call sites and tests each one needs; §7.9 does the
@@ -978,6 +981,22 @@ catches that, on data that is there either way.
 is an ordinary correction. Two can be two judges disagreeing. The third attempt
 is oscillation, and that is where the merge refuses:
 
+> **Built 2026-08-22 (step 0b), with the same setting deferral as §7.4.**
+> `merge_refusal(..., cycle_limit=DEFAULT_MERGE_CYCLE_LIMIT)`, threaded through
+> `merge_facts(..., merge_cycle_limit=...)`; the stored per-graph override and
+> its tool land with 0c. **The gate cannot fire until then**, because nothing
+> writes `restored_at` — reversal is the only writer — so the count is zero on
+> every fact in both real graphs. It is built now because the episodes it reads
+> are being written now, and a limit added after an oscillation has run has
+> nothing to look at.
+>
+> **That dormancy is what makes the deferral safe, and it is the load-bearing
+> check.** The refusal message tells the agent the limit is configurable, so the
+> escape hatch has to be real or a legitimate third merge is blocked with no
+> recourse — worse than the oscillation. By the time any fact can reach a
+> non-zero count, 0c has shipped the setting. **0c must therefore ship the
+> override and the tool**, not merely reversal; §10's row says so.
+
 ```
 this fact has already been merged and un-merged 2 times, which is the
 `merge_cycle_limit` for this graph. Merging it again is likely to be
@@ -1241,8 +1260,8 @@ Each step is useful alone, and each is a precondition for the next.
 | # | Step | Why here |
 |---|---|---|
 | **0a** ✅ | **`merge_nodes` captures the pre-merge edge partition** as `MergeUndo` on the survivor, with chain eviction past `merge_undo_depth` (§7.4, §7.9) | **Capture or lose.** The partition exists only at merge time (§7.1), so every merge taken before this lands is permanently irreversible. The only step with a deadline. **Built 2026-08-22**; the five merges of 2026-08-21 predate it and stay irreversible. |
-| **0b** | **`merge_cycle_limit` in `merge_refusal`** (§7.8) | Same file, same sitting, no new storage — the lifecycle episodes it counts already exist. Cheap now, and near-impossible to reconstruct once an oscillation has run. |
-| 0c | `delete_node` on the protocol and both backends, plus `reverse_merge` (§7.7, §7.9) | Needs 0a to have run for anything to be reversible. Carries the never-expose guard in all three places. |
+| **0b** ✅ | **`merge_cycle_limit` in `merge_refusal`** (§7.8) | Same file, same sitting, no new storage — the lifecycle episodes it counts already exist. Cheap now, and near-impossible to reconstruct once an oscillation has run. **Built 2026-08-22**; dormant until 0c, since reversal is the only writer of the `restored_at` it counts. |
+| 0c | `delete_node` on the protocol and both backends, plus `reverse_merge` (§7.7, §7.9), **and the two stored per-graph settings** — `merge_undo_depth`, `merge_cycle_limit` — with the tool that configures them | Needs 0a to have run for anything to be reversible. Carries the never-expose guard in all three places. **The settings are not optional here**: 0b's refusal tells the agent the limit is configurable, and this is the step where that stops being dormant, so shipping reversal without them leaves a promise the code does not keep. |
 | 1 | `apply_reflection(similarities=[…])` + `ASSESSED` edge | #64's fix. Stops the re-nomination treadmill, and gives corroboration its first real input — **only from `one_claim` verdicts** (§1.2). Independent of everything below. |
 | 2 | `agent` table, approved-id settings, `claim_agent`, approval over `ctx.elicit` with `epimemer agents confirm` as fallback | Registry with nothing yet pointing at it. Full protocol on both backends, per the standing rule. |
 | 3 | `judge` threaded through the reflect-side write paths | Smallest surface producing attributed decisions, so step 5 has something to read. |

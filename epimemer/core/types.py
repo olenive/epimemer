@@ -836,6 +836,31 @@ MERGE_UNDO_KEY = "merge_undo"
 # keeps absorbing restatements, whose history otherwise grows without limit.
 DEFAULT_MERGE_UNDO_DEPTH = 10
 
+# How many completed merge/reverse cycles a fact may have behind it before the
+# next merge refuses. One is an ordinary correction; two can be two judges
+# disagreeing; the third attempt is an oscillation nobody wants, and an agent
+# can run it indefinitely without noticing.
+DEFAULT_MERGE_CYCLE_LIMIT = 2
+
+
+def completed_merge_cycles(node: "EpistemicNode") -> int:
+    """How many times this node has been merged and then brought back.
+
+    **The signal needs no new storage**, which is most of the case for having
+    it: every merge appends a `LifecycleEpisode` with `because: MERGED`, every
+    reversal closes that episode with `restored_at`, and the list is append-only
+    and never trimmed. So one completed cycle leaves one closed `merged`
+    episode, permanently.
+
+    Counted per node rather than per pair. Pair matching would miss `A+B`, then
+    `A+C`, then `A+D` — one node oscillating against different partners — on
+    data that is there either way.
+    """
+    return sum(
+        1 for episode in node.lifecycle
+        if episode.because is NodeStatus.MERGED and episode.restored_at is not None
+    )
+
 
 class MergedEdge(BaseModel):
     """One edge exactly as it stood before a merge moved it.

@@ -20,10 +20,12 @@ from epimemer.core.types import (
     HISTORY_EDGE_TYPES,
     Inference,
     JUDGMENT_EDGE_TYPES,
+    LifecycleEpisode,
     Metacontext,
     NodeEdge,
     NodeStatus,
     NON_KNOWLEDGE_EDGE_TYPES,
+    completed_merge_cycles,
     RawDocument,
     Segment,
     Timeline,
@@ -116,6 +118,48 @@ class TestWorldChangeMigrationPolicy:
         assert migration_disposition(
             EdgeType.SOURCED_FROM, NodeStatus.SUPERSEDED
         ) == "move"
+
+
+def _episode(because: NodeStatus, *, restored: bool) -> LifecycleEpisode:
+    return LifecycleEpisode(
+        retired_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        because=because,
+        counterpart="other",
+        restored_at=datetime(2026, 1, 2, tzinfo=timezone.utc) if restored else None,
+    )
+
+
+class TestCountingMergeCycles:
+    """One completed cycle is one *closed* `merged` episode (REVIEW_MODE.md
+    §7.8). The signal needs no new storage — the lifecycle already records it,
+    append-only and never trimmed."""
+
+    def test_a_closed_merge_episode_is_one_cycle(self):
+        node = Fact(content="c", source_id="s", lifecycle=[
+            _episode(NodeStatus.MERGED, restored=True),
+            _episode(NodeStatus.MERGED, restored=True),
+        ])
+        assert completed_merge_cycles(node) == 2
+
+    def test_an_open_merge_episode_is_not_a_cycle(self):
+        """The node is still merged. Counting it would refuse on the strength of
+        the merge currently being reversed."""
+        node = Fact(content="c", source_id="s", lifecycle=[
+            _episode(NodeStatus.MERGED, restored=False),
+        ])
+        assert completed_merge_cycles(node) == 0
+
+    def test_a_recurrence_is_not_an_oscillation(self):
+        """A claim that stepped aside for its period and came back is #53's
+        recurrence — the case the lifecycle was built for, and not this one."""
+        node = Fact(content="c", source_id="s", lifecycle=[
+            _episode(NodeStatus.HISTORICAL, restored=True),
+            _episode(NodeStatus.CORRECTED, restored=True),
+        ])
+        assert completed_merge_cycles(node) == 0
+
+    def test_a_node_that_never_left_has_no_cycles(self):
+        assert completed_merge_cycles(Fact(content="c", source_id="s")) == 0
 
 
 class TestAJudgmentIsAnchoredWhateverTheRetirement:

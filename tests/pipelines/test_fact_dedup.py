@@ -32,6 +32,7 @@ from epimemer.core.types import (
     EmbeddingRecord,
     Fact,
     Inference,
+    LifecycleEpisode,
     Metacontext,
     NodeEdge,
     NodeStatus,
@@ -83,6 +84,7 @@ async def _fact(
     status: NodeStatus = NodeStatus.ACTIVE,
     value: ValueSignal | None = None,
     metadata: dict | None = None,
+    lifecycle: list[LifecycleEpisode] | None = None,
 ) -> Fact:
     """One stored, embedded fact. Defaults are the mergeable case."""
     fact = Fact(
@@ -92,6 +94,7 @@ async def _fact(
         status=status,
         value=value or ValueSignal(),
         metadata=metadata or {},
+        lifecycle=list(lifecycle or []),
     )
     await storage.store_node(fact)
     await storage.store_embedding(EmbeddingRecord(
@@ -141,14 +144,30 @@ def _span(start: int, end: int) -> ValidityInterval:
     )
 
 
-async def _merge(storage, embedding_provider, facts, content="One claim.") -> dict:
+async def _merge(
+    storage, embedding_provider, facts, content="One claim.", **kwargs
+) -> dict:
     result, _ = await tools.merge_facts(
         source_ids=[fact.id for fact in facts],
         content=content,
         storage=storage,
         embedding_provider=embedding_provider,
+        **kwargs,
     )
     return result
+
+
+def _completed_cycles(count: int) -> list[LifecycleEpisode]:
+    """`count` merge/reverse round trips, as the lifecycle records them."""
+    return [
+        LifecycleEpisode(
+            retired_at=datetime(2026, 1, i + 1, tzinfo=timezone.utc),
+            because=NodeStatus.MERGED,
+            counterpart=f"survivor-{i}",
+            restored_at=datetime(2026, 1, i + 2, tzinfo=timezone.utc),
+        )
+        for i in range(count)
+    ]
 
 
 class TestOneClaimInTwoDocumentsBecomesOneFact:
@@ -420,6 +439,154 @@ class TestRetiredFactsAreNotMerged:
 
         assert result["merged"] is False
         assert "corrected" in result["refused"]
+
+
+class TestAFutileMergeCycleIsRefused:
+    """Merged, reversed, merged again is an agent burning tokens on an
+    oscillation nobody wants (REVIEW_MODE.md §7.8).
+
+    Not expected — but hard to catch after the fact and nearly free to catch
+    here, which is the whole case for building it before it happens. The signal
+    needs no new storage: every merge appends a `merged` lifecycle episode and
+    every reversal closes it with `restored_at`, in a list that is append-only
+    and never trimmed.
+
+    **Dormant until reversal exists.** Nothing writes `restored_at` today, so
+    the count is zero on every real fact and this gate cannot fire. It is built
+    now because the episodes it reads are being written now, and a limit added
+    after an oscillation has run has nothing to look at.
+    """
+
+    async def test_a_fact_at_the_limit_refuses_the_next_merge(
+        self, storage, embedding_provider
+    ):
+        oscillated = await _fact(
+            storage, embedding_provider, "The capital is Bonn.",
+            lifecycle=_completed_cycles(2),
+        )
+        other = await _fact(storage, embedding_provider, "Bonn is the capital.")
+
+        result = await _merge(storage, embedding_provider, [oscillated, other])
+
+        assert result["merged"] is False
+        assert "merge_cycle_limit of 2" in result["refused"]
+        assert "Ask the user" in result["refused"]
+
+    async def test_one_cycle_is_an_ordinary_correction_and_still_merges(
+        self, storage, embedding_provider
+    ):
+        """The limit is not "never oscillate". One merge-then-reverse is a
+        judgment revised, which is the system working."""
+        once = await _fact(
+            storage, embedding_provider, "The capital is Bonn.",
+            lifecycle=_completed_cycles(1),
+        )
+        other = await _fact(storage, embedding_provider, "Bonn is the capital.")
+
+        result = await _merge(storage, embedding_provider, [once, other])
+
+        assert result["merged"] is True
+
+    async def test_an_unfinished_merge_does_not_count_as_a_cycle(
+        self, storage, embedding_provider
+    ):
+        """An open episode is a node that is still merged, not one that came
+        back. Counting it would refuse on the strength of the merge that is
+        being reversed rather than on a completed round trip."""
+        open_episode = [LifecycleEpisode(
+            retired_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            because=NodeStatus.MERGED,
+            counterpart="survivor-0",
+        )]
+        never_returned = await _fact(
+            storage, embedding_provider, "The capital is Bonn.",
+            lifecycle=_completed_cycles(1) + open_episode,
+        )
+        other = await _fact(storage, embedding_provider, "Bonn is the capital.")
+
+        result = await _merge(
+            storage, embedding_provider, [never_returned, other],
+            merge_cycle_limit=2,
+        )
+
+        assert result["merged"] is True
+
+    async def test_a_retirement_that_was_not_a_merge_does_not_count(
+        self, storage, embedding_provider
+    ):
+        """A claim that stepped aside for its period and came back is #53's
+        recurrence, not an oscillation — the case the lifecycle exists for."""
+        recurred = await _fact(
+            storage, embedding_provider, "Labour is in government.",
+            lifecycle=[LifecycleEpisode(
+                retired_at=datetime(2010, 5, 11, tzinfo=timezone.utc),
+                because=NodeStatus.HISTORICAL,
+                counterpart="successor",
+                restored_at=datetime(2024, 7, 5, tzinfo=timezone.utc),
+            )] * 3,
+        )
+        other = await _fact(storage, embedding_provider, "Labour governs.")
+
+        result = await _merge(storage, embedding_provider, [recurred, other])
+
+        assert result["merged"] is True
+
+    async def test_the_count_is_per_node_rather_than_per_pair(
+        self, storage, embedding_provider
+    ):
+        """Pair matching would miss `A+B`, then `A+C`, then `A+D` — one node
+        oscillating against a fresh partner each time, which is the same waste
+        wearing a disguise."""
+        oscillated = await _fact(
+            storage, embedding_provider, "The capital is Bonn.",
+            lifecycle=_completed_cycles(2),
+        )
+        stranger = await _fact(
+            storage, embedding_provider, "Bonn is the capital.",
+        )
+
+        result = await _merge(storage, embedding_provider, [oscillated, stranger])
+
+        assert result["merged"] is False
+        assert "merge_cycle_limit" in result["refused"]
+
+    async def test_raising_the_limit_lets_the_merge_through(
+        self, storage, embedding_provider
+    ):
+        """The refusal tells the agent to ask the user, so the escape hatch has
+        to be real — otherwise a legitimate third merge is blocked with no
+        recourse, which is worse than the oscillation."""
+        oscillated = await _fact(
+            storage, embedding_provider, "The capital is Bonn.",
+            lifecycle=_completed_cycles(2),
+        )
+        other = await _fact(storage, embedding_provider, "Bonn is the capital.")
+
+        result = await _merge(
+            storage, embedding_provider, [oscillated, other], merge_cycle_limit=3,
+        )
+
+        assert result["merged"] is True
+
+    async def test_a_permanent_obstacle_is_reported_ahead_of_this_one(
+        self, storage, embedding_provider
+    ):
+        """Refusals are ordered permanent-first, and this one is fixable: a
+        person can settle it or raise the limit. Reporting it while a
+        cross-frame pair also stands would send an agent to do work that
+        changes nothing."""
+        oscillated = await _fact(
+            storage, embedding_provider, "The capital is Bonn.",
+            lifecycle=_completed_cycles(5),
+        )
+        other = await _fact(storage, embedding_provider, "Bonn is the capital.")
+        await _framed(storage, other, "fiction")
+
+        result = await _merge(storage, embedding_provider, [oscillated, other])
+
+        assert result["merged"] is False
+        assert "frames" in result["refused"]
+        assert "merge_cycle_limit" not in result["refused"]
 
 
 class TestTheSimilarityFloorIsTheNominationBar:

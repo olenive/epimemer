@@ -304,12 +304,16 @@ moved, including `NodeNote` folding into the decision journal (which supersedes
 edge partition an undo needs is destroyed at merge time, so every merge taken
 before it is captured is permanently irreversible.
 
-**Progress.** **Step 0a is built (2026-08-22)** — `merge_nodes` now captures the
-partition on the survivor, with chain eviction past a depth bound. That closes
-the only running cost in the plan; the five merges taken on 2026-08-21 predate
-it and stay irreversible. Nothing reads the payload yet, which is expected:
-`reverse_merge` is step 0c. Remaining order is 0b (the cycle limit), 0c
-(`delete_node` + `reverse_merge`), then 1 onward.
+**Progress.** **Steps 0a and 0b are built (2026-08-22)** — `merge_nodes`
+captures the pre-merge partition on the survivor with chain eviction past a depth
+bound, and `merge_refusal` refuses a fact that has already oscillated
+`merge_cycle_limit` times. That closes the running costs in the plan; the five
+merges taken on 2026-08-21 predate the capture and stay irreversible. **Both are
+dormant by design** — nothing reads the payload and nothing can reach a non-zero
+cycle count until `reverse_merge` exists — which is the point: each reads
+something that exists at merge time and nowhere else. Next is **0c**
+(`delete_node`, `reverse_merge`, and the two stored per-graph settings the
+earlier steps deliberately deferred), then 1 onward.
 
 ---
 

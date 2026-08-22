@@ -70,9 +70,11 @@ contributing document, so provenance becomes plural rather than being
 overwritten. It refuses — with a reason — an **event** rather than a state, a
 fact ingested without a `claim_kind`, a retired twin (that is `recurs`, and
 `restore`), a pair not standing in exactly the same frames (that is
-`record_variant`), and anything below the nomination bar. Every refusal leaves
-the older action available and correct: *keep both, joined by `similarity`*,
-which is what corroboration reads.
+`record_variant`), a fact that has already been merged and un-merged
+`merge_cycle_limit` times (default 2 — an oscillation, and the refusal asks you
+to bring in the user rather than try again), and anything below the nomination
+bar. Every refusal leaves the older action available and correct: *keep both,
+joined by `similarity`*, which is what corroboration reads.
 
 ---
 
