@@ -1,10 +1,14 @@
 # Review mode: who judged this, and can someone else check it
 
-**Status: designed, not built (2026-08-22)** — with one exception. Written
-before any code, at the user's direction; where it says "does", read "would".
-The exception is §10.2.1's precondition (`ISSUES.md` #65), **built 2026-08-22**
-because it is a defect in shipped code that step 1 would make reachable, and
-fixing it after would mean shipping it knowingly.
+**Status: designed, mostly not built (2026-08-22).** Built so far: §10.2.1's
+precondition (`ISSUES.md` #65) and **step 0a**, the merge-undo capture — the two
+whose cost rose while they waited. Everything else below is design. Written
+before any code, at the user's direction; where an unbuilt section says "does",
+read "would". #65 went first because it is a defect in shipped code that
+step 1 would make reachable, and fixing it after would mean shipping it
+knowingly. Step 0a went next because **the partition it captures is destroyed at
+merge time**: every merge taken before it landed is permanently irreversible, so
+waiting had a running cost that no other step has.
 
 **Written to be implemented from.** §10 breaks the build into eight steps with
 the types, protocol methods, call sites and tests each one needs; §7.9 does the
@@ -783,12 +787,50 @@ those partitions are retained.** On each merge, walk the chain back from the new
 survivor and clear `merge_undo` on any ancestor deeper than the limit. Ten
 levels of a lineage stay reversible; the eleventh and beyond become permanent.
 
+> **Shipped 2026-08-22 as an injectable default, not yet a stored per-graph
+> override.** `merge_nodes(..., undo_depth=DEFAULT_MERGE_UNDO_DEPTH)` — explicit
+> at the call site, overridable by any caller, no singleton — with the
+> `get/set_merge_undo_depth_override` storage pair and its `configure_*` tool
+> deferred to step 0c.
+>
+> **The reason is that the pair would have shipped with no writer**, which is
+> #64's exact shape and was closed three commits earlier: a stored setting whose
+> only user-facing surface is a tool that configures reversal, in a build where
+> reversal does not exist yet. The cost of waiting is bounded and self-limiting
+> — a graph would need an **eleven-deep** merge chain built between 0a and 0c to
+> lose anything a higher setting would have kept, against measured chains of
+> depth 1, and nothing could have been reversed in that window anyway. So no
+> capability that existed is lost, which is the test this whole section applies.
+
 **Ten, and not more, because of what the bound actually targets.** It is not
 storage: merge does not shrink this graph. Sources are retired, not deleted —
 all ten from 2026-08-21 are still present as `MERGED` husks keeping their
 content and their 384-dimension vectors, so what a merge already retains and
-never reclaims (~3.4 KB) is roughly eighteen times the undo payload it would
-add (~190 B). Net node count rose across that session, 558 → 638.
+never reclaims exceeds the undo payload it adds. Net node count rose across that
+session, 558 → 638.
+
+> **Measured on building it, 2026-08-22, and the earlier figure was wrong.**
+> A representative merge — two sources, five migrating edges, matching the 4.8
+> knowledge edges per merge measured on the real graph — captures **1,650 B**,
+> about 330 B per edge, against **~4.1 KB** of husk and vector the same merge
+> already retains for ever. So the ratio is roughly **2.5×, not the ~18× this
+> paragraph first claimed from a ~190 B estimate**. That estimate had counted a
+> hand-listed field subset; the payload stores the whole edge, which is the
+> decision §7.9 makes and defends, and uuid ids, ISO timestamps and the
+> `MergedEdge` wrapper account for the rest.
+>
+> **The conclusion is unchanged, and it is worth saying why rather than just
+> asserting it.** The payload is still smaller than what a merge already keeps,
+> and the bound was never aimed at bytes — it is aimed at the single claim that
+> keeps absorbing restatements, whose chain grows without limit. But a reader
+> raising `merge_undo_depth` a long way should now do it against 1.6 KB per
+> level, not 190 B.
+>
+> **Deliberately not shrunk with `exclude_defaults`**, which would cut most of
+> it: an omitted field is re-supplied from *today's* default when the payload is
+> replayed, so a default changed next year would silently alter a replay of an
+> old merge. That is the "partial copy" hazard §7.9 rejects, wearing a
+> different hat.
 
 What the bound targets is the case where a single claim keeps absorbing
 restatements — merge document 3's phrasing into the survivor, then document 4's,
@@ -998,13 +1040,21 @@ class MergeUndo(BaseModel):
 > The lesson generalises past this field list: *a partial copy of a model is a
 > bug with a delay on it.*
 
-**Intra-set edges need capturing too, and are easy to miss.** A `similarity` or
-`contradiction` edge **between two merging sources** becomes a self-loop, and
+**Intra-set edges need capturing too, and are easy to miss.** A **migrating**
+edge **between two merging sources** becomes a self-loop, and
 `_migrate_edges_inplace` (`memory.py:~509`) drops it outright rather than
 collapsing it — so it is neither on the survivor nor on the sources afterwards.
-It must be captured with `intra_set=True` and recreated on reversal, or the
-cycle silently destroys a judgment. This is the one edge class that is gone
-*immediately*, not merely re-pointed.
+It must be captured with `intra_set=True` and recreated on reversal. This is the
+one edge class that is gone *immediately*, not merely re-pointed.
+
+> **Amended 2026-08-22, on building the capture.** This paragraph's example was
+> *"a `similarity` or `contradiction` edge between two merging sources"*, and
+> #65 has since made that the one case it is **not**. Judgment edges answer
+> `keep`, so the migration loop skips them before it reaches the self-loop
+> branch and they survive intact on the retired sources. The mechanism is still
+> needed — a user `related` edge, a `supports` edge between two merging facts —
+> and a test asserts the edge is gone from the sources *and* the survivor, so it
+> is checking the destruction it claims rather than assuming it.
 
 **Where it lives.** `metadata["merge_undo"]`, parsed through `MergeUndo` on read
 and write. `Topic`, `Fact` and `Inference` share no base class — each redeclares
@@ -1015,10 +1065,25 @@ already carries `merged_from`, and `merge_nodes` is generic over
 treatment for free.
 
 **Capture point.** `merge_nodes` (`pipelines/graph_construction/versioning.py`),
-which already reads every source's edges to migrate them — build `MergeUndo`
-from that same read, before migration mutates anything, and store it on the
-merged node in the same transaction. Then walk `merged_into` back from the new
-survivor and clear `merge_undo` on ancestors past `merge_undo_depth`.
+before migration mutates anything: build `MergeUndo`, assign it onto the merged
+node's `metadata`, and let the existing `merge_nodes_tx` call persist it — so
+the payload lands in the same transaction as the merge, with no extra write.
+Then walk the lineage back from the new survivor and clear `merge_undo` on
+ancestors past `merge_undo_depth`.
+
+> **One correction, made on building it.** This said `merge_nodes` "already
+> reads every source's edges to migrate them". It does not — *`merge_nodes_tx`*
+> does, inside each backend. So the capture adds two reads per source
+> (`get_edges_from` + `get_edges_to`), pre-transaction, on the same
+> single-connection assumption `_plan_copied_edges` and `merge_nodes_tx` already
+> make. Cheap, and a merge is rare; capturing inside the two backends instead
+> would have meant implementing the policy twice.
+>
+> Eviction runs **after** the transaction, so a merge that fails evicts nothing;
+> it is idempotent, so a failure there costs at most a payload kept one merge
+> past the bound. It walks `MergeUndo.source_ids` rather than `merged_into`
+> edges — same lineage, already in hand, one `get_nodes` per level. In practice
+> the walk terminates immediately: every merge on both real graphs is depth 1.
 
 **The protocol.**
 
@@ -1175,7 +1240,7 @@ Each step is useful alone, and each is a precondition for the next.
 
 | # | Step | Why here |
 |---|---|---|
-| **0a** | **`merge_nodes` captures the pre-merge edge partition** as `MergeUndo` on the survivor, with chain eviction past `merge_undo_depth` (§7.4, §7.9) | **Capture or lose.** The partition exists only at merge time (§7.1), so every merge taken before this lands is permanently irreversible. The only step with a deadline. |
+| **0a** ✅ | **`merge_nodes` captures the pre-merge edge partition** as `MergeUndo` on the survivor, with chain eviction past `merge_undo_depth` (§7.4, §7.9) | **Capture or lose.** The partition exists only at merge time (§7.1), so every merge taken before this lands is permanently irreversible. The only step with a deadline. **Built 2026-08-22**; the five merges of 2026-08-21 predate it and stay irreversible. |
 | **0b** | **`merge_cycle_limit` in `merge_refusal`** (§7.8) | Same file, same sitting, no new storage — the lifecycle episodes it counts already exist. Cheap now, and near-impossible to reconstruct once an oscillation has run. |
 | 0c | `delete_node` on the protocol and both backends, plus `reverse_merge` (§7.7, §7.9) | Needs 0a to have run for anything to be reversible. Carries the never-expose guard in all three places. |
 | 1 | `apply_reflection(similarities=[…])` + `ASSESSED` edge | #64's fix. Stops the re-nomination treadmill, and gives corroboration its first real input — **only from `one_claim` verdicts** (§1.2). Independent of everything below. |

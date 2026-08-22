@@ -7,13 +7,19 @@ Handles node supersession (creating a new version) and node merging
 from datetime import datetime, timezone
 
 from epimemer.core.types import (
+    DEFAULT_MERGE_UNDO_DEPTH,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
+    MergeUndo,
+    MergedEdge,
     NodeEdge,
     NodeStatus,
     Topic,
     lineage_edge_type_for,
+    migration_disposition,
+    read_merge_undo,
+    with_merge_undo,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.storage.protocol import StorageBackend
@@ -136,11 +142,123 @@ async def supersede_by_existing(
     return lineage_edge
 
 
+
+async def plan_merge_undo(
+    source_nodes: list[EpistemicNode],
+    merged_node: EpistemicNode,
+    storage: StorageBackend,
+    *,
+    merged_at: datetime,
+) -> MergeUndo:
+    """The pre-merge edge partition, captured before migration destroys it.
+
+    **Capture or lose** (REVIEW_MODE.md §7.1). `merge_nodes_tx` re-points every
+    migrating edge onto the survivor and collapses duplicates by
+    `(src, dst, type)`, and records nothing about which source owned which edge
+    — so two sources citing one document leave a single `sourced_from` edge that
+    no later pass can split back in two. This is the only moment the partition
+    exists.
+
+    Only the edges the merge actually *moves or drops* are captured. Judgment
+    edges stay on the source under `migration_disposition` (#65), so recording
+    them would have a reversal recreate edges that never left.
+
+    Read before the transaction, the way `merge_nodes_tx` and
+    `_plan_copied_edges` already plan theirs: the SurrealDB adapter is
+    single-connection and documented as unsafe for concurrent callers, so
+    nothing interleaves. Walked in the caller's source order so the payload is
+    deterministic.
+    """
+    source_ids = {node.id for node in source_nodes}
+
+    incident: dict[str, NodeEdge] = {}
+    for source in source_nodes:
+        for edge in await storage.get_edges_from(source.id):
+            incident[edge.id] = edge
+        for edge in await storage.get_edges_to(source.id):
+            incident[edge.id] = edge
+
+    captured: list[MergedEdge] = []
+    for edge in incident.values():
+        if migration_disposition(edge.type, NodeStatus.MERGED) == "keep":
+            continue
+        intra_set = edge.src_id in source_ids and edge.dst_id in source_ids
+        captured.append(MergedEdge(
+            # For an intra-set edge both endpoints are merging, so `owner_id` is
+            # arbitrary and the edge body carries the truth; `src_id` keeps it
+            # deterministic.
+            owner_id=edge.src_id if edge.src_id in source_ids else edge.dst_id,
+            edge=edge.model_dump(exclude={"id"}, mode="json"),
+            intra_set=intra_set,
+        ))
+
+    return MergeUndo(
+        source_ids=[node.id for node in source_nodes],
+        edges=captured,
+        merged_at=merged_at,
+        survivor_content=merged_node.content,
+    )
+
+
+async def evict_deep_merge_undo(
+    survivor: EpistemicNode, storage: StorageBackend, *, depth: int,
+) -> list[str]:
+    """Clear merge payloads more than `depth` levels back along the lineage.
+
+    Depth is a property of the *chain*, not of any one node's list: `A+B→S1`,
+    then `S1+C→S2`, and unwinding `S2` to `A, B, C` needs `S2`'s partition and
+    `S1`'s. The new survivor is level 1, the survivors it absorbed level 2, and
+    so on; anything past `depth` is cleared and becomes permanent.
+
+    **What eviction discards is reversal capability, never a claim.** Every
+    merged source, its content, its provenance, its lifecycle episode and its
+    `merged_into` edge are untouched. The graph forgets how to replay an edge
+    migration automatically. It forgets nothing it knows. `merged_from` is
+    deliberately left in place — it is what lets a later refusal tell an evicted
+    payload from a node that never had one.
+
+    Returns the ids cleared, which is normally empty: every merge on both real
+    graphs to date has been depth 1.
+    """
+    undo = read_merge_undo(survivor)
+    if undo is None:
+        return []
+
+    cleared: list[str] = []
+    seen = {survivor.id}
+    frontier = list(undo.source_ids)
+    level = 1
+    while frontier:
+        level += 1
+        ancestors = await storage.get_nodes(frontier)
+        next_frontier: list[str] = []
+        for node_id in frontier:
+            node = ancestors.get(node_id)
+            if node is None or node_id in seen:
+                continue
+            seen.add(node_id)
+            ancestor_undo = read_merge_undo(node)
+            if ancestor_undo is None:
+                continue
+            # Read the ancestry out before clearing: the walk has to keep going
+            # past an evicted level, since everything above it is deeper still.
+            next_frontier.extend(ancestor_undo.source_ids)
+            if level > depth:
+                await storage.store_node(node.model_copy(
+                    update={"metadata": with_merge_undo(node.metadata, None)},
+                ))
+                cleared.append(node_id)
+        frontier = next_frontier
+    return cleared
+
+
 async def merge_nodes(
     source_nodes: list[EpistemicNode],
     merged_node: EpistemicNode,
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
+    *,
+    undo_depth: int = DEFAULT_MERGE_UNDO_DEPTH,
 ) -> list[NodeEdge]:
     """Merge multiple nodes into one.
 
@@ -152,6 +270,15 @@ async def merge_nodes(
     As with supersede_node, embedding and edge migration are part of the
     operation so the merged node is searchable and inherits its sources'
     supporting evidence rather than being orphaned.
+
+    **The pre-merge edge partition is captured on the survivor** (#64 step 0a,
+    REVIEW_MODE.md §7). Migration re-points every migrating edge and collapses
+    duplicates, recording nothing about which source owned which — so the
+    partition exists at this moment and at no other, and a merge taken without
+    capturing it is permanently irreversible. See `plan_merge_undo`; the bound
+    on how far back payloads are kept is `evict_deep_merge_undo`. Nothing reads
+    the payload yet: `reverse_merge` is a later step, and this one runs first
+    only because its cost rises while it waits.
 
     **Dependent inferences are flagged, as they are on every other event that
     changes a premise** (#61). A merge is the only one that does not retire the
@@ -168,10 +295,22 @@ async def merge_nodes(
         merged_node: The new combined node.
         storage: The storage backend.
         embedding_provider: Used to embed the merged node's content.
+        undo_depth: How far back along the lineage merge payloads are kept.
+            Passed rather than read from a module-level default at the call
+            site, so a graph's own value can be threaded here without a
+            singleton. Must be at least 1 — the merge being made now is level 1,
+            and a depth below that would discard the payload in the same breath
+            as capturing it.
 
     Returns:
         A list of merged_into edges, one per source node.
     """
+    if undo_depth < 1:
+        raise ValueError(
+            f"undo_depth must be at least 1, got {undo_depth}: the merge being "
+            f"made is level 1, so a lower bound would capture the partition and "
+            f"discard it in the same call."
+        )
     from epimemer.pipelines.reflection.review import plan_evidence_merged_edges
 
     now = datetime.now(timezone.utc)
@@ -203,10 +342,24 @@ async def merge_nodes(
         for edge in await plan_evidence_merged_edges(source.id, storage)
     ]
 
+    # Captured *before* the transaction, because the transaction is what
+    # destroys it (§7.1). Assigned onto the caller's node rather than a copy:
+    # `topic_consolidation` returns the node it passed in, so a copy would leave
+    # the caller holding a version the store disagrees with.
+    merged_node.metadata = with_merge_undo(
+        merged_node.metadata,
+        await plan_merge_undo(source_nodes, merged_node, storage, merged_at=now),
+    )
+
     await storage.merge_nodes_tx(
         source_nodes, merged_node, merged_embedding, lineage_edges, merged_at=now,
         evidence_edges=evidence_edges,
     )
+
+    # After the transaction, so a merge that fails evicts nothing. Eviction is
+    # idempotent, so the worst a failure here costs is a payload kept one merge
+    # longer than the bound.
+    await evict_deep_merge_undo(merged_node, storage, depth=undo_depth)
     return lineage_edges
 
 

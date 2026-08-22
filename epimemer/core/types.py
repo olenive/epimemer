@@ -820,6 +820,87 @@ class NodeEdge(BaseModel):
         return self
 
 
+# --- Merge undo (REVIEW_MODE.md §7) ---
+
+# `metadata` key the payload lives under, on the merge survivor. Not a typed
+# field: `Topic`, `Fact` and `Inference` share no base class, so a field would
+# have to be declared three times for a payload only merge survivors ever carry
+# — and `metadata` already holds `merged_from` beside it.
+MERGE_UNDO_KEY = "merge_undo"
+
+# How far back along a `merged_into` chain the partitions are retained. Ten
+# levels of one lineage stay reversible; the eleventh and beyond become
+# permanent. Not aimed at storage — a merge retires its sources rather than
+# deleting them, so what it already keeps and never reclaims (~3.4 KB of husk
+# and vector) dwarfs the payload it adds (~190 B). It bounds the one claim that
+# keeps absorbing restatements, whose history otherwise grows without limit.
+DEFAULT_MERGE_UNDO_DEPTH = 10
+
+
+class MergedEdge(BaseModel):
+    """One edge exactly as it stood before a merge moved it.
+
+    **The whole edge, field by field, and never a hand-listed subset.** Built
+    with `edge.model_dump(exclude={"id"})`, so a field added to `NodeEdge` later
+    is carried without anyone remembering to come back here. A hand-listed
+    subset was the first design and it omitted `metadata` and `created_at` —
+    which is where a judgment's `judged_by` will live, so a merge/reverse cycle
+    would have replayed every edge with its attribution stripped.
+
+    Values rather than references, because migration collapses duplicates by
+    `(src, dst, type)`: the row this was taken from may not exist afterwards.
+    """
+    owner_id: str            # the merging source this edge belonged to
+    edge: dict               # NodeEdge.model_dump(exclude={"id"})
+    # True when *both* endpoints were merging, which makes the edge a self-loop
+    # the migration drops outright rather than re-points. It is the only class
+    # that is gone immediately rather than moved, so it is the only one a
+    # reversal must recreate from nothing.
+    intra_set: bool = False
+
+
+class MergeUndo(BaseModel):
+    """Everything needed to replay one merge backwards.
+
+    Carried on the survivor rather than in a graph-wide log, which is what makes
+    it self-maintaining: archive the survivor and the payload goes with it, no
+    dangling promise and no buffer pinning nodes against the graph's own
+    cleanup. A session of N merges touches N *distinct* survivors, one entry
+    each, so a per-node bound evicts nothing a global ring of the same size
+    would have kept.
+    """
+    source_ids: list[str]
+    edges: list[MergedEdge] = Field(default_factory=list)
+    merged_at: datetime
+    decision_id: str | None = None      # the DecisionRecord, once §4 exists
+    # The survivor's wording, kept because reversal *deletes* the node holding
+    # it. Without this a reversal cannot say what it withdrew, and the contested
+    # text stops being quotable the moment the reversal lands.
+    survivor_content: str = ""
+
+
+def read_merge_undo(node: "EpistemicNode") -> MergeUndo | None:
+    """The merge payload on `node`, or None if it carries none.
+
+    None is genuinely ambiguous here and the caller has to disambiguate it:
+    the node was never a merge survivor, or its payload aged past the depth
+    bound. One is permanent and the other is a mistake, and a reversal refusing
+    must say which — `metadata["merged_from"]` is what tells them apart, since
+    eviction clears the payload and never the lineage.
+    """
+    raw = node.metadata.get(MERGE_UNDO_KEY)
+    return None if raw is None else MergeUndo.model_validate(raw)
+
+
+def with_merge_undo(metadata: dict, undo: MergeUndo | None) -> dict:
+    """`metadata` with the merge payload set, or cleared when `undo` is None.
+
+    Never mutates its input, matching `with_retirement` / `with_return`.
+    """
+    rest = {k: v for k, v in metadata.items() if k != MERGE_UNDO_KEY}
+    return rest if undo is None else {**rest, MERGE_UNDO_KEY: undo.model_dump(mode="json")}
+
+
 # --- Embeddings ---
 
 

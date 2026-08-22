@@ -304,6 +304,13 @@ moved, including `NodeNote` folding into the decision journal (which supersedes
 edge partition an undo needs is destroyed at merge time, so every merge taken
 before it is captured is permanently irreversible.
 
+**Progress.** **Step 0a is built (2026-08-22)** — `merge_nodes` now captures the
+partition on the survivor, with chain eviction past a depth bound. That closes
+the only running cost in the plan; the five merges taken on 2026-08-21 predate
+it and stay irreversible. Nothing reads the payload yet, which is expected:
+`reverse_merge` is step 0c. Remaining order is 0b (the cycle limit), 0c
+(`delete_node` + `reverse_merge`), then 1 onward.
+
 ---
 
 ## Needs a decision before it needs code
