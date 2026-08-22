@@ -1,7 +1,8 @@
 # Warnings, settings, and the decisions made against them
 
 **Status: designed, not built (2026-08-21).** Written before any code, at the
-user's direction. Nothing here is implemented; where it says "does", read
+user's direction. **§9 was superseded on 2026-08-22** — node notes fold into
+`dev-docs/REVIEW_MODE.md`'s decision journal; see the banner there and §5.3. Nothing here is implemented; where it says "does", read
 "would". **One exception, and it is marked in place**: §1's live defect — a fact
 merge not flagging its dependents — was built the same day (§7, ISSUES.md #61).
 Advisories, settings, notes and inference merge remain designed only.
@@ -314,6 +315,11 @@ A new reflect nominee list, `contested_decisions`: active nodes carrying an
 **unreviewed note** — a `NodeNote` with `reviewed_at is None` — with the
 advisory and the node's current state.
 
+> **Amended 2026-08-22 — this becomes a `review()` mode, not a reflect list.**
+> Per §9's banner, notes fold into `DecisionRecord`, so the scan is
+> `review(mode="advisory", unreviewed=True)` and "unreviewed" is derived rather
+> than a null field. The purpose is unchanged; the reader moves.
+
 > **Restated 2026-08-21 to match §9.** This section was written against the
 > `proceeded_despite` metadata key that §9 replaced with the typed `notes` list,
 > and said so only in §5.2's banner — so the consumer described here still
@@ -482,6 +488,31 @@ edges migrated. Plus `proceeded_despite` when an advisory was in play.
 ---
 
 ## 9. Node notes (decided 2026-08-21)
+
+> **Superseded 2026-08-22 — `NodeNote` folds into `DecisionRecord`.** A day
+> after this section was decided, `dev-docs/REVIEW_MODE.md` designed a decision
+> journal whose rows also carry a judge, a date, a subject and review state.
+> Review of that document found the two to be **two review-state machines with
+> two "what has nobody looked at" scans**, where an agent proceeding past an
+> advisory would write into both.
+>
+> **The user's decision: one machine.** A `NodeNote` becomes a
+> `DecisionRecord(kind="proceeded_despite_advisory")`; `node.notes` becomes a
+> derived view over records whose `subject_ids` contains the node; §5.3's
+> `contested_decisions` becomes `review(mode="advisory", unreviewed=True)`. The
+> mapping is REVIEW_MODE §8.
+>
+> **`reviewed_at` does not survive the fold**, and that is the substantive
+> change rather than a rename. Review state is mutable, so it lives in exactly
+> one place and is *derived* — a record is reviewed when another record points
+> back at it. Storing it on the note as well would be two homes for one mutable
+> fact across two backends, which is #54/#55/#56's shape.
+>
+> **§5.2's own argument is why this went the way it did**: two shapes for one
+> question is how "the reviewing agent ends up unable to ask one question".
+> What this section decided stands — three states, not a boolean; append-only;
+> a feature rather than a flag. Only the type it lives on changed, and neither
+> was built, so the cost is this paragraph rather than a migration.
 
 §5.2 proposed a `proceeded_despite` key in `metadata`. That is replaced by this
 section, which is a **feature to build rather than a flag to set** — the user's

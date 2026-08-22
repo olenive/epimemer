@@ -292,8 +292,10 @@ neighbourhood walk has ever had.
 rather than architecture, since `storage` is already threaded explicitly and the
 judge rides beside it. Step 5 (the journal) is the largest single piece.
 
-**Blockers.** Four open questions listed in §9 of that document; none blocks
-step 1.
+**Blockers.** Four open questions listed in §11 of that document; none blocks
+step 1. The design was reviewed and revised on 2026-08-22 — §10 records what
+moved, including `NodeNote` folding into the decision journal, which supersedes
+`WARNINGS_AND_SETTINGS.md` §9.
 
 ---
 
