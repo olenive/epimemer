@@ -571,9 +571,23 @@ Memory is exposed as tools, not as a raw database. Claude Code auto-prefixes the
 
 Ingestion is a two-step process: `segment` breaks text into chunks, then the agent extracts topics/facts/inferences and passes them to `store_decomposition`. Epimemer does not decompose text itself — that is the calling agent's job.
 
-The tools group into: **core memory** (`segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`, `judge_importance`); **discovery & stats** (`query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`); **conflict handling** (`check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`, `reverse_merge`, `configure_merge`); **reflection** (`reflect`, `configure_reflection`, `apply_reflection`); **temporal access** (`graph_as_of`, `query_changes`); **archival** (`archive`, `restore`); **timelines** (`create_timeline`, `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`); **metacontexts** (`create_metacontext`, `get_metacontexts`); **graph management** (`list_graphs`, `use_graph`, `delete_graph`); and **visualization** (`viz_status`).
+The tools group into: **core memory** (`segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`, `judge_importance`); **discovery & stats** (`query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`); **conflict handling** (`check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`, `reverse_merge`, `configure_merge`); **reflection** (`reflect`, `configure_reflection`, `apply_reflection`); **temporal access** (`graph_as_of`, `query_changes`); **archival** (`archive`, `restore`); **timelines** (`create_timeline`, `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`); **metacontexts** (`create_metacontext`, `get_metacontexts`); **graph management** (`list_graphs`, `use_graph`, `delete_graph`); **agents** (`claim_agent`); and **visualization** (`viz_status`).
 
 See [INTEGRATION.md](INTEGRATION.md#available-tools) for the canonical table with one-line descriptions and the authoritative tool count — this document intentionally does not restate the count so it can only drift in one place.
+
+### Who is judging
+
+An agent can be given an identity — `claim_agent` proposes an id and a
+self-description, and the **user** approves, edits, or names a different one. An
+id nobody approved is refused, because an agent that could admit its own id
+could not then establish that a *different* agent reviewed anything. Descriptions
+append and are never edited; a description is a self-reported claim, not a
+credential, and only `confirmed_at` carries human weight. Approval is per graph,
+so `use_graph` can unbind a judge.
+
+Nothing yet records that identity **against a decision** — the registry exists
+and the writers do not use it. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) for
+what is built and `dev-docs/REVIEW_MODE.md` for the rest of the design.
 
 Historical graph state is read with the dedicated `graph_as_of` (a lifecycle snapshot at a past instant) and `query_changes` (births and retirements across a window) tools — not via an `at_time` parameter on `search`/`query_graph`. That is *transaction* time; the other axis, when a claim was **true**, is `search(valid_as_of=…)`, and the names are marked on both sides so neither inherits the wrong default reading.
 

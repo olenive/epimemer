@@ -390,6 +390,21 @@ graph learned it.
   `metacontexts` label, and when creating new metacontexts use clear, descriptive
   names.
 
+### Saying which judge you are (claim_agent)
+- Call it once per session, before writing anything, if the user has set up
+  agent identities. **Propose** an id and describe yourself; the user approves,
+  and may hand back a different id. Never pick an id and assume it.
+- A refusal is not an error to work around — it is the prompt. Put its message
+  to the user and let them decide what you should be called; the id is theirs to
+  assign, and it is what lets a later review show that a *different* agent made
+  these decisions.
+- **Your description is a claim, not a credential.** Nothing verifies it.
+  Describe what you are in a way that would let someone tell you from another
+  agent — the model or harness, the role you were given — and do not overstate
+  it. Re-describing appends a version and never edits one.
+- Approval is per graph. After `use_graph`, check whether the response says your
+  judge was unbound, and claim again if it did.
+
 ### Interpreting _meta
 Every tool response includes a `_meta` field:
 - `nodes_returned`: how many nodes were found/affected

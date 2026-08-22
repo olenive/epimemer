@@ -17,6 +17,7 @@ from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from epimemer.core.temporal import merged_validity
 from epimemer.core.types import (
+    Agent,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
@@ -54,7 +55,14 @@ from epimemer.storage.protocol import (
 _EMBEDDED_SCHEMES = ("mem://", "memory", "file://", "surrealkv://")
 
 
-def _is_embedded(url: str) -> bool:
+def is_embedded_url(url: str) -> bool:
+    """Whether this URL names a store that lives inside the process.
+
+    Public because it is not only a reconnect concern: a separate process
+    cannot reach an embedded store at all, so the `epimemer` CLI has to ask
+    this before offering to write anything a running server is meant to read
+    (REVIEW_MODE.md §10.3, ISSUES.md #16).
+    """
     return url.startswith(_EMBEDDED_SCHEMES)
 
 
@@ -447,6 +455,30 @@ def _merge_overrides(rows) -> MergeOverrides:
     return MergeOverrides() if not stored else MergeOverrides.model_validate(stored)
 
 
+# The approved-agent ids share the reflect record for the third time and on the
+# same grounds: one graph-state row, same scope, same lifetime, never the same
+# field. A list rather than a table because it is a *setting* — the user's
+# answer to which ids may judge here — and the agents it admits are the table.
+_APPROVED_AGENTS_FIELD = "approved_agent_ids"
+
+_APPROVED_AGENTS_GET = f"SELECT {_APPROVED_AGENTS_FIELD} FROM {_REFLECT_RECORD};"
+_APPROVED_AGENTS_SET = (
+    f"UPSERT {_REFLECT_RECORD} SET {_APPROVED_AGENTS_FIELD} = $ids RETURN AFTER;"
+)
+
+
+def _approved_agent_ids(rows) -> list[str]:
+    """Read the approved-id list out of a reflect-state row set.
+
+    No row, a null row, or a row without the field all mean *nobody has been
+    admitted to this graph*, which is an empty list — and an empty list refuses
+    every claim, which is the intended reading rather than a gap (§2.2).
+    """
+    if not rows or rows[0] is None:
+        return []
+    return list(rows[0].get(_APPROVED_AGENTS_FIELD) or [])
+
+
 def _serialize(model) -> dict:
     """Serialize a Pydantic model to a dict suitable for SurrealDB.
 
@@ -537,7 +569,7 @@ class SurrealDBStorage:
     async def connect(self) -> None:
         self._db = AsyncSurreal(self._url)
         await self._db.connect(self._url)
-        if not _is_embedded(self._url):
+        if not is_embedded_url(self._url):
             await self._db.signin({"username": self._user, "password": self._password})
         await self._db.use(self._namespace, self._selected)
         await self._setup_schema()
@@ -582,7 +614,7 @@ class SurrealDBStorage:
         try:
             return await operation(conn)
         except (ConnectionClosed, WebSocketException):
-            if _is_embedded(self._url):
+            if is_embedded_url(self._url):
                 raise
             await self._reconnect(conn)
             return await operation(self.db)
@@ -769,6 +801,14 @@ class SurrealDBStorage:
             DEFINE TABLE IF NOT EXISTS metacontext SCHEMALESS;
             DEFINE INDEX IF NOT EXISTS idx_mc_uid ON metacontext FIELDS uid UNIQUE;
             DEFINE INDEX IF NOT EXISTS idx_mc_status ON metacontext FIELDS status;
+        """)
+
+        # Judges. Their own table beside `fact` / `topic` / `inference` and
+        # deliberately not among them: as nodes they would surface in `search`
+        # and be swept by `reflect` (REVIEW_MODE.md §2.5).
+        await query("""
+            DEFINE TABLE IF NOT EXISTS agent SCHEMALESS;
+            DEFINE INDEX IF NOT EXISTS idx_agent_uid ON agent FIELDS uid UNIQUE;
         """)
 
         # Per-graph bookkeeping (reflection counter). Addressed by fixed record
@@ -1866,3 +1906,29 @@ class SurrealDBStorage:
         await self._query(
             _MERGE_SET, {"overrides": drop_none_values(overrides.model_dump())},
         )
+
+    # --- Agents ---
+
+    async def get_agent(self, agent_id: str) -> Agent | None:
+        rows = await self._query(
+            "SELECT * FROM agent WHERE uid = $uid LIMIT 1", {"uid": agent_id}
+        )
+        if not rows:
+            return None
+        return Agent.model_validate(_clean_record(rows[0]))
+
+    async def upsert_agent(self, agent: Agent) -> None:
+        await self._query(
+            _upsert("agent"), {"data": _serialize(agent), "uid": agent.id}
+        )
+
+    async def list_agents(self) -> list[Agent]:
+        rows = await self._query("SELECT * FROM agent")
+        return [Agent.model_validate(_clean_record(r)) for r in rows]
+
+    async def get_approved_agent_ids(self) -> list[str]:
+        rows = await self._query(_APPROVED_AGENTS_GET)
+        return _approved_agent_ids(rows)
+
+    async def set_approved_agent_ids(self, ids: list[str]) -> None:
+        await self._query(_APPROVED_AGENTS_SET, {"ids": list(ids)})

@@ -5,6 +5,7 @@ These types serve double duty:
 2. Petri net tokens — flow through processing pipelines
 """
 
+import hashlib
 from collections.abc import Iterable, Sequence
 from datetime import datetime, timezone
 from enum import Enum
@@ -1025,3 +1026,105 @@ class Metacontext(BaseModel):
     value: ValueSignal = Field(default_factory=ValueSignal)
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
+
+
+# --- Agents: who judged this (REVIEW_MODE.md §2) ---
+
+
+def description_digest(text: str) -> str:
+    """Identify a self-description *version*.
+
+    Truncated sha256 of the exact text. It identifies the version and never the
+    agent: hashing the description to get an id fails in both directions —
+    reword and you become a different judge, paste and you become the same one
+    (§2.1). The id is the user's to assign; this is only what the agent claimed
+    to be at the moment it decided, pinned so a decision that records the digest
+    needs no as-of query.
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+class AgentDescription(BaseModel):
+    """One thing an agent said about itself, and when it said it.
+
+    Append-only. A re-description appends; nothing is ever edited, because a
+    decision made last week was made by whatever this agent claimed to be last
+    week, and that claim has to stay readable after the agent changes its mind.
+
+    **Self-description is a claim, not a credential** (§2.4). Nothing verifies
+    the text — it is self-reported prose, exactly like a fact the agent ingests.
+    `confirmed_at` is the only part carrying human weight, and it is set only
+    through a channel that terminates at the user: `ctx.elicit`, or the
+    `epimemer agents confirm` CLI where the client cannot elicit (§2.3). `None`
+    is *self-described, unconfirmed* — a different epistemic object, never
+    collapsed into the same field.
+    """
+
+    digest: str
+    text: str
+    recorded_at: datetime = Field(default_factory=_now)
+    confirmed_at: datetime | None = None
+
+
+class Agent(BaseModel):
+    """A judge: something that made decisions in this graph.
+
+    Not a user account and not a credential. The id is **assigned by the user**,
+    which is what makes review provable — an agent that mints its own id cannot
+    establish that it is a different agent from the one that decided yesterday,
+    and self-review becomes indistinguishable from independent review (§2.2).
+
+    The append-only-list-with-dates shape is deliberately `LifecycleEpisode`'s.
+    Same problem, same answer: a scalar plus a timestamp cannot express
+    *changed, and here is what it was before*.
+    """
+
+    id: str
+    descriptions: list[AgentDescription] = Field(default_factory=list)
+    authorised_at: datetime = Field(default_factory=_now)
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+
+
+def with_description(
+    descriptions: Sequence[AgentDescription],
+    *,
+    text: str,
+    at: datetime,
+    confirmed_at: datetime | None = None,
+) -> list[AgentDescription]:
+    """`descriptions` plus `text`, unless the current one already says it.
+
+    Re-recording identical text is not a new version (§2.1), so a session that
+    re-claims with unchanged prose leaves the list alone — otherwise the history
+    would fill with versions that differ only in their timestamps, and *which
+    description was current when this was decided* would stop being answerable
+    from the digest alone.
+    """
+    digest = description_digest(text)
+    if descriptions and descriptions[-1].digest == digest:
+        return list(descriptions)
+    return [
+        *descriptions,
+        AgentDescription(
+            digest=digest, text=text, recorded_at=at, confirmed_at=confirmed_at
+        ),
+    ]
+
+
+def current_description(agent: Agent) -> AgentDescription | None:
+    """The version in force now — the last appended, never the newest by date."""
+    return agent.descriptions[-1] if agent.descriptions else None
+
+
+class JudgeRef(BaseModel):
+    """Who is deciding, resolved once at the MCP boundary (§3.2, §10.4).
+
+    Passed explicitly from there on and never read from a module global, so a
+    second graph or a second session cannot inherit the first one's judge. The
+    digest pins the description version current at the call, which is what makes
+    a decision readable years later without an as-of query.
+    """
+
+    agent_id: str
+    digest: str

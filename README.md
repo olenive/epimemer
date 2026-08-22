@@ -163,6 +163,7 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_RECORD_RETRIEVAL` | `true` | Whether `search` stamps `retrieved_at` on what it returns. `false` disables it, at the cost of making `never_retrieved` blind; ranking is never affected either way |
 | `EPIMEMER_IMPORTANCE_STEP` | `0.25` | How much of the gap to its bound one `judge_importance` call closes, up or down. Nothing automatic moves it |
 | `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
+| `EPIMEMER_APPROVED_AGENTS` | (empty) | Comma-separated agent ids the user admits as judges in every graph this server opens. Read when the backend connects and when the server lands on a graph. The approval channel for clients that cannot elicit, and the only one that reaches an embedded store — see [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) |
 | `EPIMEMER_VIZ_ENABLED` | `true` | Publish visualization events to the hub |
 | `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Visualization hub host |
 | `EPIMEMER_VIZ_PORT` | `8765` | Visualization hub port |
@@ -183,6 +184,7 @@ Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<
 - **Timelines**: `create_timeline`, `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`
 - **Metacontexts**: `create_metacontext`, `get_metacontexts`
 - **Graph management**: `list_graphs`, `use_graph`, `delete_graph`
+- **Agents**: `claim_agent` — say which judge you are; the user assigns the id
 - **Visualization**: `viz_status`
 
 See [INTEGRATION.md](INTEGRATION.md#available-tools) for the canonical table with one-line descriptions and the authoritative tool count.
@@ -349,6 +351,16 @@ prerequisite for backend work:
 make test-frontend      # npm run typecheck && npm test, in the frontend directory
 ```
 
+## Administration
+
+`uv run epimemer agents list` shows a graph's approved judge ids and what each
+agent has said about itself. `uv run epimemer agents confirm <id>` admits an id
+— the act no MCP tool may perform, since a tool the agent calls cannot establish
+that the *user* called it. It works only against a **served** SurrealDB: an
+embedded store lives inside the server process, so approving there would write
+into a store the running server never reads. Use `EPIMEMER_APPROVED_AGENTS`
+instead in that case; the command says so rather than appearing to succeed.
+
 ## Not yet built
 
 Proposed work — what it is, why, roughly what it costs, and what has to be true
@@ -364,6 +376,7 @@ deferred fixes are separate, in [dev-docs/ISSUES.md](dev-docs/ISSUES.md).
 - [docs/RETRIEVAL.md](docs/RETRIEVAL.md) — How `search` is answered: the two arms, rank fusion, result provenance, lineage collapse
 - [docs/VALIDITY.md](docs/VALIDITY.md) — When a claim was true: intervals per source, correction vs world-change, recurrence, the soundness check
 - [docs/REFLECTION.md](docs/REFLECTION.md) — The review loop: verdicts, what `reflect` nominates, what `apply_reflection` writes
+- [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) — Who judged this: the agent registry, why the user assigns the id, how approval reaches them
 - [INTEGRATION.md](INTEGRATION.md) — Claude Code integration guide and the canonical tool table
 
 **How it got that way** — design history, appended to rather than rewritten:

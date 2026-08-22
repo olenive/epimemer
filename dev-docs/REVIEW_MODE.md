@@ -1,10 +1,12 @@
 # Review mode: who judged this, and can someone else check it
 
-**Status: §7 and §1 built, the rest designed (2026-08-22).** Built so far:
+**Status: §7, §1 and §2 built, the rest designed (2026-08-22).** Built so far:
 §10.2.1's precondition (`ISSUES.md` #65); **steps 0a, 0b and 0c** — the whole of
 merge reversal, from capture through the futile-cycle refusal to `reverse_merge`
-itself; and **step 1**, `apply_reflection(similarities=[…])` and the `ASSESSED`
-edge, which closes #64's presenting symptom. Steps 2 through 7 below are design.
+itself; **step 1**, `apply_reflection(similarities=[…])` and the `ASSESSED`
+edge, which closes #64's presenting symptom; and **step 2**, the agent registry
+— `claim_agent`, the `agent` table on both backends, approval over elicitation
+and config, and the `epimemer` CLI. Steps 3 through 7 below are design.
 Written
 before any code, at the user's direction; where an unbuilt section says "does",
 read "would". #65 went first because it is a defect in shipped code that
@@ -1316,7 +1318,7 @@ Each step is useful alone, and each is a precondition for the next.
 | **0b** ✅ | **`merge_cycle_limit` in `merge_refusal`** (§7.8) | Same file, same sitting, no new storage — the lifecycle episodes it counts already exist. Cheap now, and near-impossible to reconstruct once an oscillation has run. **Built 2026-08-22**; live since 0c, which is what writes the `restored_at` it counts. |
 | 0c ✅ | `reverse_merge_tx` on the protocol and both backends (the hard delete lives *inside* it, §7.7), plus `reverse_merge`, the `reverse_merge` and `configure_merge` tools, and the two stored per-graph settings | Needs 0a to have run for anything to be reversible. Carries the never-expose guard in all three places. **The settings are not optional here**: 0b's refusal tells the agent the limit is configurable, and this is the step where that stops being dormant, so shipping reversal without them leaves a promise the code does not keep. **Built 2026-08-22**, minus the reversal `DecisionRecord` (step 5) and the `judge` argument (steps 2–4). |
 | 1 ✅ | `apply_reflection(similarities=[…])` + `ASSESSED` edge | #64's fix. Stops the re-nomination treadmill, and gives corroboration its first real input — **only from `one_claim` verdicts** (§1.2). Independent of everything below. **Built 2026-08-22**, with three refusals the design did not name and one ordering rule it did not state; see §10.2's amendment. |
-| 2 | `agent` table, approved-id settings, `claim_agent`, approval over `ctx.elicit` with `epimemer agents confirm` as fallback | Registry with nothing yet pointing at it. Full protocol on both backends, per the standing rule. |
+| 2 ✅ | `agent` table, approved-id settings, `claim_agent`, approval over `ctx.elicit` with `epimemer agents confirm` as fallback | Registry with nothing yet pointing at it. Full protocol on both backends, per the standing rule. **Built 2026-08-22**, with one gate split in two and one seeding rule widened; see §10.3's amendment. |
 | 3 | `judge` threaded through the reflect-side write paths | Smallest surface producing attributed decisions, so step 5 has something to read. |
 | 4 | `judge` threaded through ingest, mandatory (§3.2) | The bigger churn, and where the unreviewable priors are. **This is the cutover date** §3.3 pins. |
 | 5 | `DecisionRecord` + journal writes + W&S §9 folded in (§9) | Makes *"what did this agent judge"* one query. |
@@ -1522,6 +1524,53 @@ migrates through a merge (#65, built — the earlier draft had `SIMILARITY`
 migrating); an unknown verdict is reported, not applied.
 
 ### 10.3 Step 2 — the registry
+
+> **✅ BUILT 2026-08-22.** `Agent` / `AgentDescription` / `JudgeRef` in
+> `core/types.py`, five protocol methods on both backends, the `agent` table and
+> the `approved_agent_ids` graph-state field, `claim_agent` over elicitation,
+> `EPIMEMER_APPROVED_AGENTS`, the `epimemer` CLI (`agents confirm`,
+> `agents list`), `use_graph` re-validation, and 69 tests. `docs/ATTRIBUTION.md`
+> is the current-behaviour page. **Six things the design below did not say:**
+>
+> 1. **The two questions are not one gate.** §2.2's table has re-description
+>    "approved the same way" as the initial claim, and says nothing about the
+>    user being unreachable for it. Built as two strengths: an **id** the user
+>    has not approved is *refused*, because admitting it hands identity back to
+>    the agent; a **new description** under a known id is *recorded either way*
+>    and carries `confirmed_at` only where a human saw it. Refusing the second
+>    would lose a true record of what the agent said about itself in order to
+>    protect a field §2.4 already marks as unverified — and *self-described,
+>    unconfirmed* is the object that section exists to keep distinct.
+> 2. **A tool that waits on a person cannot share the tool timeout.** Nothing
+>    said what happens when a 30s `EPIMEMER_TOOL_TIMEOUT_SECONDS` wraps an
+>    elicitation. It would turn *the user was still reading* into *the client
+>    cannot elicit* — which is the one direction this must not fail in, since
+>    the second refuses the claim. `_run_with_timeout` grows `waits_for_user`,
+>    and only a call that puts a question to a person may set it.
+> 3. **Config seeding runs on every graph the server lands on**, not only at
+>    connect as §10.3 says. Approval is per graph, so connect-time seeding
+>    alone leaves every *other* graph unapprovable on an embedded backend —
+>    which is the failure this section was written to prevent, one `use_graph`
+>    later. Seeding is applied **before** the judge is re-checked, or
+>    configuration would clear a judge it was about to admit.
+> 4. **No session means no binding, and it is reported rather than raised.**
+>    FastMCP's session state raises outside a request context. A graph switch
+>    must not fail over an identity feature the caller never used, so absence
+>    reads as *no judge*; a successful claim reports `session_bound` so a
+>    recorded-but-unbound claim is visible instead of silent.
+> 5. **`epimemer agents confirm` stamps the description too**, not only the id:
+>    the user vouches for the wording in front of them (§2.3), so the current
+>    version gets `confirmed_at` and earlier ones do not. `agents list` was
+>    added beside it — approving an id blind is the same gap in miniature, since
+>    the user needs to see what the agent claimed before agreeing to it.
+> 6. **`list_agents` is protocol-only, not an MCP tool.** The roster is for the
+>    user and for review mode; handing the agent a list of judges is one step
+>    from the filtering §8 refuses, and it has no other use for it.
+>
+> Smaller: `is_embedded_url` is now public in the SurrealDB adapter, because the
+> CLI needs the same predicate the reconnect path uses and two copies of *what
+> counts as embedded* is exactly how the CLI ends up writing approvals into a
+> store nobody reads.
 
 **Storage protocol** (`storage/protocol.py`), implemented in full on both
 `memory.py` and `surrealdb_adapter.py` — the standing rule, no flags and no

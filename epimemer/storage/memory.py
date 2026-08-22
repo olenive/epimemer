@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from epimemer.core.temporal import merged_validity
 from epimemer.core.types import (
+    Agent,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
@@ -109,6 +110,11 @@ class _GraphStore:
     by_item: dict[str, set[str]] = field(default_factory=dict)
     timelines: dict[str, Timeline] = field(default_factory=dict)
     metacontexts: dict[str, Metacontext] = field(default_factory=dict)
+    # Judges, and the ids the user has admitted (REVIEW_MODE.md §2.5). Their
+    # own dict rather than entries in `nodes`, so `search` and `reflect` cannot
+    # reach them: two agents with similar descriptions are not a topic to merge.
+    agents: dict[str, Agent] = field(default_factory=dict)
+    approved_agent_ids: list[str] = field(default_factory=list)
     stores_since_reflect: int = 0
     reflect_threshold_override: int | None = None
     merge_overrides: MergeOverrides = field(default_factory=MergeOverrides)
@@ -958,6 +964,24 @@ class InMemoryStorage:
 
     async def set_merge_overrides(self, overrides: MergeOverrides) -> None:
         self._g.merge_overrides = overrides.model_copy()
+
+    # --- Agents ---
+
+    async def get_agent(self, agent_id: str) -> Agent | None:
+        agent = self._g.agents.get(agent_id)
+        return None if agent is None else _copy(agent)
+
+    async def upsert_agent(self, agent: Agent) -> None:
+        self._g.agents[agent.id] = _copy(agent)
+
+    async def list_agents(self) -> list[Agent]:
+        return _copy_all(self._g.agents.values())
+
+    async def get_approved_agent_ids(self) -> list[str]:
+        return list(self._g.approved_agent_ids)
+
+    async def set_approved_agent_ids(self, ids: list[str]) -> None:
+        self._g.approved_agent_ids = list(ids)
 
     # --- Multi-graph management ---
 

@@ -5,12 +5,15 @@ no global state, easily testable. The MCP server layer in server.py
 calls these and wraps the results.
 """
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Iterable, Iterator, Literal, Mapping, Sequence
 
 from pydantic import BaseModel, Field
 
 from epimemer.core.types import (
+    Agent,
+    AgentDescription,
     BASE_METACONTEXT_ID,
     ClaimKind,
     EdgeType,
@@ -32,7 +35,11 @@ from epimemer.core.types import (
     Timeline,
     Topic,
     ValueSignal,
+    JudgeRef,
+    current_description,
+    description_digest,
     merged_value_signal,
+    with_description,
 )
 from epimemer.core.temporal import ValidityInterval, ValidityVerdict
 from epimemer.embeddings.protocol import EmbeddingProvider
@@ -3505,6 +3512,180 @@ async def graph_stats(
     return result, meta
 
 
+# --- Agents (REVIEW_MODE.md §2) ---
+
+# Asks the user to admit an id, and returns the id they approved — which may not
+# be the one proposed, because the user edits. `None` means no answer: they
+# declined, or the client has no channel to them at all. The server owns *how*
+# the question is put; this module owns *when* it is worth asking.
+ApproveId = Callable[[str, str], Awaitable[str | None]]
+
+# Asks the user to confirm a *new self-description* for an id they have already
+# admitted. Separate from `ApproveId` because the two questions have different
+# consequences: an unanswered id question refuses the claim, an unanswered
+# description question records the version unconfirmed, which is a real
+# epistemic object rather than a failure (§2.4).
+ConfirmDescription = Callable[[str, str], Awaitable[bool]]
+
+
+async def approve_agent_ids(
+    storage: StorageBackend, ids: Sequence[str]
+) -> list[str]:
+    """Admit ids to the active graph's approved list. Returns the whole list.
+
+    A **union**, never a replacement. Three writers reach this — the elicitation
+    path, the `epimemer agents confirm` CLI, and config seeding at connect — and
+    a replacement would have whichever ran last silently revoke the others.
+    Order is preserved and duplicates are dropped, so the list reads as the
+    order the user admitted them in.
+    """
+    approved = await storage.get_approved_agent_ids()
+    added = [i for i in dict.fromkeys(ids) if i and i not in approved]
+    if not added:
+        return approved
+    updated = [*approved, *added]
+    await storage.set_approved_agent_ids(updated)
+    return updated
+
+
+async def judge_is_approved(storage: StorageBackend, judge: JudgeRef) -> bool:
+    """Whether this judge may still write to the **active** graph.
+
+    Approval is per graph, so a session that switches graphs carries a binding
+    the new graph never made. One declaration of the rule, called both at
+    `use_graph` and again at write time — the second is cheap, and is what keeps
+    the first from being a single point of failure (§10.3).
+    """
+    return judge.agent_id in await storage.get_approved_agent_ids()
+
+
+def _unapproved_reason(agent_id: str, approved: Sequence[str]) -> str:
+    """Why a claim was refused, written for the agent to put to the user.
+
+    **The refusal is the prompt** (§2.2): there is no startup handshake, so this
+    text is the whole mechanism by which a user ever hears that an agent wants
+    an identity. It says what to run, because the user cannot be assumed to know
+    the tool exists.
+    """
+    known = (
+        f"Ids already approved here: {', '.join(approved)}."
+        if approved
+        else "No id has been approved in this graph yet."
+    )
+    return (
+        f"'{agent_id}' is not an approved agent id for this graph. {known} "
+        f"Ask the user which id you should judge under — the id is theirs to "
+        f"assign, and it is what lets a later review show that a *different* "
+        f"agent made these decisions. They can admit one by answering the "
+        f"prompt this call raises, or by running "
+        f"`epimemer agents confirm <id>` against a server backend, or by "
+        f"setting EPIMEMER_APPROVED_AGENTS before starting the server. "
+        f"Do not pick one yourself."
+    )
+
+
+async def claim_agent(
+    storage: StorageBackend,
+    *,
+    agent_id: str,
+    description: str,
+    approve_id: ApproveId | None = None,
+    confirm_description: ConfirmDescription | None = None,
+    now: datetime | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Bind this session to a judge, or say why it cannot be bound.
+
+    Two gates, and they are deliberately different in strength:
+
+    - **The id is a hard gate.** An id the user has not approved is refused,
+      because admitting one would hand identity back to the agent and *"a
+      different agent reviewed this"* would be self-asserted again (§2.2). Where
+      a channel to the user exists, this asks first rather than refusing blind.
+    - **The description is not.** New wording is recorded either way; it carries
+      `confirmed_at` only where a human saw it. *Self-described, unconfirmed* is
+      a different epistemic object, never collapsed into the same field (§2.4).
+
+    Nothing here verifies the description. It is self-reported prose, exactly
+    like a fact the agent ingests, and it must never be read as a credential.
+    """
+    at = now or datetime.now(timezone.utc)
+    agent_id = agent_id.strip()
+    description = description.strip()
+
+    if not agent_id:
+        return {
+            "status": "refused",
+            "reason": "an agent id is required; ask the user which one to use.",
+        }, ResponseMeta()
+    if not description:
+        return {
+            "status": "refused",
+            "agent_id": agent_id,
+            "reason": (
+                "a self-description is required: it is what a later review "
+                "reads to tell one judge from another."
+            ),
+        }, ResponseMeta()
+
+    approved = await storage.get_approved_agent_ids()
+    confirmed_now = False
+    if agent_id not in approved:
+        chosen = await approve_id(agent_id, description) if approve_id else None
+        if chosen is None:
+            return {
+                "status": "refused",
+                "agent_id": agent_id,
+                "approved_agent_ids": approved,
+                "reason": _unapproved_reason(agent_id, approved),
+            }, ResponseMeta()
+        # The user edits, so what comes back is the id to use — not necessarily
+        # the one proposed. Recording the proposal would record a claim nobody
+        # approved.
+        agent_id = chosen.strip()
+        approved = await approve_agent_ids(storage, [agent_id])
+        confirmed_now = True
+
+    existing = await storage.get_agent(agent_id)
+    agent = existing or Agent(id=agent_id, authorised_at=at, first_seen_at=at)
+    current = current_description(agent)
+    is_new_text = current is None or current.digest != description_digest(description)
+
+    if is_new_text and not confirmed_now and confirm_description is not None:
+        confirmed_now = await confirm_description(agent_id, description)
+
+    updated = agent.model_copy(update={
+        "descriptions": with_description(
+            agent.descriptions,
+            text=description,
+            at=at,
+            confirmed_at=at if confirmed_now else None,
+        ),
+        "first_seen_at": agent.first_seen_at or at,
+        "last_seen_at": at,
+    })
+    await storage.upsert_agent(updated)
+
+    version: AgentDescription = updated.descriptions[-1]
+    return {
+        "status": "claimed",
+        "agent_id": agent_id,
+        "digest": version.digest,
+        "description_versions": len(updated.descriptions),
+        "new_description": is_new_text,
+        "description_confirmed": version.confirmed_at is not None,
+        "approved_agent_ids": approved,
+        "message": (
+            f"Judging as '{agent_id}'"
+            + (
+                " — the user confirmed this description."
+                if version.confirmed_at is not None
+                else " — this description is self-reported and unconfirmed, "
+                "which is what a later review will see."
+            )
+        ),
+    }, ResponseMeta(nodes_returned=1)
+
+
 def _reject_invalid_graph_name(name: str) -> tuple[dict, ResponseMeta] | None:
     """Return an error response for an illegal graph name, else None.
 
@@ -3536,11 +3717,19 @@ async def use_graph(
     storage: StorageBackend,
     *,
     confirm: bool = False,
+    judge: JudgeRef | None = None,
+    seed_agent_ids: Sequence[str] = (),
 ) -> tuple[dict, ResponseMeta]:
     """Switch to a different knowledge graph.
 
     If the graph doesn't exist and confirm is False, returns a confirmation
     prompt with similar graph names. If confirm is True, creates the graph.
+
+    A session binds **one** judge, but approval is per graph, so a switch can
+    leave that binding standing over a graph that never made it. Where it does,
+    the result says so and the caller drops the binding — silently carrying a
+    judge approved for graph A into every write on graph B is how attribution
+    starts recording something nobody approved (§10.3).
     """
     invalid = _reject_invalid_graph_name(name)
     if invalid is not None:
@@ -3550,11 +3739,11 @@ async def use_graph(
 
     if name in existing:
         await storage.switch_database(name)
-        return {
-            "status": "switched",
-            "active_graph": name,
-            "message": f"Switched to graph '{name}'.",
-        }, ResponseMeta()
+        return await _switched(
+            storage, name, status="switched",
+            message=f"Switched to graph '{name}'.", judge=judge,
+            seed_agent_ids=seed_agent_ids,
+        )
 
     # Graph doesn't exist
     if not confirm:
@@ -3572,11 +3761,45 @@ async def use_graph(
 
     # Create by switching (SurrealDB creates databases on use)
     await storage.switch_database(name)
-    return {
-        "status": "created",
+    return await _switched(
+        storage, name, status="created",
+        message=f"Created and switched to new graph '{name}'.", judge=judge,
+        seed_agent_ids=seed_agent_ids,
+    )
+
+
+async def _switched(
+    storage: StorageBackend,
+    name: str,
+    *,
+    status: str,
+    message: str,
+    judge: JudgeRef | None,
+    seed_agent_ids: Sequence[str] = (),
+) -> tuple[dict, ResponseMeta]:
+    """The result of landing on `name`, including whether the judge survived.
+
+    Config-supplied approvals are applied to whatever graph this server lands
+    on, and **before** the judge is re-checked — seeding afterwards would clear
+    a judge the configuration was about to admit. On an embedded backend this is
+    the only approval channel that reaches the running process (ISSUES.md #16),
+    so a switch that skipped it would leave the user unable to admit a judge to
+    the new graph at all.
+    """
+    if seed_agent_ids:
+        await approve_agent_ids(storage, seed_agent_ids)
+    result: dict = {
+        "status": status,
         "active_graph": name,
-        "message": f"Created and switched to new graph '{name}'.",
-    }, ResponseMeta()
+        "message": message,
+    }
+    if judge is not None and not await judge_is_approved(storage, judge):
+        result["judge_cleared"] = judge.agent_id
+        result["message"] += (
+            f" '{judge.agent_id}' is not approved in this graph, so it is no "
+            f"longer bound as the judge — claim_agent again before writing."
+        )
+    return result, ResponseMeta()
 
 
 async def delete_graph(

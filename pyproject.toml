@@ -38,6 +38,7 @@ notebooks = [
 ]
 
 [project.scripts]
+epimemer = "epimemer.cli:main"
 epimemer-viz = "epimemer.visualization.hub:main"
 
 [build-system]

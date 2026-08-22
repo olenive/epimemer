@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from epimemer.core.types import (
     DEFAULT_MERGE_CYCLE_LIMIT,
+    Agent,
     DEFAULT_MERGE_UNDO_DEPTH,
     EdgeType,
     EmbeddingRecord,
@@ -861,6 +862,57 @@ class StorageBackend(Protocol):
         Whole-record rather than per-field, so "clear this one" and "leave this
         one alone" cannot be confused: the caller reads, edits and writes back.
         A `None` field clears that override.
+        """
+        ...
+
+    # --- Agents (REVIEW_MODE.md §2) ---
+
+    async def get_agent(self, agent_id: str) -> Agent | None:
+        """The agent with this id in the active graph, or None.
+
+        Agents live in their own per-graph table rather than as graph nodes:
+        as nodes they would surface in `search` and be swept by `reflect`, and
+        two agents with similar descriptions are not a topic to merge (§2.5).
+        """
+        ...
+
+    async def upsert_agent(self, agent: Agent) -> None:
+        """Write the agent whole, replacing any record under the same id.
+
+        Whole-record for `set_merge_overrides`' reason: the caller reads, edits
+        and writes back, so *append a description* and *leave the descriptions
+        alone* cannot be confused. The append-only rule lives in
+        `with_description`, not here — a backend does not get to hold a policy
+        the other backend could hold differently.
+        """
+        ...
+
+    async def list_agents(self) -> list[Agent]:
+        """Every agent in the active graph. Unordered."""
+        ...
+
+    async def get_approved_agent_ids(self) -> list[str]:
+        """The ids the **user** has admitted to this graph.
+
+        Stored beside the reflect counter and scoped the same way, so a graph
+        carries its own answer across restarts. A graph nobody has configured
+        returns an empty list, which refuses every claim — that is the intended
+        reading, not a gap: an agent that could admit its own id would be
+        asserting its own identity, and *"a different agent reviewed this"*
+        would be self-asserted again (§2.2).
+
+        Approval is **per graph**, so a judge approved for one graph is not
+        approved for the next; `use_graph` re-validates for that reason.
+        """
+        ...
+
+    async def set_approved_agent_ids(self, ids: list[str]) -> None:
+        """Replace the active graph's approved-id list.
+
+        Never reachable from an MCP tool. The two writers are the elicitation
+        path, whose answer came from the user through their own client, and the
+        `epimemer agents confirm` CLI (§2.3) — plus config seeding at connect,
+        which is the same user saying it a third way.
         """
         ...
 

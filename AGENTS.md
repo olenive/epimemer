@@ -69,6 +69,18 @@ Every tool response includes a _meta field with:
 
 Surface this information naturally: "Found 5 relevant nodes (2 topics, 2 facts, 1 inference)."
 
+### Saying which judge you are (claim_agent)
+- Call it once per session before writing, where the user has set up agent
+  identities. Propose an id and describe yourself — the **user** approves, and
+  may hand back a different id. Never assume one.
+- A refusal is the prompt: put its message to the user rather than working
+  around it. The id is theirs to assign, and it is what lets a later review show
+  that a *different* agent made these decisions.
+- Your description is a claim, not a credential. Nothing verifies it, and only
+  `confirmed_at` carries human weight. Re-describing appends a version.
+- Approval is per graph — after `use_graph`, claim again if the response says
+  your judge was unbound.
+
 ### Multi-graph management (list_graphs, use_graph, delete_graph)
 - Use `list_graphs` to see available knowledge graphs and which is active
 - Use `use_graph` to switch between graphs or create new ones (requires confirmation)

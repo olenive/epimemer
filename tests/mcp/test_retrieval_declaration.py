@@ -204,6 +204,9 @@ def _args(tool: str, seeded: dict) -> dict:
         "configure_merge": {},
         "configure_reflection": {"threshold": 7},
         "list_graphs": {},
+        # Refused: no id is approved in the test graph and there is no channel
+        # to a user. A refusal is still a response, which is what is under test.
+        "claim_agent": {"agent_id": "a-critic", "description": "a critic"},
         "use_graph": {"name": "default", "confirm": True},
         "delete_graph": {"name": "not-a-graph", "confirm": True},
         "viz_status": {},
@@ -228,6 +231,7 @@ ALL_TOOLS = [
     "restore", "create_timeline", "set_reference_time", "add_timepoint",
     "query_timeline", "create_timelink", "create_metacontext", "get_metacontexts",
     "graph_stats", "configure_reflection", "list_graphs", "use_graph",
+    "claim_agent",
     "delete_graph", "viz_status",
 ]
 

@@ -15,7 +15,9 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastmcp import Context, FastMCP
+from fastmcp.server.elicitation import AcceptedElicitation
 
+from epimemer.core.types import JudgeRef
 from epimemer.logging.structured import ToolInvocationLog, log_tool_call, setup_logging
 from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
 from epimemer.mcp import tools
@@ -92,6 +94,13 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
     # Every backend implements connect (no-op where there's nothing to open).
     await storage.connect()
+
+    # Ids the user admitted before this process started (REVIEW_MODE.md §10.3).
+    # Seeded here rather than read at every check so that one channel writes the
+    # approved list and everything else reads it — and because on an embedded
+    # backend this is the *only* channel that reaches the running server, the
+    # `epimemer agents confirm` CLI being a separate store (ISSUES.md #16).
+    await tools.approve_agent_ids(storage, config.approved_agents)
 
     embedding_provider = create_embedding_provider(config)
 
@@ -268,13 +277,23 @@ async def _run_with_timeout(
     ctx: Context,
     input_summary: str,
     output_summary_fn: Callable[[dict, ResponseMeta], str],
+    waits_for_user: bool = False,
 ) -> str:
-    """Run a tool coroutine with timeout, logging, and error handling."""
+    """Run a tool coroutine with timeout, logging, and error handling.
+
+    `waits_for_user` drops the timeout, and only a call that puts a question to
+    a person through `ctx.elicit` may set it. The budget bounds work the server
+    is doing; a human reading a prompt is not that, and killing the request at
+    30s would turn *the user was still reading* into *the client cannot elicit*
+    — which is the difference between a claim refused and an identity admitted.
+    """
     deps = ctx.lifespan_context
-    timeout = deps["config"].tool_timeout_seconds
+    timeout = None if waits_for_user else deps["config"].tool_timeout_seconds
     start = time.monotonic()
     try:
-        result, meta = await asyncio.wait_for(coro(), timeout=timeout)
+        result, meta = await (
+            coro() if timeout is None else asyncio.wait_for(coro(), timeout=timeout)
+        )
         latency = (time.monotonic() - start) * 1000
         _log(tool_name, input_summary, output_summary_fn(result, meta), meta)
         response_text = _build_response(result, meta, latency)
@@ -2003,6 +2022,168 @@ async def epimemer_list_graphs(
     )
 
 
+# Where this session's judge lives. Session-scoped and JSON only (FastMCP
+# serializes it), so the `JudgeRef` goes in as a dict and comes back validated —
+# never held in a module global, which is the whole of §3.2: two graphs or two
+# sessions must not be able to inherit each other's judge.
+JUDGE_STATE_KEY = "epimemer.judge"
+
+
+async def _bound_judge(ctx: Context) -> JudgeRef | None:
+    """The judge bound to this session, or None if nothing has claimed one.
+
+    Session state needs a session: called outside a request context — a direct
+    invocation, or a transport that has not opened one — FastMCP raises rather
+    than returning nothing. No session is genuinely no binding, so that reads as
+    None here. It must not read as an error, or a graph switch would fail over
+    an identity feature the caller never used.
+    """
+    try:
+        stored = await ctx.get_state(JUDGE_STATE_KEY)
+    except RuntimeError:
+        return None
+    return None if stored is None else JudgeRef.model_validate(stored)
+
+
+async def _bind_judge(ctx: Context, judge: JudgeRef | None) -> bool:
+    """Bind (or clear) this session's judge. False if there is no session.
+
+    Reported rather than swallowed: everything downstream resolves the judge
+    from here (§3.2), so a claim that recorded the agent but bound nothing is a
+    state the caller has to be able to see.
+    """
+    try:
+        await ctx.set_state(
+            JUDGE_STATE_KEY, None if judge is None else judge.model_dump(mode="json")
+        )
+    except RuntimeError:
+        return False
+    return True
+
+
+async def _elicit_agent_id(ctx: Context, agent_id: str, description: str) -> str | None:
+    """Ask the **user** which id this agent may judge under (§2.3).
+
+    `ctx.elicit` inverts the direction of an MCP call — the server asks, and the
+    answer comes back from the user through their own client's UI. That is what
+    lets `confirmed_at` mean what it says: no path exists by which the agent
+    alone sets it.
+
+    Every failure reads as *no answer*. A client without the elicitation
+    capability raises here, and a raise has to refuse the claim rather than
+    admit an id nobody approved — the one direction this must not fail in.
+    """
+    try:
+        answer = await ctx.elicit(
+            f"An agent asks to judge in graph "
+            f"'{ctx.lifespan_context['storage'].current_database}' as "
+            f"'{agent_id}'.\n\n"
+            f"It describes itself as: {description}\n\n"
+            f"The id is yours to assign — accept it, or edit it to whatever you "
+            f"want this judge called. Decline to refuse. Nothing verifies the "
+            f"description; it is what the agent says about itself, and it is "
+            f"recorded as a claim rather than as a credential.",
+            response_type=str,
+        )
+    except Exception:
+        _tool_logger.info(
+            "claim_agent: no elicitation channel to the user; refusing '%s'", agent_id
+        )
+        return None
+    if isinstance(answer, AcceptedElicitation):
+        # An accepted-but-empty answer is agreement with the prompt, which named
+        # the proposed id. Reading it as a blank id would refuse the thing the
+        # user just approved.
+        return (answer.data or "").strip() or agent_id
+    return None
+
+
+async def _elicit_description_confirmation(
+    ctx: Context, agent_id: str, description: str
+) -> bool:
+    """Ask the user to vouch for a *new* self-description under a known id.
+
+    Softer than the id question by design: declining costs the confirmation, not
+    the claim. The version is recorded either way, and *self-described,
+    unconfirmed* is a different epistemic object rather than a failure (§2.4).
+    """
+    try:
+        answer = await ctx.elicit(
+            f"'{agent_id}' now describes itself as:\n\n{description}\n\n"
+            f"Accept to record this description as confirmed by you. Decline and "
+            f"it is still recorded, marked self-reported — only your "
+            f"confirmation is at stake.",
+            response_type=None,
+        )
+    except Exception:
+        return False
+    return isinstance(answer, AcceptedElicitation)
+
+
+@mcp.tool(name="claim_agent")
+async def memory_claim_agent(
+    agent_id: str,
+    description: str,
+    ctx: Context,
+) -> str:
+    """Say which judge you are, so later review can tell your decisions apart.
+
+    Propose an id and describe yourself; the **user** approves, and may hand
+    back a different id. An id the user has not approved is refused — the id is
+    theirs to assign, and that is what makes *"a different agent reviewed this"*
+    something a graph can show rather than something an agent asserts.
+
+    **Your description is a claim, not a credential.** Nothing verifies it. It
+    is recorded like a fact you ingest, and a later reader is entitled to weigh
+    it as self-reported prose. Describe what you are in a way that would let
+    someone tell you from another agent — the model or harness you run in, the
+    role you were given — and do not overstate it.
+
+    Re-describing appends a version and never edits one, because a decision made
+    last week was made by whatever you claimed to be last week. Approval is per
+    graph, so switching graphs can unbind you; claim again after a use_graph.
+
+    Args:
+        agent_id: The id you propose to judge under. Ask the user what they want
+            you called rather than inventing one; a refusal names the ids this
+            graph already approved.
+        description: What you are, in your own words. One or two sentences.
+    """
+    deps = ctx.lifespan_context
+
+    async def claim() -> tuple[dict, ResponseMeta]:
+        result, meta = await tools.claim_agent(
+            storage=deps["storage"],
+            agent_id=agent_id,
+            description=description,
+            approve_id=lambda proposed, text: _elicit_agent_id(ctx, proposed, text),
+            confirm_description=lambda claimed_id, text: (
+                _elicit_description_confirmation(ctx, claimed_id, text)
+            ),
+        )
+        if result["status"] == "claimed":
+            # The binding is the point of the call, and it is written only after
+            # the record is, so a failed upsert cannot leave a session judging
+            # under an agent the graph does not have.
+            result["session_bound"] = await _bind_judge(
+                ctx, JudgeRef(agent_id=result["agent_id"], digest=result["digest"])
+            )
+        return result, meta
+
+    return await _run_with_timeout(
+        "epimemer.claim_agent",
+        claim,
+        ctx,
+        f"agent_id={agent_id}",
+        lambda r, m: (
+            f"status={r['status']}"
+            + (f" digest={r['digest']}" if r["status"] == "claimed" else "")
+        ),
+        # This call can be waiting on a person to read a prompt.
+        waits_for_user=True,
+    )
+
+
 @mcp.tool(name="use_graph")
 async def epimemer_use_graph(
     name: str,
@@ -2019,16 +2200,29 @@ async def epimemer_use_graph(
         confirm: Set to true to confirm creation of a new graph.
     """
     deps = ctx.lifespan_context
-    return await _run_with_timeout(
-        "epimemer.use_graph",
-        lambda: tools.use_graph(
+    judge = await _bound_judge(ctx)
+
+    async def switch() -> tuple[dict, ResponseMeta]:
+        result, meta = await tools.use_graph(
             name=name,
             storage=deps["storage"],
             confirm=confirm,
-        ),
+            judge=judge,
+            seed_agent_ids=deps["config"].approved_agents,
+        )
+        if result.get("judge_cleared"):
+            await _bind_judge(ctx, None)
+        return result, meta
+
+    return await _run_with_timeout(
+        "epimemer.use_graph",
+        switch,
         ctx,
         f"name={name} confirm={confirm}",
-        lambda r, m: f"status={r.get('status', 'error')}",
+        lambda r, m: (
+            f"status={r.get('status', 'error')}"
+            + (" judge_cleared" if r.get("judge_cleared") else "")
+        ),
     )
 
 

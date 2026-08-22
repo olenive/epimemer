@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Literal, Sequence
 
 from epimemer.core.types import (
+    Agent,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
@@ -587,6 +588,27 @@ class InstrumentedStorage:
         # No event: nothing in the strip shows the merge settings, and a badge
         # that never renders is not worth an event type nobody consumes.
         await self._inner.set_merge_overrides(overrides)
+
+    # --- Agents (pass-through) ---
+    #
+    # No events, deliberately. Who is judging is not graph content, and putting
+    # it on the strip would make a self-reported description look like a fact
+    # the graph holds — which §2.4 spends its length warning against.
+
+    async def get_agent(self, agent_id: str) -> Agent | None:
+        return await self._inner.get_agent(agent_id)
+
+    async def upsert_agent(self, agent: Agent) -> None:
+        await self._inner.upsert_agent(agent)
+
+    async def list_agents(self) -> list[Agent]:
+        return await self._inner.list_agents()
+
+    async def get_approved_agent_ids(self) -> list[str]:
+        return await self._inner.get_approved_agent_ids()
+
+    async def set_approved_agent_ids(self, ids: list[str]) -> None:
+        await self._inner.set_approved_agent_ids(ids)
 
     # --- Multi-graph management (pass-through) ---
 

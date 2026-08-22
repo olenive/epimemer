@@ -7,7 +7,7 @@ Factory functions create storage and embedding providers based on the config.
 import os
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.storage.protocol import StorageBackend
@@ -44,6 +44,17 @@ class ServerConfig(BaseModel):
     reflect_threshold: int = 10
     tool_timeout_seconds: float = 30.0
 
+    # Agent ids the user admits to every graph this server opens
+    # (REVIEW_MODE.md §2.3, §10.3). This is the approval channel for clients
+    # that cannot elicit **and** for the embedded backend, where the
+    # `epimemer agents confirm` CLI cannot help: a second `mem://` connection is
+    # a separate store (ISSUES.md #16), so the CLI would write approvals into a
+    # store this process will never read. Empty means every claim_agent is
+    # refused until a user answers an elicitation — which is the right default,
+    # since an agent that could admit its own id would be asserting its own
+    # identity (§2.2).
+    approved_agents: list[str] = []
+
     # Whether `search` stamps `retrieved_at` on what it returns. Costs one
     # write per returned node; turning it off makes `never_retrieved` blind, so
     # archival nomination stops being able to tell used nodes from stale ones.
@@ -62,6 +73,20 @@ class ServerConfig(BaseModel):
     viz_autospawn: bool = True
 
 
+    @field_validator("approved_agents", mode="before")
+    @classmethod
+    def _split_ids(cls, value):
+        """Accept a comma-separated string, because an env var is one string.
+
+        Whitespace around an id is the user's formatting, not part of the id —
+        an id that differs from the approved one by a space refuses every claim
+        and gives no clue why.
+        """
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return value
+
+
 def load_config() -> ServerConfig:
     """Load server config from EPIMEMER_ environment variables."""
     env_map = {
@@ -78,6 +103,7 @@ def load_config() -> ServerConfig:
         "segmentation_strategy": "EPIMEMER_SEGMENTATION_STRATEGY",
         "similarity_threshold": "EPIMEMER_SIMILARITY_THRESHOLD",
         "reflect_threshold": "EPIMEMER_REFLECT_THRESHOLD",
+        "approved_agents": "EPIMEMER_APPROVED_AGENTS",
         "record_retrieval": "EPIMEMER_RECORD_RETRIEVAL",
         "importance_step": "EPIMEMER_IMPORTANCE_STEP",
         "tool_timeout_seconds": "EPIMEMER_TOOL_TIMEOUT_SECONDS",

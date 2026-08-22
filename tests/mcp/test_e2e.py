@@ -342,3 +342,74 @@ class TestMCPProtocol:
         )
         data = _parse_response(result)
         assert data["result"]["status"] == "deleted"
+
+
+class TestClaimAgentThroughTheServer:
+    """The registry at the surface an agent actually reaches.
+
+    The tools-level behaviour is pinned in `test_claim_agent.py`; what this file
+    can add is the wiring — Context injection, the JSON envelope, and what
+    happens where FastMCP has no session to bind to.
+    """
+
+    async def test_an_unapproved_id_is_refused_and_the_refusal_carries_advice(
+        self, server
+    ):
+        result = await server.call_tool(
+            "claim_agent",
+            {"agent_id": "self-appointed", "description": "a critic"},
+        )
+
+        data = _parse_response(result)["result"]
+        assert data["status"] == "refused"
+        # No elicitation channel exists in this harness, which is exactly the
+        # case the CLI and the env var are the fallbacks for.
+        assert "EPIMEMER_APPROVED_AGENTS" in data["reason"]
+
+    async def test_an_approved_id_is_claimed(self, server):
+        storage = epimemer_mcp._lifespan_result["storage"]
+        await storage.set_approved_agent_ids(["critic"])
+
+        result = await server.call_tool(
+            "claim_agent", {"agent_id": "critic", "description": "a critic"},
+        )
+
+        data = _parse_response(result)["result"]
+        assert data["status"] == "claimed"
+        assert data["digest"]
+        assert (await storage.get_agent("critic")) is not None
+
+    async def test_no_session_leaves_the_claim_recorded_and_unbound(self, server):
+        """`call_tool` here opens no MCP session, so there is nothing to bind to.
+
+        Reported rather than raised: the agent is recorded either way, and a
+        claim that bound nothing has to be visible instead of silent.
+        """
+        storage = epimemer_mcp._lifespan_result["storage"]
+        await storage.set_approved_agent_ids(["critic"])
+
+        result = await server.call_tool(
+            "claim_agent", {"agent_id": "critic", "description": "a critic"},
+        )
+
+        data = _parse_response(result)["result"]
+        assert data["status"] == "claimed"
+        assert data["session_bound"] is False
+
+    async def test_configured_ids_reach_a_graph_created_later(self, server):
+        """`EPIMEMER_APPROVED_AGENTS` is per server, and approval is per graph.
+
+        A switch that skipped the seeding would leave an elicitation-less client
+        unable to admit a judge to the new graph at all.
+        """
+        deps = epimemer_mcp._lifespan_result
+        deps["config"] = deps["config"].model_copy(
+            update={"approved_agents": ["critic"]}
+        )
+
+        await server.call_tool("use_graph", {"name": "elsewhere", "confirm": True})
+        result = await server.call_tool(
+            "claim_agent", {"agent_id": "critic", "description": "a critic"},
+        )
+
+        assert _parse_response(result)["result"]["status"] == "claimed"
