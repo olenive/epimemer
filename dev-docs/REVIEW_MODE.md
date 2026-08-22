@@ -681,6 +681,34 @@ this a review that can conclude rather than only complain.
 review modes become useful. Shipping the modes without it delivers a reviewer
 that can find every ingest-time mistake and fix none of them.
 
+#### 6.5.1 Scope, surveyed rather than assumed
+
+Everything an agent supplies at ingest, and where revising it belongs:
+
+| Judgment | Revised by | Why |
+|---|---|---|
+| `claim_kind` | **`rejudge`** | no path exists today; the motivating case |
+| `confidence`, `confidence_basis` | **`rejudge`** | same shape — a prior with a stated reason |
+| `importance` | `judge_importance` (**exists**) | already a judgment-with-a-clock; duplicating it would be two writers for one field |
+| metacontext assignment | **nothing — a real gap, deliberately not folded in** | see below |
+| per-source validity intervals | **nothing — a real gap, deliberately not folded in** | see below |
+
+**Two gaps surfaced by the survey, and both are left out on purpose.**
+
+- **A frame cannot be withdrawn.** `link` adds a `HAS_METACONTEXT` edge and
+  nothing removes one, so a fact wrongly framed as fiction stays framed. That
+  is not a small mistake — frames gate `merge_refusal`'s cross-frame refusal and
+  corroboration's `variant_of` exclusion — but it is a question about **frames**,
+  not about ingest priors, and folding it into `rejudge` would put a
+  load-bearing epistemic move behind a tool named for tidying metadata.
+- **A validity interval cannot be corrected.** Intervals are supplied per source
+  at ingest (#53 T1); `boundary_proposals` fills an **open** endpoint, and
+  nothing revises a wrong one. Same reasoning: this is a question about
+  **validity**, and the answer probably belongs beside the boundary machinery.
+
+Both should be filed. Neither belongs in this document, and `rejudge` stays the
+three fields above.
+
 ---
 
 ## 7. Reversing a merge
@@ -1476,18 +1504,43 @@ so the claim was false when written — and it was the overconfidence pattern th
 document polices elsewhere, stated about itself. *A design is not finished
 because its author has run out of questions.*
 
-### 12.1 Open
+### 12.1 What remains, in three kinds
 
-1. **Judgment edges migrate on a correction** (§10.2.1). A defect in shipped
-   code rather than in this design, latent only because nothing writes those
-   edges yet. **Must be filed as its own issue and fixed before step 1**, which
-   is the change that ends the latency.
-2. **Confirmation granularity at ingest** (§4.1). Naming covered subjects is the
-   recommendation; the alternative — a record staying unreviewed until every
-   subject is — has not been argued down, only judged more expensive.
-3. **`rejudge`'s scope** (§6.5). Specified for `claim_kind`, `confidence` and
-   `confidence_basis`. Whether anything else an agent supplies at ingest belongs
-   in it has not been surveyed.
+**No design question is open.** That sentence is the one this section withdrew
+above, so it is stated narrowly and with its workings: the three items listed
+here on 2026-08-22 have each been resolved, filed as work, or scoped out with a
+reason — and the categories below are the distinction whose absence made the
+earlier claim glib.
+
+**Decided, and now filed as work:**
+
+- **Judgment edges migrate on a correction** → `ISSUES.md` **#65**. The decision
+  is made (`JUDGMENT_EDGE_TYPES`, anchored on every retirement, §10.2.1); it is
+  a build, not a question, and it **blocks step 1**.
+
+**Resolved here:**
+
+- **Confirmation granularity at ingest** (§4.1) → *a confirmation names the
+  subjects it covers.* The alternative — a record staying unreviewed until every
+  subject is confirmed — turns out to **require the same machinery plus
+  bookkeeping**, since knowing when *all* subjects are done means tracking
+  *which* are done. It is the recommendation plus a rule, so the rule is the
+  only thing being chosen, and it is not worth its cost.
+- **`rejudge`'s scope** (§6.5.1) → surveyed. `claim_kind`, `confidence` and
+  `confidence_basis`; `importance` stays with `judge_importance` rather than
+  gaining a second writer.
+
+**Out of scope, named rather than hidden** — both surfaced by that survey, both
+worth filing on their own:
+
+- **A metacontext assignment cannot be withdrawn.** `link` adds a frame edge;
+  nothing removes one. Load-bearing, since frames gate cross-frame merge refusal
+  and corroboration's variant exclusion.
+- **A validity interval cannot be corrected.** Supplied per source at ingest,
+  and `boundary_proposals` only fills an *open* endpoint.
+
+Neither is a review-mode question, and answering them inside a tool named for
+ingest priors would bury an epistemic move in a metadata utility.
 
 ### 12.2 Settled
 

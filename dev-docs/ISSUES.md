@@ -3,8 +3,8 @@
 Living issue tracker. **Last review: 2026-08-21.**
 
 Open: **64** (2026-08-21, decided — `dev-docs/REVIEW_MODE.md` is the design) and
-**65** (2026-08-22, blocks #64's first step), plus **16** and **58**, both
-deferred with their triggers stated.
+**65** (2026-08-22, blocks #64's first step) and **66** (2026-08-22, not
+blocking), plus **16** and **58**, both deferred with their triggers stated.
 **61**, **62** and **63** were built on 2026-08-21. **46**, **48** and **51** were built
 and merged (2026-08-19, -19, -20); their entries are deleted per the workflow
 below, and what they taught is kept here and in the docs they name —
@@ -2847,6 +2847,48 @@ what ends the latency. Fixing after would mean shipping the defect knowingly.
 **Carry-forward.** *A rule stated for one branch of a conditional is not a rule
 the code applies.* The world-change branch carried the argument; the correction
 branch carried the same risk and no argument, and the two sat four lines apart.
+
+---
+
+### Issue 66 — two ingest-time judgments have no way to be revised — 🔴 OPEN (found 2026-08-22)
+
+Surfaced by surveying what `rejudge` should cover (`dev-docs/REVIEW_MODE.md`
+§6.5.1). Both are the #64 shape — *a judgment the system lets you make and never
+lets you unmake* — and both are left out of that document on purpose, because
+each is a question about its own subsystem rather than about ingest priors.
+
+**1. A metacontext assignment cannot be withdrawn.** `link` writes a
+`HAS_METACONTEXT` edge; nothing removes one. So a fact wrongly framed as fiction
+stays framed, for ever.
+
+This is not cosmetic. Frames are load-bearing in two places that both fail
+*silently*: `merge_refusal` refuses a cross-frame pair, so a mis-framed fact
+becomes permanently unmergeable with its own twin; and corroboration
+disqualifies `variant_of` partners, so the count moves. A frame is also the one
+thing the system will not let a merge inherit — *"asserting in one world what
+was only ever claimed in another"* is called the single worst outcome available
+— which makes the inability to correct one conspicuous.
+
+**2. A per-source validity interval cannot be corrected.** Intervals are
+supplied on the `sourced_from` edge at ingest (#53 T1 §2). `boundary_proposals`
+fills an **open** endpoint where a succession implies one; nothing revises an
+endpoint that is present and wrong. Since #62, corroboration reads those
+intervals to decide whether a look-alike is a witness or an adjacent period —
+so a wrong interval now silently moves a count as well as a date.
+
+**Neither is a supersession**, which is why neither has quietly been solved by
+`update` already: the claim is unchanged and the world has not moved, so
+`because` has no honest value. They are the same category as `claim_kind` —
+*the judgment about the claim was wrong* — which REVIEW_MODE §6.5 answers with
+`rejudge` for the fields it covers.
+
+**Why they are filed separately rather than folded in.** Withdrawing a frame is
+an epistemic move with consequences across merge, corroboration and retrieval;
+correcting an interval belongs beside the boundary machinery that already
+reasons about endpoints. Putting either behind a tool named for tidying ingest
+metadata would hide a load-bearing decision in a utility.
+
+**Not blocking anything.** Recorded so the survey that found them is not lost.
 
 ---
 
