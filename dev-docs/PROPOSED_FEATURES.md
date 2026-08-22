@@ -272,6 +272,31 @@ diverse corpus is a fixture; a remote SurrealDB is a deployment, not code.
 
 ---
 
+### Review mode and agent attribution — designed, not built
+
+**What.** An `agent` registry, a judge recorded on every decision the system
+makes, a decision journal, and a `review()` loop whose modes run from *the
+uncertain ones* to *all of them*. The use case is a second agent auditing a
+first agent's work.
+
+**Fully designed already** — `dev-docs/REVIEW_MODE.md`, 2026-08-22, including
+the build order, what absence of a judge means, and why the judge never weights
+anything. Read that rather than this paragraph.
+
+**Step 1 is `apply_reflection(similarities=[…])`**, which is `ISSUES.md` #64's
+fix and is independent of everything above it: it stops declined pairs being
+re-nominated for ever, and gives corroboration the first real input its
+neighbourhood walk has ever had.
+
+**Cost.** Step 1 is small. Steps 3–4 are signature churn across every write path
+rather than architecture, since `storage` is already threaded explicitly and the
+judge rides beside it. Step 5 (the journal) is the largest single piece.
+
+**Blockers.** Four open questions listed in §9 of that document; none blocks
+step 1.
+
+---
+
 ## Needs a decision before it needs code
 
 ### Merge for Inferences

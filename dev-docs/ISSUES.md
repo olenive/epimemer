@@ -2769,9 +2769,16 @@ record:
   `record_variant`. Smallest and most obvious, and the least connected to the
   loop that produces the judgments.
 
-The first is the recommendation. **Whichever is taken, #52's migration stays
-declined** — collapsing the walk would remove the reading that this issue exists
-to make reachable.
+**Decided 2026-08-22: the first**, and the decision grew in the taking. The
+missing writer turned out to be one part of a larger gap — *no decision in this
+system records who made it* — so `similarities=[…]` is now step 1 of a design
+that also adds an agent registry, attribution on every write path, and a review
+loop for a second agent to audit a first. Written up in
+**`dev-docs/REVIEW_MODE.md`** (designed 2026-08-22, not built); this entry stays
+open until that document's step 1 lands.
+
+**Whichever is taken, #52's migration stays declined** — collapsing the walk
+would remove the reading that this issue exists to make reachable.
 
 **Fixing this changes what corroboration costs**, which is the third thing to
 carry: every measurement of that cost was taken against synthetic edges at a
