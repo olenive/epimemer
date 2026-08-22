@@ -1,8 +1,10 @@
 # Review mode: who judged this, and can someone else check it
 
-**Status: designed, not built (2026-08-22).** Written before any code, at the
-user's direction. Nothing here is implemented; where it says "does", read
-"would".
+**Status: designed, not built (2026-08-22)** — with one exception. Written
+before any code, at the user's direction; where it says "does", read "would".
+The exception is §10.2.1's precondition (`ISSUES.md` #65), **built 2026-08-22**
+because it is a defect in shipped code that step 1 would make reachable, and
+fixing it after would mean shipping it knowingly.
 
 **Written to be implemented from.** §10 breaks the build into eight steps with
 the types, protocol methods, call sites and tests each one needs; §7.9 does the
@@ -1207,10 +1209,20 @@ label. It must not migrate — *"A and B are different claims"* is a judgment
 about those two nodes, and carrying it onto a later survivor `S = A + C` would
 assert something nobody decided.
 
-**`SIMILARITY` stays a knowledge edge and does migrate**, which is the right
-behaviour and a useful check on §1.2's split: `S` contains `A`'s claim, so if
-`A` and `B` were one claim then `S` and `B` still are. Two records, two
-migration behaviours, because they say different things.
+**`SIMILARITY` stays a knowledge edge and is traversed, but it does not
+migrate either.** An earlier draft of this section said it did, on the grounds
+that `S` contains `A`'s claim, so if `A` and `B` were one claim then `S` and `B`
+still are. §10.2.1 reversed that, and §10.2.1 is right: a merge *synthesises*
+the survivor's content, so `S` is not the wording anybody judged `A` against.
+The two records still differ, but in traversal rather than migration —
+`SIMILARITY` is knowledge to follow, `ASSESSED` is a suppression index.
+
+> **Corrected 2026-08-22, on building #65.** The two subsections gave opposite
+> answers for `SIMILARITY` on a merge, four pages apart — the same failure this
+> document names as a pattern, in a new place. The costs are asymmetric, which
+> is what settles it: anchoring costs one re-nomination of `S` against `B`,
+> which is correct, since nobody has judged that pair; migrating can manufacture
+> corroboration in silence.
 
 **The argument.** `apply_reflection` (`mcp/tools.py:2347`) gains
 `similarities: list[dict] | None = None`, each
@@ -1235,6 +1247,17 @@ must keep doing so — that is the entire point of the split, and a test should
 assert that an `ASSESSED`-only pair does not corroborate.
 
 #### 10.2.1 A precondition: judgment edges must stop migrating on a correction
+
+> **✅ BUILT 2026-08-22** (`ISSUES.md` #65), ahead of step 1 as required.
+> `JUDGMENT_EDGE_TYPES` is in `core/types.py` and `migration_disposition`
+> consults it before the status branch, so both backends inherit it — they
+> derive their answers from that one function and hold no policy of their own.
+> Seventeen tests, over both backends. Two refinements to what is written below:
+> the set covers **every** retirement including a merge (see §10.2 above), and
+> `ASSESSED` is **not** added to it — `REVIEW_EDGE_TYPES` gives it the same
+> anchoring plus the exclusion from traversal it also needs, and
+> `NON_KNOWLEDGE_EDGE_TYPES` is consulted first, so listing it twice would be
+> redundant.
 
 **This has to land before step 1, not after, and it is a change to existing
 code rather than to this design.**
@@ -1287,6 +1310,18 @@ JUDGMENT_EDGE_TYPES: frozenset[EdgeType] = frozenset(
 Traversal is unaffected. `A′` starts with no judgments and gets re-nominated,
 which is correct — `A′` against `B` is a pair nobody has judged.
 
+> **On building it, the reasoning above needed one correction.** This section
+> argues that a correction changes the wording and not the claim. But
+> `migration_disposition`'s own docstring holds that a correction preserves the
+> claim — which is exactly why the sources follow it — so a *one-claim* judgment
+> would survive that reading intact, and the argument does not land on its own
+> terms. What carries it is the **substantive** correction: "the population is
+> 500,000" → "5,000,000" leaves a counterpart judged one claim against a number
+> that is no longer there, and `corroboration.py` would count that counterpart's
+> publisher as backing the new figure. Same verdict, load-bearing for a
+> different reason — and the reason matters, because it is what shows a *merge*
+> belongs in the same rule.
+
 **Why it is latent today and stops being so at step 1**: both real graphs carry
 zero `similarity`, `contradiction` and `variant_of` edges (#64), so nothing has
 ever migrated. Step 1 is the change that starts writing them. **File it as its
@@ -1295,8 +1330,9 @@ own issue** — it is a defect in shipped code, not a design note.
 **Tests** (`tests/pipelines/test_similarity_decisions.py`): a `one_claim`
 verdict raises corroboration for both nodes from 1 to 2 where the publishers
 differ; a `distinct` verdict does not; both suppress re-nomination on the next
-`detect_contradictions`; `ASSESSED` does not migrate through a merge and
-`SIMILARITY` does; an unknown verdict is reported, not applied.
+`detect_contradictions`; neither `ASSESSED` nor `SIMILARITY`
+migrates through a merge (#65, built — the earlier draft had `SIMILARITY`
+migrating); an unknown verdict is reported, not applied.
 
 ### 10.3 Step 2 — the registry
 
@@ -1514,9 +1550,12 @@ earlier claim glib.
 
 **Decided, and now filed as work:**
 
-- **Judgment edges migrate on a correction** → `ISSUES.md` **#65**. The decision
-  is made (`JUDGMENT_EDGE_TYPES`, anchored on every retirement, §10.2.1); it is
-  a build, not a question, and it **blocks step 1**.
+- **Judgment edges migrate on a correction** → `ISSUES.md` **#65**, **✅ built
+  2026-08-22**, before step 1 as required. `JUDGMENT_EDGE_TYPES` anchors them on
+  every retirement (§10.2.1). Building it surfaced two things the design had
+  wrong: §10.2 and §10.2.1 disagreed about `SIMILARITY` on a merge, and #65's
+  stated reasoning did not carry on its own terms. Both are corrected in place;
+  the verdict did not change.
 
 **Resolved here:**
 

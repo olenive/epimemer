@@ -1487,10 +1487,15 @@ async def update(
     graph forgets its own history.
 
     It also decides which edges follow the replacement (#54). A correction
-    hands over everything but history and review: the old node is an audit husk
-    and the replacement is the same claim, corrected. A world-change hands over
-    the frame and the tags only — the retired node keeps its own provenance,
-    because it is still true of its period and its sources are what say so.
+    hands over everything but history, review and judgments: the old node is an
+    audit husk and the replacement is the same claim, corrected. A world-change
+    hands over the frame and the tags only — the retired node keeps its own
+    provenance, because it is still true of its period and its sources are what
+    say so.
+
+    Judgments — similarity, contradiction, variant_of — stay behind under
+    *either* reason (#65). The claim may survive a correction; the wording the
+    judgment was made against does not.
 
     And it decides which lineage edge records the step: `superseded_by` says
     *replaced* and is terminal, `temporally_followed_by` says only *came after*

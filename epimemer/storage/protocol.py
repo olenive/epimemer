@@ -382,7 +382,9 @@ class StorageBackend(Protocol):
         Marks the old node with ``status`` and appends a lifecycle episode
         naming ``new_node`` as the counterpart (#57 — "superseded by whom" must
         be readable without joining on the lineage edge), stores and embeds the
-        new node, migrates the old node's non-history edges onto the new node,
+        new node, migrates the old node's edges onto the new node per
+        ``migration_disposition`` (history, review and judgment edges stay
+        behind — a judgment was made against a wording, #65),
         and persists ``lineage_edge`` (the superseded_by edge). Also inserts
         ``evidence_edges``
         (e.g. evidence_superseded flags on dependent inferences) and deletes
@@ -467,9 +469,12 @@ class StorageBackend(Protocol):
     ) -> None:
         """Atomically merge ``source_nodes`` into ``merged_node``.
 
-        Stores and embeds the merged node, migrates the sources' non-history
-        edges onto it (dropping self-loops where two merged sources were
-        connected, and collapsing duplicate edges to one per src/dst/type),
+        Stores and embeds the merged node, migrates the sources' edges onto it
+        per ``migration_disposition`` — history, review and judgment edges stay
+        on the source, the last because the survivor's content is *synthesised*
+        and so is not the wording anything was judged against (#65) — dropping
+        self-loops where two merged sources were connected, and collapsing
+        duplicate edges to one per src/dst/type,
         marks each source merged — appending a lifecycle episode naming
         ``merged_node`` as the counterpart, so the history says where the
         content went rather than only that the node left — and persists

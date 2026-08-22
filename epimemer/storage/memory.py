@@ -485,9 +485,11 @@ class InMemoryStorage:
         """Carry edges touching old_ids onto new_id, per `migration_disposition`.
 
         `status` is why the old node is being retired, and it decides each
-        edge's fate: a correction (or a merge) re-points everything but history
-        and review, while a world-change re-points nothing and copies only the
-        frame and the tags (#54).
+        edge's fate: a correction (or a merge) re-points everything but history,
+        review and judgments, while a world-change re-points nothing and copies
+        only the frame and the tags (#54). A judgment (#65) is anchored whatever
+        the status — it was made against a wording, and no retirement leaves
+        that wording in place.
 
         Drops self-loops (where two merged sources were connected) and collapses
         duplicate (src, dst, type) edges, keeping one per group. The new node is

@@ -299,7 +299,9 @@ REVIEW_EDGE_TYPES: frozenset[EdgeType] = frozenset(
 # Metadata / signal edges (history + review): excluded from edge migration on
 # supersession/merge and from default graph traversal. Knowledge relationships
 # such as `contradiction` and `variant_of` are NOT in this set — they are real
-# edges to follow.
+# edges to follow. They are excluded from migration all the same, by
+# `JUDGMENT_EDGE_TYPES` below: traversal and migration are separate questions
+# and these two types answer them differently.
 NON_KNOWLEDGE_EDGE_TYPES: frozenset[EdgeType] = HISTORY_EDGE_TYPES | REVIEW_EDGE_TYPES
 
 # Edges anchoring a node to the segment it was extracted from. They record
@@ -335,6 +337,29 @@ def traversal_excluded(edge: "NodeEdge") -> bool:
     return edge.type == EdgeType.RELATED and edge.kind == ATTRIBUTION_KIND
 
 
+# Judgments one node carries about another. A judgment is made against the
+# wording it was shown, so re-pointing one onto a replacement asserts it of a
+# claim nobody assessed — the argument `migration_disposition` already makes for
+# a world-change, and just as true of a correction and of a merge. Anchored to
+# the node version that was judged, on **every** retirement.
+#
+# The costs are asymmetric, which is what settles it. Anchoring costs one
+# re-nomination: the replacement against the same counterpart is a pair nobody
+# has judged, and saying so is correct. Migrating can manufacture corroboration
+# in silence — a false unification does not lose information, it inverts the
+# quantity corroboration measures (`fact_dedup.py`).
+#
+# Not in `NON_KNOWLEDGE_EDGE_TYPES`, deliberately: these stay traversable. This
+# set answers what a *retirement* does to them, not what a *search* does.
+#
+# `assessed` (#64 step 1) is a judgment too, but belongs in `REVIEW_EDGE_TYPES`
+# rather than here: it needs the same anchoring *and* exclusion from traversal,
+# being a suppression index rather than knowledge. Listing it in both would be
+# redundant — `NON_KNOWLEDGE_EDGE_TYPES` is consulted first.
+JUDGMENT_EDGE_TYPES: frozenset[EdgeType] = frozenset(
+    {EdgeType.SIMILARITY, EdgeType.CONTRADICTION, EdgeType.VARIANT_OF}
+)
+
 # Edges a world-change carries onto the replacement rather than leaving behind.
 # A frame says *which world* a claim belongs to; a tag says what it is *about*.
 # Neither asserts the claim, so both are as true of the replacement as of its
@@ -354,9 +379,21 @@ def migration_disposition(edge_type: EdgeType, status: NodeStatus) -> EdgeDispos
     `move` re-points it onto the replacement, `copy` leaves it and adds a second
     edge on the replacement, `keep` leaves it alone.
 
-    **A correction moves everything** except history and review: the old node is
-    an audit husk that does not need sources, and the replacement is the *same
-    claim*, corrected, so what the claim was drawn from is genuinely its own.
+    **A correction moves everything** except history, review and judgments: the
+    old node is an audit husk that does not need sources, and the replacement is
+    the *same claim*, corrected, so what the claim was drawn from is genuinely
+    its own.
+
+    **No retirement moves a judgment** (#65) — the one rule here that does not
+    vary by status, see `JUDGMENT_EDGE_TYPES`. A correction is the case that
+    makes it necessary rather than merely tidy: "the population is 500,000"
+    corrected to "5,000,000" is the same claim by this module's own reckoning,
+    so the sources follow it, but a counterpart judged *one claim* against the
+    old figure was judged against a number that is no longer there. Carrying the
+    edge would count that counterpart's publisher as backing the new figure. A
+    merge is the same shape reached differently: the survivor's content is
+    *synthesised*, so it is not the wording any judgment was made against
+    either.
 
     **A world-change moves nothing** (#54). The historical node is kept because
     it is still true of its period, and what makes it true of a period is its own
@@ -366,13 +403,16 @@ def migration_disposition(edge_type: EdgeType, status: NodeStatus) -> EdgeDispos
     the replacement records the old claim's document asserting the *new* claim,
     which is fabricated attribution. The same argument covers knowledge edges —
     a contradiction or a variant is a judgment made *about the old claim*, and
-    re-pointing one asserts it of a claim nobody assessed.
+    re-pointing one asserts it of a claim nobody assessed. That half of it is
+    not confined to this status; see above.
 
     Frames and tags are the exception, and copy: see
     `WORLD_CHANGE_COPIED_EDGE_TYPES`.
     """
     if edge_type in NON_KNOWLEDGE_EDGE_TYPES:
         return "keep"  # anchored to a specific node version
+    if edge_type in JUDGMENT_EDGE_TYPES:
+        return "keep"  # anchored to the wording that was judged (#65)
     if status is NodeStatus.HISTORICAL:
         return "copy" if edge_type in WORLD_CHANGE_COPIED_EDGE_TYPES else "keep"
     return "move"

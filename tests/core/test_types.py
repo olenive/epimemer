@@ -19,9 +19,11 @@ from epimemer.core.types import (
     Fact,
     HISTORY_EDGE_TYPES,
     Inference,
+    JUDGMENT_EDGE_TYPES,
     Metacontext,
     NodeEdge,
     NodeStatus,
+    NON_KNOWLEDGE_EDGE_TYPES,
     RawDocument,
     Segment,
     Timeline,
@@ -114,6 +116,47 @@ class TestWorldChangeMigrationPolicy:
         assert migration_disposition(
             EdgeType.SOURCED_FROM, NodeStatus.SUPERSEDED
         ) == "move"
+
+
+class TestAJudgmentIsAnchoredWhateverTheRetirement:
+    """#65. A judgment was made against a wording, and no retirement leaves that
+    wording in place — so none of them re-point one.
+
+    The correction case is the one with teeth. `migration_disposition` holds
+    that a correction preserves the *claim*, which is why the sources follow it;
+    but "the population is 500,000" corrected to "5,000,000" leaves a
+    counterpart judged *one claim* against a number that is no longer there, and
+    carrying the edge would count that counterpart's publisher as backing the
+    new figure. A merge is the same shape reached differently: the survivor's
+    content is synthesised, so it is nobody's judged wording either.
+
+    Anchoring costs one re-nomination, and that cost is correct — the
+    replacement against the same counterpart is a pair nobody has judged.
+    """
+
+    def test_no_status_moves_a_judgment(self):
+        for edge_type in JUDGMENT_EDGE_TYPES:
+            for status in (
+                NodeStatus.CORRECTED, NodeStatus.HISTORICAL,
+                NodeStatus.MERGED, NodeStatus.SUPERSEDED,
+            ):
+                assert migration_disposition(edge_type, status) == "keep"
+
+    def test_the_correction_and_merge_paths_agree_with_the_policy(self):
+        """The backends filter by `moved_edge_types`, so the two must not be
+        derivable to different answers."""
+        for status in (NodeStatus.CORRECTED, NodeStatus.MERGED):
+            assert not (JUDGMENT_EDGE_TYPES & moved_edge_types(status))
+
+    def test_a_judgment_is_still_traversed_as_knowledge(self):
+        """Migration and traversal are separate questions, and these types
+        answer them differently. Anchoring them must not quietly remove them
+        from search, which is what putting them in `NON_KNOWLEDGE_EDGE_TYPES`
+        would have done."""
+        assert not (JUDGMENT_EDGE_TYPES & NON_KNOWLEDGE_EDGE_TYPES)
+        for edge_type in JUDGMENT_EDGE_TYPES:
+            e = NodeEdge(src_id="a", dst_id="b", type=edge_type)
+            assert not traversal_excluded(e)
 
 
 class TestTheLineageEdgeSplitsWithTheStatus:

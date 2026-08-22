@@ -204,6 +204,107 @@ class TestLegacyGraphsStillLoad:
         assert node.status in SUPERSEDED_STATUSES
 
 
+class TestAJudgmentStaysOnTheWordingItWasMadeAgainst:
+    """#65. Judgment edges do not migrate, on any retirement.
+
+    The world-change case was already right, and is covered above. What was
+    wrong is that a **correction** re-pointed them, and a **merge** carried them
+    onto the survivor. `similarity` is the one with teeth, because
+    `corroboration.py` walks it: re-pointing one counts the counterpart's
+    publisher as backing a wording it was never compared against, which is
+    manufactured corroboration — the failure `fact_dedup.py` calls the worst
+    available, since a false unification does not lose information, it inverts
+    the quantity the count measures.
+
+    `contradiction` carries the same fault with an extra sting: a correction may
+    be exactly what resolved the contradiction, so re-pointing it asserts a
+    conflict the correction settled.
+    """
+
+    async def _correct(self, storage, embedding_provider, old, new_content):
+        await tools.update(
+            node_id=old.id, new_content=new_content, because="it_was_wrong",
+            storage=storage, embedding_provider=embedding_provider,
+        )
+        lineage = await storage.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)
+        return lineage[0].dst_id
+
+    @pytest.mark.parametrize("edge_type", [
+        EdgeType.SIMILARITY, EdgeType.CONTRADICTION, EdgeType.VARIANT_OF,
+    ])
+    async def test_a_correction_leaves_the_judgment_behind(
+        self, storage, embedding_provider, edge_type
+    ):
+        old = await _fact(storage, embedding_provider, "The population is 500,000.")
+        other = await _fact(storage, embedding_provider, "There are 500,000 people.")
+        await storage.store_edge(NodeEdge(
+            src_id=old.id, dst_id=other.id, type=edge_type,
+        ))
+
+        new_id = await self._correct(
+            storage, embedding_provider, old, "The population is 5,000,000.",
+        )
+
+        assert len(await storage.get_edges_from(old.id, edge_type=edge_type)) == 1
+        assert len(await storage.get_edges_from(new_id, edge_type=edge_type)) == 0
+
+    async def test_a_correction_still_moves_provenance(
+        self, storage, embedding_provider
+    ):
+        """The half of the policy that has not changed, asserted next to the
+        half that has: a correction is the same claim, so its sources are
+        genuinely its own. Anchoring judgments must not be read as anchoring
+        everything."""
+        old = await _fact(storage, embedding_provider, "The population is 500,000.")
+        await storage.store_edge(NodeEdge(
+            src_id=old.id, dst_id="doc-1", type=EdgeType.SOURCED_FROM,
+        ))
+
+        new_id = await self._correct(
+            storage, embedding_provider, old, "The population is 5,000,000.",
+        )
+
+        assert len(await storage.get_edges_from(old.id, edge_type=EdgeType.SOURCED_FROM)) == 0
+        assert len(await storage.get_edges_from(new_id, edge_type=EdgeType.SOURCED_FROM)) == 1
+
+    @pytest.mark.parametrize("edge_type", [
+        EdgeType.SIMILARITY, EdgeType.CONTRADICTION, EdgeType.VARIANT_OF,
+    ])
+    async def test_a_merge_leaves_the_judgment_on_the_retired_source(
+        self, storage, embedding_provider, edge_type
+    ):
+        """The survivor's content is *synthesised*, so it is not the wording the
+        judgment was made against — even though it does carry the source's
+        claim."""
+        from epimemer.core.types import EmbeddingRecord
+
+        source = await _fact(storage, embedding_provider, "The capital is Bonn.")
+        other = await _fact(storage, embedding_provider, "Bonn is the capital.")
+        await storage.store_edge(NodeEdge(
+            src_id=source.id, dst_id=other.id, type=edge_type,
+        ))
+
+        survivor = Fact(
+            content="Bonn is the capital city.", source_id="seg-1",
+            value=ValueSignal(),
+        )
+        vector = (await embedding_provider.embed([survivor.content]))[0]
+        await storage.merge_nodes_tx(
+            [source], survivor,
+            EmbeddingRecord(
+                item_id=survivor.id, model_id=embedding_provider.model_id,
+                vector=vector,
+            ),
+            [NodeEdge(
+                src_id=source.id, dst_id=survivor.id, type=EdgeType.MERGED_INTO,
+            )],
+            merged_at=datetime.now(timezone.utc),
+        )
+
+        assert len(await storage.get_edges_from(source.id, edge_type=edge_type)) == 1
+        assert len(await storage.get_edges_from(survivor.id, edge_type=edge_type)) == 0
+
+
 class TestWorldChangeKeepsTheHistoricalNodesEdges:
     """A world-change migrates per edge type; a correction still moves everything.
 

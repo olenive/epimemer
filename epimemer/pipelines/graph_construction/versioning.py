@@ -51,9 +51,11 @@ async def supersede_node(
             caller knows which one happened (#53). It selects two things
             besides the status itself: the edge migration policy — see
             `migration_disposition` (#54), under which a `HISTORICAL` node
-            keeps its own provenance and the judgments made about it while only
-            its frame and tags are copied onto the replacement — and which
-            lineage edge is written, see `lineage_edge_type_for`.
+            keeps its own provenance while only its frame and tags are copied
+            onto the replacement — and which lineage edge is written, see
+            `lineage_edge_type_for`. Judgments made about the old node stay on
+            it under *either* status (#65), so that is not one of the
+            differences.
 
     Returns:
         The lineage edge linking old to new: `superseded_by` for a correction,

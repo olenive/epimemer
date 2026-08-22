@@ -863,6 +863,26 @@ drops the frame, which would move a fiction-frame replacement into base reality.
 The *validity* half still waits for the interval model, but it waits safely: the
 intervals will ride on `sourced_from` edges that no longer go anywhere.
 
+> **Amended 2026-08-22 (ISSUES.md #65).** "A correction moves everything but
+> history and review" was too wide by three types. The argument this paragraph
+> makes for a world-change — *a judgment is about the old claim, and re-pointing
+> one asserts it of a claim nobody assessed* — was stated for one branch of the
+> conditional and not applied to the others. It is just as true of a correction,
+> and of a merge. `similarity`, `contradiction` and `variant_of` are now
+> anchored on **every** retirement, via `JUDGMENT_EDGE_TYPES`.
+>
+> The case that makes it necessary rather than tidy is the substantive
+> correction: "the population is 500,000" → "5,000,000" is the *same claim* by
+> this module's own reckoning, which is why its sources rightly follow it — but
+> a counterpart judged *one claim* against the old figure was judged against a
+> number that is no longer there. Since `corroboration.py` walks `similarity`,
+> carrying the edge would count that counterpart's publisher as backing the new
+> figure. A merge is the same shape reached differently: the survivor's content
+> is synthesised, so it is nobody's judged wording either.
+>
+> Latent when found — both real graphs held zero edges of all three types — and
+> fixed before #64's step 1, which is what would have started writing them.
+
 ### 13.6 The method that found it
 
 **When an issue is blocked on a precondition, check whether the precondition's

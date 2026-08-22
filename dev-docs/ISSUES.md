@@ -1,10 +1,12 @@
 # Epimemer — Known Issues
 
-Living issue tracker. **Last review: 2026-08-21.**
+Living issue tracker. **Last review: 2026-08-22.**
 
 Open: **64** (2026-08-21, decided — `dev-docs/REVIEW_MODE.md` is the design) and
-**65** (2026-08-22, blocks #64's first step) and **66** (2026-08-22, not
-blocking), plus **16** and **58**, both deferred with their triggers stated.
+**66** (2026-08-22, not blocking), plus **16** and **58**, both deferred with
+their triggers stated. **65** was found and built on 2026-08-22, ahead of #64's
+first step, which is what would have made it reachable; its entry is kept until
+the next prune for the two carry-forwards it earned.
 **61**, **62** and **63** were built on 2026-08-21. **46**, **48** and **51** were built
 and merged (2026-08-19, -19, -20); their entries are deleted per the workflow
 below, and what they taught is kept here and in the docs they name —
@@ -2789,7 +2791,7 @@ observation.
 
 ---
 
-### Issue 65 — a correction re-points judgment edges onto wording nobody judged — 🔴 OPEN (found 2026-08-22)
+### Issue 65 — a correction re-points judgment edges onto wording nobody judged — ✅ BUILT (2026-08-22, found the same day)
 
 Found by review of `dev-docs/REVIEW_MODE.md`, which proposed to start writing
 `similarity` edges (#64) and so would have made this reachable. **Latent today
@@ -2847,6 +2849,56 @@ what ends the latency. Fixing after would mean shipping the defect knowingly.
 **Carry-forward.** *A rule stated for one branch of a conditional is not a rule
 the code applies.* The world-change branch carried the argument; the correction
 branch carried the same risk and no argument, and the two sat four lines apart.
+
+> **Built 2026-08-22, before step 1 as required.** `JUDGMENT_EDGE_TYPES` sits in
+> `core/types.py` and `migration_disposition` consults it before the status
+> branch, so it answers `keep` for `similarity`, `contradiction` and
+> `variant_of` on **every** retirement. Both backends inherit it without
+> changing: `memory.py` calls `migration_disposition` per edge and
+> `surrealdb_adapter.py` derives its type filter from `moved_edge_types`, so
+> neither holds a policy of its own — which is why this was a four-line change
+> to one function. Seventeen tests, run against both backends: the policy
+> directly, a correction and a merge leaving each of the three types behind,
+> provenance still moving on a correction (the half that did **not** change,
+> asserted beside the half that did), and traversal unaffected.
+>
+> **Two corrections came out of building it, neither changing the verdict.**
+>
+> **1. The set covers a merge too, and `REVIEW_MODE.md` §10.2 said otherwise.**
+> That section had `SIMILARITY` migrating onto a merge survivor, arguing `S`
+> contains `A`'s claim so a one-claim judgment survives. §10.2.1, four pages
+> later, said judgment edges are anchored on any retirement. Two subsections,
+> opposite answers — this issue's own carry-forward pattern, in a new place.
+> Anchoring wins on asymmetry: it costs one re-nomination of `S` against `B`,
+> which is *correct* since nobody has judged that pair, while migrating can
+> manufacture corroboration in silence. And the merge case is not really the
+> weaker one — `merge_facts` **synthesises** the survivor's content, so `S` is
+> nobody's judged wording.
+>
+> **2. The reasoning above does not carry on its own terms.** This entry argues
+> that a correction changes the wording and not the claim. But
+> `migration_disposition`'s docstring holds that a correction preserves the
+> claim — that is precisely why the sources follow it — so a *one-claim*
+> judgment would survive that reading intact. What actually carries it is the
+> **substantive** correction: "the population is 500,000" → "5,000,000" is the
+> same claim, and its sources rightly follow, but a counterpart judged one claim
+> against the old figure was judged against a number that is no longer there,
+> and `corroboration.py` would count that counterpart's publisher as backing the
+> new figure. Same verdict, different load-bearing reason — and the reason
+> matters, because *"the wording is gone"* is what shows a merge belongs in the
+> same rule while *"the claim is gone"* would not.
+>
+> **`ASSESSED` is not in the set**, contrary to the snippet above. When #64 step
+> 1 adds it, `REVIEW_EDGE_TYPES` is its home: it needs the same anchoring *and*
+> exclusion from traversal, being a suppression index rather than knowledge, and
+> `NON_KNOWLEDGE_EDGE_TYPES` is consulted first — so listing it in both would be
+> redundant.
+>
+> **A second carry-forward.** *When a fix is derived from an argument, check the
+> argument against the code before trusting the fix.* The verdict here was right
+> and the stated reason was not, which is survivable only because someone
+> re-derived it. A fix that is right for the wrong reason generalises wrongly —
+> in this case it would have left the merge case out.
 
 ---
 
@@ -3040,6 +3092,7 @@ What to pick up, and what has to be true first:
 | ✅ | ~~61 (a fact merge does not flag its dependents)~~ | **Done 2026-08-21**, decision and build in one sitting. The decision the row asked for went to a **sibling edge type**, `evidence_merged`, rather than a qualified `evidence_superseded` — and what settled it was a consequence rather than a principle: archival nominates on `evidence_stale`, so one shared label would have every merge propose discarding its own dependents. The build is the shape the row predicted (`merge_nodes` calls a planner beside the two supersession paths, both now over one `dependent_inference_ids`), plus the seam the row did not: `merge_nodes_tx` grows `evidence_edges` across the protocol, both backends and the instrumented wrapper. **One thing learned that is worth more than the fix**: unlike `evidence_stale`, this label has no live-check half and never can, because the `derived_from` edge is migrated onto the survivor by the same transaction — *a derived label can only be derived while its evidence is still in the graph* |
 | ✅ | ~~63 (the nomination bar was two numbers)~~ | **Done 2026-08-21.** Found by review, fixed the same day: the sweeps nominated at 0.80 while the merge gate refused below 0.83, so reflect offered pairs `merge_facts` then rejected — telling the agent the graph would never have paired them, right after it had. One constant at 0.80 now, read by both `check_conflicts` declarations, `merge_facts` and `detect_contradictions`, with the invariant **merge floor ≤ every nomination bar** pinned by signature across the MCP boundary. The carry-forward is the shape of the miss: **a constant with a stated invariant needs a test that reads every declaration of it** — #52's "both readers take it from there" was true of the two it named, and there were four |
 | ✅ | ~~62 (corroboration does not read validity)~~ | **Done 2026-08-21.** The one decision the row asked for turned out to be **mis-framed**: dropping and marking are not alternatives, because nothing is dropped from the *graph* — both claims stay, true of their own periods, and only a read-time integer narrows. So the count became honest and the uncounted look-alike comes back named in `adjacent_periods`, which is the half that carries new information: where a search returns one of the pair, that block is the only place the other appears at all. Two things the row had wrong. **Placement** it did not mention and which decides correctness: the comparison must run before the supporter hop, or the look-alike walks its own supporters — and their publishers — in behind it. **Cost** it stated as "no round trips": nearly, but the periods were being read at stage 4 and are needed at stage 1.5, so the provenance read splits in two, thirteen calls or twelve, still constant in result-set size. #52's inherited corroboration migration stays open and separate, as the row said |
+| ✅ | ~~65 (a correction re-points judgment edges)~~ | **Found and built 2026-08-22**, in that order and on the same day, because it is a defect in shipped code that #64's step 1 would have made reachable — fixing it after would have meant shipping it knowingly. `JUDGMENT_EDGE_TYPES` in `core/types.py`, consulted by `migration_disposition` before the status branch, so `similarity`, `contradiction` and `variant_of` are anchored on **every** retirement. Four lines, because both backends derive their answers from that one function and hold no policy of their own. **Two things the design had wrong surfaced only on building it**: `REVIEW_MODE.md` §10.2 and §10.2.1 gave opposite answers for `similarity` on a merge, and the issue's stated reasoning (*a correction changes the wording, not the claim*) contradicts `migration_disposition`'s own account of a correction. The verdict survived both; the reason did not, and the real one — the **substantive** correction, "500,000" → "5,000,000", leaving a counterpart judged against a number that is gone — is what shows a merge belongs in the same rule. Carry-forward: **when a fix is derived from an argument, check the argument against the code before trusting the fix** — right for the wrong reason generalises wrongly |
 | **next** | **64 (`similarity` has no writer)** | **Found 2026-08-21**, while taking #52's outstanding corroboration migration — which is declined on the strength of it, with no code. The migration assumed a populated neighbourhood that merging would shrink toward identity; the neighbourhood is **empty on every real graph** (0 of 4,386 edges on `memory`, 0 of 1,028 on `petritype-server`), so collapsing the walk would change no count and would delete the only consumer of a judgment nothing yet records. Both of the migration's stated payoffs were already gone: the Saint Petersburg caveat was collected by #62 through `adjacent_periods`, and "stops over-reporting through a wrong edge" describes a trade `corroboration.py` argued for rather than a defect. **Merging structurally cannot replace the walk** — `merge_refusal` refuses every event, so identity can never count two publishers on one occurrence, the paradigm case the whole annotation exists for. The decision this row wants is *which surface records the judgment*: a tenth `apply_reflection` argument (recommended), a write on `merge_facts`' refusal, or a `record_similarity` tool. Carry-forward: **an edge type with readers and no writer is not a feature with low adoption, it is a feature that has never run** — three documents described its cost curve and one named the wrong writer |
 | designed | inference merge, advisories, node notes | Not on this board — `dev-docs/WARNINGS_AND_SETTINGS.md`, designed 2026-08-21 and deliberately unbuilt. The duplication it addresses does not exist yet: 123 active inferences across both real graphs yield 5,053 pairs and **zero** at the nomination bar. It becomes real once fact merges start collecting inferences onto one survivor |
 | deferred | 16, 58 | 16: the server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`). 58: a graph large enough that the FTS backfill inside `connect()` is worth reporting on |

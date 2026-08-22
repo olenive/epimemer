@@ -1135,10 +1135,11 @@ class SurrealDBStorage:
         clear_edge_ids: Sequence[str] = (),
     ) -> None:
         # Which edges follow the replacement depends on *why* the old node is
-        # being retired (#54): a correction re-points everything but history and
-        # review; a world-change re-points nothing and copies only the frame and
-        # the tags. Both answers come from `migration_disposition`, so this
-        # backend cannot develop an opinion of its own.
+        # being retired (#54): a correction re-points everything but history,
+        # review and judgments (#65); a world-change re-points nothing and
+        # copies only the frame and the tags. Both answers come from
+        # `migration_disposition`, so this backend cannot develop an opinion of
+        # its own.
         moved = [t.value for t in moved_edge_types(status)]
         copied_data = await self._plan_copied_edges(old_node.id, new_node.id, status)
 
@@ -1292,7 +1293,7 @@ class SurrealDBStorage:
     ) -> None:
         source_ids = {s.id for s in source_nodes}
 
-        # Plan the edge migration in Python: read the sources' non-history edges,
+        # Plan the edge migration in Python: read the sources' migrating edges,
         # re-point them onto the merged node, and drop self-loops and duplicate
         # (src, dst, type) edges, keeping one per group. Planning here keeps it
         # deterministic — in-transaction GROUP BY dedup proved unreliable. The

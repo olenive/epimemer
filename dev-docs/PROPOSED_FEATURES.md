@@ -292,9 +292,10 @@ neighbourhood walk has ever had.
 rather than architecture, since `storage` is already threaded explicitly and the
 judge rides beside it. Step 5 (the journal) is the largest single piece.
 
-**Blockers.** **`ISSUES.md` #65 blocks step 1** — a correction re-points
-judgment edges onto wording nobody judged, which is latent only while nothing
-writes `similarity` edges, and step 1 is what starts. Nothing else blocks:
+**Blockers.** None. **`ISSUES.md` #65 blocked step 1** — a correction re-pointed
+judgment edges onto wording nobody judged, latent only while nothing writes
+`similarity` edges, and step 1 is what starts — and was **built 2026-08-22**,
+before the step it blocked. Nothing else blocks:
 §12.1 sorts what remains into filed work, resolved questions and two gaps
 scoped out (now `ISSUES.md` #66), and §12.2 indexes every decision with its
 reasoning. Two review rounds are recorded in §11 and §11.1. The design was reviewed and revised on 2026-08-22 — §11 records what
