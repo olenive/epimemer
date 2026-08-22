@@ -508,8 +508,9 @@ band would live. The only two above-bar scores on record, 0.87 and 0.89 from
 neither. Two points is not a distribution.
 
 So the band is cut, and **measuring the above-bar distribution is a precondition
-for adding it back**. The four signals above need no threshold and carry the
-mode meanwhile.
+for adding it back**. The four signals above need no threshold and carry tier 2
+of §6.2's ordering meanwhile — which is the whole corpus today, and the reason
+derived difficulty earns its place at all.
 
 ---
 
@@ -518,10 +519,15 @@ mode meanwhile.
 `review(...)` — read-only, like `reflect`, and for the same reason: it
 nominates, and every change goes through the existing decision tools.
 
+**Three things are separate, and the first draft ran them together.** *Which*
+decisions you are looking at, *what order* they arrive in, and *whether* the
+list is narrowed further are different questions, and `uncertain` and
+`difficult` were sitting in the mode column while being answers to the second.
+
+### 6.1 Modes — which decisions
+
 | Mode | Selects | Answers |
 |---|---|---|
-| `uncertain` | declared `certainty` below a floor | *"what did the last agent say it was unsure about"* |
-| `difficult` | the derived signals of §5 | *"what looks hard, on a corpus with no declared certainty"* |
 | `by_agent` | `judged_by == …` | *"check everything this judge did"* |
 | `since` / `between` | `decided_at` in range | *"review yesterday's session"* |
 | `unreviewed` | no record `reviews` this one | *"what has nobody looked at"* |
@@ -530,6 +536,70 @@ nominates, and every change goes through the existing decision tools.
 
 Modes compose — `by_agent` **and** `since` is the ordinary case for *"review
 what agent-1 did yesterday"*.
+
+### 6.2 Ordering — shakiest first, always
+
+**Every mode returns its results least-confident first**, the way
+`nominate_archival_candidates` already returns *worst first*. This replaces the
+`uncertain` and `difficult` modes of the first draft, and the reason is that
+nobody actually wants only the doubtful ones: a reviewer checking yesterday's
+work wants **all** of yesterday, ordered so the doubtful calls are at the top
+and they can stop reading when it stops repaying the attention.
+
+It is **two tiers, never one blended number** — §5's rule that declared and
+derived must not be mixed, applied to the sort rather than abandoned:
+
+| Tier | Contains | Ordered by |
+|---|---|---|
+| 1 | decisions with a declared `certainty` | that value, ascending |
+| 2 | decisions with none | the derived signals of §5, most signals first |
+
+**Tier 1 before tier 2, and that ordering is itself a rule.** Absence is not a
+claim of doubt (#46), so an unrated decision never sorts above one an agent
+actually flagged.
+
+**The graceful degradation is the point.** The whole existing corpus is tier 2 —
+nothing carries a certainty and nothing will until agents start supplying it —
+so on today's graph the order is entirely derived, and it still works. As
+certainties accumulate, tier 1 fills from the top and the order improves without
+anything changing.
+
+**It also makes the cap benign.** Results are capped and report `truncated`
+(below); ordered worst-first, a cut list loses the end nobody was going to read.
+
+### 6.3 Filters — optional narrowing
+
+**`certainty_ceiling`**, off by default. When supplied, keeps only decisions
+whose declared certainty is **at or below** it; unrated decisions are excluded,
+since blank cannot be distinguished from ordinary (#46).
+
+Its use is not browsing — ordering already covers that — but **counting**:
+*"is anything below 0.5 still outstanding before I stop?"* is a gate, and a gate
+wants a number rather than a list.
+
+`0.5` is the value to reach for, **inclusive**, on two grounds. `importance_
+ceiling` is inclusive of its own default because *"nomination is a proposal
+rather than a verdict"*, and the same holds here. And the guidance says to
+**omit** at 0.5, so leaving it blank is the easy path — an agent that typed 0.5
+anyway was making a point of it, and including it respects that.
+
+**Why 0.5 is a legitimate constant where §5's `0.85` was not**, since the two
+look alike and the difference matters: 0.5 is a labelled anchor on the `#46`
+ladder that tool guidance actively teaches, so it means something before anybody
+measures anything. The `0.85` was a number with no referent anywhere in the
+system. Neither is derived from data — but only one of them needs to be.
+
+**The response names the ceiling this call used**, never asserting what the
+graph would have done, because a caller can pass their own. That is #63's
+carry-forward verbatim: `merge_facts`' refusal message stated a threshold as
+though it were the system's, and was false for exactly the caller who overrode
+it.
+
+**Always reported: how many decisions were unrated.** Three results out of four
+hundred blanks is not the same answer as three out of four, and only one of them
+means *"the graph is in good shape"*.
+
+### 6.4 Everything else about the response
 
 **Every mode is capped and reports `truncated`**, #60's treatment applied
 verbatim. `all` over an append-only journal fed by every ingest is precisely the
@@ -963,8 +1033,8 @@ Each step is useful alone, and each is a precondition for the next.
 | 3 | `judge` threaded through the reflect-side write paths | Smallest surface producing attributed decisions, so step 5 has something to read. |
 | 4 | `judge` threaded through ingest, mandatory (§3.2) | The bigger churn, and where the unreviewable priors are. **This is the cutover date** §3.3 pins. |
 | 5 | `DecisionRecord` + journal writes + W&S §9 folded in (§9) | Makes *"what did this agent judge"* one query. |
-| 6 | `review()` with `difficult` and `all`, capped | Works on the existing corpus, since derived signals need no attribution. |
-| 7 | `uncertain`, `by_agent`, `since`, `unreviewed`, `advisory`; `apply_review` | Need attributed decisions to exist; useful from the first session after step 4. |
+| 6 | `review(mode="all")`, capped, with tier-2 ordering (§6.2) | Works on the existing corpus and orders it usefully, since derived signals need no attribution. |
+| 7 | `by_agent`, `since`, `unreviewed`, `advisory`, tier-1 ordering, `certainty_ceiling`; `apply_review` | Need attributed decisions to exist; useful from the first session after step 4. |
 
 **Steps 0a and 0b go first, and not because anything below needs them** —
 nothing does. They are first because they are the only steps whose cost rises
@@ -990,7 +1060,14 @@ carry-forwards this repo has banked before.
 | 7 | The absence rule held only if the judge were mandatory, which the signature did not say | §3.2 |
 
 Smaller: ingest journal granularity (§4.1), one ladder not two (§5), which record
-is primary (§4.2), and a named writer for confirmations (§6).
+is primary (§4.2), and a named writer for confirmations (§6.4).
+
+**One further defect surfaced by discussion rather than by the review**, and it
+is the same species as #2 above: §6's mode table ran *which decisions*, *in what
+order* and *narrowed how* together in one column, so `uncertain` and `difficult`
+sat among the modes while being answers to a different question. Separated in
+§6.1–6.3. The tell was the same both times — **a column, or a field, that needs
+the word "or" to describe what it holds.**
 
 **What the review confirmed and has not moved**: minted id plus append-only
 dated descriptions; pinning `(judged_by, judge_desc)` per decision; no backfill;
@@ -1000,12 +1077,21 @@ before journal before modes.
 
 ---
 
-## 12. Open questions
+## 12. Questions raised, and how they were settled
 
-1. **What is the `uncertain` floor?** §5 settles the ladder but not the
-   threshold. Likely below 0.5, but it wants the same treatment as every other
-   bar here: one named constant, documented, read everywhere (#63).
+**None are open.** Everything the review and the discussion of 2026-08-22 raised
+has an answer in the sections above; this is the index to them, newest first.
 
+> **"Uncertain" is an ordering, not a mode** — decided 2026-08-22, §6.2. The
+> question was *what floor selects the uncertain ones*, and it dissolved once
+> somebody asked **when an agent actually needs them**: at no point does anyone
+> want only the doubtful decisions. A reviewer wants all of yesterday's work,
+> shakiest first, and stops reading when it stops repaying attention. So the
+> floor became `certainty_ceiling`, an optional filter for the one case that
+> wants a count rather than a list, and ordering carries the rest — in two
+> tiers, so declared and derived stay unblended (§5) and the whole
+> pre-certainty corpus still sorts usefully.
+>
 > **The survivor is deleted on reversal, not retired** — decided 2026-08-22,
 > and §7.7 has the reasoning. The decisive argument is not exactness but that a
 > later re-merge must synthesise from what is known then; resurrecting the old
