@@ -12,6 +12,7 @@ from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
+    JudgeRef,
     MergeUndo,
     MergedEdge,
     NodeEdge,
@@ -33,6 +34,7 @@ async def supersede_node(
     embedding_provider: EmbeddingProvider,
     *,
     status: NodeStatus,
+    judge: JudgeRef | None = None,
 ) -> NodeEdge:
     """Create a new version of a node.
 
@@ -96,6 +98,7 @@ async def supersede_node(
         old_node, new_node, new_embedding, lineage_edge,
         status=status, superseded_at=now,
         evidence_edges=evidence_edges, clear_edge_ids=clear_edge_ids,
+        judge=judge,
     )
     return lineage_edge
 
@@ -106,6 +109,7 @@ async def supersede_by_existing(
     storage: StorageBackend,
     *,
     status: NodeStatus,
+    judge: JudgeRef | None = None,
 ) -> NodeEdge:
     """Supersede ``old_node`` by an already-existing node.
 
@@ -139,6 +143,7 @@ async def supersede_by_existing(
     await storage.supersede_by_existing_tx(
         old_node, existing_id, lineage_edge, status=status, superseded_at=now,
         evidence_edges=evidence_edges, clear_edge_ids=clear_edge_ids,
+        judge=judge,
     )
     return lineage_edge
 
@@ -260,6 +265,7 @@ async def merge_nodes(
     embedding_provider: EmbeddingProvider,
     *,
     undo_depth: int | None = None,
+    judge: JudgeRef | None = None,
 ) -> list[NodeEdge]:
     """Merge multiple nodes into one.
 
@@ -360,7 +366,7 @@ async def merge_nodes(
 
     await storage.merge_nodes_tx(
         source_nodes, merged_node, merged_embedding, lineage_edges, merged_at=now,
-        evidence_edges=evidence_edges,
+        evidence_edges=evidence_edges, judge=judge,
     )
 
     # After the transaction, so a merge that fails evicts nothing. Eviction is
@@ -465,6 +471,8 @@ async def reversal_refusal(
 async def reverse_merge(
     survivor_id: str,
     storage: StorageBackend,
+    *,
+    judge: JudgeRef | None = None,
 ) -> ReverseRefused | dict:
     """Undo one merge: restore the sources, replay their edges, delete the survivor.
 
@@ -562,7 +570,7 @@ async def reverse_merge(
     now = datetime.now(timezone.utc)
     await storage.reverse_merge_tx(
         survivor, source_nodes, restored_edges,
-        restored_at=now, delete_edge_ids=delete_edge_ids,
+        restored_at=now, delete_edge_ids=delete_edge_ids, judge=judge,
     )
     return {
         "reversed": True,

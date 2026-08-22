@@ -19,6 +19,7 @@ from epimemer.core.temporal import merged_validity
 from epimemer.core.types import (
     Agent,
     EdgeType,
+    JudgeRef,
     EmbeddingRecord,
     EpistemicNode,
     Fact,
@@ -1224,6 +1225,7 @@ class SurrealDBStorage:
         superseded_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
+        judge: JudgeRef | None = None,
     ) -> None:
         # Which edges follow the replacement depends on *why* the old node is
         # being retired (#54): a correction re-points everything but history,
@@ -1262,7 +1264,7 @@ class SurrealDBStorage:
             "emb_data": _serialize(new_embedding),
             "lifecycle": _episode_rows(with_retirement(
                 lifecycles[old_node.id], at=superseded_at, because=status,
-                counterpart=new_node.id,
+                counterpart=new_node.id, judge=judge,
             )),
             "moved": moved,
             "copied_data": copied_data,
@@ -1281,6 +1283,7 @@ class SurrealDBStorage:
         superseded_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
+        judge: JudgeRef | None = None,
     ) -> None:
         lifecycles = await self._stored_lifecycles([old_node])
         statements = [
@@ -1296,7 +1299,7 @@ class SurrealDBStorage:
             "lineage_data": _edge_row(lineage_edge),
             "lifecycle": _episode_rows(with_retirement(
                 lifecycles[old_node.id], at=superseded_at, because=status,
-                counterpart=existing_id,
+                counterpart=existing_id, judge=judge,
             )),
         }
         self._append_review_writes(statements, params, evidence_edges, clear_edge_ids)
@@ -1309,6 +1312,7 @@ class SurrealDBStorage:
         status: NodeStatus,
         at: datetime,
         edges: Sequence[NodeEdge] = (),
+        judge: JudgeRef | None = None,
     ) -> None:
         if not nodes:
             return
@@ -1343,8 +1347,10 @@ class SurrealDBStorage:
         lifecycles = await self._stored_lifecycles(nodes)
         for i, node in enumerate(nodes):
             episodes = (
-                with_return(lifecycles[node.id], at=at) if returning
-                else with_retirement(lifecycles[node.id], at=at, because=status)
+                with_return(lifecycles[node.id], at=at, judge=judge) if returning
+                else with_retirement(
+                    lifecycles[node.id], at=at, because=status, judge=judge
+                )
             )
             params[f"lifecycle_{i}"] = _episode_rows(episodes)
             params[f"uid_{i}"] = node.id
@@ -1384,6 +1390,7 @@ class SurrealDBStorage:
         *,
         merged_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
+        judge: JudgeRef | None = None,
     ) -> None:
         source_ids = {s.id for s in source_nodes}
 
@@ -1464,7 +1471,7 @@ class SurrealDBStorage:
             source_params[f"source_{i}"] = source.id
             source_params[f"lifecycle_{i}"] = _episode_rows(with_retirement(
                 lifecycles[source.id], at=merged_at, because=NodeStatus.MERGED,
-                counterpart=merged_node.id,
+                counterpart=merged_node.id, judge=judge,
             ))
 
         params: dict = {
@@ -1493,6 +1500,7 @@ class SurrealDBStorage:
         *,
         restored_at: datetime,
         delete_edge_ids: Sequence[str],
+        judge: JudgeRef | None = None,
     ) -> None:
         """See the protocol. **The only hard delete in this backend**, and it
         must never be reachable from an MCP tool (REVIEW_MODE.md §7.7)."""
@@ -1534,7 +1542,7 @@ class SurrealDBStorage:
         for i, source in enumerate(source_nodes):
             params[f"source_{i}"] = source.id
             params[f"lifecycle_{i}"] = _episode_rows(
-                with_return(lifecycles[source.id], at=restored_at)
+                with_return(lifecycles[source.id], at=restored_at, judge=judge)
             )
             statements.append(
                 f"UPDATE {_node_to_table(source)} SET status = $status, "

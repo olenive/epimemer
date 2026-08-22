@@ -19,6 +19,7 @@ from epimemer.core.temporal import merged_validity
 from epimemer.core.types import (
     Agent,
     EdgeType,
+    JudgeRef,
     EmbeddingRecord,
     EpistemicNode,
     Fact,
@@ -582,6 +583,7 @@ class InMemoryStorage:
         superseded_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
+        judge: JudgeRef | None = None,
     ) -> None:
         # Snapshot the active graph so any failure leaves it untouched.
         snapshot = copy.deepcopy(self._g)
@@ -593,7 +595,7 @@ class InMemoryStorage:
             node.superseded_at = superseded_at
             node.lifecycle = with_retirement(
                 node.lifecycle, at=superseded_at, because=status,
-                counterpart=new_node.id,
+                counterpart=new_node.id, judge=judge,
             )
             self._g.nodes[new_node.id] = _store(new_node)
             _put_embedding(self._g, _store(new_embedding))
@@ -617,6 +619,7 @@ class InMemoryStorage:
         superseded_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
+        judge: JudgeRef | None = None,
     ) -> None:
         snapshot = copy.deepcopy(self._g)
         try:
@@ -627,7 +630,7 @@ class InMemoryStorage:
             node.superseded_at = superseded_at
             node.lifecycle = with_retirement(
                 node.lifecycle, at=superseded_at, because=status,
-                counterpart=existing_id,
+                counterpart=existing_id, judge=judge,
             )
             # No new node, no embedding, no migration — the existing node stands.
             _put_edge(self._g, _store(lineage_edge))
@@ -646,6 +649,7 @@ class InMemoryStorage:
         status: NodeStatus,
         at: datetime,
         edges: Sequence[NodeEdge] = (),
+        judge: JudgeRef | None = None,
     ) -> None:
         returning = status is NodeStatus.ACTIVE
         snapshot = copy.deepcopy(self._g)
@@ -657,8 +661,10 @@ class InMemoryStorage:
                 stored.status = status
                 stored.superseded_at = None if returning else at
                 stored.lifecycle = (
-                    with_return(stored.lifecycle, at=at) if returning
-                    else with_retirement(stored.lifecycle, at=at, because=status)
+                    with_return(stored.lifecycle, at=at, judge=judge) if returning
+                    else with_retirement(
+                        stored.lifecycle, at=at, because=status, judge=judge
+                    )
                 )
             for edge in edges:
                 _put_edge(self._g, _store(edge))
@@ -675,6 +681,7 @@ class InMemoryStorage:
         *,
         merged_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
+        judge: JudgeRef | None = None,
     ) -> None:
         snapshot = copy.deepcopy(self._g)
         try:
@@ -693,7 +700,7 @@ class InMemoryStorage:
                 node.superseded_at = merged_at
                 node.lifecycle = with_retirement(
                     node.lifecycle, at=merged_at, because=NodeStatus.MERGED,
-                    counterpart=merged_node.id,
+                    counterpart=merged_node.id, judge=judge,
                 )
             for edge in lineage_edges:
                 _put_edge(self._g, _store(edge))
@@ -713,6 +720,7 @@ class InMemoryStorage:
         *,
         restored_at: datetime,
         delete_edge_ids: Sequence[str],
+        judge: JudgeRef | None = None,
     ) -> None:
         snapshot = copy.deepcopy(self._g)
         try:
@@ -734,7 +742,9 @@ class InMemoryStorage:
                 # `lifecycle`, which is what makes N cycles cost N episodes and
                 # no flags (§7.6).
                 node.superseded_at = None
-                node.lifecycle = with_return(node.lifecycle, at=restored_at)
+                node.lifecycle = with_return(
+                    node.lifecycle, at=restored_at, judge=judge
+                )
             _destroy_node(self._g, survivor.id)
         except Exception:
             self._graphs[self._database] = snapshot

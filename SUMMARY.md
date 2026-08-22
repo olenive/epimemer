@@ -585,9 +585,14 @@ append and are never edited; a description is a self-reported claim, not a
 credential, and only `confirmed_at` carries human weight. Approval is per graph,
 so `use_graph` can unbind a judge.
 
-Nothing yet records that identity **against a decision** — the registry exists
-and the writers do not use it. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) for
-what is built and `dev-docs/REVIEW_MODE.md` for the rest of the design.
+Decisions made during review carry that identity: retiring a node records who
+retired it and returning it records who brought it back, a judgment edge records
+who asserted it, and content written during reflect records who wrote it. A blank
+means **unknown** and nothing more — no date is implied, and a graph is free
+never to name anyone. **Ingest is not yet attributed**, and nothing yet answers
+*what did this agent judge* as one query. See
+[docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) for what is built and
+`dev-docs/REVIEW_MODE.md` for the rest of the design.
 
 Historical graph state is read with the dedicated `graph_as_of` (a lifecycle snapshot at a past instant) and `query_changes` (births and retirements across a window) tools — not via an `at_time` parameter on `search`/`query_graph`. That is *transaction* time; the other axis, when a claim was **true**, is `search(valid_as_of=…)`, and the names are marked on both sides so neither inherits the wrong default reading.
 

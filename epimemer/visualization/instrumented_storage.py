@@ -20,6 +20,7 @@ from typing import Literal, Sequence
 from epimemer.core.types import (
     Agent,
     EdgeType,
+    JudgeRef,
     EmbeddingRecord,
     EpistemicNode,
     Metacontext,
@@ -213,12 +214,14 @@ class InstrumentedStorage:
         superseded_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
+        judge: JudgeRef | None = None,
     ) -> None:
         await self._inner.supersede_node_tx(
             old_node, new_node, new_embedding, lineage_edge,
             status=status, superseded_at=superseded_at,
             evidence_edges=evidence_edges,
             clear_edge_ids=clear_edge_ids,
+            judge=judge,
         )
         # Publish only after the atomic operation succeeds.
         graph = self._inner.current_database
@@ -250,12 +253,14 @@ class InstrumentedStorage:
         superseded_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
+        judge: JudgeRef | None = None,
     ) -> None:
         await self._inner.supersede_by_existing_tx(
             old_node, existing_id, lineage_edge,
             status=status, superseded_at=superseded_at,
             evidence_edges=evidence_edges,
             clear_edge_ids=clear_edge_ids,
+            judge=judge,
         )
         graph = self._inner.current_database
         await self._bus.publish(NodeStatusChanged(
@@ -282,8 +287,11 @@ class InstrumentedStorage:
         status: NodeStatus,
         at: datetime,
         edges: Sequence[NodeEdge] = (),
+        judge: JudgeRef | None = None,
     ) -> None:
-        await self._inner.set_node_status_tx(nodes, status=status, at=at, edges=edges)
+        await self._inner.set_node_status_tx(
+            nodes, status=status, at=at, edges=edges, judge=judge
+        )
         graph = self._inner.current_database
         for node in nodes:
             await self._bus.publish(NodeStatusChanged(
@@ -312,10 +320,11 @@ class InstrumentedStorage:
         *,
         merged_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
+        judge: JudgeRef | None = None,
     ) -> None:
         await self._inner.merge_nodes_tx(
             source_nodes, merged_node, merged_embedding, lineage_edges,
-            merged_at=merged_at, evidence_edges=evidence_edges,
+            merged_at=merged_at, evidence_edges=evidence_edges, judge=judge,
         )
         graph = self._inner.current_database
         await self._bus.publish(NodeStored(graph=graph, node=node_to_view(merged_node, graph)))
@@ -346,10 +355,11 @@ class InstrumentedStorage:
         *,
         restored_at: datetime,
         delete_edge_ids: Sequence[str],
+        judge: JudgeRef | None = None,
     ) -> None:
         await self._inner.reverse_merge_tx(
             survivor, source_nodes, restored_edges,
-            restored_at=restored_at, delete_edge_ids=delete_edge_ids,
+            restored_at=restored_at, delete_edge_ids=delete_edge_ids, judge=judge,
         )
         graph = self._inner.current_database
         for source in source_nodes:

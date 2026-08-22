@@ -1,10 +1,11 @@
 # Attribution — who judged this
 
-**Built so far: the registry.** An agent can be given an identity, the user
-assigns it, and a session can be bound to it. Nothing yet *records* that
-identity against a decision — that is the next step, and until it lands this
-page describes a registry with nothing pointing at it. The design for the rest
-is `dev-docs/REVIEW_MODE.md`.
+**Built so far: the registry, and the judge on every reflect-side decision.**
+An agent can be given an identity, the user assigns it, a session is bound to
+it, and the decisions that session makes during review carry it. **Ingest does
+not yet** — a fact's own wording still records no author — and nothing yet
+answers *what did this agent judge* as one query. Both are next; the design is
+`dev-docs/REVIEW_MODE.md`.
 
 ## The problem it exists for
 
@@ -98,6 +99,37 @@ approved.
 Ids from `EPIMEMER_APPROVED_AGENTS` are applied to whatever graph the server
 lands on, and applied *before* the judge is re-checked — otherwise configuration
 would clear a judge it was about to admit.
+
+## What a decision records
+
+Once a session has claimed an identity, these writers record it, each on the
+thing the decision landed on:
+
+| Decision | Recorded on |
+|---|---|
+| `update`, `supersede_by`, `merge_facts`, `apply_reflection`'s merges and supersessions and archivals | the retired node's lifecycle episode, as `retired_by` |
+| `restore`, `reverse_merge` | the same episode, as `restored_by` — a separate field, because returning is a separate decision |
+| `record_contradiction`, `record_variant`, `link`, `apply_reflection`'s similarity verdicts | the edge, as `judged_by` |
+| `judge_importance` | the value signal, as the latest judge — and every entry in the node's reinforcement trail names its own |
+| content written during reflect: synthesised parents, splits, enrichments, merge survivors, and `update`'s replacement | the new node, as `judged_by` |
+
+Three things follow that are easy to get wrong:
+
+- **A correction does not inherit the previous author.** The replacement is the
+  correcting agent's wording, and crediting the earlier one would attribute a
+  sentence they never wrote.
+- **Re-recording a pair does not restamp its edge.** A second agent calling
+  `record_contradiction` on a pair that already has one has *confirmed*, not
+  decided. That is a review, and a review gets its own record rather than
+  overwriting somebody else's name.
+- **Approval is re-checked on every write.** An id the graph no longer approves
+  records as unknown rather than failing the call: writing the name would assert
+  an approval that no longer exists.
+
+Two things are deliberately **not** attributed yet, because both edit an
+existing record rather than adding one: accepting a boundary proposal, and
+merging relation labels. Stamping the first would overwrite whoever ingested the
+edge. Both want the decision journal, which is not built.
 
 ## Where it lives
 

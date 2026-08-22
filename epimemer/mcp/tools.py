@@ -1430,6 +1430,7 @@ async def link(
     kind: str = "relationship",
     weight: float = 1.0,
     metadata: dict | None = None,
+    judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Create a direct edge between two existing nodes.
 
@@ -1466,6 +1467,7 @@ async def link(
         label=label,
         kind=resolved_kind,
         weight=weight,
+        judged_by=judge,
         metadata=metadata or {},
     )
     await storage.store_edge(edge)
@@ -1485,6 +1487,7 @@ async def update(
     embedding_provider: EmbeddingProvider,
     *,
     because: str,
+    judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Update a node by creating a new version (supersession).
 
@@ -1523,29 +1526,32 @@ async def update(
     #
     # `extraction_method` carries over for the same reason: correcting the
     # wording does not change where the material came from.
+    # `judged_by` is deliberately *not* carried over: the replacement is this
+    # agent's wording, and inheriting the previous author would credit them with
+    # a sentence they never wrote.
     carried_value = old_node.value.model_copy()
     carried_method = old_node.extraction_method
     if isinstance(old_node, Topic):
         new_node: EpistemicNode = Topic(
             content=new_content, source_id=old_node.source_id,
-            value=carried_value, extraction_method=carried_method,
+            value=carried_value, extraction_method=carried_method, judged_by=judge,
         )
     elif isinstance(old_node, Fact):
         new_node = Fact(
             content=new_content, source_id=old_node.source_id,
-            value=carried_value, extraction_method=carried_method,
+            value=carried_value, extraction_method=carried_method, judged_by=judge,
         )
     elif isinstance(old_node, Inference):
         new_node = Inference(
             content=new_content, source_id=old_node.source_id,
-            value=carried_value, extraction_method=carried_method,
+            value=carried_value, extraction_method=carried_method, judged_by=judge,
         )
     else:
         raise ValueError(f"Unknown node type for node '{node_id}'")
 
     edge = await supersede_node(
         old_node, new_node, storage, embedding_provider,
-        status=superseded_status_for(because),
+        status=superseded_status_for(because), judge=judge,
     )
 
     result = {
@@ -1609,6 +1615,7 @@ async def judge_importance(
     *,
     related_id: str | None = None,
     importance_step: float = DEFAULT_IMPORTANCE_STEP,
+    judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Move a node's `importance` by one judgment, and record why.
 
@@ -1658,6 +1665,10 @@ async def judge_importance(
         # retrieval: an assessment is not traffic, and archival nomination
         # reads the two for different reasons.
         "importance_judged_at": at,
+        # Written with the clock, and overwritten with it: this pair is the
+        # *latest* judgment, not the history. The history is the
+        # `reinforcements` trail below, which each entry now names its judge in.
+        "importance_judged_by": judge,
     })
     node.metadata = {
         **node.metadata,
@@ -1668,6 +1679,10 @@ async def judge_importance(
                 "reason": reason,
                 "related_id": related_id,
                 "direction": direction,
+                # Per entry, because three judgments by three agents compose
+                # into one number and the trail is the only place that stays
+                # separable. `None` here means unknown, as everywhere.
+                "judged_by": judge.model_dump(mode="json") if judge else None,
             },
         ],
     }
@@ -1688,6 +1703,7 @@ async def supersede_by(
     storage: StorageBackend,
     *,
     because: str,
+    judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Supersede a node by an already-existing node.
 
@@ -1712,7 +1728,8 @@ async def supersede_by(
         raise ValueError(f"Node '{existing_id}' not found")
 
     edge = await supersede_by_existing(
-        old, existing_id, storage, status=superseded_status_for(because)
+        old, existing_id, storage, status=superseded_status_for(because),
+        judge=judge,
     )
     result = {"superseded_id": old_id, "by_id": existing_id, "edge_id": edge.id}
     meta = ResponseMeta(
@@ -1829,6 +1846,8 @@ async def record_contradiction(
     a_id: str,
     b_id: str,
     storage: StorageBackend,
+    *,
+    judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Record a genuine contradiction between two facts (both stay active).
 
@@ -1850,7 +1869,7 @@ async def record_contradiction(
 
     shares_frame = await same_frame(a_id, b_id, storage)
     edge_id, created = await _ensure_symmetric_edge(
-        a_id, b_id, EdgeType.CONTRADICTION, storage
+        a_id, b_id, EdgeType.CONTRADICTION, storage, judge=judge
     )
 
     result = {
@@ -1872,6 +1891,8 @@ async def record_variant(
     a_id: str,
     b_id: str,
     storage: StorageBackend,
+    *,
+    judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Record that two facts are one proposition resolved differently per frame.
 
@@ -1893,7 +1914,7 @@ async def record_variant(
 
     shares_frame = await same_frame(a_id, b_id, storage)
     edge_id, created = await _ensure_symmetric_edge(
-        a_id, b_id, EdgeType.VARIANT_OF, storage
+        a_id, b_id, EdgeType.VARIANT_OF, storage, judge=judge
     )
 
     result = {"edge_id": edge_id, "created": created, "same_frame": shares_frame}
@@ -1913,6 +1934,7 @@ async def merge_facts(
     embedding_provider: EmbeddingProvider,
     *,
     similarity_threshold: float = SIMILARITY_NOMINATION_THRESHOLD,
+    judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Collapse facts that restate one claim into a single node (#52).
 
@@ -1996,12 +2018,13 @@ async def merge_facts(
         claim_kind=ClaimKind.STATE,
         value=merged_value_signal([source.value for source in sources]),
         extraction_method="agent:merge",
+        judged_by=judge,
         metadata=(
             {"merged_from": source_ids}
             | ({"confidence_basis": basis} if basis else {})
         ),
     )
-    await merge_nodes(list(sources), merged, storage, embedding_provider)
+    await merge_nodes(list(sources), merged, storage, embedding_provider, judge=judge)
 
     result = {
         "merged": True,
@@ -2020,6 +2043,8 @@ async def merge_facts(
 async def reverse_merge(
     survivor_id: str,
     storage: StorageBackend,
+    *,
+    judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Undo a merge: restore the sources and destroy the survivor (§7 of
     `dev-docs/REVIEW_MODE.md`).
@@ -2057,7 +2082,7 @@ async def reverse_merge(
         reverse_merge as _reverse_merge,
     )
 
-    outcome = await _reverse_merge(survivor_id, storage)
+    outcome = await _reverse_merge(survivor_id, storage, judge=judge)
     if isinstance(outcome, ReverseRefused):
         return (
             {"reversed": False, "refused": outcome.reason, "survivor_id": survivor_id},
@@ -2495,6 +2520,7 @@ async def apply_reflection(
     boundaries: list[dict] | None = None,
     similarities: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
+    judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Apply agent-provided reflection decisions to the graph.
 
@@ -2590,6 +2616,7 @@ async def apply_reflection(
             b_id=pair[1],
             verdict=spec["verdict"],
             because=spec.get("because", ""),
+            judge=judge,
         )
         if isinstance(outcome, SimilarityRefused):
             similarities_refused.append(outcome.model_dump(mode="json"))
@@ -2615,6 +2642,7 @@ async def apply_reflection(
             content=content,
             source_id=children[0].source_id,
             extraction_method="agent:parent_synthesis",
+            judged_by=judge,
             metadata={"synthesized_from": children_ids},
         )
         edges = await plan_subtopic_edges(children, parent_topic.id, storage)
@@ -2640,7 +2668,7 @@ async def apply_reflection(
         subtopics = [
             Topic(
                 content=sc, source_id=parent.source_id, extraction_method="agent:split",
-                metadata={"split_from": topic_id},
+                judged_by=judge, metadata={"split_from": topic_id},
             )
             for sc in subtopic_contents
         ]
@@ -2669,6 +2697,7 @@ async def apply_reflection(
             source_id=old_topic.source_id,
             value=old_topic.value,
             extraction_method=f"{old_topic.extraction_method}:enriched",
+            judged_by=judge,
             metadata={**old_topic.metadata, "enriched_from": topic_id},
         )
         # supersede_node embeds the replacement and migrates edges.
@@ -2676,7 +2705,7 @@ async def apply_reflection(
         # was never true-of-a-period, so this is a correction (#53).
         await supersede_node(
             old_topic, enriched, storage, embedding_provider,
-            status=NodeStatus.CORRECTED,
+            status=NodeStatus.CORRECTED, judge=judge,
         )
         topics_enriched += 1
 
@@ -2711,9 +2740,12 @@ async def apply_reflection(
             source_id=sources[0].source_id,
             value=merged_value,
             extraction_method="agent:merge",
+            judged_by=judge,
             metadata={"merged_from": source_ids},
         )
-        await merge_nodes(sources, merged_topic, storage, embedding_provider)
+        await merge_nodes(
+            sources, merged_topic, storage, embedding_provider, judge=judge
+        )
         topics_merged += 1
 
     # 6. Resolve flagged/contested nodes by superseding the loser with an existing
@@ -2729,7 +2761,7 @@ async def apply_reflection(
             continue
         await supersede_by_existing(
             old_node, by_id, storage,
-            status=superseded_status_for(supersede_spec["because"]),
+            status=superseded_status_for(supersede_spec["because"]), judge=judge,
         )
         supersessions_applied += 1
 
@@ -2752,6 +2784,7 @@ async def apply_reflection(
             to_archive,
             status=NodeStatus.ARCHIVED,
             at=datetime.now(timezone.utc),
+            judge=judge,
         )
 
     # 8. Re-judge importance. Separate from archivals on purpose: archiving is a
@@ -2766,6 +2799,7 @@ async def apply_reflection(
                 reason=spec["reason"],
                 storage=storage,
                 related_id=spec.get("related_id"),
+                judge=judge,
             )
         except ValueError:
             continue        # unknown node or related id — skipped, as above
@@ -2936,6 +2970,7 @@ async def restore(
     node_ids: list[str] | None = None,
     sourced_from: str | None = None,
     validity: list[dict] | None = None,
+    judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Bring nodes back: from an archive blob, or by id when a claim recurs.
 
@@ -2985,7 +3020,7 @@ async def restore(
             archived.append(stored)
 
     reactivated, new_edges = await _reactivation(
-        node_ids or [], sourced_from, validity, storage
+        node_ids or [], sourced_from, validity, storage, judge=judge
     )
 
     # Only edges reaching a node that was itself missing can be missing: an
@@ -3001,7 +3036,7 @@ async def restore(
     if coming_back:
         await storage.set_node_status_tx(
             coming_back, status=NodeStatus.ACTIVE,
-            at=datetime.now(timezone.utc), edges=new_edges,
+            at=datetime.now(timezone.utc), edges=new_edges, judge=judge,
         )
 
     result = {
@@ -3018,6 +3053,8 @@ async def _reactivation(
     sourced_from: str | None,
     validity: list[dict] | None,
     storage: StorageBackend,
+    *,
+    judge: JudgeRef | None = None,
 ) -> tuple[list[EpistemicNode], list[NodeEdge]]:
     """The nodes a `recurs` verdict brings back, and the provenance it brings.
 
@@ -3062,7 +3099,7 @@ async def _reactivation(
     edges = [
         NodeEdge(
             src_id=node.id, dst_id=sourced_from, type=EdgeType.SOURCED_FROM,
-            validity=intervals,
+            validity=intervals, judged_by=judge,
         )
         for node in nodes
         if sourced_from is not None
@@ -3083,6 +3120,15 @@ def _node_to_dict(node: EpistemicNode) -> dict:
     deciding how far to lean on a retrieved claim, and 0.5 cannot say it (#46).
     """
     data = node.model_dump(mode="json")
+    # An unknown judge is dropped rather than sent as null, which is the
+    # opposite of what `confidence` does directly above — and the difference is
+    # what the absence says. A missing confidence is a caveat *about the claim*
+    # and worth a line in every result. A missing judge says only that this
+    # graph does not record one, which is the default state and true of every
+    # node in it (REVIEW_MODE.md §3.3): repeating it per result is noise the
+    # agent pays for. A judge that *is* present is information, and is sent.
+    if data.get("judged_by") is None:
+        data.pop("judged_by", None)
     data["node_type"] = _node_type_key(node)
     return data
 
@@ -3151,7 +3197,12 @@ async def _metacontext_labels(node_id: str, storage: StorageBackend) -> list[str
 
 
 async def _ensure_symmetric_edge(
-    a_id: str, b_id: str, edge_type: EdgeType, storage: StorageBackend
+    a_id: str,
+    b_id: str,
+    edge_type: EdgeType,
+    storage: StorageBackend,
+    *,
+    judge: JudgeRef | None = None,
 ) -> tuple[str, bool]:
     """Create a symmetric edge between a and b if absent. Returns (edge_id, created).
 
@@ -3165,8 +3216,12 @@ async def _ensure_symmetric_edge(
 
     existing = await symmetric_edge_between(a_id, b_id, edge_type, storage)
     if existing is not None:
+        # Deliberately not restamped. The edge records the judgment that made
+        # it, and a second agent calling the same tool has confirmed rather than
+        # decided — which is a record of its own (§6.4), not an overwrite of
+        # somebody else's name.
         return existing.id, False
-    edge = NodeEdge(src_id=a_id, dst_id=b_id, type=edge_type)
+    edge = NodeEdge(src_id=a_id, dst_id=b_id, type=edge_type, judged_by=judge)
     await storage.store_edge(edge)
     return edge.id, True
 

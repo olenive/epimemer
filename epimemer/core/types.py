@@ -449,6 +449,37 @@ def moved_edge_types(status: NodeStatus) -> frozenset[EdgeType]:
 BASE_METACONTEXT_ID = "the-real"
 
 
+# --- Who decided (REVIEW_MODE.md §3) ---
+
+
+class JudgeRef(BaseModel):
+    """Who is deciding, resolved once at the MCP boundary (§3.2, §10.4).
+
+    Passed explicitly from there on and never read from a module global, so a
+    second graph or a second session cannot inherit the first one's judge. The
+    digest pins the description version current at the call, which is what makes
+    a decision readable years later without an as-of query.
+
+    **Absent means unknown, and nothing more** (§3.3, revised 2026-08-23). It
+    carries no date and asserts nothing about why nobody is named — a graph may
+    require a judge or not, and that is a per-graph setting rather than a
+    property of this type.
+
+    Two fields rather than the design's separate `judged_by` / `judge_desc`
+    columns, because the pair is never meaningful apart: an agent id without the
+    description version says *who* but not *what they claimed to be at the
+    time*, which is the half that makes an old decision readable. Kept nested
+    wherever it is recorded, so no carrier has to remember two field names.
+
+    It sits here, above every type that carries one, rather than beside `Agent`
+    at the end of this module: the registry is one subsystem, and this is a
+    field on nodes, edges, episodes and value signals.
+    """
+
+    agent_id: str
+    digest: str
+
+
 # --- Value Signal ---
 
 
@@ -505,6 +536,12 @@ class ValueSignal(BaseModel):
     # nomination had to compare two clock reads with a tolerance window.
     retrieved_at: datetime | None = None
     importance_judged_at: datetime | None = None
+    # Who last stood behind `importance`, paired with the clock above rather
+    # than standing alone: the two answer *when* and *who* about one judgment
+    # and are written together or not at all. Named for `importance`
+    # specifically because `confidence` is a different judgment, made at a
+    # different moment by possibly a different agent, and will want its own.
+    importance_judged_by: JudgeRef | None = None
 
 
 UNRATED_CONFIDENCE = 0.5
@@ -653,6 +690,12 @@ class LifecycleEpisode(BaseModel):
     because: NodeStatus
     counterpart: str | None = None
     restored_at: datetime | None = None
+    # Retiring and returning are two decisions, often months and sometimes two
+    # agents apart, so they carry two judges rather than one. `restored_by` is
+    # written by the same single edit that writes `restored_at` — the only edit
+    # an episode ever receives.
+    retired_by: JudgeRef | None = None
+    restored_by: JudgeRef | None = None
 
 
 def with_retirement(
@@ -661,16 +704,23 @@ def with_retirement(
     at: datetime,
     because: NodeStatus,
     counterpart: str | None = None,
+    judge: "JudgeRef | None" = None,
 ) -> list[LifecycleEpisode]:
     """`episodes` plus the retirement that just happened. Never mutates its input."""
     return [
         *episodes,
-        LifecycleEpisode(retired_at=at, because=because, counterpart=counterpart),
+        LifecycleEpisode(
+            retired_at=at, because=because, counterpart=counterpart,
+            retired_by=judge,
+        ),
     ]
 
 
 def with_return(
-    episodes: Sequence[LifecycleEpisode], *, at: datetime,
+    episodes: Sequence[LifecycleEpisode],
+    *,
+    at: datetime,
+    judge: "JudgeRef | None" = None,
 ) -> list[LifecycleEpisode]:
     """`episodes` with the open one closed at `at`.
 
@@ -681,7 +731,10 @@ def with_return(
     """
     if not episodes or episodes[-1].restored_at is not None:
         return list(episodes)
-    return [*episodes[:-1], episodes[-1].model_copy(update={"restored_at": at})]
+    return [
+        *episodes[:-1],
+        episodes[-1].model_copy(update={"restored_at": at, "restored_by": judge}),
+    ]
 
 
 class Topic(BaseModel):
@@ -699,6 +752,10 @@ class Topic(BaseModel):
     # two fields above are the current-state snapshot of the last entry.
     lifecycle: list[LifecycleEpisode] = Field(default_factory=list)
     value: ValueSignal = Field(default_factory=ValueSignal)
+    # Who wrote this wording — the agent that read the material at ingest, or
+    # the one that synthesised it during reflect. Fixed at creation and never
+    # edited: a new version is a new node, which gets its own (§3.4).
+    judged_by: JudgeRef | None = None
     extraction_method: str = "unspecified"
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
@@ -733,6 +790,10 @@ class Fact(BaseModel):
     # two fields above are the current-state snapshot of the last entry.
     lifecycle: list[LifecycleEpisode] = Field(default_factory=list)
     value: ValueSignal = Field(default_factory=ValueSignal)
+    # Who wrote this wording — the agent that read the material at ingest, or
+    # the one that synthesised it during reflect. Fixed at creation and never
+    # edited: a new version is a new node, which gets its own (§3.4).
+    judged_by: JudgeRef | None = None
     extraction_method: str = "unspecified"
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
@@ -753,6 +814,10 @@ class Inference(BaseModel):
     # two fields above are the current-state snapshot of the last entry.
     lifecycle: list[LifecycleEpisode] = Field(default_factory=list)
     value: ValueSignal = Field(default_factory=ValueSignal)
+    # Who wrote this wording — the agent that read the material at ingest, or
+    # the one that synthesised it during reflect. Fixed at creation and never
+    # edited: a new version is a new node, which gets its own (§3.4).
+    judged_by: JudgeRef | None = None
     extraction_method: str = "unspecified"
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
@@ -813,6 +878,12 @@ class NodeEdge(BaseModel):
     # Living here also means intervals survive a merge for free, since merging
     # migrates edges and there is no combination rule to invent.
     validity: list[ValidityInterval] = Field(default_factory=list)
+    # Who asserted this edge. A first-class field rather than a `metadata` key,
+    # which is where the design put it: metadata is a free-form bag, and a
+    # reader asking *who decided this* would have to know a string. Every edge
+    # can carry one — a judgment edge because somebody judged, a provenance edge
+    # because somebody read the document (step 4).
+    judged_by: JudgeRef | None = None
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
 
@@ -1116,15 +1187,3 @@ def current_description(agent: Agent) -> AgentDescription | None:
     """The version in force now — the last appended, never the newest by date."""
     return agent.descriptions[-1] if agent.descriptions else None
 
-
-class JudgeRef(BaseModel):
-    """Who is deciding, resolved once at the MCP boundary (§3.2, §10.4).
-
-    Passed explicitly from there on and never read from a module global, so a
-    second graph or a second session cannot inherit the first one's judge. The
-    digest pins the description version current at the call, which is what makes
-    a decision readable years later without an as-of query.
-    """
-
-    agent_id: str
-    digest: str

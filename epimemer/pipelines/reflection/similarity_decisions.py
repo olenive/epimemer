@@ -42,6 +42,7 @@ from pydantic import BaseModel
 
 from epimemer.core.types import (
     EdgeType,
+    JudgeRef,
     NOMINATED_STATUSES,
     NodeEdge,
 )
@@ -108,6 +109,7 @@ async def apply_similarity_decision(
     b_id: str,
     verdict: str,
     because: str,
+    judge: JudgeRef | None = None,
 ) -> SimilarityRefused | SimilarityRecorded:
     """Record one verdict about one nominated pair, or say why it was not recorded.
 
@@ -225,6 +227,7 @@ async def apply_similarity_decision(
             src_id=a_id,
             dst_id=b_id,
             type=edge_type,
+            judged_by=judge,
             metadata={"verdict": verdict, "because": because},
         )
         await storage.store_edge(edge)

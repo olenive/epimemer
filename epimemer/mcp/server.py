@@ -720,6 +720,7 @@ async def memory_link(
         metadata: Optional metadata for the edge.
     """
     deps = ctx.lifespan_context
+    judge = await _bound_judge(ctx)
     return await _run_with_timeout(
         "epimemer.link",
         lambda: tools.link(
@@ -731,6 +732,7 @@ async def memory_link(
             kind=kind,
             weight=weight,
             metadata=metadata,
+            judge=judge,
         ),
         ctx,
         f"{src_id}->{dst_id}:{relation or edge_type}",
@@ -781,6 +783,7 @@ async def memory_update(
     noticing rather than working around.
     """
     deps = ctx.lifespan_context
+    judge = await _bound_judge(ctx)
     return await _run_with_timeout(
         "epimemer.update",
         lambda: tools.update(
@@ -789,6 +792,7 @@ async def memory_update(
             because=because,
             storage=deps["storage"],
             embedding_provider=deps["embedding_provider"],
+            judge=judge,
         ),
         ctx,
         f"node={node_id}",
@@ -827,6 +831,7 @@ async def memory_supersede_by(
     its own.
     """
     deps = ctx.lifespan_context
+    judge = await _bound_judge(ctx)
     return await _run_with_timeout(
         "epimemer.supersede_by",
         lambda: tools.supersede_by(
@@ -834,6 +839,7 @@ async def memory_supersede_by(
             existing_id=existing_id,
             because=because,
             storage=deps["storage"],
+            judge=judge,
         ),
         ctx,
         f"old={old_id} by={existing_id}",
@@ -879,6 +885,7 @@ async def memory_judge_importance(
             reassessment.
     """
     deps = ctx.lifespan_context
+    judge = await _bound_judge(ctx)
     return await _run_with_timeout(
         "epimemer.judge_importance",
         lambda: tools.judge_importance(
@@ -888,6 +895,7 @@ async def memory_judge_importance(
             storage=deps["storage"],
             related_id=related_id,
             importance_step=deps["config"].importance_step,
+            judge=judge,
         ),
         ctx,
         f"node={node_id} direction={direction} related={related_id}",
@@ -980,12 +988,14 @@ async def memory_record_contradiction(
         b_id: The other fact id.
     """
     deps = ctx.lifespan_context
+    judge = await _bound_judge(ctx)
     return await _run_with_timeout(
         "epimemer.record_contradiction",
         lambda: tools.record_contradiction(
             a_id=a_id,
             b_id=b_id,
             storage=deps["storage"],
+            judge=judge,
         ),
         ctx,
         f"{a_id}<->{b_id}",
@@ -1011,12 +1021,14 @@ async def memory_record_variant(
         b_id: The other fact id.
     """
     deps = ctx.lifespan_context
+    judge = await _bound_judge(ctx)
     return await _run_with_timeout(
         "epimemer.record_variant",
         lambda: tools.record_variant(
             a_id=a_id,
             b_id=b_id,
             storage=deps["storage"],
+            judge=judge,
         ),
         ctx,
         f"{a_id}<->{b_id}",
@@ -1067,6 +1079,7 @@ async def memory_merge_facts(
             source's wording — this is new text and it is what gets embedded.
     """
     deps = ctx.lifespan_context
+    judge = await _bound_judge(ctx)
     return await _run_with_timeout(
         "epimemer.merge_facts",
         lambda: tools.merge_facts(
@@ -1074,6 +1087,7 @@ async def memory_merge_facts(
             content=content,
             storage=deps["storage"],
             embedding_provider=deps["embedding_provider"],
+            judge=judge,
         ),
         ctx,
         f"sources={len(source_ids)}",
@@ -1120,11 +1134,13 @@ async def memory_reverse_merge(
             returned as `fact_id`.
     """
     deps = ctx.lifespan_context
+    judge = await _bound_judge(ctx)
     return await _run_with_timeout(
         "epimemer.reverse_merge",
         lambda: tools.reverse_merge(
             survivor_id=survivor_id,
             storage=deps["storage"],
+            judge=judge,
         ),
         ctx,
         f"survivor={survivor_id}",
@@ -1360,6 +1376,7 @@ async def memory_apply_reflection(
             to allow a merge (default 0.92, deliberately high).
     """
     deps = ctx.lifespan_context
+    judge = await _bound_judge(ctx)
     return await _run_with_timeout(
         "epimemer.apply_reflection",
         lambda: tools.apply_reflection(
@@ -1376,6 +1393,7 @@ async def memory_apply_reflection(
             boundaries=boundaries,
             similarities=similarities,
             merge_similarity_threshold=merge_similarity_threshold,
+            judge=judge,
         ),
         ctx,
         f"parents={len(parents or [])} splits={len(splits or [])} "
@@ -1687,6 +1705,7 @@ async def memory_restore(
             document gives no dates — the common case, and better than a guess.
     """
     deps = ctx.lifespan_context
+    judge = await _bound_judge(ctx)
     return await _run_with_timeout(
         "epimemer.restore",
         lambda: tools.restore(
@@ -1695,6 +1714,7 @@ async def memory_restore(
             node_ids=node_ids,
             sourced_from=sourced_from,
             validity=validity,
+            judge=judge,
         ),
         ctx,
         f"nodes={len((archive_data or {}).get('nodes', []))} "
@@ -2037,12 +2057,31 @@ async def _bound_judge(ctx: Context) -> JudgeRef | None:
     than returning nothing. No session is genuinely no binding, so that reads as
     None here. It must not read as an error, or a graph switch would fail over
     an identity feature the caller never used.
+
+    **Approval is re-checked here, on every write.** `use_graph` checks too, and
+    this is what keeps that from being a single point of failure (§10.3): a
+    revoked id, or a graph reached by any route that check missed, must not go
+    on stamping decisions. A judge the active graph does not approve reads as
+    *unknown* rather than raising — recording the name would assert an approval
+    that no longer exists, and refusing would be the graph-level policy talking,
+    which is not this function's to hold (§3.3).
     """
     try:
         stored = await ctx.get_state(JUDGE_STATE_KEY)
     except RuntimeError:
         return None
-    return None if stored is None else JudgeRef.model_validate(stored)
+    if stored is None:
+        return None
+    judge = JudgeRef.model_validate(stored)
+    if not await tools.judge_is_approved(ctx.lifespan_context["storage"], judge):
+        _tool_logger.warning(
+            "judge %r is not approved in graph %r; recording this write as "
+            "unknown. Call claim_agent again.",
+            judge.agent_id,
+            ctx.lifespan_context["storage"].current_database,
+        )
+        return None
+    return judge
 
 
 async def _bind_judge(ctx: Context, judge: JudgeRef | None) -> bool:

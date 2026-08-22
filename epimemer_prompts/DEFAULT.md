@@ -404,6 +404,10 @@ graph learned it.
   it. Re-describing appends a version and never edits one.
 - Approval is per graph. After `use_graph`, check whether the response says your
   judge was unbound, and claim again if it did.
+- Once you have claimed one, the decisions you make carry it: who retired a
+  node, who brought it back, who asserted a contradiction, who wrote a
+  synthesised topic. You pass nothing — it comes from the session. Ingest is not
+  yet attributed.
 
 ### Interpreting _meta
 Every tool response includes a `_meta` field:

@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from epimemer.core.types import (
     DEFAULT_MERGE_CYCLE_LIMIT,
     Agent,
+    JudgeRef,
     DEFAULT_MERGE_UNDO_DEPTH,
     EdgeType,
     EmbeddingRecord,
@@ -396,6 +397,17 @@ class StorageBackend(Protocol):
 
     # --- Atomic compound operations ---
     #
+    # Every method here takes `judge: JudgeRef | None` and records it on the
+    # lifecycle episode it writes — these are the calls that retire or return a
+    # node, and *who decided that* belongs beside *when* (REVIEW_MODE.md §3).
+    # The episode is built inside the backend, from the stored history (#67), so
+    # the judge has to arrive as an argument rather than on the node objects.
+    #
+    # `None` means **unknown**, and nothing more (§3.3). Whether a graph accepts
+    # an unknown judge is a per-graph policy, checked once at the MCP boundary;
+    # a backend never refuses on this account, because a backend that held the
+    # policy would be a second place for it to differ.
+    #
     # Supersession and merge each perform several writes (status change, node +
     # embedding store, edge migration, lineage edge). They are exposed as single
     # protocol methods so each backend can make them atomic — all-or-nothing —
@@ -412,6 +424,7 @@ class StorageBackend(Protocol):
         superseded_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
+        judge: JudgeRef | None = None,
     ) -> None:
         """Atomically supersede ``old_node`` with ``new_node``.
 
@@ -443,6 +456,7 @@ class StorageBackend(Protocol):
         superseded_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
+        judge: JudgeRef | None = None,
     ) -> None:
         """Atomically supersede ``old_node`` by an already-existing node.
 
@@ -463,6 +477,7 @@ class StorageBackend(Protocol):
         status: NodeStatus,
         at: datetime,
         edges: Sequence[NodeEdge] = (),
+        judge: JudgeRef | None = None,
     ) -> None:
         """Atomically move every node in ``nodes`` to ``status``, as of ``at``.
 
@@ -506,6 +521,7 @@ class StorageBackend(Protocol):
         *,
         merged_at: datetime,
         evidence_edges: Sequence[NodeEdge] = (),
+        judge: JudgeRef | None = None,
     ) -> None:
         """Atomically merge ``source_nodes`` into ``merged_node``.
 
@@ -537,6 +553,7 @@ class StorageBackend(Protocol):
         *,
         restored_at: datetime,
         delete_edge_ids: Sequence[str],
+        judge: JudgeRef | None = None,
     ) -> None:
         """Atomically undo one merge: put the sources back and destroy `survivor`.
 

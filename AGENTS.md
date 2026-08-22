@@ -80,6 +80,10 @@ Surface this information naturally: "Found 5 relevant nodes (2 topics, 2 facts, 
   `confirmed_at` carries human weight. Re-describing appends a version.
 - Approval is per graph — after `use_graph`, claim again if the response says
   your judge was unbound.
+- Once you have claimed one, the decisions you make carry it: who retired a
+  node, who brought it back, who asserted a contradiction, who wrote a
+  synthesised topic. You pass nothing — it comes from the session. Ingest is not
+  yet attributed.
 
 ### Multi-graph management (list_graphs, use_graph, delete_graph)
 - Use `list_graphs` to see available knowledge graphs and which is active

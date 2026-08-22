@@ -1,12 +1,14 @@
 # Review mode: who judged this, and can someone else check it
 
-**Status: §7, §1 and §2 built, the rest designed (2026-08-22).** Built so far:
+**Status: §7, §1, §2 and step 3 built, the rest designed (2026-08-23).** Built so far:
 §10.2.1's precondition (`ISSUES.md` #65); **steps 0a, 0b and 0c** — the whole of
 merge reversal, from capture through the futile-cycle refusal to `reverse_merge`
 itself; **step 1**, `apply_reflection(similarities=[…])` and the `ASSESSED`
 edge, which closes #64's presenting symptom; and **step 2**, the agent registry
 — `claim_agent`, the `agent` table on both backends, approval over elicitation
-and config, and the `epimemer` CLI. Steps 3 through 7 below are design.
+and config, and the `epimemer` CLI; and **step 3**, the judge threaded through every
+reflect-side writer and recorded on the episode, edge, value signal or node the
+decision landed on. Steps 4 through 7 below are design.
 Written
 before any code, at the user's direction; where an unbuilt section says "does",
 read "would". #65 went first because it is a defect in shipped code that
@@ -1400,7 +1402,7 @@ Each step is useful alone, and each is a precondition for the next.
 | 0c ✅ | `reverse_merge_tx` on the protocol and both backends (the hard delete lives *inside* it, §7.7), plus `reverse_merge`, the `reverse_merge` and `configure_merge` tools, and the two stored per-graph settings | Needs 0a to have run for anything to be reversible. Carries the never-expose guard in all three places. **The settings are not optional here**: 0b's refusal tells the agent the limit is configurable, and this is the step where that stops being dormant, so shipping reversal without them leaves a promise the code does not keep. **Built 2026-08-22**, minus the reversal `DecisionRecord` (step 5) and the `judge` argument (steps 2–4). |
 | 1 ✅ | `apply_reflection(similarities=[…])` + `ASSESSED` edge | #64's fix. Stops the re-nomination treadmill, and gives corroboration its first real input — **only from `one_claim` verdicts** (§1.2). Independent of everything below. **Built 2026-08-22**, with three refusals the design did not name and one ordering rule it did not state; see §10.2's amendment. |
 | 2 ✅ | `agent` table, approved-id settings, `claim_agent`, approval over `ctx.elicit` with `epimemer agents confirm` as fallback | Registry with nothing yet pointing at it. Full protocol on both backends, per the standing rule. **Built 2026-08-22**, with one gate split in two and one seeding rule widened; see §10.3's amendment. |
-| 3 | `judge` threaded through the reflect-side write paths | Smallest surface producing attributed decisions, so step 5 has something to read. |
+| 3 ✅ | `judge` threaded through the reflect-side write paths | Smallest surface producing attributed decisions, so step 5 has something to read. **Built 2026-08-23**, with two writers the design's list had missed and one field shape changed; see §10.4's amendment. |
 | 4 | `judge` threaded through ingest (§3.2), plus the require-a-judge setting (§3.3.1) | The bigger churn, and where the unreviewable priors are. **No cutover** — the setting decides, per graph, and ships default-off, so an upgraded server keeps writing exactly as before. |
 | 5 | `DecisionRecord` + journal writes + W&S §9 folded in (§9) | Makes *"what did this agent judge"* one query. |
 | 6 | `review(mode="all")`, capped, with tier-2 ordering (§6.2) | Works on the existing corpus and orders it usefully, since derived signals need no attribution. |
@@ -1722,6 +1724,72 @@ Check at `use_graph`, and again at write time — the second is cheap and is wha
 makes the first not a single point of failure.
 
 ### 10.4 Steps 3–4 — threading the judge
+
+> **✅ STEP 3 BUILT 2026-08-23.** `JudgeRef` reaches ten tools, five storage
+> transactions on both backends, and four carriers: `LifecycleEpisode`,
+> `NodeEdge`, `ValueSignal` and the node types. 60 tests over both backends.
+> Step 4 (ingest, and the require-a-judge setting) is still design.
+>
+> **Where it landed, and six things the design below did not say:**
+>
+> 1. **One nested pair, not two columns.** §4 has `judged_by` and `judge_desc`
+>    as separate fields. Built as a nested `JudgeRef`, because the pair is never
+>    meaningful apart — an agent id without the description version says *who*
+>    but not *what they claimed to be at the time*, which is the half that makes
+>    an old decision readable — and because four carriers would otherwise each
+>    have to remember two field names.
+> 2. **On the edge, not in its `metadata`.** §3.1's table routes judgment edges
+>    to `metadata`. `metadata` is a free-form bag, and a reader asking *who
+>    decided this* would have to know a string. `NodeEdge.judged_by` is a field.
+> 3. **Retiring and returning carry two judges.** `retired_by` **and**
+>    `restored_by` on the episode, because they are two decisions often months
+>    and sometimes two agents apart — and `restored_by` is written by the same
+>    single edit that writes `restored_at`, which is the only edit an episode
+>    ever receives.
+> 4. **`update` and `link` are in, and the design's list omitted both.**
+>    `update` is `supersede_by`'s twin — the same retirement with the same
+>    `because` — so attributing one and not the other puts a hole in *who
+>    retired this* that depends on which tool the agent happened to reach for.
+>    `link` asserts a relation, which is the same category as
+>    `record_contradiction`.
+> 5. **Nodes gained the field now rather than at step 4.** `apply_reflection`
+>    synthesises topics (parents, splits, enrichments) and `merge_facts` writes
+>    a survivor: those are step-3 writers producing *content*, so the node-level
+>    field had to exist for them. Step 4 sets the same field at ingest. A
+>    correction does **not** inherit it — the replacement is this agent's
+>    wording, and carrying the previous author over would credit them with a
+>    sentence they never wrote.
+> 6. **`tools.archive` needed nothing, and that is not a hole.** The design
+>    lists it among the writers, but it only *exports* candidates; the status
+>    flip is `apply_reflection(archivals=…)`, which is attributed.
+>
+> **Two rules decided while building, both about not overwriting a name:**
+> re-recording a pair that already has its edge returns `created: False` and
+> leaves the judge alone — a second agent calling the same tool has *confirmed*,
+> which is a review with a record of its own (§6.4), not an overwrite of
+> somebody else's field. And `ValueSignal.importance_judged_by` is the **latest**
+> judgment while each `reinforcements` entry names its own judge, because three
+> judgments by three agents compose into one number and the trail is the only
+> place they stay separable.
+>
+> **Approval is re-checked on every write**, as §10.3 asks. A revoked id records
+> as *unknown* rather than raising: recording the name would assert an approval
+> that no longer exists, and refusing is the graph-level policy talking, which
+> §3.3 puts elsewhere.
+>
+> **Two deliberate gaps, named rather than left to be discovered.**
+> `apply_reflection`'s `boundaries` and `relation_merges` both edit an existing
+> record in place. Stamping a boundary onto the provenance edge would overwrite
+> whoever ingested it, and relabelling has no slot at all. Both want a
+> **journal** row (§4, step 5) rather than an inline field, which is the
+> distinction §3.4 already draws: inline is the original judgment and never
+> changes; anything that revisits one belongs in the journal.
+>
+> Smaller: an unknown judge is **dropped** from retrieval responses rather than
+> sent as null. That is the opposite of what `confidence` does, and the
+> difference is what the absence says — a missing confidence is a caveat about
+> the claim, a missing judge says only that this graph does not record one,
+> which is true of every node in it.
 
 ```python
 class JudgeRef(BaseModel):
