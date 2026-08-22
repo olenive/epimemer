@@ -310,12 +310,16 @@ is the most expensive annotation on the retrieval path, and because its cost
 rises with the density of `similarity` edges — it would grow fastest on the
 graphs where it says most.
 
-**Today it says less than that implies**, and the reason is worth knowing before
-you read a count: nothing currently *writes* a `similarity` edge
-(`dev-docs/ISSUES.md` #64), so on every real graph the neighbourhood is the node
-itself and the number is a count of publishers behind one node. That makes it
-correct and cheap rather than wrong — but it is not yet the cross-restatement
-reading described here. See [docs/RETRIEVAL.md](docs/RETRIEVAL.md).
+**Until 2026-08-22 it said less than that implies**, and the reason is worth
+knowing before you read any count taken earlier: nothing *wrote* a `similarity`
+edge (`dev-docs/ISSUES.md` #64), so the neighbourhood was the node itself and
+the number was a count of publishers behind one node — correct and cheap rather
+than wrong, but not the cross-restatement reading described here.
+`apply_reflection(similarities=[…])` now writes one, and only on an agent's
+explicit `one_claim` verdict. Its companion `assessed` edge, written for **both**
+verdicts, is deliberately not read here: it records that a pair was judged, which
+is not a claim that the judgment agreed. See
+[docs/RETRIEVAL.md](docs/RETRIEVAL.md).
 
 ## Data Model (Minimal)
 

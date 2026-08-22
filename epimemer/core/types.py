@@ -235,6 +235,13 @@ class EdgeType(str, Enum):
     # never heard of this one sees an edge it does not handle rather than a
     # familiar edge that has quietly grown a second meaning.
     EVIDENCE_MERGED = "evidence_merged"
+    # fact ↔ fact: *somebody has judged this pair*, whichever way it went. Its
+    # own type rather than a flag on `similarity`, because the two have readers
+    # wanting opposite breadth: nomination wants every pair anybody assessed
+    # suppressed, corroboration wants only restatements of one claim. One edge
+    # serving both makes "these are different claims" corroborate — which is
+    # manufactured support, the worst failure this system has (#64 §1.2).
+    ASSESSED = "assessed"
     VARIANT_OF = "variant_of"                          # fact ↔ fact, across frames
     BASED_ON = "based_on"                              # metacontext → metacontext (association)
 
@@ -284,15 +291,22 @@ def lineage_edge_type_for(status: NodeStatus) -> EdgeType:
     return edge_type
 
 
-# Edges that flag a node for epistemic review. They are computed into retrieval
-# labels (superseded_candidate / evidence_stale / evidence_merged) rather than
-# traversed as knowledge, and are anchored to a node version (not migrated on
-# supersession or merge — a flag records what happened to *that* wording).
+# Edges that record epistemic review rather than knowledge. The operative
+# property is that they are **anchored to a node version** — never migrated on
+# supersession or merge, because each records what happened to, or was decided
+# about, *that* wording — and never traversed as knowledge.
+#
+# Three of them are also computed into retrieval labels
+# (superseded_candidate / evidence_stale / evidence_merged). `assessed` is the
+# first member with no label at all: nothing downstream should treat "a pair was
+# looked at" as a flag on either node. It is read by one caller, the nomination
+# sweep, and read there as a suppression index (#64 §1.2).
 REVIEW_EDGE_TYPES: frozenset[EdgeType] = frozenset(
     {
         EdgeType.SUPERSESSION_CANDIDATE,
         EdgeType.EVIDENCE_SUPERSEDED,
         EdgeType.EVIDENCE_MERGED,
+        EdgeType.ASSESSED,
     }
 )
 

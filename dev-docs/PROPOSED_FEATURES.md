@@ -283,14 +283,17 @@ first agent's work.
 the build order, what absence of a judge means, and why the judge never weights
 anything. Read that rather than this paragraph.
 
-**Step 1 is `apply_reflection(similarities=[…])`**, which is `ISSUES.md` #64's
-fix and is independent of everything above it: it stops declined pairs being
+**Step 1 was `apply_reflection(similarities=[…])`**, which is `ISSUES.md` #64's
+fix and was independent of everything above it: it stops declined pairs being
 re-nominated for ever, and gives corroboration the first real input its
-neighbourhood walk has ever had.
+neighbourhood walk has ever had. **Built 2026-08-22**, along with steps 0a–0c
+(merge reversal, §7). What remains is steps 2–7: the registry, attribution
+threaded through every write path, the journal, and `review()`.
 
-**Cost.** Step 1 is small. Steps 3–4 are signature churn across every write path
-rather than architecture, since `storage` is already threaded explicitly and the
-judge rides beside it. Step 5 (the journal) is the largest single piece.
+**Cost.** Step 1 was small, as expected. Steps 3–4 are signature churn across
+every write path rather than architecture, since `storage` is already threaded
+explicitly and the judge rides beside it. Step 5 (the journal) is the largest
+single piece.
 
 **Blockers.** None. **`ISSUES.md` #65 blocked step 1** — a correction re-pointed
 judgment edges onto wording nobody judged, latent only while nothing writes

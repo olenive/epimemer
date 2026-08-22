@@ -2,11 +2,15 @@
 
 Living issue tracker. **Last review: 2026-08-22.**
 
-Open: **64** (2026-08-21, decided — `dev-docs/REVIEW_MODE.md` is the design),
-**66** (2026-08-22, not blocking) and **67** (2026-08-22, latent), plus **16**
-and **58**, both deferred with their triggers stated. **65** was found and built on 2026-08-22, ahead of #64's
-first step, which is what would have made it reachable; its entry is kept until
-the next prune for the two carry-forwards it earned.
+Open: **66** (2026-08-22, not blocking), **67** (2026-08-22, latent) and
+**68** (2026-08-22, not blocking), plus **16** and **58**, both deferred with
+their triggers stated. **64** was built on 2026-08-22 — its entry is kept for
+the measurement it hands forward, and the larger design it grew into continues
+in `dev-docs/REVIEW_MODE.md`, steps 2–7. **65** was found and built on
+2026-08-22, ahead of #64's first step, which is what would have made it
+reachable; its entry is kept until the next prune for the two carry-forwards it
+earned. **68** was found by building #64's step 1 and is the third instance of
+#64's own shape: a judgment with no way to unmake it.
 **61**, **62** and **63** were built on 2026-08-21. **46**, **48** and **51** were built
 and merged (2026-08-19, -19, -20); their entries are deleted per the workflow
 below, and what they taught is kept here and in the docs they name —
@@ -2696,7 +2700,7 @@ a measured 0.8099.
 
 ---
 
-### Issue 64 — `EdgeType.SIMILARITY` has three readers and no writer — 🔴 OPEN (found 2026-08-21)
+### Issue 64 — `EdgeType.SIMILARITY` has three readers and no writer — ✅ BUILT (2026-08-22), the rest of the design continues in `REVIEW_MODE.md`
 
 Found while taking #52's outstanding corroboration migration, which is what
 sent anyone looking at the neighbourhood in the first place. The migration is
@@ -2779,6 +2783,37 @@ that also adds an agent registry, attribution on every write path, and a review
 loop for a second agent to audit a first. Written up in
 **`dev-docs/REVIEW_MODE.md`** (designed 2026-08-22, not built); this entry stays
 open until that document's step 1 lands.
+
+> **Built 2026-08-22.** `EdgeType.ASSESSED`,
+> `pipelines/reflection/similarity_decisions.py`,
+> `apply_reflection(similarities=[…])`, and `ALREADY_JUDGED_EDGE_TYPES` in
+> `contradiction_detection` — which is now
+> `SIMILARITY ∪ CONTRADICTION ∪ VARIANT_OF ∪ ASSESSED`, so `variant_of` starts
+> suppressing too, having always been a judgment about a pair and simply never
+> read as one. 57 tests over both backends. **This entry closes; the design it
+> grew into does not** — steps 2–7 of `REVIEW_MODE.md` (registry, attribution,
+> journal, `review()`) are still ahead, and that document is where they live.
+>
+> **The measurement that motivated it is now the thing to re-take.** Every
+> corroboration cost figure in `BENCHMARKS.md` was taken against synthetic edges
+> at a fixed degree, because real ones did not exist. They exist now, one
+> `one_claim` verdict at a time, so the fan-out is finally an observation rather
+> than an assumption — and worth re-measuring once a graph has accumulated a
+> few dozen.
+>
+> **What building it changed in the design** is written up in `REVIEW_MODE.md`
+> §10.2's amendment; the load-bearing one is that the *retired id is skipped*
+> rule was too broad by exactly half the problem. The recurrence sweep nominates
+> active/historical pairs, so refusing a historical side would have left the
+> treadmill running on the population where the graph is offering a claim beside
+> its own predecessor. The rule is `NOMINATED_STATUSES` on both sides — not a
+> widening, but the same rule stated properly: an `assessed` edge earns its
+> place by suppressing a nomination, so it belongs exactly where a nomination
+> could have happened.
+>
+> **And it left one thing it could not do** — nothing retracts a `one_claim`
+> verdict once the `similarity` edge is written. Filed as **#68** rather than
+> worked around.
 
 **Whichever is taken, #52's migration stays declined** — collapsing the walk
 would remove the reading that this issue exists to make reachable.
@@ -2994,6 +3029,54 @@ metadata would hide a load-bearing decision in a utility.
 
 ---
 
+### Issue 68 — nothing retracts a `one_claim` verdict — 🟠 OPEN (found 2026-08-22)
+
+Found on building #64's step 1, and it is #64's own shape arriving one tier
+down: *a judgment the system lets you make and never lets you unmake.* #66
+records two more of these; this is the third, and the first that touches the
+number retrieval reports.
+
+`apply_reflection(similarities=[{pair, verdict: "one_claim", …}])` writes a
+`similarity` edge. **Corroboration counts it as a second independent source.**
+Nothing removes one — not `apply_reflection`, not `link`, not `update`. So an
+agent that judged two facts one claim and later concludes it was wrong has no
+call to make.
+
+**What the code does about it today.** A later `distinct` on that pair is
+**refused**, with the standing edge's id in the reason. The alternative was
+worse: writing `assessed` beside a `similarity` that goes on corroborating a
+pair the agent has just disowned, and reporting success while doing it. The
+refusal costs no suppression — the standing edge already suppresses the pair —
+so what it buys is that the gap is visible at the moment somebody hits it,
+instead of being a count nobody can explain later.
+
+**Why it is not simply a delete.** The system's rule is that nothing is
+destroyed, and step 0c spent a whole design (`REVIEW_MODE.md` §7) arriving at a
+*reversal* for merges rather than a delete — capture the prior state, restore
+it, keep the history of both events. The same answer probably fits here and is
+much cheaper, because a similarity edge destroys nothing on the way in: the
+retraction wants a **writer**, not a delete. Two shapes worth weighing when it
+is taken:
+
+- **A `retracted` marker on the edge**, with corroboration skipping marked
+  edges. Append-only, keeps both judgments, and needs no new edge type — but it
+  makes an edge mutable, which §3.4 permits only for immutable denormalisations
+  and this would not be one.
+- **A third verdict**, `retracted`, writing a second `assessed` edge that
+  supersedes the first and a lineage edge onto the `similarity`. More faithful
+  to how the rest of the system records reversals, and more machinery than the
+  problem has yet earned.
+
+**Not blocking, and bounded by construction**: every `similarity` edge in the
+graph was written by an agent that had the pair in front of it and said the two
+were one claim, so the population that could ever need retracting is small and
+deliberate. Filed because the honest refusal is not a fix, and because a count
+that cannot be walked back is exactly the failure `fact_dedup`'s header calls
+the worst this system can produce — reached this time through a door that is
+supposed to be the *safe* alternative to merging.
+
+---
+
 ## Older carry-overs (open, low priority)
 
 From the original live-graph walkthrough (issues 1–5, otherwise resolved or kept
@@ -3144,6 +3227,7 @@ What to pick up, and what has to be true first:
 | ✅ | ~~62 (corroboration does not read validity)~~ | **Done 2026-08-21.** The one decision the row asked for turned out to be **mis-framed**: dropping and marking are not alternatives, because nothing is dropped from the *graph* — both claims stay, true of their own periods, and only a read-time integer narrows. So the count became honest and the uncounted look-alike comes back named in `adjacent_periods`, which is the half that carries new information: where a search returns one of the pair, that block is the only place the other appears at all. Two things the row had wrong. **Placement** it did not mention and which decides correctness: the comparison must run before the supporter hop, or the look-alike walks its own supporters — and their publishers — in behind it. **Cost** it stated as "no round trips": nearly, but the periods were being read at stage 4 and are needed at stage 1.5, so the provenance read splits in two, thirteen calls or twelve, still constant in result-set size. #52's inherited corroboration migration stays open and separate, as the row said |
 | ✅ | ~~65 (a correction re-points judgment edges)~~ | **Found and built 2026-08-22**, in that order and on the same day, because it is a defect in shipped code that #64's step 1 would have made reachable — fixing it after would have meant shipping it knowingly. `JUDGMENT_EDGE_TYPES` in `core/types.py`, consulted by `migration_disposition` before the status branch, so `similarity`, `contradiction` and `variant_of` are anchored on **every** retirement. Four lines, because both backends derive their answers from that one function and hold no policy of their own. **Two things the design had wrong surfaced only on building it**: `REVIEW_MODE.md` §10.2 and §10.2.1 gave opposite answers for `similarity` on a merge, and the issue's stated reasoning (*a correction changes the wording, not the claim*) contradicts `migration_disposition`'s own account of a correction. The verdict survived both; the reason did not, and the real one — the **substantive** correction, "500,000" → "5,000,000", leaving a counterpart judged against a number that is gone — is what shows a merge belongs in the same rule. Carry-forward: **when a fix is derived from an argument, check the argument against the code before trusting the fix** — right for the wrong reason generalises wrongly |
 | ✅ | ~~64's steps 0a–0c (merge reversal)~~ | **Built 2026-08-22**, in one sitting, because the three depend on each other in a way that made any subset useless: 0a captures the pre-merge edge partition (destroyed by migration, so **capture or lose**), 0b refuses an oscillating merge, and both are **dormant** until 0c writes the `restored_at` and reads the payload. `reverse_merge` restores the sources and **deletes** the survivor — the only hard delete in the system, and it lives *inside* `reverse_merge_tx` rather than behind a `delete_node` method, because the safest way never to expose a hard delete is not to have one. New tools: `reverse_merge`, `configure_merge`. Deferred by design: the reversal `DecisionRecord` (step 5) and the `judge` argument (steps 2–4). Building it found **#67**, a backend divergence that made a second merge/reverse cycle look like the first — which would have blinded `merge_cycle_limit` to the exact oscillation it exists to catch |
-| **next** | **64 (`similarity` has no writer)** | **Found 2026-08-21**, while taking #52's outstanding corroboration migration — which is declined on the strength of it, with no code. The migration assumed a populated neighbourhood that merging would shrink toward identity; the neighbourhood is **empty on every real graph** (0 of 4,386 edges on `memory`, 0 of 1,028 on `petritype-server`), so collapsing the walk would change no count and would delete the only consumer of a judgment nothing yet records. Both of the migration's stated payoffs were already gone: the Saint Petersburg caveat was collected by #62 through `adjacent_periods`, and "stops over-reporting through a wrong edge" describes a trade `corroboration.py` argued for rather than a defect. **Merging structurally cannot replace the walk** — `merge_refusal` refuses every event, so identity can never count two publishers on one occurrence, the paradigm case the whole annotation exists for. The decision this row wants is *which surface records the judgment*: a tenth `apply_reflection` argument (recommended), a write on `merge_facts`' refusal, or a `record_similarity` tool. Carry-forward: **an edge type with readers and no writer is not a feature with low adoption, it is a feature that has never run** — three documents described its cost curve and one named the wrong writer |
+| ✅ | ~~64 (`similarity` has no writer)~~ | **Found 2026-08-21**, while taking #52's outstanding corroboration migration — which is declined on the strength of it, with no code. The migration assumed a populated neighbourhood that merging would shrink toward identity; the neighbourhood is **empty on every real graph** (0 of 4,386 edges on `memory`, 0 of 1,028 on `petritype-server`), so collapsing the walk would change no count and would delete the only consumer of a judgment nothing yet records. Both of the migration's stated payoffs were already gone: the Saint Petersburg caveat was collected by #62 through `adjacent_periods`, and "stops over-reporting through a wrong edge" describes a trade `corroboration.py` argued for rather than a defect. **Merging structurally cannot replace the walk** — `merge_refusal` refuses every event, so identity can never count two publishers on one occurrence, the paradigm case the whole annotation exists for. The decision this row wants is *which surface records the judgment*: a tenth `apply_reflection` argument (recommended), a write on `merge_facts`' refusal, or a `record_similarity` tool. Carry-forward: **an edge type with readers and no writer is not a feature with low adoption, it is a feature that has never run** — three documents described its cost curve and one named the wrong writer. **Built 2026-08-22** as `REVIEW_MODE.md` step 1, taking the recommended surface: `EdgeType.ASSESSED`, `apply_reflection(similarities=[…])`, and a nomination sweep that now reads `SIMILARITY ∪ CONTRADICTION ∪ VARIANT_OF ∪ ASSESSED`. The split — both verdicts suppress, only `one_claim` corroborates — is the design, and building it corrected one rule: *retired ids are skipped* was too broad by exactly half the problem, since the recurrence sweep nominates active/historical pairs, so the gate is `NOMINATED_STATUSES` on both sides. Left behind: **#68**, nothing retracts a `one_claim` verdict |
+| **next** | 68 (no retraction), or `REVIEW_MODE.md` step 2 | 68 is small and bounded — every `similarity` edge was written deliberately, so the population that could need retracting is tiny — and it is the third instance of #64's shape after #66's two. Step 2 (the agent registry) is the larger thread and needs no precondition. Neither blocks the other |
 | designed | inference merge, advisories, node notes | Not on this board — `dev-docs/WARNINGS_AND_SETTINGS.md`, designed 2026-08-21 and deliberately unbuilt. The duplication it addresses does not exist yet: 123 active inferences across both real graphs yield 5,053 pairs and **zero** at the nomination bar. It becomes real once fact merges start collecting inferences onto one survivor |
 | deferred | 16, 58 | 16: the server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`). 58: a graph large enough that the FTS backfill inside `connect()` is worth reporting on |

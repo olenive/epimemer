@@ -313,6 +313,23 @@ useful:
   pass `supersessions=[{old_id, by_id}]`. Resolving a loser automatically clears
   the winner's `contested` / `superseded_candidate` labels. Escalate anything you
   shouldn't decide alone to the user.
+- **Record the pairs you decline, or they come back forever.** A nominated pair
+  you take no other action on needs
+  `apply_reflection(similarities=[{pair, verdict, because}])` — otherwise nothing
+  records that you looked, and the next `reflect` offers it again. Two verdicts:
+  - `"one_claim"` — the two really do say the same thing and something blocked
+    the merge (an event, an unjudged `claim_kind`). Writes a `similarity` edge,
+    **which corroboration counts as a second source**, plus `assessed`.
+  - `"distinct"` — different claims that merely look alike. Writes `assessed`
+    only, which corroboration never reads.
+
+  Both stop the pair being nominated, so the suppression is never a reason to
+  pick `one_claim`. Reach for it only where you would have merged: recording a
+  decline as a similarity is how a graph starts manufacturing its own support.
+  `because` is required, and anything refused comes back in
+  `similarities_refused` — a cross-frame pair wants `record_variant` instead,
+  and a pair already judged `one_claim` cannot be walked back here, so raise
+  that with the user.
 - **Source/tag/entity consolidation** is ordinary topic-merge — they're Topics, so
   pass `merges=[...]` for synonymous ones.
 - **Relation consolidation**: for `similar_relations` you judge synonymous, pass

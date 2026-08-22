@@ -394,6 +394,23 @@ this inherits its vocabulary limits like everything else here.
 > thing that puts real similarity edges in a graph, and the degree column
 > becomes an observation the first time it does. Re-measure then, against a
 > graph whose edges came from judgments rather than from `--similarity-degree`.
+>
+> > **2026-08-22 — the writer exists now.**
+> > `apply_reflection(similarities=[{pair, verdict: "one_claim", …}])` writes a
+> > `similarity` edge, one agent judgment at a time (#64 step 1). So the degree
+> > column stops being a dial the moment a graph accumulates a few dozen, and
+> > **the re-measurement above is now takeable rather than hypothetical** —
+> > against real degrees, which the census can read directly.
+> >
+> > Two things to hold on to when it is taken. Real degree will be **far below
+> > 10** for a long while: the edge requires an agent to have had the pair in
+> > front of it and said the two are one claim, so it accumulates at the rate
+> > pairs are judged, not at the rate facts are stored. And the companion
+> > `assessed` edge — written for *both* verdicts, so it accumulates several
+> > times faster — costs corroboration nothing, because corroboration does not
+> > read it. If a future measurement shows this cost climbing, that is the first
+> > thing to check: `assessed` in the neighbourhood walk would be a bug, not a
+> > workload.
 
 
 Reproduce with, one run per degree:

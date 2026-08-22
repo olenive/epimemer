@@ -27,10 +27,24 @@ from epimemer.pipelines.reflection.pair_scoring import (
 from epimemer.storage.protocol import StorageBackend
 
 __all__ = [
+    "ALREADY_JUDGED_EDGE_TYPES",
     "SCORE_BLOCK",
     "detect_contradictions",
     "similar_pairs",
 ]
+
+
+# An edge of any of these between two facts means the pair has been put in front
+# of somebody and decided. Nominating it again would be asking a question that
+# has an answer. Deliberately wider than the edges corroboration reads: this set
+# is about *suppression*, and `assessed` and `variant_of` suppress without
+# supporting (#64 §1.2).
+ALREADY_JUDGED_EDGE_TYPES: tuple[EdgeType, ...] = (
+    EdgeType.SIMILARITY,
+    EdgeType.CONTRADICTION,
+    EdgeType.VARIANT_OF,
+    EdgeType.ASSESSED,
+)
 
 
 async def detect_contradictions(
@@ -48,8 +62,8 @@ async def detect_contradictions(
     - Contradiction (opposing claims about the same thing)
     - Recurrence, when one side is HISTORICAL: the same claim true again (#53)
 
-    Returns candidate pairs for further analysis. Excludes pairs already
-    linked by SIMILARITY or CONTRADICTION edges.
+    Returns candidate pairs for further analysis. Excludes pairs anybody has
+    already judged — see `already_linked` below.
 
     `statuses` widens what is compared, and the default keeps this pass to the
     active set as before. Reflect asks twice rather than once: an active pair
@@ -88,12 +102,19 @@ async def detect_contradictions(
         fact.id: by_item[fact.id][0].vector for fact in facts if by_item[fact.id]
     }
 
-    # Build a set of already-linked pairs (by SIMILARITY or CONTRADICTION edges).
-    # Four queries for the whole fact set: the edge type is part of the query
-    # rather than a filter over every edge each fact has.
+    # Every pair somebody has already judged, whichever way the judgment went.
+    # `ASSESSED` is what makes the set complete: before it there was no writer
+    # for the *compatible* verdict, so a declined pair was recorded nowhere and
+    # came back on every pass — thirteen of eighteen, on the graph that
+    # motivated #64. The other three are the pairs that got an action.
+    #
+    # Eight queries for the whole fact set: the edge type is part of the query
+    # rather than a filter over every edge each fact has. If that ever costs
+    # more than it saves, the lever is one untyped `get_edges_for` per direction
+    # — a trade to make on a measurement, not in advance.
     already_linked: set[frozenset[str]] = set()
     fact_ids = [fact.id for fact in facts]
-    for edge_type in (EdgeType.SIMILARITY, EdgeType.CONTRADICTION):
+    for edge_type in ALREADY_JUDGED_EDGE_TYPES:
         for direction in ("from", "to"):
             found = await storage.get_edges_for(
                 fact_ids, direction=direction, edge_type=edge_type

@@ -64,6 +64,11 @@ const EDGE_MEANINGS: Record<string, keyof SemanticPalette> = {
   // a status the backend had grown drew as a kind the frontend never heard of.
   temporally_followed_by: "lineage",
   merged_into: "lineage",
+  // A judgment about a pair, written whichever way the verdict went (#64). It
+  // is here for the reason the two above are: the backend grew an edge type,
+  // and a type this table has never heard of draws as `UNKNOWN_KIND` grey —
+  // which is the #55 failure, one layer over.
+  assessed: "assessed",
 };
 
 /** Fallback for a kind this build has never heard of: a plain neutral. */

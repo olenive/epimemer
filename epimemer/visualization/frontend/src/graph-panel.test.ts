@@ -46,6 +46,11 @@ describe("statusOpacity", () => {
 // has never heard of draws in the unknown-kind neutral rather than as lineage.
 describe("edgeColor", () => {
   const THEMES: Theme[] = ["light", "dark"];
+  // The neutral `graph-panel` falls through to for a kind it has never heard
+  // of. Spelled here rather than imported because the point is to catch the
+  // table and the enum drifting apart, and a shared constant would move with
+  // whichever side changed.
+  const UNKNOWN_KIND = "#9ca3af";
 
   for (const theme of THEMES) {
     it(`draws a world-change transition as lineage (${theme})`, () => {
@@ -56,6 +61,19 @@ describe("edgeColor", () => {
         .toBe(semanticPaletteFor(theme).lineage);
       expect(edgeColor("temporally_followed_by", theme))
         .toBe(edgeColor("superseded_by", theme));
+    });
+
+    it(`draws a judged pair apart from a corroborating one (${theme})`, () => {
+      // `assessed` is written for both verdicts — "one claim" and "different
+      // claims" alike — while `similarity` is written only for the first, and
+      // only the first is counted as support. Two edge types that mean
+      // different things must not read as one colour, and neither may fall
+      // through to the unknown-kind neutral.
+      expect(edgeColor("assessed", theme))
+        .toBe(semanticPaletteFor(theme).assessed);
+      expect(edgeColor("assessed", theme))
+        .not.toBe(edgeColor("similarity", theme));
+      expect(edgeColor("assessed", theme)).not.toBe(UNKNOWN_KIND);
     });
   }
 });

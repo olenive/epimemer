@@ -1262,6 +1262,7 @@ async def memory_apply_reflection(
     judgments: list[dict] | None = None,
     relation_merges: list[dict] | None = None,
     boundaries: list[dict] | None = None,
+    similarities: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
 ) -> str:
     """Apply your reflection decisions to the memory graph.
@@ -1269,6 +1270,22 @@ async def memory_apply_reflection(
     Call this after reviewing reflect results. All arguments optional.
 
     Args:
+        similarities: What you decided about a pair from reflect's
+            similar_pairs that you are **not** otherwise acting on — the verdict
+            that previously had no writer, which is why the same pairs kept
+            coming back. Each: {pair: [a_id, b_id], verdict: "one_claim" |
+            "distinct", because: str}.
+            Use "one_claim" when the two really do say the same thing and
+            something blocked the merge — an event, or an unjudged claim_kind;
+            it writes a `similarity` edge, which **corroboration counts**, plus
+            an `assessed` edge.
+            Use "distinct" when they merely look alike; it writes `assessed`
+            only, and writes nothing corroboration reads. Recording a decline as
+            a similarity is how a graph starts manufacturing its own support, so
+            reach for "one_claim" only when you would have merged.
+            Either way the pair stops being nominated. `because` is required.
+            Pairs that could not be recorded come back in `similarities_refused`
+            with a reason — a cross-frame pair wants record_variant instead.
         parents: Consolidate similar topics under a new parent (non-destructive;
             children stay active). Each: {children_ids: [str], content: str}
             content = your synthesized parent description.
@@ -1338,6 +1355,7 @@ async def memory_apply_reflection(
             judgments=judgments,
             relation_merges=relation_merges,
             boundaries=boundaries,
+            similarities=similarities,
             merge_similarity_threshold=merge_similarity_threshold,
         ),
         ctx,
@@ -1346,8 +1364,17 @@ async def memory_apply_reflection(
         f"supersessions={len(supersessions or [])} archivals={len(archivals or [])} "
         f"judgments={len(judgments or [])} "
         f"relation_merges={len(relation_merges or [])} "
-        f"boundaries={len(boundaries or [])}",
-        lambda r, m: f"applied={m.nodes_returned}",
+        f"boundaries={len(boundaries or [])} "
+        f"similarities={len(similarities or [])}",
+        # A refusal should reach the operator's log, not only the agent's
+        # response — a decision silently not recorded is the whole of #64.
+        lambda r, m: (
+            f"applied={m.nodes_returned}"
+            + (
+                f" similarities_refused={len(r['similarities_refused'])}"
+                if r["similarities_refused"] else ""
+            )
+        ),
     )
 
 

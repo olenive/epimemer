@@ -882,6 +882,15 @@ intervals will ride on `sourced_from` edges that no longer go anywhere.
 >
 > Latent when found — both real graphs held zero edges of all three types — and
 > fixed before #64's step 1, which is what would have started writing them.
+>
+> > **2026-08-22, on building that step.** `assessed` joins them, through
+> > `REVIEW_EDGE_TYPES` rather than `JUDGMENT_EDGE_TYPES`: it needs the same
+> > anchoring *and* the exclusion from traversal, and
+> > `NON_KNOWLEDGE_EDGE_TYPES` is consulted first, so one home covers both. It
+> > is that set's first member with **no retrieval label** — nothing downstream
+> > should read "somebody judged this pair" as a flag on either node. §3's
+> > standing advice, *record `similarity` and keep both*, now has a call behind
+> > it: `apply_reflection(similarities=[…])`, on a `one_claim` verdict.
 
 ### 13.6 The method that found it
 

@@ -142,6 +142,12 @@ export interface SemanticPalette {
   /** Edge meanings with no node kind of their own. */
   similarity: string;
   abstracts: string;
+  /** A pair somebody judged. The similarity hue drained of saturation, which
+   *  is the relationship: same subject, no assertion of support. `assessed` is
+   *  written for both verdicts — including "these are different claims" — so
+   *  drawing it *as* similarity would show agreement where a decline was
+   *  recorded, and drawing it in an unrelated hue would hide the connection. */
+  assessed: string;
   /** Lineage rather than knowledge: superseded_by, temporally_followed_by,
    *  merged_into. */
   lineage: string;
@@ -159,6 +165,7 @@ const SEMANTIC_LIGHT: SemanticPalette = {
   selection: "#ec4899",
   similarity: "#38bdf8",
   abstracts: "#facc15",
+  assessed: "#7ba7bd",
   lineage: "#6b7280",
 };
 
@@ -174,6 +181,7 @@ const SEMANTIC_DARK: SemanticPalette = {
   selection: "#ec4899",
   similarity: "#38bdf8",
   abstracts: "#facc15",
+  assessed: "#6b93a8",
   lineage: "#6b7280",
 };
 

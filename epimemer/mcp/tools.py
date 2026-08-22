@@ -2486,10 +2486,19 @@ async def apply_reflection(
     judgments: list[dict] | None = None,
     relation_merges: list[dict] | None = None,
     boundaries: list[dict] | None = None,
+    similarities: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
 ) -> tuple[dict, ResponseMeta]:
     """Apply agent-provided reflection decisions to the graph.
 
+    similarities: [{pair: [a_id, b_id], verdict: "one_claim" | "distinct",
+        because: str}] — what you decided about a nominated pair you are not
+        otherwise acting on. ``one_claim`` writes ``similarity`` **and**
+        ``assessed``; ``distinct`` writes ``assessed`` only, and the split is
+        the point: ``similarity`` is what corroboration counts, so recording
+        *"these are different claims"* as one would manufacture support. Both
+        stop the pair being nominated again. ``because`` is required. Anything
+        not recorded comes back in ``similarities_refused`` with a reason.
     parents: [{children_ids: [str], content: str}] — synthesized parent topics
     splits: [{topic_id: str, subtopics: [str]}] — split a broad topic
     enrichments: [{topic_id: str, new_content: str}] — improved descriptions
@@ -2544,6 +2553,10 @@ async def apply_reflection(
         supersede_node,
     )
     from epimemer.pipelines.reflection.boundaries import apply_boundary
+    from epimemer.pipelines.reflection.similarity_decisions import (
+        SimilarityRefused,
+        apply_similarity_decision,
+    )
     from epimemer.pipelines.reflection.topic_consolidation import all_pairs_above_threshold
 
     parents_created = 0
@@ -2554,7 +2567,30 @@ async def apply_reflection(
     supersessions_applied = 0
     model_id = embedding_provider.model_id
 
-    # 1. Create parent topics for similar groups
+    # 1. Record what was decided about nominated pairs. **First**, and that is
+    #    the #65 anchoring rule applied to a batch: a judgment is about the
+    #    wording it was made against, and steps 4-7 below can retire a node
+    #    named here. Recording afterwards would either lose the judgment to a
+    #    skip or attach it to a replacement nobody assessed.
+    similarities_recorded = 0
+    similarity_edges_written = 0
+    similarities_refused: list[dict] = []
+    for spec in (similarities or []):
+        pair = spec["pair"]
+        outcome = await apply_similarity_decision(
+            storage,
+            a_id=pair[0],
+            b_id=pair[1],
+            verdict=spec["verdict"],
+            because=spec.get("because", ""),
+        )
+        if isinstance(outcome, SimilarityRefused):
+            similarities_refused.append(outcome.model_dump(mode="json"))
+        else:
+            similarities_recorded += 1
+            similarity_edges_written += outcome.edges_created
+
+    # 2. Create parent topics for similar groups
     for parent_spec in (parents or []):
         children_ids: list[str] = parent_spec["children_ids"]
         content: str = parent_spec["content"]
@@ -2585,7 +2621,7 @@ async def apply_reflection(
         )
         parents_created += 1
 
-    # 2. Split broad topics into subtopics
+    # 3. Split broad topics into subtopics
     for split_spec in (splits or []):
         topic_id: str = split_spec["topic_id"]
         subtopic_contents: list[str] = split_spec["subtopics"]
@@ -2612,7 +2648,7 @@ async def apply_reflection(
         )
         topics_split += 1
 
-    # 3. Enrich topic descriptions
+    # 4. Enrich topic descriptions
     for enrich_spec in (enrichments or []):
         topic_id = enrich_spec["topic_id"]
         new_content: str = enrich_spec["new_content"]
@@ -2637,7 +2673,7 @@ async def apply_reflection(
         )
         topics_enriched += 1
 
-    # 4. Merge near-duplicate topics into one (guarded by a high similarity bar)
+    # 5. Merge near-duplicate topics into one (guarded by a high similarity bar)
     for merge_spec in (merges or []):
         source_ids: list[str] = merge_spec["source_ids"]
         content = merge_spec["content"]
@@ -2673,7 +2709,7 @@ async def apply_reflection(
         await merge_nodes(sources, merged_topic, storage, embedding_provider)
         topics_merged += 1
 
-    # 5. Resolve flagged/contested nodes by superseding the loser with an existing
+    # 6. Resolve flagged/contested nodes by superseding the loser with an existing
     #    winner (the resolution action of the review loop). Missing or self-pairs
     #    are skipped rather than raised so a batch partially applies cleanly.
     for supersede_spec in (supersessions or []):
@@ -2690,7 +2726,7 @@ async def apply_reflection(
         )
         supersessions_applied += 1
 
-    # 6. Archive the approved trivial nodes: export first, then one atomic flip.
+    # 7. Archive the approved trivial nodes: export first, then one atomic flip.
     #    Ordering matters — the export is the archive, so it must be taken
     #    before anything about the nodes changes.
     to_archive: list[EpistemicNode] = []
@@ -2711,7 +2747,7 @@ async def apply_reflection(
             at=datetime.now(timezone.utc),
         )
 
-    # 7. Re-judge importance. Separate from archivals on purpose: archiving is a
+    # 8. Re-judge importance. Separate from archivals on purpose: archiving is a
     #    status verdict wanting human approval, while a change of degree is
     #    something the agent may conclude on its own.
     judgments_applied = 0
@@ -2728,7 +2764,7 @@ async def apply_reflection(
             continue        # unknown node or related id — skipped, as above
         judgments_applied += 1
 
-    # 8. Consolidate synonymous user relationship labels: relabel edges in place
+    # 9. Consolidate synonymous user relationship labels: relabel edges in place
     #    (edges are not versioned).
     relations_consolidated = 0
     edges_relabeled = 0
@@ -2745,7 +2781,7 @@ async def apply_reflection(
         if applied:
             relations_consolidated += 1
 
-    # 9. Accept boundaries reflect proposed. Last because it is the only step
+    # 10. Accept boundaries reflect proposed. Last because it is the only step
     #    that edits an existing assertion rather than adding one, so anything
     #    that moves a node's status above has already happened.
     boundaries_applied = 0
@@ -2766,6 +2802,9 @@ async def apply_reflection(
             boundaries_refused.append(refusal.model_dump(mode="json"))
 
     result = {
+        "similarities_recorded": similarities_recorded,
+        "similarity_edges_written": similarity_edges_written,
+        "similarities_refused": similarities_refused,
         "parents_created": parents_created,
         "topics_split": topics_split,
         "topics_enriched": topics_enriched,
@@ -2782,7 +2821,7 @@ async def apply_reflection(
     }
     meta = ResponseMeta(
         nodes_returned=(
-            parents_created + topics_split + topics_enriched
+            similarities_recorded + parents_created + topics_split + topics_enriched
             + topics_merged + supersessions_applied + len(to_archive)
             + judgments_applied + relations_consolidated + boundaries_applied
         ),
@@ -3104,19 +3143,6 @@ async def _metacontext_labels(node_id: str, storage: StorageBackend) -> list[str
     return (await _metacontext_labels_for([node_id], storage))[node_id]
 
 
-async def _symmetric_edge_between(
-    a_id: str, b_id: str, edge_type: EdgeType, storage: StorageBackend
-) -> NodeEdge | None:
-    """An existing edge of ``edge_type`` between a and b, in either direction."""
-    for edge in await storage.get_edges_from(a_id, edge_type=edge_type):
-        if edge.dst_id == b_id:
-            return edge
-    for edge in await storage.get_edges_from(b_id, edge_type=edge_type):
-        if edge.dst_id == a_id:
-            return edge
-    return None
-
-
 async def _ensure_symmetric_edge(
     a_id: str, b_id: str, edge_type: EdgeType, storage: StorageBackend
 ) -> tuple[str, bool]:
@@ -3126,7 +3152,11 @@ async def _ensure_symmetric_edge(
     pair regardless of direction, so repeated recording does not accumulate
     duplicates.
     """
-    existing = await _symmetric_edge_between(a_id, b_id, edge_type, storage)
+    from epimemer.pipelines.reflection.similarity_decisions import (
+        symmetric_edge_between,
+    )
+
+    existing = await symmetric_edge_between(a_id, b_id, edge_type, storage)
     if existing is not None:
         return existing.id, False
     edge = NodeEdge(src_id=a_id, dst_id=b_id, type=edge_type)

@@ -289,14 +289,20 @@ of every other annotation here, and its price rises with the density of
 `dev-docs/BENCHMARKS.md` has the table, measured against edges assigned at a
 fixed degree.
 
-**One thing to know before reading any count today.** Nothing in the system
-writes a `similarity` edge — the neighbourhood bullet above describes a walk
-whose input no tool produces, and both real graphs carry zero of them
-(`dev-docs/ISSUES.md` #64). So every count you will currently see is the
-identity reading: the distinct publishers behind *that node's own* documents,
-with no restatement folded in. The number is honest and the annotation is
-cheaper than the table suggests; what it is not yet is the cross-restatement
-count this section describes.
+**One thing to know before reading a count on an older graph.** Until
+2026-08-22 nothing in the system wrote a `similarity` edge: the neighbourhood
+bullet above described a walk whose input no tool produced, and both real graphs
+carried zero of them (`dev-docs/ISSUES.md` #64). Any count taken before then is
+the identity reading — the distinct publishers behind *that node's own*
+documents, with no restatement folded in. Honest, and cheaper than the table
+suggests, but not the cross-restatement count this section describes.
+
+`apply_reflection(similarities=[…])` is what writes them now, and only on an
+agent's explicit `one_claim` verdict about a pair `reflect` nominated. The
+companion `assessed` edge, written for **both** verdicts, is deliberately not
+read here: it records that somebody judged a pair, which is not a claim that
+they agreed — see [REFLECTION.md](REFLECTION.md) §6. So the number rises as
+judgments accumulate, and only ever on pairs somebody said were one claim.
 
 ### Frame scoping
 

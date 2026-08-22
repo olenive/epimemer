@@ -94,7 +94,7 @@ Ten phases, ten keys. Each is a worklist, not a verdict:
 | `similar_pairs` | topics above the similarity threshold | `merges` or `parents` |
 | `split_candidates` | topics whose material has high internal variance | `splits` |
 | `enrichment_candidates` | thin descriptions with rich underlying material | `enrichments` |
-| `contradictions` | same-frame active fact pairs above 0.80 — the one nomination bar, which `merge_facts` also gates on, so a pair listed here is mergeable | `record_contradiction`, then `supersessions` |
+| `contradictions` | same-frame active fact pairs above 0.80 — the one nomination bar, which `merge_facts` also gates on, so a pair listed here is mergeable | `record_contradiction`, then `supersessions`; or `similarities` where neither fits |
 | `recurrences` | an active claim beside its own `historical` twin | `restore` |
 | `unsound_inferences` | inferences whose premises no source puts in one period | agent judgment |
 | `boundary_proposals` | where a succession lets a period close or open | `boundaries` |
@@ -203,10 +203,11 @@ deleted, and `restore` reverses it.
 
 ## 6. What `apply_reflection` writes
 
-Nine kinds of decision, all optional, applied in one call:
+Ten kinds of decision, all optional, applied in one call:
 
 | Argument | Effect |
 |---|---|
+| `similarities` | record what you decided about a nominated pair |
 | `parents` | synthesise a parent topic over children |
 | `splits` | split a broad topic into subtopics |
 | `enrichments` | replace a thin topic description |
@@ -231,6 +232,41 @@ silently resets whatever it forgets to name — and the specific thing it forgot
 
 Unknown or already-retired ids are **skipped**, not errors. Refused boundaries
 come back in `boundaries_refused` with a reason.
+
+### `similarities` — the verdict that used to have no writer
+
+Six of `reflect`'s seven verdicts always had an action. The seventh —
+*compatible*, these merely look alike — had none, so a decline was recorded
+nowhere and the same pair was nominated again on every pass. Measured
+2026-08-21: of eighteen pairs nominated on one real graph, five merged and
+**thirteen were declined and came straight back.**
+
+Each entry is `{pair: [a_id, b_id], verdict, because}`, and the verdict picks
+what is written:
+
+| Verdict | Use it when | Writes |
+|---|---|---|
+| `one_claim` | the two really do say the same thing and something blocked the merge — an event, or an unjudged `claim_kind` | `similarity` **and** `assessed` |
+| `distinct` | they are different claims that merely look alike | `assessed` only |
+
+**Both stop the pair being nominated; only `one_claim` corroborates.** That split
+is the whole design. A decline is two populations, and one edge cannot serve
+both readers: the nomination sweep wants every judged pair suppressed, while
+`corroboration.py` wants only restatements of one claim. Record a decline as a
+`similarity` and *"these are different claims"* starts counting as a second
+source — manufactured support, which is the failure this system treats as its
+worst, since a false unification does not lose information, it inverts the
+quantity corroboration measures. So reach for `one_claim` only where you would
+have merged.
+
+`because` is required. Anything not recorded comes back in
+`similarities_refused` with a reason rather than being applied to something
+adjacent — a cross-frame pair wants `record_variant`, and a pair already judged
+`one_claim` cannot be walked back here, because nothing in this system deletes.
+
+Similarities are applied **first** in the call, before any argument that can
+retire a node. A judgment is about the wording it was made against, so a
+supersession later in the same batch must not turn it into a skip.
 
 ---
 

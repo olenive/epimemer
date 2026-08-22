@@ -1,9 +1,11 @@
 # Review mode: who judged this, and can someone else check it
 
-**Status: §7 built, the rest designed (2026-08-22).** Built so far: §10.2.1's
-precondition (`ISSUES.md` #65) and **steps 0a, 0b and 0c** — the whole of merge
-reversal, from capture through the futile-cycle refusal to `reverse_merge`
-itself. Steps 1 through 7 below are design. Written
+**Status: §7 and §1 built, the rest designed (2026-08-22).** Built so far:
+§10.2.1's precondition (`ISSUES.md` #65); **steps 0a, 0b and 0c** — the whole of
+merge reversal, from capture through the futile-cycle refusal to `reverse_merge`
+itself; and **step 1**, `apply_reflection(similarities=[…])` and the `ASSESSED`
+edge, which closes #64's presenting symptom. Steps 2 through 7 below are design.
+Written
 before any code, at the user's direction; where an unbuilt section says "does",
 read "would". #65 went first because it is a defect in shipped code that
 step 1 would make reachable, and fixing it after would mean shipping it
@@ -73,7 +75,7 @@ verdicts have an action. The seventh does not.
 | recurs | `restore` | ✅ |
 | contradicts | `record_contradiction` | ✅ |
 | cross-frame | `record_variant` | ✅ |
-| **compatible** | **nothing — by omission, not by design** | ❌ |
+| **compatible** | `apply_reflection(similarities=[…])` | ✅ (#64 step 1, 2026-08-22) |
 
 `grep EdgeType.SIMILARITY` returns three sites and all three read. Measured
 2026-08-21: **0 similarity edges of 4,386 on `memory`, 0 of 1,028 on
@@ -1313,7 +1315,7 @@ Each step is useful alone, and each is a precondition for the next.
 | **0a** ✅ | **`merge_nodes` captures the pre-merge edge partition** as `MergeUndo` on the survivor, with chain eviction past `merge_undo_depth` (§7.4, §7.9) | **Capture or lose.** The partition exists only at merge time (§7.1), so every merge taken before this lands is permanently irreversible. The only step with a deadline. **Built 2026-08-22**; the five merges of 2026-08-21 predate it and stay irreversible. |
 | **0b** ✅ | **`merge_cycle_limit` in `merge_refusal`** (§7.8) | Same file, same sitting, no new storage — the lifecycle episodes it counts already exist. Cheap now, and near-impossible to reconstruct once an oscillation has run. **Built 2026-08-22**; live since 0c, which is what writes the `restored_at` it counts. |
 | 0c ✅ | `reverse_merge_tx` on the protocol and both backends (the hard delete lives *inside* it, §7.7), plus `reverse_merge`, the `reverse_merge` and `configure_merge` tools, and the two stored per-graph settings | Needs 0a to have run for anything to be reversible. Carries the never-expose guard in all three places. **The settings are not optional here**: 0b's refusal tells the agent the limit is configurable, and this is the step where that stops being dormant, so shipping reversal without them leaves a promise the code does not keep. **Built 2026-08-22**, minus the reversal `DecisionRecord` (step 5) and the `judge` argument (steps 2–4). |
-| 1 | `apply_reflection(similarities=[…])` + `ASSESSED` edge | #64's fix. Stops the re-nomination treadmill, and gives corroboration its first real input — **only from `one_claim` verdicts** (§1.2). Independent of everything below. |
+| 1 ✅ | `apply_reflection(similarities=[…])` + `ASSESSED` edge | #64's fix. Stops the re-nomination treadmill, and gives corroboration its first real input — **only from `one_claim` verdicts** (§1.2). Independent of everything below. **Built 2026-08-22**, with three refusals the design did not name and one ordering rule it did not state; see §10.2's amendment. |
 | 2 | `agent` table, approved-id settings, `claim_agent`, approval over `ctx.elicit` with `epimemer agents confirm` as fallback | Registry with nothing yet pointing at it. Full protocol on both backends, per the standing rule. |
 | 3 | `judge` threaded through the reflect-side write paths | Smallest surface producing attributed decisions, so step 5 has something to read. |
 | 4 | `judge` threaded through ingest, mandatory (§3.2) | The bigger churn, and where the unreviewable priors are. **This is the cutover date** §3.3 pins. |
@@ -1335,6 +1337,56 @@ never-expose guard, the five-step reversal algorithm, where the cycle check
 sits in the refusal ordering, and the eight tests.
 
 ### 10.2 Step 1 — `similarities` and the `ASSESSED` edge
+
+> **✅ BUILT 2026-08-22.** `EdgeType.ASSESSED` in `REVIEW_EDGE_TYPES`,
+> `pipelines/reflection/similarity_decisions.py`,
+> `apply_reflection(similarities=[…])`, `ALREADY_JUDGED_EDGE_TYPES` in
+> `contradiction_detection`, and 57 tests over both backends. Corroboration is
+> untouched, and a test asserts an `assessed`-only pair does not corroborate.
+> **Five things the design below did not say, four of them found by building it:**
+>
+> 1. **`NOMINATED_STATUSES`, not "active".** The design said an unknown or
+>    retired id is skipped. That is too broad by exactly half the problem: the
+>    recurrence sweep nominates **active/historical** pairs (`NOMINATED_STATUSES`
+>    is `{ACTIVE, HISTORICAL}`), so refusing a historical side would leave the
+>    treadmill running on the population where the graph is offering a claim
+>    beside its own predecessor. Both sides must be in `NOMINATED_STATUSES` —
+>    which is the rule stated properly rather than a widening: an `assessed`
+>    edge earns its place by suppressing a nomination, so it belongs exactly
+>    where a nomination could have happened. `CORRECTED`, `ARCHIVED` and
+>    `MERGED` are refused, because a judgment there suppresses nothing and a
+>    `similarity` edge would still be counted as support.
+> 2. **`one_claim` is refused across frames.** §1.2 already routes a cross-frame
+>    pair to `record_variant`, and `merge_refusal` already refuses one — but
+>    nothing said what happens if the agent sends `one_claim` anyway. A
+>    `similarity` edge across frames is a fiction corroborating a fact, and
+>    corroboration only disqualifies a partner that carries a `variant_of`,
+>    which this pair would not have. `distinct` across frames is accepted:
+>    `assessed` corroborates nothing, so there is no reason to make the agent
+>    choose between recording its judgment and being accurate.
+> 3. **`distinct` after a standing `one_claim` is refused, not layered.**
+>    Nothing in this system deletes, this call included, so the `similarity`
+>    edge would go on corroborating a pair the agent had just disowned — while
+>    the response reported success. Refusing costs no suppression (the standing
+>    edge already suppresses) and surfaces a retraction nothing can yet perform.
+>    **Filed as #68.** The opposite direction is additive and is allowed:
+>    `one_claim` after `distinct` adds the `similarity` beside the `assessed`
+>    that is already there.
+> 4. **Similarities are applied *first* in `apply_reflection`**, before any
+>    argument that can retire a node. This is #65's anchoring rule applied to
+>    the order of one call: a judgment is about the wording it was made against,
+>    and a supersession later in the same batch would otherwise turn it into a
+>    skip — or, worse, leave the agent thinking it had been recorded.
+> 5. **The frontend needed telling.** `EdgeType` growing a member that
+>    `EDGE_MEANINGS` has never heard of is #55 exactly, one layer over: the edge
+>    draws in unknown-kind grey. `assessed` gets the similarity hue drained of
+>    saturation — same subject, no assertion of support — with a test that it is
+>    neither the similarity colour nor the neutral.
+>
+> Two things the design got right and are worth keeping visible: the `because`
+> rides on both edges' metadata until the journal lands (§3.4 permits it,
+> because it is immutable), and the four-type `already_linked` read cost nothing
+> measurable — the phase was already batched over the whole fact set.
 
 **The edge type.** Add `ASSESSED = "assessed"` to `EdgeType`
 (`core/types.py`) and put it in **`REVIEW_EDGE_TYPES`**, widening that set's
@@ -1691,6 +1743,13 @@ earlier claim glib.
   wrong: §10.2 and §10.2.1 disagreed about `SIMILARITY` on a merge, and #65's
   stated reasoning did not carry on its own terms. Both are corrected in place;
   the verdict did not change.
+- **Nothing retracts a `one_claim` verdict** → `ISSUES.md` **#68**, filed on
+  building step 1. The `similarity` edge it writes is what corroboration counts,
+  and no call removes one; `apply_reflection(similarities=[…])` refuses a later
+  `distinct` on that pair rather than writing `assessed` beside an edge that
+  keeps corroborating. The refusal is the honest shape, but it leaves an agent
+  that has changed its mind with nowhere to go — which is `reverse_merge`'s
+  problem one tier down, and it wants the same answer: a writer, not a delete.
 
 **Resolved here:**
 
