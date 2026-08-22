@@ -6,7 +6,7 @@ user's direction. Nothing here is implemented; where it says "does", read
 
 **Revised 2026-08-22 after review**, which found seven defects in the first
 draft. Five were mechanical; two changed the design. What moved is recorded in
-§10 rather than quietly rewritten, because two of the corrections are the same
+§11 rather than quietly rewritten, because two of the corrections are the same
 carry-forward this repo has now banked three times.
 
 The motivating case, in the user's words: *"using a different agent to review
@@ -19,7 +19,7 @@ can see what was decided and when; it cannot see that a different agent did it,
 and on its own second pass it cannot tell its own decisions from the first
 agent's.
 
-This document covers four parts, together because none of them works alone:
+This document covers five parts, together because none of them works alone:
 
 1. **The missing actions** — `similarity`, the verdict with no writer (#64), and
    the suppression marker it turned out to be entangled with.
@@ -28,12 +28,14 @@ This document covers four parts, together because none of them works alone:
 3. **Attribution** — where the judge is recorded, and what its absence means.
 4. **Review modes** — the filters over decisions, from *the uncertain ones* to
    *all of them*.
+5. **Reversal** — what review can actually undo, and the one thing that has to
+   be captured before it can ever be built (§7).
 
 Design history it depends on: `ISSUES.md` #64 (the defect), #52 (fact merge),
 #63 (the one nomination bar), #60 (bounding a response), #46 (unrated is not
 0.5), `REVIEW_EPISTEMIC.md` §3 (the verdict taxonomy), `EVENT_LOG.md` (the
 durable change path this extends), and **`WARNINGS_AND_SETTINGS.md` §5.3 and §9**
-(node notes, folded into this document's journal — see §8).
+(node notes, folded into this document's journal — see §9).
 
 ---
 
@@ -240,7 +242,7 @@ Two rules follow, and they are load-bearing:
   carry any.
 - **The judge never gates anything automatically.** No ranking, no corroboration
   weighting, no default filter. Review mode *selects* on it; nothing *decides*
-  on it. §7 refuses the obvious next request.
+  on it. §8 refuses the obvious next request.
 
 ### 2.5 Where it lives
 
@@ -494,7 +496,7 @@ nominates, and every change goes through the existing decision tools.
 | `by_agent` | `judged_by == …` | *"check everything this judge did"* |
 | `since` / `between` | `decided_at` in range | *"review yesterday's session"* |
 | `unreviewed` | no record `reviews` this one | *"what has nobody looked at"* |
-| `advisory` | `kind` is an advisory override (§8) | W&S §5.3's `contested_decisions` |
+| `advisory` | `kind` is an advisory override (§9) | W&S §5.3's `contested_decisions` |
 | `all` | every record | the full audit |
 
 Modes compose — `by_agent` **and** `since` is the ordinary case for *"review
@@ -522,7 +524,117 @@ unrevisited judgment protecting a node for ever (`docs/REFLECTION.md` §5).
 
 ---
 
-## 7. What this deliberately does not do
+## 7. Reversing a merge
+
+Undo was out of scope in the first draft. It is in scope now because of a
+property that only shows up when you look at what a merge leaves behind:
+**the information reversal needs is destroyed at merge time and is not
+reconstructible afterwards.** So the decision is not *build undo or don't* —
+it is *capture or lose*, and it has to be made before the next merge, not
+before the undo.
+
+### 7.1 What a merge destroys
+
+`merge_nodes` migrates every knowledge edge onto the survivor, collapsing
+duplicates by `(src, dst, type)`. Nothing records which source each migrated
+edge came from. Measured on the five merges of 2026-08-21: **the ten retired
+sources hold zero knowledge edges between them** — all 24 sit on the survivors,
+with no record of the partition. Where two sources cited the same document, the
+two `sourced_from` edges genuinely collapsed into one.
+
+`metadata.merged_from` names the nodes that merged. It does not name their
+edges, and no later pass can recover them. **This is `claim_kind`'s shape
+again**: information that exists at one moment only, with an island that grows
+with every merge taken before it is captured.
+
+### 7.2 Where merge information lives today
+
+Distributed across three places, none of them complete:
+
+| Where | What | Bounded |
+|---|---|---|
+| survivor node, `metadata.merged_from` | the ids that merged in, appended per merge | **no** |
+| each retired source, `lifecycle` | `{because: merged, counterpart: <survivor>, retired_at}` | append-only |
+| graph edges | `merged_into` (source→survivor), `evidence_merged` (to dependents) | grows with merges |
+
+The survivor already carries a per-node, unbounded, append-on-every-merge list.
+It holds ids rather than the partition, but the structure to extend is there.
+
+### 7.3 The split: audit in the journal, payload on the node
+
+The two halves of "what happened in this merge" have different lifetimes and
+different readers, so they live in different places:
+
+| | Lives in | Size | Lifetime |
+|---|---|---|---|
+| **Audit** — who merged, when, why, how certain | `DecisionRecord` (§4) | small | permanent |
+| **Payload** — the pre-merge edge partition | the survivor node | ~190 B/merge, measured | bounded, §7.4 |
+
+Putting the payload on the node rather than in the journal is the user's design
+and it is better than the global ring first proposed here, for a reason the
+alternative got backwards. A working session of ~55 merges touches ~55
+*distinct* survivors, one entry each — so under a per-node bound nothing evicts
+and the whole session stays reversible, where a global ring of the same nominal
+size would have thrown away its tail.
+
+### 7.4 The bound
+
+**`merge_undo_depth`, default 10, a per-graph setting** — the per-graph override
+pattern, no singleton. The survivor keeps the partitions of its last ten merges;
+an eleventh pushes the oldest out.
+
+**Ten, and not more, because of what the bound actually targets.** It is not
+storage: merge does not shrink this graph. Sources are retired, not deleted —
+all ten from 2026-08-21 are still present as `MERGED` husks keeping their
+content and their 384-dimension vectors, so what a merge already retains and
+never reclaims (~3.4 KB) is roughly eighteen times the undo payload it would
+add (~190 B). Net node count rose across that session, 558 → 638.
+
+What the bound targets is the case where a single claim keeps absorbing
+restatements — merge document 3's phrasing into the survivor, then document 4's,
+then document 5's. That is the **expected** pattern for anything frequently
+restated rather than a pathology, and today that node's history grows without
+limit. Ten levels of reversibility on one claim is generous; chains are rare
+enough that all five merges of 2026-08-21 were depth 1.
+
+**What eviction discards, stated plainly because this is the first structure in
+the system that deliberately forgets.** `lifecycle` and W&S's `notes` are both
+unbounded append-only lists, so a bounded one beside them will otherwise read as
+an oversight. What is dropped is **reversal capability, never a claim**: every
+merged source node, its content, its provenance, its lifecycle episode and its
+`merged_into` lineage edge all remain exactly as before. The graph forgets how
+to replay an edge migration automatically. It forgets nothing it knows.
+
+**It also settles the archival interaction**, which the global-ring design could
+not. Archive the survivor and its payload goes with it — no dangling promise, no
+undo buffer pinning nodes against the graph's own cleanup, no staleness check to
+write. That self-maintenance is what node-attachment buys, and it is the second
+reason to prefer it.
+
+### 7.5 The guard that is not a setting
+
+Depth bounds *how far back*, and says nothing about *whether it is safe*.
+Reversal is refused — with a reason, as every refusal here is — when something
+has come to depend on the survivor:
+
+- the survivor has itself been merged again, or superseded;
+- inferences have been drawn on the survivor's own wording, rather than migrated
+  onto it by the merge being reversed.
+
+**No configured value raises past this.** `merge_undo_depth` is policy; this is
+correctness, and a reversal that ignored it would leave dependents resting on
+text that no longer exists.
+
+### 7.6 What is still open
+
+Whether a reversal re-flags the dependent inferences it re-points, and under
+which label, is §12's question 2 rather than settled here. Everything
+above is about being *able* to reverse; what a reversal then owes the rest of
+the graph is a separate call.
+
+---
+
+## 8. What this deliberately does not do
 
 - **It does not verify anybody.** §2.4. Descriptions are self-reported and the
   system says so wherever it shows one. Only `confirmed_at` carries human
@@ -534,17 +646,18 @@ unrevisited judgment protecting a node for ever (`docs/REFLECTION.md` §5).
   publisher is a property of the **document**; a judge is a property of the
   **claimant**.
 - **It does not re-open applied changes as a matter of course.** Review
-  *nominates* a decision for another look. Undoing a merge is a real operation —
-  `merge_facts` migrated the sources' edges onto the survivor, so reversing it is
-  not `restore` — and it is out of scope. `all` mode surfaces merges it cannot
-  offer an undo for and **says so** rather than implying one (§9.2).
+  *nominates* a decision for another look; reversing one is a separate, explicit
+  act (§7), bounded by depth and refused outright where something has come to
+  depend on the result. A merge older than `merge_undo_depth`, or one whose
+  survivor has since been built on, is **not** reversible, and `all` mode says so
+  rather than implying an undo it cannot offer.
 - **It does not backfill.** §3.3.
 - **It does not run on its own.** Same rule as `reflect`: a review nobody asked
   for, over a graph nobody was looking at, is consolidation by timer.
 
 ---
 
-## 8. Node notes are decision records (folding in W&S §9)
+## 9. Node notes are decision records (folding in W&S §9)
 
 `WARNINGS_AND_SETTINGS.md` §9 (decided 2026-08-21) gives every node an
 append-only `notes` list, each `NodeNote` carrying `reviewed_at` and a verdict;
@@ -572,25 +685,28 @@ costs a paragraph rather than a migration.
 
 ---
 
-## 9. Build order
+## 10. Build order
 
 Each step is useful alone, and each is a precondition for the next.
 
 | # | Step | Why here |
 |---|---|---|
+| **0** | **`merge_facts` captures the pre-merge edge partition on the survivor**, bounded by `merge_undo_depth` (§7) | **Capture or lose.** The partition exists only at merge time (§7.1), so every merge taken before this lands is permanently irreversible. Independent of the rest, smallest change here, and the only step with a deadline. |
 | 1 | `apply_reflection(similarities=[…])` + `ASSESSED` edge | #64's fix. Stops the re-nomination treadmill, and gives corroboration its first real input — **only from `one_claim` verdicts** (§1.2). Independent of everything below. |
 | 2 | `agent` table, authorised-id settings, `claim_agent`, `epimemer agents confirm` | Registry with nothing yet pointing at it. Full protocol on both backends, per the standing rule. |
 | 3 | `judge` threaded through the reflect-side write paths | Smallest surface producing attributed decisions, so step 5 has something to read. |
 | 4 | `judge` threaded through ingest, mandatory (§3.2) | The bigger churn, and where the unreviewable priors are. **This is the cutover date** §3.3 pins. |
-| 5 | `DecisionRecord` + journal writes + W&S §9 folded in (§8) | Makes *"what did this agent judge"* one query. |
+| 5 | `DecisionRecord` + journal writes + W&S §9 folded in (§9) | Makes *"what did this agent judge"* one query. |
 | 6 | `review()` with `difficult` and `all`, capped | Works on the existing corpus, since derived signals need no attribution. |
 | 7 | `uncertain`, `by_agent`, `since`, `unreviewed`, `advisory`; `apply_review` | Need attributed decisions to exist; useful from the first session after step 4. |
 
-Steps 1 and 2 are independent and can go in either order.
+**Step 0 goes first, and not because it is a precondition** — nothing below
+needs it. It is first because it is the only step whose cost rises while it
+waits. Steps 1 and 2 are independent of it and of each other.
 
 ---
 
-## 10. What the review changed
+## 11. What the review changed
 
 Recorded rather than silently rewritten, because three of these are
 carry-forwards this repo has banked before.
@@ -600,7 +716,7 @@ carry-forwards this repo has banked before.
 | 1 | `DecisionRecord` claimed append-only and carried mutable review state, duplicated inline — two homes for one mutable fact, the #54/#55/#56 shape, in a document citing all three | §3.4, §4 |
 | 2 | One `similarity` edge for two populations whose readers want opposite breadth; would have manufactured corroboration. **The #46 carry-forward verbatim**: when a field is documented with an "and", check whether the two halves want the same storage | §1.2 |
 | 3 | Registry had no tool surface at all; identity "resolved at the boundary" from nothing, and self-review was indistinguishable from independent review | §2.2, §2.3 |
-| 4 | Did not reconcile with `WARNINGS_AND_SETTINGS.md`, designed one day earlier, and did not even cite it | §8 |
+| 4 | Did not reconcile with `WARNINGS_AND_SETTINGS.md`, designed one day earlier, and did not even cite it | §9 |
 | 5 | Unrated `confidence` used as a difficulty signal, re-committing the sin #46 fixed | §5 |
 | 6 | `all` mode unbounded (the day after #60); `[0.80, 0.85)` minted an unnamed constant (the week of #63) | §5, §6 |
 | 7 | The absence rule held only if the judge were mandatory, which the signature did not say | §3.2 |
@@ -610,23 +726,32 @@ is primary (§4.2), and a named writer for confirmations (§6).
 
 **What the review confirmed and has not moved**: minted id plus append-only
 dated descriptions; pinning `(judged_by, judge_desc)` per decision; no backfill;
-no judge-weighted ranking, for the reason in §7; derived difficulty as the only
+no judge-weighted ranking, for the reason in §8; derived difficulty as the only
 mode that works on the legacy corpus; and the build order's shape — attribution
 before journal before modes.
 
 ---
 
-## 11. Open questions
+## 12. Open questions
 
 1. **What is the `uncertain` floor?** §5 settles the ladder but not the
    threshold. Likely below 0.5, but it wants the same treatment as every other
    bar here: one named constant, documented, read everywhere (#63).
-2. **Undo.** Out of scope in §7, but `all` surfaces merges it cannot reverse.
-   Either that gap is stated in the response — the current answer — or reversing
-   a merge gets designed, which is its own document.
-3. **Does a reversal need to re-run what depended on it?** Overturning a merge
-   should plausibly re-flag the `evidence_merged` inferences (#61). Nothing here
-   says so.
-4. **Does `claim_agent` refuse, or warn, on an unauthorised id?** §2.2 says
+2. **Does a reversal need to re-run what depended on it?** Overturning a merge
+   re-points its dependent inferences back, which is a premise change and should
+   plausibly re-flag them the way the merge did (#61). Reusing `evidence_merged`
+   with the operation in metadata is the cheap answer — the semantics a reader
+   needs are *the premise under you was rewritten, go re-read it*, true in both
+   directions, and neither direction is an archival class, so #61's reason for
+   splitting it from `evidence_stale` does not apply. The objection is that the
+   name then over-promises on an unmerge.
+3. **Does `claim_agent` refuse, or warn, on an unauthorised id?** §2.2 says
    refuse. The softer alternative — admit it as unconfirmed — is friendlier for
    solo use and dissolves the guarantee §2.2 exists to provide.
+
+> **Undo was question 2 and is now §7** (decided 2026-08-22). The question
+> changed shape on inspection: the partition reversal needs is destroyed at
+> merge time, so the live decision was *capture or lose* rather than *build or
+> not*. Settled: journal for the audit, a bounded list on the survivor for the
+> payload, `merge_undo_depth` defaulting to 10, and a safety guard no setting can
+> raise past.

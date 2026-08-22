@@ -292,10 +292,12 @@ neighbourhood walk has ever had.
 rather than architecture, since `storage` is already threaded explicitly and the
 judge rides beside it. Step 5 (the journal) is the largest single piece.
 
-**Blockers.** Four open questions listed in §11 of that document; none blocks
-step 1. The design was reviewed and revised on 2026-08-22 — §10 records what
-moved, including `NodeNote` folding into the decision journal, which supersedes
-`WARNINGS_AND_SETTINGS.md` §9.
+**Blockers.** Three open questions listed in §12 of that document; none blocks
+step 1. The design was reviewed and revised on 2026-08-22 — §11 records what
+moved, including `NodeNote` folding into the decision journal (which supersedes
+`WARNINGS_AND_SETTINGS.md` §9) and merge reversal, which added a **step 0**: the
+edge partition an undo needs is destroyed at merge time, so every merge taken
+before it is captured is permanently irreversible.
 
 ---
 
