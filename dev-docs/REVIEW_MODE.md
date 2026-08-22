@@ -452,6 +452,16 @@ The per-node judgments ride inside the record. The trade, stated: reviewing
 document, and the reviewer opens the facts from `subject_ids`. That is the
 honest granularity — one document read, one judgment pass.
 
+**The same coarseness applies to confirmation, and that half is worth naming
+separately.** One `reviews` pointer against an ingest record marks **all 44
+facts reviewed**, so a reviewer who checked six of them and confirmed has told
+the graph it checked forty-four. Nomination degrading gracefully at this
+granularity is fine; confirmation does not, because it is what stops the next
+reviewer looking. Either a confirmation on an ingest record names the subjects
+it actually covers, or the record stays unreviewed until all of them are — and
+**naming the subjects is the cheaper of the two**, since `subject_ids` is
+already a list.
+
 ### 4.2 Which record is primary
 
 A merge now appears in two places, and `EVENT_LOG.md`'s rule is that one of them
@@ -628,6 +638,49 @@ This follows `judge_importance`, whose `importance_judged_at` moves on
 re-confirmation, and whose `stale_judgment` archival class exists to stop an
 unrevisited judgment protecting a node for ever (`docs/REFLECTION.md` §5).
 
+### 6.5 Every verdict needs a writer, including the ones review invents
+
+**This document's own flagship example had no action behind it**, which is #64's
+defect reborn one layer up. §3.1 offers *"agent-1 called 44 facts `state`; two
+look like events"* as what review recovers — and **nothing can act on it**.
+`update` takes `new_content` only (`tools.py:1474`); there is no path that
+changes a `claim_kind`. A review that nominates a defect nobody can fix is a
+verdict with no action, which is the exact shape §1.1 tabulates.
+
+**Supersession is not the missing path and must not be pressed into it.**
+`update` requires `because` being *it was wrong* or *the world changed*, and a
+mislabelled `claim_kind` is neither: the claim was right and the world did not
+move — **the judgment about the claim was wrong**. Filing it as a correction
+retires a true node and re-points its edges, which is the forgetting #53 exists
+to prevent, for a metadata mistake.
+
+So the missing writer is narrow, and its narrowness is the design:
+
+```python
+async def rejudge(
+    node_id: str, storage: StorageBackend, *, judge: JudgeRef, because: str,
+    claim_kind: ClaimKind | None = None,
+    confidence: float | None = None,
+    confidence_basis: str | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Revise an agent-supplied judgment about a node, without touching the claim.
+
+    Never a supersession: the node content is unchanged, so nothing was
+    corrected and nothing moved on. Writes a `DecisionRecord` whose `reviews`
+    points at the record that made the original judgment, and moves no status,
+    no edges and no lineage.
+    """
+```
+
+`judge_importance` already is this tool for one field, and its shape — a
+judgment, a reason, a clock — is the one to copy. The re-judgment is checkable
+against the material because the segments are still stored, which is what makes
+this a review that can conclude rather than only complain.
+
+**Ordering note for the build:** this belongs with step 7, and step 7 is where
+review modes become useful. Shipping the modes without it delivers a reviewer
+that can find every ingest-time mistake and fix none of them.
+
 ---
 
 ## 7. Reversing a merge
@@ -735,8 +788,18 @@ Reversal is refused — with a reason, as every refusal here is — when somethi
 has come to depend on the survivor:
 
 - the survivor has itself been merged again, or superseded;
-- inferences have been drawn on the survivor's own wording, rather than migrated
-  onto it by the merge being reversed.
+- **it carries any edge that is neither in the undo payload nor written by the
+  merge itself.**
+
+**The second is a set difference, not a list, and that is deliberate.** An
+earlier draft named only *inferences drawn on the survivor's own wording*, which
+missed everything else that can accrue to a live node: a contradiction recorded
+against it, a `distinct` verdict assessed against it, a tag, a user relation.
+Reversal ends in `delete_node`, so an edge the guard does not notice is an edge
+the reversal destroys — and **a contested claim losing its contest record** is
+precisely the loss *nothing is destroyed* exists to prevent. Stated as a
+difference, an edge type invented next year is refused by default rather than
+deleted by omission.
 
 **No configured value raises past this.** `merge_undo_depth` is policy; this is
 correctness, and a reversal that ignored it would leave dependents resting on
@@ -871,15 +934,16 @@ exist to point at.
 
 ```python
 class MergedEdge(BaseModel):
-    """One edge as it stood before the merge moved it."""
+    """One edge exactly as it stood before the merge moved it.
+
+    **The whole edge, field by field, and never a hand-listed subset.** Build it
+    with `edge.model_dump(exclude={"id"})` — the shape `_migrate_edges_inplace`'s
+    copy branch already uses — so a field added to `NodeEdge` later is carried
+    without anyone remembering to come back here.
+    """
     owner_id: str                 # which merging source it belonged to
-    src_id: str
-    dst_id: str
-    type: EdgeType
-    label: str | None = None
-    kind: Literal["relationship", "attribution"] = "relationship"
-    weight: float = 1.0
-    validity: list[ValidityInterval] = Field(default_factory=list)
+    edge: dict                    # NodeEdge.model_dump(exclude={"id"})
+    intra_set: bool = False       # §7.9, "the edge the merge deleted outright"
 
 
 class MergeUndo(BaseModel):
@@ -888,7 +952,29 @@ class MergeUndo(BaseModel):
     edges: list[MergedEdge]
     merged_at: datetime
     decision_id: str | None = None      # the DecisionRecord (§4)
+    # The survivor's wording, kept because `delete_node` removes the node that
+    # held it. Without this a reversal cannot say what it withdrew, and the
+    # contested text is unquotable the moment the reversal lands.
+    survivor_content: str = ""
 ```
+
+> **A hand-listed field subset was the first draft of this and it was wrong.**
+> It named `src_id`, `dst_id`, `type`, `label`, `kind`, `weight` and `validity`
+> — omitting `metadata` (`types.py:761`) and `created_at` (`:762`). Since §3.1
+> puts `judged_by` for similarity, assessed, contradiction and variant decisions
+> **in edge metadata**, a merge→reverse cycle would have replayed every edge
+> with its attribution stripped and its date reset. **Reversal would have
+> deleted the judge** — in the document whose entire purpose is recording one.
+> The lesson generalises past this field list: *a partial copy of a model is a
+> bug with a delay on it.*
+
+**Intra-set edges need capturing too, and are easy to miss.** A `similarity` or
+`contradiction` edge **between two merging sources** becomes a self-loop, and
+`_migrate_edges_inplace` (`memory.py:~509`) drops it outright rather than
+collapsing it — so it is neither on the survivor nor on the sources afterwards.
+It must be captured with `intra_set=True` and recreated on reversal, or the
+cycle silently destroys a judgment. This is the one edge class that is gone
+*immediately*, not merely re-pointed.
 
 **Where it lives.** `metadata["merge_undo"]`, parsed through `MergeUndo` on read
 and write. `Topic`, `Fact` and `Inference` share no base class — each redeclares
@@ -935,10 +1021,17 @@ async def reverse_merge(
    `merge_undo` — the latter meaning either it was never a merge survivor or
    its payload aged past `merge_undo_depth`, and **the refusal must say
    which**, since one is permanent and the other is a mistake.
-2. **§7.5's guard.** Refuse if the survivor has an outgoing `merged_into` (it
-   was merged again), is superseded, or carries `derived_from` / `supports`
-   edges from inferences that are not in the payload — meaning something was
-   drawn on the survivor's own wording rather than migrated onto it.
+2. **§7.5's guard, and it is broader than "inferences".** Refuse if the
+   survivor has an outgoing `merged_into` (it was merged again), is superseded,
+   or **carries any edge that is neither in the payload nor written by the merge
+   itself**. The narrow inference-only version of this check was wrong: a
+   contradiction recorded against `S` after the merge, a `distinct` verdict
+   assessed against it, a tag, a user `RELATED` edge — none is in the payload,
+   none is merge-created, and `delete_node(S)` would erase every one of them
+   silently. **A contested claim losing its contest record** is exactly the loss
+   *nothing is destroyed* exists to prevent. The check is therefore a set
+   difference, not a list of edge types, so an edge type added later is refused
+   by default rather than deleted by omission.
 3. Load the sources. Each must be `MERGED` with an open lifecycle episode whose
    `counterpart` is this survivor.
 4. **One transaction**, on both backends:
@@ -946,16 +1039,27 @@ async def reverse_merge(
      collapsed;
    - delete the edges the merge left on the survivor;
    - sources → `ACTIVE`, closing the open episode with `restored_at`;
+   - recreate any `intra_set` edges the merge deleted outright;
    - delete the `merged_into` and `evidence_merged` edges the merge wrote;
-   - `delete_node(survivor_id)`;
-   - append a reversal `DecisionRecord` with `reviews` and `supersedes` set.
+   - `delete_node(survivor_id)` **and its `EmbeddingRecord`** — the vector is
+     stored per item, so deleting the node alone strands an entry the index
+     still returns. `delete_node` owns the cascade; it is not the caller's to
+     remember;
+   - append a reversal `DecisionRecord` with `reviews` and `supersedes` set,
+     carrying `survivor_content` so the withdrawn wording stays quotable after
+     the node holding it is gone.
 5. Return what changed, in the shape `merge_facts` returns.
 
 **The cycle check** goes in `merge_refusal`
 (`pipelines/reflection/fact_dedup.py`), ordered with the other refusals —
-**after** the permanent ones (cross-frame, event, unjudged) and before the
-similarity bar, since it is fixable by a human decision rather than by the
-graph changing.
+**after** the permanent ones (cross-frame, event) and before the similarity
+bar, since it is fixable by a human decision rather than by the graph changing.
+
+*(An earlier draft listed **unjudged** among the permanent refusals. It is not:
+`fact_dedup.py`'s own header names it the fixable one — "an unjudged pair merges
+as soon as somebody judges it" — which is why the refusals are ordered
+permanent-first in the first place. Two descriptions of one rule, caught before
+either was built.)*
 
 **Tests.** `tests/pipelines/test_merge_reversal.py`:
 
@@ -970,6 +1074,15 @@ graph changing.
   never had one;
 - the third merge of an oscillating pair refuses on `merge_cycle_limit`, and
   raising the setting lets it through;
+- **an intra-set edge survives the cycle**: `A` and `B` joined by `similarity`,
+  merged, reversed — the edge is back. It is the only class the merge deletes
+  rather than re-points, so nothing else in this list would catch its loss;
+- **edge `metadata` and `created_at` survive the cycle**, `judged_by`
+  specifically — the defect the first draft of `MergedEdge` would have shipped;
+- reversal **refuses** when `S` carries a post-merge contradiction, assessed
+  verdict, tag or user edge, rather than deleting it;
+- the survivor's `EmbeddingRecord` is gone after reversal and no search returns
+  it;
 - a partial failure mid-transaction leaves the graph as it was, on both
   backends.
 
@@ -1093,6 +1206,64 @@ untyped `get_edges_for` per direction.
 must keep doing so — that is the entire point of the split, and a test should
 assert that an `ASSESSED`-only pair does not corroborate.
 
+#### 10.2.1 A precondition: judgment edges must stop migrating on a correction
+
+**This has to land before step 1, not after, and it is a change to existing
+code rather than to this design.**
+
+`migration_disposition(edge_type, status)` (`core/types.py:351`) returns
+`"move"` for every knowledge edge on a `CORRECTED` retirement, and `SIMILARITY`,
+`CONTRADICTION` and `VARIANT_OF` are deliberately **not** in
+`NON_KNOWLEDGE_EDGE_TYPES` — the set's own comment says so, because they are
+real edges to follow. So:
+
+> `A` carries a `one_claim` similarity to `B`. `A` is corrected to `A′`. The
+> edge re-points, asserting **`A′` and `B` are one claim** — a judgment about
+> wording nobody assessed — and `corroboration.py` counts `B`'s publisher as
+> backing `A′`.
+
+That is **manufactured corroboration arriving through migration**, with §1.2's
+split entirely correct. It is the failure `fact_dedup.py`'s header calls the
+worst available, reached by a route neither the split nor the merge gate can
+see.
+
+**The document already states the principle and the code applies it too
+narrowly.** `migration_disposition`'s own docstring, for the world-change case:
+*"a contradiction or a variant is a judgment made **about the old claim**, and
+re-pointing one asserts it of a claim nobody assessed."* Exactly right — and
+scoped to `HISTORICAL` only. A correction is not a different situation in this
+respect: the claim is the same, the **wording** changed, and the judgment was
+about the wording.
+
+`CONTRADICTION` carries the same latent fault, with an extra sting: **a
+correction may be precisely what resolved the contradiction**, so re-pointing it
+asserts a conflict the correction just settled.
+
+**The fix, and why not the obvious one.** Adding these types to
+`NON_KNOWLEDGE_EDGE_TYPES` would also drop them from default graph traversal,
+which is a second behaviour change nobody asked for. Instead a separate set,
+consulted first:
+
+```python
+# A judgment is about the wording it was made against. Re-pointing one onto a
+# replacement asserts it of a claim nobody assessed — the argument
+# `migration_disposition` already makes for a world-change, which is just as
+# true of a correction. Anchored, never migrated, on any retirement.
+JUDGMENT_EDGE_TYPES: frozenset[EdgeType] = frozenset(
+    {EdgeType.SIMILARITY, EdgeType.CONTRADICTION,
+     EdgeType.VARIANT_OF, EdgeType.ASSESSED}
+)
+```
+
+`migration_disposition` returns `"keep"` for these regardless of status.
+Traversal is unaffected. `A′` starts with no judgments and gets re-nominated,
+which is correct — `A′` against `B` is a pair nobody has judged.
+
+**Why it is latent today and stops being so at step 1**: both real graphs carry
+zero `similarity`, `contradiction` and `variant_of` edges (#64), so nothing has
+ever migrated. Step 1 is the change that starts writing them. **File it as its
+own issue** — it is a defect in shipped code, not a design note.
+
 **Tests** (`tests/pipelines/test_similarity_decisions.py`): a `one_claim`
 verdict raises corroboration for both nodes from 1 to 2 where the publishers
 differ; a `distinct` verdict does not; both suppress re-nomination on the next
@@ -1125,13 +1296,40 @@ upserts the `Agent`, appends an `AgentDescription` if `text` differs from the
 current one, updates `last_seen_at`, and binds `(agent_id, digest)` to the
 session via `ctx.set_state`.
 
-**Approval** goes over `ctx.elicit` where the client supports it, else the
-`epimemer agents confirm <id>` CLI (§2.3). Both terminate at the user; neither
-is reachable by the agent alone.
+**Approval** goes over `ctx.elicit` where the client supports it (§2.3).
+
+**The CLI fallback does not work for every backend, and the gap is load-bearing
+at step 4.** Approved ids live in per-graph settings *inside the storage
+backend*. `epimemer agents confirm <id>` is a separate process — and `ISSUES.md`
+#16 records that **a second `mem://` connection is a separate store**. So
+against an embedded backend the CLI writes approvals into a store the running
+server will never read. Combine that with an elicitation-less client and there
+is **no approval path at all** — which step 4's cutover then turns into a server
+that refuses every write.
+
+So the fallback has to be a transport the server itself reads at startup:
+
+| Backend | Elicitation | Fallback that works |
+|---|---|---|
+| SurrealDB | `ctx.elicit` | `epimemer agents confirm` — same store, different process |
+| embedded `mem://` | `ctx.elicit` | **config file or env, read at connect time** |
+
+Read the configured ids when the backend connects and seed the per-graph list
+from them. `epimemer agents confirm` stays the convenience for server backends;
+it must **refuse loudly against an embedded store** rather than appear to
+succeed. Nothing here may be reachable by the agent — that is still the rule
+(§2.3) — but *unreachable by the agent* and *unreachable by the user* are
+different failures, and the first draft shipped the second one.
 
 **Session detection** uses `ctx.session_id` and `ctx.client_id`, both already
 on FastMCP's `Context`, which `server.py` already threads into every tool.
 Neither identifies the *model* (§2.2) — do not try to infer one.
+
+**Re-validate the judge on `use_graph`.** The session binds one
+`(agent_id, digest)`, but approval is **per graph**. Switching graphs mid-session
+would otherwise carry a judge approved for graph A into every write on graph B.
+Check at `use_graph`, and again at write time — the second is cheap and is what
+makes the first not a single point of failure.
 
 ### 10.4 Steps 3–4 — threading the judge
 
@@ -1237,6 +1435,31 @@ sat among the modes while being answers to a different question. Separated in
 §6.1–6.3. The tell was the same both times — **a column, or a field, that needs
 the word "or" to describe what it holds.**
 
+### 11.1 The second review (2026-08-22)
+
+A second round over the revision found four more, two of them the same species
+the document spends its length warning about — *a judgment re-pointed onto
+wording nobody judged*.
+
+| # | Defect | Where |
+|---|---|---|
+| 1 | `MergedEdge` listed seven fields and omitted `metadata` and `created_at`, so reversal would have **stripped `judged_by` from every edge it replayed** | §7.9 |
+| 2 | Judgment edges migrate on a **correction**, manufacturing corroboration with §1.2's split entirely correct — a defect in shipped code, now `ISSUES.md` **#65**, blocking step 1 | §10.2.1 |
+| 3 | The reversal guard checked inferences only, so `delete_node` would have destroyed post-merge contradictions, assessed verdicts and tags | §7.5 |
+| 4 | The CLI approval fallback cannot reach an embedded `mem://` store, so an elicitation-less client had **no approval path** and step 4 would have bricked it | §10.3 |
+
+Smaller, all fixed: `use_graph` must re-validate the judge (§10.3); the flagship
+review example had no writer, now `rejudge` (§6.5); the reversal record now
+keeps the survivor's wording; `delete_node` owns its embedding cascade;
+intra-set edges are captured; confirmation granularity is stated (§4.1); and
+§12's "none are open" is withdrawn.
+
+**Two patterns worth keeping.** *A partial copy of a model is a bug with a delay
+on it* — defect 1 would have surfaced only once somebody reversed a merge on an
+attributed graph. And *a rule stated for one branch of a conditional is not a
+rule the code applies* — defect 2 sat four lines from the argument that would
+have prevented it.
+
 **What the review confirmed and has not moved**: minted id plus append-only
 dated descriptions; pinning `(judged_by, judge_desc)` per decision; no backfill;
 no judge-weighted ranking, for the reason in §8; derived difficulty as the only
@@ -1247,9 +1470,49 @@ before journal before modes.
 
 ## 12. Questions raised, and how they were settled
 
-**None are open.** Everything the review and the discussion of 2026-08-22 raised
-has an answer in the sections above; this is the index to them, newest first.
+**Withdrawn 2026-08-22: this section previously opened "None are open."** A
+second review found four defects in the material this document had just added,
+so the claim was false when written — and it was the overconfidence pattern the
+document polices elsewhere, stated about itself. *A design is not finished
+because its author has run out of questions.*
 
+### 12.1 Open
+
+1. **Judgment edges migrate on a correction** (§10.2.1). A defect in shipped
+   code rather than in this design, latent only because nothing writes those
+   edges yet. **Must be filed as its own issue and fixed before step 1**, which
+   is the change that ends the latency.
+2. **Confirmation granularity at ingest** (§4.1). Naming covered subjects is the
+   recommendation; the alternative — a record staying unreviewed until every
+   subject is — has not been argued down, only judged more expensive.
+3. **`rejudge`'s scope** (§6.5). Specified for `claim_kind`, `confidence` and
+   `confidence_basis`. Whether anything else an agent supplies at ingest belongs
+   in it has not been surveyed.
+
+### 12.2 Settled
+
+Newest first.
+
+> **The whole edge is captured, not a field list** — decided 2026-08-22 after
+> the second review, §7.9. `MergedEdge` named seven fields and omitted
+> `metadata` and `created_at`, so a merge/reverse cycle would have stripped
+> `judged_by` from every edge it replayed. The rule that replaces it: *a partial
+> copy of a model is a bug with a delay on it.*
+>
+> **The reversal guard is a set difference, not a list of edge types** — decided
+> 2026-08-22, §7.5. The inference-only version would have let `delete_node`
+> silently destroy a contradiction, an assessed verdict or a tag written against
+> the survivor after the merge.
+>
+> **Approval needs a transport the server reads** — decided 2026-08-22, §10.3.
+> The CLI fallback cannot reach an embedded `mem://` store (`ISSUES.md` #16), so
+> config-at-connect is the fallback there. *Unreachable by the agent* and
+> *unreachable by the user* are different failures.
+>
+> **Review gets a writer** — decided 2026-08-22, §6.5. `rejudge` revises an
+> agent-supplied judgment without superseding the claim, because a mislabelled
+> `claim_kind` is neither *it was wrong* nor *the world changed*.
+>
 > **"Uncertain" is an ordering, not a mode** — decided 2026-08-22, §6.2. The
 > question was *what floor selects the uncertain ones*, and it dissolved once
 > somebody asked **when an agent actually needs them**: at no point does anyone

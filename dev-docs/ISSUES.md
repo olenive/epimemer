@@ -2,7 +2,8 @@
 
 Living issue tracker. **Last review: 2026-08-21.**
 
-Open: **64** (found 2026-08-21, wants a decision), plus **16** and **58**, both
+Open: **64** (2026-08-21, decided — `dev-docs/REVIEW_MODE.md` is the design) and
+**65** (2026-08-22, blocks #64's first step), plus **16** and **58**, both
 deferred with their triggers stated.
 **61**, **62** and **63** were built on 2026-08-21. **46**, **48** and **51** were built
 and merged (2026-08-19, -19, -20); their entries are deleted per the workflow
@@ -2785,6 +2786,67 @@ carry: every measurement of that cost was taken against synthetic edges at a
 fixed degree (`BENCHMARKS.md`), because real ones did not exist to measure. A
 graph that starts recording judgments is the first one where the fan-out is an
 observation.
+
+---
+
+### Issue 65 — a correction re-points judgment edges onto wording nobody judged — 🔴 OPEN (found 2026-08-22)
+
+Found by review of `dev-docs/REVIEW_MODE.md`, which proposed to start writing
+`similarity` edges (#64) and so would have made this reachable. **Latent today
+and only today**: both real graphs carry zero `similarity`, `contradiction` and
+`variant_of` edges, so nothing has ever migrated.
+
+**What it is.** `migration_disposition(edge_type, status)`
+(`core/types.py:351`) returns `"move"` for every knowledge edge on a `CORRECTED`
+retirement, and `SIMILARITY`, `CONTRADICTION` and `VARIANT_OF` are deliberately
+**not** in `NON_KNOWLEDGE_EDGE_TYPES` — the set's comment says so in as many
+words, because they are real edges to follow. So a correction drags them onto
+the replacement:
+
+> `A` carries a `similarity` edge to `B`, meaning *one claim, restated*. `A` is
+> corrected to `A′`. The edge re-points, asserting **`A′` and `B` are one
+> claim** — and `corroboration.py` walks `SIMILARITY` to build its
+> neighbourhood, so `B`'s publisher is counted as backing a wording nobody
+> compared it against.
+
+That is **manufactured corroboration**, which `fact_dedup.py`'s header calls the
+worst failure available: a false unification does not lose information, it
+inverts the quantity corroboration measures. And it arrives by a route neither
+the merge gate nor #64's two-population split can see, because no merge happened.
+
+`CONTRADICTION` has the same fault with an extra sting: **a correction may be
+exactly what resolved the contradiction**, so re-pointing it asserts a conflict
+that the correction settled.
+
+**The principle is already written down, one status too narrowly.**
+`migration_disposition`'s own docstring, on the world-change case: *"a
+contradiction or a variant is a judgment made **about the old claim**, and
+re-pointing one asserts it of a claim nobody assessed."* Correct — and applied
+only to `HISTORICAL`. A correction is not different in this respect: the claim
+is the same, the **wording** changed, and the judgment was about the wording.
+
+**Fix, and why not the obvious one.** Adding the three types to
+`NON_KNOWLEDGE_EDGE_TYPES` would also drop them from default graph traversal —
+a second behaviour change nobody asked for, against a set whose comment exists
+to say they *are* traversable. Instead a set of its own, consulted first, so
+that a judgment is anchored on **every** retirement:
+
+```python
+JUDGMENT_EDGE_TYPES: frozenset[EdgeType] = frozenset(
+    {EdgeType.SIMILARITY, EdgeType.CONTRADICTION,
+     EdgeType.VARIANT_OF, EdgeType.ASSESSED}   # ASSESSED arrives with #64
+)
+```
+
+`A′` then starts with no judgments and is re-nominated, which is right: `A′`
+against `B` is a pair nobody has judged.
+
+**Blocks #64's step 1.** That step starts writing `similarity` edges, which is
+what ends the latency. Fixing after would mean shipping the defect knowingly.
+
+**Carry-forward.** *A rule stated for one branch of a conditional is not a rule
+the code applies.* The world-change branch carried the argument; the correction
+branch carried the same risk and no argument, and the two sat four lines apart.
 
 ---
 
