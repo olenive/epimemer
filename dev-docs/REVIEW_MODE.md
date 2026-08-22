@@ -27,6 +27,11 @@ An implementer should be able to start from this document without reconstructing
 the reasoning — but §11 and §12 record what was rejected and why, and are worth
 reading before changing any of it.
 
+**Revised 2026-08-23**: §3.3's absence rule is reversed by the user — blank
+means *unknown*, and whether a graph accepts one is a setting rather than a
+dated cutover. The reasoning is in §12.2 and the sites it touched are §3.2,
+§3.3.1, §4, §6.4, §10.3 and §10.4.
+
 **Revised 2026-08-22 after review**, which found seven defects in the first
 draft. Five were mechanical; two changed the design. What moved is recorded in
 §11 rather than quietly rewritten, because two of the corrections are the same
@@ -332,7 +337,7 @@ re-examined by nothing.
 | `judge_importance` | `ValueSignal` | already has `importance_judged_at`; gains a judge |
 | topic parents / splits / enrichments | `Topic` / `metadata` | structural calls nobody currently owns |
 
-### 3.2 Threading it, without a singleton, and mandatory after cutover
+### 3.2 Threading it, without a singleton, and required where the graph says so
 
 The obvious implementation is an ambient "current agent" resolved once and read
 from everywhere. **That is a singleton and this project does not have those.**
@@ -345,16 +350,56 @@ as one more explicit parameter beside a parameter that is already there.
 async def store_decomposition(
     ...,
     storage: StorageBackend,
-    judge: JudgeRef,          # (agent_id, digest) — required, not `| None`
+    judge: JudgeRef | None = None,   # (agent_id, digest); absent = unknown
 ) -> tuple[dict, ResponseMeta]:
 ```
 
-**Required, and a write without one is refused** — the `judge_importance` shape,
-not a default. This is not fastidiousness: §3.3's whole rule depends on it. An
-optional parameter makes `None` ambiguous again on day two, and the island
-below stops being datable.
+> **Revised 2026-08-23 (user's decision).** This block previously read
+> `judge: JudgeRef` — *"required, not `| None`"*, with a write lacking one
+> refused outright from step 4 onward. **Whether a blank is accepted is the
+> graph's policy, not the signature's**, and §3.3 below carries the argument.
+> The type stays optional everywhere and one shared check at the tool boundary
+> asks *does this graph require a judge, and is there one* — which is also the
+> only place that can consult a per-graph setting.
+>
+> Nothing else in this subsection changes: the judge is still resolved once at
+> the boundary and passed explicitly, and it is still never a module global.
+> **That** is what has no exceptions.
 
-### 3.3 What absence means — decided on day one
+### 3.3 What absence means — decided on day one, reversed on day five
+
+> **Revised 2026-08-23, and the first bullet is reversed (user's decision).**
+> The original is kept below the replacement, because the argument that produced
+> it is still the right argument and only its conclusion overreached.
+>
+> **Blank means *unknown*. That is the whole of it.** It does not mean *written
+> before attribution existed*, it carries no date, and it asserts nothing about
+> why nobody is named. The old reading bought one meaning by making the field
+> mandatory for ever after a fixed release — which is a large permanent cost
+> paid to describe a population that can be described honestly for nothing:
+> *we do not know who judged this*.
+>
+> **Whether blank is allowed is a per-graph setting, default permissive.** For
+> many graphs it genuinely does not matter who judged; for others the user wants
+> every write tied to an agent or a person, and the id is where that goes. So
+> the graph says which it is, and a graph that requires a judge refuses a write
+> without one. Turning it on later is not retroactive and does not need to be —
+> nothing about the earlier rows was ever claiming to be dated.
+>
+> **What the scars below actually argued for**, and it survives intact: a blank
+> must never be given a meaning nobody asserted. The old bullet did exactly that
+> — it read a date into an absence. *Unknown* is the reading that adds nothing.
+>
+> **No backfill still holds, and now has a positive half worth stating.** A
+> review of an unattributed decision writes a **new** record naming the
+> reviewer, pointing back at the old one (§4). The reviewed record is untouched,
+> because records are never edited. So a graph that ran unattributed for months
+> can still take a fully attributed review pass, and the result reads honestly:
+> *judged by unknown, reviewed by this agent on this date.* That is what makes
+> the permissive default safe rather than merely convenient.
+>
+> **The review-mode default moves with it** — see §6.4, which no longer hides
+> blank-judge rows across the board.
 
 The day the field exists, every node and edge already in the graph reads as
 *judged by nobody*, and nothing distinguishes that from *written before
@@ -368,14 +413,36 @@ island that does not shrink by waiting.
 
 So, decided now rather than discovered later:
 
-- **`judged_by is None` means "written before attribution existed"** — one
+- ~~**`judged_by is None` means "written before attribution existed"** — one
   meaning, guaranteed by §3.2's refusal, with the cutover date recorded here and
-  in `docs/`.
+  in `docs/`.~~ **Reversed 2026-08-23; see above.**
 - **No backfill, ever.** Stamping a synthetic `legacy-agent` asserts that an
   agent existed and made a judgment. That is the same species of lie as the
   literal `0.5`, reached by the same well-meant route.
-- **Review modes exclude null by default** and report how many they excluded, so
-  a caller can tell *nothing to review* from *nothing attributable*.
+- ~~**Review modes exclude null by default**~~ — **superseded**; they still
+  **report** how many rows had no judge, so a caller can tell *nothing to
+  review* from *nothing attributable*, but hiding them by default is now wrong
+  on a graph that never required one (§6.4).
+
+### 3.3.1 The setting
+
+One per-graph setting, stored beside the reflect counter and the merge
+overrides, which is where every other per-graph setting already lives:
+
+| | |
+|---|---|
+| **Off (default)** | a write may carry a judge or not; blank is recorded as unknown |
+| **On** | a write without a judge is refused, with prose naming `claim_agent` |
+
+**It is not an MCP tool.** `configure_reflection` and `configure_merge` are
+agent-callable because they tune how eagerly the system nominates things. This
+one is a gate on the agent itself, and a gate the agent can open is decoration —
+so it takes the same channel as the approved-id list (§2.3): an environment
+variable read at connect, and a CLI subcommand the agent cannot run.
+
+**Existing graphs start off**, and turning it on affects only writes after that
+moment. There is no migration, because nothing is being reinterpreted: the rows
+that had no judge still have no judge, and still mean *unknown*.
 
 ### 3.4 Immutable facts may be denormalised; mutable state may not
 
@@ -434,8 +501,13 @@ class DecisionRecord(BaseModel):
     id: str = Field(default_factory=_new_id)
     kind: DecisionKind
     subject_ids: list[str]
-    judged_by: str
-    judge_desc: str
+    # Absent = **unknown**, and nothing more (§3.3). A graph that does not
+    # require a judge still journals: the row carries how certain the agent was
+    # and whether anyone has since checked it, and both are worth having from an
+    # agent that did not name itself. A graph that *does* require one never
+    # writes a blank here, because the write was refused before reaching this.
+    judged_by: str | None = None
+    judge_desc: str | None = None
     decided_at: datetime
     # §5. Same ladder as `confidence` (#46), stated once and referenced — absent
     # means unrated, which is deliberately not a rated 0.5.
@@ -640,8 +712,17 @@ unbounded response #60 capped four lists for, and designing it uncapped the day
 after would be perverse. As there: when a list is named in `truncated`, act on
 what came back and review again rather than raising the number.
 
-**Every mode excludes pre-attribution rows by default** (§3.3) and reports how
-many it excluded.
+**Every mode reports how many rows had no judge**, and only the modes that are
+*about* who judged exclude them by default — `by_agent` cannot answer without
+one, `all` and the difficulty ordering never needed one.
+
+> **Revised 2026-08-23.** This read *"every mode excludes pre-attribution rows
+> by default"*, which followed from the reading §3.3 has now reversed. With
+> blank meaning **unknown** rather than **legacy**, a blanket exclusion would
+> hide most of the corpus on exactly the graphs that chose not to require a
+> judge — leaving review nearly blind on the population it is most useful for.
+> The count stays: three results out of four hundred unattributed rows is not
+> the same answer as three out of four.
 
 **Confirming costs something, or the treadmill moves up a level.** If agent 2
 reviews a decision and agrees, and nothing records that, agent 3 does the same
@@ -1320,7 +1401,7 @@ Each step is useful alone, and each is a precondition for the next.
 | 1 ✅ | `apply_reflection(similarities=[…])` + `ASSESSED` edge | #64's fix. Stops the re-nomination treadmill, and gives corroboration its first real input — **only from `one_claim` verdicts** (§1.2). Independent of everything below. **Built 2026-08-22**, with three refusals the design did not name and one ordering rule it did not state; see §10.2's amendment. |
 | 2 ✅ | `agent` table, approved-id settings, `claim_agent`, approval over `ctx.elicit` with `epimemer agents confirm` as fallback | Registry with nothing yet pointing at it. Full protocol on both backends, per the standing rule. **Built 2026-08-22**, with one gate split in two and one seeding rule widened; see §10.3's amendment. |
 | 3 | `judge` threaded through the reflect-side write paths | Smallest surface producing attributed decisions, so step 5 has something to read. |
-| 4 | `judge` threaded through ingest, mandatory (§3.2) | The bigger churn, and where the unreviewable priors are. **This is the cutover date** §3.3 pins. |
+| 4 | `judge` threaded through ingest (§3.2), plus the require-a-judge setting (§3.3.1) | The bigger churn, and where the unreviewable priors are. **No cutover** — the setting decides, per graph, and ships default-off, so an upgraded server keeps writing exactly as before. |
 | 5 | `DecisionRecord` + journal writes + W&S §9 folded in (§9) | Makes *"what did this agent judge"* one query. |
 | 6 | `review(mode="all")`, capped, with tier-2 ordering (§6.2) | Works on the existing corpus and orders it usefully, since derived signals need no attribution. |
 | 7 | `by_agent`, `since`, `unreviewed`, `advisory`, tier-1 ordering, `certainty_ceiling`; `apply_review` | Need attributed decisions to exist; useful from the first session after step 4. |
@@ -1598,9 +1679,18 @@ session via `ctx.set_state`.
 
 **Approval** goes over `ctx.elicit` where the client supports it (§2.3).
 
-**The CLI fallback does not work for every backend, and the gap is load-bearing
-at step 4.** Approved ids live in per-graph settings *inside the storage
-backend*. `epimemer agents confirm <id>` is a separate process — and `ISSUES.md`
+**The CLI fallback does not work for every backend, and the gap matters as soon
+as anyone requires a judge.** Approved ids live in per-graph settings *inside the
+storage backend*.
+
+> **Revised 2026-08-23.** This subsection previously said the gap was
+> load-bearing *at step 4*, because step 4 was a dated cutover that would turn
+> an approval-less server into one refusing every write. §3.3 has replaced the
+> cutover with a per-graph setting that ships off, so nothing is bricked by
+> upgrading. The gap is real for anyone who turns the setting **on** with a
+> client that cannot elicit and an embedded store — which is the same failure,
+> now reached by choice rather than by release date, and still worth closing
+> here. `epimemer agents confirm <id>` is a separate process — and `ISSUES.md`
 #16 records that **a second `mem://` connection is a separate store**. So
 against an embedded backend the CLI writes approvals into a store the running
 server will never read. Combine that with an elicitation-less client and there
@@ -1645,10 +1735,20 @@ never read from a module global (§3.2). Step 3 covers the reflect-side writers
 `record_variant`, `judge_importance`, `archive`, `restore`); step 4 covers
 `store_decomposition` and `segment`.
 
-**Step 4 is the cutover.** From that release `judge` is required and a write
-without one is **refused, not defaulted** — §3.3's whole rule rests on it. The
-release note must say that approved ids have to be configured first, or an
-upgraded server refuses every write.
+**Step 4 carries the setting, and there is no cutover** (§3.3, revised
+2026-08-23). `judge` is optional in every signature; one shared check at the
+tool boundary refuses a blank **only where the graph requires one**, and the
+setting ships off, so an upgraded server keeps writing exactly as it did. The
+release note says what turning it on requires — approved ids first — rather than
+warning about an upgrade that changes nothing by itself.
+
+**What step 4 must also carry, if the setting is to be usable**: a way for a
+write to name its judge where the session cannot hold one. `claim_agent` binds
+the identity to the MCP session, and a caller without one gets
+`session_bound: false` (§10.3, built) — which is harmless while blanks are
+allowed and total once they are not. An explicit `agent_id` on the write is no
+weaker than the binding, because approving the id is the actual gate and the
+binding was only ever ergonomics.
 
 ### 10.5 Step 5 — the journal
 
@@ -1786,6 +1886,13 @@ earlier claim glib.
 
 **Decided, and now filed as work:**
 
+- **Blank means unknown, and requiring a judge is a per-graph setting** →
+  §3.3, revised 2026-08-23 by the user, reversing the day-one absence rule.
+  Filed as part of **step 4**, which also gains the setting itself and a way for
+  a write to name its judge where the session cannot hold one. Nothing built
+  contradicted it — every occurrence was in this document, which is why the
+  correction costs edits rather than a migration.
+
 - **Judgment edges migrate on a correction** → `ISSUES.md` **#65**, **✅ built
   2026-08-22**, before step 1 as required. `JUDGMENT_EDGE_TYPES` anchors them on
   every retirement (§10.2.1). Building it surfaced two things the design had
@@ -1827,6 +1934,29 @@ ingest priors would bury an epistemic move in a metadata utility.
 ### 12.2 Settled
 
 Newest first.
+
+> **Blank means unknown, and requiring a judge is a per-graph setting** —
+> decided 2026-08-23 by the user, §3.3. This reverses *"`judged_by is None`
+> means written before attribution existed"*, which was the one decision in this
+> document made **on day one to avoid a scar rather than to describe anything**
+> — and it overshot in a way worth recording, because the instinct behind it is
+> sound and will recur.
+>
+> The scars it was avoiding are real: a literal `0.5` confidence on every
+> pre-2026-08-19 row, and 305 unjudged `claim_kind`s. Both are cases where a
+> blank was given a meaning nobody asserted. The fix for that is to **stop
+> asserting**, and *unknown* asserts nothing. The old rule instead bought a
+> second meaning — *legacy* — by making the field mandatory for every write for
+> ever, which is a permanent cost on every graph to date-stamp a population that
+> needed no date. **Guarding against a scar is not the same as needing a
+> guarantee**, and a rule that costs more than the ambiguity it removes is the
+> shape to watch for.
+>
+> What replaces it costs one setting: off by default, on where the user wants
+> every write tied to an agent or a person, not agent-settable for the reason
+> approvals are not. And the positive half of *no backfill* is now stated: the
+> reviewer's id lands on the **review** record and never on the reviewed one, so
+> an unattributed graph can still be reviewed under full attribution.
 
 > **The whole edge is captured, not a field list** — decided 2026-08-22 after
 > the second review, §7.9. `MergedEdge` named seven fields and omitted
