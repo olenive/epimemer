@@ -166,9 +166,10 @@ class AgentDescription(BaseModel):
     digest: str
     text: str
     recorded_at: datetime
-    # Set only by `epimemer agents confirm`, which is a CLI command and not an
-    # MCP tool (§2.3). `None` is *self-described, unconfirmed* — a different
-    # epistemic object, never collapsed into the same field.
+    # Set only through a channel that terminates at the user — `ctx.elicit`,
+    # or the `epimemer agents confirm` CLI where the client cannot elicit
+    # (§2.3). Never by the agent alone. `None` is *self-described, unconfirmed*
+    # — a different epistemic object, never collapsed into the same field.
     confirmed_at: datetime | None = None
 
 
@@ -195,35 +196,63 @@ An agent that mints or claims its own id cannot establish that it is a
 collapses, because `reviewed_by == judged_by` and self-review is
 indistinguishable from independent review.
 
-So identity arrives from outside the agent:
+**Identity is proposed, not claimed** (user's design, 2026-08-22). The agent is
+not the author of who it is, and it is not left guessing either — it offers, the
+user edits, and the approved pair is what gets recorded:
 
-| Step | Who | Where |
+| Step | Who | How |
 |---|---|---|
-| Authorise an id | the user | graph settings — the per-graph override pattern, no singleton |
-| Claim it for this session | the agent | `claim_agent(agent_id, description)` (MCP) |
-| Confirm a description | the user | `epimemer agents confirm <id>` (**CLI, not MCP**) |
-| Re-describe | the agent | `claim_agent` with new text; appends a version |
+| Detect a new session or a different client | the server | `ctx.session_id`, `ctx.client_id` |
+| Propose an id and a description | the agent | `claim_agent(agent_id, description)` |
+| Edit and approve, or name a different id | **the user** | `ctx.elicit` — the server asks, the user answers (§2.3) |
+| Record the approved pair | the server | `Agent` + an `AgentDescription` version |
+| Re-describe later | the agent, approved the same way | appends a version, never edits one |
 
-`claim_agent` **refuses an id the user has not authorised.** That refusal is the
-whole mechanism: an id in the settings is an assertion the user made, and the
-agent can only pick from what is there. Two sessions of the same model are
-distinct judges exactly when the user gave them distinct ids, which is the right
-place for that decision to live.
+**`claim_agent` refuses an id the user has not approved.** An unapproved or
+absent identity comes back refused, with a message the agent puts to the user —
+so **the refusal is the prompt**, and no separate startup handshake is needed.
+Admitting unapproved ids would hand identity straight back to the agent, and
+*"a different agent reviewed this"* would be self-asserted again, which is the
+whole thing this section exists to prevent.
+
+**The user owns the semantics, and the system imposes none.** Whether ids track
+a model (*"my llama agent"*), a role (*"my critic"*), or a task (*"my editor
+reviewer"*) is the user's scheme. Two harnesses running the same model are one
+judge or two exactly as the user decides.
+
+**What the server can and cannot detect, stated because it bounds the above.**
+`client_id` and `session_id` identify the **client application**, not the model
+behind it. A different harness is detectable; **swapping the model inside one
+harness is not** — the model is never on the wire. So detection reliably answers
+*"is this a new session?"* and can never answer *"is this a different LLM?"*.
+That second question is the user's to answer, which is what the flow above
+already assumes.
 
 **Session-per-mint was rejected** — it makes self-review impossible by
 construction, but fragments one judge across sessions, which is the failure
 §2.1 ruled out hashing for.
 
-### 2.3 Confirmation is not an MCP tool, and cannot be
+### 2.3 Confirmation reaches the user, not the agent
 
-An MCP tool called by the agent cannot establish that the *user* called it. If
-`confirm_agent` were a tool, `confirmed_at` would mean *"the agent asserts the
-user confirmed"*, which is worth approximately nothing and is worse than
-nothing once anybody builds on it.
+The first draft said confirmation *"is not an MCP tool, and cannot be"*, on the
+grounds that a tool called by the agent cannot establish that the **user** called
+it. The premise is right and the conclusion was wrong, because it assumed every
+MCP call originates with the agent.
 
-So confirmation is a CLI command outside the agent's reach. This is the one
-place in the design with real human weight, and it is worth the extra step to
-keep it real.
+**`ctx.elicit` inverts the direction**: the server asks, and the answer comes
+back from the user through the client's own UI. Present in FastMCP today, and
+gated on a capability the client declares. So confirmation can be in-band after
+all, and `confirmed_at` can mean what it says.
+
+| Channel | When | What `confirmed_at` then means |
+|---|---|---|
+| `ctx.elicit` | the client supports elicitation | the user answered, through their own UI |
+| `epimemer agents confirm <id>` (CLI) | it does not | the user ran a command the agent cannot run |
+
+**What has not changed is the rule.** No path exists by which the agent alone
+sets `confirmed_at` — the two channels above are the only ones, and both
+terminate at the user. A `confirm_agent` tool the agent could call is still
+refused, for the reason the first draft gave.
 
 ### 2.4 Self-description is a claim, not a credential
 
@@ -625,12 +654,36 @@ has come to depend on the survivor:
 correctness, and a reversal that ignored it would leave dependents resting on
 text that no longer exists.
 
-### 7.6 What is still open
+### 7.6 What a reversal restores
 
-Whether a reversal re-flags the dependent inferences it re-points, and under
-which label, is §12's question 2 rather than settled here. Everything
-above is about being *able* to reverse; what a reversal then owes the rest of
-the graph is a separate call.
+**The principle (user's, 2026-08-22): reversing returns the graph to the status
+it had before the merge, and reversing back and forth N times is
+indistinguishable from doing it once.** Every flag the merge set is returned.
+
+| The merge did | Reversal does | Exact |
+|---|---|---|
+| moved A and B's knowledge edges onto S | replays the captured partition, **splitting** an edge that collapsed when both cited one document | ✅ — what §7.1's capture is for |
+| A, B status → `MERGED` | → `ACTIVE` | ✅ |
+| wrote `merged_into` A→S, B→S | deletes them | ✅ |
+| wrote `evidence_merged` on dependents | deletes them | ✅ |
+| appended a lifecycle episode to A and B | closes it with `restored_at` | status ✅, history appended |
+| created survivor S | §12's remaining question | |
+| — | appends a reversal `DecisionRecord` | new, by design |
+
+**No new flag is raised on the dependents, and that is the principle working
+rather than an omission.** The merge re-pointed each dependent's `derived_from`
+onto S and flagged it `evidence_merged` — *your premise was reworded, go re-read
+it*. Reversal re-points it back to the premise it was actually drawn from, so
+the inference is returned to the state it was in before and there is nothing for
+a reader to re-read. A flag here would assert a change the reversal has just
+undone. `evidence_merged` keeps its name and its single meaning.
+
+**One boundary, because it is the only place exactness does not hold: status is
+restored, history is appended.** `lifecycle` is append-only by design — a node
+leaving the active set twice is the Saint Petersburg case #53 legalised — so a
+merge/reverse cycle leaves a closed episode behind, and the journal keeps both
+decisions. That is the record that it happened, which is not a flag and is not
+returned.
 
 ---
 
@@ -693,7 +746,7 @@ Each step is useful alone, and each is a precondition for the next.
 |---|---|---|
 | **0** | **`merge_facts` captures the pre-merge edge partition on the survivor**, bounded by `merge_undo_depth` (§7) | **Capture or lose.** The partition exists only at merge time (§7.1), so every merge taken before this lands is permanently irreversible. Independent of the rest, smallest change here, and the only step with a deadline. |
 | 1 | `apply_reflection(similarities=[…])` + `ASSESSED` edge | #64's fix. Stops the re-nomination treadmill, and gives corroboration its first real input — **only from `one_claim` verdicts** (§1.2). Independent of everything below. |
-| 2 | `agent` table, authorised-id settings, `claim_agent`, `epimemer agents confirm` | Registry with nothing yet pointing at it. Full protocol on both backends, per the standing rule. |
+| 2 | `agent` table, approved-id settings, `claim_agent`, approval over `ctx.elicit` with `epimemer agents confirm` as fallback | Registry with nothing yet pointing at it. Full protocol on both backends, per the standing rule. |
 | 3 | `judge` threaded through the reflect-side write paths | Smallest surface producing attributed decisions, so step 5 has something to read. |
 | 4 | `judge` threaded through ingest, mandatory (§3.2) | The bigger churn, and where the unreviewable priors are. **This is the cutover date** §3.3 pins. |
 | 5 | `DecisionRecord` + journal writes + W&S §9 folded in (§9) | Makes *"what did this agent judge"* one query. |
@@ -737,18 +790,23 @@ before journal before modes.
 1. **What is the `uncertain` floor?** §5 settles the ladder but not the
    threshold. Likely below 0.5, but it wants the same treatment as every other
    bar here: one named constant, documented, read everywhere (#63).
-2. **Does a reversal need to re-run what depended on it?** Overturning a merge
-   re-points its dependent inferences back, which is a premise change and should
-   plausibly re-flag them the way the merge did (#61). Reusing `evidence_merged`
-   with the operation in metadata is the cheap answer — the semantics a reader
-   needs are *the premise under you was rewritten, go re-read it*, true in both
-   directions, and neither direction is an archival class, so #61's reason for
-   splitting it from `evidence_stale` does not apply. The objection is that the
-   name then over-promises on an unmerge.
-3. **Does `claim_agent` refuse, or warn, on an unauthorised id?** §2.2 says
-   refuse. The softer alternative — admit it as unconfirmed — is friendlier for
-   solo use and dissolves the guarantee §2.2 exists to provide.
+2. **Is the survivor deleted or retired on reversal?** Deleting gives the exact
+   idempotence §7.6 states, and needs `delete_node` added to the protocol and
+   both backends — a first for this system, since nothing has ever hard-deleted
+   a node. Retiring needs nothing new but leaves one husk per merge/reverse
+   cycle, so N cycles stop being equal to one. What makes deletion defensible is
+   §7.5's guard: by the time reversal is permitted, the only edges pointing at
+   the survivor are ones the merge itself created.
 
+> **A reversal raises no new flag on its dependents** — decided 2026-08-22 by
+> §7.6's principle, which was a question here. The merge's `evidence_merged`
+> edges are deleted rather than mirrored by a second label.
+>
+> **`claim_agent` refuses an unapproved id** — decided 2026-08-22. Admitting
+> invented ids hands identity back to the agent and dissolves the guarantee §2.2
+> provides. The cost is one approval on a fresh install, and §2.2's refusal-as-
+> prompt is what makes that a conversation rather than an error.
+>
 > **Undo was question 2 and is now §7** (decided 2026-08-22). The question
 > changed shape on inspection: the partition reversal needs is destroyed at
 > merge time, so the live decision was *capture or lose* rather than *build or
