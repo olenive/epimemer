@@ -1150,6 +1150,29 @@ class SurrealDBStorage:
             )))
         return rows
 
+    async def _stored_lifecycles(
+        self, nodes: Sequence[EpistemicNode]
+    ) -> dict[str, Sequence[LifecycleEpisode]]:
+        """Each node's lifecycle **as stored**, keyed by id (#67).
+
+        A transaction argument is a *request* — which nodes to retire — and its
+        `lifecycle` field was being read as a *snapshot*. A caller holding a node
+        it loaded before an earlier retirement passes a stale list, and appending
+        to that silently drops every episode since — which is how a second
+        merge/reverse cycle came back looking like the first, blind to the
+        oscillation `merge_cycle_limit` exists to catch. `InMemoryStorage` reads
+        the stored node in all five of these paths, so trusting the argument also
+        made the two backends give different histories for the same call.
+
+        One batched read, taken pre-transaction like every other plan here: the
+        adapter is single-connection and documented as unsafe for concurrent
+        callers, so nothing interleaves. A node with no row falls back to the
+        argument, which leaves a missing node failing where each path already
+        fails it rather than inventing a second answer here.
+        """
+        stored = await self.get_nodes([node.id for node in nodes])
+        return {node.id: stored.get(node.id, node).lifecycle for node in nodes}
+
     async def supersede_node_tx(
         self,
         old_node: EpistemicNode,
@@ -1170,6 +1193,7 @@ class SurrealDBStorage:
         # its own.
         moved = [t.value for t in moved_edge_types(status)]
         copied_data = await self._plan_copied_edges(old_node.id, new_node.id, status)
+        lifecycles = await self._stored_lifecycles([old_node])
 
         statements = [
             f"UPDATE {_node_to_table(old_node)} SET status = $status, "
@@ -1197,7 +1221,7 @@ class SurrealDBStorage:
             "new_data": _serialize(new_node),
             "emb_data": _serialize(new_embedding),
             "lifecycle": _episode_rows(with_retirement(
-                old_node.lifecycle, at=superseded_at, because=status,
+                lifecycles[old_node.id], at=superseded_at, because=status,
                 counterpart=new_node.id,
             )),
             "moved": moved,
@@ -1218,6 +1242,7 @@ class SurrealDBStorage:
         evidence_edges: Sequence[NodeEdge] = (),
         clear_edge_ids: Sequence[str] = (),
     ) -> None:
+        lifecycles = await self._stored_lifecycles([old_node])
         statements = [
             f"UPDATE {_node_to_table(old_node)} SET status = $status, "
             f"superseded_at = $sup_at, lifecycle = $lifecycle "
@@ -1230,7 +1255,7 @@ class SurrealDBStorage:
             "old_uid": old_node.id,
             "lineage_data": _edge_row(lineage_edge),
             "lifecycle": _episode_rows(with_retirement(
-                old_node.lifecycle, at=superseded_at, because=status,
+                lifecycles[old_node.id], at=superseded_at, because=status,
                 counterpart=existing_id,
             )),
         }
@@ -1275,10 +1300,11 @@ class SurrealDBStorage:
         # The history is per-node, so it takes a statement per node. The status
         # flip above stays a single bulk update: it is the same for all of them,
         # and it is the part that has to be all-or-nothing.
+        lifecycles = await self._stored_lifecycles(nodes)
         for i, node in enumerate(nodes):
             episodes = (
-                with_return(node.lifecycle, at=at) if returning
-                else with_retirement(node.lifecycle, at=at, because=status)
+                with_return(lifecycles[node.id], at=at) if returning
+                else with_retirement(lifecycles[node.id], at=at, because=status)
             )
             params[f"lifecycle_{i}"] = _episode_rows(episodes)
             params[f"uid_{i}"] = node.id
@@ -1390,19 +1416,14 @@ class SurrealDBStorage:
         if lineage_data:
             statements.append("INSERT INTO node_edge $lineage_data")
 
-        # The *stored* lifecycle, not the caller's copy. A node object handed in
-        # by a caller that loaded it before an earlier merge carries a stale
-        # list, and appending to that silently drops every episode since —
-        # which is how a second merge/reverse cycle came back looking like the
-        # first. `InMemoryStorage` reads the stored node here, so trusting the
-        # argument also made the two backends disagree.
-        stored = await self.get_nodes([source.id for source in source_nodes])
+        # The *stored* lifecycle, not the caller's copy — `_stored_lifecycles`
+        # has the whole argument (#67).
+        lifecycles = await self._stored_lifecycles(source_nodes)
         source_params: dict = {}
         for i, source in enumerate(source_nodes):
-            current = stored.get(source.id, source)
             source_params[f"source_{i}"] = source.id
             source_params[f"lifecycle_{i}"] = _episode_rows(with_retirement(
-                current.lifecycle, at=merged_at, because=NodeStatus.MERGED,
+                lifecycles[source.id], at=merged_at, because=NodeStatus.MERGED,
                 counterpart=merged_node.id,
             ))
 
@@ -1468,14 +1489,12 @@ class SurrealDBStorage:
             params["restored_rows"] = rows
 
         # One statement per source: the status and instant are shared, each
-        # source's history is its own.
-        # Stored rather than passed, for the reason `merge_nodes_tx` states.
-        stored = await self.get_nodes([source.id for source in source_nodes])
+        # source's history is its own. Stored rather than passed (#67).
+        lifecycles = await self._stored_lifecycles(source_nodes)
         for i, source in enumerate(source_nodes):
-            current = stored.get(source.id, source)
             params[f"source_{i}"] = source.id
             params[f"lifecycle_{i}"] = _episode_rows(
-                with_return(current.lifecycle, at=restored_at)
+                with_return(lifecycles[source.id], at=restored_at)
             )
             statements.append(
                 f"UPDATE {_node_to_table(source)} SET status = $status, "

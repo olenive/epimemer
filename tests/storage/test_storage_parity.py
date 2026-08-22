@@ -1472,6 +1472,120 @@ class TestArchivalStatus:
         assert {n.id for n in nodes} <= active_ids
 
 
+class TestLifecycleComesFromTheStoredRow:
+    """A retirement appends to the history **in the database**, not the caller's.
+
+    Every transaction here takes node objects, and each one has to decide
+    whether the argument is a *request* — which nodes to retire — or a
+    *snapshot* of their state. It is a request: a caller holding a node it
+    loaded before an earlier retirement carries a stale `lifecycle`, and
+    appending to that silently drops every episode since (#67).
+
+    Parity rather than a SurrealDB test because the two backends answered
+    differently: `InMemoryStorage` always re-read the stored node, so the same
+    call produced two different histories depending on where it ran. The failure
+    is invisible from behaviour — the node ends up with the right status either
+    way, and only the record of how it got there is short.
+    """
+
+    RETIRED = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    CAME_BACK = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    AGAIN = datetime(2026, 3, 1, tzinfo=timezone.utc)
+
+    async def _out_and_back(self, store, content: str):
+        """A node that has left the active set once and returned.
+
+        Returns it with a copy of itself as it was *before* any of that — the
+        object a caller that loaded early would still be holding.
+        """
+        node = Fact(content=content, source_id="s1")
+        await store.store_node(node)
+        stale = node.model_copy(deep=True)
+        await store.set_node_status_tx(
+            [node], status=NodeStatus.ARCHIVED, at=self.RETIRED
+        )
+        await store.set_node_status_tx(
+            [node], status=NodeStatus.ACTIVE, at=self.CAME_BACK
+        )
+        return node, stale
+
+    async def test_supersede_appends_to_the_stored_history(self, store):
+        old, stale = await self._out_and_back(store, "the earlier claim")
+        new = Fact(content="the corrected claim", source_id="s2")
+
+        await store.supersede_node_tx(
+            stale,
+            new,
+            EmbeddingRecord(item_id=new.id, model_id="test", vector=[0.0, 1.0, 0.0]),
+            NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY),
+            status=NodeStatus.CORRECTED,
+            superseded_at=self.AGAIN,
+        )
+
+        stored = await store.get_node(old.id)
+        assert [(e.retired_at, e.restored_at) for e in stored.lifecycle] == [
+            (self.RETIRED, self.CAME_BACK),
+            (self.AGAIN, None),
+        ]
+        assert stored.lifecycle[-1].counterpart == new.id
+
+    async def test_supersede_by_existing_appends_to_the_stored_history(self, store):
+        old, stale = await self._out_and_back(store, "the earlier claim")
+        keeper = Fact(content="the claim already there", source_id="s2")
+        await store.store_node(keeper)
+
+        await store.supersede_by_existing_tx(
+            stale,
+            keeper.id,
+            NodeEdge(src_id=old.id, dst_id=keeper.id, type=EdgeType.SUPERSEDED_BY),
+            status=NodeStatus.CORRECTED,
+            superseded_at=self.AGAIN,
+        )
+
+        stored = await store.get_node(old.id)
+        assert [(e.retired_at, e.restored_at) for e in stored.lifecycle] == [
+            (self.RETIRED, self.CAME_BACK),
+            (self.AGAIN, None),
+        ]
+        assert stored.lifecycle[-1].counterpart == keeper.id
+
+    async def test_archiving_appends_to_the_stored_history(self, store):
+        node, stale = await self._out_and_back(store, "trivial")
+
+        await store.set_node_status_tx(
+            [stale], status=NodeStatus.ARCHIVED, at=self.AGAIN
+        )
+
+        stored = await store.get_node(node.id)
+        assert [(e.retired_at, e.restored_at) for e in stored.lifecycle] == [
+            (self.RETIRED, self.CAME_BACK),
+            (self.AGAIN, None),
+        ]
+
+    async def test_restoring_closes_the_stored_open_episode(self, store):
+        """The return branch fails the other way: it writes *less*, not more.
+
+        `with_return` is a no-op on a history with nothing open, so a caller's
+        pre-archival copy would have written an empty list straight over the
+        episode that was there — losing the retirement as well as its return.
+        """
+        node = Fact(content="trivial", source_id="s1")
+        await store.store_node(node)
+        stale = node.model_copy(deep=True)
+        await store.set_node_status_tx(
+            [node], status=NodeStatus.ARCHIVED, at=self.RETIRED
+        )
+
+        await store.set_node_status_tx(
+            [stale], status=NodeStatus.ACTIVE, at=self.CAME_BACK
+        )
+
+        stored = await store.get_node(node.id)
+        assert [(e.retired_at, e.restored_at) for e in stored.lifecycle] == [
+            (self.RETIRED, self.CAME_BACK)
+        ]
+
+
 class TestLexicalSearch:
     """`text_search` is the first protocol method where the backends genuinely
     differ: SurrealDB scores in-engine with its own analyzer, the in-memory
