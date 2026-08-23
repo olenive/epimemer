@@ -1951,8 +1951,12 @@ derived read over records whose `subject_ids` contains the node, and W&S §5.3's
 > only while every rendering has the same shape — and Pydantic omits the
 > fractional part on a whole second, so a row at `…41Z` sorts *after* a bound at
 > `…41.5Z` because `"Z" > "."`. The journal writes microseconds on both sides.
-> `query_changes`' lifecycle window has the same latent case and is not fixed
-> here; it is `ISSUES.md` #70.
+> `query_changes`' lifecycle window had the same latent case — **fixed the same
+> day** as `ISSUES.md` #70, by `instant()`, which compares instants rather than
+> spellings. The journal keeps its padded strings rather than converting: it is
+> the one timestamp with an index a range actually uses, and wrapping the field
+> costs 45× at 50,000 rows. Reader converts where there is no index; writer pads
+> where there is.
 
 ### 10.6 Steps 6–7 — `review()`
 

@@ -10,6 +10,8 @@ When using Marimo notebooks remember to not re-define variables in different cel
 
 Our goal is to build a robust and secure system, not simply a prototype. We don't want to trade speed for technical debt.
 
+Never compare two timestamps naively in a backend query. They are stored as ISO-8601 text, and `>=` on text is only chronologically correct while both sides render identically — which nothing guarantees. Use `instant()` in `surrealdb_adapter.py`, or make the writer pad where an index rules that out. `dev-docs/DEVELOPER_GUIDE.md` has the rule and the measurements behind it.
+
 # Git Usage
 - Do not merge into the main branch without asking.
 - Keep commit messages very succinct.

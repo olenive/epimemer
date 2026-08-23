@@ -554,17 +554,52 @@ def _edge_row(edge: NodeEdge) -> dict:
     return row
 
 
-# Timestamps are uniform UTC ISO-8601 strings, so these string comparisons are
-# chronologically correct — the same property `query_changes` already relies on
-# for `created_at` and `superseded_at`. The `?? []` is load-bearing: on a row
-# written before episodes existed the field is absent, and `array::len(NONE)` is
-# an error rather than zero.
+def instant(expr: str) -> str:
+    """`expr` as a datetime, for comparing against another one.
+
+    **Never compare two timestamps as strings here.** They are stored as ISO-8601
+    text, and a string comparison is chronologically correct only while every
+    rendering has the same shape — which is not a property the writers guarantee.
+    Pydantic omits the fractional part when it is exactly zero, so a row written
+    on a whole second renders `…:41Z` while a bound renders `…:41.500000Z`, and
+    `"Z" > "."` puts the earlier row *after* the later bound. The `+00:00` and
+    `Z` suffixes differ the same way. Wrapping both sides removes the whole class
+    rather than the instances (`ISSUES.md` #70).
+
+    **It costs a full scan, and that is why it is not used everywhere.** Measured
+    2026-08-23 on embedded SurrealDB: the conversion adds ~2.3 µs per row
+    scanned — 1.19× on a realistic `query_nodes` window over 10,000 rows, which
+    on the real graphs (644 and ~1,000 nodes) is under 2 ms. It buys nothing to
+    lose at the sites below, because **none of those fields is indexed**: both
+    forms already plan as `Iterate Table`. Where a timestamp *is* indexed the
+    picture inverts — a range over the journal's `decided_at` went 6.2 ms →
+    281 ms at 50,000 rows, 45×, because wrapping the field drops
+    `Iterate Index`.
+
+    So the rule has two halves, and which applies is decided by the index:
+
+    - **No index** → compare through this function. What the sites below do.
+    - **Indexed** → the comparison must stay plain, so the *writer* has to
+      guarantee one rendering. `_iso_micros` is that guarantee, and
+      `_decision_row` is its only caller.
+
+    A new indexed timestamp field takes on the second obligation. A new
+    comparison of an unindexed one takes the first.
+    """
+    return f"type::datetime({expr})"
+
+
+# The `?? []` is load-bearing: on a row written before episodes existed the field
+# is absent, and `array::len(NONE)` is an error rather than zero. The `!= NONE`
+# guard on `restored_at` is load-bearing for a second reason now — `type::datetime`
+# of an absent value is an error, and the guard short-circuits before it.
 _EPISODE_IN_WINDOW = (
     "array::len((lifecycle ?? [])"
-    "[WHERE retired_at >= $start AND retired_at < $end]) > 0 "
+    f"[WHERE {instant('retired_at')} >= {instant('$start')} "
+    f"AND {instant('retired_at')} < {instant('$end')}]) > 0 "
     "OR array::len((lifecycle ?? [])"
-    "[WHERE restored_at != NONE AND restored_at >= $start "
-    "AND restored_at < $end]) > 0"
+    f"[WHERE restored_at != NONE AND {instant('restored_at')} >= {instant('$start')} "
+    f"AND {instant('restored_at')} < {instant('$end')}]) > 0"
 )
 
 
@@ -1010,8 +1045,10 @@ class SurrealDBStorage:
                 )
             else:
                 rows = await self._query(
-                    f"SELECT * FROM {table} WHERE created_at <= $at_time "
-                    f"AND (superseded_at IS NONE OR superseded_at > $at_time)",
+                    f"SELECT * FROM {table} WHERE "
+                    f"{instant('created_at')} <= {instant('$at_time')} "
+                    f"AND (superseded_at IS NONE "
+                    f"OR {instant('superseded_at')} > {instant('$at_time')})",
                     {"at_time": at_time.isoformat()},
                 )
             results.extend(_record_to_node(table, r) for r in rows)
@@ -1061,9 +1098,11 @@ class SurrealDBStorage:
         for table in tables:
             rows = await self._query(
                 f"SELECT * FROM {table} WHERE "
-                f"(created_at >= $start AND created_at < $end) "
-                f"OR (superseded_at != NONE AND superseded_at >= $start "
-                f"AND superseded_at < $end) "
+                f"({instant('created_at')} >= {instant('$start')} "
+                f"AND {instant('created_at')} < {instant('$end')}) "
+                f"OR (superseded_at != NONE "
+                f"AND {instant('superseded_at')} >= {instant('$start')} "
+                f"AND {instant('superseded_at')} < {instant('$end')}) "
                 f"OR {_EPISODE_IN_WINDOW}",
                 {"start": start.isoformat(), "end": end.isoformat()},
             )

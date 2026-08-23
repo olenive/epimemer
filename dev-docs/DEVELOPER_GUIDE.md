@@ -326,9 +326,59 @@ parameterizes `storage` over `InMemoryStorage` and `SurrealDBStorage("mem://")`.
    - Core storage operations (documents, segments, nodes, edges, embeddings, timelines, metacontexts)
    - Multi-graph interface: `current_database`, `list_databases()`, `switch_database()`, `delete_database()` — both existing backends support multiple named graphs (default `"default"`); see `InMemoryStorage` for the in-process pattern
    - Apply `normalize_for_storage` on write so `None`-valued dict keys round-trip identically across backends
+   - **Never compare two timestamps naively** — see the section below
    - If the backend talks over a socket, it owns reconnection. An MCP server
      outlives the databases it talks to, so a dropped connection has to be
      rebuilt rather than raised forever — see `_reconnect` in
      `surrealdb_adapter.py`, and the constraints in its comment
 2. Add tests in `tests/storage/test_your_backend.py`, and add the backend to the parity fixtures in `tests/conftest.py`
 3. Add a factory branch in `epimemer/mcp/config.py`
+
+## Comparing timestamps
+
+**A timestamp comparison must be about instants, not about spelling.** If a
+backend stores timestamps as text — SurrealDB does — then `>=` compares two
+strings, and that is chronologically correct only while every rendering has the
+same shape. It is not a shape the writers guarantee: Pydantic omits the
+fractional part when it is exactly zero, so a row written on a whole second
+renders `…:41Z` while a bound renders `…:41.500000Z`, and `"Z" > "."` sorts the
+earlier row *after* the later bound. The `Z` and `+00:00` suffixes differ the
+same way.
+
+This shipped for months and was invisible, because `datetime.now()` essentially
+never lands on a whole second — so every test that built a timestamp built a
+safe one by accident (`ISSUES.md` #70).
+
+**The rule has two halves, and the index decides which applies.**
+
+| The field is… | Compare how | Who guarantees correctness |
+|---|---|---|
+| **not indexed** | through `instant()` in `surrealdb_adapter.py`, which wraps both sides in `type::datetime` | the reader |
+| **indexed** | plainly — wrapping the field drops the index scan | the **writer**, which must render one canonical shape (`_iso_micros`) |
+
+The measurements behind the split, taken 2026-08-23 on embedded SurrealDB:
+
+- Converting costs about **2.3 µs per row scanned** — 1.19× on a realistic
+  `query_nodes` window over 10,000 rows, and under 2 ms on the real graphs.
+- It costs nothing else at the unindexed sites, because `created_at`,
+  `superseded_at` and the `lifecycle` timestamps **have no index**: both forms
+  already plan as `Iterate Table`. (The first draft of #70 assumed an index was
+  being given up here. There was none to give up — check the plan before
+  believing that argument.)
+- Where a timestamp *is* indexed the picture inverts. A range over the decision
+  journal's `decided_at` went **6.2 ms → 281 ms at 50,000 rows, 45×**, because
+  wrapping the field turns `Iterate Index` into `Iterate Table`. That is why the
+  journal pads on write instead, in `_decision_row`.
+
+So: **a new comparison of an unindexed timestamp goes through `instant()`. A new
+indexed timestamp field takes on the writer's obligation instead** — and if you
+add an index to a field something already compares through `instant()`, the
+comparison must change with it or the index is dead weight.
+
+`EXPLAIN` is how you check which case you are in:
+
+```python
+await store._query("SELECT * FROM fact WHERE created_at <= $at EXPLAIN", {"at": at})
+# {'operation': 'Iterate Table'}  → unindexed, use instant()
+# {'operation': 'Iterate Index'}  → indexed, pad on write instead
+```

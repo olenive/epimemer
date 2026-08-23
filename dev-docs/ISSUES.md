@@ -3145,7 +3145,7 @@ second writer and the shape of a record is open anyway.
 
 ---
 
-### Issue 70 — SurrealDB compares timestamps as strings, and Pydantic does not always write the same string — 🟠 OPEN (found 2026-08-23)
+### Issue 70 — SurrealDB compares timestamps as strings, and Pydantic does not always write the same string — ✅ FIXED 2026-08-23 (found the same day)
 
 A backend divergence, found while building the journal and reproduced:
 
@@ -3173,31 +3173,42 @@ notices. The `+00:00` versus `Z` suffix mismatch on its own is harmless, which
 is why this survived: at equal instants it errs in the direction each comparison
 already wants.
 
-**Not two lines.** Padding the query bound does not help, because the *stored*
-side is what varies, and rows written before any fix keep their shape. The two
-real options are normalising on write (a serialization change plus a backfill
-for existing rows) or comparing with `type::datetime()` on both sides (correct
-for old and new alike, at the cost of the index). A third worth pricing: a
-second, always-padded field written beside `created_at` purely to compare on,
-which keeps an index at the cost of a column and a backfill.
+**Fixed by comparing instants rather than spellings.** `instant()` in
+`surrealdb_adapter.py` wraps both sides in `type::datetime`, at the three sites
+that compare a timestamp: `query_nodes(at_time=…)`, `query_changes`' window, and
+`_EPISODE_IN_WINDOW`. No migration — it is correct for rows already written,
+whatever shape they are in, which is what makes it the cheap answer.
+`TestTimestampsAtAWholeSecond` covers both directions and the lifecycle window,
+on both backends.
 
-**The next step is a measurement, not a queue position.** The first draft of
-this entry said the decision "wants whoever next touches `graph_as_of`'s
-performance", which gates a *correctness* bug on somebody doing *performance*
-work — the wrong trigger, and one this repo has argued against in its own
-words: #53 called silent point-in-time wrongness "the kind of wrong nobody
-notices". #48 is the precedent for what to do instead: measure
-`type::datetime()` against the indexed comparison, and let the number decide.
+**The measurement said take it, and corrected this entry's own reasoning while
+doing so.** The first draft said the fix cost "the index", and there is no
+index: `created_at`, `superseded_at` and the lifecycle timestamps are unindexed,
+so both forms already plan as `Iterate Table`. *Check the plan before believing
+a cost argument.* What the conversion actually costs is ~2.3 µs per row
+scanned — 1.19× on a realistic `query_nodes` window over 10,000 rows, under 2 ms
+on the real graphs.
 
-**Pinned meanwhile**, by `TestTimestampsAtAWholeSecond` in
-`tests/storage/test_storage_parity.py`, xfailed on SurrealDB with a control
-case beside it. The parity fixture missed this for months because
-`datetime.now()` essentially never lands on a whole second, so every other
-timestamp in that file is constructed by accident; an unpinned known divergence
-is how the fixture's guarantee quietly stops meaning what it says.
+**Where a timestamp is indexed the picture inverts, which is why the rule has
+two halves.** A range over the journal's `decided_at` went **6.2 ms → 281 ms at
+50,000 rows, 45×**, because wrapping the field turns `Iterate Index` into
+`Iterate Table`. So the journal keeps a plain comparison and pays on the write
+side instead: `_decision_row` renders microseconds unconditionally. Reader
+converts where there is no index; writer pads where there is. Both halves are in
+`DEVELOPER_GUIDE.md` under *Comparing timestamps*, and `AGENTS.md` carries the
+one-line rule.
 
-The decision journal does not have this: `_decision_row` writes microseconds
-unconditionally, on both sides of every comparison.
+**The first draft also gated a correctness bug on a performance trigger** —
+"wants whoever next touches `graph_as_of`'s performance" — which inverts this
+repo's own language: #53 called silent point-in-time wrongness "the kind of
+wrong nobody notices". Caught in review. The carry-forward is the pair:
+*a correctness defect does not wait for a performance visit*, and
+*a cost you have not measured is a guess, including when it sounds structural*.
+
+**Why it survived**: `datetime.now()` essentially never lands on a whole second,
+so every timestamp in the parity suite was constructed safely by accident. The
+fixture guarantees parity over the values tests happen to build, which is not
+the same as parity.
 
 ---
 
@@ -3420,6 +3431,7 @@ What to pick up, and what has to be true first:
 | ✅ | ~~`REVIEW_MODE.md` step 5 (the decision journal)~~ | **Built 2026-08-23.** The `decision` table on both backends with six indexes, five reads, and a row at fifteen writers; `WARNINGS_AND_SETTINGS.md` §9's node notes folded in, so `node.notes` is a subject query and there is one review machine rather than two. **`kind` carries `because`** — a correction and a world-change are opposite claims (#53) and a reviewer asking for one does not want the other. Granularity is **per act, not per call**: ingest, an archival sweep and a reactivation are one row each; reflect's other lists get a row apiece, because those are independent verdicts batched into one request. Re-recording a pair verdict now writes a **confirmation** pointing at the oldest record for that pair, which is what §3.4's rule was waiting for. Two things left open on purpose: `certainty` has no tool that supplies one (step 7's `apply_review` and `rejudge` are the first, where the ladder can be stated once instead of on twelve schemas), and relation merges still have no row — **#69**, because their subjects are labels and `subject_ids` holds node ids. Building it found **#70**, a timestamp comparison that makes `graph_as_of` answer differently on the two backends |
 | ✅ | ~~the default graph was a real graph~~ | **Fixed 2026-08-23**, the day it bit. A server started without `EPIMEMER_GRAPH` fell back to `EPIMEMER_SURREALDB_DATABASE`, whose default was the literal string **`memory`** — which is also the name of this repo's dev-history graph. An agent working on unrelated material reconnected mid-session, landed there without knowing, and ingested 61 nodes of one project's procurement documents into another project's graph; every response said success. Three parts to the fix: the default is now `default`, a name nobody would give a real graph; `segment` and `store_decomposition` report `active_graph`, since ingest is otherwise indistinguishable between the right graph and the wrong one; and `INTEGRATION.md` states the resolution rule and that **the active graph is process state**, so `use_graph` does not survive a reconnect. The 61 nodes were archived out (reversible; nothing is deleted), and that archival is the journal's first production row. Carry-forward: **a default that collides with a real name fails silently, and a default that lands somewhere empty fails loudly** — the wrong one had been there since the initial commit, unexercised because every configured server named its graph |
 | ✅ | ~~review pass on the journal + the graph fix~~ | **2026-08-23**, an independent agent over both commits. Three findings, all taken. `journal()` **never raises** — it landed after the decision and outside its transaction, which is the safe direction, but raising still failed the tool call *after* the graph write, and every retry was worse than the missing row (a retried merge refuses, a retried contradiction writes a row reading as an original, a retried ingest stores the document twice). `DecisionKind` **carries no member without a writer**: `relation_merge` and `proceeded_despite_advisory` both shipped unwritten and both came out, which is `WARNINGS_AND_SETTINGS.md` §8.1's rule for `AdvisoryAction` binding harder here because review *selects* on the kind. And the reporting fix was upgraded to a **refusal**: `expected_graph` on `segment`, `store_decomposition` and `restore`, since answering *"every response said success"* with a better success response leaves the failure attention-dependent. **One correction to the review's own reasoning**, which moved where the guard goes: the incident's two ingest steps were *internally consistent* in the wrong graph, so the existing `Segment not found` guard never fires and a check of step two against step one would not have caught it — the comparison has to be the agent's intent against the server's state, at the entry point. Left open: **71** (should naming the graph be mandatory) and **72** (a misdirected write journals in the wrong graph) |
+| ✅ | ~~70 (timestamps compared as strings)~~ | **Fixed 2026-08-23**, same day, and the fix is one function: `instant()` wraps both sides in `type::datetime`, so the comparison is about instants rather than spelling. No migration — correct for rows already written. **The measurement overturned the entry's own cost argument**: it claimed the fix cost an index, and there is no index on `created_at`, `superseded_at` or the lifecycle timestamps — both forms already plan as `Iterate Table`, so the conversion costs ~2.3 µs/row and nothing else. Where a timestamp *is* indexed it inverts, hard: the journal's `decided_at` range went 6.2 ms → 281 ms at 50,000 rows, 45×, so that one keeps a plain comparison and pays on the write side. Reader converts without an index, writer pads with one; both halves documented in `DEVELOPER_GUIDE.md` and the rule is in `AGENTS.md`. Two carry-forwards: **a correctness defect does not wait for a performance visit** (the entry had gated it on one), and **`datetime.now()` never lands on a whole second**, so a parity suite that builds its own timestamps guarantees parity over the safe values it happens to pick |
 | **next** | 68 (no retraction), or `REVIEW_MODE.md` step 6 | 68 is small and bounded — every `similarity` edge was written deliberately, so the population that could need retracting is tiny — and it is the third instance of #64's shape after #66's two. Step 6 is `review(mode="all")` with tier-2 ordering, which works on the whole existing corpus precisely because derived difficulty needs no attribution. Neither blocks the other; **#70** blocks neither and is worth taking before anything else reads a time window |
 | designed | inference merge, advisories, node notes | Not on this board — `dev-docs/WARNINGS_AND_SETTINGS.md`, designed 2026-08-21 and deliberately unbuilt. The duplication it addresses does not exist yet: 123 active inferences across both real graphs yield 5,053 pairs and **zero** at the nomination bar. It becomes real once fact merges start collecting inferences onto one survivor |
 | deferred | 16, 58 | 16: the server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`). 58: a graph large enough that the FTS backfill inside `connect()` is worth reporting on |
