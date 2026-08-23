@@ -812,6 +812,53 @@ Everything an agent supplies at ingest, and where revising it belongs:
 Both should be filed. Neither belongs in this document, and `rejudge` stays the
 three fields above.
 
+### 6.6 Review is per graph, and says so
+
+The journal is a per-graph table like every other, so `review()` answers about
+one graph. The question that exposes it is the one review exists for: *"check
+everything this judge did"* means *"…in this graph"*, and an agent that worked
+in three graphs in one session cannot be reviewed in one question. That is
+`WARNINGS_AND_SETTINGS.md` §5.2's *"the reviewing agent ends up unable to ask
+one question"*, arriving through a door this design did not consider (#72).
+
+**Per graph is right, and the reason is the ids.** `subject_ids` holds node
+ids, and a node id resolves only in the graph that holds it. A row filed
+anywhere else carries ids that dereference nowhere, so a central journal would
+have to store the graph name on every row and every reader would have to switch
+graphs before it could act on one. The row belongs beside its subjects.
+
+That also disposes of the forensic half of #72. Where a write lands in the
+wrong graph its journal row lands there too — *with* the material it describes,
+which is where somebody who found the material is already looking. Nothing is
+orphaned; what was lost was knowing which graph to open, and that is the hole
+`expected_graph` refuses through (`INTEGRATION.md`).
+
+**So `review()` takes no `graphs=` list, and the reason is not scope.** A
+fan-out has to borrow the active database and give it back — the `viz_list_*`
+pattern, which its own docstring calls unsafe under concurrent tool calls and
+which #16 has documented since July. Doing it by hand is *safer*: `list_graphs`,
+then `use_graph`, then `review()`, once per graph, where each switch is the
+active state rather than one borrowed mid-call. A convenience less safe than the
+sequence it replaces is not a convenience.
+
+**What review owes instead costs nothing: every response names the graph it
+answered from.** Silent scoping becomes stated scoping, which is the whole of
+§5.2's complaint — a reviewer who can see the answer is one graph wide can
+widen it, and one who cannot, cannot.
+
+**What would genuinely close it is a locator, not a reader.** *"agent-1 also has
+12 decisions in `field-notes`"* — a count per graph, no rows, no ids to dereference —
+turns *there is more elsewhere* from something the reviewer has to think of into
+something it is told, and leaves the reading where it is safe. It needs a
+cross-graph read that does not move the active database, which does not exist
+and cannot be added the obvious way, because a second connection to an embedded
+URL is a second store (#16). Filed as #73, gated on #16.
+
+**One rule for whoever builds it: the graph is not a field on the row.** A
+merged listing tags each row with the graph it was *read from*. Stored, it would
+be free to disagree with where the row actually lives — a restored archive, a
+copied database — and #54, #55 and #56 are three instances of what that costs.
+
 ---
 
 ## 7. Reversing a merge
@@ -1983,6 +2030,12 @@ value **this call** used (§6.3, #63).
 
 **`apply_review(confirmations=[…], reversals=[…])`** is the only writer;
 `review()` never writes.
+
+**No `graphs=` parameter, and every response names the graph it answered from**
+(§6.6). Cross-graph review is `list_graphs` → `use_graph` → `review()` per
+graph — safer than a fan-out rather than merely equivalent, since each switch is
+the active state instead of one borrowed mid-call. The locator that would tell a
+reviewer *where else to look* is #73, gated on #16.
 
 **Step 6 ships before any decision has a judge**, and works: the whole existing
 corpus is tier 2, so the ordering is entirely derived and still useful (§6.2).

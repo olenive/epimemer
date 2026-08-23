@@ -224,3 +224,12 @@ The journal is a per-graph `decision` table beside them, indexed on the judge's
 id, the date, the kind, the subjects and what a row reviews — the five reads
 review mode needs. Its rows are not nodes either, for the same reason and one
 more: a judgment about the graph is not a claim the graph holds.
+
+**Per graph, and that follows from the ids.** `subject_ids` holds node ids, and
+a node id resolves only in the graph that holds it — so a row filed anywhere
+else would carry ids that dereference nowhere. The row lives with its subjects,
+which is also true when a write lands somewhere unintended: the material and the
+record of it stay together. *What did this agent decide* is therefore asked once
+per graph, with `list_graphs` and `use_graph` between the asks, and deliberately
+not by a fan-out — a switch is the active state, while a fan-out has to borrow it
+mid-call and give it back.
