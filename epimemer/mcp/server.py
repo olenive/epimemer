@@ -278,6 +278,19 @@ async def _record_response(
 # keeps the list readable as a list — the invariant is *these and no others*.
 MOVES_THE_GRAPH = frozenset({"epimemer.use_graph"})
 
+# The tools that need no `expected_graph`, because each is *about* graphs rather
+# than in one (#71): `list_graphs` asks which exist, `use_graph` and
+# `delete_graph` take the graph as their argument, and `viz_status` is
+# server-level. Every other tool must name the graph it means, and a tool absent
+# from both this list and the parameter is a hole — `tests/mcp/test_graph_gate.py`
+# reads this set and asserts the complement.
+NAMES_ITS_OWN_GRAPH = frozenset({
+    "epimemer.list_graphs",
+    "epimemer.use_graph",
+    "epimemer.delete_graph",
+    "epimemer.viz_status",
+})
+
 
 def _graph_turn(deps: dict, tool_name: str, waits_for_user: bool):
     """The guard turn this tool call takes, if any (#16).
@@ -339,9 +352,13 @@ async def _run_with_timeout(
     the check and the call would leave a call that passed the gate running in
     another graph, which is the defect the gate exists to close.
 
-    Absent still proceeds. Making absence a refusal is the second half of #71
-    and one condition here; every tool takes the parameter first, and the tests
-    that prove the gate works run against it before it is mandatory.
+    **Absent is a refusal**, and unconditionally — there is no setting, per graph
+    or per server. A per-graph one would be read from whichever graph the call is
+    *actually* in, so landing in the wrong graph would switch the guard off in
+    exactly the case it exists for; and a gate that turned itself on once a
+    second graph appeared would change what a working call does, based on state
+    the agent never touched. `NAMES_ITS_OWN_GRAPH` is the only exemption and it
+    is about *shape*, not policy.
     """
     deps = ctx.lifespan_context
     timeout = None if waits_for_user else deps["config"].tool_timeout_seconds
@@ -349,7 +366,10 @@ async def _run_with_timeout(
     summarise = output_summary_fn
     try:
         async with _graph_turn(deps, tool_name, waits_for_user):
-            mismatch = tools.wrong_graph(deps["storage"], expected_graph)
+            mismatch = (
+                None if tool_name in NAMES_ITS_OWN_GRAPH
+                else tools.wrong_graph(deps["storage"], expected_graph)
+            )
             if mismatch is not None:
                 result, meta = mismatch
                 # **The tool's own summariser cannot describe this**, and that

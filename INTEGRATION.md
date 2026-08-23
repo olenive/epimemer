@@ -184,8 +184,9 @@ project, each naming its graph, is the configuration this is built for. A server
 without one is not broken — it opens `default` — but it will not stay where
 `use_graph` put it.
 
-**Every tool takes an `expected_graph`** — reads as well as writes — and refuses
-rather than run when the server is somewhere else. That is the check a machine
+**Every tool requires an `expected_graph`** — reads as well as writes — and
+refuses rather than run when it is missing, or when the server is somewhere
+else. That is the check a machine
 makes; reporting the graph is only a hint an agent may read, and the incident was
 silent precisely because every response said success.
 
@@ -205,9 +206,25 @@ agent's next move is a workaround; `apply_reflection` does not even raise, it
 skips; and where two graphs share ids — a restored archive, a copied database —
 the ids resolve and the call lands.
 
-**It is still optional.** Passing it converts a wrong-graph call from silent to
-refused; omitting it leaves you where you were. Making it mandatory is the next
-change.
+**It is mandatory, unconditional, and there is no setting** — not per graph, not
+per server. Two settings were considered and both rejected for one reason: *a
+guard must not be configured by the state it is guarding against.* A per-graph
+flag would be read from whichever graph the call is **actually** in, so landing
+in the wrong one would switch the guard off in exactly the case it exists for. A
+gate that turned itself on once a server could see a second graph would read a
+live database list, so creating a graph would start refusing calls that worked
+yesterday and deleting it would stop — a requirement that oscillates with
+unrelated state is not a policy.
+
+This is where it differs from `require_judge`, which *is* per graph and rightly
+so: that is a policy about rigour, and rigour legitimately varies by use case.
+There is no use case for not minding which graph a call lands in.
+
+**Do not read the graph name out of a refusal and paste it back.** The check is
+worth something only because the agent's expectation and the server's state are
+worked out independently; echoing one into the other makes them agree by
+construction. The refusal names the active graph so you can recover, not so you
+can copy it.
 
 **Tools also report `active_graph`** whether or not you passed an expectation —
 `list_graphs`, `graph_stats` and `viz_status` report it too, but only if

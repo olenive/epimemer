@@ -58,11 +58,19 @@ def _parse_response(result) -> dict:
     return json.loads(text)
 
 
-async def _segment_and_store(server: FastMCP, content: str, metacontext_id: str | None = None) -> dict:
-    """Helper: run the two-step ingest flow (segment + store_decomposition)."""
+async def _segment_and_store(
+    server: FastMCP, content: str, metacontext_id: str | None = None,
+    graph: str = "default",
+) -> dict:
+    """Helper: run the two-step ingest flow (segment + store_decomposition).
+
+    `graph` is threaded rather than defaulted at each call because both steps
+    have to name the same one, and a test that switches graphs first has to say
+    so — which is the whole point of the parameter (#71).
+    """
     seg_result = await server.call_tool(
         "segment",
-        {"content": content},
+        {"expected_graph": graph, "content": content},
     )
     seg_data = _parse_response(seg_result)
     doc_id = seg_data["result"]["document_id"]
@@ -87,7 +95,7 @@ async def _segment_and_store(server: FastMCP, content: str, metacontext_id: str 
 
     store_result = await server.call_tool(
         "store_decomposition",
-        store_args,
+        {"expected_graph": graph, **store_args},
     )
     return _parse_response(store_result)
 
@@ -97,7 +105,7 @@ class TestMCPProtocol:
     async def test_segment_returns_valid_json(self, server):
         result = await server.call_tool(
             "segment",
-            {"content": "Machine learning is a branch of AI."},
+            {"expected_graph": "default", "content": "Machine learning is a branch of AI."},
         )
         data = _parse_response(result)
         assert "result" in data
@@ -116,7 +124,7 @@ class TestMCPProtocol:
 
         result = await server.call_tool(
             "search",
-            {"query": "Neural networks learn from large datasets."},
+            {"expected_graph": "default", "query": "Neural networks learn from large datasets."},
         )
         data = _parse_response(result)
         assert len(data["result"]["nodes"]) > 0
@@ -124,7 +132,7 @@ class TestMCPProtocol:
     async def test_meta_present_on_response(self, server):
         result = await server.call_tool(
             "segment",
-            {"content": "Some text to segment."},
+            {"expected_graph": "default", "content": "Some text to segment."},
         )
         data = _parse_response(result)
         assert "_meta" in data
@@ -135,7 +143,7 @@ class TestMCPProtocol:
 
         search_result = await server.call_tool(
             "search",
-            {"query": "First paragraph", "k": 2, "graph_hops": 0},
+            {"expected_graph": "default", "query": "First paragraph", "k": 2, "graph_hops": 0},
         )
         search_data = _parse_response(search_result)
         nodes = search_data["result"]["nodes"]
@@ -143,7 +151,7 @@ class TestMCPProtocol:
         if len(nodes) >= 2:
             link_result = await server.call_tool(
                 "link",
-                {
+                {"expected_graph": "default", 
                     "src_id": nodes[0]["id"],
                     "dst_id": nodes[1]["id"],
                     "edge_type": "supports",
@@ -156,7 +164,7 @@ class TestMCPProtocol:
     async def test_reflect_via_protocol(self, server):
         result = await server.call_tool(
             "reflect",
-            {},
+            {"expected_graph": "default"},
         )
         data = _parse_response(result)
         assert "result" in data
@@ -165,7 +173,7 @@ class TestMCPProtocol:
     async def test_archive_via_protocol(self, server):
         result = await server.call_tool(
             "archive",
-            {"max_age_days": 90},
+            {"expected_graph": "default", "max_age_days": 90},
         )
         data = _parse_response(result)
         assert data["result"]["nodes_archived"] == 0  # Nothing old enough
@@ -173,7 +181,7 @@ class TestMCPProtocol:
     async def test_error_returns_structured_json(self, server):
         result = await server.call_tool(
             "update",
-            {
+            {"expected_graph": "default", 
                 "node_id": "nonexistent", "new_content": "test",
                 "because": "it_was_wrong",
             },
@@ -208,7 +216,7 @@ class TestMCPProtocol:
     async def test_create_timeline_via_protocol(self, server):
         result = await server.call_tool(
             "create_timeline",
-            {"name": "AI History", "description": "Key events"},
+            {"expected_graph": "default", "name": "AI History", "description": "Key events"},
         )
         data = _parse_response(result)
         assert data["result"]["name"] == "AI History"
@@ -222,17 +230,17 @@ class TestMCPProtocol:
         every timestamp the storage layer then compares lexicographically.
         """
         created = _parse_response(
-            await server.call_tool("create_timeline", {"name": "Offsets"})
+            await server.call_tool("create_timeline", {"expected_graph": "default", "name": "Offsets"})
         )
         timeline_id = created["result"]["timeline_id"]
 
         await server.call_tool(
             "add_timepoint",
-            {"timeline_id": timeline_id, "start": "2024-01-01T12:00:00+02:00"},
+            {"expected_graph": "default", "timeline_id": timeline_id, "start": "2024-01-01T12:00:00+02:00"},
         )
 
         queried = _parse_response(
-            await server.call_tool("query_timeline", {"timeline_id": timeline_id})
+            await server.call_tool("query_timeline", {"expected_graph": "default", "timeline_id": timeline_id})
         )
         starts = [tp["start"] for tp in queried["result"]["timepoints"]]
         assert len(starts) == 1
@@ -249,13 +257,13 @@ class TestMCPProtocol:
         would cancel.
         """
         created = _parse_response(
-            await server.call_tool("create_timeline", {"name": "Ranges"})
+            await server.call_tool("create_timeline", {"expected_graph": "default", "name": "Ranges"})
         )
         timeline_id = created["result"]["timeline_id"]
 
         await server.call_tool(
             "add_timepoint",
-            {"timeline_id": timeline_id, "start": "2024-01-01T10:00:00+00:00"},
+            {"expected_graph": "default", "timeline_id": timeline_id, "start": "2024-01-01T10:00:00+00:00"},
         )
 
         # 11:00+02:00 == 09:00Z .. 13:00+02:00 == 11:00Z — brackets 10:00Z.
@@ -263,7 +271,7 @@ class TestMCPProtocol:
         inside = _parse_response(
             await server.call_tool(
                 "query_timeline",
-                {
+                {"expected_graph": "default", 
                     "timeline_id": timeline_id,
                     "range_start": "2024-01-01T11:00:00+02:00",
                     "range_end": "2024-01-01T13:00:00+02:00",
@@ -276,7 +284,7 @@ class TestMCPProtocol:
         outside = _parse_response(
             await server.call_tool(
                 "query_timeline",
-                {
+                {"expected_graph": "default", 
                     "timeline_id": timeline_id,
                     "range_start": "2024-01-01T13:00:00+02:00",
                     "range_end": "2024-01-01T15:00:00+02:00",
@@ -288,7 +296,7 @@ class TestMCPProtocol:
     async def test_create_metacontext_via_protocol(self, server):
         result = await server.call_tool(
             "create_metacontext",
-            {"content": "Real historical events"},
+            {"expected_graph": "default", "content": "Real historical events"},
         )
         data = _parse_response(result)
         assert data["result"]["content"] == "Real historical events"
@@ -296,7 +304,7 @@ class TestMCPProtocol:
     async def test_ingest_with_metacontext_via_protocol(self, server):
         mc_result = await server.call_tool(
             "create_metacontext",
-            {"content": "Science fiction"},
+            {"expected_graph": "default", "content": "Science fiction"},
         )
         mc_data = _parse_response(mc_result)
         mc_id = mc_data["result"]["metacontext_id"]
@@ -357,7 +365,7 @@ class TestClaimAgentThroughTheServer:
     ):
         result = await server.call_tool(
             "claim_agent",
-            {"agent_id": "self-appointed", "description": "a critic"},
+            {"expected_graph": "default", "agent_id": "self-appointed", "description": "a critic"},
         )
 
         data = _parse_response(result)["result"]
@@ -371,7 +379,9 @@ class TestClaimAgentThroughTheServer:
         await storage.set_approved_agent_ids(["critic"])
 
         result = await server.call_tool(
-            "claim_agent", {"agent_id": "critic", "description": "a critic"},
+            "claim_agent",
+            {"expected_graph": "default", "agent_id": "critic",
+             "description": "a critic"},
         )
 
         data = _parse_response(result)["result"]
@@ -389,7 +399,9 @@ class TestClaimAgentThroughTheServer:
         await storage.set_approved_agent_ids(["critic"])
 
         result = await server.call_tool(
-            "claim_agent", {"agent_id": "critic", "description": "a critic"},
+            "claim_agent",
+            {"expected_graph": "default", "agent_id": "critic",
+             "description": "a critic"},
         )
 
         data = _parse_response(result)["result"]
@@ -409,7 +421,9 @@ class TestClaimAgentThroughTheServer:
 
         await server.call_tool("use_graph", {"name": "elsewhere", "confirm": True})
         result = await server.call_tool(
-            "claim_agent", {"agent_id": "critic", "description": "a critic"},
+            "claim_agent",
+            {"expected_graph": "elsewhere", "agent_id": "critic",
+             "description": "a critic"},
         )
 
         assert _parse_response(result)["result"]["status"] == "claimed"

@@ -175,7 +175,7 @@ class TestABatchedSwitchDoesNotSplitAnIngest:
         server, storage = server_on
         started_on = storage.current_database
 
-        seg = _result(await server.call_tool("segment", {
+        seg = _result(await server.call_tool("segment", {"expected_graph": "default", 
             "content": "The first paragraph.\n\nThe second paragraph.",
         }))
         decomposition = [
@@ -189,7 +189,7 @@ class TestABatchedSwitchDoesNotSplitAnIngest:
         ]
 
         ingest, switch = await asyncio.gather(
-            server.call_tool("store_decomposition", {
+            server.call_tool("store_decomposition", {"expected_graph": "default", 
                 "document_id": seg["document_id"],
                 "segments": decomposition,
             }),
@@ -217,7 +217,7 @@ class TestABatchedSwitchDoesNotSplitAnIngest:
         server, storage = server_on
 
         await asyncio.gather(
-            server.call_tool("graph_stats", {}),
+            server.call_tool("graph_stats", {"expected_graph": "default"}),
             server.call_tool("use_graph", {"name": "elsewhere", "confirm": True}),
             server.call_tool("list_graphs", {}),
         )

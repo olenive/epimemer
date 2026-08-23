@@ -79,7 +79,7 @@ def _parse(result) -> dict:
 
 async def _seed(server: FastMCP) -> dict:
     """A small graph whose ids the oracle then hunts for in every response."""
-    seg = _parse(await server.call_tool("segment", {
+    seg = _parse(await server.call_tool("segment", {"expected_graph": "default", 
         "content": (
             "The deployment rollback failed on Tuesday. "
             "JIRA-4417 tracks the certificate rotation."
@@ -90,7 +90,7 @@ async def _seed(server: FastMCP) -> dict:
     document_id = seg["document_id"]
     segment_ids = [s["segment_id"] for s in seg["segments"]]
 
-    stored = _parse(await server.call_tool("store_decomposition", {
+    stored = _parse(await server.call_tool("store_decomposition", {"expected_graph": "default", 
         "document_id": document_id,
         "segments": [
             {
@@ -104,20 +104,20 @@ async def _seed(server: FastMCP) -> dict:
     }))["result"]
 
     graph = _parse(await server.call_tool(
-        "find_nodes", {"sourced_from": document_id, "limit": 100}
+        "find_nodes", {"expected_graph": "default", "sourced_from": document_id, "limit": 100}
     ))["result"]
     nodes = graph["nodes"]
     by_type = {t: [n["id"] for n in nodes if n["node_type"] == t] for t in
                ("topic", "fact", "inference")}
 
     timeline = _parse(await server.call_tool(
-        "create_timeline", {"name": "Ops", "description": "ops events"}
+        "create_timeline", {"expected_graph": "default", "name": "Ops", "description": "ops events"}
     ))["result"]
-    timepoint = _parse(await server.call_tool("add_timepoint", {
+    timepoint = _parse(await server.call_tool("add_timepoint", {"expected_graph": "default", 
         "timeline_id": timeline["timeline_id"], "label": "the incident",
     }))["result"]
     metacontext = _parse(await server.call_tool(
-        "create_metacontext", {"content": "Runbook frame"}
+        "create_metacontext", {"expected_graph": "default", "content": "Runbook frame"}
     ))["result"]
 
     return {
@@ -282,11 +282,11 @@ async def test_an_undeclared_tool_is_flagged_not_silent(server, captured):
     seeded = await _seed(server)
     captured.clear()
 
-    await server.call_tool("graph_stats", {})
+    await server.call_tool("graph_stats", {"expected_graph": "default"})
     _, stats_meta = captured[-1]
 
     await server.call_tool(
-        "find_nodes", {"sourced_from": seeded["document_id"], "limit": 100}
+        "find_nodes", {"expected_graph": "default", "sourced_from": seeded["document_id"], "limit": 100}
     )
     _, find_meta = captured[-1]
 
@@ -299,7 +299,7 @@ async def test_declaring_nothing_is_not_the_same_as_not_declaring(server, captur
     await _seed(server)  # a graph exists; this tag does not
     captured.clear()
 
-    await server.call_tool("find_nodes", {"tagged_with": "no-such-tag", "limit": 5})
+    await server.call_tool("find_nodes", {"expected_graph": "default", "tagged_with": "no-such-tag", "limit": 5})
 
     _, meta = captured[-1]
     assert meta.retrieved == []
@@ -315,7 +315,7 @@ async def test_retrieved_ids_are_not_serialized_to_the_agent(server, captured):
     seeded = await _seed(server)
     captured.clear()
 
-    result = await server.call_tool("search", {"query": "deployment", "k": 5})
+    result = await server.call_tool("search", {"expected_graph": "default", "query": "deployment", "k": 5})
 
     _, meta = captured[-1]
     assert meta.retrieved  # the tool did declare

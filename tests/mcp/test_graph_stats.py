@@ -130,8 +130,8 @@ async def test_tool_reports_the_configured_threshold(config):
     config = config.model_copy(update={"reflect_threshold": 3})
 
     async with _session(storage, config) as server:
-        seg = _result(await server.call_tool("segment", {"content": "Cats are mammals."}))
-        await server.call_tool("store_decomposition", {
+        seg = _result(await server.call_tool("segment", {"expected_graph": "default", "content": "Cats are mammals."}))
+        await server.call_tool("store_decomposition", {"expected_graph": "default", 
             "document_id": seg["document_id"],
             "segments": [
                 {"segment_id": s["segment_id"], "topics": ["Cats"]}
@@ -139,7 +139,7 @@ async def test_tool_reports_the_configured_threshold(config):
             ],
         })
 
-        stats = _result(await server.call_tool("graph_stats", {}))
+        stats = _result(await server.call_tool("graph_stats", {"expected_graph": "default"}))
 
     assert stats["stores_since_reflect"] == 1
     assert stats["reflect_threshold"] == 3

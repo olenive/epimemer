@@ -55,10 +55,15 @@ def _result(tool_result) -> dict:
     return json.loads(tool_result.content[0].text)["result"]
 
 
-async def _ingest(server: FastMCP, content: str) -> dict:
-    """Run the two-step ingest flow and return the store_decomposition result."""
-    seg = _result(await server.call_tool("segment", {"content": content}))
-    return _result(await server.call_tool("store_decomposition", {
+async def _ingest(server: FastMCP, content: str, graph: str = "default") -> dict:
+    """Run the two-step ingest flow and return the store_decomposition result.
+
+    `graph` is threaded because a test that switches graphs has to say which one
+    it means on every call (#71) — the parameter is not a formality that can be
+    defaulted once at the top.
+    """
+    seg = _result(await server.call_tool("segment", {"expected_graph": graph, "content": content}))
+    return _result(await server.call_tool("store_decomposition", {"expected_graph": graph,
         "document_id": seg["document_id"],
         "segments": [
             {"segment_id": s["segment_id"], "topics": [f"Topic {s['segment_id']}"]}
@@ -92,7 +97,7 @@ async def test_reflect_resets_the_counter_and_reports_what_it_cleared(config):
         await _ingest(server, "Cats are mammals.")
         await _ingest(server, "Dogs are mammals.")
 
-        reflected = _result(await server.call_tool("reflect", {}))
+        reflected = _result(await server.call_tool("reflect", {"expected_graph": "default"}))
         assert reflected["stores_since_last_reflect"] == 2
 
         after = await _ingest(server, "Birds are not mammals.")
@@ -123,7 +128,7 @@ async def test_counter_follows_a_graph_switch(config):
         await _ingest(server, "Dogs are mammals.")
 
         await server.call_tool("use_graph", {"name": "other", "confirm": True})
-        on_other = await _ingest(server, "Sparrows are birds.")
+        on_other = await _ingest(server, "Sparrows are birds.", graph="other")
         assert on_other["stores_since_reflect"] == 1
 
         await server.call_tool("use_graph", {"name": "default", "confirm": True})

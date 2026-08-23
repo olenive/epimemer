@@ -136,13 +136,13 @@ def _parse(result) -> dict:
 
 
 async def _seed(server: FastMCP) -> list[str]:
-    seg = _parse(await server.call_tool("segment", {
+    seg = _parse(await server.call_tool("segment", {"expected_graph": "default", 
         "content": (
             "The deployment rollback failed on Tuesday. "
             "The certificate rotation completed on Wednesday."
         ),
     }))["result"]
-    await server.call_tool("store_decomposition", {
+    await server.call_tool("store_decomposition", {"expected_graph": "default", 
         "document_id": seg["document_id"],
         "segments": [{
             "segment_id": seg["segments"][0]["segment_id"],
@@ -155,7 +155,7 @@ async def _seed(server: FastMCP) -> list[str]:
         }],
     })
     found = _parse(await server.call_tool(
-        "find_nodes", {"sourced_from": seg["document_id"], "limit": 50}
+        "find_nodes", {"expected_graph": "default", "sourced_from": seg["document_id"], "limit": 50}
     ))["result"]
     return [n["id"] for n in found["nodes"]]
 
@@ -166,19 +166,19 @@ async def test_rpc_hands_the_frontend_exactly_what_the_agent_saw():
         known = await _seed(server)
         facts = [
             n["id"] for n in _parse(await server.call_tool(
-                "find_nodes", {"sourced_from": known[0], "limit": 50}
+                "find_nodes", {"expected_graph": "default", "sourced_from": known[0], "limit": 50}
             ))["result"]["nodes"]
         ] or known
 
         responses = {
             "epimemer.search": (await server.call_tool(
-                "search", {"query": "deployment rollback", "k": 5}
+                "search", {"expected_graph": "default", "query": "deployment rollback", "k": 5}
             )).content[0].text,
             "epimemer.check_conflicts": (await server.call_tool(
-                "check_conflicts", {"fact_ids": facts, "threshold": 0.0}
+                "check_conflicts", {"expected_graph": "default", "fact_ids": facts, "threshold": 0.0}
             )).content[0].text,
             "epimemer.reflect": (await server.call_tool(
-                "reflect", {"similarity_threshold": 0.0}
+                "reflect", {"expected_graph": "default", "similarity_threshold": 0.0}
             )).content[0].text,
         }
 
@@ -211,7 +211,7 @@ async def test_a_reflect_record_names_its_nominees_not_its_scan():
         server, addr = wired.server, wired.addr
         known = await _seed(server)
         text = (await server.call_tool(
-            "reflect", {"similarity_threshold": 0.99}
+            "reflect", {"expected_graph": "default", "similarity_threshold": 0.99}
         )).content[0].text
 
         status, body = await _http_get(addr, f"/api/retrievals?session={SESSION_ID}")
@@ -233,7 +233,7 @@ async def test_the_rpc_is_gone_with_the_session_and_the_mirror_is_not():
     async with _wired() as wired:
         server, addr = wired.server, wired.addr
         await _seed(server)
-        await server.call_tool("search", {"query": "deployment", "k": 5})
+        await server.call_tool("search", {"expected_graph": "default", "query": "deployment", "k": 5})
         live_status, _ = await _http_get(addr, f"/api/retrievals?session={SESSION_ID}")
         assert live_status == 200
 

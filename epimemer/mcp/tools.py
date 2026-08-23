@@ -230,10 +230,47 @@ def wrong_graph(
     could differ from this one without anybody noticing. A caller that reaches
     `tools.*` directly passes its own storage handle and has no ambient active
     graph to be wrong about, which is the hazard this exists for.
+
+    **Absent refuses, and there is no setting that changes it.** The two shapes
+    a setting could take were both rejected, and for one reason: *a guard must
+    not be configured by the state it is guarding against.* A per-graph flag
+    would be read from whichever graph the call is actually in, so landing
+    somewhere with it off would wave the call through. A gate that switched
+    itself on once a second graph existed would read a live database list, so
+    creating a graph would start refusing calls that worked yesterday and
+    deleting it would stop — a requirement that oscillates with unrelated state
+    is not a policy. Unlike `require_judge`, which is about *rigour* and
+    legitimately varies by use case, this is a correctness check, and there is
+    no use case for not minding which graph a call lands in.
+
+    **The refusal for absence says what the active graph is, and warns against
+    copying it back.** Naming the graph is worth something only because the
+    agent's side and the server's are worked out independently; an agent that
+    reads the answer out of the refusal and pastes it in has made the two agree
+    by construction. Stated in the message because it cannot be enforced.
     """
     active = storage.current_database
-    if expected_graph is None or expected_graph == active:
+    if expected_graph == active:
         return None
+    if expected_graph is None:
+        return (
+            {
+                "refused": (
+                    f"This call did not say which graph it means. Pass "
+                    f"expected_graph — the server is on '{active}', so "
+                    f"expected_graph='{active}' if that is where you meant to "
+                    f"be. The active graph is not remembered across a client "
+                    f"reconnect, so a session that switched earlier can come "
+                    f"back somewhere else, and nothing tells you. Do not copy "
+                    f"this name back without checking it is the graph you "
+                    f"intend: the value of naming it is that your side and the "
+                    f"server's are worked out independently."
+                ),
+                "expected_graph": None,
+                "active_graph": active,
+            },
+            ResponseMeta(),
+        )
     return (
         {
             "refused": (

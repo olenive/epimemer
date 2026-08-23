@@ -71,9 +71,9 @@ def _parse(result) -> dict:
 
 async def _seed(server: FastMCP) -> list[str]:
     seg = _parse(await server.call_tool(
-        "segment", {"content": "The deployment rollback failed on Tuesday."}
+        "segment", {"expected_graph": "default", "content": "The deployment rollback failed on Tuesday."}
     ))["result"]
-    await server.call_tool("store_decomposition", {
+    await server.call_tool("store_decomposition", {"expected_graph": "default", 
         "document_id": seg["document_id"],
         "segments": [{
             "segment_id": seg["segments"][0]["segment_id"],
@@ -82,7 +82,7 @@ async def _seed(server: FastMCP) -> list[str]:
         }],
     })
     found = _parse(await server.call_tool(
-        "find_nodes", {"sourced_from": seg["document_id"], "limit": 50}
+        "find_nodes", {"expected_graph": "default", "sourced_from": seg["document_id"], "limit": 50}
     ))["result"]
     return [n["id"] for n in found["nodes"]]
 
@@ -94,7 +94,7 @@ class TestOneInsertionCoversEveryTool:
             node_ids = await _seed(server)
             before = len(records_of(log))
 
-            result = await server.call_tool("search", {"query": "deployment", "k": 5})
+            result = await server.call_tool("search", {"expected_graph": "default", "query": "deployment", "k": 5})
 
             records = records_of(log)
             assert len(records) == before + 1
@@ -111,7 +111,7 @@ class TestOneInsertionCoversEveryTool:
         async with _running() as (server, log, _):
             await _seed(server)
 
-            await server.call_tool("graph_stats", {})
+            await server.call_tool("graph_stats", {"expected_graph": "default"})
 
             record = records_of(log)[-1]
             assert record.tool == "epimemer.graph_stats"
@@ -121,7 +121,7 @@ class TestOneInsertionCoversEveryTool:
         async with _running() as (server, log, _):
             await _seed(server)
 
-            await server.call_tool("search", {"query": "rollback", "k": 3})
+            await server.call_tool("search", {"expected_graph": "default", "query": "rollback", "k": 3})
 
             assert "rollback" in records_of(log)[-1].query
 
@@ -132,7 +132,7 @@ class TestOneInsertionCoversEveryTool:
             await _seed(server)
             before = len(records_of(log))
 
-            await server.call_tool("query_graph", {"node_id": "not-a-node"})
+            await server.call_tool("query_graph", {"expected_graph": "default", "node_id": "not-a-node"})
 
             assert len(records_of(log)) == before
 
@@ -140,7 +140,7 @@ class TestOneInsertionCoversEveryTool:
         async with _running() as (server, log, _):
             await _seed(server)
             for _ in range(RETRIEVAL_RING_CAPACITY + 3):
-                await server.call_tool("graph_stats", {})
+                await server.call_tool("graph_stats", {"expected_graph": "default"})
 
             assert len(records_of(log)) == RETRIEVAL_RING_CAPACITY
 
@@ -154,7 +154,7 @@ class TestMirroring:
             await _seed(server)
             published.clear()
 
-            await server.call_tool("search", {"query": "deployment", "k": 5})
+            await server.call_tool("search", {"expected_graph": "default", "query": "deployment", "k": 5})
 
             assert len(published) == 1
             assert published[0].record["tool"] == "epimemer.search"
@@ -170,7 +170,7 @@ class TestMirroring:
             await _seed(server)
             published.clear()
 
-            await server.call_tool("search", {"query": "deployment", "k": 5})
+            await server.call_tool("search", {"expected_graph": "default", "query": "deployment", "k": 5})
 
             mirrored = published[0].record
             assert mirrored["query"] == ""
@@ -190,6 +190,6 @@ class TestMirroring:
             await _seed(server)
             published.clear()
 
-            await server.call_tool("graph_stats", {})
+            await server.call_tool("graph_stats", {"expected_graph": "default"})
 
             assert [e.record["tool"] for e in published] == ["epimemer.graph_stats"]

@@ -36,10 +36,16 @@ the history linked. Your job is to write fast and organize deliberately.
 
 ### Which graph — say it on every call
 
-**Pass `expected_graph` to every tool you call**, reads included. If the server
-is on a different graph the call is **refused** instead of running, and the
-refusal tells you which graph you are actually on so you can `use_graph` and
-retry. If you do not know the name, `list_graphs` says which one is active.
+**`expected_graph` is required on every tool you call**, reads included. Leave
+it out and the call is refused before anything runs; name a graph the server is
+not on and it is refused too, with the graph you are actually on so you can
+`use_graph` and retry. If you do not know the name, `list_graphs` says which one
+is active.
+
+**Do not paste the name out of a refusal.** The check is worth something only
+because your expectation and the server's state are arrived at independently.
+Say which graph you *meant* — from what the user asked for, or from the
+`use_graph` you made — and let the refusal tell you when the two differ.
 
 **Why it matters more than it looks.** The active graph is process state and is
 **not remembered across a client reconnect** — a session that called `use_graph`

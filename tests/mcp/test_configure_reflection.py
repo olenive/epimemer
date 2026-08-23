@@ -215,8 +215,8 @@ def _result(tool_result) -> dict:
 
 
 async def _ingest(server: FastMCP, content: str) -> dict:
-    seg = _result(await server.call_tool("segment", {"content": content}))
-    return _result(await server.call_tool("store_decomposition", {
+    seg = _result(await server.call_tool("segment", {"expected_graph": "default", "content": content}))
+    return _result(await server.call_tool("store_decomposition", {"expected_graph": "default", 
         "document_id": seg["document_id"],
         "segments": [
             {"segment_id": s["segment_id"], "topics": [f"Topic {s['segment_id']}"]}
@@ -236,12 +236,12 @@ async def test_configure_reflection_persists_override(config):
 
     async with _session(storage, config) as server:
         set_result = _result(
-            await server.call_tool("configure_reflection", {"threshold": 2})
+            await server.call_tool("configure_reflection", {"expected_graph": "default", "threshold": 2})
         )
         assert set_result["reflect_threshold"] == 2
 
     async with _session(storage, config) as server:
-        stats = _result(await server.call_tool("graph_stats", {}))
+        stats = _result(await server.call_tool("graph_stats", {"expected_graph": "default"}))
 
     assert stats["reflect_threshold"] == 2
     assert stats["reflect_threshold_overridden"] is True
@@ -253,7 +253,7 @@ async def test_store_decomposition_honours_the_override(config):
     storage = InMemoryStorage()
 
     async with _session(storage, config) as server:
-        await server.call_tool("configure_reflection", {"threshold": 2})
+        await server.call_tool("configure_reflection", {"expected_graph": "default", "threshold": 2})
 
         first = await _ingest(server, "Cats are mammals.")
         assert first["reflect_threshold"] == 2
@@ -268,8 +268,8 @@ async def test_clearing_returns_to_the_configured_default(config):
     config = config.model_copy(update={"reflect_threshold": 7})
 
     async with _session(storage, config) as server:
-        await server.call_tool("configure_reflection", {"threshold": 2})
-        cleared = _result(await server.call_tool("configure_reflection", {}))
+        await server.call_tool("configure_reflection", {"expected_graph": "default", "threshold": 2})
+        cleared = _result(await server.call_tool("configure_reflection", {"expected_graph": "default"}))
 
     assert cleared["reflect_threshold"] == 7
     assert cleared["overridden"] is False

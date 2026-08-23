@@ -31,15 +31,17 @@ from fastmcp import FastMCP
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log
+from epimemer.mcp.server import NAMES_ITS_OWN_GRAPH
 from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.storage.memory import InMemoryStorage
 
 
-# Tools that are *about* graphs rather than in one. Each would be nonsense with
-# the parameter: `list_graphs` asks which exist, `use_graph` and `delete_graph`
-# take the graph as their argument, and `viz_status` is server-level.
+# Read from the server rather than restated here. A second copy would be free to
+# disagree with the one the gate consults, and the disagreement would look like
+# a passing test — which is the whole failure mode this file exists to close,
+# one level up.
 EXEMPT: frozenset[str] = frozenset(
-    {"list_graphs", "use_graph", "delete_graph", "viz_status"}
+    name.removeprefix("epimemer.") for name in NAMES_ITS_OWN_GRAPH
 )
 
 ISO = "2026-08-23T12:00:00+00:00"
@@ -160,14 +162,43 @@ class TestTheGateItself:
         assert "refused" not in result
         assert result["document_id"]
 
-    async def test_omitting_it_still_proceeds(self, server):
-        """True for now and only now. Making absence a refusal is the second
-        half of #71, and this test is what has to change when it lands."""
+    async def test_omitting_it_refuses(self, server):
+        """Mandatory, unconditionally, with no setting either way.
+
+        A per-graph flag would be read from whichever graph the call is
+        *actually* in, so landing in the wrong one would switch the guard off in
+        exactly the case it exists for. A gate that turned itself on once a
+        second graph appeared would change what a working call does, based on
+        state the agent never touched.
+        """
+        srv, deps = server
+
+        result = await _call(srv, "segment", content="A report.")
+
+        assert "refused" in result
+        assert result["expected_graph"] is None
+        assert result["active_graph"] == "default"
+        assert await deps["storage"].query_nodes() == []
+
+    async def test_the_absence_refusal_names_the_active_graph(self, server):
+        """The agent has to be able to recover, and it cannot see the reconnect
+        that put it here."""
         srv, _ = server
 
         result = await _call(srv, "segment", content="A report.")
 
-        assert "refused" not in result
+        assert "expected_graph='default'" in result["refused"]
+
+    async def test_it_warns_against_pasting_the_answer_back(self, server):
+        """The check is worth something only because the two sides are worked
+        out independently. An agent that reads the active graph out of the
+        refusal and echoes it has made them agree by construction — which
+        cannot be enforced, so it is said."""
+        srv, _ = server
+
+        result = await _call(srv, "segment", content="A report.")
+
+        assert "independently" in result["refused"]
 
     async def test_the_gate_follows_a_switch(self, server):
         srv, _ = server
@@ -231,7 +262,10 @@ class TestEveryContentToolIsGated:
         srv, _ = server
         names = {tool.name for tool in await srv.list_tools()}
 
-        assert EXEMPT <= names, "EXEMPT names a tool that is not registered"
+        assert EXEMPT <= names, (
+            "NAMES_ITS_OWN_GRAPH exempts a tool that is not registered — a "
+            "renamed tool would be silently ungated"
+        )
         for name in EXEMPT:
             tool = next(t for t in await srv.list_tools() if t.name == name)
             assert "expected_graph" not in tool.parameters.get("properties", {})
@@ -279,13 +313,15 @@ class TestTheReconnectThatCausedThis:
         assert "refused" in result
         assert result["active_graph"] == "default"
 
-    async def test_the_same_write_without_the_parameter_lands_in_the_wrong_graph(
+    async def test_the_same_write_without_the_parameter_cannot_happen_now(
         self, server
     ):
-        """The incident itself, and the reason the parameter becomes mandatory.
+        """The incident itself, and it no longer has a path.
 
-        Every response says success. Nothing here is a bug in any single tool —
-        the write is correct in every respect except where it went.
+        This is the call that put 61 nodes of one project into another's: an
+        ingest that named no graph, after a reconnect the agent could not see,
+        reporting success in every respect except where it went. There is now no
+        way to make it — omitting the parameter refuses before anything runs.
         """
         srv, deps = server
         await _call(srv, "use_graph", name="field-notes", confirm=True)
@@ -293,13 +329,9 @@ class TestTheReconnectThatCausedThis:
 
         result = await _call(srv, "segment", content="A project report.")
 
-        assert "refused" not in result
-        assert result["active_graph"] == "default", (
-            "reported honestly — and only an agent that reads it is helped"
-        )
-        assert await deps["storage"].get_document(result["document_id"]) is not None, (
-            "the report landed in `default`, which is not where the agent meant"
-        )
+        assert "refused" in result
+        assert "document_id" not in result
+        assert await deps["storage"].query_nodes() == []
 
     async def test_a_read_after_a_reconnect_is_refused_too(self, server):
         """The half the first guard missed. A wrong-graph read returns a
