@@ -44,8 +44,8 @@ the knowledge graph and pipeline execution in real time.
 | `EPIMEMER_SURREALDB_USER` | `root` | SurrealDB username |
 | `EPIMEMER_SURREALDB_PASS` | `root` | SurrealDB password |
 | `EPIMEMER_SURREALDB_NAMESPACE` | `epimemer` | SurrealDB namespace |
-| `EPIMEMER_SURREALDB_DATABASE` | `memory` | SurrealDB database name |
-| `EPIMEMER_GRAPH` | (empty) | Override database name for multi-graph |
+| `EPIMEMER_SURREALDB_DATABASE` | `default` | SurrealDB database name — one database per graph |
+| `EPIMEMER_GRAPH` | (empty) | The graph this server opens. Overrides the above. **Set it per server** — see below |
 | `EPIMEMER_EMBEDDING_PROVIDER` | `sentence-transformers` | `sentence-transformers`, `mock` |
 | `EPIMEMER_EMBEDDING_MODEL_ID` | `all-MiniLM-L6-v2` | Any sentence-transformers model |
 | `EPIMEMER_SEGMENTATION_STRATEGY` | `paragraph` | `paragraph`, `semantic` |
@@ -145,15 +145,44 @@ restate the count.
 
 ### Graph Management (knowledge graphs)
 
-Both storage backends support multiple named graphs. The starting graph is
-`"default"` in-memory and `EPIMEMER_SURREALDB_DATABASE` (default `"memory"`)
-under SurrealDB.
+Both storage backends support multiple named graphs.
 
 | Tool | Purpose |
 |------|---------|
 | `list_graphs` | List available knowledge graphs and show the active one |
 | `use_graph` | Switch to or create a knowledge graph |
 | `delete_graph` | Delete a knowledge graph permanently |
+
+#### Which graph a server opens
+
+One rule, applied when the process starts:
+
+```
+EPIMEMER_GRAPH  →  else EPIMEMER_SURREALDB_DATABASE  →  else "default"
+```
+
+**The active graph is process state.** `use_graph` switches it and nothing
+persists the switch, so a client reconnect — `/mcp`, a restart, a crash — starts
+a fresh server that lands back on whatever that rule resolves to. A session that
+spent an hour in one graph reopens somewhere else, and the switch it made is
+gone. That is the intended behaviour; the point is that it is silent.
+
+**So give every server an explicit `EPIMEMER_GRAPH`.** One MCP server entry per
+project, each naming its graph, is the configuration this is built for. A server
+without one is not broken — it opens `default` — but it will not stay where
+`use_graph` put it.
+
+**`segment` and `store_decomposition` report `active_graph` in their responses**
+for exactly this reason: ingest is where volume lands, and it is otherwise
+indistinguishable between the right graph and the wrong one. `list_graphs`,
+`graph_stats` and `viz_status` report it too, but only if something thinks to
+ask.
+
+The default is `default` and is deliberately a name nobody would give a real
+graph. It used to be `memory`, which collided with a real graph of that name —
+so a server configured without `EPIMEMER_GRAPH` wrote a project's material into
+an unrelated graph and reported success. A default that lands somewhere empty is
+wrong in a way you notice.
 
 ### Agents
 

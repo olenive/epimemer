@@ -306,6 +306,13 @@ async def segment_text(
     # Only return IDs and boundaries — the agent already has the original text.
     result = {
         "document_id": doc.id,
+        # Named on the way in, and this is the earliest place it can be. The
+        # active graph is process state, so a client reconnect silently reopens
+        # whatever the server was configured with — and an ingest into the wrong
+        # graph reports success in every other respect. Said here, the agent can
+        # notice before it decomposes anything; said only by `list_graphs`, it is
+        # noticed after the nodes are written.
+        "active_graph": storage.current_database,
         "segments": [
             {"segment_id": s.id, "char_count": len(s.text)}
             for s in segments
@@ -701,6 +708,9 @@ async def store_decomposition(
     }
     result = {
         "document_id": document_id,
+        # Repeated from `segment` rather than assumed unchanged: the two calls
+        # are separate requests and a reconnect can land between them.
+        "active_graph": storage.current_database,
         "nodes_created": nodes_created,
         "edges_created": len(batch_edges),
         "timepoints_proposed": timepoints_proposed,

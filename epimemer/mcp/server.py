@@ -381,7 +381,7 @@ async def memory_segment(
         ),
         ctx,
         f"content_length={len(content)}",
-        lambda r, m: f"segments={len(r['segments'])}",
+        lambda r, m: f"graph={r['active_graph']} segments={len(r['segments'])}",
     )
 
 
@@ -546,7 +546,7 @@ async def memory_store_decomposition(
         _do,
         ctx,
         f"doc={document_id} segments={len(segments)}",
-        lambda r, m: f"nodes={m.nodes_returned} edges={r['edges_created']} timepoints={r['timepoints_proposed']} reflect={r['stores_since_reflect']}/{r['reflect_threshold']}",
+        lambda r, m: f"graph={r['active_graph']} nodes={m.nodes_returned} edges={r['edges_created']} timepoints={r['timepoints_proposed']} reflect={r['stores_since_reflect']}/{r['reflect_threshold']}",
     )
 
 

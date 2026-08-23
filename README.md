@@ -152,8 +152,8 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_SURREALDB_USER` | `root` | SurrealDB username |
 | `EPIMEMER_SURREALDB_PASS` | `root` | SurrealDB password |
 | `EPIMEMER_SURREALDB_NAMESPACE` | `epimemer` | SurrealDB namespace |
-| `EPIMEMER_SURREALDB_DATABASE` | `memory` | SurrealDB database name — one database per graph. This is a *name*, not a storage mode: the default is spelled `memory` but says nothing about where data lives. Whether storage is in-memory is decided by `EPIMEMER_STORAGE_BACKEND` here and by the `[PATH]` argument on the server |
-| `EPIMEMER_GRAPH` | (empty) | Override database name for multi-graph |
+| `EPIMEMER_SURREALDB_DATABASE` | `default` | SurrealDB database name — one database per graph. This is a *name*, not a storage mode: whether storage is in-memory is decided by `EPIMEMER_STORAGE_BACKEND` here and by the `[PATH]` argument on the server |
+| `EPIMEMER_GRAPH` | (empty) | The graph this server opens, overriding the database name above. **Set it per server.** The active graph is process state, so `use_graph` lasts only as long as the process and a client reconnect lands back here — see [INTEGRATION.md](INTEGRATION.md#which-graph-a-server-opens) |
 | `EPIMEMER_EMBEDDING_PROVIDER` | `sentence-transformers` | `sentence-transformers` or `mock` |
 | `EPIMEMER_EMBEDDING_MODEL_ID` | `all-MiniLM-L6-v2` | Embedding model name |
 | `EPIMEMER_EMBEDDING_DIMENSION` | `384` | Embedding vector dimension |

@@ -31,7 +31,16 @@ class ServerConfig(BaseModel):
     surrealdb_user: str = "root"
     surrealdb_pass: str = "root"
     surrealdb_namespace: str = "epimemer"
-    surrealdb_database: str = "memory"
+    # The graph a server lands on when nothing names one. **Deliberately a name
+    # nobody would give a real graph**: it used to be `"memory"`, which collided
+    # with a real graph of that name, so a server started without
+    # `EPIMEMER_GRAPH` wrote into somebody's actual data and looked like it had
+    # worked. A default that lands somewhere empty is wrong in a way you notice.
+    surrealdb_database: str = "default"
+    # `EPIMEMER_GRAPH` — the graph to open, overriding `surrealdb_database`.
+    # Empty means *unset*, not a graph named "". Set it per server: the active
+    # graph is process state, so `use_graph` lasts only as long as the process
+    # and a client reconnect lands back on whatever this resolves to.
     graph: str = ""
 
     embedding_provider: Literal["sentence-transformers", "mock"] = "sentence-transformers"
@@ -136,10 +145,18 @@ def load_config() -> ServerConfig:
 
 
 def create_storage(config: ServerConfig) -> StorageBackend:
-    """Create a storage backend from config."""
+    """Create a storage backend from config, landing on the configured graph.
+
+    **This is the only thing that decides which graph a server opens.** The
+    active graph is process state — `use_graph` switches it and nothing persists
+    the switch — so a client reconnect starts a fresh process and comes back
+    here. A session that spent an hour in one graph reopens in whatever this
+    resolves to, which is intended and is why the tools report `active_graph`.
+    """
     if config.storage_backend == "surrealdb":
         from epimemer.storage.surrealdb_adapter import SurrealDBStorage
-        # EPIMEMER_GRAPH overrides the database name if set to non-default
+        # EPIMEMER_GRAPH first, then EPIMEMER_SURREALDB_DATABASE. Empty means
+        # unset rather than a graph named "".
         database = config.graph if config.graph != "" else config.surrealdb_database
         return SurrealDBStorage(
             url=config.surrealdb_url,
