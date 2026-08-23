@@ -186,6 +186,7 @@ Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<
 - **Metacontexts**: `create_metacontext`, `get_metacontexts`
 - **Graph management**: `list_graphs`, `use_graph`, `delete_graph`
 - **Agents**: `claim_agent` — say which judge you are; the user assigns the id
+- **Review**: `review` — the decisions this graph has recorded, shakiest first
 - **Visualization**: `viz_status`
 
 See [INTEGRATION.md](INTEGRATION.md#available-tools) for the canonical table with one-line descriptions and the authoritative tool count.

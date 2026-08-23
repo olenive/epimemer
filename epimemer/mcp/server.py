@@ -1490,6 +1490,60 @@ async def memory_apply_reflection(
     )
 
 
+@mcp.tool(name="review")
+async def epimemer_review(
+    ctx: Context,
+    mode: str = "all",
+    max_results: int = tools.REVIEW_MAX_RESULTS,
+) -> str:
+    """Read this graph's decision journal back, shakiest decisions first.
+
+    Every judgment the graph has recorded — what was decided, about which nodes,
+    by whom, and when — ordered so the calls most worth a second look arrive at
+    the top. Read-only: acting on what you find goes through the ordinary
+    decision tools.
+
+    Ordering is two tiers and never one blended score. A decision whose agent
+    declared a low `certainty` comes first; everything unrated follows, ordered
+    by how many *derived* difficulty signals it carries:
+
+    - `thin_source` — a subject's own `confidence` is below 0.5
+    - `wide_merge` — three or more sources collapsed into one node
+    - `open_contradiction` — recorded, both sides still active
+    - `ground_moved` — a subject was retired after the decision was made
+
+    An unrated decision never outranks one an agent actually flagged: a blank
+    `certainty` means *unrated*, not *doubtful*.
+
+    Read `unrated_count` beside the results — three shaky rows out of four
+    hundred unrated is not the same answer as three out of four. `truncated`
+    says the list was cut at `max_results`; act on what came back and review
+    again rather than raising the number.
+
+    **The answer covers this graph only, and `graph` names which.** For another,
+    `use_graph` and ask again.
+
+    Args:
+        mode: Which decisions to look at. Only "all" is implemented so far.
+        max_results: Cap on decisions returned (default 200).
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.review",
+        lambda: tools.review(
+            storage=deps["storage"], mode=mode, max_results=max_results,
+        ),
+        ctx,
+        f"mode={mode} max_results={max_results}",
+        lambda r, m: (
+            f"refused mode={mode}" if "refused" in r else
+            f"decisions={m.nodes_returned}/{r['decisions_scanned']} "
+            f"graph={r['graph']} unrated={r['unrated_count']}"
+            + (" truncated" if r["truncated"] else "")
+        ),
+    )
+
+
 @mcp.tool(name="query_graph")
 async def memory_query_graph(
     node_id: str,

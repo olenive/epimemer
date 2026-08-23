@@ -1,12 +1,13 @@
 # Attribution — who judged this
 
 **Built so far: the registry, the judge on every write, the setting that can
-require one, and the journal.** An agent can be given an identity, the user
-assigns it, a session is bound to it, every decision that session makes — during
-review and at ingest — carries it, and every decision is also appended to a
-journal, so *what did this agent judge* is one query. What is **not** built is
-`review()`, which reads that journal and orders it shakiest-first. The design is
-`dev-docs/REVIEW_MODE.md`.
+require one, the journal, and `review`.** An agent can be given an identity, the
+user assigns it, a session is bound to it, every decision that session makes —
+during review and at ingest — carries it, every decision is also appended to a
+journal, so *what did this agent judge* is one query, and `review` reads that
+journal back shakiest-first. What is **not** built is the rest of `review`'s
+modes and `apply_review`, which is what makes a confirmation cost something. The
+design is `dev-docs/REVIEW_MODE.md`.
 
 ## The problem it exists for
 
@@ -172,6 +173,39 @@ nothing to point at, and the pointer stays blank rather than inventing a target.
 **Nothing supplies `certainty` yet.** The field is on the row for the tools that
 will declare one; until then every decision is unrated, which is deliberately
 different from a rated 0.5.
+
+## Reading it back — `review`
+
+`review` returns this graph's decisions **shakiest first**, so a reviewer can
+start at the top and stop when it stops repaying the attention. It writes
+nothing; acting on what you find goes through the ordinary decision tools.
+
+The order is **two tiers that never blend into one score**. A decision whose
+agent declared a low `certainty` comes first, ascending. Everything unrated
+follows, ordered by how many *derived* signals it carries:
+
+| Signal | What it saw |
+|---|---|
+| `thin_source` | a subject's own `confidence` is below 0.5 |
+| `wide_merge` | three or more sources collapsed into one node |
+| `open_contradiction` | recorded, and both sides are still active |
+| `ground_moved` | a subject was retired *after* the decision was made |
+
+**An unrated decision never outranks a flagged one.** Blank means *unrated*, not
+*doubtful* — the same rule `confidence` follows — so no amount of derived
+evidence lets absence read as a claim of doubt.
+
+Read `unrated_count` and `unattributed_count` beside the results: three shaky
+rows out of four hundred unrated is not the same answer as three out of four.
+`truncated` says the list was cut; act on what came back and ask again rather
+than raising the cap.
+
+**The answer covers one graph and `graph` names which** — the journal is per
+graph because a row's `subject_ids` resolve only where those nodes live. For
+another, `use_graph` and ask again.
+
+**It sees only what was decided after the journal existed.** Anything the graph
+was told before then left no row, and nothing can reconstruct one.
 
 ## Requiring a judge
 

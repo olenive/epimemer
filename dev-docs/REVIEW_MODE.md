@@ -1456,7 +1456,7 @@ Each step is useful alone, and each is a precondition for the next.
 | 3 ✅ | `judge` threaded through the reflect-side write paths | Smallest surface producing attributed decisions, so step 5 has something to read. **Built 2026-08-23**, with two writers the design's list had missed and one field shape changed; see §10.4's amendment. |
 | 4 ✅ | `judge` threaded through ingest (§3.2), plus the require-a-judge setting (§3.3.1) | The bigger churn, and where the unreviewable priors are. **No cutover** — the setting decides, per graph, and ships default-off, so an upgraded server keeps writing exactly as before. **Built 2026-08-23**; the sessionless escape hatch took a different shape from the one this section proposed, see the amendment below. |
 | 5 ✅ | `DecisionRecord` + journal writes + W&S §9 folded in (§9) | Makes *"what did this agent judge"* one query. **Built 2026-08-23**, with `kind` carrying `because`, one writer deferred and `certainty` left without a tool that supplies it; see §10.5's amendment. |
-| 6 | `review(mode="all")`, capped, with tier-2 ordering (§6.2) | Works on the existing corpus and orders it usefully, since derived signals need no attribution. |
+| 6 ✅ | `review(mode="all")`, capped, with tier-2 ordering (§6.2) | Works on the existing corpus and orders it usefully, since derived signals need no attribution. **Built 2026-08-23**, with tier-1 ordering pulled forward and one thing the design did not foresee: the journal is younger than the graph, so there is almost nothing to review yet. See §10.6's amendment. |
 | 7 | `by_agent`, `since`, `unreviewed`, `advisory`, tier-1 ordering, `certainty_ceiling`; `apply_review` | Need attributed decisions to exist; useful from the first session after step 4. |
 
 **Steps 0a and 0b go first, and not because anything below needs them** —
@@ -2047,6 +2047,54 @@ value **this call** used (§6.3, #63).
 graph — safer than a fan-out rather than merely equivalent, since each switch is
 the active state instead of one borrowed mid-call. The locator that would tell a
 reviewer *where else to look* is #73, gated on #16.
+
+> **Amended 2026-08-23, on building it.** Five things.
+>
+> 1. **Only the parameters step 6 owns shipped**: `mode` and `max_results`. The
+>    signature above is step 7's, and `agent_id`, `since`, `between`,
+>    `certainty_ceiling` and `include_pre_attribution` would each have been an
+>    argument that did nothing — which is `DecisionKind`'s rule about members
+>    with no writer, arriving on a parameter list. `mode` is validated against
+>    the modes that exist and **refuses by name**, saying which are designed but
+>    unbuilt: a mode the list admits and nothing implements is a filter that
+>    silently returns everything, which reads as a clean graph.
+> 2. **Tier-1 ordering came with it**, though the build table assigns it to step
+>    7. `certainty` is a field that already exists on `DecisionRecord`; a sort
+>    that ignored it would have been silently wrong the moment `apply_review`
+>    wrote one, and the rule it encodes — an unrated decision never outranks a
+>    flagged one — is the half worth pinning early. It costs five lines and a
+>    test over hand-built rows.
+> 3. **`confidence` is not on the node.** §5's table says *"source
+>    `confidence`"*, and it lives on `ValueSignal`, which every node type
+>    carries — so `node.confidence` raises on a `Topic`. Caught by the
+>    retrieval-declaration parity suite rather than by anything written for this
+>    step, which is what an oracle over *every* tool buys.
+> 4. **`retrieved` is not the use signal**, and this nearly shipped without a
+>    declaration on the reasoning that reviewer traffic would feed the staleness
+>    clock archival nominates on. It would not: only `search` stamps
+>    `retrieved_at`, while `meta.retrieved` drives focus in the viewer. An
+>    undeclared subject greys out the moment somebody clicks the decision naming
+>    it. Same parity suite caught it.
+> 5. **The merge subject convention is a trap.** `merge_facts` journals
+>    `[survivor, *sources]`, so *"three or more sources"* read off
+>    `len(subject_ids)` calls every two-source merge wide. It has a named
+>    function and a test of its own for that one off-by-one.
+>
+> **And the honest scope, measured rather than assumed.** Step 6's row says it
+> *"works on the existing corpus"*. That is true of the **signals**, which read
+> nodes and so see everything — and false of the **journal**, which begins where
+> step 5 does. On the three real graphs on 2026-08-23: `memory` holds **one**
+> row (the archival sweep from the wrong-graph incident, correctly first and
+> unreviewed), and `field-notes` and `petritype-server` hold **none** — their ingests
+> ran through a server that predated the journal. Every decision this project
+> has made before 2026-08-23 is invisible to review, permanently, and no later
+> pass can reconstruct it: the same island #52 left behind, in the other
+> direction. Review is right and nearly empty, and it fills from here.
+>
+> **The read is linear in journal size**, which §6.2 anticipated — *"a caller
+> that re-sorts has to fetch enough rows to sort"*. `decisions_scanned` is in
+> every response so the cost is visible rather than inferred; the bound arrives
+> with step 7's `since`.
 
 **Step 6 ships before any decision has a judge**, and works: the whole existing
 corpus is tier 2, so the ordering is entirely derived and still useful (§6.2).

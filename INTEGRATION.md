@@ -62,12 +62,12 @@ the knowledge graph and pipeline execution in real time.
 
 ### Verify Connection
 
-In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 38 tools.
+In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 39 tools.
 
 ## Available Tools
 
 Tools are auto-prefixed as `mcp__epimemer__<name>` by Claude Code. This table is
-the canonical list of the 38 tools — other docs should link here rather than
+the canonical list of the 39 tools — other docs should link here rather than
 restate the count.
 
 ### Core Memory Operations
@@ -111,6 +111,15 @@ restate the count.
 | `reflect` | Analyse the graph for consolidation/cleanup candidates (reads only) |
 | `configure_reflection` | Set (or clear) this graph's store threshold for suggesting a reflect |
 | `apply_reflection` | Apply agent decisions from a reflection (including user-approved archivals) |
+
+### Review
+
+Reading the decision journal back. Every judgment the graph records — who
+decided, about what, and when — see [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
+
+| Tool | Purpose |
+|------|---------|
+| `review` | This graph's decisions, shakiest first: a declared low `certainty` before anything unrated, then by derived difficulty (thin sources, wide merges, open contradictions, ground that moved since). Read-only, capped, and one graph wide — `graph` names which |
 
 ### Temporal Access
 

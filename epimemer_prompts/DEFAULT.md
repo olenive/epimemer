@@ -422,6 +422,27 @@ graph learned it.
   names `claim_agent`. That is not something to work around — put it to the
   user, since only they can approve an id or turn the requirement off.
 
+### Reviewing what was decided (review)
+- `review` returns this graph's recorded decisions **shakiest first** and writes
+  nothing. Use it when the user asks what has been decided, before trusting a
+  count you did not produce, or as a pass over your own session's work.
+- Read the top of the list, not all of it. That is what the ordering is for —
+  stop when it stops repaying the attention.
+- **`difficulty_signals` says why a row is near the top**, and none of them are
+  verdicts: `thin_source` (a subject's own confidence is low), `wide_merge`
+  (three or more sources in one node), `open_contradiction` (recorded, both
+  sides still active), `ground_moved` (a subject was retired after the decision).
+  They mark what is worth looking at, never what is wrong.
+- **A blank `certainty` means unrated, not doubtful.** Rows an agent actually
+  flagged sort above unrated ones however many signals those carry.
+- Check `unrated_count` and `unattributed_count` before reporting a conclusion:
+  three shaky rows out of four hundred unrated is not three out of four. Check
+  `truncated` too — ask again rather than raising `max_results`.
+- **It answers for one graph**, named in `graph`. For another, `use_graph` and
+  ask again.
+- It sees only decisions made since the journal existed. An older graph can be
+  full of judgments `review` will never show.
+
 ### Interpreting _meta
 Every tool response includes a `_meta` field:
 - `nodes_returned`: how many nodes were found/affected

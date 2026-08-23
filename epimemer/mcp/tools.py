@@ -57,6 +57,11 @@ from epimemer.mcp.types import ResponseMeta
 from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment
 from epimemer.pipelines.query.types import SeedProvenance
 from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
+from epimemer.pipelines.review.difficulty import (
+    ScoredDecision,
+    difficulty_signals,
+    review_order,
+)
 from epimemer.storage.protocol import (
     MergeOverrides,
     StorageBackend,
@@ -3224,6 +3229,148 @@ async def apply_reflection(
         ),
     )
     return result, meta
+
+
+# --- Review (reading the journal back, REVIEW_MODE.md §6) ---
+
+# One page of decisions, and the cap is #60's treatment applied verbatim: `all`
+# over an append-only journal fed by every ingest is precisely the unbounded
+# response that capped four reflect lists, and designing this one uncapped
+# afterwards would be perverse. As there — when the response says it was cut,
+# act on what came back and review again rather than raising the number.
+REVIEW_MAX_RESULTS: int = 200
+
+# The modes that exist. `by_agent`, `since`, `unreviewed` and `advisory` are
+# designed (§6.1) and belong to step 7, which is why they are named in the
+# docstring and not here: a mode this list admits but nothing implements is a
+# filter that silently returns everything, which is worse than a refusal that
+# says the mode is not built.
+REVIEW_MODES: tuple[str, ...] = ("all",)
+
+
+async def review(
+    storage: StorageBackend,
+    *,
+    mode: str = "all",
+    max_results: int = REVIEW_MAX_RESULTS,
+) -> tuple[dict, ResponseMeta]:
+    """Read the decision journal back, shakiest first (§6).
+
+    Read-only, like `reflect`, and for the same reason: it nominates, and every
+    change goes through the decision tools that already exist.
+
+    **Ordering is two tiers that never mix** (§6.2, `pipelines/review/`). A
+    declared `certainty` comes first, ascending; everything unrated follows,
+    ordered by how many derived difficulty signals it carries. Nothing supplies
+    a `certainty` yet, so today every row is tier 2 — which is the point: the
+    derived half needs no attribution and works on the corpus as it stands.
+
+    **Nobody wants only the doubtful ones.** A reviewer checking a session's
+    work wants all of it, ordered so the doubtful calls are at the top and they
+    can stop reading when it stops repaying the attention. That is why this is
+    an ordering rather than a filter, and why the cap is benign: a cut list
+    loses the end nobody was going to read.
+
+    **The answer is one graph wide, and says which** (#72). The journal is per
+    graph like every other table, because `subject_ids` are node ids and a node
+    id resolves only where it lives. Covering more is `list_graphs`,
+    `use_graph`, ask again — and that sequence is *safer* than a fan-out would
+    be, since each switch is the active graph rather than one borrowed
+    mid-call (#16).
+    """
+    if mode not in REVIEW_MODES:
+        return {
+            "refused": (
+                f"'{mode}' is not a mode this server implements. Available: "
+                f"{', '.join(REVIEW_MODES)}. Designed but not built yet: "
+                f"by_agent, since, unreviewed, advisory — ask the user rather "
+                f"than working around it."
+            ),
+            "modes": list(REVIEW_MODES),
+        }, ResponseMeta()
+
+    records = await storage.query_decisions()
+
+    subject_ids = list(dict.fromkeys(
+        sid for record in records for sid in record.subject_ids
+    ))
+    subjects = await storage.get_nodes(subject_ids) if subject_ids else {}
+
+    scored = [
+        ScoredDecision(record=record, signals=difficulty_signals(record, subjects))
+        for record in records
+    ]
+    ordered = review_order(scored)
+
+    page = ordered[:max_results]
+    reviewed = await storage.reviewed_decision_ids([item.record.id for item in page])
+
+    decisions = [
+        {
+            "decision_id": item.record.id,
+            "kind": item.record.kind.value,
+            "decided_at": item.record.decided_at.isoformat(),
+            "judged_by": (
+                item.record.judged_by.agent_id if item.record.judged_by else None
+            ),
+            "certainty": item.record.certainty,
+            "certainty_basis": item.record.certainty_basis,
+            "difficulty_signals": [s.value for s in item.signals],
+            # A null preview means the node is not in this graph: a merge
+            # survivor a reversal destroyed, or a row written elsewhere. That is
+            # information rather than an error, so the id stays.
+            "subjects": [
+                {
+                    "id": sid,
+                    "content_preview": (
+                        _content_preview(subjects[sid])["content_preview"]
+                        if sid in subjects else None
+                    ),
+                    "status": subjects[sid].status.value if sid in subjects else None,
+                }
+                for sid in item.record.subject_ids
+            ],
+            # Derived from a row pointing back, never stored (§3.4) — which is
+            # what step 7's `unreviewed` mode will filter on.
+            "reviewed": item.record.id in reviewed,
+            "reviews": item.record.reviews,
+            "supersedes": item.record.supersedes,
+        }
+        for item in page
+    ]
+
+    result = {
+        "mode": mode,
+        # #72: an answer that does not name its scope reads as the whole story.
+        "graph": storage.current_database,
+        "decisions": decisions,
+        "decisions_scanned": len(records),
+        "truncated": len(ordered) > len(page),
+        # Three results out of four hundred unrated rows is not the same answer
+        # as three out of four, and only one of them means the graph is in good
+        # shape (§6.4). Counted over everything scanned, not over the page.
+        "unrated_count": sum(1 for r in records if r.certainty is None),
+        "unattributed_count": sum(1 for r in records if r.judged_by is None),
+    }
+
+    # Declared, like every response carrying node ids: `retrieved` is what drives
+    # focus in the viewer, so an undeclared subject greys out the moment a
+    # reviewer clicks the decision that names it. It is **not** the use signal —
+    # only `search` stamps `retrieved_at` — so a graph reviewing itself does not
+    # start looking busy to archival.
+    #
+    # Only the subjects still in this graph. A row can name a node that is gone
+    # (a reversal's survivor) and declaring an id nothing resolves would ask the
+    # viewer to focus on nothing.
+    return result, ResponseMeta(
+        nodes_returned=len(decisions),
+        retrieved=_declare(
+            sid
+            for decision in decisions
+            for subject in decision["subjects"]
+            if (sid := subject["id"]) in subjects
+        ),
+    )
 
 
 # --- Query Graph ---
