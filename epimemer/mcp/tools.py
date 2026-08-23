@@ -197,24 +197,39 @@ def wrong_graph(
 
     **The check a machine makes, rather than the hint an agent may read.** The
     active graph is process state, so a client reconnect silently reopens
-    whatever the server was configured with — and the write that follows is
-    correct in every respect except which graph it lands in. Reporting
+    whatever the server was configured with — and the call that follows is
+    correct in every respect except which graph it ran against. Reporting
     `active_graph` in the response helps an agent that looks; this stops one
     that does not.
 
-    Only the tools that create content **without dereferencing an existing id**
-    need it, and that is the whole list rather than a starting point. Every other
-    writer takes node ids, and an id from another graph names nothing here:
-    `link`, `update`, `supersede_by`, `judge_importance`, `merge_facts`,
-    `record_contradiction` and `reverse_merge` all raise, and
-    `apply_reflection` skips. Those already fail on the wrong graph. Ingest, and
-    `restore` from an archive blob, are the paths that carry their own content
-    and so cannot be pinned by anything the graph already holds.
+    **Every tool that touches graph content, read and write alike** (#71). This
+    read three tools at first, on the argument that everything else dereferences
+    a node id and so already fails on the wrong graph. That argument was wrong
+    twice.
 
-    Optional, because a single-graph server has nothing to confuse and requiring
-    it there would be ceremony. Where a session has named its graph — which is
-    every session that called `use_graph`, and every agent told which project it
-    is working on — passing it converts the failure from silent to impossible.
+    - **It ignored reads entirely, and reads are the worse half.** A misfiled
+      write is *visible*: the material and its journal row sit together in the
+      graph that received them, waiting to be found. A wrong-graph `search`
+      returns a plausible answer the agent then reasons from and reports, and
+      leaves no artifact anywhere. `search` also runs far more often than any
+      writer.
+    - **An id that fails to resolve is a worse failure than a refusal, not a
+      substitute for one.** `merge_facts` raises *node not found*, which does
+      not say *wrong graph*, so the agent's next move is a workaround rather
+      than a `use_graph`. `apply_reflection` does not even raise — it skips.
+      And where two graphs share ids, which is what a restored archive or a
+      copied database produces (#54, #55, #56), the ids resolve and the call
+      lands.
+
+    Exempt, and the list is short because each is *about* graphs rather than in
+    one: `list_graphs` asks which exist, `use_graph` and `delete_graph` take the
+    graph as their argument, and `viz_status` is server-level.
+
+    **The gate lives at the MCP boundary and nowhere else** — one home for the
+    policy, on `_judge_for_write`'s reasoning: a second check on its own account
+    could differ from this one without anybody noticing. A caller that reaches
+    `tools.*` directly passes its own storage handle and has no ambient active
+    graph to be wrong about, which is the hazard this exists for.
     """
     active = storage.current_database
     if expected_graph is None or expected_graph == active:
@@ -344,7 +359,6 @@ async def segment_text(
     segmentation_strategy: str | None = None,
     event_bus: InProcessEventBus | None = None,
     judge: JudgeRef | None = None,
-    expected_graph: str | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Segment text and store the document and segments. Returns segments for the agent to decompose.
 
@@ -361,12 +375,6 @@ async def segment_text(
     """
     from epimemer.pipelines.segmentation.paragraph_split import paragraph_split_segmentation_net
     from epimemer.pipelines.segmentation.semantic_similarity import semantic_similarity_segmentation_net
-
-    # First, before the document is stored: this is the entry point of the only
-    # write path that cannot be pinned to a graph by an id it was given.
-    mismatch = wrong_graph(storage, expected_graph)
-    if mismatch is not None:
-        return mismatch
 
     strategy = segmentation_strategy or config.segmentation_strategy
 
@@ -601,7 +609,6 @@ async def store_decomposition(
     propose_timepoints: bool = True,
     event_bus: InProcessEventBus | None = None,
     judge: JudgeRef | None = None,
-    expected_graph: str | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Store agent-provided decomposition: topics, facts, inferences per segment.
 
@@ -635,13 +642,6 @@ async def store_decomposition(
     from epimemer.pipelines.timeline import functions as timeline_functions
 
     # Checked here too, and not because the segment lookup below would miss it:
-    # a document segmented in the wrong graph *has* its segments there, so step
-    # two is internally consistent and lands the whole decomposition beside it.
-    # The two steps agreeing says nothing about either being right.
-    mismatch = wrong_graph(storage, expected_graph)
-    if mismatch is not None:
-        return mismatch
-
     # Accumulate the whole document's writes, then persist them atomically so a
     # mid-document failure cannot leave a partial graph.
     batch_nodes: list[EpistemicNode] = []
@@ -3679,7 +3679,6 @@ async def restore(
     sourced_from: str | None = None,
     validity: list[dict] | None = None,
     judge: JudgeRef | None = None,
-    expected_graph: str | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Bring nodes back: from an archive blob, or by id when a claim recurs.
 
@@ -3715,12 +3714,6 @@ async def restore(
     so the node ends holding several disjoint periods — which is what a list of
     intervals was for.
     """
-    # An archive blob carries its own content, so nothing about it names a
-    # graph — the one other write path that can land anywhere (see `wrong_graph`).
-    mismatch = wrong_graph(storage, expected_graph)
-    if mismatch is not None:
-        return mismatch
-
     archive_data = archive_data or {}
     nodes = [_reconstruct_node(nd) for nd in archive_data.get("nodes", [])]
     edges = [NodeEdge(**ed) for ed in archive_data.get("edges", [])]

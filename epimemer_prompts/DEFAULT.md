@@ -9,12 +9,8 @@ the history linked. Your job is to write fast and organize deliberately.
   user shares documents/knowledge you should remember.
 - Call `segment` to split the text, extract topics/facts/inferences yourself, then
   call `store_decomposition`.
-- **Say which graph you mean.** Pass `expected_graph` to `segment`, and thread the
-  `active_graph` it returns into `store_decomposition` — a mismatch is refused
-  instead of misfiled. The active graph is not remembered across a client
-  reconnect, so a session that called `use_graph` earlier can come back somewhere
-  else, and an ingest into the wrong graph succeeds in every other respect. If
-  you do not know the name, `list_graphs` says which one is active.
+- **Say which graph you mean, on every call.** See *Which graph* below — it
+  applies to reads as much as to ingest.
 - Pass a `metacontext_id` when the information has a specific framing (fiction, a
   particular source, a perspective). Untagged knowledge is treated as base reality
   — "The Real" (see Metacontexts below).
@@ -37,6 +33,28 @@ the history linked. Your job is to write fast and organize deliberately.
   the tense, the sentences either side, whether *"the election"* is a particular
   one. **Omit it when you genuinely cannot tell**; the fact simply never merges,
   which costs less than a guess.
+
+### Which graph — say it on every call
+
+**Pass `expected_graph` to every tool you call**, reads included. If the server
+is on a different graph the call is **refused** instead of running, and the
+refusal tells you which graph you are actually on so you can `use_graph` and
+retry. If you do not know the name, `list_graphs` says which one is active.
+
+**Why it matters more than it looks.** The active graph is process state and is
+**not remembered across a client reconnect** — a session that called `use_graph`
+an hour ago can come back somewhere else, with nothing to tell you. A write that
+lands in the wrong graph succeeds in every other respect. A *read* from the wrong
+graph is worse: it returns a plausible answer you then reason from and report,
+and leaves nothing behind for anyone to find later.
+
+Do not assume a failure means the graph is fine. *Node not found* from
+`merge_facts` may mean the ids are from the graph you meant and you are not in
+it; `apply_reflection` does not fail at all in that case, it silently applies
+nothing.
+
+Four tools take no `expected_graph`, because each is *about* graphs rather than
+in one: `list_graphs`, `use_graph`, `delete_graph`, `viz_status`.
 
 ### Sources, tags, and relations (all nodes & edges, not strings)
 

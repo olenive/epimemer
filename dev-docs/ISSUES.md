@@ -3384,6 +3384,69 @@ the same as parity.
 
 ---
 
+### Issue 71 — every call names the graph it means — 🟡 DECIDED (2026-08-23), change one built
+
+> **Decided 2026-08-23 by the user, and it is stricter and simpler than this
+> entry proposed.** Naming the graph is **mandatory, unconditional, and there is
+> no setting**. Two proposals below were rejected on the way, both by the user:
+>
+> **The count-based gate is out.** This entry recommended requiring it only
+> where the server can see more than one graph. That gate reads
+> `list_databases()`, which is *live* — so creating a second graph switches the
+> requirement on and deleting it switches it back off. Writes that worked
+> yesterday start refusing because of state the agent never touched. **A
+> requirement that oscillates with unrelated state is not a policy.**
+>
+> **A per-graph setting is out, and the reason generalises.** `require_judge` is
+> stored inside each graph, which is right for it — rigour legitimately varies
+> by use case. It is *self-defeating* here: the server would look the
+> requirement up in whichever graph is **active**, and the whole premise is that
+> the active graph may not be the one the agent thinks. Land in a graph with the
+> flag off and the gate waves the call through — it turns itself off in exactly
+> the case it exists for. **A guard must not be configured by the state it is
+> guarding against.**
+>
+> **So there is no setting at all**, per-graph or per-server, which deletes the
+> question this entry was filed to answer. The only argument for one was
+> backwards compatibility, and the failure is loud and self-explaining — a
+> refusal naming the parameter and the graph to switch to.
+>
+> **And it covers reads, which this entry never considered.** The scope was
+> three write tools, on the argument that everything else dereferences a node id
+> and so already fails. Wrong twice. A wrong-graph **read** returns a plausible
+> answer the agent reasons from and reports, and leaves **no artifact anywhere**
+> — where a misfiled write at least leaves the material and its journal row
+> together in the graph that received them. And a failing id is a *worse*
+> failure than a refusal, not a substitute: `merge_facts` raises *node not
+> found*, which does not say *wrong graph*, so the next move is a workaround;
+> `apply_reflection` skips silently; and where two graphs share ids — a restored
+> archive, a copied database, which is #54/#55/#56 again — the ids resolve and
+> the call lands.
+>
+> **Built 2026-08-23 (change one of two).** `expected_graph` on all 37 content
+> tools; four exempt because each is *about* graphs (`list_graphs`, `use_graph`,
+> `delete_graph`, `viz_status`). One gate, at `_run_with_timeout`, **inside** the
+> turn that holds the graph still — outside it, a `use_graph` landing between the
+> check and the call would leave a call that passed the gate running elsewhere.
+> Absence still proceeds; making it a refusal is change two, and the tests that
+> prove the gate works run against it first.
+>
+> **Building it found a defect that predates the change and had never fired in a
+> test.** The gate returns a refusal dict, and `_log` then called the *tool's
+> own success summariser* on it — which reads keys a refusal does not carry,
+> raised `KeyError`, and turned the response into `{"error": "'segments'"}`.
+> The sentence telling the agent to call `use_graph` was being swallowed on the
+> way out, and had been since `expected_graph` shipped. It passed review because
+> every test called `tools.segment_text` **directly**, one layer below the
+> boundary, where no summariser runs. Carry-forward: **a test at the layer below
+> the boundary cannot see what the boundary does to the answer.** The gate's
+> refusal now brings its own summariser.
+>
+> **One ordering left as-is and named:** `_judge_for_write` runs in the tool body,
+> *before* the gate, so an agent in the wrong graph is judged by the wrong
+> graph's judge policy first. Never a worse outcome — the gate still refuses and
+> nothing is written — but a worse message. Worth revisiting with change two.
+
 ### Issue 71 — should a server be able to *require* that a write names its graph? — 🟡 DECISION NEEDED (raised 2026-08-23)
 
 `expected_graph` is optional, and an agent that never passes it gets none of its
@@ -3688,6 +3751,7 @@ What to pick up, and what has to be true first:
 | ✅ | ~~68 (nothing retracts a `one_claim` verdict)~~ | **Fixed 2026-08-23.** `distinct` over a standing `one_claim` now **withdraws** it, writing a `retracted_similarity` edge that `DISQUALIFYING_EDGE_TYPES` reads — so the corroboration count comes back down. **The entry weighed two shapes and the answer was a third already in the codebase**: `contradiction` has disqualified a standing `similarity` since before this design, on a comment describing this exact situation, so the retraction is one more member of a list rather than new machinery. The refusal moved rather than vanished — nothing re-asserts a withdrawn verdict, because withdrawing wrongly *withholds* a count while re-asserting wrongly *invents* agreement, and #52 already chose that direction. Suppression untouched; `DecisionKind.RETRACTION` in the journal, its own kind because `REVERSAL` deletes a node and this destroys nothing. Adding the frontend row found **`variant_of` drawing as unknown-kind grey** since it was introduced — #55 live, fixed, with a guard scoped to pair judgments |
 | ✅ | ~~`REVIEW_MODE.md` step 6 (`review`)~~ | **Built 2026-08-23.** The journal read back shakiest-first, capped, read-only, one graph wide and saying which (#72). **Tier-1 ordering came with it** rather than waiting for step 7: `certainty` is already a field, so a sort that ignored it would have gone silently wrong the moment `apply_review` wrote one — and the rule it encodes, *an unrated decision never outranks a flagged one*, is the half worth pinning early. Only the parameters step 6 owns shipped; the rest would each have been an argument that did nothing. Three things the design did not say: **`confidence` lives on `ValueSignal`, not the node** (so reading it off one raises on a `Topic`), **`meta.retrieved` is not the use signal** (only `search` stamps `retrieved_at`, so declining to declare would only have greyed the viewer), and **`merge_facts` journals `[survivor, *sources]`** — so *three or more sources* read off the subject count calls every two-source merge wide. The first two were caught by the retrieval-declaration parity suite, not by anything written for this step. **Honest scope, measured**: the row says it works on the existing corpus, which is true of the signals (they read nodes) and false of the journal — `memory` holds **one** row, `field-notes` and `petritype-server` **none**, so every decision made before 2026-08-23 is invisible to review permanently, the same island #52 left in the other direction |
 | ✅ | ~~`REVIEW_MODE.md` step 7 (the review modes and their writers)~~ | **Built 2026-08-23**, and the design's build order is now complete. `review` gains `by_agent` / `since` / `unreviewed` and `certainty_ceiling`; `apply_review` and `rejudge` are the writers, and the first two tools that supply a `certainty`. **The second list changed what it does, and that renamed it**: `reversals` became `dissents`, because it reverses nothing — every undo already has a tool with its own refusals and its own row that legitimately sets `supersedes`, and a dispatcher over four of them is #72's fan-out. A dissent sets `reviews` and never `supersedes`, so the journal never claims to have overturned a decision whose effect still stands; its real use is where the undo was **refused**, which the design had not considered. **`advisory` is refused by name rather than shipped** — it selects on a `DecisionKind` nothing writes, which would return an empty list reading as *nothing is contested*. **Not one transaction**, against §10.7: it performs nothing, so each entry is an independent judgment batched with unrelated ones, refused per item like `apply_reflection`. Three things found on the way: a **retry must not read as a second opinion** (an identical judgment by the same judge is refused; two blank judges cannot be told apart, which is one more thing `require_judge` buys), **`rejudge` has to keep the value it replaces** or it would be the one call that destroys a judgment rather than superseding it, and **`DecisionRecord.certainty` was unbounded** — harmless while nothing supplied one, and the ordering sorts on it. The `DecisionKind` drift guard **caught the new kinds and was itself wrong**: it scanned `mcp/tools.py`, true only because every writer had happened to live there. Carry-forward: **a guard whose reach is an accident of where the code sat is one that fails open** |
-| **next** | 73, 71, or 69 | **73** (the cross-graph decision locator) is independent and unblocked, and a field on `review()`'s response is where it goes. **71** wants a decision rather than code: should naming the graph be mandatory. **69** (relation merges have no journal row) is the one gap step 5 left and step 7 did not close. None is urgent for the same reason: the journal is one row old on the real graphs, so everything reading it gets more useful the longer it waits |
+| ✅ | ~~71 (should a server be able to require that a write names its graph?)~~ — change one | **Decided and half-built 2026-08-23.** The answer is stricter than the entry proposed: **mandatory, unconditional, no setting**, and covering **reads** as well as writes. Two shapes rejected by the user, both for the same underlying reason — *a guard must not be configured by the state it is guarding against*. The count-based gate reads a live `list_databases()`, so a second graph switches the requirement on and deleting it switches it off; a per-graph setting gets read from whichever graph you are wrongly in, so it disables itself precisely when it matters. **Reads were the omission**: a wrong-graph `search` returns a plausible answer the agent reasons from and leaves no artifact, where a misfiled write at least sits beside its own journal row. Change one ships `expected_graph` on all 37 content tools with one gate at `_run_with_timeout`, inside the turn; absence still proceeds. **It surfaced a defect older than itself** — the refusal's recovery message had been swallowed by a `KeyError` in `_log` since `expected_graph` shipped, because the tool's success summariser ran over a refusal dict, and every test called `tools.*` one layer *below* the boundary where no summariser runs |
+| **next** | 71 change two, then 73 or 69 | **71 change two** makes absence a refusal — one line, with the oracle and the reconnect regression already green underneath it. **73** (the cross-graph decision locator) is independent and unblocked, and a field on `review()`'s response is where it goes. **69** (relation merges have no journal row) is the one gap step 5 left and step 7 did not close |
 | designed | inference merge, advisories, node notes | Not on this board — `dev-docs/WARNINGS_AND_SETTINGS.md`, designed 2026-08-21 and deliberately unbuilt. The duplication it addresses does not exist yet: 123 active inferences across both real graphs yield 5,053 pairs and **zero** at the nomination bar. It becomes real once fact merges start collecting inferences onto one survivor |
 | deferred | 58 | A graph large enough that the FTS backfill inside `connect()` is worth reporting on. **16 left this row on 2026-08-23** — its trigger had already fired |

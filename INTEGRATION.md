@@ -184,19 +184,32 @@ project, each naming its graph, is the configuration this is built for. A server
 without one is not broken — it opens `default` — but it will not stay where
 `use_graph` put it.
 
-**`segment`, `store_decomposition` and `restore` take an `expected_graph`**, and
-refuse rather than write when the server is somewhere else. That is the check a
-machine makes; reporting the graph is only a hint an agent may read, and the
-incident was silent precisely because every response said success.
+**Every tool takes an `expected_graph`** — reads as well as writes — and refuses
+rather than run when the server is somewhere else. That is the check a machine
+makes; reporting the graph is only a hint an agent may read, and the incident was
+silent precisely because every response said success.
 
-Those three, and no others, because a tool that dereferences an existing node id
-is already pinned: an id from another graph names nothing here, so `link`,
-`update`, `supersede_by`, `judge_importance`, `merge_facts`,
-`record_contradiction` and `reverse_merge` all fail on the wrong graph, and
-`apply_reflection` skips. Ingest and an archive blob are the writes that carry
-their own content and so can land anywhere.
+Four tools are exempt, each because it is *about* graphs rather than in one:
+`list_graphs` asks which exist, `use_graph` and `delete_graph` take the graph as
+their argument, and `viz_status` is server-level.
 
-**They also report `active_graph`** whether or not you passed an expectation —
+**Reads are the half worth stating explicitly.** This began as three write tools,
+on the argument that everything else dereferences a node id and so already fails
+on the wrong graph. That argument missed two things. A wrong-graph `search`
+returns a *plausible answer* the agent then reasons from and reports, leaving no
+artifact anywhere — where a misfiled write at least leaves the material and its
+journal row sitting together in the graph that received them. And an id that
+fails to resolve is a worse failure than a refusal, not a substitute for one:
+`merge_facts` raises *node not found*, which does not say *wrong graph*, so the
+agent's next move is a workaround; `apply_reflection` does not even raise, it
+skips; and where two graphs share ids — a restored archive, a copied database —
+the ids resolve and the call lands.
+
+**It is still optional.** Passing it converts a wrong-graph call from silent to
+refused; omitting it leaves you where you were. Making it mandatory is the next
+change.
+
+**Tools also report `active_graph`** whether or not you passed an expectation —
 `list_graphs`, `graph_stats` and `viz_status` report it too, but only if
 something thinks to ask.
 

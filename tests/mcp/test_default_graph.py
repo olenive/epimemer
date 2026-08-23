@@ -130,122 +130,60 @@ class TestIngestSaysWhereItLanded:
         assert result["active_graph"] == "elsewhere"
 
 
-class TestRefusingAWriteToTheWrongGraph:
-    """`active_graph` in the response is a hint an agent may read. This is the
-    check the machine makes.
+class TestTheGuardMovedToTheBoundary:
+    """`tests/mcp/test_graph_gate.py` is where the wrong-graph gate is tested
+    now, and the move is the finding rather than a tidy-up (#71).
 
-    The incident that prompted both was silent precisely because every response
-    said success — so answering it with a *better success response* leaves the
-    failure attention-dependent, which is the same shape one layer along.
+    These tests used to call `tools.segment_text(..., expected_graph=...)`
+    directly and assert on the refusal dict. They passed, and the refusal they
+    asserted on **never reached an agent**: at the MCP boundary the tool's own
+    success summariser ran over that dict inside `_log`, raised `KeyError`, and
+    the response became `{"error": "'segments'"}` — with the sentence telling
+    the agent to call `use_graph` gone.
+
+    **A test at the layer below the boundary cannot see what the boundary does
+    to the answer.** That is the carry-forward, and it is why the replacement
+    goes through `mcp.call_tool` even though it is slower and more setup.
     """
 
-    async def test_a_mismatch_refuses_before_anything_is_written(
-        self, storage, embedder, config
-    ):
-        result, _ = await tools.segment_text(
-            "A report.", storage, embedder, config, expected_graph="field-notes",
-        )
+    async def test_the_gate_is_not_at_this_layer_any_more(self, storage, embedder, config):
+        """One home for the policy, on `_judge_for_write`'s reasoning: a second
+        check on its own account could differ from the first without anybody
+        noticing. A caller down here passes its own storage handle and has no
+        ambient active graph to be wrong about."""
+        import inspect
 
-        assert "refused" in result
-        assert result["active_graph"] == storage.current_database
-        assert result["expected_graph"] == "field-notes"
-        assert await storage.query_nodes() == []
-        assert "document_id" not in result, "nothing was stored to refer to"
-
-    async def test_the_refusal_says_how_to_recover(self, storage, embedder, config):
-        """The agent can fix this itself, and the message has to say so — the
-        reconnect that caused it is invisible from where the agent stands."""
-        result, _ = await tools.segment_text(
-            "A report.", storage, embedder, config, expected_graph="field-notes",
-        )
-
-        assert "use_graph('field-notes')" in result["refused"]
-        assert "reconnect" in result["refused"]
-
-    async def test_a_match_proceeds(self, storage, embedder, config):
-        result, _ = await tools.segment_text(
-            "A report.", storage, embedder, config,
-            expected_graph=storage.current_database,
-        )
-
-        assert "refused" not in result
-        assert result["document_id"]
-
-    async def test_omitting_it_proceeds(self, storage, embedder, config):
-        """Optional on purpose: a single-graph server has nothing to confuse,
-        and requiring it there would be ceremony."""
-        result, _ = await tools.segment_text("A report.", storage, embedder, config)
-
-        assert "refused" not in result
-
-    async def test_store_decomposition_is_checked_independently(
-        self, storage, embedder, config
-    ):
-        """The case the incident actually took. A document segmented in the
-        wrong graph *has* its segments there, so step two is internally
-        consistent and lands the whole decomposition beside it — the existing
-        `Segment not found` guard never fires, and cannot."""
-        seg, _ = await tools.segment_text("A report.", storage, embedder, config)
-
-        result, _ = await tools.store_decomposition(
-            document_id=seg["document_id"],
-            segments=[{
-                "segment_id": seg["segments"][0]["segment_id"],
-                "topics": ["a topic"], "facts": [], "inferences": [],
-            }],
-            storage=storage,
-            embedding_provider=embedder,
-            expected_graph="field-notes",
-        )
-
-        assert "refused" in result
-        assert await storage.query_nodes() == [], "nothing was decomposed"
-
-    async def test_restore_is_checked_because_a_blob_names_no_graph(
-        self, storage, embedder, config
-    ):
-        """The other write that carries its own content: an archive restores
-        into whichever graph is active, since nothing in it says which."""
-        node = await _fact(storage, embedder, "a trivial aside")
-        exported, _ = await tools.apply_reflection(
-            storage, embedder, archivals=[node.id],
-        )
-
-        result, _ = await tools.restore(
-            storage, archive_data=exported["archive_data"], expected_graph="field-notes",
-        )
-
-        assert "refused" in result
-        assert (await storage.get_node(node.id)).status is NodeStatus.ARCHIVED
-
-    async def test_the_guard_follows_a_switch(self, storage, embedder, config):
-        await tools.use_graph("elsewhere", storage, confirm=True)
-
-        result, _ = await tools.segment_text(
-            "A report.", storage, embedder, config, expected_graph="elsewhere",
-        )
-
-        assert "refused" not in result
+        assert "expected_graph" not in inspect.signature(tools.segment_text).parameters
+        assert "expected_graph" not in inspect.signature(tools.store_decomposition).parameters
+        assert "expected_graph" not in inspect.signature(tools.restore).parameters
 
 
-class TestWhichWritesNeedTheGuardAtAll:
-    """The list is complete rather than a starting point: only a tool that
-    creates content **without dereferencing an existing id** can land silently
-    in the wrong graph. Everything else takes node ids, and an id from another
-    graph names nothing here."""
+class TestWhyAnIdThatDoesNotResolveIsNotEnough:
+    """The guard first covered three tools, on the argument that every other
+    write dereferences a node id and so already fails on the wrong graph. The
+    calls below do fail — and each failure is worse than a refusal, which is
+    what #71 overturned.
 
-    async def test_a_node_id_from_another_graph_already_fails(
-        self, storage, embedder
-    ):
+    It also ignored reads entirely, and a wrong-graph read is the worse half: a
+    misfiled write leaves the material and its journal row together in the graph
+    that received them, while a wrong-graph `search` returns a plausible answer
+    the agent reasons from and leaves nothing behind at all.
+    """
+
+    async def test_a_raise_does_not_say_which_graph(self, storage, embedder):
+        """*Node not found* sends an agent looking for a missing node. The next
+        move is a workaround; it should have been `use_graph`."""
         node = await _fact(storage, embedder, "a claim")
         await tools.use_graph("elsewhere", storage, confirm=True)
 
-        with pytest.raises(ValueError):
-            await tools.judge_importance(
-                node.id, "up", "cited", storage,
-            )
+        with pytest.raises(ValueError) as raised:
+            await tools.judge_importance(node.id, "up", "cited", storage)
 
-    async def test_linking_across_a_switch_fails(self, storage, embedder):
+        assert "graph" not in str(raised.value).lower()
+
+    async def test_linking_across_a_switch_raises_the_same_way(
+        self, storage, embedder
+    ):
         a = await _fact(storage, embedder, "one")
         b = await _fact(storage, embedder, "two")
         await tools.use_graph("elsewhere", storage, confirm=True)
@@ -253,11 +191,10 @@ class TestWhichWritesNeedTheGuardAtAll:
         with pytest.raises(ValueError):
             await tools.link(a.id, b.id, storage, relation="about")
 
-    async def test_reflection_applies_nothing_it_cannot_find(
-        self, storage, embedder
-    ):
-        """It skips rather than raising, which is the same protection reached a
-        different way: no write lands."""
+    async def test_reflection_does_not_even_raise(self, storage, embedder):
+        """It skips, silently, and reports a successful reflection that applied
+        nothing. That is the failure this whole issue is about wearing a
+        different hat."""
         node = await _fact(storage, embedder, "a trivial aside")
         await tools.use_graph("elsewhere", storage, confirm=True)
 
@@ -266,3 +203,19 @@ class TestWhichWritesNeedTheGuardAtAll:
         )
 
         assert result["nodes_archived"] == 0
+        assert "refused" not in result, "no refusal, no error — just nothing"
+
+    async def test_a_read_in_the_wrong_graph_answers_rather_than_failing(
+        self, storage, embedder
+    ):
+        """No id to fail on. The agent asked a question and got an answer, and
+        nothing anywhere records that it came from the wrong place."""
+        await _fact(storage, embedder, "the deployment rolled back")
+        await tools.use_graph("elsewhere", storage, confirm=True)
+
+        result, _ = await tools.search(
+            "deployment", storage, embedder, k=5,
+        )
+
+        assert result["nodes"] == [] and result["segments"] == []
+        assert "refused" not in result and "error" not in result
