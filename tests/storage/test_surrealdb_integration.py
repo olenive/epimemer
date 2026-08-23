@@ -602,3 +602,51 @@ async def test_containment_keeps_the_index_over_a_real_connection(surreal):
     )
 
     assert [node_id for node_id, _ in hits] == [facts[0].id, facts[1].id]
+
+
+# --- The active graph, over a real connection (#16) ---
+
+
+async def test_a_snapshot_borrow_waits_for_a_write_in_flight(surreal, db_name):
+    """The deployment the hazard is actually reachable in.
+
+    Embedded `mem://` proves the guard's logic; only a real connection proves
+    the thing the guard is about — `USE ns db` is a message on the wire, so a
+    borrow that overlapped a write would send that write's statements to another
+    database on the server. Here the write completes where it started, and the
+    selection is handed back.
+    """
+    store = await surreal()
+    # A real graph to snapshot, schema and all: the borrow is what is under
+    # test, not what an absent database answers.
+    elsewhere = _make_store(f"{db_name}_elsewhere")
+    await elsewhere.connect()
+
+    inside, release = asyncio.Event(), asyncio.Event()
+    written = Topic(content="written before the borrow")
+
+    async def in_flight():
+        async with store.graph_guard.using():
+            inside.set()
+            await release.wait()
+            await store.store_node(written)
+
+    call = asyncio.create_task(in_flight())
+    await inside.wait()
+    snapshot = asyncio.create_task(store.viz_list_nodes(f"{db_name}_elsewhere"))
+    for _ in range(8):
+        await asyncio.sleep(0)
+
+    assert store._selected == db_name, "the connection was re-pointed mid-write"
+
+    release.set()
+    await call
+    await asyncio.wait_for(snapshot, timeout=10)
+
+    assert store._selected == db_name, "the borrow was not handed back"
+    assert await store.get_node_by_content(
+        written.content, node_type=NodeType.TOPIC
+    ) is not None
+
+    await elsewhere.delete_database(f"{db_name}_elsewhere")
+    await elsewhere.close()

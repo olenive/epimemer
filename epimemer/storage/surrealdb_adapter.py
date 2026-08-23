@@ -40,6 +40,7 @@ from epimemer.core.types import (
     with_retirement,
     with_return,
 )
+from epimemer.storage.active_graph import GraphGuard, make_graph_guard
 from epimemer.storage.bm25 import containment_first
 from epimemer.storage.protocol import (
     EdgeDirection,
@@ -652,6 +653,7 @@ class SurrealDBStorage:
         # back pointed where the caller believes it is.
         self._selected = database
         self._reconnect_lock = asyncio.Lock()
+        self._guard = make_graph_guard()
 
     async def connect(self) -> None:
         self._db = AsyncSurreal(self._url)
@@ -725,6 +727,10 @@ class SurrealDBStorage:
         return self._database
 
     @property
+    def graph_guard(self) -> GraphGuard:
+        return self._guard
+
+    @property
     def namespace(self) -> str:
         return self._namespace
 
@@ -736,11 +742,16 @@ class SurrealDBStorage:
         return sorted(databases.keys())
 
     async def switch_database(self, database: str) -> None:
-        """Switch to a different database and set up its schema."""
+        """Switch to a different database and set up its schema.
+
+        Takes the guard's mover turn, so a call in flight finishes against the
+        graph it started on rather than half of it landing here (#16).
+        """
         validate_graph_name(database)
-        await self._use(database)
-        self._database = database
-        await self._setup_schema()
+        async with self._guard.moving():
+            await self._use(database)
+            self._database = database
+            await self._setup_schema()
 
     async def delete_database(self, database: str) -> None:
         """Delete a database from the current namespace.
@@ -753,7 +764,32 @@ class SurrealDBStorage:
         validate_graph_name(database)
         await self._query(f"REMOVE DATABASE IF EXISTS `{database}`;")
 
-    # --- Viz reads (cross-graph, no switching of active state) ---
+    # --- Viz reads (cross-graph, by borrowing the connection) ---
+    #
+    # There is no cross-database query in SurrealQL and no second connection to
+    # be had (a second embedded URL is a second store), so reading another
+    # graph means pointing this one at it and giving it back. That borrow is
+    # the wrong-graph incident's mechanism running inside the server, and
+    # `expected_graph` cannot see it — the agent and `current_database` agree
+    # while the database on the wire has moved. So the borrow takes the guard's
+    # mover turn and nothing else runs during it (#16).
+
+    @contextlib.asynccontextmanager
+    async def _borrowed(self, database: str):
+        """Point the connection at `database` for one read, then give it back.
+
+        Re-entrant through the guard, so a caller that already holds a mover
+        turn — `assemble_snapshot`, taking one turn for its four reads so the
+        snapshot is of a single instant — nests without deadlocking.
+        """
+        async with self._guard.moving():
+            original_db = self._selected
+            try:
+                await self._use(database)
+                yield
+            finally:
+                await self._use(original_db)
+
 
     async def viz_list_nodes(
         self,
@@ -761,16 +797,8 @@ class SurrealDBStorage:
         *,
         historical_status: NodeStatus = NodeStatus.ACTIVE,
     ) -> Sequence[EpistemicNode]:
-        """List all nodes in a graph for visualization snapshot.
-
-        Temporarily switches the SurrealDB connection to the target database,
-        queries, then switches back. Not safe for concurrent MCP calls — the
-        viz server should serialize snapshot reads or use a separate connection
-        for production deployments.
-        """
-        original_db = self._selected
-        try:
-            await self._use(database)
+        """List all nodes in a graph for visualization snapshot."""
+        async with self._borrowed(database):
             results = []
             for table in ("topic", "fact", "inference"):
                 rows = await self._query(
@@ -779,21 +807,15 @@ class SurrealDBStorage:
                 )
                 results.extend(_record_to_node(table, r) for r in rows)
             return results
-        finally:
-            await self._use(original_db)
 
     async def viz_list_edges(
         self,
         database: str,
     ) -> Sequence[NodeEdge]:
         """List all edges in a graph for visualization snapshot."""
-        original_db = self._selected
-        try:
-            await self._use(database)
+        async with self._borrowed(database):
             rows = await self._query("SELECT * FROM node_edge")
             return [NodeEdge.model_validate(_clean_record(r)) for r in rows]
-        finally:
-            await self._use(original_db)
 
     async def viz_list_timelines(
         self,
@@ -804,29 +826,21 @@ class SurrealDBStorage:
         Timepoints come back embedded, as they are stored — a timeline is one
         record, not a parent with child rows.
         """
-        original_db = self._selected
-        try:
-            await self._use(database)
+        async with self._borrowed(database):
             rows = await self._query("SELECT * FROM timeline")
             return [Timeline.model_validate(_clean_record(r)) for r in rows]
-        finally:
-            await self._use(original_db)
 
     async def viz_list_metacontexts(
         self,
         database: str,
     ) -> Sequence[Metacontext]:
         """List all active metacontexts in a graph for visualization."""
-        original_db = self._selected
-        try:
-            await self._use(database)
+        async with self._borrowed(database):
             rows = await self._query(
                 "SELECT * FROM metacontext WHERE status = $status",
                 {"status": NodeStatus.ACTIVE.value},
             )
             return [Metacontext.model_validate(_clean_record(r)) for r in rows]
-        finally:
-            await self._use(original_db)
 
     async def close(self) -> None:
         if self._db is not None:

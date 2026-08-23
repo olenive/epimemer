@@ -61,13 +61,17 @@ async def start_hub_client(
     type, exactly as ``PublishEvent.payload`` is opaque to the hub.
     """
     stop_event = asyncio.Event()
-    # RPC reads share one lock: two concurrent viz reads must not interleave the
-    # active-database `use()` switches on a SurrealDB connection. This is the same
-    # shared-connection hazard as ISSUES.md #16; the lock only serializes viz
-    # reads against each other. #16 proper (a viz read racing a tool call on the
-    # shared connection) stays deferred — the eventual fix (a dedicated read
-    # connection for SurrealDB) would land right here in the RPC handler.
-    read_lock = asyncio.Lock()
+    # Every RPC read takes the storage guard's mover turn (ISSUES.md #16). Two
+    # things follow from that one line. Snapshot reads still do not interleave
+    # with each other — a mover excludes a mover — which is what the plain
+    # `asyncio.Lock` here used to buy. And they no longer interleave with **tool
+    # calls** either, which is what it did not: a snapshot of a graph this
+    # session is not on borrows the SurrealDB connection, and a write in flight
+    # during that borrow lands in the graph being snapshotted.
+    #
+    # It is one turn for the whole handler rather than one per `viz_list_*`, so
+    # the four reads behind a snapshot describe a single instant.
+    read_turn = raw_storage.graph_guard.moving
 
     # Per-connection outbound queue; None while disconnected so the bus handler
     # drops events instead of buffering them across a dead connection.
@@ -84,7 +88,7 @@ async def start_hub_client(
 
     async def _handle_rpc(ws, req: RpcRequest) -> None:
         try:
-            async with read_lock:
+            async with read_turn():
                 if req.method == "list_graphs":
                     result = await list_graphs_result(
                         raw_storage, default_reflect_threshold

@@ -309,7 +309,70 @@ left it.
 two other documents name it as the design of record for validity — read it for
 that, not as something outstanding.
 
-### Issue 16 — Multi-graph state is process-global; viz reads re-point the shared connection — 🔴 OPEN (2026-08-23) — the deferral's premise is measured false
+### Issue 16 — the active graph moves under a call in flight — ✅ FIXED (2026-08-23), same day it was reopened
+
+> **Fixed 2026-08-23.** `storage/active_graph.py`: one guard per backend, with
+> two sides. A tool call takes `using()`; the two things that move the active
+> graph — `switch_database` and the `viz_list_*` borrow — take `moving()`.
+> Users do not exclude each other, so the common case costs an uncontended lock
+> and an integer; movers are preferred, so a busy session cannot starve a
+> snapshot.
+>
+> **Granularity is the logical operation**, which is the whole reason the turn
+> is taken at the MCP tool boundary (`_run_with_timeout`) and at the snapshot
+> RPC (`hub_client.py`) rather than inside the storage calls. A guard taken per
+> query would leave the hole it exists to close: a move only has to land between
+> two of the several calls one tool makes.
+>
+> **The title was wrong, and that is the finding.** This was filed as *"viz
+> reads re-point the shared connection"* — a SurrealDB problem with a SurrealDB
+> fix (a second connection). But the active graph is **process state on every
+> backend**: `InMemoryStorage` resolves `self._graphs[self._database]` per call,
+> so a `use_graph` landing mid-ingest splits that ingest across two graphs there
+> too, with no connection involved. The second-connection fix would have closed
+> one backend's half of it. Carry-forward: **a fix aimed at the mechanism you
+> noticed can miss the property that made it a bug** — the property here is
+> *shared mutable state read per call*, and the connection was one instance.
+>
+> The asymmetry that survives is the opposite of the one the entry assumed:
+> in-memory viz reads take **no** turn, because a dict lookup reaches another
+> graph without going near the active one. Only SurrealDB has to borrow, because
+> SurrealQL has no cross-database query and a second embedded connection is a
+> second store.
+>
+> **Reproduced against a served SurrealDB before and after**
+> (`test_a_snapshot_borrow_waits_for_a_write_in_flight`, and
+> `EPIMEMER_SURREAL_WS_URL` pointed at a real server). With the guard disabled
+> the write issued during a snapshot borrow **is not in the graph it was issued
+> against** — it went to the graph being snapshotted, over the wire, silently.
+> That is the wrong-graph incident with no agent involved.
+>
+> **Two carry-forwards, both about how this stayed open for a month.**
+>
+> - **A deferral rests on a premise, and the trigger has to be something you can
+>   check rather than something you expect to be told.** This one said *"the
+>   server is single-client stdio, so nothing issues concurrent tool calls"* and
+>   named its trigger as an event — *the server gains concurrent clients*. The
+>   premise went false without the event: the same single client started batching
+>   parallel calls, which is what every agent harness now asks for. Nothing
+>   re-checked it because nothing was written as checkable.
+> - **A concurrency test whose subject cannot occur reports green for the wrong
+>   reason.** The first end-to-end version passed with the guard removed. With
+>   in-memory storage and a hash-based embedder **every await completes without
+>   suspending**, so `asyncio.gather` ran the ingest to completion before the
+>   switch started and there was no race to lose. It needed a provider that
+>   actually yields (`_suspending`) before it could fail.
+>
+> One residue, stated rather than hidden: **a call that waits on a person takes
+> no turn.** `claim_agent` blocks on an elicitation, and holding a user's turn
+> across it would stall every snapshot behind a prompt nobody has read — *the
+> dashboard is seconds stale* becoming *the dashboard is down*. A borrow landing
+> in that window can still redirect that one call's write, to a graph's `agent`
+> table. The trade is deliberate and tested as such.
+>
+> **#73 is unblocked** by this: a cross-graph read that cannot move the active
+> graph out from under anything is exactly what the journal locator needed.
+
 
 > **Reopened 2026-08-23, while settling #72. The trigger this was waiting for
 > has already fired, and nobody noticed because it fired in a different shape.**
@@ -3362,7 +3425,7 @@ answer would go.
 
 ---
 
-### Issue 73 — a reviewer is not told which other graphs hold this agent's decisions — 🟡 OPEN (raised 2026-08-23, by #72), blocked on #16
+### Issue 73 — a reviewer is not told which other graphs hold this agent's decisions — 🟡 OPEN (raised 2026-08-23, by #72), unblocked the same day
 
 #72 settled that the journal stays per graph and that `review()` takes no
 `graphs=` list, and left one thing genuinely missing: **a reviewer has no way to
@@ -3381,11 +3444,12 @@ is not in. That keeps the payload honest (a merged row list is readable but not
 actionable, since every write path is single-graph) and keeps the read small
 enough to be worth doing across every graph in the namespace.
 
-**Blocked on #16.** It needs a cross-graph read that does not move the active
-database. The only existing precedent (`viz_list_*`) moves it and restores it,
-which is the hazard #16 describes and which #16 now shows is reachable. Building
-the locator on that pattern would add a second, MCP-reachable, agent-triggerable
-instance of the mechanism that caused the wrong-graph incident.
+**Was blocked on #16, which was fixed the same day.** The locator needs a
+cross-graph read that cannot move the active graph out from under a call in
+flight, and that is now what `graph_guard.moving()` provides: a counting read
+takes a mover's turn exactly as a snapshot does. What is left is deciding the
+surface — a field on `review()`'s response is the obvious home, and #72's §6.6
+says the reader tags each count with the graph it read, never the row.
 
 **Two rules banked by #72, for whoever builds this:**
 
@@ -3560,7 +3624,7 @@ What to pick up, and what has to be true first:
 | ✅ | ~~review pass on the journal + the graph fix~~ | **2026-08-23**, an independent agent over both commits. Three findings, all taken. `journal()` **never raises** — it landed after the decision and outside its transaction, which is the safe direction, but raising still failed the tool call *after* the graph write, and every retry was worse than the missing row (a retried merge refuses, a retried contradiction writes a row reading as an original, a retried ingest stores the document twice). `DecisionKind` **carries no member without a writer**: `relation_merge` and `proceeded_despite_advisory` both shipped unwritten and both came out, which is `WARNINGS_AND_SETTINGS.md` §8.1's rule for `AdvisoryAction` binding harder here because review *selects* on the kind. And the reporting fix was upgraded to a **refusal**: `expected_graph` on `segment`, `store_decomposition` and `restore`, since answering *"every response said success"* with a better success response leaves the failure attention-dependent. **One correction to the review's own reasoning**, which moved where the guard goes: the incident's two ingest steps were *internally consistent* in the wrong graph, so the existing `Segment not found` guard never fires and a check of step two against step one would not have caught it — the comparison has to be the agent's intent against the server's state, at the entry point. Left open: **71** (should naming the graph be mandatory) and **72** (a misdirected write journals in the wrong graph) |
 | ✅ | ~~70 (timestamps compared as strings)~~ | **Fixed 2026-08-23**, same day, and the fix is one function: `instant()` wraps both sides in `type::datetime`, so the comparison is about instants rather than spelling. No migration — correct for rows already written. **The measurement overturned the entry's own cost argument**: it claimed the fix cost an index, and there is no index on `created_at`, `superseded_at` or the lifecycle timestamps — both forms already plan as `Iterate Table`, so the conversion costs ~2.3 µs/row and nothing else. Where a timestamp *is* indexed it inverts, hard: the journal's `decided_at` range went 6.2 ms → 281 ms at 50,000 rows, 45×, so that one keeps a plain comparison and pays on the write side. Reader converts without an index, writer pads with one; both halves documented in `DEVELOPER_GUIDE.md` and the rule is in `AGENTS.md`. Two carry-forwards: **a correctness defect does not wait for a performance visit** (the entry had gated it on one), and **`datetime.now()` never lands on a whole second**, so a parity suite that builds its own timestamps guarantees parity over the safe values it happens to pick |
 | ✅ | ~~72 (a misdirected write journals in the graph it went to)~~ | **Decided 2026-08-23**, before step 6 as the entry asked, and with **no code**: the journal stays per graph, `review()` takes no `graphs=`, and every response names the graph it answered from. **The ids decide where a row lives** — `subject_ids` resolves only in the graph holding those nodes, so a central journal would carry ids that dereference nowhere. The forensic complaint was overtaken: the misplaced material and the row recording it sit **together**, and `expected_graph` closes the hole that made *which graph* the unknown. **The fan-out turned out to be the unsafe option** — `review(graphs=[…])` has to borrow the active database and give it back, while `list_graphs` → `use_graph` → `review()` switches for real; *a convenience less safe than the sequence it replaces is not a convenience*. Left behind: **73**, the locator that would say where else to look, blocked on **16** — which settling this reopened |
-| **next** | **16 (the shared connection moves under a tool call)** | **No longer deferred — its premise was measured false on 2026-08-23.** One client's batched parallel tool calls overlap in the server (`scripts/concurrency_probe.py`: two calls enter 0.1 ms apart and run together for 400 ms), so a browser-chosen viz snapshot of another graph can re-point the shared SurrealDB connection **while a write is in flight** — the wrong-graph incident's mechanism, self-inflicted, and the one shape `expected_graph` cannot catch, since the agent and `current_database` agree while `_selected` has moved. Fix shape unchanged and scoped: a dedicated read connection in `hub_client.py`'s RPC handler. Blocks **73** |
-| then | 68 (no retraction), or `REVIEW_MODE.md` step 6 | 68 is small and bounded — every `similarity` edge was written deliberately, so the population that could need retracting is tiny — and it is the third instance of #64's shape after #66's two. Step 6 is `review(mode="all")` with tier-2 ordering, which works on the whole existing corpus precisely because derived difficulty needs no attribution, and #72 settled its signature. Neither blocks the other |
+| ✅ | ~~16 (the active graph moves under a call in flight)~~ | **Fixed 2026-08-23**, the day #72 reopened it, a month after it was deferred as latent. One guard per backend with two sides — a tool call takes `using()`, a `switch_database` or a `viz_list_*` borrow takes `moving()` — at the **logical-operation** boundary, since a move only has to land between two of the several storage calls one tool makes. **The title was the finding**: filed as a SurrealDB connection problem with a second-connection fix, it is shared mutable state read per call, and `InMemoryStorage` has the same defect through `use_graph` with no connection in sight — the proposed fix would have closed one backend's half. Reproduced against a **served** SurrealDB: with the guard off, a write issued during a snapshot borrow lands in the graph being snapshotted, silently, which is the wrong-graph incident with no agent involved. Two carry-forwards about the month: **a deferral's trigger has to be checkable rather than an event you expect to be told about** (the premise went false without the event), and **a concurrency test whose subject cannot occur reports green for the wrong reason** — in-memory storage and a hash embedder never suspend, so the first end-to-end test passed with the guard removed. Unblocks **73** |
+| **next** | `REVIEW_MODE.md` step 6, or 68 (no retraction) | Step 6 is `review(mode="all")` with tier-2 ordering, which works on the whole existing corpus precisely because derived difficulty needs no attribution, and #72 settled its signature. 68 is small and bounded — every `similarity` edge was written deliberately, so the population that could need retracting is tiny — and it is the third instance of #64's shape after #66's two. Neither blocks the other; **73** is now buildable alongside either |
 | designed | inference merge, advisories, node notes | Not on this board — `dev-docs/WARNINGS_AND_SETTINGS.md`, designed 2026-08-21 and deliberately unbuilt. The duplication it addresses does not exist yet: 123 active inferences across both real graphs yield 5,053 pairs and **zero** at the nomination bar. It becomes real once fact merges start collecting inferences onto one survivor |
 | deferred | 58 | A graph large enough that the FTS backfill inside `connect()` is worth reporting on. **16 left this row on 2026-08-23** — its trigger had already fired |

@@ -33,6 +33,7 @@ from epimemer.core.types import (
     Segment,
     Timeline,
 )
+from epimemer.storage.active_graph import GraphGuard
 from epimemer.storage.protocol import (
     EdgeDirection,
     MergeOverrides,
@@ -668,6 +669,13 @@ class InstrumentedStorage:
     @property
     def current_database(self) -> str:
         return self._inner.current_database
+
+    @property
+    def graph_guard(self) -> GraphGuard:
+        # The inner backend's own guard, not a second one: the thing being kept
+        # still is its active graph, and two guards over one piece of state
+        # would agree only by accident.
+        return self._inner.graph_guard
 
     async def list_databases(self) -> list[str]:
         return await self._inner.list_databases()

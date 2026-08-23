@@ -327,6 +327,9 @@ parameterizes `storage` over `InMemoryStorage` and `SurrealDBStorage("mem://")`.
    - Multi-graph interface: `current_database`, `list_databases()`, `switch_database()`, `delete_database()` — both existing backends support multiple named graphs (default `"default"`); see `InMemoryStorage` for the in-process pattern
    - Apply `normalize_for_storage` on write so `None`-valued dict keys round-trip identically across backends
    - **Never compare two timestamps naively** — see the section below
+   - **`graph_guard`**, and `switch_database` takes its mover turn — see *The
+     active graph holds still* below. A backend that resolves its graph per
+     call (both of ours do) has this problem whether or not it has a connection
    - If the backend talks over a socket, it owns reconnection. An MCP server
      outlives the databases it talks to, so a dropped connection has to be
      rebuilt rather than raised forever — see `_reconnect` in
@@ -382,3 +385,49 @@ await store._query("SELECT * FROM fact WHERE created_at <= $at EXPLAIN", {"at": 
 # {'operation': 'Iterate Table'}  → unindexed, use instant()
 # {'operation': 'Iterate Index'}  → indexed, pad on write instead
 ```
+
+
+## The active graph holds still
+
+**The active graph is process state, and one logical operation needs it not to
+move.** Both backends resolve it per call — `InMemoryStorage` indexes
+`self._graphs[self._database]`, `SurrealDBStorage` sends `USE ns db` down one
+shared connection — so a switch landing between two steps of an operation sends
+the rest of that operation somewhere else. It is not a SurrealDB problem, and it
+took a month to see that because it was filed as one (#16).
+
+Two things move it, and that is the whole list:
+
+| Mover | Why it moves | Who takes the turn |
+|---|---|---|
+| `switch_database` | `use_graph`, permanently | the method itself |
+| `viz_list_*` | borrowing the connection so a dashboard can snapshot a graph this session is not on | the method itself, and `hub_client.py` for the four reads of one snapshot |
+
+`storage/active_graph.py` has the guard. Everything else takes the other side:
+
+```python
+async with storage.graph_guard.using():   # a tool call — see _run_with_timeout
+    ...
+```
+
+**Users do not exclude each other** — the common case is an uncontended lock and
+an integer — and **movers are preferred**, so a busy session cannot starve the
+dashboard.
+
+Three rules for anything new:
+
+- **Take the turn at the logical-operation boundary.** Per query is useless: a
+  move only has to land between two of the several storage calls one tool makes.
+  The boundaries are `_run_with_timeout` and the snapshot RPC.
+- **A tool that moves the graph goes in `MOVES_THE_GRAPH`** (`mcp/server.py`).
+  Taking `moving()` inside `using()` raises rather than hanging, and the message
+  says so — but the tool has to be declared, because the default fails open.
+- **A cross-graph read takes a mover's turn**, even though it only reads. It
+  moves the graph to get there.
+
+**Testing concurrency here needs a real suspension point.** With in-memory
+storage and the mock embedder every await completes without suspending, so
+`asyncio.gather` runs the first call to completion and there is no race to lose
+— the first end-to-end test for this passed with the guard removed. See
+`_suspending` in `tests/mcp/test_graph_turns.py`, and prove any new test fails
+without the fix before trusting it.

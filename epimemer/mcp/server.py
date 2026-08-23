@@ -10,7 +10,7 @@ import logging
 import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -271,6 +271,31 @@ async def _record_response(
     ))
 
 
+# The tools that move the active graph, and so take the guard's mover turn
+# rather than a user's. `use_graph` is the whole list: `delete_graph` removes a
+# graph without pointing anything at it, and every other tool works against
+# wherever the server already is. Naming them here rather than at each call site
+# keeps the list readable as a list — the invariant is *these and no others*.
+MOVES_THE_GRAPH = frozenset({"epimemer.use_graph"})
+
+
+def _graph_turn(deps: dict, tool_name: str, waits_for_user: bool):
+    """The guard turn this tool call takes, if any (#16).
+
+    **A call that waits on a person takes none.** `claim_agent` blocks until
+    somebody answers an elicitation, and a user's turn held across that would
+    stall every snapshot behind a prompt nobody has read yet — turning *the
+    dashboard is a few seconds stale* into *the dashboard is down*. The residue
+    is stated rather than hidden: a snapshot borrow landing mid-elicitation can
+    still redirect that one call's write, which is a graph's `agent` table, and
+    the trade is deliberate.
+    """
+    if waits_for_user:
+        return nullcontext()
+    guard = deps["storage"].graph_guard
+    return guard.moving() if tool_name in MOVES_THE_GRAPH else guard.using()
+
+
 async def _run_with_timeout(
     tool_name: str,
     coro: Callable[[], Awaitable[tuple[dict, ResponseMeta]]],
@@ -286,14 +311,20 @@ async def _run_with_timeout(
     is doing; a human reading a prompt is not that, and killing the request at
     30s would turn *the user was still reading* into *the client cannot elicit*
     — which is the difference between a claim refused and an identity admitted.
+
+    **This is also where a call takes its turn over the active graph.** One tool
+    call is one logical operation, and the invariant #16 exists for is that the
+    graph does not move underneath one — so the turn has to be taken here, at
+    the boundary, rather than inside the storage calls that make up the work.
     """
     deps = ctx.lifespan_context
     timeout = None if waits_for_user else deps["config"].tool_timeout_seconds
     start = time.monotonic()
     try:
-        result, meta = await (
-            coro() if timeout is None else asyncio.wait_for(coro(), timeout=timeout)
-        )
+        async with _graph_turn(deps, tool_name, waits_for_user):
+            result, meta = await (
+                coro() if timeout is None else asyncio.wait_for(coro(), timeout=timeout)
+            )
         latency = (time.monotonic() - start) * 1000
         _log(tool_name, input_summary, output_summary_fn(result, meta), meta)
         response_text = _build_response(result, meta, latency)

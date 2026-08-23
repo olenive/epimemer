@@ -38,6 +38,7 @@ from epimemer.core.types import (
     with_retirement,
     with_return,
 )
+from epimemer.storage.active_graph import GraphGuard, make_graph_guard
 from epimemer.storage.bm25 import bm25_scores, containment_first
 from epimemer.storage.protocol import (
     EdgeDirection,
@@ -276,6 +277,7 @@ class InMemoryStorage:
     def __init__(self):
         self._database: str = _DEFAULT_DB
         self._graphs: dict[str, _GraphStore] = {_DEFAULT_DB: _GraphStore()}
+        self._guard = make_graph_guard()
 
     # --- Lifecycle ---
     # No external connection to manage; these exist so the full StorageBackend
@@ -1070,11 +1072,16 @@ class InMemoryStorage:
     async def list_databases(self) -> list[str]:
         return sorted(self._graphs.keys())
 
+    @property
+    def graph_guard(self) -> GraphGuard:
+        return self._guard
+
     async def switch_database(self, database: str) -> None:
         validate_graph_name(database)
-        if database not in self._graphs:
-            self._graphs[database] = _GraphStore()
-        self._database = database
+        async with self._guard.moving():
+            if database not in self._graphs:
+                self._graphs[database] = _GraphStore()
+            self._database = database
 
     async def delete_database(self, database: str) -> None:
         validate_graph_name(database)
@@ -1085,6 +1092,11 @@ class InMemoryStorage:
         del self._graphs[database]
 
     # --- Viz reads (cross-graph, no switching) ---
+
+    # These take no `moving()` turn, and the asymmetry with SurrealDB is the
+    # point: a dict lookup reads another graph without going near the active
+    # one, so there is nothing to borrow and nothing to give back. Only
+    # `switch_database` moves anything here (#16).
 
     async def viz_list_nodes(
         self,

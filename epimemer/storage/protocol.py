@@ -29,6 +29,7 @@ from epimemer.core.types import (
     Segment,
     Timeline,
 )
+from epimemer.storage.active_graph import GraphGuard
 
 _M = TypeVar("_M", bound=BaseModel)
 
@@ -1052,6 +1053,22 @@ class StorageBackend(Protocol):
     @property
     def current_database(self) -> str:
         """The name of the currently active database/graph."""
+        ...
+
+    @property
+    def graph_guard(self) -> GraphGuard:
+        """Keeps the active graph still while a logical operation uses it.
+
+        Every backend has one and none of them may skip it: the active graph is
+        process state everywhere, so a switch landing mid-operation sends the
+        rest of that operation to another graph on the in-memory backend as
+        surely as on SurrealDB (#16).
+
+        Callers take `using()`; the two things that move the graph —
+        `switch_database` and the `viz_list_*` borrow — take `moving()`
+        themselves. See `storage/active_graph.py` for why the boundary is the
+        logical operation rather than the query.
+        """
         ...
 
     async def list_databases(self) -> list[str]:

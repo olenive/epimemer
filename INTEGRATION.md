@@ -188,6 +188,17 @@ their own content and so can land anywhere.
 `list_graphs`, `graph_stats` and `viz_status` report it too, but only if
 something thinks to ask.
 
+**Nothing moves the graph out from under a call in progress.** Tool calls run
+concurrently — a client that batches independent calls into one block is doing
+what agent harnesses ask for — and two things move the active graph: a
+`use_graph`, and a dashboard snapshot of a graph this session is not on, which
+borrows the connection to read it. Both now wait for the calls in flight, and
+calls arriving during one wait for it. So a `use_graph` batched alongside an
+ingest cannot split that ingest across two graphs, and a snapshot cannot
+redirect a write. This is the one failure `expected_graph` could never catch:
+the agent's expectation and the server's active graph agree while the database
+underneath has moved.
+
 The default is `default` and is deliberately a name nobody would give a real
 graph. It used to be `memory`, which collided with a real graph of that name —
 so a server configured without `EPIMEMER_GRAPH` wrote a project's material into
