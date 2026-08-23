@@ -648,6 +648,18 @@ list is narrowed further are different questions, and `uncertain` and
 Modes compose — `by_agent` **and** `since` is the ordinary case for *"review
 what agent-1 did yesterday"*.
 
+> **Revised 2026-08-23, on building it.** Composition and a single `mode` string
+> are reconciled as: **the mode names the selection; every argument narrows
+> whatever it selected.** So `mode="unreviewed", agent_id=…, since=…` is one
+> call, and `by_agent` and `since` become sugar over a *required* argument —
+> which is worth having, because `all` with an `agent_id` the caller forgot to
+> pass returns the whole journal and reads as an answer.
+>
+> **`advisory` is refused by name and `between` is not a mode.** `advisory`
+> selects on a `DecisionKind` nothing writes, so it would return an empty list
+> that reads as *nothing is contested*; `between` is `since` with an `until`,
+> and two names for one selection is §5.2's *two shapes for one question*.
+
 ### 6.2 Ordering — shakiest first, always
 
 **Every mode returns its results least-confident first**, the way
@@ -740,6 +752,15 @@ read-only, and none of the existing decision tools can write this.
 This follows `judge_importance`, whose `importance_judged_at` moves on
 re-confirmation, and whose `stale_judgment` archival class exists to stop an
 unrevisited judgment protecting a node for ever (`docs/REFLECTION.md` §5).
+
+> **Revised 2026-08-23, on building it: `reversals` is `dissents`, and it
+> reverses nothing.** Every undo already has a tool with its own refusals and
+> its own row that legitimately sets `supersedes`; a dispatcher over four of
+> them is #72's fan-out. So a dissent sets only `reviews` — a row claiming to
+> supersede a decision whose effect still stands would put the journal in
+> disagreement with the graph (§4.2) — and its real use is where the undo was
+> **refused**, which is the case this section had not considered. §10.6's second
+> amendment has the rest.
 
 ### 6.5 Every verdict needs a writer, including the ones review invents
 
@@ -1457,7 +1478,7 @@ Each step is useful alone, and each is a precondition for the next.
 | 4 ✅ | `judge` threaded through ingest (§3.2), plus the require-a-judge setting (§3.3.1) | The bigger churn, and where the unreviewable priors are. **No cutover** — the setting decides, per graph, and ships default-off, so an upgraded server keeps writing exactly as before. **Built 2026-08-23**; the sessionless escape hatch took a different shape from the one this section proposed, see the amendment below. |
 | 5 ✅ | `DecisionRecord` + journal writes + W&S §9 folded in (§9) | Makes *"what did this agent judge"* one query. **Built 2026-08-23**, with `kind` carrying `because`, one writer deferred and `certainty` left without a tool that supplies it; see §10.5's amendment. |
 | 6 ✅ | `review(mode="all")`, capped, with tier-2 ordering (§6.2) | Works on the existing corpus and orders it usefully, since derived signals need no attribution. **Built 2026-08-23**, with tier-1 ordering pulled forward and one thing the design did not foresee: the journal is younger than the graph, so there is almost nothing to review yet. See §10.6's amendment. |
-| 7 | `by_agent`, `since`, `unreviewed`, `advisory`, tier-1 ordering, `certainty_ceiling`; `apply_review` | Need attributed decisions to exist; useful from the first session after step 4. |
+| 7 ✅ | `by_agent`, `since`, `unreviewed`, tier-1 ordering, `certainty_ceiling`; `apply_review`, `rejudge` | Need attributed decisions to exist; useful from the first session after step 4. **Built 2026-08-23**, with `advisory` refused rather than shipped, `reversals` renamed to `dissents` for a reason that changed what it does, and the batch left un-transactional against §10.7; see §10.6's second amendment. |
 
 **Steps 0a and 0b go first, and not because anything below needs them** —
 nothing does. They are first because they are the only steps whose cost rises
@@ -2099,6 +2120,90 @@ reviewer *where else to look* is #73, gated on #16.
 **Step 6 ships before any decision has a judge**, and works: the whole existing
 corpus is tier 2, so the ordering is entirely derived and still useful (§6.2).
 
+> **Amended 2026-08-23, on building step 7.** Nine things, and the first changed
+> what one of the two writers *does*.
+>
+> 1. **`reversals=[…]` is `dissents=[…]`, and the rename is the design.** The
+>    parameter reversed nothing. Every undo in this system already has a tool —
+>    `reverse_merge` for a merge, `restore` for an archival, `apply_reflection`
+>    with `distinct` for a `one_claim`, and now `rejudge` for an ingest prior —
+>    each with its own refusals and its own row that legitimately sets
+>    `supersedes`, because it really did supersede something. A dispatcher over
+>    four such tools is #72's fan-out: *a convenience less safe than the sequence
+>    it replaces is not a convenience.* So a dissent records the **finding** and
+>    sets only `reviews`. A row claiming to supersede a decision whose effect
+>    still stands would put the journal in disagreement with the graph, which is
+>    the one thing §4.2 exists to prevent.
+>
+>    **And the reviewer who most needs it is the one whose undo was refused.** A
+>    merge whose survivor has since been contradicted cannot be reversed at all
+>    (§7). Before this there was nowhere to put that finding, which is the
+>    verdict-with-no-writer shape one more time — and it is the argument for the
+>    dissent existing at all, which the design had not made.
+> 2. **It is not one transaction, against §10.7.** That requirement was written
+>    while this tool was imagined as performing the reversals; it performs
+>    nothing, so there is no multi-step change to make atomic. Each entry is an
+>    independent judgment about an unrelated decision that happens to be batched,
+>    which is `apply_reflection`'s shape exactly — per-entry refusals, and one
+>    bad `decision_id` does not lose the good ones.
+> 3. **`advisory` is refused by name rather than shipped**, and `between` is not
+>    a mode. `advisory` selects on a `DecisionKind` that deliberately does not
+>    exist, so admitting it would return an empty list that reads as *nothing is
+>    contested* — the rule `DecisionKind` states, arriving on a mode. `between`
+>    is `since` with an `until`, and two names for one selection is the *two
+>    shapes for one question* defect §6.6 cites from `WARNINGS_AND_SETTINGS.md`
+>    §5.2. Both are held as data with the reason in the refusal, so a caller that
+>    read §6.1 is told where the selection went.
+> 4. **§6.1's *"modes compose"* and §10.6's single `mode` string were never
+>    reconciled**, and the resolution is: **a mode names the selection; every
+>    argument narrows whatever it selected.** `agent_id`, `since`, `until` and
+>    `certainty_ceiling` work under every mode. That leaves `by_agent` and
+>    `since` as sugar over a *required* argument — and the refusal is their whole
+>    value, because `all` with an `agent_id` the caller forgot to pass returns
+>    the entire journal, which reads as an answer rather than as a missing
+>    filter.
+> 5. **A retry must not read as a second opinion**, which the design did not
+>    consider. Two confirmations over one decision is exactly the evidence a
+>    later reviewer weighs, so an identical judgment by the same judge is refused
+>    naming the row that already says it; a *different* judge is the second
+>    independent check this design exists for. The refusal is subject-scoped per
+>    §4.1, so confirming other subjects of the same ingest record is new work.
+>    **The gap it leaves is named rather than hidden:** two blank judges cannot
+>    be told apart, so a retry on a graph that does not require one writes a
+>    second row. One more thing `require_judge` buys.
+> 6. **`rejudge` has to keep what it replaces**, which §6.5's signature and
+>    docstring do not say. Without a trail it would be the one call in the system
+>    that *destroys* a judgment rather than superseding it, and *"nothing is
+>    destroyed"* would stop being true in exactly the tool review reaches for
+>    most. Each revision appends `{because, was, now, judged_by}` to the node's
+>    `rejudgments`, on `judge_importance`'s reasoning: one chronological trail,
+>    because a reviewer wants a judgment and its later reversal in sequence.
+> 7. **Restating a judgment is a confirmation, not a rejudgment.** `rejudge`
+>    refuses a call where every value supplied is what the node already carries,
+>    and points at `apply_review` — otherwise it would write a `REJUDGMENT` row
+>    that revised nothing, which review would then rank as a decision.
+> 8. **`DecisionRecord.certainty` was unbounded**, and nothing had noticed
+>    because nothing supplied one. The ordering *sorts* on it, so an
+>    out-of-range value would not have been rejected — it would have silently
+>    ranked first or last. Bounded 0.0–1.0 at the model, and refused with a
+>    message at both writers.
+> 9. **The drift guard was scanning one file.**
+>    `test_every_kind_has_a_writer` read `mcp/tools.py`, which was true only
+>    because every writer happened to live there — and stopped being true the
+>    moment `CONFIRMATION` and `DISSENT` were written from
+>    `pipelines/review/apply.py`. It caught them, correctly, and the fix is that
+>    it now reads the whole package: **a guard whose reach is an accident of
+>    where the code sat is one that fails open.**
+>
+> **One implementation trap worth the line:** `review()`'s reviewed-set has to
+> cover the whole selection rather than the page, or every row past
+> `max_results` reads as unreviewed. `unreviewed` filters before ordering, and
+> `unreviewed_count` is over what was selected.
+>
+> **And the scope is unchanged from step 6's amendment.** `memory` still holds
+> one journal row; the two writers added here have nothing to act on yet. That is
+> not a defect in either — it is the island #52 left, and it fills from here.
+
 ### 10.7 Cross-cutting
 
 - **Both backends, always.** Every protocol method above lands on `memory.py`
@@ -2189,6 +2294,11 @@ here on 2026-08-22 have each been resolved, filed as work, or scoped out with a
 reason — and the categories below are the distinction whose absence made the
 earlier claim glib.
 
+**Every step in §10's build order is now built.** Steps 0a through 7 shipped
+between 2026-08-22 and 2026-08-23; each carries a dated amendment recording what
+took a different shape from the design. What remains below is not the build —
+it is what the build left open.
+
 **Decided, and now filed as work:**
 
 - **Blank means unknown, and requiring a judge is a per-graph setting** →
@@ -2227,7 +2337,15 @@ earlier claim glib.
   only thing being chosen, and it is not worth its cost.
 - **`rejudge`'s scope** (§6.5.1) → surveyed. `claim_kind`, `confidence` and
   `confidence_basis`; `importance` stays with `judge_importance` rather than
-  gaining a second writer.
+  gaining a second writer. **Built 2026-08-23** at exactly that scope, plus one
+  thing the survey did not name: the value it replaces is kept on the node, or
+  this would be the one call in the system that destroys a judgment rather than
+  superseding it.
+- **What `apply_review`'s second list does** (§6.4) → *records a finding, and
+  performs no undo.* Settled on building it, and it renamed the parameter:
+  `reversals` reversed nothing, because every undo already has a tool that
+  journals its own row. A dissent sets `reviews` and never `supersedes`. §10.6's
+  second amendment has the argument.
 
 **Out of scope, named rather than hidden** — both surfaced by that survey, both
 worth filing on their own:

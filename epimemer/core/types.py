@@ -1269,6 +1269,27 @@ class DecisionKind(str, Enum):
     RELATION = "relation"
     IMPORTANCE = "importance"
 
+    # Review of a decision already in the journal (§6.4, step 7). All three
+    # carry a `reviews` pointer, and none of them is a graph change: the point
+    # of review is that somebody looked, and looking is worth recording even
+    # where nothing needed doing.
+    #
+    # `CONFIRMATION` and `DISSENT` are two kinds rather than one with a flag,
+    # for the reason this enum is fine-grained everywhere else: a reviewer
+    # asking *"what has been disputed"* does not want the agreements, and a
+    # boolean inside a row cannot be selected on.
+    CONFIRMATION = "confirmation"
+    # Checked, and wrong — but **nothing was undone**, which is what separates
+    # this from `REVERSAL`. The tools that undo a decision journal their own row
+    # and set `supersedes`; a dissent sets only `reviews`, because a row
+    # claiming to supersede a decision whose effect still stands would make the
+    # journal disagree with the graph (§4.2).
+    DISSENT = "dissent"
+    # An ingest-time judgment revised without touching the claim (§6.5) —
+    # `claim_kind`, `confidence`, `confidence_basis`. Never a supersession: the
+    # wording is unchanged, so nothing was corrected and nothing moved on.
+    REJUDGMENT = "rejudgment"
+
 
 class DecisionRecord(BaseModel):
     """One judgment, as an append-only row (§4).
@@ -1306,9 +1327,13 @@ class DecisionRecord(BaseModel):
     decided_at: datetime = Field(default_factory=_now)
     # §5. The same ladder as `confidence` (#46) rather than a second
     # near-identical one, and absent means **unrated** — deliberately not a
-    # rated 0.5. No tool supplies one yet; `review()`'s ordering is designed to
-    # degrade to its derived tier, which is the whole corpus today (§6.2).
-    certainty: float | None = None
+    # rated 0.5. Supplied by the review writers (`apply_review`, `rejudge`),
+    # where a declared judgment is the whole point of the call; every other
+    # writer leaves it blank rather than adding a rung to twelve tool schemas,
+    # so `review()`'s derived tier still carries most of the corpus (§6.2).
+    # Bounded because the ordering sorts on it: an out-of-range value would not
+    # be rejected by the sort, it would silently rank first or last.
+    certainty: float | None = Field(default=None, ge=0.0, le=1.0)
     certainty_basis: str | None = None
     # The record this one is *about*. A confirmation reviews without
     # superseding, so the two are separate fields — collapsing them is what

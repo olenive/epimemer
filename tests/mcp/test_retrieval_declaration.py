@@ -199,6 +199,12 @@ def _args(tool: str, seeded: dict) -> dict:
         "get_metacontexts": {"node_id": facts[0]},
         "graph_stats": {},
         "review": {},
+        # Nothing supplied: an empty batch is an answer rather than an error,
+        # and it is the response shape under test here rather than a write.
+        "apply_review": {},
+        # Refused — no field is supplied — and a refusal still names the id back
+        # at the agent, which is the property under test.
+        "rejudge": {"node_id": facts[0], "because": "checking the shape"},
         # Not a merge survivor, so this refuses — and a refusal still names the
         # id back at the agent, which is the property under test.
         "reverse_merge": {"survivor_id": facts[0]},
@@ -227,7 +233,8 @@ ALL_TOOLS = [
     "segment", "store_decomposition", "search", "link", "update", "supersede_by",
     "judge_importance", "check_conflicts", "record_contradiction", "record_variant",
     "merge_facts", "reverse_merge", "configure_merge",
-    "reflect", "apply_reflection", "review", "query_graph", "topic_tree",
+    "reflect", "apply_reflection", "review", "apply_review", "rejudge",
+    "query_graph", "topic_tree",
     "graph_as_of", "query_changes", "find_nodes", "list_sources", "list_relations", "archive",
     "restore", "create_timeline", "set_reference_time", "add_timepoint",
     "query_timeline", "create_timelink", "create_metacontext", "get_metacontexts",

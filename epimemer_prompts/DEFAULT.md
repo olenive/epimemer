@@ -442,6 +442,51 @@ graph learned it.
   ask again.
 - It sees only decisions made since the journal existed. An older graph can be
   full of judgments `review` will never show.
+- **Modes select; the other arguments narrow whatever was selected.** `all`,
+  `by_agent` (needs `agent_id`), `since` (needs `since`; `until` is exclusive),
+  `unreviewed`. So *"what did agent-1 decide yesterday that nobody checked"* is
+  one call. `by_agent` and `since` exist to make their argument mandatory —
+  asking for `all` with an `agent_id` you forgot to pass returns everything,
+  which reads as an answer.
+- `certainty_ceiling` is for **counting**, not browsing: *"is anything below 0.5
+  still outstanding?"* It is inclusive and leaves unrated rows out entirely.
+
+### Saying you checked one (apply_review)
+- **Confirming costs something, or the next agent redoes your work.** If you
+  check a decision and say nothing, `review(mode="unreviewed")` keeps offering
+  it. `apply_review(confirmations=[…], dissents=[…])` is the only thing that
+  writes a review.
+- Each entry is `{decision_id, because, subject_ids?, certainty?,
+  certainty_basis?}`. **`because` is required** — a review with no reason marks
+  the decision checked, so the next reviewer skips it without knowing whether it
+  was examined or waved through.
+- **Name `subject_ids` when you checked part of a decision.** One pointer at an
+  ingest record covering forty-four facts tells the graph you checked
+  forty-four. Omit it only when you really covered all of them.
+- **A dissent records the finding, not the undo.** It changes nothing. Say in
+  `because` what should happen, then make that call: `reverse_merge` for a merge,
+  `restore` for an archival, `apply_reflection` with `verdict: "distinct"` for a
+  `one_claim`, `rejudge` for a wrong ingest prior. A dissent is *most* useful
+  where the undo was refused and there is nowhere else to put the finding.
+- `certainty` here is how sure you are of **this review**, on the same ladder as
+  `confidence`. Omit it for the ordinary case.
+- Confirming the same decision twice as the same judge is refused. That is not a
+  bug — a second identical row would read as a second opinion.
+
+### Fixing a judgment you made at ingest (rejudge)
+- `claim_kind`, `confidence` and `confidence_basis` are yours and nothing
+  downstream re-makes them. `rejudge` is the only way to correct one.
+- **Do not reach for `update` or `supersede_by` here.** Those are for a claim
+  that was wrong or a world that moved. `rejudge` is for a claim that is fine
+  where the *judgment about* it was wrong — a `state` that is really an `event`,
+  a confidence set too high. It retires nothing.
+- `confidence` and `certainty` are different numbers on the same ladder:
+  `confidence` is about the **material**, `certainty` is about **this act of
+  re-judging**.
+- `importance` is not here — `judge_importance` already revises that one.
+- A metacontext assignment and a validity interval still cannot be revised at
+  all. If either is wrong, raise it with the user rather than working around it
+  with a supersession.
 
 ### Interpreting _meta
 Every tool response includes a `_meta` field:

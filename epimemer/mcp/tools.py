@@ -57,10 +57,21 @@ from epimemer.mcp.types import ResponseMeta
 from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment
 from epimemer.pipelines.query.types import SeedProvenance
 from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
+from epimemer.pipelines.review.apply import (
+    RejudgeRefused,
+    ReviewRefused,
+    rejudge_node,
+    review_decision,
+)
 from epimemer.pipelines.review.difficulty import (
     ScoredDecision,
     difficulty_signals,
     review_order,
+)
+from epimemer.pipelines.review.modes import (
+    REVIEW_MODES,
+    mode_refusal,
+    passes_ceiling,
 )
 from epimemer.storage.protocol import (
     MergeOverrides,
@@ -237,6 +248,8 @@ async def journal(
     judge: JudgeRef | None,
     reviews: str | None = None,
     supersedes: str | None = None,
+    certainty: float | None = None,
+    certainty_basis: str | None = None,
 ) -> DecisionRecord | None:
     """Append one judgment to the journal. Returns the row, or None if it failed.
 
@@ -269,6 +282,11 @@ async def journal(
         judged_by=judge,
         reviews=reviews,
         supersedes=supersedes,
+        # Blank at almost every writer, and that is the design: the review
+        # writers are where a declared judgment is the point of the call, so
+        # §5's ladder is stated there instead of on twelve tool schemas.
+        certainty=certainty,
+        certainty_basis=certainty_basis,
     )
     try:
         await storage.record_decision(record)
@@ -3240,30 +3258,35 @@ async def apply_reflection(
 # act on what came back and review again rather than raising the number.
 REVIEW_MAX_RESULTS: int = 200
 
-# The modes that exist. `by_agent`, `since`, `unreviewed` and `advisory` are
-# designed (§6.1) and belong to step 7, which is why they are named in the
-# docstring and not here: a mode this list admits but nothing implements is a
-# filter that silently returns everything, which is worse than a refusal that
-# says the mode is not built.
-REVIEW_MODES: tuple[str, ...] = ("all",)
-
 
 async def review(
     storage: StorageBackend,
     *,
     mode: str = "all",
+    agent_id: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    certainty_ceiling: float | None = None,
     max_results: int = REVIEW_MAX_RESULTS,
 ) -> tuple[dict, ResponseMeta]:
     """Read the decision journal back, shakiest first (§6).
 
     Read-only, like `reflect`, and for the same reason: it nominates, and every
-    change goes through the decision tools that already exist.
+    change goes through `apply_review`, `rejudge` and the decision tools that
+    already exist.
+
+    **Three separate questions, and the first draft ran them together.** *Which*
+    decisions (`mode`, `agent_id`, `since`/`until`), *what order* they arrive in
+    (always the same — see below), and *whether* the list is narrowed further
+    (`certainty_ceiling`). A mode names the selection; every argument narrows
+    whatever it selected, which is how §6.1's *"`by_agent` **and** `since`"*
+    composes without a second vocabulary.
 
     **Ordering is two tiers that never mix** (§6.2, `pipelines/review/`). A
     declared `certainty` comes first, ascending; everything unrated follows,
-    ordered by how many derived difficulty signals it carries. Nothing supplies
-    a `certainty` yet, so today every row is tier 2 — which is the point: the
-    derived half needs no attribution and works on the corpus as it stands.
+    ordered by how many derived difficulty signals it carries. An unrated
+    decision never outranks one an agent flagged: absence is not a claim of
+    doubt (#46).
 
     **Nobody wants only the doubtful ones.** A reviewer checking a session's
     work wants all of it, ordered so the doubtful calls are at the top and they
@@ -3278,18 +3301,23 @@ async def review(
     be, since each switch is the active graph rather than one borrowed
     mid-call (#16).
     """
-    if mode not in REVIEW_MODES:
-        return {
-            "refused": (
-                f"'{mode}' is not a mode this server implements. Available: "
-                f"{', '.join(REVIEW_MODES)}. Designed but not built yet: "
-                f"by_agent, since, unreviewed, advisory — ask the user rather "
-                f"than working around it."
-            ),
-            "modes": list(REVIEW_MODES),
-        }, ResponseMeta()
+    refusal = mode_refusal(mode, agent_id=agent_id, since_given=since is not None)
+    if refusal is not None:
+        return {"refused": refusal, "modes": list(REVIEW_MODES)}, ResponseMeta()
 
-    records = await storage.query_decisions()
+    # One scan, narrowed by whatever the caller supplied. `unreviewed` is the
+    # only mode that is not a field filter, so it is applied below against a
+    # reviewed-set covering the **whole** selection rather than the page: a
+    # reviewed-set built from the page would call every row on page two
+    # unreviewed.
+    records = await storage.query_decisions(
+        agent_id=agent_id, since=since, until=until
+    )
+    records = [r for r in records if passes_ceiling(r, certainty_ceiling)]
+
+    reviewed = await storage.reviewed_decision_ids([r.id for r in records])
+    if mode == "unreviewed":
+        records = [r for r in records if r.id not in reviewed]
 
     subject_ids = list(dict.fromkeys(
         sid for record in records for sid in record.subject_ids
@@ -3301,9 +3329,7 @@ async def review(
         for record in records
     ]
     ordered = review_order(scored)
-
     page = ordered[:max_results]
-    reviewed = await storage.reviewed_decision_ids([item.record.id for item in page])
 
     decisions = [
         {
@@ -3330,8 +3356,8 @@ async def review(
                 }
                 for sid in item.record.subject_ids
             ],
-            # Derived from a row pointing back, never stored (§3.4) — which is
-            # what step 7's `unreviewed` mode will filter on.
+            # Derived from a row pointing back, never stored (§3.4), which is
+            # what makes `unreviewed` a mode rather than a flag on the row.
             "reviewed": item.record.id in reviewed,
             "reviews": item.record.reviews,
             "supersedes": item.record.supersedes,
@@ -3348,9 +3374,15 @@ async def review(
         "truncated": len(ordered) > len(page),
         # Three results out of four hundred unrated rows is not the same answer
         # as three out of four, and only one of them means the graph is in good
-        # shape (§6.4). Counted over everything scanned, not over the page.
+        # shape (§6.4). Counted over everything selected, not over the page.
         "unrated_count": sum(1 for r in records if r.certainty is None),
         "unattributed_count": sum(1 for r in records if r.judged_by is None),
+        "unreviewed_count": sum(1 for r in records if r.id not in reviewed),
+        # The value **this call** used, never what the graph would have done:
+        # a caller can pass its own, and #63's carry-forward is a refusal
+        # message that stated a threshold as the system's and was false for
+        # exactly the caller who overrode it.
+        "certainty_ceiling": certainty_ceiling,
     }
 
     # Declared, like every response carrying node ids: `retrieved` is what drives
@@ -3371,6 +3403,179 @@ async def review(
             if (sid := subject["id"]) in subjects
         ),
     )
+
+
+async def apply_review(
+    storage: StorageBackend,
+    *,
+    confirmations: list[dict] | None = None,
+    dissents: list[dict] | None = None,
+    judge: JudgeRef | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Record that somebody checked decisions in the journal (§6.4).
+
+    The only writer of a review, and `review()` never writes one. Two lists
+    rather than a flag, because a reviewer asking *"what has been disputed"*
+    does not want the agreements back, and a boolean inside a row cannot be
+    selected on.
+
+    **Neither list changes the graph.** A confirmation has nothing to change.
+    A dissent has plenty and does none of it: undoing a merge is
+    `reverse_merge`, an archival `restore`, a `one_claim` verdict a `distinct`
+    through `apply_reflection` — each with its own refusals and its own journal
+    row that sets `supersedes` because it really did supersede something. A
+    dissent sets only `reviews`, so the journal never claims to have overturned
+    a decision whose effect still stands (§4.2). Say in `because` what should
+    happen, then make that call.
+
+    **Not one transaction, and the design said it should be.** §10.7 asked for
+    one, written when this tool was imagined as performing the reversals. It
+    performs nothing, so there is no multi-step change to make atomic — and each
+    entry is an independent judgment about an unrelated decision that happens to
+    be batched, which is exactly the shape `apply_reflection` refuses per item.
+
+    Each entry: `{decision_id, because, subject_ids?, certainty?,
+    certainty_basis?}`. `subject_ids` narrows the review to the subjects
+    actually checked — one pointer at an ingest record covering forty-four facts
+    otherwise tells the graph a reviewer checked forty-four when it checked six
+    (§4.1). Omitted means all of them.
+    """
+    recorded: list[dict] = []
+    refused: list[dict] = []
+
+    for entries, agreed in ((confirmations or [], True), (dissents or [], False)):
+        for entry in entries:
+            outcome = await review_decision(
+                storage,
+                decision_id=str(entry.get("decision_id", "")),
+                agreed=agreed,
+                because=str(entry.get("because", "")),
+                subject_ids=entry.get("subject_ids"),
+                certainty=entry.get("certainty"),
+                certainty_basis=entry.get("certainty_basis"),
+                judge=judge,
+            )
+            if isinstance(outcome, ReviewRefused):
+                refused.append(outcome.model_dump())
+            else:
+                recorded.append(outcome.model_dump())
+
+    result = {
+        "recorded": recorded,
+        "refused": refused,
+        "confirmations": sum(1 for r in recorded if r["kind"] == "confirmation"),
+        "dissents": sum(1 for r in recorded if r["kind"] == "dissent"),
+        "graph": storage.current_database,
+    }
+    # The subjects of what was reviewed, so the viewer can follow a reviewer's
+    # attention the same way it follows a search.
+    return result, ResponseMeta(
+        nodes_returned=len(recorded),
+        retrieved=_declare(
+            sid for entry in recorded for sid in entry["subjects"]
+        ),
+    )
+
+
+async def rejudge(
+    node_id: str,
+    storage: StorageBackend,
+    *,
+    because: str,
+    claim_kind: str | None = None,
+    confidence: float | None = None,
+    confidence_basis: str | None = None,
+    certainty: float | None = None,
+    certainty_basis: str | None = None,
+    judge: JudgeRef | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Revise an ingest-time judgment about a node, without touching the claim (§6.5).
+
+    `claim_kind`, `confidence` and `confidence_basis` are supplied by an agent
+    that read the material, and nothing downstream re-makes them — so until this
+    existed, review could find every ingest-time mistake and fix none of them,
+    which is the verdict-with-no-action shape #64 was filed for.
+
+    **Never a supersession.** `update` requires `because` to be *it was wrong* or
+    *the world changed*, and a mislabelled `claim_kind` is neither: the claim was
+    right and the world did not move — the *judgment about* the claim was wrong.
+    Filing it as a correction would retire a true node and re-point its edges,
+    which is the forgetting #53 exists to prevent, over a metadata mistake. So
+    no status moves, no edge moves, no lineage is written, and the node keeps its
+    `judged_by`: that field records who wrote the wording, which is unchanged.
+
+    **`confidence` and `certainty` are different numbers on the same ladder, and
+    this is the one call that takes both.** `confidence` is a prior about the
+    *material* — how well the record would back this claim up. `certainty` is
+    about *this act of re-judging* — how sure you are that the original was
+    wrong. Omit either for the ordinary case; omitting stores unrated, which is
+    deliberately not a rated 0.5.
+
+    **The prior value is kept.** Each revision appends to
+    `metadata["rejudgments"]` with what it was, what it became and why, because
+    otherwise this would be the one call in the system that destroys a judgment
+    rather than superseding it.
+
+    **`importance` is not here.** `judge_importance` is already this tool for
+    that one field, and two writers for one value is how it ends up depending on
+    which tool ran last.
+    """
+    parsed_kind = None
+    if claim_kind is not None:
+        try:
+            parsed_kind = ClaimKind(claim_kind)
+        except ValueError:
+            return {
+                "rejudged": False,
+                "node_id": node_id,
+                "refused": (
+                    f"'{claim_kind}' is not a claim kind. Expected "
+                    f"{' or '.join(k.value for k in ClaimKind)} — a condition "
+                    f"that holds over a period, or something that happened on "
+                    f"an occasion."
+                ),
+            # A refusal still names the id back at the agent, so it still has to
+            # declare it — otherwise focus mode greys a node the response just
+            # showed. The same rule `merge_facts`' refusal follows.
+            }, ResponseMeta(retrieved=_declare([node_id]))
+
+    outcome = await rejudge_node(
+        storage,
+        node_id=node_id,
+        because=because,
+        claim_kind=parsed_kind,
+        confidence=confidence,
+        confidence_basis=confidence_basis,
+        certainty=certainty,
+        certainty_basis=certainty_basis,
+        judge=judge,
+    )
+    if isinstance(outcome, RejudgeRefused):
+        return (
+            {"rejudged": False, "node_id": node_id, "refused": outcome.reason},
+            ResponseMeta(retrieved=_declare([node_id])),
+        )
+
+    record = await journal(
+        storage,
+        DecisionKind.REJUDGMENT,
+        [node_id],
+        judge=judge,
+        reviews=outcome.reviews,
+        certainty=certainty,
+        certainty_basis=certainty_basis,
+    )
+    result = {
+        "rejudged": True,
+        "node_id": node_id,
+        "changed": outcome.changed,
+        # The decision this revises, blank where the original predates the
+        # journal — which the journal cannot cite, and does not pretend to.
+        "reviews": outcome.reviews,
+        "decision_id": record.id if record else None,
+    }
+    return result, ResponseMeta(nodes_returned=1, retrieved=_declare([node_id]))
+
 
 
 # --- Query Graph ---

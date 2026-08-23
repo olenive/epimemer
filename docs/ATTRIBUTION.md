@@ -1,13 +1,13 @@
 # Attribution — who judged this
 
-**Built so far: the registry, the judge on every write, the setting that can
-require one, the journal, and `review`.** An agent can be given an identity, the
-user assigns it, a session is bound to it, every decision that session makes —
-during review and at ingest — carries it, every decision is also appended to a
-journal, so *what did this agent judge* is one query, and `review` reads that
-journal back shakiest-first. What is **not** built is the rest of `review`'s
-modes and `apply_review`, which is what makes a confirmation cost something. The
-design is `dev-docs/REVIEW_MODE.md`.
+**Built: the registry, the judge on every write, the setting that can require
+one, the journal, and the review loop over it.** An agent can be given an
+identity, the user assigns it, a session is bound to it, every decision that
+session makes — during review and at ingest — carries it, every decision is also
+appended to a journal, so *what did this agent judge* is one query. `review`
+reads that journal back shakiest-first, `apply_review` records that somebody
+checked a decision, and `rejudge` revises a judgment made at ingest without
+touching the claim. The design is `dev-docs/REVIEW_MODE.md`.
 
 ## The problem it exists for
 
@@ -170,9 +170,11 @@ writes a row pointing at the original decision. That is what stops a third agent
 doing the same work again. Where the original predates the journal there is
 nothing to point at, and the pointer stays blank rather than inventing a target.
 
-**Nothing supplies `certainty` yet.** The field is on the row for the tools that
-will declare one; until then every decision is unrated, which is deliberately
-different from a rated 0.5.
+**`certainty` is supplied by the review writers and nowhere else.**
+`apply_review` and `rejudge` are calls whose whole point is a declared judgment,
+so the ladder is stated there rather than added to a dozen other tool schemas.
+Every other decision is unrated, which is deliberately different from a rated
+0.5.
 
 ## Reading it back — `review`
 
@@ -204,8 +206,90 @@ than raising the cap.
 graph because a row's `subject_ids` resolve only where those nodes live. For
 another, `use_graph` and ask again.
 
+### Modes and filters
+
+A **mode** names the selection; every other argument narrows whatever it
+selected. So *"what did agent-1 decide yesterday that nobody has checked"* is
+one call rather than three vocabularies.
+
+| Mode | Selects | Needs |
+|---|---|---|
+| `all` | every row | — |
+| `by_agent` | one judge's decisions | `agent_id` |
+| `since` | a time window; `until` is exclusive | `since` |
+| `unreviewed` | rows no other record points back at | — |
+
+`by_agent` and `since` are the same filters the other modes accept, made
+**mandatory**. That is their whole value: asking for `all` with an `agent_id`
+you forgot to pass returns the entire journal, which reads as an answer rather
+than as a missing filter.
+
+`certainty_ceiling` is for **counting**, not browsing — the ordering already
+covers browsing. *"Is anything below 0.5 still outstanding before I stop?"* is a
+gate, and a gate wants a number. It is inclusive, and it leaves unrated rows out
+entirely, since blank cannot be told from ordinary.
+
 **It sees only what was decided after the journal existed.** Anything the graph
 was told before then left no row, and nothing can reconstruct one.
+
+## Recording that somebody checked — `apply_review`
+
+If an agent checks a decision and agrees, and nothing records that, the next
+agent does the same work again. So a review is a row pointing back, and
+`apply_review` is the only thing that writes one.
+
+It takes `confirmations` and `dissents`, each entry `{decision_id, because,
+subject_ids?, certainty?, certainty_basis?}`. `because` is required in both:
+a review with no reason is a rubber stamp, and it costs more than nothing —
+it marks the decision checked, so the next reviewer skips it without being able
+to tell whether it was examined or waved through.
+
+**Neither list changes the graph, and the dissent least of all.** Undoing a
+merge is `reverse_merge`; an archival, `restore`; a `one_claim` verdict, a
+`distinct` through `apply_reflection`; a wrong ingest prior, `rejudge`. A
+dissent records the *finding* and sets only `reviews` — never `supersedes` —
+because a row claiming to have overturned a decision whose effect still stands
+would put the journal in disagreement with the graph. It is most useful exactly
+where the undo was **refused**: a merge whose survivor has since been
+contradicted cannot be reversed at all, and this is where that finding goes.
+
+`subject_ids` narrows a review to what was actually looked at. One pointer at an
+ingest record covering forty-four facts otherwise tells the graph a reviewer
+checked forty-four when it checked six.
+
+**A retry must not read as a second opinion.** The same judge confirming the
+same decision twice is refused, naming the row that already says it. A
+*different* judge is not a retry — it is the second independent check this whole
+design exists to make possible. On a graph that does not require a judge, two
+blanks cannot be told apart, so a retry there writes a second row: one more
+thing `require_judge` buys.
+
+## Revising a judgment — `rejudge`
+
+`claim_kind`, `confidence` and `confidence_basis` are supplied by an agent that
+read the material, and nothing downstream re-makes them. Until `rejudge` existed,
+review could find every ingest-time mistake and fix none of them.
+
+**It is not a correction and not a supersession.** `update` is for a claim that
+was wrong or a world that moved. This is for a claim that is fine where the
+*judgment about* it was wrong — a fact labelled `state` that is really an
+`event`, a confidence set too high. Nothing here retires a node, moves an edge
+or writes lineage, and the node keeps its `judged_by`: that field records who
+wrote the wording, which is unchanged.
+
+**The value it replaces is kept**, appended to the node's `rejudgments` trail
+with what it was, what it became and why — otherwise this would be the one call
+in the system that destroys a judgment rather than superseding it.
+
+`importance` is not here. `judge_importance` is already this tool for that one
+field, and two writers for one value is how it ends up depending on which ran
+last.
+
+**Two gaps it deliberately does not cover** (`ISSUES.md` #66): a metacontext
+assignment still cannot be withdrawn, and a validity interval still cannot be
+corrected. Both are the same shape, and both are load-bearing enough that
+answering them inside a tool named for ingest priors would bury an epistemic
+move in a metadata utility.
 
 ## Requiring a judge
 

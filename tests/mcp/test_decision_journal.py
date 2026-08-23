@@ -748,18 +748,32 @@ class TestNoKindGoesUnwritten:
     """
 
     def test_every_kind_has_a_writer(self):
-        import inspect
+        """Read over the whole package, not one module.
 
-        from epimemer.mcp import tools as tools_module
+        This scanned `mcp/tools.py` alone until step 7, which was true only
+        because every writer happened to live there — and it stopped being true
+        the moment `CONFIRMATION` and `DISSENT` were written from
+        `pipelines/review/apply.py`. A guard whose reach is an accident of where
+        the code sat is one that fails open, so it reads the package.
+        """
+        import pathlib
 
-        source = inspect.getsource(tools_module)
+        import epimemer
+
+        source = "\n".join(
+            path.read_text()
+            for path in pathlib.Path(epimemer.__file__).parent.rglob("*.py")
+        )
         # `supersession_kind` maps a status to one of the two supersession
-        # kinds, so those are written by name in `types.py` rather than here.
-        indirect = {DecisionKind.CORRECTION, DecisionKind.WORLD_CHANGE}
+        # kinds, so those are written by name in `types.py` rather than at a
+        # call site — and `types.py` is now inside the scan, so they need no
+        # exception at all. Kept as an assertion of *where*, which is the part
+        # a reader would otherwise have to go looking for.
+        assert "SUPERSESSION_KINDS" in source
         unwritten = {
             kind for kind in DecisionKind
             if f"DecisionKind.{kind.name}" not in source
-        } - indirect
+        }
 
         assert unwritten == set()
 

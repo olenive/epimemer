@@ -34,12 +34,20 @@ from epimemer.core.types import (
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
+from epimemer.pipelines.review.apply import rejudge_node, review_decision
 from epimemer.pipelines.review.difficulty import (
     DifficultySignal,
     ScoredDecision,
     difficulty_signals,
     merge_source_count,
     review_order,
+)
+from epimemer.pipelines.review.modes import (
+    MODE_REQUIRES,
+    REVIEW_MODES,
+    UNBUILT_MODES,
+    mode_refusal,
+    passes_ceiling,
 )
 
 
@@ -304,13 +312,13 @@ class TestTheToolOverARealGraph:
 
         assert subject == {"id": "gone", "content_preview": None, "status": None}
 
-    async def test_an_unbuilt_mode_is_refused_by_name(self, storage):
+    async def test_an_unknown_mode_is_refused_by_name(self, storage):
         """A mode the list admitted but nothing implemented would be a filter
         that silently returned everything."""
-        result, _ = await tools.review(storage, mode="by_agent")
+        result, _ = await tools.review(storage, mode="whatever")
 
-        assert "by_agent" in result["refused"]
-        assert result["modes"] == ["all"]
+        assert "whatever" in result["refused"]
+        assert result["modes"] == list(REVIEW_MODES)
         assert "decisions" not in result
 
     async def test_it_writes_nothing(self, storage, embedder, config):
@@ -376,3 +384,184 @@ class TestItWorksOnTheCorpusAsItStands:
         assert result["decisions_scanned"] == 0
         assert result["truncated"] is False
         assert meta.nodes_returned == 0
+
+
+class TestModesSelectAndArgumentsNarrow:
+    """§6.1's *"modes compose"* over a single `mode` string.
+
+    A mode names the selection; every other argument narrows whatever it
+    selected. So *"what did agent-1 decide yesterday that nobody has checked"*
+    is one call rather than three vocabularies.
+    """
+
+    def test_a_mode_that_needs_an_argument_refuses_without_it(self):
+        assert mode_refusal("by_agent", agent_id=None, since_given=False)
+        assert mode_refusal("since", agent_id=None, since_given=False)
+
+    def test_it_is_satisfied_by_the_argument_it_names(self):
+        assert mode_refusal("by_agent", agent_id="a1", since_given=False) is None
+        assert mode_refusal("since", agent_id=None, since_given=True) is None
+
+    def test_every_required_argument_is_one_this_call_accepts(self):
+        """`MODE_REQUIRES` names a parameter, and a name nothing supplies would
+        make the mode permanently unusable rather than merely strict."""
+        assert set(MODE_REQUIRES.values()) <= {"agent_id", "since"}
+
+    def test_an_unbuilt_mode_says_why_rather_than_returning_nothing(self):
+        for mode, reason in UNBUILT_MODES.items():
+            refusal = mode_refusal(mode, agent_id="a1", since_given=True)
+            assert refusal is not None and reason in refusal
+
+    def test_advisory_is_refused_because_nothing_writes_the_kind(self):
+        """The rule `DecisionKind` states, arriving on a mode: a selection over
+        a kind nothing produces returns an empty list that reads as a clean
+        graph."""
+        refusal = mode_refusal("advisory", agent_id=None, since_given=False)
+        assert "advisories are not built" in refusal
+        assert not any("advisor" in kind.value for kind in DecisionKind)
+
+    def test_between_points_at_since_rather_than_being_a_second_mode(self):
+        refusal = mode_refusal("between", agent_id=None, since_given=False)
+        assert "mode='since'" in refusal and "until" in refusal
+
+    async def test_by_agent_returns_one_judge(self, storage):
+        mine = _row(DecisionKind.INGEST, ["n1"], judged_by=CRITIC)
+        theirs = _row(
+            DecisionKind.INGEST, ["n2"], judged_by=JudgeRef(agent_id="other", digest="d")
+        )
+        for record in (mine, theirs):
+            await storage.record_decision(record)
+
+        result, _ = await tools.review(storage, mode="by_agent", agent_id="critic")
+
+        assert [d["decision_id"] for d in result["decisions"]] == [mine.id]
+
+    async def test_by_agent_leaves_unattributed_rows_out(self, storage):
+        """Not an exclusion policy — `agent_id` simply matches no blank. §6.4
+        reversed the blanket exclusion for every other mode, and this is the one
+        that cannot answer without a judge."""
+        await storage.record_decision(_row(DecisionKind.INGEST, ["n1"]))
+
+        result, _ = await tools.review(storage, mode="by_agent", agent_id="critic")
+
+        assert result["decisions"] == []
+        assert result["unattributed_count"] == 0
+
+    async def test_since_is_inclusive_and_until_exclusive(self, storage):
+        """`query_changes`' own half-open convention, so adjacent windows
+        neither overlap nor drop a row on the boundary."""
+        early = DecisionRecord(
+            kind=DecisionKind.INGEST, subject_ids=["a"],
+            decided_at=NOON - timedelta(hours=1),
+        )
+        on_the_bound = DecisionRecord(
+            kind=DecisionKind.INGEST, subject_ids=["b"], decided_at=NOON,
+        )
+        later = DecisionRecord(
+            kind=DecisionKind.INGEST, subject_ids=["c"],
+            decided_at=NOON + timedelta(hours=1),
+        )
+        for record in (early, on_the_bound, later):
+            await storage.record_decision(record)
+
+        result, _ = await tools.review(
+            storage, mode="since", since=NOON, until=NOON + timedelta(hours=1)
+        )
+
+        assert [d["decision_id"] for d in result["decisions"]] == [on_the_bound.id]
+
+    async def test_unreviewed_drops_what_a_row_points_back_at(self, storage):
+        checked = _row(DecisionKind.MERGE, ["a", "b"])
+        loose = _row(DecisionKind.MERGE, ["c", "d"])
+        for record in (checked, loose):
+            await storage.record_decision(record)
+        await storage.record_decision(
+            _row(DecisionKind.CONFIRMATION, ["a"], reviews=checked.id)
+        )
+
+        result, _ = await tools.review(storage, mode="unreviewed")
+
+        ids = [d["decision_id"] for d in result["decisions"]]
+        assert checked.id not in ids and loose.id in ids
+
+    async def test_unreviewed_is_judged_over_the_whole_selection(self, storage):
+        """Not over the page. A reviewed-set built from the page alone would
+        call every row past `max_results` unreviewed."""
+        target = _row(DecisionKind.MERGE, ["a", "b"])
+        await storage.record_decision(target)
+        for i in range(5):
+            await storage.record_decision(_row(DecisionKind.INGEST, [f"n{i}"]))
+        await storage.record_decision(
+            _row(DecisionKind.CONFIRMATION, ["a"], reviews=target.id)
+        )
+
+        result, _ = await tools.review(storage, mode="all", max_results=1)
+
+        assert result["unreviewed_count"] == 6, "seven rows, one of them checked"
+
+    async def test_the_arguments_compose_with_any_mode(self, storage):
+        wanted = _row(DecisionKind.INGEST, ["n1"], judged_by=CRITIC)
+        wrong_agent = _row(
+            DecisionKind.INGEST, ["n2"], judged_by=JudgeRef(agent_id="other", digest="d")
+        )
+        checked = _row(DecisionKind.INGEST, ["n3"], judged_by=CRITIC)
+        for record in (wanted, wrong_agent, checked):
+            await storage.record_decision(record)
+        await storage.record_decision(
+            _row(DecisionKind.CONFIRMATION, ["n3"], reviews=checked.id)
+        )
+
+        result, _ = await tools.review(
+            storage, mode="unreviewed", agent_id="critic",
+            since=NOON - timedelta(hours=1),
+        )
+
+        assert [d["decision_id"] for d in result["decisions"]] == [wanted.id]
+
+
+class TestTheCertaintyCeiling:
+    """§6.3. Its use is counting, not browsing — ordering already covers
+    browsing — so what it must get right is which rows it leaves out."""
+
+    def test_it_is_inclusive_of_its_own_value(self):
+        """`importance_ceiling` is inclusive of its default because *nomination
+        is a proposal rather than a verdict*, and the guidance says to **omit**
+        at 0.5 — so an agent that typed it was making a point of it."""
+        assert passes_ceiling(_row(DecisionKind.INGEST, [], certainty=0.5), 0.5)
+
+    def test_it_excludes_what_is_above(self):
+        assert not passes_ceiling(_row(DecisionKind.INGEST, [], certainty=0.7), 0.5)
+
+    def test_an_unrated_row_is_excluded_rather_than_read_as_a_half(self):
+        """Blank cannot be told from ordinary (#46), and this filter's use is a
+        gate — a blank counted in either direction is an invented answer."""
+        assert not passes_ceiling(_row(DecisionKind.INGEST, []), 0.5)
+
+    def test_no_ceiling_keeps_everything(self):
+        assert passes_ceiling(_row(DecisionKind.INGEST, []), None)
+
+    async def test_the_response_names_the_ceiling_this_call_used(self, storage):
+        """Never what the graph would have done: a caller can pass its own, and
+        #63's carry-forward is a message that stated a threshold as the
+        system's and was false for exactly the caller who overrode it."""
+        result, _ = await tools.review(storage, certainty_ceiling=0.3)
+        assert result["certainty_ceiling"] == 0.3
+
+        result, _ = await tools.review(storage)
+        assert result["certainty_ceiling"] is None
+
+    async def test_the_unrated_it_left_out_stay_counted_nowhere_misleading(
+        self, storage
+    ):
+        """`unrated_count` is over what was selected, and the ceiling excludes
+        every unrated row — so it reads zero rather than reporting a population
+        the filter already removed."""
+        await storage.record_decision(_row(DecisionKind.INGEST, ["a"]))
+        await storage.record_decision(
+            _row(DecisionKind.INGEST, ["b"], certainty=0.3)
+        )
+
+        result, _ = await tools.review(storage, certainty_ceiling=0.5)
+
+        assert len(result["decisions"]) == 1
+        assert result["unrated_count"] == 0

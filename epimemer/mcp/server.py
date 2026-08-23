@@ -1494,14 +1494,27 @@ async def memory_apply_reflection(
 async def epimemer_review(
     ctx: Context,
     mode: str = "all",
+    agent_id: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    certainty_ceiling: float | None = None,
     max_results: int = tools.REVIEW_MAX_RESULTS,
 ) -> str:
     """Read this graph's decision journal back, shakiest decisions first.
 
     Every judgment the graph has recorded — what was decided, about which nodes,
     by whom, and when — ordered so the calls most worth a second look arrive at
-    the top. Read-only: acting on what you find goes through the ordinary
-    decision tools.
+    the top. Read-only: acting on what you find goes through `apply_review`,
+    `rejudge`, and the ordinary decision tools.
+
+    **Modes select; every other argument narrows whatever was selected**, so
+    "what did agent-1 decide yesterday, that nobody has checked" is one call:
+    `mode="unreviewed", agent_id="agent-1", since=...`.
+
+    - `all` — the full audit
+    - `by_agent` — needs `agent_id`; check everything one judge did
+    - `since` — needs `since`; add `until` for a closed window (exclusive)
+    - `unreviewed` — decisions no other record points back at
 
     Ordering is two tiers and never one blended score. A decision whose agent
     declared a low `certainty` comes first; everything unrated follows, ordered
@@ -1515,33 +1528,179 @@ async def epimemer_review(
     An unrated decision never outranks one an agent actually flagged: a blank
     `certainty` means *unrated*, not *doubtful*.
 
-    Read `unrated_count` beside the results — three shaky rows out of four
-    hundred unrated is not the same answer as three out of four. `truncated`
-    says the list was cut at `max_results`; act on what came back and review
-    again rather than raising the number.
+    `certainty_ceiling` is for **counting**, not browsing — ordering already
+    covers browsing. *"Is anything below 0.5 still outstanding before I stop?"*
+    is a gate, and it wants a number. It is inclusive, and it excludes unrated
+    decisions, since blank cannot be told from ordinary.
+
+    Read the counts beside the results — three shaky rows out of four hundred
+    unrated is not the same answer as three out of four. `truncated` says the
+    list was cut at `max_results`; act on what came back and review again rather
+    than raising the number.
 
     **The answer covers this graph only, and `graph` names which.** For another,
     `use_graph` and ask again.
 
     Args:
-        mode: Which decisions to look at. Only "all" is implemented so far.
+        mode: all | by_agent | since | unreviewed.
+        agent_id: Restrict to one judge. Required by mode="by_agent".
+        since: ISO-8601 lower bound on when the decision was made, inclusive.
+        until: ISO-8601 upper bound, exclusive.
+        certainty_ceiling: Keep only decisions declared at or below this.
         max_results: Cap on decisions returned (default 200).
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
         "epimemer.review",
         lambda: tools.review(
-            storage=deps["storage"], mode=mode, max_results=max_results,
+            storage=deps["storage"],
+            mode=mode,
+            agent_id=agent_id,
+            since=_parse_utc(since) if since else None,
+            until=_parse_utc(until) if until else None,
+            certainty_ceiling=certainty_ceiling,
+            max_results=max_results,
         ),
         ctx,
-        f"mode={mode} max_results={max_results}",
+        f"mode={mode} agent_id={agent_id} max_results={max_results}",
         lambda r, m: (
             f"refused mode={mode}" if "refused" in r else
             f"decisions={m.nodes_returned}/{r['decisions_scanned']} "
-            f"graph={r['graph']} unrated={r['unrated_count']}"
+            f"graph={r['graph']} unrated={r['unrated_count']} "
+            f"unreviewed={r['unreviewed_count']}"
             + (" truncated" if r["truncated"] else "")
         ),
     )
+
+
+@mcp.tool(name="apply_review")
+async def epimemer_apply_review(
+    ctx: Context,
+    confirmations: list[dict] | None = None,
+    dissents: list[dict] | None = None,
+) -> str:
+    """Record that you checked decisions `review` returned, and what you concluded.
+
+    **Confirming costs something, or the treadmill moves up a level.** If you
+    check a decision and agree and nothing records that, the next agent does the
+    same work again. A confirmation is what makes `review(mode="unreviewed")`
+    shrink.
+
+    **Neither list changes the graph, and a dissent least of all.** Undoing a
+    merge is `reverse_merge`; an archival, `restore`; a `one_claim` verdict, a
+    `distinct` through `apply_reflection`; a wrong ingest prior, `rejudge`. A
+    dissent records the *finding* — say in `because` what should happen, then
+    make that call. It is most useful exactly where the undo was refused: a
+    merge whose survivor has since been contradicted cannot be reversed at all,
+    and this is where that finding goes.
+
+    Each entry is `{decision_id, because, subject_ids?, certainty?,
+    certainty_basis?}`.
+
+    - `because` is required. A review with no reason is a rubber stamp, and it
+      costs more than nothing: it marks the decision checked, so the next
+      reviewer skips it.
+    - `subject_ids` narrows the review to what you actually looked at. One
+      pointer at an ingest record covering forty-four facts otherwise tells the
+      graph you checked forty-four when you checked six. Omit for all of them.
+    - `certainty` is how sure you are of *this review*, on the same ladder as
+      `confidence` (0.3 / 0.5 / 0.7 / 0.9). Omit for the ordinary case; omitting
+      stores *unrated*, which is deliberately not a rated 0.5.
+
+    Confirming the same decision twice as the same judge is refused — a second
+    identical row would read as a second opinion, and it is the same one.
+
+    Args:
+        confirmations: Decisions you checked and agree with.
+        dissents: Decisions you checked and think are wrong.
+    """
+    deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx)
+    if refused is not None:
+        return refused
+    return await _run_with_timeout(
+        "epimemer.apply_review",
+        lambda: tools.apply_review(
+            storage=deps["storage"],
+            confirmations=confirmations,
+            dissents=dissents,
+            judge=judge,
+        ),
+        ctx,
+        f"confirmations={len(confirmations or [])} dissents={len(dissents or [])}",
+        lambda r, m: (
+            f"confirmed={r['confirmations']} dissented={r['dissents']} "
+            f"refused={len(r['refused'])} graph={r['graph']}"
+        ),
+    )
+
+
+@mcp.tool(name="rejudge")
+async def epimemer_rejudge(
+    node_id: str,
+    because: str,
+    ctx: Context,
+    claim_kind: str | None = None,
+    confidence: float | None = None,
+    confidence_basis: str | None = None,
+    certainty: float | None = None,
+    certainty_basis: str | None = None,
+) -> str:
+    """Revise a judgment you made at ingest, without changing the claim itself.
+
+    `claim_kind`, `confidence` and `confidence_basis` are supplied by whoever
+    read the material, and nothing downstream re-makes them. This is the only
+    way to correct one.
+
+    **Not a correction, and not a supersession.** Use `update` when the claim
+    was wrong or the world moved. Use this when the claim is fine and the
+    *judgment about* it was wrong — a fact labelled `state` that is really an
+    `event`, a confidence set too high. Nothing here retires a node, moves an
+    edge, or writes lineage.
+
+    **`confidence` and `certainty` are different numbers on the same ladder.**
+    `confidence` is about the *material* — how well the record would back this
+    claim up if challenged. `certainty` is about *this act of re-judging* — how
+    sure you are the original was wrong. Omit either for the ordinary case.
+
+    `importance` is not here: `judge_importance` already revises that one, with
+    a reason and a clock.
+
+    Args:
+        node_id: The node whose judgment you are revising.
+        because: Why the original judgment was wrong. Required.
+        claim_kind: "state" or "event". Facts only.
+        confidence: Revised prior about the material, 0.0-1.0.
+        confidence_basis: One line on why that value.
+        certainty: How sure you are of this revision, 0.0-1.0.
+        certainty_basis: One line on why that value.
+    """
+    deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx)
+    if refused is not None:
+        return refused
+    return await _run_with_timeout(
+        "epimemer.rejudge",
+        lambda: tools.rejudge(
+            node_id=node_id,
+            storage=deps["storage"],
+            because=because,
+            claim_kind=claim_kind,
+            confidence=confidence,
+            confidence_basis=confidence_basis,
+            certainty=certainty,
+            certainty_basis=certainty_basis,
+            judge=judge,
+        ),
+        ctx,
+        f"node_id={node_id}",
+        lambda r, m: (
+            f"refused node={node_id}" if not r["rejudged"] else
+            f"rejudged={node_id} changed={','.join(r['changed'])} "
+            f"reviews={r['reviews']}"
+        ),
+    )
+
 
 
 @mcp.tool(name="query_graph")
