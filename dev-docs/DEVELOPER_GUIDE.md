@@ -414,6 +414,34 @@ async with storage.graph_guard.using():   # a tool call — see _run_with_timeou
 an integer — and **movers are preferred**, so a busy session cannot starve the
 dashboard.
 
+### And every call says which graph it means
+
+The guard stops the graph moving *underneath* a call. It cannot tell you the
+call started in the right graph — the agent's belief and `current_database` can
+agree while a reconnect has put both somewhere else. That is `expected_graph`,
+and since #71 it is **required on every tool** except the four that are *about*
+graphs (`NAMES_ITS_OWN_GRAPH` in `mcp/server.py`).
+
+Adding a tool means adding the parameter and forwarding it — the oracle in
+`tests/mcp/test_graph_gate.py` walks the live registry and fails otherwise. The
+check itself is one call to `tools.wrong_graph`, made in two places and declared
+in one:
+
+| Where | Why there |
+|---|---|
+| `_run_with_timeout` | the choke point, **inside** the turn — outside it, a `use_graph` landing between check and call would leave a passing call running elsewhere |
+| `_judge_for_write` | it runs in the tool body, and everything it reads is graph state: which graph, before who |
+
+Do not add a third. And do not add a *setting*: a per-graph flag would be read
+from whichever graph the call is actually in, disabling the guard in exactly the
+case it exists for, and a gate that switched on once a second graph existed
+would refuse calls that worked yesterday because of state nobody touched.
+
+**A refusal produced outside a tool cannot use that tool's summariser.** The
+gate returns a shape no `output_summary_fn` was written against, and running one
+over it raises inside `_log` — which is how the recovery message went missing
+for weeks. `_wrong_graph_summary` is why the refusal now survives to the agent.
+
 Three rules for anything new:
 
 - **Take the turn at the logical-operation boundary.** Per query is useless: a

@@ -520,6 +520,14 @@ edges migrated. Plus `proceeded_despite` when an advisory was in play.
 > `proceeded_despite_advisory` to `DecisionKind` and writes it** — no second
 > list, no `reviewed_at`, no second scan.
 >
+> **The review modes shipped on 2026-08-23** (REVIEW_MODE step 7), and
+> `advisory` is **refused by name** rather than admitted: it would select on a
+> kind nothing writes and return an empty list reading as *nothing is
+> contested*. The refusal points here. So building §5's advisories means adding
+> the kind, writing it, and adding `"advisory"` to `REVIEW_MODES` in
+> `pipelines/review/modes.py` — the refusal disappears on its own once the mode
+> is real.
+>
 > The kind is deliberately **not** in the enum until then, which is §8.1's own
 > rule turned on this document: a value nothing can produce is worse than no
 > value at all, and here it is worse still, because review *selects* on the

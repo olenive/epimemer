@@ -384,7 +384,7 @@ deferred fixes are separate, in [dev-docs/ISSUES.md](dev-docs/ISSUES.md).
 - [docs/RETRIEVAL.md](docs/RETRIEVAL.md) — How `search` is answered: the two arms, rank fusion, result provenance, lineage collapse
 - [docs/VALIDITY.md](docs/VALIDITY.md) — When a claim was true: intervals per source, correction vs world-change, recurrence, the soundness check
 - [docs/REFLECTION.md](docs/REFLECTION.md) — The review loop: verdicts, what `reflect` nominates, what `apply_reflection` writes
-- [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) — Who judged this: the agent registry, why the user assigns the id, how approval reaches them, and the append-only journal of every decision
+- [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) — Who judged this: the agent registry, why the user assigns the id, how approval reaches them, the append-only journal of every decision, and reading it back with `review` / `apply_review` / `rejudge`
 - [INTEGRATION.md](INTEGRATION.md) — Claude Code integration guide and the canonical tool table
 
 **How it got that way** — design history, appended to rather than rewritten:
@@ -394,6 +394,7 @@ deferred fixes are separate, in [dev-docs/ISSUES.md](dev-docs/ISSUES.md).
 - [dev-docs/DEVELOPER_GUIDE.md](dev-docs/DEVELOPER_GUIDE.md) — Development and debugging guide
 - [dev-docs/BENCHMARKS.md](dev-docs/BENCHMARKS.md) — Measured scaling limits and where they come from
 - [dev-docs/REVIEW_EPISTEMIC.md](dev-docs/REVIEW_EPISTEMIC.md) — The review loop's design, including the validity model (§13)
+- [dev-docs/REVIEW_MODE.md](dev-docs/REVIEW_MODE.md) — Who judged this and can someone else check it: the agent registry, the decision journal, and the review modes over it (built, steps 0a–7)
 - [dev-docs/LEXICAL_SEARCH.md](dev-docs/LEXICAL_SEARCH.md), [dev-docs/RETRIEVAL_PROVENANCE.md](dev-docs/RETRIEVAL_PROVENANCE.md), [dev-docs/EVENT_LOG.md](dev-docs/EVENT_LOG.md) — Feature designs
 - [dev-docs/WARNINGS_AND_SETTINGS.md](dev-docs/WARNINGS_AND_SETTINGS.md) — Advisories, per-graph warning policy, node notes, inference merge (designed, not built)
 - [dev-docs/VISUALISATION.md](dev-docs/VISUALISATION.md), [dev-docs/TIMELINE_VISUALISATION.md](dev-docs/TIMELINE_VISUALISATION.md) — Dashboard design

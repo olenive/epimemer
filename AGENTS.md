@@ -25,6 +25,21 @@ Never compare two timestamps naively in a backend query. They are stored as ISO-
 # Memory System (Epimemer)
 You have access to an epistemic memory system via MCP tools. Use it to:
 
+### Say which graph you mean — on every call
+- **`expected_graph` is required on every tool**, reads as much as writes. Leave
+  it out and the call refuses before anything runs; name a graph the server is
+  not on and it refuses too, saying which graph you are actually on.
+- The active graph is **process state** and does not survive a client reconnect,
+  so a session that called `use_graph` an hour ago can come back somewhere else
+  with nothing to tell you. A write that lands in the wrong graph succeeds in
+  every other respect; a **read** from the wrong graph returns a plausible answer
+  you then reason from and report, leaving nothing behind for anyone to find.
+- **Do not paste the graph name out of a refusal.** The check is worth something
+  only because your expectation and the server's state are arrived at
+  independently. Say which graph you *meant*.
+- Four tools take no `expected_graph`, each being *about* graphs rather than in
+  one: `list_graphs`, `use_graph`, `delete_graph`, `viz_status`.
+
 ### When to ingest (segment + store_decomposition)
 - After learning new information from the user or external sources
 - When the user shares documents, articles, or knowledge you should remember
@@ -89,6 +104,34 @@ Surface this information naturally: "Found 5 relevant nodes (2 topics, 2 facts, 
 - If a graph requires a judge, a write without one is refused and the message
   names `claim_agent`. That is not something to work around — put it to the
   user, since only they can approve an id or turn the requirement off.
+
+### Reviewing what was decided (review, apply_review, rejudge)
+- `review` reads this graph's decision journal back **shakiest first** and writes
+  nothing. Modes: `all`, `by_agent` (needs `agent_id`), `since` (needs `since`;
+  `until` is exclusive), `unreviewed`. `certainty_ceiling` is for counting, not
+  browsing.
+- **A blank `certainty` means unrated, not doubtful.** Rows an agent actually
+  flagged sort above unrated ones however many derived signals those carry.
+  Read `unrated_count` and `unattributed_count` before concluding anything —
+  three shaky rows out of four hundred unrated is not three out of four.
+- **`apply_review(confirmations=[…], dissents=[…])` is what makes a confirmation
+  cost something.** If you check a decision and record nothing, the next agent
+  repeats the work. `because` is required on both: a review with no reason marks
+  the decision checked, so the next reviewer skips it.
+- **A dissent records the finding, not the undo.** It changes nothing. Say what
+  should happen, then make that call — `reverse_merge`, `restore`,
+  `apply_reflection` with a `distinct` verdict, or `rejudge`. It matters most
+  where the undo was *refused* and there is nowhere else to put the finding.
+- **`rejudge` revises a judgment you made at ingest** — `claim_kind`,
+  `confidence`, `confidence_basis` — without touching the claim. Do not reach for
+  `update` or `supersede_by`: those are for a claim that was wrong or a world
+  that moved. This is for a claim that is fine where the *judgment about* it was
+  wrong. It retires nothing and keeps the value it replaces.
+- A metacontext assignment and a validity interval still cannot be revised at
+  all. If either is wrong, raise it with the user rather than working around it.
+- `review` answers for **one graph**, named in `graph`. It sees only decisions
+  made since the journal existed; an older graph can be full of judgments it will
+  never show.
 
 ### Multi-graph management (list_graphs, use_graph, delete_graph)
 - Use `list_graphs` to see available knowledge graphs and which is active

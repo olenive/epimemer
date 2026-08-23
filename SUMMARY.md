@@ -598,10 +598,16 @@ supplied — the event/state call, the confidence prior. A graph can be set to
 though it never does by default. Every decision is also appended to a **journal**
 — an append-only table with no update path — so *what did this agent judge* is
 one query rather than five scans, and *has anyone checked this* is derived from
-a row pointing back rather than a flag anyone edits. What is still missing is
-`review()`, which reads that journal and orders it shakiest-first. See
-[docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) for what is built and
-`dev-docs/REVIEW_MODE.md` for the rest of the design.
+a row pointing back rather than a flag anyone edits. `review()` reads that
+journal back **shakiest first** — a declared low `certainty` before anything
+unrated, then by derived difficulty — with modes for one judge, one time window,
+or what nobody has looked at. `apply_review` records that somebody checked a
+decision and whether they agree, because a confirmation nobody records means the
+next agent repeats the work; and `rejudge` revises a judgment made at ingest
+without touching the claim, which is what stops review being able to find every
+ingest-time mistake and fix none of them. See
+[docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) for the built behaviour and
+`dev-docs/REVIEW_MODE.md` for how it was reached.
 
 Historical graph state is read with the dedicated `graph_as_of` (a lifecycle snapshot at a past instant) and `query_changes` (births and retirements across a window) tools — not via an `at_time` parameter on `search`/`query_graph`. That is *transaction* time; the other axis, when a claim was **true**, is `search(valid_as_of=…)`, and the names are marked on both sides so neither inherits the wrong default reading.
 
@@ -612,6 +618,8 @@ Historical graph state is read with the dedicated `graph_as_of` (a lifecycle sna
 ### Multi-Graph Support
 
 All backends support multiple named graphs. The `StorageBackend` protocol requires `list_databases`, `switch_database`, and `delete_database`. SurrealDB uses separate databases within a namespace; InMemoryStorage uses a dict-of-dicts pattern. The default graph is `"default"`. Agents manage graphs at runtime via the `list_graphs`, `use_graph`, and `delete_graph` tools.
+
+**The active graph is process state, so every other tool must name the graph it means.** `use_graph` lasts as long as the process: a client reconnect lands back on whatever configuration resolves to, and a session that switched an hour ago comes back somewhere else with nothing to say so. Every tool therefore requires an `expected_graph`, reads as much as writes, and refuses rather than run when it is missing or names a graph the server is not on. It is unconditional and there is no setting: a per-graph flag would be read from whichever graph the call is *actually* in, which would disable the guard in exactly the case it exists for. A wrong-graph **read** is the worse half — it returns a plausible answer the agent then reasons from, leaving no artifact, where a misfiled write at least sits beside its own journal row.
 
 ### Scaling Limits
 
