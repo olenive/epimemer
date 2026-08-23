@@ -2006,3 +2006,56 @@ class TestBatchedSegmentFetch:
 
         assert await store.get_segments([]) == {}
         assert set(await store.get_segments([segment.id, segment.id])) == {segment.id}
+
+
+class TestTimestampsAtAWholeSecond:
+    """The divergence this fixture exists to catch, and nearly missed.
+
+    SurrealDB stores timestamps as ISO strings and compares them as strings,
+    which is chronologically correct only while every rendering has the same
+    shape — and Pydantic omits the fractional part when it is exactly zero. So a
+    row written at `…:41Z` sorts *after* a bound at `…:41.500000Z`, because
+    `"Z" > "."`, and drops out of a window it belongs in.
+
+    **It survived because `datetime.now()` essentially never lands on a whole
+    second**, so every other test in this file constructs its timestamps by
+    accident rather than on purpose. An unpinned known divergence is how this
+    fixture's guarantee quietly stops meaning what it says, so the case is
+    written down and marked, rather than left for the next person to rediscover.
+
+    `ISSUES.md` #70. The fix is not two lines — padding the bound does not help
+    when the *stored* side is what varies, and rows already written keep their
+    shape — so this stays marked until that entry is settled.
+    """
+
+    WHOLE = datetime(2026, 8, 23, 12, 0, 41, tzinfo=timezone.utc)
+    HALF_PAST = datetime(2026, 8, 23, 12, 0, 41, 500000, tzinfo=timezone.utc)
+
+    async def test_a_node_created_on_a_whole_second_existed_a_moment_later(
+        self, store
+    ):
+        node = Fact(content="x", source_id="s1", created_at=self.WHOLE)
+        await store.store_node(node)
+
+        if store.backend_name == "surrealdb":
+            pytest.xfail(
+                "ISSUES.md #70 — '…41Z' > '…41.5Z' as strings, so the node "
+                "drops out of a point-in-time query it belongs in"
+            )
+
+        found = await store.query_nodes(at_time=self.HALF_PAST)
+
+        assert [n.id for n in found] == [node.id]
+
+    async def test_a_fractional_timestamp_is_unaffected(self, store):
+        """The control. Nothing is wrong with the comparison itself — only with
+        two renderings of it, which is why this looked fine for months."""
+        node = Fact(
+            content="x", source_id="s1",
+            created_at=self.WHOLE.replace(microsecond=1),
+        )
+        await store.store_node(node)
+
+        found = await store.query_nodes(at_time=self.HALF_PAST)
+
+        assert [n.id for n in found] == [node.id]

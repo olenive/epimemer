@@ -1379,7 +1379,7 @@ at"* scan, and an agent proceeding past an advisory would write into both.
 
 | W&S §9 | Becomes |
 |---|---|
-| `NodeNote` | `DecisionRecord(kind="proceeded_despite_advisory")` |
+| `NodeNote` | `DecisionRecord(kind="proceeded_despite_advisory")` — the kind is added when advisories are, not before (§10.5) |
 | `node.notes` | a derived view over records whose `subject_ids` contains the node |
 | `NodeNote.reviewed_at` | gone — derived from `reviews`, per §3.4 |
 | §5.3 `contested_decisions` | `review(mode="advisory", unreviewed=True)` |
@@ -1924,6 +1924,27 @@ derived read over records whose `subject_ids` contains the node, and W&S §5.3's
 > the hundreds. Filed as `ISSUES.md` #69 rather than guessed at. Boundaries, the
 > other gap `docs/ATTRIBUTION.md` named, are closed: both of their subjects are
 > nodes.
+>
+> **`DecisionKind` carries no member without a writer**, corrected on review the
+> same day: `relation_merge` and `proceeded_despite_advisory` both shipped
+> unwritten and both were removed. `WARNINGS_AND_SETTINGS.md` §8.1 had already
+> settled the rule for `AdvisoryAction` — *"a value nothing can produce is worse
+> than no value at all"* — and it binds harder here, because review **selects**
+> on the kind: an unwritten one is a filter that silently returns nothing and
+> reads as a clean graph. Both absences are named in `DecisionKind`'s docstring,
+> which is where a not-yet belongs. The drift-guard test now has no exception
+> list, and is stronger for it — a list of forgiven cases written by whoever
+> added the member is not a check.
+>
+> **The journal write never raises.** It lands after the decision and outside
+> its transaction, which is the safe direction; raising would fail the tool call
+> *after* the graph write succeeded, and the retry is worse than the missing row
+> every time — a retried `merge_facts` refuses because its sources are already
+> retired, a retried `record_contradiction` writes a row that reads as an
+> original decision, and a retried `store_decomposition` ingests the document
+> twice. The failure is logged with the kind and the subjects, for the operator
+> rather than the agent: no tool re-journals a decision, so telling the agent
+> would hand it information it has no move for.
 >
 > **One defect fixed on the way**, in code this step only read: timestamps are
 > stored as strings and compared as strings, which is chronologically correct

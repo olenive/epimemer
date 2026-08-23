@@ -1202,6 +1202,19 @@ class DecisionKind(str, Enum):
 
     It is not a free string: review selects on it, and a vocabulary that grows
     by typing is one that cannot be selected on reliably.
+
+    **Every member has a writer.** A value nothing can produce is worse than no
+    value at all — a caller writes a branch for it and the branch is dead, and
+    here it is worse still, because review *selects* on this: a kind with no
+    writer is a filter that silently returns nothing and looks like a clean
+    graph. `WARNINGS_AND_SETTINGS.md` §8.1 settled this for `AdvisoryAction` and
+    the same rule holds here, enforced by a test that reads both lists.
+
+    Two kinds are therefore **not** here yet, and are named so nobody re-derives
+    them: `relation_merge`, once `ISSUES.md` #69 settles what a relation merge's
+    subjects are; and `proceeded_despite_advisory`, once advisories exist — that
+    one is `WARNINGS_AND_SETTINGS.md` §9's node note, folded in here so there is
+    one review machine rather than two (REVIEW_MODE.md §9).
     """
 
     # Ingest. One row per `store_decomposition` call rather than per fact (§4.1)
@@ -1227,18 +1240,11 @@ class DecisionKind(str, Enum):
     ENRICHMENT = "enrichment"
     ARCHIVAL = "archival"
     REACTIVATION = "reactivation"
-    RELATION_MERGE = "relation_merge"
     BOUNDARY = "boundary"
 
     # Everything else an agent asserts about the graph.
     RELATION = "relation"
     IMPORTANCE = "importance"
-
-    # `WARNINGS_AND_SETTINGS.md` §9's node note, folded in here (§9). "I was
-    # warned and proceeded anyway" is a judgment with a judge, a date and a
-    # subject; it was a separate type only because it was designed a day before
-    # this journal existed. Nothing writes it yet — advisories are not built.
-    PROCEEDED_DESPITE_ADVISORY = "proceeded_despite_advisory"
 
 
 class DecisionRecord(BaseModel):

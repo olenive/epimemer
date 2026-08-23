@@ -515,11 +515,17 @@ edges migrated. Plus `proceeded_despite` when an advisory was in play.
 > was built, so the cost is this paragraph rather than a migration.
 >
 > **The journal was built on 2026-08-23** (REVIEW_MODE step 5), so the fold is
-> no longer a plan. `DecisionKind.PROCEEDED_DESPITE_ADVISORY` exists with
-> nothing writing it — advisories are what is missing now, not the place to
-> record them — and `query_decisions(subject_id=…)` is the derived `node.notes`
-> this section described. Whoever builds §5's advisories writes that kind and
-> nothing else: no second list, no `reviewed_at`, no second scan.
+> no longer a plan: `query_decisions(subject_id=…)` is the derived `node.notes`
+> this section described. Whoever builds §5's advisories **adds
+> `proceeded_despite_advisory` to `DecisionKind` and writes it** — no second
+> list, no `reviewed_at`, no second scan.
+>
+> The kind is deliberately **not** in the enum until then, which is §8.1's own
+> rule turned on this document: a value nothing can produce is worse than no
+> value at all, and here it is worse still, because review *selects* on the
+> kind — an unwritten one is a filter that returns nothing and reads as a clean
+> graph. It is named in `DecisionKind`'s docstring so nobody re-derives the
+> fold from scratch.
 
 §5.2 proposed a `proceeded_despite` key in `metadata`. That is replaced by this
 section, which is a **feature to build rather than a flag to set** — the user's

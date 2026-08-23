@@ -203,6 +203,15 @@ A client whose connection cannot hold a session binding is not locked out: a
 claim that could not bind to a session is held for the process instead, which is
 safe precisely because a transport with no sessions has one client.
 
+**One cost of *blank means unknown*, stated rather than discovered.** On a graph
+that never turns the requirement on, a row written before attribution existed
+and a row written yesterday by an agent that did not name itself are
+**permanently indistinguishable** — both are blank, and nothing else separates
+them. That is the price of the rule, and it was paid deliberately: the
+alternative read blank as *"written before a date"*, which asserts something
+about every unattributed row that nobody checked. Turning the requirement on
+draws the line from that moment forward; it cannot draw one backwards.
+
 ## Where it lives
 
 A per-graph `agent` table beside `fact` / `topic` / `inference`, with the

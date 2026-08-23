@@ -585,6 +585,7 @@ class TestReflectionAppliesManyDecisionsAndJournalsEachOne:
         a = await _topic(storage, embedder, "Vienna")
         b = await _topic(storage, embedder, "Austria")
         await tools.link(a.id, b.id, storage, relation="capital_of")
+        before = {r.id for r in await storage.query_decisions()}
 
         result, _ = await tools.apply_reflection(
             storage, embedder,
@@ -593,9 +594,9 @@ class TestReflectionAppliesManyDecisionsAndJournalsEachOne:
         )
 
         assert result["edges_relabeled"] == 1
-        assert await storage.query_decisions(
-            kinds=[DecisionKind.RELATION_MERGE]
-        ) == []
+        # No row of any kind. There is no `relation_merge` kind either — the
+        # same decision said twice rather than two decisions.
+        assert {r.id for r in await storage.query_decisions()} == before
 
 
 class TestAcceptedBoundaries:
@@ -679,24 +680,22 @@ class TestAcceptedBoundaries:
 
 
 class TestNoKindGoesUnwritten:
-    """The drift guard. A kind added to the enum with nothing writing it is a
-    review filter that silently returns nothing, and a writer added without a
-    kind is a decision that leaves no row — neither shows up in a passing suite
-    unless something reads both lists.
+    """The drift guard, and it has **no exceptions**.
 
-    The two exceptions are named here rather than being an empty result: an
-    exception nobody has to justify is how the list becomes decoration.
+    A kind nothing writes is worse here than a dead enum member usually is:
+    review *selects* on this, so an unwritten kind is a filter that returns
+    nothing and looks like a clean graph. `WARNINGS_AND_SETTINGS.md` §8.1
+    settled the general rule for `AdvisoryAction` — *"a value nothing can
+    produce is worse than no value at all"* — and this asserts it rather than
+    keeping a list of forgiven cases, because an exception list written by
+    whoever added the member is not a check.
+
+    Two kinds are named in `DecisionKind`'s docstring as deliberately absent
+    (`relation_merge`, `proceeded_despite_advisory`). Prose is where a
+    not-yet belongs; the enum is where a selectable vocabulary belongs.
     """
 
-    UNWRITTEN = {
-        # Advisories are not built; W&S §9's node note is folded into this enum
-        # so that when they are, there is one review machine rather than two.
-        DecisionKind.PROCEEDED_DESPITE_ADVISORY,
-        # Its subjects are labels, not node ids. See `apply_reflection` step 9.
-        DecisionKind.RELATION_MERGE,
-    }
-
-    def test_every_kind_has_a_writer_or_a_stated_reason(self):
+    def test_every_kind_has_a_writer(self):
         import inspect
 
         from epimemer.mcp import tools as tools_module
@@ -710,11 +709,93 @@ class TestNoKindGoesUnwritten:
             if f"DecisionKind.{kind.name}" not in source
         } - indirect
 
-        assert unwritten == self.UNWRITTEN
+        assert unwritten == set()
 
-    async def test_the_stated_exceptions_are_still_selectable(self, storage):
-        """Nothing writes them, but the filter has to work the day something
-        does — and a query for a kind with no rows must answer empty rather than
-        fail."""
-        for kind in self.UNWRITTEN:
-            assert await storage.query_decisions(kinds=[kind]) == []
+    def test_the_absent_kinds_are_recorded_where_someone_will_read_them(self):
+        """Dropping a member must not drop the decision behind it, or the next
+        implementer adds a second notes list because nothing said not to."""
+        assert "relation_merge" in DecisionKind.__doc__
+        assert "proceeded_despite_advisory" in DecisionKind.__doc__
+
+
+class TestAFailedJournalWriteDoesNotUndoTheDecision:
+    """The row is written after the decision lands and outside its transaction,
+    which is the safe direction — but only if the failure stays there.
+
+    Raising would fail the tool call *after* the graph write succeeded, and the
+    agent would retry: a retried `merge_facts` refuses because its sources are
+    already retired, a retried `record_contradiction` writes a row that reads as
+    an original decision, and a retried `store_decomposition` ingests the whole
+    document twice. Every one of those is worse than the missing row.
+    """
+
+    @staticmethod
+    def _breaks_the_journal(storage):
+        async def refuse(record):
+            raise RuntimeError("the journal is unreachable")
+
+        storage.record_decision = refuse
+        return storage
+
+    async def test_the_tool_still_succeeds(self, storage, embedder):
+        a = await _topic(storage, embedder, "Vienna")
+        b = await _topic(storage, embedder, "Austria")
+        self._breaks_the_journal(storage)
+
+        result, _ = await tools.link(
+            a.id, b.id, storage, relation="capital_of", judge=CRITIC
+        )
+
+        assert result["edge_id"]
+        assert await storage.get_edges_from(a.id), "the decision itself landed"
+
+    async def test_an_ingest_is_not_thrown_away(self, storage, embedder, config):
+        """The worst retry of the set: the row covers the whole document, and
+        raising here would have the agent store all of it a second time."""
+        seg, _ = await tools.segment_text("A report.", storage, embedder, config)
+        self._breaks_the_journal(storage)
+
+        result, _ = await tools.store_decomposition(
+            document_id=seg["document_id"],
+            segments=[{
+                "segment_id": seg["segments"][0]["segment_id"],
+                "topics": ["a topic"],
+                "facts": [{"content": "a fact", "claim_kind": "state"}],
+                "inferences": [],
+            }],
+            storage=storage,
+            embedding_provider=embedder,
+            judge=CRITIC,
+        )
+
+        assert result["nodes_created"] == {"topics": 1, "facts": 1, "inferences": 0}
+        assert len(await storage.query_nodes()) == 2
+
+    async def test_the_loss_is_logged_where_an_operator_will_see_it(
+        self, storage, embedder, caplog
+    ):
+        """Named with the kind and the subjects — what the row would have held,
+        so it can be reconstructed by hand. Told to the operator rather than to
+        the agent, because no tool re-journals a decision: the agent would have
+        the information and no move to make with it."""
+        node = await _fact(storage, embedder, "a claim worth keeping")
+        self._breaks_the_journal(storage)
+
+        with caplog.at_level("WARNING", logger="epimemer.mcp.tools"):
+            await tools.judge_importance(
+                node.id, "up", "cited again", storage, judge=CRITIC
+            )
+
+        [record] = [r for r in caplog.records if "journal" in r.getMessage()]
+        assert "importance" in record.getMessage()
+        assert node.id in record.getMessage()
+        assert "critic" in record.getMessage()
+
+    async def test_journal_reports_the_failure_to_its_caller(self, storage):
+        """`None` rather than an exception, so a call site that wants to know
+        can ask — `_journal_pair_judgment` is the one that does."""
+        self._breaks_the_journal(storage)
+
+        assert await tools.journal(
+            storage, DecisionKind.MERGE, ["a", "b"], judge=None
+        ) is None

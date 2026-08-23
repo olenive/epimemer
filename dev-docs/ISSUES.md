@@ -3122,9 +3122,23 @@ Three shapes, none free:
   lists in the hundreds for a broad label.
 - **A `labels` field on the record.** One more column for one writer, and the
   first thing on this row that is not an id.
+- **The node ids at the endpoints of the relabelled edges.** Raised in review,
+  and it does satisfy *ids only* — but it buys that by making the row surface
+  under nodes the decision was not about: §9's derived `node.notes` view would
+  show *"somebody merged two relation labels"* against a topic nobody judged.
+  Cheaper than the first option and less faithful than the second.
 - **Leave it, and let the reviewer read `edges_relabeled`.** What ships today:
   the count is in the response and nowhere else, so nobody can ask *who merged
   these labels* a month later.
+
+**There is no `relation_merge` kind in `DecisionKind` meanwhile.** It shipped
+with the journal and was removed the same day on review: a kind nothing writes
+is worse here than a dead enum member usually is, because review *selects* on
+it — an unwritten kind is a filter that returns nothing and looks like a clean
+graph. That is `WARNINGS_AND_SETTINGS.md` §8.1's rule for `AdvisoryAction`
+(*"a value nothing can produce is worse than no value at all"*) applying
+unchanged. The absence is recorded in `DecisionKind`'s docstring, which is where
+a not-yet belongs; the enum is where a selectable vocabulary belongs.
 
 **Small, and worth taking with step 7**, when `apply_review` gives the journal a
 second writer and the shape of a record is open anyway.
@@ -3161,10 +3175,26 @@ already wants.
 
 **Not two lines.** Padding the query bound does not help, because the *stored*
 side is what varies, and rows written before any fix keep their shape. The two
-real options are normalising on write (a serialization change plus a
-backfill for existing rows) or comparing with `type::datetime()` on both sides
-(correct for old and new alike, at the cost of the index). The decision wants
-whoever next touches `graph_as_of`'s performance.
+real options are normalising on write (a serialization change plus a backfill
+for existing rows) or comparing with `type::datetime()` on both sides (correct
+for old and new alike, at the cost of the index). A third worth pricing: a
+second, always-padded field written beside `created_at` purely to compare on,
+which keeps an index at the cost of a column and a backfill.
+
+**The next step is a measurement, not a queue position.** The first draft of
+this entry said the decision "wants whoever next touches `graph_as_of`'s
+performance", which gates a *correctness* bug on somebody doing *performance*
+work — the wrong trigger, and one this repo has argued against in its own
+words: #53 called silent point-in-time wrongness "the kind of wrong nobody
+notices". #48 is the precedent for what to do instead: measure
+`type::datetime()` against the indexed comparison, and let the number decide.
+
+**Pinned meanwhile**, by `TestTimestampsAtAWholeSecond` in
+`tests/storage/test_storage_parity.py`, xfailed on SurrealDB with a control
+case beside it. The parity fixture missed this for months because
+`datetime.now()` essentially never lands on a whole second, so every other
+timestamp in that file is constructed by accident; an unpinned known divergence
+is how the fixture's guarantee quietly stops meaning what it says.
 
 The decision journal does not have this: `_decision_row` writes microseconds
 unconditionally, on both sides of every comparison.

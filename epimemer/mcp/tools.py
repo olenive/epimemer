@@ -5,6 +5,7 @@ no global state, easily testable. The MCP server layer in server.py
 calls these and wraps the results.
 """
 
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Iterable, Iterator, Literal, Mapping, Sequence
@@ -172,6 +173,8 @@ def _ids_within(value: object) -> Iterator[str]:
 
 # --- The decision journal (REVIEW_MODE.md §4) ---
 
+_journal_logger = logging.getLogger("epimemer.mcp.tools")
+
 
 async def journal(
     storage: StorageBackend,
@@ -181,14 +184,26 @@ async def journal(
     judge: JudgeRef | None,
     reviews: str | None = None,
     supersedes: str | None = None,
-) -> DecisionRecord:
-    """Append one judgment to the journal, and return the row.
+) -> DecisionRecord | None:
+    """Append one judgment to the journal. Returns the row, or None if it failed.
 
     Called **after** the decision has landed, at every site that makes one. The
     row is not written in the same transaction as the decision, and that is the
     safe direction of the two: a lost row costs the journal an entry, while a
     row for a write that never happened would have review chasing a decision the
     graph never made.
+
+    **And it never raises**, which is the other half of that choice. Raising here
+    would fail the tool call *after* the graph write succeeded, and the agent
+    would retry: a retried `merge_facts` refuses because its sources are already
+    retired, a retried `record_contradiction` writes a row that reads as an
+    original decision, and a retried `store_decomposition` ingests the document
+    twice. Every one of those is worse than the missing row.
+
+    So a failure is logged rather than returned. The log names the kind and the
+    subjects, which is what the row would have held, and it is the operator who
+    can act on it — no tool re-journals a decision, so telling the *agent* would
+    hand it information it has no move for.
 
     A blank `judge` is written rather than skipped. The graph may not require
     one (§3.3.1), and the row still carries when the decision was made and
@@ -202,7 +217,18 @@ async def journal(
         reviews=reviews,
         supersedes=supersedes,
     )
-    await storage.record_decision(record)
+    try:
+        await storage.record_decision(record)
+    except Exception:
+        _journal_logger.warning(
+            "decision journal write failed; the decision stands and is "
+            "unrecorded. kind=%s subjects=%s judge=%s",
+            kind.value,
+            ",".join(record.subject_ids),
+            judge.agent_id if judge else "unknown",
+            exc_info=True,
+        )
+        return None
     return record
 
 
@@ -1987,7 +2013,7 @@ async def _journal_pair_judgment(
     *,
     judge: JudgeRef | None,
     created: bool,
-) -> DecisionRecord:
+) -> DecisionRecord | None:
     """Journal a verdict about a pair, citing the original where there is one.
 
     A second agent recording a verdict the pair already carries has
@@ -2009,6 +2035,7 @@ async def _journal_pair_judgment(
     return await journal(
         storage, kind, [a_id, b_id], judge=judge, reviews=reviews
     )
+
 
 
 async def record_contradiction(
