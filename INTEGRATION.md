@@ -172,10 +172,12 @@ works only against a served SurrealDB, since an embedded store lives inside the
 server process. No MCP tool can approve an id: a tool the agent calls cannot
 establish that the *user* called it.
 
-Every write records the claimed identity — ingest included. A graph can be set
-to **refuse** writes that name no judge (`epimemer agents require on`, or
-`EPIMEMER_REQUIRE_JUDGE` for the whole server); it is off by default, and no MCP
-tool can change it. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
+Every write records the claimed identity — ingest included — and every decision
+is also appended to an append-only journal, so *what did this agent judge* is one
+query and *has anyone checked it* is derived from a row pointing back. A graph
+can be set to **refuse** writes that name no judge (`epimemer agents require on`,
+or `EPIMEMER_REQUIRE_JUDGE` for the whole server); it is off by default, and no
+MCP tool can change it. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 
 ### Visualization
 

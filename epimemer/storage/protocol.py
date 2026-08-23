@@ -14,6 +14,8 @@ from pydantic import BaseModel
 from epimemer.core.types import (
     DEFAULT_MERGE_CYCLE_LIMIT,
     Agent,
+    DecisionKind,
+    DecisionRecord,
     JudgeRef,
     DEFAULT_MERGE_UNDO_DEPTH,
     EdgeType,
@@ -967,6 +969,70 @@ class StorageBackend(Protocol):
         path, whose answer came from the user through their own client, and the
         `epimemer agents confirm` CLI (§2.3) — plus config seeding at connect,
         which is the same user saying it a third way.
+        """
+        ...
+
+    # --- The decision journal (REVIEW_MODE.md §4) ---
+
+    async def record_decision(self, record: DecisionRecord) -> str:
+        """Append one judgment to the active graph's journal. Returns its id.
+
+        **Append is the only write.** There is no update and no delete on this
+        protocol, and that absence is the design rather than an omission: a
+        reversal, a confirmation and an overturn are all new rows pointing back
+        at old ones (§4). A backend that offered an edit would let review state
+        become mutable in one place and derived in another, which is the shape
+        #54, #55 and #56 all were.
+
+        Written *after* the decision it records has succeeded, so a refused
+        write leaves no row. The two are not one transaction: a lost row costs
+        the journal an entry, while a row for a write that never landed would
+        have review chasing a decision the graph never made.
+        """
+        ...
+
+    async def get_decision(self, decision_id: str) -> DecisionRecord | None:
+        """One journal row by id, or None."""
+        ...
+
+    async def query_decisions(
+        self,
+        *,
+        agent_id: str | None = None,
+        kinds: Sequence[DecisionKind] | None = None,
+        subject_id: str | None = None,
+        reviews: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[DecisionRecord]:
+        """Journal rows matching every filter given, newest first.
+
+        The four reads review mode needs (§10.5), in one method because they
+        compose: *"what did agent-1 decide yesterday"* is two of them, and a
+        method per filter would make the composition the caller's problem.
+
+        `agent_id` matches `judged_by.agent_id` and never the digest — a judge
+        that re-described itself is the same judge, which is the whole reason
+        the id is assigned rather than derived from the description (§2.1).
+        Rows with no judge match no `agent_id`, since unknown is not an id.
+
+        `since` is inclusive and `until` exclusive, the half-open convention
+        `query_changes` already uses, so adjacent windows neither overlap nor
+        drop a row on the boundary.
+
+        `limit` truncates in **journal order** — newest first — which is not the
+        order review presents results in (§6.2). A caller that re-sorts has to
+        fetch enough rows to sort, and the cap it reports is its own.
+        """
+        ...
+
+    async def reviewed_decision_ids(self, decision_ids: Sequence[str]) -> set[str]:
+        """Which of these ids some other row `reviews`.
+
+        The batch form of *"has anyone checked this"*, which is what makes
+        `unreviewed` derived from existence rather than stored as a flag (§3.4).
+        One query for a page of results rather than one per row.
         """
         ...
 

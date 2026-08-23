@@ -381,7 +381,7 @@ deferred fixes are separate, in [dev-docs/ISSUES.md](dev-docs/ISSUES.md).
 - [docs/RETRIEVAL.md](docs/RETRIEVAL.md) — How `search` is answered: the two arms, rank fusion, result provenance, lineage collapse
 - [docs/VALIDITY.md](docs/VALIDITY.md) — When a claim was true: intervals per source, correction vs world-change, recurrence, the soundness check
 - [docs/REFLECTION.md](docs/REFLECTION.md) — The review loop: verdicts, what `reflect` nominates, what `apply_reflection` writes
-- [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) — Who judged this: the agent registry, why the user assigns the id, how approval reaches them
+- [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) — Who judged this: the agent registry, why the user assigns the id, how approval reaches them, and the append-only journal of every decision
 - [INTEGRATION.md](INTEGRATION.md) — Claude Code integration guide and the canonical tool table
 
 **How it got that way** — design history, appended to rather than rewritten:

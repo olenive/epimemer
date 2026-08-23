@@ -1187,3 +1187,118 @@ def current_description(agent: Agent) -> AgentDescription | None:
     """The version in force now — the last appended, never the newest by date."""
     return agent.descriptions[-1] if agent.descriptions else None
 
+
+
+# --- The decision journal (REVIEW_MODE.md §4) ---
+
+
+class DecisionKind(str, Enum):
+    """What sort of judgment a journal row records.
+
+    One value per writer, and the list is deliberately fine-grained where two
+    outcomes look alike but mean opposite things — `CORRECTION` and
+    `WORLD_CHANGE` are the two halves of `because`, and #53 exists because
+    collapsing them is how a graph forgets its own history.
+
+    It is not a free string: review selects on it, and a vocabulary that grows
+    by typing is one that cannot be selected on reliably.
+    """
+
+    # Ingest. One row per `store_decomposition` call rather than per fact (§4.1)
+    # — forty-four facts out of one document is one reading of one document.
+    INGEST = "ingest"
+
+    # Supersession, in its two opposite readings.
+    CORRECTION = "correction"
+    WORLD_CHANGE = "world_change"
+
+    # Judgments about pairs.
+    CONTRADICTION = "contradiction"
+    VARIANT = "variant"
+    SIMILARITY = "similarity"
+
+    # Consolidation, and its undo.
+    MERGE = "merge"
+    REVERSAL = "reversal"
+
+    # Reflect's other applications.
+    SYNTHESIS = "synthesis"
+    SPLIT = "split"
+    ENRICHMENT = "enrichment"
+    ARCHIVAL = "archival"
+    REACTIVATION = "reactivation"
+    RELATION_MERGE = "relation_merge"
+    BOUNDARY = "boundary"
+
+    # Everything else an agent asserts about the graph.
+    RELATION = "relation"
+    IMPORTANCE = "importance"
+
+    # `WARNINGS_AND_SETTINGS.md` §9's node note, folded in here (§9). "I was
+    # warned and proceeded anyway" is a judgment with a judge, a date and a
+    # subject; it was a separate type only because it was designed a day before
+    # this journal existed. Nothing writes it yet — advisories are not built.
+    PROCEEDED_DESPITE_ADVISORY = "proceeded_despite_advisory"
+
+
+class DecisionRecord(BaseModel):
+    """One judgment, as an append-only row (§4).
+
+    Attribution on the rows answers *who judged this node*. This answers the
+    inverse — *what did this agent judge* — which over fields scattered across
+    facts, edges, lifecycle episodes and value signals would be five scans and a
+    reassembly. The inline fields stay: they are the immutable denormalised
+    copy, and §4.2 records which of the two is primary for which question.
+
+    **Never edited, with no exceptions** — including for review state, which is
+    why there is no `reviewed_at` here. A review is another record pointing back
+    (`reviews`), so *reviewed* is derived from existence rather than stored as a
+    mutable flag on a row that claims to be append-only. The first draft had
+    both, and the contradiction was load-bearing: a mutable field on this row
+    also has to stay in sync with a copy on the node, across two backends
+    (#54, #55, #56).
+
+    There is no update path on the protocol either, which is what makes the
+    claim structural rather than a convention.
+    """
+
+    id: str = Field(default_factory=_new_id)
+    kind: DecisionKind
+    # What the judgment was about. Ids rather than edges: edges cannot originate
+    # from edges, so similarity, contradiction and variant decisions would need
+    # the inline form regardless, and two rules for one relation is worse than a
+    # scan (§3.5).
+    subject_ids: list[str] = Field(default_factory=list)
+    # Absent means **unknown**, and nothing more (§3.3). A graph that does not
+    # require a judge still journals: the row carries when it was decided and
+    # whether anyone has since checked it, and both are worth having from an
+    # agent that did not name itself.
+    judged_by: JudgeRef | None = None
+    decided_at: datetime = Field(default_factory=_now)
+    # §5. The same ladder as `confidence` (#46) rather than a second
+    # near-identical one, and absent means **unrated** — deliberately not a
+    # rated 0.5. No tool supplies one yet; `review()`'s ordering is designed to
+    # degrade to its derived tier, which is the whole corpus today (§6.2).
+    certainty: float | None = None
+    certainty_basis: str | None = None
+    # The record this one is *about*. A confirmation reviews without
+    # superseding, so the two are separate fields — collapsing them is what
+    # breaks a derived-only scheme, since a confirmation supersedes nothing.
+    reviews: str | None = None
+    supersedes: str | None = None
+
+
+SUPERSESSION_KINDS: dict[NodeStatus, DecisionKind] = {
+    NodeStatus.CORRECTED: DecisionKind.CORRECTION,
+    NodeStatus.HISTORICAL: DecisionKind.WORLD_CHANGE,
+}
+
+
+def supersession_kind(status: NodeStatus) -> DecisionKind:
+    """Which journal kind a retirement at `status` is.
+
+    One declaration, read by `update`, `supersede_by` and reflect's
+    supersessions and enrichments, so the three cannot drift into disagreeing
+    about what the same status means.
+    """
+    return SUPERSESSION_KINDS.get(status, DecisionKind.CORRECTION)

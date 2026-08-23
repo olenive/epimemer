@@ -19,6 +19,8 @@ from typing import Literal, Sequence
 
 from epimemer.core.types import (
     Agent,
+    DecisionKind,
+    DecisionRecord,
     EdgeType,
     JudgeRef,
     EmbeddingRecord,
@@ -625,6 +627,37 @@ class InstrumentedStorage:
 
     async def set_require_judge(self, required: bool | None) -> None:
         await self._inner.set_require_judge(required)
+
+    # --- The decision journal (pass-through) ---
+    #
+    # No events either, and for the agents' reason one step on: a journal row is
+    # a statement *about* a change the strip already shows, so emitting it would
+    # draw every write twice.
+
+    async def record_decision(self, record: DecisionRecord) -> str:
+        return await self._inner.record_decision(record)
+
+    async def get_decision(self, decision_id: str) -> DecisionRecord | None:
+        return await self._inner.get_decision(decision_id)
+
+    async def query_decisions(
+        self,
+        *,
+        agent_id: str | None = None,
+        kinds: Sequence[DecisionKind] | None = None,
+        subject_id: str | None = None,
+        reviews: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[DecisionRecord]:
+        return await self._inner.query_decisions(
+            agent_id=agent_id, kinds=kinds, subject_id=subject_id,
+            reviews=reviews, since=since, until=until, limit=limit,
+        )
+
+    async def reviewed_decision_ids(self, decision_ids: Sequence[str]) -> set[str]:
+        return await self._inner.reviewed_decision_ids(decision_ids)
 
     # --- Multi-graph management (pass-through) ---
 

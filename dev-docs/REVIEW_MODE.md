@@ -1,6 +1,6 @@
 # Review mode: who judged this, and can someone else check it
 
-**Status: §7, §1, §2, §3 and steps 3–4 built, the rest designed (2026-08-23).** Built so far:
+**Status: §7, §1, §2, §3, §4 and §9 built, the rest designed (2026-08-23).** Built so far:
 §10.2.1's precondition (`ISSUES.md` #65); **steps 0a, 0b and 0c** — the whole of
 merge reversal, from capture through the futile-cycle refusal to `reverse_merge`
 itself; **step 1**, `apply_reflection(similarities=[…])` and the `ASSESSED`
@@ -9,8 +9,10 @@ edge, which closes #64's presenting symptom; and **step 2**, the agent registry
 and config, and the `epimemer` CLI; and **step 3**, the judge threaded through every
 reflect-side writer and recorded on the episode, edge, value signal or node the
 decision landed on; and **step 4**, ingest attributed and the per-graph
-require-a-judge setting with its CLI. Steps 5 through 7 below are design —
-the journal, and `review()`.
+require-a-judge setting with its CLI; and **step 5**, the decision journal —
+the `decision` table on both backends, a row at every writer, and
+`WARNINGS_AND_SETTINGS.md` §9's node notes folded into it. Steps 6 and 7 below
+are design — `review()` and `apply_review`.
 Written
 before any code, at the user's direction; where an unbuilt section says "does",
 read "would". #65 went first because it is a defect in shipped code that
@@ -1406,7 +1408,7 @@ Each step is useful alone, and each is a precondition for the next.
 | 2 ✅ | `agent` table, approved-id settings, `claim_agent`, approval over `ctx.elicit` with `epimemer agents confirm` as fallback | Registry with nothing yet pointing at it. Full protocol on both backends, per the standing rule. **Built 2026-08-22**, with one gate split in two and one seeding rule widened; see §10.3's amendment. |
 | 3 ✅ | `judge` threaded through the reflect-side write paths | Smallest surface producing attributed decisions, so step 5 has something to read. **Built 2026-08-23**, with two writers the design's list had missed and one field shape changed; see §10.4's amendment. |
 | 4 ✅ | `judge` threaded through ingest (§3.2), plus the require-a-judge setting (§3.3.1) | The bigger churn, and where the unreviewable priors are. **No cutover** — the setting decides, per graph, and ships default-off, so an upgraded server keeps writing exactly as before. **Built 2026-08-23**; the sessionless escape hatch took a different shape from the one this section proposed, see the amendment below. |
-| 5 | `DecisionRecord` + journal writes + W&S §9 folded in (§9) | Makes *"what did this agent judge"* one query. |
+| 5 ✅ | `DecisionRecord` + journal writes + W&S §9 folded in (§9) | Makes *"what did this agent judge"* one query. **Built 2026-08-23**, with `kind` carrying `because`, one writer deferred and `certainty` left without a tool that supplies it; see §10.5's amendment. |
 | 6 | `review(mode="all")`, capped, with tier-2 ordering (§6.2) | Works on the existing corpus and orders it usefully, since derived signals need no attribution. |
 | 7 | `by_agent`, `since`, `unreviewed`, `advisory`, tier-1 ordering, `certainty_ceiling`; `apply_review` | Need attributed decisions to exist; useful from the first session after step 4. |
 
@@ -1878,6 +1880,58 @@ reversal, a confirmation and an overturn are all new rows.
 **Fold W&S §9 here** (§9): `NodeNote` never ships; `node.notes` becomes a
 derived read over records whose `subject_ids` contains the node, and W&S §5.3's
 `contested_decisions` becomes `review(mode="advisory")`.
+
+> **Built 2026-08-23.** The table, the five reads, and a row at every writer:
+> ingest, both supersession readings, contradiction, variant, similarity, merge,
+> reversal, synthesis, split, enrichment, archival, reactivation, boundary,
+> relation and importance. Four things took a different shape from this section,
+> and one writer is missing.
+>
+> **`kind` carries `because`, rather than a field repeating it.** A correction
+> and a world-change are opposite claims about what happened (#53) and a
+> reviewer asking for one does not want the other, so they are two kinds —
+> `supersession_kind(status)` in `types.py` is their single declaration, read by
+> `update`, `supersede_by` and reflect's supersessions.
+>
+> **Granularity is per act, and an act is not always a call.** §4.1 settles
+> ingest at one row per `store_decomposition`; the same reasoning makes an
+> archival sweep one row (one pass over one nomination list) and a reactivation
+> one row, while `apply_reflection`'s other lists get a row each — those are
+> independent verdicts about unrelated nodes that happen to be batched. The rule
+> underneath both: **one judgment, one row**, and the batching is the request's
+> shape rather than the judgment's.
+>
+> **Re-recording a pair verdict writes a confirmation**, which is §3.4's rule
+> finally having somewhere to go: `record_contradiction` and `record_variant` on
+> a pair that already carries the edge write a row whose `reviews` names the
+> *oldest* record for that pair — the decision, not an intervening confirmation
+> of it. Where the verdict predates the journal the pointer is blank, because
+> the journal cannot cite a row that does not exist.
+>
+> **`certainty` has no tool that supplies one.** The field is on the row and
+> writable through the protocol, but no MCP tool takes one yet; the first are
+> step 7's `apply_review` and `rejudge`, whose whole purpose is a declared
+> judgment and where §5's ladder can be stated once instead of on twelve tool
+> schemas. §6.2 already designs for exactly this state — the whole corpus is
+> tier 2 and the ordering is entirely derived — so nothing promises the agent
+> something the code does not do.
+>
+> **Relation merges still have no row, and that is the one gap.** Every other
+> subject in this journal is a node id; a relation merge's subjects are
+> *labels*, and putting them in `subject_ids` would give one field two
+> namespaces — the tell §11 records twice. The alternative, the id of every edge
+> relabelled, needs `relabel_edges` to return them and writes subject lists in
+> the hundreds. Filed as `ISSUES.md` #69 rather than guessed at. Boundaries, the
+> other gap `docs/ATTRIBUTION.md` named, are closed: both of their subjects are
+> nodes.
+>
+> **One defect fixed on the way**, in code this step only read: timestamps are
+> stored as strings and compared as strings, which is chronologically correct
+> only while every rendering has the same shape — and Pydantic omits the
+> fractional part on a whole second, so a row at `…41Z` sorts *after* a bound at
+> `…41.5Z` because `"Z" > "."`. The journal writes microseconds on both sides.
+> `query_changes`' lifecycle window has the same latent case and is not fixed
+> here; it is `ISSUES.md` #70.
 
 ### 10.6 Steps 6–7 — `review()`
 

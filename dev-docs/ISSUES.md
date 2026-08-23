@@ -3100,6 +3100,77 @@ supposed to be the *safe* alternative to merging.
 
 ---
 
+### Issue 69 — merging relation labels leaves no record of who did it — 🟡 OPEN (found 2026-08-23)
+
+The last decision in `apply_reflection` with neither an inline judge nor a
+journal row. Its twin, accepting a boundary proposal, was closed by step 5;
+this one was not, and the obstacle is the **field** rather than the work.
+
+`relation_merges=[{labels: [...], into: ...}]` relabels every user-tier edge
+carrying a synonym, in place — edges are not versioned, so there is nothing to
+stamp, which is why step 3 left it alone. The journal is the right home for a
+judgment about somebody else's row. But `DecisionRecord.subject_ids` holds
+**node ids**, and this judgment's subjects are **labels**: putting them there
+gives one field two namespaces, which is the tell `REVIEW_MODE.md` §11 records
+twice — *a field that needs the word "or" to describe what it holds*.
+
+Three shapes, none free:
+
+- **`relabel_edges` returns the ids it changed**, and they become the subjects.
+  Faithful — §3.5 already expects edge ids in this field for decisions *about*
+  edges — but it changes a protocol method on both backends and writes subject
+  lists in the hundreds for a broad label.
+- **A `labels` field on the record.** One more column for one writer, and the
+  first thing on this row that is not an id.
+- **Leave it, and let the reviewer read `edges_relabeled`.** What ships today:
+  the count is in the response and nowhere else, so nobody can ask *who merged
+  these labels* a month later.
+
+**Small, and worth taking with step 7**, when `apply_review` gives the journal a
+second writer and the shape of a record is open anyway.
+
+---
+
+### Issue 70 — SurrealDB compares timestamps as strings, and Pydantic does not always write the same string — 🟠 OPEN (found 2026-08-23)
+
+A backend divergence, found while building the journal and reproduced:
+
+```python
+node = Fact(content="x", source_id="s",
+            created_at=datetime(2026, 8, 23, 12, 0, 41, tzinfo=timezone.utc))
+await store.store_node(node)
+await store.query_nodes(at_time=datetime(2026, 8, 23, 12, 0, 41, 500000, ...))
+# memory:   1 node     ← correct, the node existed by then
+# surrealdb: 0 nodes
+```
+
+Timestamps are stored as ISO strings and compared as strings, which is
+chronologically correct **only while every rendering has the same shape**.
+Pydantic omits the fractional part when it is exactly zero, so the row holds
+`…:41Z` while the bound is `…:41.500000+00:00` — and `"Z" > "."`, so the earlier
+row sorts past the later bound and drops out. It reaches `graph_as_of`'s
+`created_at <= $at_time` and `superseded_at > $at_time`, and the lifecycle
+window `query_changes` reads.
+
+**Rare, and not benign.** One timestamp in a million lands on a whole second,
+and `graph_as_of` is the tool whose whole promise is *the graph as it stood* —
+a node silently missing from a point-in-time answer is the kind of wrong nobody
+notices. The `+00:00` versus `Z` suffix mismatch on its own is harmless, which
+is why this survived: at equal instants it errs in the direction each comparison
+already wants.
+
+**Not two lines.** Padding the query bound does not help, because the *stored*
+side is what varies, and rows written before any fix keep their shape. The two
+real options are normalising on write (a serialization change plus a
+backfill for existing rows) or comparing with `type::datetime()` on both sides
+(correct for old and new alike, at the cost of the index). The decision wants
+whoever next touches `graph_as_of`'s performance.
+
+The decision journal does not have this: `_decision_row` writes microseconds
+unconditionally, on both sides of every comparison.
+
+---
+
 ## Older carry-overs (open, low priority)
 
 From the original live-graph walkthrough (issues 1–5, otherwise resolved or kept
@@ -3255,6 +3326,7 @@ What to pick up, and what has to be true first:
 | ✅ | ~~`REVIEW_MODE.md` step 2 (the agent registry)~~ | **Built 2026-08-22.** `claim_agent`, the `agent` table on both backends, `EPIMEMER_APPROVED_AGENTS`, the `epimemer` CLI, and `use_graph` re-validation. A registry with nothing pointing at it yet, which is the shape the build order intends — steps 3–4 are what make a decision carry a judge. Two things the design had not settled, both found by building it: **the id gate and the description gate are different strengths** (an unapproved id is refused; a new description is recorded unconfirmed, because *self-described, unconfirmed* is the object §2.4 exists to keep distinct), and **a tool that waits on a person cannot share the tool timeout** — 30s would turn *the user was still reading* into *the client cannot elicit*, which refuses the claim. Config seeding was also widened from connect-time to every graph the server lands on: approval is per graph, so the narrow rule left the embedded backend unapprovable one `use_graph` later, which is the failure it was written to prevent |
 | ✅ | ~~`REVIEW_MODE.md` step 3 (the judge on reflect-side writes)~~ | **Built 2026-08-23.** `JudgeRef` through ten tools, five storage transactions on both backends, and four carriers — lifecycle episode, edge, value signal, node. Two writers the design's list had missed are in: **`update`**, which is `supersede_by`'s twin and would otherwise leave *who retired this* answerable or not depending on which tool the agent reached for, and **`link`**. Two rules were decided by building rather than inherited, and both are about not overwriting a name: re-recording an existing pair leaves its judge alone, because a second agent calling the same tool has *confirmed* rather than decided; and importance keeps the latest judge on the value signal while each entry in the reinforcement trail names its own, since three agents' judgments compose into one number. Two gaps named rather than left to be found: boundary acceptance and relation relabelling edit existing records in place and want a journal row, not an inline stamp |
 | ✅ | ~~`REVIEW_MODE.md` step 4 (ingest, and the require-a-judge setting)~~ | **Built 2026-08-23.** Ingest attributed on both steps, `require_judge` per graph on both backends behind `EPIMEMER_REQUIRE_JUDGE` and `epimemer agents require`, and one gate at the boundary over twelve write tools. **The escape hatch changed shape**: the design wanted an explicit `agent_id` on every write, and it is a lifespan-held fallback binding used only where session state does not exist — ten schemas narrower, claimed once rather than repeated per call, and no weaker, since approving the id is the gate and the binding was only ergonomics. The document and its segments carry no judge (*who pasted this* is not *who judged what it says*), and reusing an entity or tag topic does not restamp it, which is step 3's re-recorded-edge rule again |
-| **next** | 68 (no retraction), or `REVIEW_MODE.md` step 5 | 68 is small and bounded — every `similarity` edge was written deliberately, so the population that could need retracting is tiny — and it is the third instance of #64's shape after #66's two. Step 5 is the decision journal, which makes *what did this agent judge* one query instead of five scans, and is what steps 6–7's `review()` reads. It also absorbs `WARNINGS_AND_SETTINGS.md` §9's node notes. Neither blocks the other |
+| ✅ | ~~`REVIEW_MODE.md` step 5 (the decision journal)~~ | **Built 2026-08-23.** The `decision` table on both backends with six indexes, five reads, and a row at fifteen writers; `WARNINGS_AND_SETTINGS.md` §9's node notes folded in, so `node.notes` is a subject query and there is one review machine rather than two. **`kind` carries `because`** — a correction and a world-change are opposite claims (#53) and a reviewer asking for one does not want the other. Granularity is **per act, not per call**: ingest, an archival sweep and a reactivation are one row each; reflect's other lists get a row apiece, because those are independent verdicts batched into one request. Re-recording a pair verdict now writes a **confirmation** pointing at the oldest record for that pair, which is what §3.4's rule was waiting for. Two things left open on purpose: `certainty` has no tool that supplies one (step 7's `apply_review` and `rejudge` are the first, where the ladder can be stated once instead of on twelve schemas), and relation merges still have no row — **#69**, because their subjects are labels and `subject_ids` holds node ids. Building it found **#70**, a timestamp comparison that makes `graph_as_of` answer differently on the two backends |
+| **next** | 68 (no retraction), or `REVIEW_MODE.md` step 6 | 68 is small and bounded — every `similarity` edge was written deliberately, so the population that could need retracting is tiny — and it is the third instance of #64's shape after #66's two. Step 6 is `review(mode="all")` with tier-2 ordering, which works on the whole existing corpus precisely because derived difficulty needs no attribution. Neither blocks the other; **#70** blocks neither and is worth taking before anything else reads a time window |
 | designed | inference merge, advisories, node notes | Not on this board — `dev-docs/WARNINGS_AND_SETTINGS.md`, designed 2026-08-21 and deliberately unbuilt. The duplication it addresses does not exist yet: 123 active inferences across both real graphs yield 5,053 pairs and **zero** at the nomination bar. It becomes real once fact merges start collecting inferences onto one survivor |
 | deferred | 16, 58 | 16: the server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`). 58: a graph large enough that the FTS backfill inside `connect()` is worth reporting on |

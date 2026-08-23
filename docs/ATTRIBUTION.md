@@ -1,11 +1,12 @@
 # Attribution — who judged this
 
-**Built so far: the registry, the judge on every write, and the setting that
-can require one.** An agent can be given an identity, the user assigns it, a
-session is bound to it, and every decision that session makes — during review
-and at ingest — carries it. What is **not** built is the decision journal, so
-*what did this agent judge* is still five scans rather than one query, and
-`review()` does not exist. The design is `dev-docs/REVIEW_MODE.md`.
+**Built so far: the registry, the judge on every write, the setting that can
+require one, and the journal.** An agent can be given an identity, the user
+assigns it, a session is bound to it, every decision that session makes — during
+review and at ingest — carries it, and every decision is also appended to a
+journal, so *what did this agent judge* is one query. What is **not** built is
+`review()`, which reads that journal and orders it shakiest-first. The design is
+`dev-docs/REVIEW_MODE.md`.
 
 ## The problem it exists for
 
@@ -132,10 +133,45 @@ than a claim about it — *who pasted this text* is a different question from *w
 judged what it says*. And reusing an existing entity or tag topic does not
 restamp it: mentioning a name again is not introducing it.
 
-Two things are deliberately **not** attributed yet, because both edit an
-existing record rather than adding one: accepting a boundary proposal, and
-merging relation labels. Stamping the first would overwrite whoever ingested the
-edge. Both want the decision journal, which is not built.
+One decision is still **not** attributed: merging relation labels. Every subject
+in the journal is a node id and this judgment's subjects are labels, so the row
+has nowhere honest to put them — filed as `ISSUES.md` #69. Accepting a boundary
+proposal, the other gap, is closed: it edits an existing edge rather than adding
+one, which is exactly the case the journal is for, and both of its subjects are
+nodes.
+
+## The journal — what did this agent judge
+
+Attribution on the rows answers *who judged this node*. Review asks the inverse,
+and over fields scattered across facts, edges, lifecycle episodes and value
+signals that is five scans and a reassembly. So every decision is **also**
+appended to a journal, and the inline fields are the immutable copy.
+
+A row carries what was decided (`kind`), what it was about (`subject_ids`), who
+decided it, when, and — where an agent supplies one — how certain they were.
+
+| Rule | Why |
+|---|---|
+| **Append is the only write.** No update path exists, on either backend or on the protocol | A reversal, a confirmation and an overturn are all new rows. An edit here would make review state mutable in one place and derived in another |
+| **`reviewed` is derived**, from a row whose `reviews` names another | A flag on an append-only row would have to stay in sync with a copy on the node, across two backends |
+| **One judgment, one row** | Forty-four facts out of one document is one reading of one document; an archival sweep is one pass over one nomination list. Reflect's other decisions get a row each, because those are independent verdicts that happen to be batched |
+| **The row is written after the decision lands** | A refused write leaves no row. The other order would have review chasing a decision the graph never made |
+
+Two kinds are worth knowing about by name. A **correction** and a
+**world_change** are separate kinds rather than one supersession with a reason
+attached, because they are opposite claims about what happened and a reviewer
+asking for one does not want the other. And a **reversal** — undoing a merge —
+is the one row that both `reviews` and `supersedes` the record it overturns.
+
+**Re-recording a verdict writes a confirmation.** A second agent calling
+`record_contradiction` on a pair that already has one leaves the edge alone and
+writes a row pointing at the original decision. That is what stops a third agent
+doing the same work again. Where the original predates the journal there is
+nothing to point at, and the pointer stays blank rather than inventing a target.
+
+**Nothing supplies `certainty` yet.** The field is on the row for the tools that
+will declare one; until then every decision is unrated, which is deliberately
+different from a rated 0.5.
 
 ## Requiring a judge
 
@@ -174,3 +210,8 @@ approved-id list in per-graph settings beside the reflect counter. Agents are
 deliberately **not** graph nodes: as nodes they would surface in `search` and be
 swept by `reflect`, and two agents with similar descriptions are not a topic to
 merge.
+
+The journal is a per-graph `decision` table beside them, indexed on the judge's
+id, the date, the kind, the subjects and what a row reviews — the five reads
+review mode needs. Its rows are not nodes either, for the same reason and one
+more: a judgment about the graph is not a claim the graph holds.

@@ -18,6 +18,8 @@ from pydantic import BaseModel
 from epimemer.core.temporal import merged_validity
 from epimemer.core.types import (
     Agent,
+    DecisionKind,
+    DecisionRecord,
     EdgeType,
     JudgeRef,
     EmbeddingRecord,
@@ -117,6 +119,12 @@ class _GraphStore:
     agents: dict[str, Agent] = field(default_factory=dict)
     approved_agent_ids: list[str] = field(default_factory=list)
     require_judge: bool | None = None
+    # The decision journal (REVIEW_MODE.md §4). Append-only: nothing in this
+    # module removes or replaces an entry, and the protocol offers no way to
+    # ask. Scanned rather than indexed — unlike `edges`, it is read by review
+    # rather than on the retrieval path, and an index nothing needs is a second
+    # thing to keep correct.
+    decisions: dict[str, DecisionRecord] = field(default_factory=dict)
     stores_since_reflect: int = 0
     reflect_threshold_override: int | None = None
     merge_overrides: MergeOverrides = field(default_factory=MergeOverrides)
@@ -999,6 +1007,55 @@ class InMemoryStorage:
 
     async def set_require_judge(self, required: bool | None) -> None:
         self._g.require_judge = required
+
+    # --- The decision journal ---
+
+    async def record_decision(self, record: DecisionRecord) -> str:
+        self._g.decisions[record.id] = _store(record)
+        return record.id
+
+    async def get_decision(self, decision_id: str) -> DecisionRecord | None:
+        record = self._g.decisions.get(decision_id)
+        return None if record is None else _copy(record)
+
+    async def query_decisions(
+        self,
+        *,
+        agent_id: str | None = None,
+        kinds: Sequence[DecisionKind] | None = None,
+        subject_id: str | None = None,
+        reviews: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[DecisionRecord]:
+        wanted = set(kinds) if kinds is not None else None
+        matches = [
+            record for record in self._g.decisions.values()
+            if (
+                agent_id is None
+                or (record.judged_by is not None
+                    and record.judged_by.agent_id == agent_id)
+            )
+            and (wanted is None or record.kind in wanted)
+            and (subject_id is None or subject_id in record.subject_ids)
+            and (reviews is None or record.reviews == reviews)
+            and (since is None or record.decided_at >= since)
+            and (until is None or record.decided_at < until)
+        ]
+        # Newest first, ties broken by id. The tiebreak is arbitrary and that is
+        # the point: a batch written in one call shares a timestamp to the
+        # microsecond, and two backends free to order those differently would
+        # make a parity test pass or fail on the clock.
+        matches.sort(key=lambda record: (record.decided_at, record.id), reverse=True)
+        return _copy_all(matches if limit is None else matches[:limit])
+
+    async def reviewed_decision_ids(self, decision_ids: Sequence[str]) -> set[str]:
+        targets = set(decision_ids)
+        return {
+            record.reviews for record in self._g.decisions.values()
+            if record.reviews is not None and record.reviews in targets
+        }
 
     # --- Multi-graph management ---
 

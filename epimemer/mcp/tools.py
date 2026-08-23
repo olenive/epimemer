@@ -16,6 +16,8 @@ from epimemer.core.types import (
     AgentDescription,
     BASE_METACONTEXT_ID,
     ClaimKind,
+    DecisionKind,
+    DecisionRecord,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
@@ -39,6 +41,7 @@ from epimemer.core.types import (
     current_description,
     description_digest,
     merged_value_signal,
+    supersession_kind,
     with_description,
 )
 from epimemer.core.temporal import ValidityInterval, ValidityVerdict
@@ -167,6 +170,66 @@ def _ids_within(value: object) -> Iterator[str]:
             yield from _ids_within(item)
 
 
+# --- The decision journal (REVIEW_MODE.md §4) ---
+
+
+async def journal(
+    storage: StorageBackend,
+    kind: DecisionKind,
+    subject_ids: Sequence[str],
+    *,
+    judge: JudgeRef | None,
+    reviews: str | None = None,
+    supersedes: str | None = None,
+) -> DecisionRecord:
+    """Append one judgment to the journal, and return the row.
+
+    Called **after** the decision has landed, at every site that makes one. The
+    row is not written in the same transaction as the decision, and that is the
+    safe direction of the two: a lost row costs the journal an entry, while a
+    row for a write that never happened would have review chasing a decision the
+    graph never made.
+
+    A blank `judge` is written rather than skipped. The graph may not require
+    one (§3.3.1), and the row still carries when the decision was made and
+    whether anyone has since checked it — both worth having from an agent that
+    did not name itself.
+    """
+    record = DecisionRecord(
+        kind=kind,
+        subject_ids=[sid for sid in subject_ids],
+        judged_by=judge,
+        reviews=reviews,
+        supersedes=supersedes,
+    )
+    await storage.record_decision(record)
+    return record
+
+
+async def prior_decisions(
+    storage: StorageBackend,
+    kind: DecisionKind,
+    subject_ids: Sequence[str],
+) -> list[DecisionRecord]:
+    """Records of `kind` covering **every** id in `subject_ids`, newest first.
+
+    What lets a second judgment cite the first rather than overwrite it: an
+    agent re-recording a pair that already carries the verdict has *confirmed*,
+    not decided, and a confirmation is a row pointing back (§3.4).
+
+    Filtered on one subject in the query and the rest in memory, because the
+    index answers *contains this id* and not *contains all of these* — and the
+    first id already cuts the journal to a handful.
+    """
+    if not subject_ids:
+        return []
+    candidates = await storage.query_decisions(
+        kinds=[kind], subject_id=subject_ids[0]
+    )
+    wanted = set(subject_ids)
+    return [r for r in candidates if wanted <= set(r.subject_ids)]
+
+
 # --- Segment (step 1 of agent-driven ingest) ---
 
 
@@ -215,6 +278,11 @@ async def segment_text(
         # question from *who judged what it says*. The entity topic and the
         # attribution edge are claims — this publisher exists, and this document
         # is theirs — so both name the agent that made them.
+        #
+        # No journal row either, on the same division: the judgment pass over
+        # this document is `store_decomposition`, and that is where the `ingest`
+        # row goes (§4.1). Splitting text into paragraphs is not a verdict
+        # anybody would review.
         entity = await _upsert_entity_topic(
             published_by, storage, embedding_provider, judge=judge
         )
@@ -610,6 +678,21 @@ async def store_decomposition(
         embeddings=batch_embeddings,
         timelines=batch_timelines,
     )
+
+    # One journal row for the call, never one per fact (§4.1). Forty-four facts
+    # out of one document is one reading of one document, and a row each would
+    # make ingest the journal's dominant writer by orders of magnitude while
+    # still describing a single act. The per-node judgments — `claim_kind`, the
+    # two priors — ride inside it, and a reviewer opens them from `subject_ids`.
+    # A call that stored nothing journals nothing: there was no judgment to
+    # record, and a row with no subjects is a decision about nothing.
+    if batch_nodes:
+        await journal(
+            storage,
+            DecisionKind.INGEST,
+            [node.id for node in batch_nodes],
+            judge=judge,
+        )
 
     nodes_created = {
         "topics": total_topics,
@@ -1505,6 +1588,7 @@ async def link(
         metadata=metadata or {},
     )
     await storage.store_edge(edge)
+    await journal(storage, DecisionKind.RELATION, [src_id, dst_id], judge=judge)
 
     result = {"edge_id": edge.id, "kind": resolved_kind}
     meta = ResponseMeta(nodes_returned=2)
@@ -1583,9 +1667,16 @@ async def update(
     else:
         raise ValueError(f"Unknown node type for node '{node_id}'")
 
+    status = superseded_status_for(because)
     edge = await supersede_node(
         old_node, new_node, storage, embedding_provider,
-        status=superseded_status_for(because), judge=judge,
+        status=status, judge=judge,
+    )
+    # The kind carries `because`, rather than a second field repeating it: a
+    # correction and a world-change are opposite claims about what happened
+    # (#53), and a reviewer asking for one does not want the other.
+    await journal(
+        storage, supersession_kind(status), [old_node.id, new_node.id], judge=judge
     )
 
     result = {
@@ -1721,6 +1812,7 @@ async def judge_importance(
         ],
     }
     await storage.store_node(node)
+    await journal(storage, DecisionKind.IMPORTANCE, [node.id], judge=judge)
 
     result = {
         "node_id": node.id,
@@ -1761,10 +1853,11 @@ async def supersede_by(
     if await storage.get_node(existing_id) is None:
         raise ValueError(f"Node '{existing_id}' not found")
 
+    status = superseded_status_for(because)
     edge = await supersede_by_existing(
-        old, existing_id, storage, status=superseded_status_for(because),
-        judge=judge,
+        old, existing_id, storage, status=status, judge=judge,
     )
+    await journal(storage, supersession_kind(status), [old_id, existing_id], judge=judge)
     result = {"superseded_id": old_id, "by_id": existing_id, "edge_id": edge.id}
     meta = ResponseMeta(
         nodes_returned=2, retrieved=_declare([existing_id, old_id])
@@ -1876,6 +1969,38 @@ async def check_conflicts(
     return result, meta
 
 
+async def _journal_pair_judgment(
+    storage: StorageBackend,
+    kind: DecisionKind,
+    a_id: str,
+    b_id: str,
+    *,
+    judge: JudgeRef | None,
+    created: bool,
+) -> DecisionRecord:
+    """Journal a verdict about a pair, citing the original where there is one.
+
+    A second agent recording a verdict the pair already carries has
+    **confirmed**, not decided — the edge is untouched, and the confirmation is
+    its own row pointing back (§3.4). That is what stops a third agent doing the
+    work a fourth time, which is §1's defect one layer up.
+
+    Where the pair's verdict predates the journal there is nothing to point at,
+    and the row is written with `reviews` blank. It reads as a decision because
+    the journal cannot cite a row that does not exist, and inventing a target
+    would be worse than the ambiguity.
+    """
+    reviews = None
+    if not created:
+        # The oldest is the decision; everything after it is already a
+        # confirmation, and a confirmation of a confirmation buries the original.
+        prior = await prior_decisions(storage, kind, [a_id, b_id])
+        reviews = prior[-1].id if prior else None
+    return await journal(
+        storage, kind, [a_id, b_id], judge=judge, reviews=reviews
+    )
+
+
 async def record_contradiction(
     a_id: str,
     b_id: str,
@@ -1904,6 +2029,10 @@ async def record_contradiction(
     shares_frame = await same_frame(a_id, b_id, storage)
     edge_id, created = await _ensure_symmetric_edge(
         a_id, b_id, EdgeType.CONTRADICTION, storage, judge=judge
+    )
+    await _journal_pair_judgment(
+        storage, DecisionKind.CONTRADICTION, a_id, b_id,
+        judge=judge, created=created,
     )
 
     result = {
@@ -1949,6 +2078,9 @@ async def record_variant(
     shares_frame = await same_frame(a_id, b_id, storage)
     edge_id, created = await _ensure_symmetric_edge(
         a_id, b_id, EdgeType.VARIANT_OF, storage, judge=judge
+    )
+    await _journal_pair_judgment(
+        storage, DecisionKind.VARIANT, a_id, b_id, judge=judge, created=created,
     )
 
     result = {"edge_id": edge_id, "created": created, "same_frame": shares_frame}
@@ -2059,6 +2191,11 @@ async def merge_facts(
         ),
     )
     await merge_nodes(list(sources), merged, storage, embedding_provider, judge=judge)
+    # The survivor first, so a reversal looking for *the merge that made this
+    # node* finds it by the id it holds.
+    await journal(
+        storage, DecisionKind.MERGE, [merged.id, *source_ids], judge=judge
+    )
 
     result = {
         "merged": True,
@@ -2122,6 +2259,21 @@ async def reverse_merge(
             {"reversed": False, "refused": outcome.reason, "survivor_id": survivor_id},
             ResponseMeta(retrieved=_declare([survivor_id])),
         )
+
+    # An overturn: it both **reviews** the merge and **supersedes** it, which is
+    # the one case where the two fields are set together (§4). The row names the
+    # survivor it destroyed — that id is now the only place the graph says the
+    # node existed, and the wording comes back in `survivor_content`.
+    merges = await prior_decisions(storage, DecisionKind.MERGE, [survivor_id])
+    overturned = merges[0].id if merges else None
+    await journal(
+        storage,
+        DecisionKind.REVERSAL,
+        [survivor_id, *outcome["restored_ids"]],
+        judge=judge,
+        reviews=overturned,
+        supersedes=overturned,
+    )
     return outcome, ResponseMeta(
         nodes_returned=len(outcome["restored_ids"]),
         source_types={"facts": len(outcome["restored_ids"])},
@@ -2657,6 +2809,9 @@ async def apply_reflection(
         else:
             similarities_recorded += 1
             similarity_edges_written += outcome.edges_created
+            await journal(
+                storage, DecisionKind.SIMILARITY, [pair[0], pair[1]], judge=judge
+            )
 
     # 2. Create parent topics for similar groups
     for parent_spec in (parents or []):
@@ -2688,6 +2843,10 @@ async def apply_reflection(
                 item_id=parent_topic.id, model_id=model_id, vector=vectors[0]
             )],
         )
+        await journal(
+            storage, DecisionKind.SYNTHESIS,
+            [parent_topic.id, *children_ids], judge=judge,
+        )
         parents_created += 1
 
     # 3. Split broad topics into subtopics
@@ -2715,6 +2874,10 @@ async def apply_reflection(
         await storage.write_batch_tx(
             nodes=subtopics, edges=edges, embeddings=embeddings,
         )
+        await journal(
+            storage, DecisionKind.SPLIT,
+            [topic_id, *(st.id for st in subtopics)], judge=judge,
+        )
         topics_split += 1
 
     # 4. Enrich topic descriptions
@@ -2740,6 +2903,9 @@ async def apply_reflection(
         await supersede_node(
             old_topic, enriched, storage, embedding_provider,
             status=NodeStatus.CORRECTED, judge=judge,
+        )
+        await journal(
+            storage, DecisionKind.ENRICHMENT, [topic_id, enriched.id], judge=judge
         )
         topics_enriched += 1
 
@@ -2780,6 +2946,10 @@ async def apply_reflection(
         await merge_nodes(
             sources, merged_topic, storage, embedding_provider, judge=judge
         )
+        await journal(
+            storage, DecisionKind.MERGE,
+            [merged_topic.id, *source_ids], judge=judge,
+        )
         topics_merged += 1
 
     # 6. Resolve flagged/contested nodes by superseding the loser with an existing
@@ -2793,9 +2963,12 @@ async def apply_reflection(
         old_node = await storage.get_node(old_id)
         if old_node is None or await storage.get_node(by_id) is None:
             continue
+        status = superseded_status_for(supersede_spec["because"])
         await supersede_by_existing(
-            old_node, by_id, storage,
-            status=superseded_status_for(supersede_spec["because"]), judge=judge,
+            old_node, by_id, storage, status=status, judge=judge,
+        )
+        await journal(
+            storage, supersession_kind(status), [old_id, by_id], judge=judge
         )
         supersessions_applied += 1
 
@@ -2820,10 +2993,18 @@ async def apply_reflection(
             at=datetime.now(timezone.utc),
             judge=judge,
         )
+        # One row for the sweep. Approving a batch of trivial nodes is a single
+        # pass over a single nomination list, not twelve independent verdicts.
+        await journal(
+            storage, DecisionKind.ARCHIVAL,
+            [node.id for node in to_archive], judge=judge,
+        )
 
     # 8. Re-judge importance. Separate from archivals on purpose: archiving is a
     #    status verdict wanting human approval, while a change of degree is
-    #    something the agent may conclude on its own.
+    #    something the agent may conclude on its own. `judge_importance` writes
+    #    its own journal row, so there is none here — one act, one row, whether
+    #    it was reached through this batch or called directly.
     judgments_applied = 0
     for spec in (judgments or []):
         try:
@@ -2841,6 +3022,14 @@ async def apply_reflection(
 
     # 9. Consolidate synonymous user relationship labels: relabel edges in place
     #    (edges are not versioned).
+    #
+    #    **Still the one decision here with no journal row**, and the reason is
+    #    the field rather than the effort: a journal subject is a node id, and
+    #    this judgment's subjects are *labels*. Putting them in `subject_ids`
+    #    would give one field two namespaces, which is the tell this design
+    #    names twice (§11 #2, §11's closing note). The alternative — the ids of
+    #    every edge relabelled — needs `relabel_edges` to return them and would
+    #    write a subject list in the hundreds. Filed rather than guessed at.
     relations_consolidated = 0
     edges_relabeled = 0
     for rm_spec in (relation_merges or []):
@@ -2873,6 +3062,15 @@ async def apply_reflection(
         )
         if refusal is None:
             boundaries_applied += 1
+            # The gap `ATTRIBUTION.md` named: accepting a boundary edits an
+            # existing `sourced_from` edge, so stamping it inline would take the
+            # edge from whoever ingested it. The journal is where a judgment
+            # about someone else's row belongs, and both of its subjects are
+            # nodes — the claim, and the source whose period was closed.
+            await journal(
+                storage, DecisionKind.BOUNDARY,
+                [spec["node_id"], spec["source_id"]], judge=judge,
+            )
         else:
             boundaries_refused.append(refusal.model_dump(mode="json"))
 
@@ -3071,6 +3269,16 @@ async def restore(
         await storage.set_node_status_tx(
             coming_back, status=NodeStatus.ACTIVE,
             at=datetime.now(timezone.utc), edges=new_edges, judge=judge,
+        )
+
+    # One row for the call, ingest's granularity for ingest's reason: bringing
+    # a batch back is one act. Both shapes land here — a cold-storage reimport
+    # and a claim asserted true again — because both are the same judgment,
+    # *this belongs in the active graph*, made about different rows.
+    brought_back = [node.id for node in missing] + [node.id for node in coming_back]
+    if brought_back:
+        await journal(
+            storage, DecisionKind.REACTIVATION, brought_back, judge=judge
         )
 
     result = {

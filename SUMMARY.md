@@ -592,9 +592,11 @@ means **unknown** and nothing more — no date is implied, and a graph is free
 never to name anyone. Ingest is attributed too, which is where the judgments nothing re-makes are
 supplied — the event/state call, the confidence prior. A graph can be set to
 **require** a judge and refuse writes without one (`epimemer agents require on`),
-though it never does by default. **Nothing yet answers *what did this agent
-judge* as one query**, which is the decision journal, and `review()` does not
-exist. See
+though it never does by default. Every decision is also appended to a **journal**
+— an append-only table with no update path — so *what did this agent judge* is
+one query rather than five scans, and *has anyone checked this* is derived from
+a row pointing back rather than a flag anyone edits. What is still missing is
+`review()`, which reads that journal and orders it shakiest-first. See
 [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) for what is built and
 `dev-docs/REVIEW_MODE.md` for the rest of the design.
 

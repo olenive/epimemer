@@ -9,7 +9,7 @@ with SurrealDB's built-in 'id' field (which uses RecordID type).
 
 import asyncio
 import contextlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Literal, Sequence
 
 from surrealdb import AsyncSurreal
@@ -18,6 +18,8 @@ from websockets.exceptions import ConnectionClosed, WebSocketException
 from epimemer.core.temporal import merged_validity
 from epimemer.core.types import (
     Agent,
+    DecisionKind,
+    DecisionRecord,
     EdgeType,
     JudgeRef,
     EmbeddingRecord,
@@ -516,6 +518,35 @@ def _serialize(model) -> dict:
     return data
 
 
+def _iso_micros(at: datetime) -> str:
+    """A UTC timestamp as this backend compares it: ISO-8601, always to the
+    microsecond, always `Z`.
+
+    Timestamps are stored as strings and compared as strings, which is only
+    chronologically correct while every rendering has the same shape. Pydantic
+    omits the fractional part when it is exactly zero, so a row written on a
+    whole second renders `…:41Z` while a bound renders `…:41.500000Z` — and
+    `"Z" > "."`, which puts the earlier row *after* the later bound. Rare, and
+    wrong. Writing the microseconds on both sides removes the case rather than
+    narrowing it.
+    """
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    return (
+        at.astimezone(timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def _decision_row(record: DecisionRecord) -> dict:
+    """Serialize a journal row (uid-renamed, comparable timestamp, enum value)."""
+    row = _serialize(record)
+    row["kind"] = record.kind.value
+    row["decided_at"] = _iso_micros(record.decided_at)
+    return row
+
+
 def _edge_row(edge: NodeEdge) -> dict:
     """Serialize an edge for SurrealDB (uid-renamed, enum type as its value)."""
     row = _serialize(edge)
@@ -830,6 +861,26 @@ class SurrealDBStorage:
         await query("""
             DEFINE TABLE IF NOT EXISTS agent SCHEMALESS;
             DEFINE INDEX IF NOT EXISTS idx_agent_uid ON agent FIELDS uid UNIQUE;
+        """)
+
+        # The decision journal (REVIEW_MODE.md §4). Append-only in the strict
+        # sense: nothing in this class updates or deletes a row here, and the
+        # protocol offers no method that could. The indexes are the four reads
+        # review mode needs — who decided it, when, what it was about, and
+        # whether anything has since reviewed it (§10.5). `judged_by` is indexed
+        # on the id inside it rather than on the whole object: a judge that
+        # re-described itself is the same judge, so an index over the pair would
+        # partition one agent by its own wording.
+        await query("""
+            DEFINE TABLE IF NOT EXISTS decision SCHEMALESS;
+            DEFINE INDEX IF NOT EXISTS idx_decision_uid ON decision FIELDS uid UNIQUE;
+            DEFINE INDEX IF NOT EXISTS idx_decision_judge ON decision
+                FIELDS judged_by.agent_id;
+            DEFINE INDEX IF NOT EXISTS idx_decision_at ON decision FIELDS decided_at;
+            DEFINE INDEX IF NOT EXISTS idx_decision_kind ON decision FIELDS kind;
+            DEFINE INDEX IF NOT EXISTS idx_decision_reviews ON decision FIELDS reviews;
+            DEFINE INDEX IF NOT EXISTS idx_decision_subjects ON decision
+                FIELDS subject_ids.*;
         """)
 
         # Per-graph bookkeeping (reflection counter). Addressed by fixed record
@@ -1967,3 +2018,70 @@ class SurrealDBStorage:
 
     async def set_require_judge(self, required: bool | None) -> None:
         await self._query(_REQUIRE_JUDGE_SET, {"required": required})
+
+    # --- The decision journal ---
+
+    async def record_decision(self, record: DecisionRecord) -> str:
+        await self._query(
+            _upsert("decision"), {"data": _decision_row(record), "uid": record.id}
+        )
+        return record.id
+
+    async def get_decision(self, decision_id: str) -> DecisionRecord | None:
+        rows = await self._query(
+            "SELECT * FROM decision WHERE uid = $uid LIMIT 1", {"uid": decision_id}
+        )
+        if not rows:
+            return None
+        return DecisionRecord.model_validate(_clean_record(rows[0]))
+
+    async def query_decisions(
+        self,
+        *,
+        agent_id: str | None = None,
+        kinds: Sequence[DecisionKind] | None = None,
+        subject_id: str | None = None,
+        reviews: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int | None = None,
+    ) -> list[DecisionRecord]:
+        clauses: list[str] = []
+        params: dict = {}
+        if agent_id is not None:
+            clauses.append("judged_by.agent_id = $agent_id")
+            params["agent_id"] = agent_id
+        if kinds is not None:
+            clauses.append("kind IN $kinds")
+            params["kinds"] = [kind.value for kind in kinds]
+        if subject_id is not None:
+            clauses.append("$subject_id IN subject_ids")
+            params["subject_id"] = subject_id
+        if reviews is not None:
+            clauses.append("reviews = $reviews")
+            params["reviews"] = reviews
+        if since is not None:
+            clauses.append("decided_at >= $since")
+            params["since"] = _iso_micros(since)
+        if until is not None:
+            clauses.append("decided_at < $until")
+            params["until"] = _iso_micros(until)
+
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        # Ordered here rather than by the caller so both backends answer in the
+        # same order, and tie-broken on the id because a batch written in one
+        # call shares a timestamp to the microsecond.
+        tail = " ORDER BY decided_at DESC, uid DESC"
+        if limit is not None:
+            tail += f" LIMIT {int(limit)}"
+        rows = await self._query(f"SELECT * FROM decision{where}{tail}", params)
+        return [DecisionRecord.model_validate(_clean_record(r)) for r in rows]
+
+    async def reviewed_decision_ids(self, decision_ids: Sequence[str]) -> set[str]:
+        ids = list(decision_ids)
+        if not ids:
+            return set()
+        rows = await self._query(
+            "SELECT reviews FROM decision WHERE reviews IN $ids", {"ids": ids}
+        )
+        return {r["reviews"] for r in rows if r.get("reviews")}
