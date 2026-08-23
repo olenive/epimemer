@@ -172,11 +172,21 @@ project, each naming its graph, is the configuration this is built for. A server
 without one is not broken — it opens `default` — but it will not stay where
 `use_graph` put it.
 
-**`segment` and `store_decomposition` report `active_graph` in their responses**
-for exactly this reason: ingest is where volume lands, and it is otherwise
-indistinguishable between the right graph and the wrong one. `list_graphs`,
-`graph_stats` and `viz_status` report it too, but only if something thinks to
-ask.
+**`segment`, `store_decomposition` and `restore` take an `expected_graph`**, and
+refuse rather than write when the server is somewhere else. That is the check a
+machine makes; reporting the graph is only a hint an agent may read, and the
+incident was silent precisely because every response said success.
+
+Those three, and no others, because a tool that dereferences an existing node id
+is already pinned: an id from another graph names nothing here, so `link`,
+`update`, `supersede_by`, `judge_importance`, `merge_facts`,
+`record_contradiction` and `reverse_merge` all fail on the wrong graph, and
+`apply_reflection` skips. Ingest and an archive blob are the writes that carry
+their own content and so can land anywhere.
+
+**They also report `active_graph`** whether or not you passed an expectation —
+`list_graphs`, `graph_stats` and `viz_status` report it too, but only if
+something thinks to ask.
 
 The default is `default` and is deliberately a name nobody would give a real
 graph. It used to be `memory`, which collided with a real graph of that name —

@@ -3201,6 +3201,67 @@ unconditionally, on both sides of every comparison.
 
 ---
 
+### Issue 71 — should a server be able to *require* that a write names its graph? — 🟡 DECISION NEEDED (raised 2026-08-23)
+
+`expected_graph` is optional, and an agent that never passes it gets none of its
+protection. That is the residue of the wrong-graph incident: the parameter
+closes the hole for a caller who opts in, and the caller who caused the incident
+would not have.
+
+The shape that would close it properly is `require_judge`'s, one field over —
+an opt-in setting, per graph and per server, reachable only through an
+environment variable and the CLI, never an MCP tool, refusing any write that
+does not name the graph it means.
+
+**Recommended variant, if it is taken: require it only where the server can see
+more than one graph.** A server with a single graph cannot misfile, and asking
+its agent to confirm the only possible answer is ceremony that teaches the agent
+to pass the parameter without reading it — the failure mode of every mandatory
+field. `list_databases()` already answers the question, and the gate would turn
+itself on at exactly the moment ambiguity appears, which is when a second graph
+is created.
+
+**The argument against taking it at all**, and it is not weak: unlike a judge,
+the graph is something the server already knows, so this asks the agent to
+restate a fact rather than supply one. The value is entirely in the two sides
+being derived independently — the agent's *intent* against the server's *state*
+— and that value is real only if the agent's side genuinely comes from its
+intent rather than from a previous response it copied without thinking.
+
+Not urgent. `expected_graph` plus the documentation is a real improvement on
+silence, and this decides whether the remaining gap is worth a mandatory field.
+
+---
+
+### Issue 72 — a misdirected write journals in the graph it went to — 🟡 OPEN (found 2026-08-23, by review)
+
+The decision journal is per graph, like everything else. So an ingest that lands
+in the wrong graph writes its `ingest` record **there** — the forensic trail
+that would answer *who put this here and when* is filed beside the misplaced
+material, in the graph nobody is looking at.
+
+The wrong-graph incident is the worked example: it was found by an agent
+re-reading its own conversation, and the journal row that describes it sits in
+`memory` rather than in `field-notes`, where somebody investigating would look.
+
+This generalises past the incident. **`review()` (steps 6–7) is per graph too**,
+so *"show me everything this agent decided"* means *"…in this graph"*, and an
+agent working across several graphs in one session cannot be reviewed in one
+question. That is the same *"the reviewing agent ends up unable to ask one
+question"* that `WARNINGS_AND_SETTINGS.md` §5.2 warns about, arriving through a
+door the design did not consider.
+
+**Not a bug in the journal** — per-graph is right, and a cross-graph journal
+would need somewhere to live that is not a graph. What is missing is a *read*:
+something that can ask several graphs the same question and say which answered.
+`viz_list_nodes(database=…)` is the precedent for a cross-graph read that does
+not switch the active database.
+
+Worth settling **before step 6**, since `review()`'s signature is where the
+answer would go.
+
+---
+
 ## Older carry-overs (open, low priority)
 
 From the original live-graph walkthrough (issues 1–5, otherwise resolved or kept
@@ -3358,6 +3419,7 @@ What to pick up, and what has to be true first:
 | ✅ | ~~`REVIEW_MODE.md` step 4 (ingest, and the require-a-judge setting)~~ | **Built 2026-08-23.** Ingest attributed on both steps, `require_judge` per graph on both backends behind `EPIMEMER_REQUIRE_JUDGE` and `epimemer agents require`, and one gate at the boundary over twelve write tools. **The escape hatch changed shape**: the design wanted an explicit `agent_id` on every write, and it is a lifespan-held fallback binding used only where session state does not exist — ten schemas narrower, claimed once rather than repeated per call, and no weaker, since approving the id is the gate and the binding was only ergonomics. The document and its segments carry no judge (*who pasted this* is not *who judged what it says*), and reusing an entity or tag topic does not restamp it, which is step 3's re-recorded-edge rule again |
 | ✅ | ~~`REVIEW_MODE.md` step 5 (the decision journal)~~ | **Built 2026-08-23.** The `decision` table on both backends with six indexes, five reads, and a row at fifteen writers; `WARNINGS_AND_SETTINGS.md` §9's node notes folded in, so `node.notes` is a subject query and there is one review machine rather than two. **`kind` carries `because`** — a correction and a world-change are opposite claims (#53) and a reviewer asking for one does not want the other. Granularity is **per act, not per call**: ingest, an archival sweep and a reactivation are one row each; reflect's other lists get a row apiece, because those are independent verdicts batched into one request. Re-recording a pair verdict now writes a **confirmation** pointing at the oldest record for that pair, which is what §3.4's rule was waiting for. Two things left open on purpose: `certainty` has no tool that supplies one (step 7's `apply_review` and `rejudge` are the first, where the ladder can be stated once instead of on twelve schemas), and relation merges still have no row — **#69**, because their subjects are labels and `subject_ids` holds node ids. Building it found **#70**, a timestamp comparison that makes `graph_as_of` answer differently on the two backends |
 | ✅ | ~~the default graph was a real graph~~ | **Fixed 2026-08-23**, the day it bit. A server started without `EPIMEMER_GRAPH` fell back to `EPIMEMER_SURREALDB_DATABASE`, whose default was the literal string **`memory`** — which is also the name of this repo's dev-history graph. An agent working on unrelated material reconnected mid-session, landed there without knowing, and ingested 61 nodes of one project's procurement documents into another project's graph; every response said success. Three parts to the fix: the default is now `default`, a name nobody would give a real graph; `segment` and `store_decomposition` report `active_graph`, since ingest is otherwise indistinguishable between the right graph and the wrong one; and `INTEGRATION.md` states the resolution rule and that **the active graph is process state**, so `use_graph` does not survive a reconnect. The 61 nodes were archived out (reversible; nothing is deleted), and that archival is the journal's first production row. Carry-forward: **a default that collides with a real name fails silently, and a default that lands somewhere empty fails loudly** — the wrong one had been there since the initial commit, unexercised because every configured server named its graph |
+| ✅ | ~~review pass on the journal + the graph fix~~ | **2026-08-23**, an independent agent over both commits. Three findings, all taken. `journal()` **never raises** — it landed after the decision and outside its transaction, which is the safe direction, but raising still failed the tool call *after* the graph write, and every retry was worse than the missing row (a retried merge refuses, a retried contradiction writes a row reading as an original, a retried ingest stores the document twice). `DecisionKind` **carries no member without a writer**: `relation_merge` and `proceeded_despite_advisory` both shipped unwritten and both came out, which is `WARNINGS_AND_SETTINGS.md` §8.1's rule for `AdvisoryAction` binding harder here because review *selects* on the kind. And the reporting fix was upgraded to a **refusal**: `expected_graph` on `segment`, `store_decomposition` and `restore`, since answering *"every response said success"* with a better success response leaves the failure attention-dependent. **One correction to the review's own reasoning**, which moved where the guard goes: the incident's two ingest steps were *internally consistent* in the wrong graph, so the existing `Segment not found` guard never fires and a check of step two against step one would not have caught it — the comparison has to be the agent's intent against the server's state, at the entry point. Left open: **71** (should naming the graph be mandatory) and **72** (a misdirected write journals in the wrong graph) |
 | **next** | 68 (no retraction), or `REVIEW_MODE.md` step 6 | 68 is small and bounded — every `similarity` edge was written deliberately, so the population that could need retracting is tiny — and it is the third instance of #64's shape after #66's two. Step 6 is `review(mode="all")` with tier-2 ordering, which works on the whole existing corpus precisely because derived difficulty needs no attribution. Neither blocks the other; **#70** blocks neither and is worth taking before anything else reads a time window |
 | designed | inference merge, advisories, node notes | Not on this board — `dev-docs/WARNINGS_AND_SETTINGS.md`, designed 2026-08-21 and deliberately unbuilt. The duplication it addresses does not exist yet: 123 active inferences across both real graphs yield 5,053 pairs and **zero** at the nomination bar. It becomes real once fact merges start collecting inferences onto one survivor |
 | deferred | 16, 58 | 16: the server gains concurrent clients (the viz-read leg is closed by the hub; the fix is now scoped to `hub_client.py`). 58: a graph large enough that the FTS backfill inside `connect()` is worth reporting on |

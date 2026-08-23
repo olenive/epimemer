@@ -328,6 +328,7 @@ async def memory_segment(
     published_at: dict | None = None,
     metadata: dict | None = None,
     segmentation_strategy: str | None = None,
+    expected_graph: str | None = None,
 ) -> str:
     """Segment text and store the document. Returns segment IDs for you to decompose.
 
@@ -358,6 +359,14 @@ async def memory_segment(
             says, never a date you know from elsewhere.
         metadata: Optional metadata to attach to the document.
         segmentation_strategy: "paragraph" or "semantic". Uses server default if omitted.
+        expected_graph: The graph you believe you are working in. Optional, and
+            worth passing whenever you know it: the write is **refused** rather
+            than misfiled if the server is on a different one. The active graph
+            is not remembered across a client reconnect, so a session that
+            called use_graph earlier can come back somewhere else — and an
+            ingest into the wrong graph succeeds in every other respect. The
+            response names `active_graph` either way; thread it into
+            store_decomposition.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx)
@@ -378,6 +387,7 @@ async def memory_segment(
             segmentation_strategy=segmentation_strategy,
             event_bus=deps.get("event_bus"),
             judge=judge,
+            expected_graph=expected_graph,
         ),
         ctx,
         f"content_length={len(content)}",
@@ -394,6 +404,7 @@ async def memory_store_decomposition(
     tags: list[str] | None = None,
     timeline_id: str | None = None,
     propose_timepoints: bool = True,
+    expected_graph: str | None = None,
 ) -> str:
     """Store your decomposition of segments into topics, facts, and inferences.
 
@@ -508,6 +519,12 @@ async def memory_store_decomposition(
             the document belongs to a timeline you have already created (a
             novel's chronology, a project history). It must exist. Omitted,
             proposals go to the shared "Extracted" timeline.
+        expected_graph: The graph you believe you are working in — pass
+            `active_graph` from the segment response. Refused rather than
+            misfiled if the server has moved. Checked here as well as in
+            segment, because a document segmented in the wrong graph *has* its
+            segments there: the two steps agreeing says nothing about either
+            being right.
         propose_timepoints: Dates stated in node content ("on 12 March 1997",
             "the 1990s") become timepoints linked by TIMELINK, so content-time
             mode has something to show. Vague expressions stay undated rather
@@ -530,6 +547,7 @@ async def memory_store_decomposition(
             propose_timepoints=propose_timepoints,
             event_bus=deps.get("event_bus"),
             judge=judge,
+            expected_graph=expected_graph,
         )
         count = await deps["storage"].bump_reflect_counter()
         threshold = await tools.effective_reflect_threshold(
@@ -1702,6 +1720,7 @@ async def memory_restore(
     node_ids: list[str] | None = None,
     sourced_from: str | None = None,
     validity: list[dict] | None = None,
+    expected_graph: str | None = None,
 ) -> str:
     """Bring nodes back — from an archive, or when a retired claim is true again.
 
@@ -1726,6 +1745,10 @@ async def memory_restore(
             produce. It gets a new `sourced_from` edge, written in the same
             transaction as the reactivation; the node's earlier provenance and
             its lineage record are left untouched.
+        expected_graph: The graph you believe you are working in. An archive blob
+            carries its own content, so nothing in it names a graph and it will
+            restore into whichever one is active — pass this and a mismatch is
+            refused instead.
         validity: What that document says about *when* the claim is true again,
             in the same form `store_decomposition` takes. Omit it when the
             document gives no dates — the common case, and better than a guess.
@@ -1742,6 +1765,7 @@ async def memory_restore(
             node_ids=node_ids,
             sourced_from=sourced_from,
             validity=validity,
+            expected_graph=expected_graph,
             judge=judge,
         ),
         ctx,

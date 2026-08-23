@@ -9,6 +9,12 @@ the history linked. Your job is to write fast and organize deliberately.
   user shares documents/knowledge you should remember.
 - Call `segment` to split the text, extract topics/facts/inferences yourself, then
   call `store_decomposition`.
+- **Say which graph you mean.** Pass `expected_graph` to `segment`, and thread the
+  `active_graph` it returns into `store_decomposition` — a mismatch is refused
+  instead of misfiled. The active graph is not remembered across a client
+  reconnect, so a session that called `use_graph` earlier can come back somewhere
+  else, and an ingest into the wrong graph succeeds in every other respect. If
+  you do not know the name, `list_graphs` says which one is active.
 - Pass a `metacontext_id` when the information has a specific framing (fiction, a
   particular source, a perspective). Untagged knowledge is treated as base reality
   — "The Real" (see Metacontexts below).
