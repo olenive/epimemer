@@ -3337,6 +3337,14 @@ async def review(
     `use_graph`, ask again — and that sequence is *safer* than a fan-out would
     be, since each switch is the active graph rather than one borrowed
     mid-call (#16).
+
+    **`elsewhere` says where else to look, and nothing more** (#73). Counts per
+    graph, no rows, no ids — the reviewer who needs this is a *later, different*
+    agent, which is the reviewer the registry exists for; the one that made the
+    decisions switched the graphs itself and never needed telling. It counts
+    with `agent_id`, `since` and `until` only, so a count can be **wider** than
+    what a review there would list and is never narrower: too high sends someone
+    to look and find less, too low leaves them not looking at all.
     """
     refusal = mode_refusal(mode, agent_id=agent_id, since_given=since is not None)
     if refusal is not None:
@@ -3402,10 +3410,22 @@ async def review(
         for item in page
     ]
 
+    # The locator (#73). Read after the graph's own answer and never merged into
+    # it: these counts come from graphs whose node ids do not resolve here, so
+    # everything that could be dereferenced stays on the near side of the line.
+    here = storage.current_database
+    others = [name for name in await storage.list_databases() if name != here]
+    counts = (
+        await storage.count_decisions_by_graph(
+            others, agent_id=agent_id, since=since, until=until
+        )
+        if others else {}
+    )
+
     result = {
         "mode": mode,
         # #72: an answer that does not name its scope reads as the whole story.
-        "graph": storage.current_database,
+        "graph": here,
         "decisions": decisions,
         "decisions_scanned": len(records),
         "truncated": len(ordered) > len(page),
@@ -3420,6 +3440,27 @@ async def review(
         # message that stated a threshold as the system's and was false for
         # exactly the caller who overrode it.
         "certainty_ceiling": certainty_ceiling,
+        "elsewhere": {
+            # Every other graph, zeros included: *nothing there* is an answer a
+            # reviewer can act on, and omitting it would read as *not checked*.
+            "graphs": [
+                {"graph": name, "decisions": counts[name]}
+                for name in others if name in counts
+            ],
+            "total": sum(counts.values()),
+            # What the counts were narrowed by — and by implication what they
+            # were not. `mode` and `certainty_ceiling` are not mirrored here, so
+            # a graph counted at 12 can list fewer than 12 when you get there.
+            "counted_with": {
+                "agent_id": agent_id,
+                "since": since.isoformat() if since else None,
+                "until": until.isoformat() if until else None,
+            },
+            # Listed but not counted: deleted between the two reads. Named
+            # rather than dropped, because a graph missing from the counts and a
+            # graph holding nothing are different answers.
+            "unreadable": [name for name in others if name not in counts],
+        },
     }
 
     # Declared, like every response carrying node ids: `retrieved` is what drives

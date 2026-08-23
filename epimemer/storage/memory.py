@@ -231,6 +231,36 @@ def _destroy_node(g: _GraphStore, node_id: str) -> None:
     g.by_dst.pop(node_id, None)
 
 
+def _decision_matches(
+    record: DecisionRecord,
+    *,
+    agent_id: str | None,
+    kinds: set[DecisionKind] | None,
+    subject_id: str | None,
+    reviews: str | None,
+    since: datetime | None,
+    until: datetime | None,
+) -> bool:
+    """One row against the journal filters — the only place this backend says
+    what they mean.
+
+    Shared by `query_decisions` and `count_decisions_by_graph` because the two
+    have to agree: a locator that counts a window differently from the reader it
+    sends you to is worse than no locator (#73). One predicate makes that
+    agreement structural rather than a thing to remember.
+    """
+    return (
+        (agent_id is None
+         or (record.judged_by is not None
+             and record.judged_by.agent_id == agent_id))
+        and (kinds is None or record.kind in kinds)
+        and (subject_id is None or subject_id in record.subject_ids)
+        and (reviews is None or record.reviews == reviews)
+        and (since is None or record.decided_at >= since)
+        and (until is None or record.decided_at < until)
+    )
+
+
 def _edges_at(
     g: _GraphStore,
     index: dict[str, set[str]],
@@ -1034,16 +1064,15 @@ class InMemoryStorage:
         wanted = set(kinds) if kinds is not None else None
         matches = [
             record for record in self._g.decisions.values()
-            if (
-                agent_id is None
-                or (record.judged_by is not None
-                    and record.judged_by.agent_id == agent_id)
+            if _decision_matches(
+                record,
+                agent_id=agent_id,
+                kinds=wanted,
+                subject_id=subject_id,
+                reviews=reviews,
+                since=since,
+                until=until,
             )
-            and (wanted is None or record.kind in wanted)
-            and (subject_id is None or subject_id in record.subject_ids)
-            and (reviews is None or record.reviews == reviews)
-            and (since is None or record.decided_at >= since)
-            and (until is None or record.decided_at < until)
         ]
         # Newest first, ties broken by id. The tiebreak is arbitrary and that is
         # the point: a batch written in one call shares a timestamp to the
@@ -1058,6 +1087,39 @@ class InMemoryStorage:
             record.reviews for record in self._g.decisions.values()
             if record.reviews is not None and record.reviews in targets
         }
+
+    async def count_decisions_by_graph(
+        self,
+        databases: Sequence[str],
+        *,
+        agent_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> dict[str, int]:
+        """Counts per named graph, by dict lookup — nothing is borrowed here.
+
+        A graph this store has never seen is left out of the answer rather than
+        counted zero, and asking about one must not bring it into existence:
+        `.get`, never `self._graphs[...]`, which would create it (#73).
+        """
+        counts: dict[str, int] = {}
+        for database in databases:
+            graph = self._graphs.get(database)
+            if graph is None:
+                continue
+            counts[database] = sum(
+                1 for record in graph.decisions.values()
+                if _decision_matches(
+                    record,
+                    agent_id=agent_id,
+                    kinds=None,
+                    subject_id=None,
+                    reviews=None,
+                    since=since,
+                    until=until,
+                )
+            )
+        return counts
 
     # --- Multi-graph management ---
 

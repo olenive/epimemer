@@ -120,7 +120,7 @@ Every judgment the graph records — who decided, about what, and when — see
 
 | Tool | Purpose |
 |------|---------|
-| `review` | This graph's decisions, shakiest first: a declared low `certainty` before anything unrated, then by derived difficulty (thin sources, wide merges, open contradictions, ground that moved since). Modes `all` / `by_agent` / `since` / `unreviewed`, narrowed by `agent_id`, `since`/`until` and `certainty_ceiling`. Read-only, capped, and one graph wide — `graph` names which |
+| `review` | This graph's decisions, shakiest first: a declared low `certainty` before anything unrated, then by derived difficulty (thin sources, wide merges, open contradictions, ground that moved since). Modes `all` / `by_agent` / `since` / `unreviewed`, narrowed by `agent_id`, `since`/`until` and `certainty_ceiling`. Read-only, capped, and one graph wide — `graph` names which, and `elsewhere` counts the journal in every other graph so a reviewer is told where else to look |
 | `apply_review` | Record that you checked decisions and what you concluded — `confirmations` and `dissents`, each with a required `because`. Neither changes the graph: a dissent records the finding, and the undo is `reverse_merge` / `restore` / `apply_reflection` / `rejudge` |
 | `rejudge` | Revise a judgment made at ingest — `claim_kind`, `confidence`, `confidence_basis` — without touching the claim. Not a supersession: nothing is retired, no edge moves, and the value replaced is kept on the node |
 

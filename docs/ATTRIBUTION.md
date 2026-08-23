@@ -206,6 +206,23 @@ than raising the cap.
 graph because a row's `subject_ids` resolve only where those nodes live. For
 another, `use_graph` and ask again.
 
+**`elsewhere` says where else there is something to see.** One count per other
+graph — zeros included — plus a `total`, the filters those counts used
+(`counted_with`), and any graph that could not be read (`unreadable`). No rows
+and no ids: an id from another graph dereferences nowhere here, and every write
+path is single-graph anyway. Going there is still `use_graph` then ask again,
+which is safer than a fan-out would be because each switch is the active graph
+rather than one borrowed mid-call.
+
+The reviewer this is for is a **later, different agent**. The one that made the
+decisions switched those graphs itself and never needed telling.
+
+**It counts wider than it reads, deliberately.** Only `agent_id`, `since` and
+`until` narrow the counts; `mode` and `certainty_ceiling` do not. So a graph
+counted at 12 can list fewer than 12 once you get there, and `counted_with` is
+what tells you that is scope rather than a defect. A count too high costs a
+wasted look; a count too low costs the look entirely.
+
 ### Modes and filters
 
 A **mode** names the selection; every other argument narrows whatever it

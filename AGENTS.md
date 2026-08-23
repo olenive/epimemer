@@ -156,6 +156,13 @@ Surface this information naturally: "Found 5 relevant nodes (2 topics, 2 facts, 
 - `review` answers for **one graph**, named in `graph`. It sees only decisions
   made since the journal existed; an older graph can be full of judgments it will
   never show.
+- **`elsewhere` says where else to look.** Counts per other graph and nothing
+  more — no rows, no ids, since a `subject_id` resolves only where its node
+  lives. Going there is still `use_graph` then `review` again. It counts by
+  `agent_id`/`since`/`until` only, never by `mode` or `certainty_ceiling`
+  (`counted_with` says which ran), so a graph counted at 12 may list fewer than
+  12 when you arrive: **wider, never narrower**. A graph listed at 0 is an
+  answer; one named in `unreadable` was not counted at all.
 
 ### Multi-graph management (list_graphs, use_graph, delete_graph)
 - Use `list_graphs` to see available knowledge graphs and which is active

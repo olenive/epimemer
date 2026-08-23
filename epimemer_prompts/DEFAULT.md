@@ -464,6 +464,13 @@ graph learned it.
   `truncated` too — ask again rather than raising `max_results`.
 - **It answers for one graph**, named in `graph`. For another, `use_graph` and
   ask again.
+- **`elsewhere` tells you whether there is anything to go and see** — a count of
+  decisions per other graph, no rows and no ids. The reviewer who needs it is
+  the one checking somebody *else's* work: an agent knows which graphs it worked
+  in, its successor does not. Counted by `agent_id`/`since`/`until` only
+  (`counted_with` says so), so a graph counted at 12 may list fewer than 12 once
+  you switch to it — wider, never narrower. Zero means nothing is there;
+  `unreadable` means it was not counted.
 - It sees only decisions made since the journal existed. An older graph can be
   full of judgments `review` will never show.
 - **Modes select; the other arguments narrow whatever was selected.** `all`,

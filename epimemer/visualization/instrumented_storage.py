@@ -660,6 +660,18 @@ class InstrumentedStorage:
     async def reviewed_decision_ids(self, decision_ids: Sequence[str]) -> set[str]:
         return await self._inner.reviewed_decision_ids(decision_ids)
 
+    async def count_decisions_by_graph(
+        self,
+        databases: Sequence[str],
+        *,
+        agent_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> dict[str, int]:
+        return await self._inner.count_decisions_by_graph(
+            databases, agent_id=agent_id, since=since, until=until
+        )
+
     # --- Multi-graph management (pass-through) ---
 
     @property

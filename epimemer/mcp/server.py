@@ -272,11 +272,21 @@ async def _record_response(
 
 
 # The tools that move the active graph, and so take the guard's mover turn
-# rather than a user's. `use_graph` is the whole list: `delete_graph` removes a
-# graph without pointing anything at it, and every other tool works against
-# wherever the server already is. Naming them here rather than at each call site
-# keeps the list readable as a list — the invariant is *these and no others*.
-MOVES_THE_GRAPH = frozenset({"epimemer.use_graph"})
+# rather than a user's. `delete_graph` removes a graph without pointing anything
+# at it, and every other tool works against wherever the server already is.
+# Naming them here rather than at each call site keeps the list readable as a
+# list — the invariant is *these and no others*.
+#
+# `review` is here for a reason worth stating, because it is a **read**: its
+# `elsewhere` locator counts the journal in every other graph (#73), and on
+# SurrealDB that means borrowing the connection. To move the graph you must
+# exclude the calls using it, and you cannot do that while being one — a
+# `moving()` taken inside a `using()` raises rather than deadlocking. So the
+# mover turn is taken at the boundary, for the whole call, and review reads a
+# single instant as a consequence. The cost is that a review excludes other
+# tool calls and viz snapshots for its duration; reviews are rare, human-driven
+# and read-only, and a review racing a write was reading a moving target anyway.
+MOVES_THE_GRAPH = frozenset({"epimemer.use_graph", "epimemer.review"})
 
 # The tools that need no `expected_graph`, because each is *about* graphs rather
 # than in one (#71): `list_graphs` asks which exist, `use_graph` and
@@ -1675,6 +1685,13 @@ async def epimemer_review(
     **The answer covers this graph only, and `graph` names which.** For another,
     `use_graph` and ask again.
 
+    **`elsewhere` tells you whether there is anything to go and see** — a count
+    of journal rows per other graph, no rows and no ids, so a decision made
+    somewhere else stops being something you have to think to look for. It
+    counts by `agent_id`, `since` and `until` only: `mode` and
+    `certainty_ceiling` are not applied there, so a graph counted at 12 may list
+    fewer than 12 once you switch to it. Wider, never narrower.
+
     Args:
         mode: all | by_agent | since | unreviewed.
         agent_id: Restrict to one judge. Required by mode="by_agent".
@@ -1705,7 +1722,8 @@ async def epimemer_review(
             f"refused mode={mode}" if "refused" in r else
             f"decisions={m.nodes_returned}/{r['decisions_scanned']} "
             f"graph={r['graph']} unrated={r['unrated_count']} "
-            f"unreviewed={r['unreviewed_count']}"
+            f"unreviewed={r['unreviewed_count']} "
+            f"elsewhere={r['elsewhere']['total']}"
             + (" truncated" if r["truncated"] else "")
         ),
         expected_graph=expected_graph,

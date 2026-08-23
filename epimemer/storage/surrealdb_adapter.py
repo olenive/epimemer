@@ -548,6 +548,49 @@ def _decision_row(record: DecisionRecord) -> dict:
     return row
 
 
+def _decision_clauses(
+    *,
+    agent_id: str | None = None,
+    kinds: Sequence[DecisionKind] | None = None,
+    subject_id: str | None = None,
+    reviews: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> tuple[str, dict]:
+    """The journal filters as one WHERE clause and its parameters.
+
+    Shared by `query_decisions` and `count_decisions_by_graph`, which have to
+    agree about what a window contains: a locator that counts a window
+    differently from the reader it sends you to is worse than no locator (#73).
+
+    `since`/`until` are padded to the microsecond because `decided_at` is stored
+    and compared as text — see `_iso_micros` for the case that breaks otherwise.
+    """
+    clauses: list[str] = []
+    params: dict = {}
+    if agent_id is not None:
+        clauses.append("judged_by.agent_id = $agent_id")
+        params["agent_id"] = agent_id
+    if kinds is not None:
+        clauses.append("kind IN $kinds")
+        params["kinds"] = [kind.value for kind in kinds]
+    if subject_id is not None:
+        clauses.append("$subject_id IN subject_ids")
+        params["subject_id"] = subject_id
+    if reviews is not None:
+        clauses.append("reviews = $reviews")
+        params["reviews"] = reviews
+    if since is not None:
+        clauses.append("decided_at >= $since")
+        params["since"] = _iso_micros(since)
+    if until is not None:
+        clauses.append("decided_at < $until")
+        params["until"] = _iso_micros(until)
+
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    return where, params
+
+
 def _edge_row(edge: NodeEdge) -> dict:
     """Serialize an edge for SurrealDB (uid-renamed, enum type as its value)."""
     row = _serialize(edge)
@@ -2099,28 +2142,14 @@ class SurrealDBStorage:
         until: datetime | None = None,
         limit: int | None = None,
     ) -> list[DecisionRecord]:
-        clauses: list[str] = []
-        params: dict = {}
-        if agent_id is not None:
-            clauses.append("judged_by.agent_id = $agent_id")
-            params["agent_id"] = agent_id
-        if kinds is not None:
-            clauses.append("kind IN $kinds")
-            params["kinds"] = [kind.value for kind in kinds]
-        if subject_id is not None:
-            clauses.append("$subject_id IN subject_ids")
-            params["subject_id"] = subject_id
-        if reviews is not None:
-            clauses.append("reviews = $reviews")
-            params["reviews"] = reviews
-        if since is not None:
-            clauses.append("decided_at >= $since")
-            params["since"] = _iso_micros(since)
-        if until is not None:
-            clauses.append("decided_at < $until")
-            params["until"] = _iso_micros(until)
-
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        where, params = _decision_clauses(
+            agent_id=agent_id,
+            kinds=kinds,
+            subject_id=subject_id,
+            reviews=reviews,
+            since=since,
+            until=until,
+        )
         # Ordered here rather than by the caller so both backends answer in the
         # same order, and tie-broken on the id because a batch written in one
         # call shares a timestamp to the microsecond.
@@ -2138,3 +2167,42 @@ class SurrealDBStorage:
             "SELECT reviews FROM decision WHERE reviews IN $ids", {"ids": ids}
         )
         return {r["reviews"] for r in rows if r.get("reviews")}
+
+    async def count_decisions_by_graph(
+        self,
+        databases: Sequence[str],
+        *,
+        agent_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> dict[str, int]:
+        """Counts per named graph, by borrowing the connection once per graph.
+
+        **One mover turn wraps the whole sweep**, the way `assemble_snapshot`
+        takes one for its four reads: the counts are then of a single instant,
+        and the borrows nested inside re-enter the guard rather than queueing
+        against it (#16). The caller is already a mover — `review` is in
+        `MOVES_THE_GRAPH` — so this nests again and takes nothing.
+
+        **A graph is counted only if it already exists.** `USE` on an unknown
+        database is not an error here, so counting one blind would answer zero
+        for a graph the sweep had just brought into being. Checked against
+        `list_databases` first, and left out of the answer otherwise.
+
+        `SELECT count() … GROUP ALL` returns no row for an empty or absent
+        table, which is a real zero rather than a missing graph — the two are
+        distinguished above, not here.
+        """
+        where, params = _decision_clauses(agent_id=agent_id, since=since, until=until)
+        counts: dict[str, int] = {}
+        async with self._guard.moving():
+            existing = set(await self.list_databases())
+            for database in databases:
+                if database not in existing:
+                    continue
+                async with self._borrowed(database):
+                    rows = await self._query(
+                        f"SELECT count() FROM decision{where} GROUP ALL", params
+                    )
+                counts[database] = int(rows[0]["count"]) if rows else 0
+        return counts

@@ -451,7 +451,12 @@ Three rules for anything new:
   Taking `moving()` inside `using()` raises rather than hanging, and the message
   says so — but the tool has to be declared, because the default fails open.
 - **A cross-graph read takes a mover's turn**, even though it only reads. It
-  moves the graph to get there.
+  moves the graph to get there. `review` is the worked example: its `elsewhere`
+  locator counts the journal in every other graph (#73), so a read ended up in
+  `MOVES_THE_GRAPH`. You cannot borrow the graph while being one of the calls
+  using it, and the turn has to be taken at the boundary for the whole call —
+  which is why `review` now excludes other calls for its duration, and reads a
+  single instant in exchange.
 
 **Testing concurrency here needs a real suspension point.** With in-memory
 storage and the mock embedder every await completes without suspending, so
@@ -459,3 +464,9 @@ storage and the mock embedder every await completes without suspending, so
 — the first end-to-end test for this passed with the guard removed. See
 `_suspending` in `tests/mcp/test_graph_turns.py`, and prove any new test fails
 without the fix before trusting it.
+
+**And run it on both backends.** The in-memory store reads another graph with a
+dict lookup and borrows nothing, so a cross-graph test written against it alone
+is green whether or not the mover turn was ever declared — the same *green for
+the wrong reason* in a second costume. `tests/mcp/test_review_locator.py`
+parameterises its end-to-end fixture over both for exactly this.

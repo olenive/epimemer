@@ -1037,6 +1037,48 @@ class StorageBackend(Protocol):
         """
         ...
 
+    async def count_decisions_by_graph(
+        self,
+        databases: Sequence[str],
+        *,
+        agent_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> dict[str, int]:
+        """How many journal rows each named graph holds — counts and nothing else.
+
+        The locator behind `review()`'s `elsewhere` (#73). A reviewer checking a
+        *later, different* agent's work does not know which graphs that agent
+        worked in; the agent that made the decisions switched them itself and
+        never needed telling.
+
+        **A count, deliberately, and never a row.** `subject_ids` are node ids,
+        and a node id resolves only in the graph that holds it — so rows read
+        out of another graph would arrive readable but not actionable, and every
+        write path is single-graph anyway (#72). What a reviewer needs from here
+        is *where else to look*; the looking is `use_graph` then `review()`,
+        which stays the fallback and is not a workaround.
+
+        **A locator may overcount and must never undercount.** Only the filters
+        `query_decisions` already implements are mirrored here — `agent_id`,
+        `since`, `until` — and the narrowings a reviewer applies while browsing
+        (`certainty_ceiling`, `mode="unreviewed"`) are not. Every filter
+        reimplemented for a second read is somewhere the two can disagree, and a
+        locator that disagrees with the reader it points at is worse than one
+        that is plainly wider: too high sends a reviewer to look and find less,
+        too low leaves them not looking at all.
+
+        A graph that cannot be read — deleted between listing and counting — is
+        **omitted** rather than counted zero, because the caller reports the
+        difference and *nothing there* is not *not checked*.
+
+        Naming a graph must not create it. On SurrealDB the read borrows the
+        connection and takes the guard's mover turn for the whole sweep, so the
+        counts are of one instant and nothing else runs during it (#16); the
+        in-memory backend indexes a dict and borrows nothing.
+        """
+        ...
+
     # --- Multi-graph management ---
 
     @property

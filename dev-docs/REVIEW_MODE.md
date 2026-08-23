@@ -835,6 +835,31 @@ three fields above.
 
 ### 6.6 Review is per graph, and says so
 
+> **Amended 2026-08-23 — the locator this section filed as #73 is built, and it
+> cost a turn rather than a query.**
+>
+> `review()` carries `elsewhere`: one count per other graph, zeros included, no
+> rows and no ids. The rule below survives intact — the graph is the tag on a
+> count read from it, never a field on a row.
+>
+> **What the design did not see is that the locator changes what kind of call
+> `review` is.** Reading another graph on SurrealDB means borrowing the
+> connection; borrowing takes the guard's mover turn; and `moving()` inside
+> `using()` raises rather than deadlocking (#16), because you cannot exclude
+> the calls using the graph while being one of them. So `review` is now in
+> `MOVES_THE_GRAPH` — a **read** that declares itself a mover. It excludes
+> other tool calls and viz snapshots for its duration, and reads a single
+> instant in exchange, which is what a journal read wanted anyway.
+>
+> **The scope rule, which is the part worth carrying past this document: a
+> locator may overcount and must never undercount.** Only the filters
+> `query_decisions` already implements are mirrored into the sweep —
+> `agent_id`, `since`, `until`. `certainty_ceiling` and `mode="unreviewed"` are
+> not, and `elsewhere.counted_with` says which ran. Every filter reimplemented
+> for a second read is a place two implementations can disagree, and a locator
+> that disagrees with the reader it points at is worse than one plainly wider:
+> a count too high costs a wasted look, a count too low costs the look.
+
 The journal is a per-graph table like every other, so `review()` answers about
 one graph. The question that exposes it is the one review exists for: *"check
 everything this judge did"* means *"…in this graph"*, and an agent that worked
@@ -2067,7 +2092,9 @@ value **this call** used (§6.3, #63).
 (§6.6). Cross-graph review is `list_graphs` → `use_graph` → `review()` per
 graph — safer than a fan-out rather than merely equivalent, since each switch is
 the active state instead of one borrowed mid-call. The locator that would tell a
-reviewer *where else to look* is #73, gated on #16.
+reviewer *where else to look* is #73, gated on #16. **Built 2026-08-23 as
+`elsewhere`; see §6.6's amendment, including what it cost — `review` is a mover
+now.**
 
 > **Amended 2026-08-23, on building it.** Five things.
 >

@@ -3584,7 +3584,61 @@ answer would go.
 
 ---
 
-### Issue 73 — a reviewer is not told which other graphs hold this agent's decisions — 🟡 OPEN (raised 2026-08-23, by #72), unblocked the same day
+### Issue 73 — a reviewer is not told which other graphs hold this agent's decisions — ✅ FIXED (2026-08-23)
+
+> **Built 2026-08-23, as `review()`'s `elsewhere` — counts per graph, no rows,
+> no new tool.** Every response now carries `elsewhere.graphs` (one entry per
+> other graph, zeros included), `elsewhere.total`, `elsewhere.counted_with` and
+> `elsewhere.unreadable`.
+>
+> **The count was the easy half; the *turn* was the design problem.** Reading
+> another graph on SurrealDB means borrowing the connection, borrowing means
+> taking the guard's mover turn, and `moving()` inside `using()` **raises** by
+> design (#16) — you cannot exclude the calls using the graph while being one of
+> them. So `review` had to declare itself in `MOVES_THE_GRAPH`, at the boundary,
+> for the whole call. Two consequences, both accepted rather than hidden: a
+> review now excludes other tool calls and viz snapshots for its duration, and
+> it reads a **single instant** as a result — which is what a journal read
+> wanted anyway, since a review racing a write was reading a moving target.
+> **A read can be a mover.** The set was named as *the tools that move the
+> graph* and it now contains one that only borrows it, which is the same
+> distinction `viz_list_*` has always had.
+>
+> **#16's carry-forward repeated itself, and the fixture is what caught it.**
+> The in-memory sweep is a dict lookup, borrows nothing, and passes whether or
+> not the declaration exists — so an end-to-end test on one backend would have
+> been green for the wrong reason, exactly as #16's first concurrency test was.
+> The end-to-end fixture runs **both backends** for that reason, and removing
+> the declaration was checked to fail it.
+>
+> **One rule banked, and it decided the scope: a locator may overcount and must
+> never undercount.** Only the filters `query_decisions` already implements are
+> mirrored — `agent_id`, `since`, `until`. `certainty_ceiling` and
+> `mode="unreviewed"` are **not**, so a graph counted at 12 can list fewer than
+> 12 once you switch to it. Every filter reimplemented for a second read is
+> somewhere two implementations can disagree, and a locator that disagrees with
+> the reader it points at is worse than one that is plainly wider: too high
+> costs a wasted look, too low costs the look entirely. `counted_with` says
+> which filters ran so the difference reads as scope rather than as a defect.
+>
+> **Both backends now build the journal filter once** — `_decision_matches`
+> in-memory, `_decision_clauses` on SurrealDB — shared by the reader and the
+> locator. That makes the agreement structural rather than remembered, and it
+> matters most on the text-timestamp boundary #70 was about: the test that
+> counts the row sitting exactly on `since` and then reads it there is what
+> fails if the two ever stop sharing.
+>
+> **Naming a graph must not create one.** `USE` on an unknown SurrealDB database
+> is not an error and `self._graphs[db]` on the in-memory backend creates, so a
+> locator counting blind would have manufactured a database for every name it
+> was asked about — one review turning into a namespace of empty graphs.
+> Checked against `list_databases` first; an unknown graph is **omitted**, never
+> counted zero, because *nothing there* is an answer and *not checked* is not.
+>
+> The manual sequence stays exactly where #72 left it: `list_graphs` →
+> `use_graph` → `review()` is what you do once the locator has told you where.
+> It was never the workaround, and the locator does not replace it.
+
 
 #72 settled that the journal stays per graph and that `review()` takes no
 `graphs=` list, and left one thing genuinely missing: **a reviewer has no way to
@@ -3788,6 +3842,7 @@ What to pick up, and what has to be true first:
 | ✅ | ~~`REVIEW_MODE.md` step 6 (`review`)~~ | **Built 2026-08-23.** The journal read back shakiest-first, capped, read-only, one graph wide and saying which (#72). **Tier-1 ordering came with it** rather than waiting for step 7: `certainty` is already a field, so a sort that ignored it would have gone silently wrong the moment `apply_review` wrote one — and the rule it encodes, *an unrated decision never outranks a flagged one*, is the half worth pinning early. Only the parameters step 6 owns shipped; the rest would each have been an argument that did nothing. Three things the design did not say: **`confidence` lives on `ValueSignal`, not the node** (so reading it off one raises on a `Topic`), **`meta.retrieved` is not the use signal** (only `search` stamps `retrieved_at`, so declining to declare would only have greyed the viewer), and **`merge_facts` journals `[survivor, *sources]`** — so *three or more sources* read off the subject count calls every two-source merge wide. The first two were caught by the retrieval-declaration parity suite, not by anything written for this step. **Honest scope, measured**: the row says it works on the existing corpus, which is true of the signals (they read nodes) and false of the journal — `memory` holds **one** row, `field-notes` and `petritype-server` **none**, so every decision made before 2026-08-23 is invisible to review permanently, the same island #52 left in the other direction |
 | ✅ | ~~`REVIEW_MODE.md` step 7 (the review modes and their writers)~~ | **Built 2026-08-23**, and the design's build order is now complete. `review` gains `by_agent` / `since` / `unreviewed` and `certainty_ceiling`; `apply_review` and `rejudge` are the writers, and the first two tools that supply a `certainty`. **The second list changed what it does, and that renamed it**: `reversals` became `dissents`, because it reverses nothing — every undo already has a tool with its own refusals and its own row that legitimately sets `supersedes`, and a dispatcher over four of them is #72's fan-out. A dissent sets `reviews` and never `supersedes`, so the journal never claims to have overturned a decision whose effect still stands; its real use is where the undo was **refused**, which the design had not considered. **`advisory` is refused by name rather than shipped** — it selects on a `DecisionKind` nothing writes, which would return an empty list reading as *nothing is contested*. **Not one transaction**, against §10.7: it performs nothing, so each entry is an independent judgment batched with unrelated ones, refused per item like `apply_reflection`. Three things found on the way: a **retry must not read as a second opinion** (an identical judgment by the same judge is refused; two blank judges cannot be told apart, which is one more thing `require_judge` buys), **`rejudge` has to keep the value it replaces** or it would be the one call that destroys a judgment rather than superseding it, and **`DecisionRecord.certainty` was unbounded** — harmless while nothing supplied one, and the ordering sorts on it. The `DecisionKind` drift guard **caught the new kinds and was itself wrong**: it scanned `mcp/tools.py`, true only because every writer had happened to live there. Carry-forward: **a guard whose reach is an accident of where the code sat is one that fails open** |
 | ✅ | ~~71 (should a server be able to require that a write names its graph?)~~ | **Decided and half-built 2026-08-23.** The answer is stricter than the entry proposed: **mandatory, unconditional, no setting**, and covering **reads** as well as writes. Two shapes rejected by the user, both for the same underlying reason — *a guard must not be configured by the state it is guarding against*. The count-based gate reads a live `list_databases()`, so a second graph switches the requirement on and deleting it switches it off; a per-graph setting gets read from whichever graph you are wrongly in, so it disables itself precisely when it matters. **Reads were the omission**: a wrong-graph `search` returns a plausible answer the agent reasons from and leaves no artifact, where a misfiled write at least sits beside its own journal row. `expected_graph` is on all 37 content tools with one gate at `_run_with_timeout`, inside the turn, and a missing one refuses. Turning it on failed **82 tests across nine files** — every call that had been going through the boundary without saying which graph it meant, which is the population the gate is for; four of them switch graphs first, so two helpers now thread the graph rather than defaulting it. **It surfaced a defect older than itself** — the refusal's recovery message had been swallowed by a `KeyError` in `_log` since `expected_graph` shipped, because the tool's success summariser ran over a refusal dict, and every test called `tools.*` one layer *below* the boundary where no summariser runs |
-| **next** | 73 or 69 | **73** (the cross-graph decision locator) is independent and unblocked, and a field on `review()`'s response is where it goes. **69** (relation merges have no journal row) is the one gap step 5 left and step 7 did not close |
+| ✅ | ~~73 (a reviewer is not told which other graphs hold this agent's decisions)~~ | **Built 2026-08-23**, as `review()`'s `elsewhere` — counts per graph, zeros included, no rows and no new tool. **The count was the easy half and the turn was the design problem**: borrowing the connection means taking the guard's mover turn, and `moving()` inside `using()` raises by design, so `review` had to join `MOVES_THE_GRAPH` and a **read** is now a mover. It excludes other calls for its duration and reads a single instant in exchange, which is what a journal read wanted anyway. **#16's carry-forward repeated itself**: the in-memory sweep borrows nothing and passes whether or not the declaration exists, so the end-to-end fixture runs both backends and removing the declaration was checked to fail it. One rule banked, and it set the scope: **a locator may overcount and must never undercount** — only the filters `query_decisions` already implements are mirrored, `certainty_ceiling` and `unreviewed` are not, and `counted_with` says so, because every mirrored filter is somewhere two implementations can disagree. Both backends now build the journal filter once, shared by reader and locator, which is what makes the `since` boundary row count and read the same (#70's trap). And **naming a graph must not create one** — `USE` on an unknown database is not an error, so a blind count would have manufactured a namespace of empty graphs |
+| **next** | 69 | **69** (relation merges have no journal row) is the one gap step 5 left and step 7 did not close — blocked on a real question, since their subjects are labels and `subject_ids` holds node ids. **66** (metacontext assignment and validity interval cannot be revised) is now bounded, with `rejudge` as the template |
 | designed | inference merge, advisories, node notes | Not on this board — `dev-docs/WARNINGS_AND_SETTINGS.md`, designed 2026-08-21 and deliberately unbuilt. The duplication it addresses does not exist yet: 123 active inferences across both real graphs yield 5,053 pairs and **zero** at the nomination bar. It becomes real once fact merges start collecting inferences onto one survivor |
 | deferred | 58 | A graph large enough that the FTS backfill inside `connect()` is worth reporting on. **16 left this row on 2026-08-23** — its trigger had already fired |
