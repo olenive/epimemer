@@ -333,9 +333,13 @@ useful:
   pick `one_claim`. Reach for it only where you would have merged: recording a
   decline as a similarity is how a graph starts manufacturing its own support.
   `because` is required, and anything refused comes back in
-  `similarities_refused` — a cross-frame pair wants `record_variant` instead,
-  and a pair already judged `one_claim` cannot be walked back here, so raise
-  that with the user.
+  `similarities_refused` — a cross-frame pair wants `record_variant` instead.
+
+  **To take back a `one_claim`, record `distinct` on the same pair.** The count
+  returns to what it would have been. You get one withdrawal: nothing
+  re-asserts `one_claim` afterwards, because a wrong withdrawal only withholds
+  support while a wrong re-assertion invents it. If they really are one claim,
+  `merge_facts` is the call.
 - **Source/tag/entity consolidation** is ordinary topic-merge — they're Topics, so
   pass `merges=[...]` for synonymous ones.
 - **Relation consolidation**: for `similar_relations` you judge synonymous, pass

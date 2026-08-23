@@ -75,6 +75,38 @@ describe("edgeColor", () => {
         .not.toBe(edgeColor("similarity", theme));
       expect(edgeColor("assessed", theme)).not.toBe(UNKNOWN_KIND);
     });
+
+    it(`draws a withdrawn similarity apart from a standing one (${theme})`, () => {
+      // #68 leaves both edges in the graph — nothing deletes — so both draw,
+      // and a withdrawal wearing the similarity hue would show agreement that
+      // has been taken back.
+      expect(edgeColor("retracted_similarity", theme))
+        .not.toBe(edgeColor("similarity", theme));
+      expect(edgeColor("retracted_similarity", theme)).not.toBe(UNKNOWN_KIND);
+    });
+
+    it(`draws every pair judgment in a hue of its own (${theme})`, () => {
+      // The family where colour carries the meaning: each of these says
+      // something different about the *same two nodes*, and the panel draws
+      // them on top of each other. Grey is a fine default for a structural
+      // edge — `sourced_from`, `tagged_with` and eleven others take it — but a
+      // judgment that falls through is the #55 failure: an assertion reaching
+      // the browser and drawing as an anonymous neutral nobody reads.
+      //
+      // `variant_of` had been doing exactly that since it was introduced, and
+      // was found only because #68 added a row beside it. Spelled out rather
+      // than imported for `UNKNOWN_KIND`'s reason: a shared constant moves with
+      // whichever side changed, and drift is what is being caught.
+      const PAIR_JUDGMENTS = [
+        "similarity", "contradiction", "assessed",
+        "retracted_similarity", "variant_of",
+      ];
+
+      const grey = PAIR_JUDGMENTS.filter(
+        (type) => edgeColor(type, theme) === UNKNOWN_KIND,
+      );
+      expect(grey).toEqual([]);
+    });
   }
 });
 

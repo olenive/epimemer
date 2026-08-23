@@ -1508,6 +1508,17 @@ sits in the refusal ordering, and the eight tests.
 >    **Filed as #68.** The opposite direction is additive and is allowed:
 >    `one_claim` after `distinct` adds the `similarity` beside the `assessed`
 >    that is already there.
+>
+>    > **Superseded 2026-08-23 by #68's fix.** `distinct` over a standing
+>    > `one_claim` is now a **retraction**, not a refusal: it writes a
+>    > `retracted_similarity` edge that disqualifies the standing one, which is
+>    > the mechanism `corroboration.py` already runs for `contradiction`. The
+>    > `similarity` edge is still not deleted, which is why this reads as a
+>    > second edge rather than an undo. **The refusal moved to the other
+>    > direction** — nothing re-asserts `one_claim` over a withdrawal — because
+>    > the two are not symmetric: withholding support costs a count, inventing
+>    > it inverts the quantity. Point 3's *"the opposite direction is additive"*
+>    > still holds for a pair that was never `one_claim`.
 > 4. **Similarities are applied *first* in `apply_reflection`**, before any
 >    argument that can retire a node. This is #65's anchoring rule applied to
 >    the order of one call: a judgment is about the wording it was made against,
@@ -2152,6 +2163,11 @@ earlier claim glib.
   keeps corroborating. The refusal is the honest shape, but it leaves an agent
   that has changed its mind with nowhere to go — which is `reverse_merge`'s
   problem one tier down, and it wants the same answer: a writer, not a delete.
+  **Built 2026-08-23**, and it took the writer: `distinct` over a standing
+  `one_claim` writes `retracted_similarity`, which `DISQUALIFYING_EDGE_TYPES`
+  reads. What the entry did not anticipate is that the read side already
+  existed — `contradiction` had been disqualifying a standing `similarity` on
+  the same reasoning since before this document.
 
 **Resolved here:**
 

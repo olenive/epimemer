@@ -243,6 +243,19 @@ class EdgeType(str, Enum):
     # serving both makes "these are different claims" corroborate — which is
     # manufactured support, the worst failure this system has (#64 §1.2).
     ASSESSED = "assessed"
+    # fact ↔ fact: an earlier `one_claim` verdict about this pair has been
+    # **withdrawn** (#68). Written only where one stands, because that is the
+    # only place it does anything: `similarity` is not deleted — nothing here
+    # deletes — so this is what stops it corroborating, exactly as
+    # `contradiction` already does for a pair judged the other way.
+    #
+    # A retraction is **terminal**, and the asymmetry is deliberate. Nothing
+    # re-asserts `one_claim` over one, because the two directions fail
+    # differently: a false unification manufactures agreement, which is the
+    # worst thing this system can produce (`fact_dedup.py`), while a withdrawn
+    # one under-counts. Under-counting is the direction #52 already chose when
+    # it left the pre-`claim_kind` corpus unmergeable.
+    RETRACTED_SIMILARITY = "retracted_similarity"
     VARIANT_OF = "variant_of"                          # fact ↔ fact, across frames
     BASED_ON = "based_on"                              # metacontext → metacontext (association)
 
@@ -308,6 +321,10 @@ REVIEW_EDGE_TYPES: frozenset[EdgeType] = frozenset(
         EdgeType.EVIDENCE_SUPERSEDED,
         EdgeType.EVIDENCE_MERGED,
         EdgeType.ASSESSED,
+        # Here rather than in `JUDGMENT_EDGE_TYPES` for `assessed`'s reason: it
+        # needs the same anchoring *and* exclusion from traversal, being a
+        # record about a judgment rather than a claim about the world.
+        EdgeType.RETRACTED_SIMILARITY,
     }
 )
 
@@ -1229,6 +1246,12 @@ class DecisionKind(str, Enum):
     CONTRADICTION = "contradiction"
     VARIANT = "variant"
     SIMILARITY = "similarity"
+    # A `similarity` verdict withdrawn (#68). Its own kind rather than
+    # `REVERSAL`, though both undo an earlier decision, because the two differ
+    # in what they did: a merge reversal **deletes** the survivor — the system's
+    # only hard delete — and a reviewer selecting `REVERSAL` to audit that would
+    # otherwise get rows where nothing was destroyed.
+    RETRACTION = "retraction"
 
     # Consolidation, and its undo.
     MERGE = "merge"

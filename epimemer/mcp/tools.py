@@ -2819,6 +2819,11 @@ async def apply_reflection(
         *"these are different claims"* as one would manufacture support. Both
         stop the pair being nominated again. ``because`` is required. Anything
         not recorded comes back in ``similarities_refused`` with a reason.
+        ``distinct`` over a pair you earlier called ``one_claim`` **withdraws**
+        that verdict: the pair stops corroborating, and the count comes back to
+        what it would have been. A withdrawal is final — nothing re-asserts
+        ``one_claim`` afterwards, because getting that wrong invents agreement
+        rather than losing it.
     parents: [{children_ids: [str], content: str}] — synthesized parent topics
     splits: [{topic_id: str, subtopics: [str]}] — split a broad topic
     enrichments: [{topic_id: str, new_content: str}] — improved descriptions
@@ -2894,6 +2899,7 @@ async def apply_reflection(
     #    skip or attach it to a replacement nobody assessed.
     similarities_recorded = 0
     similarity_edges_written = 0
+    similarities_retracted = 0
     similarities_refused: list[dict] = []
     for spec in (similarities or []):
         pair = spec["pair"]
@@ -2910,9 +2916,25 @@ async def apply_reflection(
         else:
             similarities_recorded += 1
             similarity_edges_written += outcome.edges_created
-            await journal(
-                storage, DecisionKind.SIMILARITY, [pair[0], pair[1]], judge=judge
-            )
+            if outcome.retracted:
+                similarities_retracted += 1
+                # A withdrawal cites what it withdrew, the way a merge reversal
+                # does: `reviews` says somebody checked that decision,
+                # `supersedes` says it no longer stands. Where the original
+                # predates the journal there is nothing to cite, and the row
+                # goes in unlinked rather than pointing at an invented target.
+                prior = await prior_decisions(
+                    storage, DecisionKind.SIMILARITY, [pair[0], pair[1]]
+                )
+                original = prior[-1].id if prior else None
+                await journal(
+                    storage, DecisionKind.RETRACTION, [pair[0], pair[1]],
+                    judge=judge, reviews=original, supersedes=original,
+                )
+            else:
+                await journal(
+                    storage, DecisionKind.SIMILARITY, [pair[0], pair[1]], judge=judge
+                )
 
     # 2. Create parent topics for similar groups
     for parent_spec in (parents or []):
@@ -3178,6 +3200,7 @@ async def apply_reflection(
     result = {
         "similarities_recorded": similarities_recorded,
         "similarity_edges_written": similarity_edges_written,
+        "similarities_retracted": similarities_retracted,
         "similarities_refused": similarities_refused,
         "parents_created": parents_created,
         "topics_split": topics_split,

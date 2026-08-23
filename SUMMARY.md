@@ -318,7 +318,10 @@ than wrong, but not the cross-restatement reading described here.
 `apply_reflection(similarities=[…])` now writes one, and only on an agent's
 explicit `one_claim` verdict. Its companion `assessed` edge, written for **both**
 verdicts, is deliberately not read here: it records that a pair was judged, which
-is not a claim that the judgment agreed. See
+is not a claim that the judgment agreed. A verdict can be **withdrawn** — record
+`distinct` on the pair and the count comes back down, via a
+`retracted_similarity` edge that disqualifies the standing one rather than
+deleting it. Once, and one way: nothing re-asserts a withdrawn verdict. See
 [docs/RETRIEVAL.md](docs/RETRIEVAL.md).
 
 ## Data Model (Minimal)

@@ -423,8 +423,13 @@ class TestTheCrossFrameCase:
 
 
 class TestReplayAndReversal:
-    """What a second call does. The first case is a retried batch; the second is
-    an agent changing its mind, which nothing here can yet perform."""
+    """What a second call does — a retried batch, and an agent changing its mind.
+
+    The second used to be refused: nothing could unmake a `one_claim`, and the
+    honest refusal was better than writing `assessed` beside a `similarity` edge
+    that went on corroborating a pair the agent had disowned. #68 gave it a
+    writer, and the direction it can travel is deliberately one-way.
+    """
 
     async def test_replaying_a_decision_writes_nothing_new(
         self, storage, embedding_provider
@@ -441,13 +446,12 @@ class TestReplayAndReversal:
         assert again.edges_created == 0
         assert await _count(storage, a) == 2      # not 3: one edge, not two
 
-    async def test_distinct_after_one_claim_is_refused_out_loud(
+    async def test_distinct_after_one_claim_withdraws_it(
         self, storage, embedding_provider
     ):
-        """Nothing in this system deletes, this call included. The standing
-        `similarity` edge keeps corroborating a pair the agent has just
-        disowned, and saying so beats writing `assessed` beside it and looking
-        like the judgment landed (#68)."""
+        """Nothing in this system deletes, this call included — so the
+        `similarity` edge stays and a second edge stops it counting (#68). The
+        same shape `contradiction` already has, one judgment along."""
         a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
         b = await _fact(
             storage, embedding_provider, "the deployment failed", publisher="Reuters"
@@ -456,9 +460,81 @@ class TestReplayAndReversal:
 
         outcome = await _decide(storage, a, b, "distinct", "on reflection, different")
 
-        assert isinstance(outcome, SimilarityRefused)
-        assert "already stands" in outcome.reason
+        assert isinstance(outcome, SimilarityRecorded)
+        assert outcome.retracted is True
+        assert await _edge_types_between(storage, a, b) == {
+            "similarity", "assessed", "retracted_similarity",
+        }
+
+    async def test_the_count_comes_back_to_where_it_started(
+        self, storage, embedding_provider
+    ):
+        """The number is the point. A verdict that could not be walked back left
+        a count nobody could explain and nothing could correct."""
+        a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
+        b = await _fact(
+            storage, embedding_provider, "the deployment failed", publisher="Reuters"
+        )
+        assert await _count(storage, a) == 1
+
+        await _decide(storage, a, b, "one_claim")
         assert await _count(storage, a) == 2
+
+        await _decide(storage, a, b, "distinct", "on reflection, different")
+
+        assert await _count(storage, a) == 1
+
+    async def test_a_withdrawal_leaves_the_pair_suppressed(
+        self, storage, embedding_provider
+    ):
+        """A retraction changes what corroboration counts and nothing else. The
+        agent has now judged this pair twice; re-offering it would restart the
+        treadmill #64 closed."""
+        a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
+        b = await _fact(
+            storage, embedding_provider, "the deployment failed", publisher="Reuters"
+        )
+        await _decide(storage, a, b, "one_claim")
+        await _decide(storage, a, b, "distinct", "on reflection, different")
+
+        assert "assessed" in await _edge_types_between(storage, a, b)
+
+    async def test_repeating_a_withdrawal_decides_nothing_new(
+        self, storage, embedding_provider
+    ):
+        """Otherwise a retried batch journals a second withdrawal, and the
+        record reads as two agents disowning the pair on separate occasions."""
+        a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
+        b = await _fact(
+            storage, embedding_provider, "the deployment failed", publisher="Reuters"
+        )
+        await _decide(storage, a, b, "one_claim")
+        await _decide(storage, a, b, "distinct", "on reflection, different")
+
+        again = await _decide(storage, a, b, "distinct", "still different")
+
+        assert isinstance(again, SimilarityRecorded)
+        assert again.edges_created == 0
+        assert again.retracted is False
+
+    async def test_a_withdrawal_is_final(self, storage, embedding_provider):
+        """The one-way street, and the asymmetry is the design. Withdrawing a
+        `one_claim` costs a count the graph will no longer make; re-asserting
+        one over a withdrawal **invents agreement**, which does not lose
+        information — it inverts the quantity corroboration measures."""
+        a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
+        b = await _fact(
+            storage, embedding_provider, "the deployment failed", publisher="Reuters"
+        )
+        await _decide(storage, a, b, "one_claim")
+        await _decide(storage, a, b, "distinct", "on reflection, different")
+
+        outcome = await _decide(storage, a, b, "one_claim", "no, the same after all")
+
+        assert isinstance(outcome, SimilarityRefused)
+        assert "was withdrawn" in outcome.reason
+        assert "merge_facts" in outcome.reason
+        assert await _count(storage, a) == 1
 
     async def test_one_claim_after_distinct_upgrades_the_pair(
         self, storage, embedding_provider

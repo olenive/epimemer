@@ -248,6 +248,7 @@ what is written:
 |---|---|---|
 | `one_claim` | the two really do say the same thing and something blocked the merge — an event, or an unjudged `claim_kind` | `similarity` **and** `assessed` |
 | `distinct` | they are different claims that merely look alike | `assessed` only |
+| `distinct`, over a pair you earlier called `one_claim` | you got it wrong and want the count back | `retracted_similarity` + `assessed` |
 
 **Both stop the pair being nominated; only `one_claim` corroborates.** That split
 is the whole design. A decline is two populations, and one edge cannot serve
@@ -259,10 +260,25 @@ worst, since a false unification does not lose information, it inverts the
 quantity corroboration measures. So reach for `one_claim` only where you would
 have merged.
 
+**A `one_claim` can be withdrawn, once.** Recording `distinct` over a pair you
+earlier called one claim retracts that verdict: the pair stops corroborating and
+the count returns to what it would have been. The `similarity` edge is not
+removed — nothing in this system deletes — so the withdrawal is a second edge
+that disqualifies the first, which is how a `contradiction` between two facts
+has always stopped them counting as support for each other.
+
+**The withdrawal is final**, and the asymmetry is deliberate: nothing re-asserts
+`one_claim` afterwards. Withdrawing costs a count the graph will no longer make;
+re-asserting invents agreement, and invented agreement does not lose information
+— it inverts the quantity corroboration measures. If the pair really is one
+claim, `merge_facts` is the call that says so.
+
+Suppression is untouched either way. The pair has now been judged twice and
+stays out of every future nomination.
+
 `because` is required. Anything not recorded comes back in
 `similarities_refused` with a reason rather than being applied to something
-adjacent — a cross-frame pair wants `record_variant`, and a pair already judged
-`one_claim` cannot be walked back here, because nothing in this system deletes.
+adjacent — a cross-frame pair wants `record_variant`.
 
 Similarities are applied **first** in the call, before any argument that can
 retire a node. A judgment is about the wording it was made against, so a

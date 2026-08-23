@@ -69,6 +69,16 @@ const EDGE_MEANINGS: Record<string, keyof SemanticPalette> = {
   // and a type this table has never heard of draws as `UNKNOWN_KIND` grey —
   // which is the #55 failure, one layer over.
   assessed: "assessed",
+  // An earlier `one_claim` verdict withdrawn (#68). The `similarity` edge stays
+  // in the graph — nothing deletes — so both draw, and they must not draw
+  // alike: `similarity` in its own hue would show agreement that has been
+  // taken back. It takes `contradiction`'s, which is the other edge that stops
+  // a similarity partner counting, for the same reason and by the same route.
+  retracted_similarity: "contradiction",
+  // Cross-frame variants. Found missing while adding the row above — it has
+  // been drawing as `UNKNOWN_KIND` grey since it was introduced, which is
+  // exactly the failure the two comments above warn about, live.
+  variant_of: "similarity",
 };
 
 /** Fallback for a kind this build has never heard of: a plain neutral. */

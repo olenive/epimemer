@@ -479,6 +479,58 @@ class TestReflectionAppliesManyDecisionsAndJournalsEachOne:
         record = await _only(storage, DecisionKind.SIMILARITY)
         assert set(record.subject_ids) == {a.id, b.id}
 
+    async def test_a_withdrawn_similarity_journals_a_retraction(
+        self, storage, embedder
+    ):
+        """Its own kind, not `REVERSAL`: a merge reversal deletes the survivor,
+        and a reviewer selecting `REVERSAL` to audit that must not get rows
+        where nothing was destroyed (#68)."""
+        a = await _fact(storage, embedder, "the treaty was signed in Vienna")
+        b = await _fact(storage, embedder, "the treaty was signed at Vienna")
+        await tools.apply_reflection(
+            storage, embedder,
+            similarities=[{
+                "pair": [a.id, b.id], "verdict": "one_claim", "because": "one claim",
+            }],
+            judge=CRITIC,
+        )
+        original = await _only(storage, DecisionKind.SIMILARITY)
+
+        result, _ = await tools.apply_reflection(
+            storage, embedder,
+            similarities=[{
+                "pair": [a.id, b.id], "verdict": "distinct",
+                "because": "on reflection, different treaties",
+            }],
+            judge=CRITIC,
+        )
+
+        assert result["similarities_retracted"] == 1
+        record = await _only(storage, DecisionKind.RETRACTION)
+        assert set(record.subject_ids) == {a.id, b.id}
+        assert record.reviews == original.id, "a withdrawal checked what it undid"
+        assert record.supersedes == original.id, "and says it no longer stands"
+
+    async def test_a_repeated_withdrawal_journals_one_retraction(
+        self, storage, embedder
+    ):
+        """A retried batch must not read as two agents disowning the pair on
+        two occasions."""
+        a = await _fact(storage, embedder, "the treaty was signed in Vienna")
+        b = await _fact(storage, embedder, "the treaty was signed at Vienna")
+        for verdict in ("one_claim", "distinct", "distinct"):
+            await tools.apply_reflection(
+                storage, embedder,
+                similarities=[{
+                    "pair": [a.id, b.id], "verdict": verdict, "because": "judged",
+                }],
+                judge=CRITIC,
+            )
+
+        assert len(await storage.query_decisions(
+            kinds=[DecisionKind.RETRACTION]
+        )) == 1
+
     async def test_a_refused_similarity_journals_nothing(self, storage, embedder):
         a = await _fact(storage, embedder, "the treaty was signed in Vienna")
         b = await _fact(storage, embedder, "the treaty was signed at Vienna")

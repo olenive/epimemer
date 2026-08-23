@@ -26,6 +26,28 @@ So the verdict picks the edges:
 |--------------|--------------------------------------|---------------------------|
 | `one_claim`  | genuinely one claim, unmergeable     | `similarity` + `assessed` |
 | `distinct`   | different claims that look alike     | `assessed` only           |
+| `distinct`, over a standing `one_claim` | **withdrawn**   | `retracted_similarity` + `assessed` |
+
+**The third row is a retraction, and it is the only conditional write here**
+(#68). `distinct` on a pair that already carries a `similarity` edge used to be
+*refused*, because nothing could unmake a `one_claim` and writing `assessed`
+beside a standing `similarity` would have reported success while the pair went
+on corroborating. The edge is still not deleted — nothing here deletes — so the
+retraction is a second edge that disqualifies the first, which is the mechanism
+`corroboration.py` already runs for `contradiction` and for exactly this reason:
+*"the `similarity` edge written before the verdict stays in the graph"*.
+
+**A retraction is terminal**, and the asymmetry is the design rather than an
+omission. Nothing re-asserts `one_claim` over one, because the two directions
+fail differently: a false unification manufactures agreement — the worst failure
+this system has — while a withdrawn one under-counts. Under-counting is the
+direction #52 chose when it left the pre-`claim_kind` corpus unmergeable, and it
+is the direction to keep choosing.
+
+**Suppression is unaffected**, which is what keeps the retraction narrow. The
+`assessed` edge stays and the pair stays out of every future nomination: the
+agent has now judged it twice, and re-offering it would restart the treadmill
+#64 closed. A retraction changes what corroboration counts, and nothing else.
 
 `assessed` is a denormalised suppression index, and it is legitimate as one
 because it is immutable and append-only: it cannot drift from the decision
@@ -81,12 +103,20 @@ class SimilarityRecorded(BaseModel):
     `edges_created` counts only edges that did not already exist, so a batch
     replayed after a timeout reports zero rather than claiming to have written
     what was already there.
+
+    `retracted` says **this call** withdrew a standing `one_claim` rather than
+    judging a fresh pair (#68). The caller needs it because the two are
+    different decisions to journal — a verdict and the withdrawal of one — and
+    they are indistinguishable from the verdict string alone. A `distinct`
+    repeated over a pair already withdrawn reports `False`: it decided nothing
+    new, and a second retraction row would read as a second withdrawal.
     """
 
     pair: list[str]
     verdict: str
     edge_ids: dict[str, str]
     edges_created: int
+    retracted: bool = False
 
 
 async def symmetric_edge_between(
@@ -176,6 +206,9 @@ async def apply_similarity_decision(
     standing_similarity = await symmetric_edge_between(
         a_id, b_id, EdgeType.SIMILARITY, storage
     )
+    standing_retraction = await symmetric_edge_between(
+        a_id, b_id, EdgeType.RETRACTED_SIMILARITY, storage
+    )
 
     if verdict == "one_claim" and not await same_frame(a_id, b_id, storage):
         # A `similarity` edge across frames is a fiction corroborating a fact.
@@ -193,25 +226,35 @@ async def apply_similarity_decision(
             ),
         )
 
-    if verdict == "distinct" and standing_similarity is not None:
-        # Nothing in this system deletes, and this call is no exception. Saying
-        # so out loud beats writing `assessed` beside a `similarity` edge that
-        # keeps corroborating a pair the agent has just disowned — the pair is
-        # suppressed by that edge either way, so the refusal costs no
-        # suppression and surfaces a retraction nothing can yet perform (#68).
+    if verdict == "one_claim" and standing_retraction is not None:
+        # A retraction is terminal, and this is where that is enforced. The two
+        # directions are not symmetric: withdrawing a `one_claim` costs a count
+        # the graph will no longer make, while re-asserting one over a
+        # withdrawal manufactures agreement — and manufactured agreement does
+        # not lose information, it inverts the quantity corroboration measures.
         return SimilarityRefused(
             pair=pair,
             reason=(
-                f"a similarity edge already stands between these "
-                f"({standing_similarity.id}), from an earlier 'one_claim' "
-                f"verdict, and nothing here retracts one. It keeps corroborating "
-                f"the pair. Raise this with the user rather than working around it."
+                f"an earlier 'one_claim' verdict about this pair was withdrawn "
+                f"({standing_retraction.id}), and nothing re-asserts one. If "
+                f"these really are one claim, merge_facts is the call that says "
+                f"so; otherwise raise it with the user rather than working "
+                f"around it."
             ),
         )
 
+    # `distinct` over a standing `one_claim` **retracts** it (#68). The
+    # `similarity` edge stays — nothing here deletes — and the retraction edge
+    # is what stops corroboration counting it, the same way `contradiction`
+    # already does for a pair judged the other way round.
+    retracting = verdict == "distinct" and standing_similarity is not None
+    edge_types = VERDICT_EDGES[verdict]
+    if retracting:
+        edge_types = (EdgeType.RETRACTED_SIMILARITY, *edge_types)
+
     edge_ids: dict[str, str] = {}
     edges_created = 0
-    for edge_type in VERDICT_EDGES[verdict]:
+    for edge_type in edge_types:
         existing = (
             standing_similarity
             if edge_type is EdgeType.SIMILARITY
@@ -219,6 +262,10 @@ async def apply_similarity_decision(
         )
         if existing is not None:
             edge_ids[edge_type.value] = existing.id
+            if edge_type is EdgeType.RETRACTED_SIMILARITY:
+                # Already withdrawn. This call decided nothing new, so it must
+                # not report a retraction the caller would journal a second time.
+                retracting = False
             continue
         # The verdict rides on the `assessed` edge as well as being implied by
         # which edges exist: a reader holding one edge should not have to look
@@ -235,5 +282,6 @@ async def apply_similarity_decision(
         edges_created += 1
 
     return SimilarityRecorded(
-        pair=pair, verdict=verdict, edge_ids=edge_ids, edges_created=edges_created
+        pair=pair, verdict=verdict, edge_ids=edge_ids, edges_created=edges_created,
+        retracted=retracting,
     )

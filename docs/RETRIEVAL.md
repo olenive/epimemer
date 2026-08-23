@@ -304,6 +304,13 @@ read here: it records that somebody judged a pair, which is not a claim that
 they agreed — see [REFLECTION.md](REFLECTION.md) §6. So the number rises as
 judgments accumulate, and only ever on pairs somebody said were one claim.
 
+**And it can come back down.** An agent that withdraws a `one_claim` verdict
+leaves the `similarity` edge in place — nothing here deletes — and a
+`retracted_similarity` edge beside it stops the pair counting, exactly as a
+`contradiction` or a `variant_of` between two facts already does. A withdrawal
+is final: nothing re-asserts the verdict afterwards, because getting *that*
+wrong manufactures support rather than merely withholding it.
+
 ### Frame scoping
 
 Passing `metacontext_id` scopes results to that frame plus untagged base-reality

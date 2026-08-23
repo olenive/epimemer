@@ -96,9 +96,20 @@ PUBLISHED_BY_LABEL = "published_by"
 #
 # `variant_of` because a cross-frame variant is **that frame's** resolution of
 # the proposition, not support for this one.
+#
+# `retracted_similarity` for the first reason exactly, one judgment later: an
+# agent that withdraws a `one_claim` verdict leaves the `similarity` edge in
+# place, because nothing in this system deletes, so without this the pair goes
+# on corroborating after it has been disowned (#68). Reading it here is the
+# whole of the retraction — the suppression the pair already had is untouched.
+#
+# Each member costs a round trip pair (out-edges and in-edges) on a path #51
+# measured as the most expensive annotation in retrieval, which is why this list
+# grows by argument rather than by convenience.
 DISQUALIFYING_EDGE_TYPES: tuple[EdgeType, ...] = (
     EdgeType.CONTRADICTION,
     EdgeType.VARIANT_OF,
+    EdgeType.RETRACTED_SIMILARITY,
 )
 
 # A neighbour retired as *wrong* is not evidence for anything: `corrected` means

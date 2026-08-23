@@ -3164,7 +3164,57 @@ metadata would hide a load-bearing decision in a utility.
 
 ---
 
-### Issue 68 — nothing retracts a `one_claim` verdict — 🟠 OPEN (found 2026-08-22)
+### Issue 68 — nothing retracts a `one_claim` verdict — ✅ FIXED (2026-08-23)
+
+> **Fixed 2026-08-23.** `distinct` over a pair that already carries a
+> `similarity` edge is now a **withdrawal** instead of a refusal: it writes a
+> `retracted_similarity` edge, and `DISQUALIFYING_EDGE_TYPES` in
+> `corroboration.py` reads it. The count comes back to what it would have been.
+>
+> **The entry weighed two shapes and the answer was a third, already in the
+> codebase.** It proposed a `retracted` marker on the edge (rejected: mutable
+> state denormalised, which §3.4 forbids) or a third verdict with a lineage edge
+> onto the `similarity` (rejected here: more machinery than the problem earns).
+> What it missed is that **the read side already existed**. `contradiction` has
+> disqualified a standing `similarity` since before this design, on a comment
+> that describes exactly this situation — *"the `similarity` edge written before
+> the verdict stays in the graph"*. So the retraction is one more member of a
+> list, and the fix is a new edge type with one writer, one reader, and no new
+> mechanism. Carry-forward: **before designing a mechanism for "undo without
+> delete", check whether the read that would honour it is already there** — this
+> system disqualifies in several places and deletes in one.
+>
+> **The refusal did not disappear; it changed direction.** Nothing re-asserts
+> `one_claim` over a withdrawal, and the asymmetry is the design rather than the
+> same defect pointed the other way. The two failures are not comparable:
+> withdrawing wrongly **withholds** a count, while re-asserting wrongly
+> **invents** agreement — and invented agreement does not lose information, it
+> inverts the quantity corroboration measures. Under-counting is the direction
+> #52 already chose when it left the pre-`claim_kind` corpus unmergeable. Where
+> a pair really is one claim, `merge_facts` is the call that says so, and the
+> refusal names it.
+>
+> **Suppression is untouched**, which is what keeps this narrow. The `assessed`
+> edge stays and the pair stays out of every nomination: it has now been judged
+> twice, and re-offering it would restart the treadmill #64 closed. A retraction
+> changes what corroboration counts and nothing else.
+>
+> The journal gets **`DecisionKind.RETRACTION`**, its own kind rather than
+> `REVERSAL`. Both undo an earlier decision, but a merge reversal **deletes** the
+> survivor — the system's only hard delete — and a reviewer selecting `REVERSAL`
+> to audit that must not get rows where nothing was destroyed. The row `reviews`
+> **and** `supersedes` the original `SIMILARITY` row, the shape §4 gives a
+> reversal. A repeated `distinct` writes nothing and journals nothing: a retried
+> batch must not read as two agents disowning the pair on separate occasions.
+>
+> **Found while adding the frontend row: `variant_of` has been drawing as
+> unknown-kind grey since it was introduced** — #55's failure, live, and caught
+> only because #68 put a row beside it. Fixed, and the new guard is scoped to
+> the family where it matters rather than to every edge type: grey is the right
+> default for `sourced_from` and eleven other structural edges, and wrong for a
+> judgment about a pair, since those all draw on top of each other and mean
+> different things.
+
 
 Found on building #64's step 1, and it is #64's own shape arriving one tier
 down: *a judgment the system lets you make and never lets you unmake.* #66
@@ -3625,6 +3675,7 @@ What to pick up, and what has to be true first:
 | ✅ | ~~70 (timestamps compared as strings)~~ | **Fixed 2026-08-23**, same day, and the fix is one function: `instant()` wraps both sides in `type::datetime`, so the comparison is about instants rather than spelling. No migration — correct for rows already written. **The measurement overturned the entry's own cost argument**: it claimed the fix cost an index, and there is no index on `created_at`, `superseded_at` or the lifecycle timestamps — both forms already plan as `Iterate Table`, so the conversion costs ~2.3 µs/row and nothing else. Where a timestamp *is* indexed it inverts, hard: the journal's `decided_at` range went 6.2 ms → 281 ms at 50,000 rows, 45×, so that one keeps a plain comparison and pays on the write side. Reader converts without an index, writer pads with one; both halves documented in `DEVELOPER_GUIDE.md` and the rule is in `AGENTS.md`. Two carry-forwards: **a correctness defect does not wait for a performance visit** (the entry had gated it on one), and **`datetime.now()` never lands on a whole second**, so a parity suite that builds its own timestamps guarantees parity over the safe values it happens to pick |
 | ✅ | ~~72 (a misdirected write journals in the graph it went to)~~ | **Decided 2026-08-23**, before step 6 as the entry asked, and with **no code**: the journal stays per graph, `review()` takes no `graphs=`, and every response names the graph it answered from. **The ids decide where a row lives** — `subject_ids` resolves only in the graph holding those nodes, so a central journal would carry ids that dereference nowhere. The forensic complaint was overtaken: the misplaced material and the row recording it sit **together**, and `expected_graph` closes the hole that made *which graph* the unknown. **The fan-out turned out to be the unsafe option** — `review(graphs=[…])` has to borrow the active database and give it back, while `list_graphs` → `use_graph` → `review()` switches for real; *a convenience less safe than the sequence it replaces is not a convenience*. Left behind: **73**, the locator that would say where else to look, blocked on **16** — which settling this reopened |
 | ✅ | ~~16 (the active graph moves under a call in flight)~~ | **Fixed 2026-08-23**, the day #72 reopened it, a month after it was deferred as latent. One guard per backend with two sides — a tool call takes `using()`, a `switch_database` or a `viz_list_*` borrow takes `moving()` — at the **logical-operation** boundary, since a move only has to land between two of the several storage calls one tool makes. **The title was the finding**: filed as a SurrealDB connection problem with a second-connection fix, it is shared mutable state read per call, and `InMemoryStorage` has the same defect through `use_graph` with no connection in sight — the proposed fix would have closed one backend's half. Reproduced against a **served** SurrealDB: with the guard off, a write issued during a snapshot borrow lands in the graph being snapshotted, silently, which is the wrong-graph incident with no agent involved. Two carry-forwards about the month: **a deferral's trigger has to be checkable rather than an event you expect to be told about** (the premise went false without the event), and **a concurrency test whose subject cannot occur reports green for the wrong reason** — in-memory storage and a hash embedder never suspend, so the first end-to-end test passed with the guard removed. Unblocks **73** |
-| **next** | `REVIEW_MODE.md` step 6, or 68 (no retraction) | Step 6 is `review(mode="all")` with tier-2 ordering, which works on the whole existing corpus precisely because derived difficulty needs no attribution, and #72 settled its signature. 68 is small and bounded — every `similarity` edge was written deliberately, so the population that could need retracting is tiny — and it is the third instance of #64's shape after #66's two. Neither blocks the other; **73** is now buildable alongside either |
+| ✅ | ~~68 (nothing retracts a `one_claim` verdict)~~ | **Fixed 2026-08-23.** `distinct` over a standing `one_claim` now **withdraws** it, writing a `retracted_similarity` edge that `DISQUALIFYING_EDGE_TYPES` reads — so the corroboration count comes back down. **The entry weighed two shapes and the answer was a third already in the codebase**: `contradiction` has disqualified a standing `similarity` since before this design, on a comment describing this exact situation, so the retraction is one more member of a list rather than new machinery. The refusal moved rather than vanished — nothing re-asserts a withdrawn verdict, because withdrawing wrongly *withholds* a count while re-asserting wrongly *invents* agreement, and #52 already chose that direction. Suppression untouched; `DecisionKind.RETRACTION` in the journal, its own kind because `REVERSAL` deletes a node and this destroys nothing. Adding the frontend row found **`variant_of` drawing as unknown-kind grey** since it was introduced — #55 live, fixed, with a guard scoped to pair judgments |
+| **next** | `REVIEW_MODE.md` step 6 | `review(mode="all")` with tier-2 ordering, which works on the whole existing corpus precisely because derived difficulty needs no attribution, and #72 settled its signature. **73** (the cross-graph decision locator) is buildable alongside it now that #16 is fixed, and a field on `review()`'s response is where it would go |
 | designed | inference merge, advisories, node notes | Not on this board — `dev-docs/WARNINGS_AND_SETTINGS.md`, designed 2026-08-21 and deliberately unbuilt. The duplication it addresses does not exist yet: 123 active inferences across both real graphs yield 5,053 pairs and **zero** at the nomination bar. It becomes real once fact merges start collecting inferences onto one survivor |
 | deferred | 58 | A graph large enough that the FTS backfill inside `connect()` is worth reporting on. **16 left this row on 2026-08-23** — its trigger had already fired |
