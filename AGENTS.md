@@ -10,6 +10,30 @@ When using Marimo notebooks remember to not re-define variables in different cel
 
 Our goal is to build a robust and secure system, not simply a prototype. We don't want to trade speed for technical debt.
 
+Never design a singleton. No module-level mutable global, no `get_settings()`
+accessor, no import-time construction — pass configuration as an explicit value,
+the way `ServerConfig` travels through `deps["config"]`. Tests parameterise over
+two storage backends and many graphs in one process, so a process-wide mutable
+instance makes any test that writes a setting order-dependent with any test that
+reads one; and settings here are per graph, so one instance cannot answer *what
+is the policy here* after a `use_graph`. Where a setting needs a per-graph
+override, copy the `reflect_threshold` pattern: a process default on
+`ServerConfig`, a persisted override on the backend, and a pure
+`resolve_*(override, default)` as the only place the fallback lives. **First ask
+whether it needs a setting at all** — `ISSUES.md` #71 is the counter-case, where
+a guard must not be configured by the state it is guarding against.
+
+Every backend implements the **full** `StorageBackend` protocol, and callers
+invoke it unconditionally. No `hasattr` checks, no `__getattr__` proxies, and no
+capability flags either — `supports_multi_graph` was removed for the same reason
+the duck-typing was. Where an operation does not apply, ship a no-op:
+`connect`/`close` are no-ops on `InMemoryStorage` and are called unconditionally,
+which is what let the `hasattr(storage, "connect")` check go. Reserve
+`NotImplementedError` for what a backend genuinely cannot do; prefer a no-op
+where *nothing to do* is a valid answer. `InstrumentedStorage` is the sharp
+edge: its guard test compares **signatures**, not method names, because
+presence-only checking let a renamed protocol keyword drift through undetected.
+
 Never compare two timestamps naively in a backend query. They are stored as ISO-8601 text, and `>=` on text is only chronologically correct while both sides render identically — which nothing guarantees. Use `instant()` in `surrealdb_adapter.py`, or make the writer pad where an index rules that out. `dev-docs/DEVELOPER_GUIDE.md` has the rule and the measurements behind it.
 
 # Git Usage
