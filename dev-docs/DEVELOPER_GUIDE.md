@@ -387,6 +387,32 @@ await store._query("SELECT * FROM fact WHERE created_at <= $at EXPLAIN", {"at": 
 ```
 
 
+## The CLI is not a remedy an agent can reach
+
+`epimemer/cli.py` **refuses every embedded backend** — `mem://`, `file://`,
+`surrealkv://` and the in-memory store all live inside the server process, so a
+second connection is a separate store rather than a second view of one
+(`is_embedded_url`, `_embedded_advice`). That refusal is right, and it has a
+consequence worth stating before the next design leans on it.
+
+**Two audiences cannot use the CLI, and they overlap with everyone.** An agent
+cannot run it at all — it is the user's command — and nobody can run it against
+the default development configuration, which is embedded. So *"the user runs
+`epimemer <thing>`"* is not a fallback: it is a fallback for one deployment
+shape, unavailable to the caller who hit the problem.
+
+The rule: **a remedy the agent cannot issue, on a backend where the command
+refuses, is not a remedy.** Where a design needs data to exist before something
+works, create it on the write paths that already run — not in a CLI command the
+blocked caller is being told to ask for. `dev-docs/RELATION_LABELS.md` §2.3 is
+the worked example: its first draft refused a verdict on a label with no record
+and pointed at `epimemer relations backfill`, which left the defect that stage
+exists to fix unfixable on exactly the backend most people develop against.
+
+Settings are the exception and the reason the trap is easy to fall into: they
+have environment variables read at connect, so the CLI is one of three channels
+rather than the only one. **Data operations have no equivalent escape hatch.**
+
 ## The active graph holds still
 
 **The active graph is process state, and one logical operation needs it not to

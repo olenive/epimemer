@@ -396,5 +396,6 @@ deferred fixes are separate, in [dev-docs/ISSUES.md](dev-docs/ISSUES.md).
 - [dev-docs/REVIEW_EPISTEMIC.md](dev-docs/REVIEW_EPISTEMIC.md) — The review loop's design, including the validity model (§13)
 - [dev-docs/REVIEW_MODE.md](dev-docs/REVIEW_MODE.md) — Who judged this and can someone else check it: the agent registry, the decision journal, and the review modes over it (built, steps 0a–7)
 - [dev-docs/LEXICAL_SEARCH.md](dev-docs/LEXICAL_SEARCH.md), [dev-docs/RETRIEVAL_PROVENANCE.md](dev-docs/RETRIEVAL_PROVENANCE.md), [dev-docs/EVENT_LOG.md](dev-docs/EVENT_LOG.md) — Feature designs
+- [dev-docs/RELATION_LABELS.md](dev-docs/RELATION_LABELS.md) — Giving a relationship label a record, a description and a decline it can remember (designed, not built)
 - [dev-docs/WARNINGS_AND_SETTINGS.md](dev-docs/WARNINGS_AND_SETTINGS.md) — Advisories, per-graph warning policy, node notes, inference merge (designed, not built)
 - [dev-docs/VISUALISATION.md](dev-docs/VISUALISATION.md), [dev-docs/TIMELINE_VISUALISATION.md](dev-docs/TIMELINE_VISUALISATION.md) — Dashboard design

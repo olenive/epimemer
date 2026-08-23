@@ -3272,7 +3272,19 @@ supposed to be the *safe* alternative to merging.
 
 ---
 
-### Issue 69 — merging relation labels leaves no record of who did it — 🟡 OPEN (found 2026-08-23)
+### Issue 69 — merging relation labels leaves no record of who did it — 🟡 OPEN (found 2026-08-23), superseded by #74
+
+> **Superseded 2026-08-24 by #74, which dissolves the question rather than
+> answering it.** All four shapes below assume the merge happens and argue about
+> where its record goes. Three things measured on 2026-08-24 undercut the
+> premise: relation merges fire approximately never (one label in the largest
+> real graph), labels do not affect retrieval at all (`traversal_excluded` reads
+> `type` and `kind`, never `label`), and the feature is a port of tag
+> consolidation whose premise did not survive — a tag *was* a retrieval handle
+> and a label is not. Give the label a record and deprecation replaces merging:
+> nothing is rewritten, and the subject finally has an id. Do not build any of
+> the four options below without settling #74 first.
+
 
 The last decision in `apply_reflection` with neither an inline judge nor a
 journal row. Its twin, accepting a boundary proposal, was closed by step 5;
@@ -3677,6 +3689,227 @@ Not urgent. Review works, and says what it covers.
 
 ---
 
+### Issue 74 — a relation label is a string with no record, so nothing can describe it and nothing can decide about it — 🟡 OPEN (raised 2026-08-24), supersedes #69
+
+> **Designed 2026-08-24 in `dev-docs/RELATION_LABELS.md`**, at the user's
+> direction and before any code. Four stages: the record and a backfill;
+> descriptions; FC1's verdict and suppression, which is where #69 resolves; and
+> deprecation, left undecided because this entry has not settled whether
+> relation merging should survive at all. Stage 2 precedes stage 3 for FC3's
+> reason — the description is what lets an agent tell a synonym from a
+> distinction. That document has the types, protocol methods, call sites and
+> tests; this entry is the argument for why.
+>
+> **The standalone FC1 fix was considered and rejected**, and the reasoning is
+> worth keeping here: keying suppression on the label strings looked like the
+> small option, and it fails safe (a stale string suppresses nothing, which is
+> today's behaviour). But declining is a **decision**, every decision leaves a
+> journal row, and `subject_ids` holds node ids — so it would have forced the
+> `subject_labels` field this entry argues against, as a side effect. *The
+> cheap fix that answers an open question by accident is not the cheap fix.*
+
+
+**A user-tier relationship label exists nowhere.** `list_relations` *derives* the
+vocabulary by scanning the edges of active nodes and grouping by `(label, kind)`.
+There is no row, no id, no description — the label is a string repeated on every
+edge that carries it. Three consequences, and they are the three open questions
+about relations:
+
+- **Nothing to describe.** An agent choosing a label sees a list of words with
+  counts, and no way to learn what this graph means by each.
+- **Nothing to name in a decision.** #69 asked where a label merge's
+  `subject_ids` go, and the answer was *nowhere clean*, because the subject has
+  no id.
+- **Nothing to change but the edges.** "Renaming" a label means rewriting every
+  edge carrying it, in place, irreversibly.
+
+#### What was measured first, because the answer changes the question
+
+**It fires approximately never.** `memory`, the largest real graph, holds
+**one** user-tier relationship label — `published_by`, on 4 edges. A merge
+nomination needs two labels of the same `kind` at ≥0.9 cosine. Zero are
+possible. Not a load-bearing feature by usage.
+
+**Labels do not affect retrieval.** `traversal_excluded` (`core/types.py`) is the
+single function deciding whether a search expands through an edge, and it reads
+`edge.type` and `edge.kind` — **never** `edge.label`. Outside `list_relations`
+(counting), `link` (writing), and the engine-tier `published_by` constant in
+`corroboration.py`, no query pipeline reads a user-tier label at all. So merging
+two labels changes a string that gets printed and nothing about which nodes come
+back. **That is a different class of operation from a fact merge**, which
+destroys a node and moves corroboration counts — and the two have been sharing
+machinery and vocabulary as though they were the same thing.
+
+**It is a port, not a design.** `relation_consolidation.py` arrived in `4d3526b`
+(2026-07-23), the same commit that **deleted** `tag_consolidation.py`, with the
+same cosine function and the same 0.9 threshold. The tag premise did not survive
+the port: a tag *was* the retrieval handle, so `billing` and `billings` really
+were two buckets and a search for one missed the other. A relation label is not
+a handle for anything.
+
+**And it has no frame check.** `merge_facts` refuses cross-frame pairs;
+label consolidation groups by `kind` alone, so two fictional universes in one
+graph pool their vocabularies and are judged on string similarity. The worked
+example, from the user: a servant *works for* a master where the culture has no
+employment relation at all, while elsewhere in the same universe a corporation
+formally *employs* an on-call consultant who does very little work. Near-identical
+strings, opposite meanings, and the nominator sees only the strings.
+
+#### The proposal: give a label a record
+
+A small stored entity, **not** a node — `Metacontext` is the precedent and the
+shape: a name, a `description` ("longer explanation"), a status. Per graph,
+because the same words mean different things in different graphs, which is the
+whole content of the example above.
+
+**Deprecation then replaces merging, and rewrites nothing.** Because labels do
+not affect retrieval, marking `employed_by` as an alias of `works_for` needs no
+edge to change: existing edges keep their own wording, and `list_relations`
+shows the canonical set with aliases folded underneath. A lossy irreversible
+bulk rewrite becomes a reversible annotation — and **#69 evaporates rather than
+being answered**, because a decision about a label finally has an id to put in
+`subject_ids`.
+
+**The description is the half that pays.** It moves the intervention from repair
+to prevention: an agent picking a label from a glossary never coins the fourth
+synonym. `link` already calls `get_relation_kind` to reuse an existing label's
+kind — the same lookup can hand back the label and what it means.
+
+**Advisory prose, not a schema, and that is what keeps it out of hypergraph
+territory.** One description per label per graph. It will not partition the
+servant case from the consultant case, and it does not need to: it is prose an
+agent reads, free to say *"in the Court context this means X; for corporate
+contracts use Y."* Making it enforceable would make it a schema, and describing
+individual **edges** rather than the shared label is the step that would make
+this a hypergraph. Neither is proposed.
+
+#### Explicitly not covered: relabelling one edge
+
+Raised while settling this, and it is a **different operation** — filed here so
+it is not mistaken for part of the above.
+
+*"New information arrives and this particular relationship turns out to be formal
+employment after all"* is a **correction to one claim**, not vocabulary
+bookkeeping. There is no path for it today: `link` only creates, `relabel_edges`
+is bulk-only, and `store_edge`/`delete_edge` exist on the protocol with no MCP
+tool reaching them. An agent that learns this can only add a second edge and
+leave the first standing, so the graph asserts both.
+
+It also inherits a question nodes already answered. `NodeEdge.judged_by` records
+**who asserted this edge**; changing the label in place silently reassigns that
+assertion to a claim the original judge never made — which is exactly what the
+design refuses to do for nodes, where a correction supersedes rather than
+overwrites. Edges are not versioned, so there is nowhere for the superseded
+assertion to go. Two honest shapes: retire the old edge and assert a new one
+(needs an edge-retirement concept edges do not have), or change in place and
+capture the prior label in `NodeEdge.metadata` — which is capture-or-lose, and
+worthless unless written at the moment of the change (§7.1's rule again).
+
+**Per-edge rename history is not proposed here.** If a label gains a record, its
+history belongs on that record: one entry per rename rather than one per edge,
+and it survives a rename that touched zero edges, which a per-edge log cannot.
+The edge-level log is only worth building once something actually asks *what did
+this edge originally say*.
+
+#### Reversal parity, and where it stops
+
+Raised by the user: *if a node merge can be reversed, a relabel should be too,
+with the same caveats.* Agreed on the principle, and the principle is not about
+nodes — **any operation collapsing many into one destroys the partition, and the
+partition exists only at the moment of the operation.** That is §7.1's *capture
+or lose*, stated about merges and true of collapse in general. So **whichever
+collapses survive this issue must capture at the time they run**, not when
+somebody wants the undo.
+
+The qualification that decides the design: **for nodes, capture was the only
+option; for labels, it is not.** A node merge must destroy — two nodes becoming
+one is the point of it — and §7.1 chose capture because there was no
+alternative. A label merge destroys for no gain, since deprecation delivers the
+same tidier vocabulary while rewriting nothing. **Undo you never need beats undo
+that works.**
+
+`reverse_merge`'s three caveats transfer unevenly, which is worth having written
+down before anyone reasons from the parallel too far:
+
+- **Capture-or-lose transfers exactly.** Which edges carried `employed_by` exists
+  only while the rewrite is happening. `merge_undo_depth`'s lesson applies too —
+  past the retention window it is permanent.
+- **"Refuse when the world moved on" transfers weakly.** Node reversal is refused
+  when anything has accreted onto the survivor, because reversal *deletes* the
+  node those edges point at and the refusal is all that stands between a
+  contested claim and the silent loss of its contest record. A label reversal
+  deletes nothing; nothing points at a label. The only accretion found is
+  `get_relation_kind`, where a later edge inherited the surviving label's `kind`
+  — real, and a footnote beside a vanishing contradiction.
+- **The hard-delete caveat does not transfer at all.** Reversing a relabel writes
+  a string back, so none of the narrow justification `reverse_merge` needs
+  applies.
+
+Easier for labels than for nodes, in other words — which supports the parallel
+and is also exactly why not destroying is better still. **The place the
+principle earns its keep is the single-edge relabel above**, where the loss is
+real and unavoidable: the claim genuinely changed, the prior label is gone
+unless captured, and the capture has to ship before the first relabel does.
+
+#### Futile cycles to design against
+
+Flagged by the user, and looking for them found one that is **live today**.
+
+**FC1 — the nomination treadmill, running now.** `find_similar_relation_pairs`
+re-derives from scratch on every `reflect`: scan edges, embed the label strings,
+cosine, threshold. It records nothing about declines. **#64 closed exactly this
+for fact pairs** — the `assessed` edge is a suppression index so a pair an agent
+has judged never comes back — and relation labels got no equivalent. So a pair
+correctly rejected (the servant/consultant case is the worked example) is
+re-offered on every pass, for ever, and the cost is agent attention, which is
+the scarcest thing here. A suppression edge cannot be written today because the
+subject is a **label pair**, not a node pair — #69's field problem in a second
+place, and a third thing a label record would fix.
+
+**FC2 — deprecate ↔ un-deprecate.** Deprecation should be reversible, so two
+agents disagreeing can alternate. Cheap in the graph, since nothing is
+rewritten — but **the journal is append-only, so a futile cycle permanently
+inflates the record**, and `review`'s difficulty signals keep resurfacing the
+same pair. FC1's fix is what bounds it: a decline recorded is a decline not
+re-offered.
+
+**FC3 — nudge, comply, re-coin, nudge.** A coin-time nudge (*"`works_for`
+already exists"*) plus a later agent that genuinely needs the distinction gives
+a loop with no exit. **The description is the escape hatch**, which is an
+argument for sequencing: the description must land *before* any alias or nudge
+mechanism, because without it neither the nudge nor the agent it is nudging can
+tell a synonym from a distinction.
+
+**FC4 — rename ping-pong, and a second argument about where history goes.**
+Bulk relabel A→B then B→A. With per-edge capture each pass appends to every
+affected edge, so the cycle costs O(edges × cycles); with history on the label
+record it is O(cycles). An independent reason for the placement argued above.
+
+**The general rule, worth checking against any new nominator: a sweep that is
+recomputed from current state and records no declines is a futile cycle by
+construction.** It re-offers what was already refused, and it cannot know it is
+doing so. That is #64's lesson stated once rather than rediscovered per feature.
+
+**And its dual, which the fix creates: a suppression with no retraction makes
+every wrong decline permanent by construction.** The fact-pair layer chose that
+deliberately — `similarity_decisions.py` says the pair *"stays out of every
+future nomination"*, and #68's retraction left suppression untouched on purpose
+— so it is inherited knowingly here rather than by accident. Both halves are
+stated in `RELATION_LABELS.md` §4.2, along with the reason #68's
+**one-directional** retraction must not be copied across unexamined: it is
+terminal because a false unification manufactures agreement while a withdrawal
+only under-counts, and **neither failure exists for labels**, since nothing
+corroborates on one.
+
+#### Cost, stated plainly
+
+A new stored entity is a table on both backends, protocol methods, at least one
+read tool and one write tool, and a viz row. Not large, and larger than #69 was.
+The description and the deprecation are separable: the description pays on its
+own and does not depend on aliases existing.
+
+---
+
 ## Older carry-overs (open, low priority)
 
 From the original live-graph walkthrough (issues 1–5, otherwise resolved or kept
@@ -3843,6 +4076,6 @@ What to pick up, and what has to be true first:
 | ✅ | ~~`REVIEW_MODE.md` step 7 (the review modes and their writers)~~ | **Built 2026-08-23**, and the design's build order is now complete. `review` gains `by_agent` / `since` / `unreviewed` and `certainty_ceiling`; `apply_review` and `rejudge` are the writers, and the first two tools that supply a `certainty`. **The second list changed what it does, and that renamed it**: `reversals` became `dissents`, because it reverses nothing — every undo already has a tool with its own refusals and its own row that legitimately sets `supersedes`, and a dispatcher over four of them is #72's fan-out. A dissent sets `reviews` and never `supersedes`, so the journal never claims to have overturned a decision whose effect still stands; its real use is where the undo was **refused**, which the design had not considered. **`advisory` is refused by name rather than shipped** — it selects on a `DecisionKind` nothing writes, which would return an empty list reading as *nothing is contested*. **Not one transaction**, against §10.7: it performs nothing, so each entry is an independent judgment batched with unrelated ones, refused per item like `apply_reflection`. Three things found on the way: a **retry must not read as a second opinion** (an identical judgment by the same judge is refused; two blank judges cannot be told apart, which is one more thing `require_judge` buys), **`rejudge` has to keep the value it replaces** or it would be the one call that destroys a judgment rather than superseding it, and **`DecisionRecord.certainty` was unbounded** — harmless while nothing supplied one, and the ordering sorts on it. The `DecisionKind` drift guard **caught the new kinds and was itself wrong**: it scanned `mcp/tools.py`, true only because every writer had happened to live there. Carry-forward: **a guard whose reach is an accident of where the code sat is one that fails open** |
 | ✅ | ~~71 (should a server be able to require that a write names its graph?)~~ | **Decided and half-built 2026-08-23.** The answer is stricter than the entry proposed: **mandatory, unconditional, no setting**, and covering **reads** as well as writes. Two shapes rejected by the user, both for the same underlying reason — *a guard must not be configured by the state it is guarding against*. The count-based gate reads a live `list_databases()`, so a second graph switches the requirement on and deleting it switches it off; a per-graph setting gets read from whichever graph you are wrongly in, so it disables itself precisely when it matters. **Reads were the omission**: a wrong-graph `search` returns a plausible answer the agent reasons from and leaves no artifact, where a misfiled write at least sits beside its own journal row. `expected_graph` is on all 37 content tools with one gate at `_run_with_timeout`, inside the turn, and a missing one refuses. Turning it on failed **82 tests across nine files** — every call that had been going through the boundary without saying which graph it meant, which is the population the gate is for; four of them switch graphs first, so two helpers now thread the graph rather than defaulting it. **It surfaced a defect older than itself** — the refusal's recovery message had been swallowed by a `KeyError` in `_log` since `expected_graph` shipped, because the tool's success summariser ran over a refusal dict, and every test called `tools.*` one layer *below* the boundary where no summariser runs |
 | ✅ | ~~73 (a reviewer is not told which other graphs hold this agent's decisions)~~ | **Built 2026-08-23**, as `review()`'s `elsewhere` — counts per graph, zeros included, no rows and no new tool. **The count was the easy half and the turn was the design problem**: borrowing the connection means taking the guard's mover turn, and `moving()` inside `using()` raises by design, so `review` had to join `MOVES_THE_GRAPH` and a **read** is now a mover. It excludes other calls for its duration and reads a single instant in exchange, which is what a journal read wanted anyway. **#16's carry-forward repeated itself**: the in-memory sweep borrows nothing and passes whether or not the declaration exists, so the end-to-end fixture runs both backends and removing the declaration was checked to fail it. One rule banked, and it set the scope: **a locator may overcount and must never undercount** — only the filters `query_decisions` already implements are mirrored, `certainty_ceiling` and `unreviewed` are not, and `counted_with` says so, because every mirrored filter is somewhere two implementations can disagree. Both backends now build the journal filter once, shared by reader and locator, which is what makes the `since` boundary row count and read the same (#70's trap). And **naming a graph must not create one** — `USE` on an unknown database is not an error, so a blind count would have manufactured a namespace of empty graphs |
-| **next** | 69 | **69** (relation merges have no journal row) is the one gap step 5 left and step 7 did not close — blocked on a real question, since their subjects are labels and `subject_ids` holds node ids. **66** (metacontext assignment and validity interval cannot be revised) is now bounded, with `rejudge` as the template |
+| **next** | 74 | Now also carries a **live defect**: relation-label nominations have no suppression, so a rejected pair is re-offered on every reflect for ever — the treadmill **64** closed for fact pairs with the `assessed` edge, never built for labels, and unbuildable today because the subject is a label pair rather than a node pair. **74** (a relation label is a string with no record) **supersedes 69** — raised 2026-08-24 after measuring the feature 69 was about: relation merges fire approximately never, labels do not affect retrieval, and the consolidation is a port of tag consolidation whose premise did not survive. Give a label a record and a description, and deprecation replaces merging without rewriting an edge. **69** stays open but blocked on it. **66** (metacontext assignment and validity interval cannot be revised) is bounded, with `rejudge` as the template |
 | designed | inference merge, advisories, node notes | Not on this board — `dev-docs/WARNINGS_AND_SETTINGS.md`, designed 2026-08-21 and deliberately unbuilt. The duplication it addresses does not exist yet: 123 active inferences across both real graphs yield 5,053 pairs and **zero** at the nomination bar. It becomes real once fact merges start collecting inferences onto one survivor |
 | deferred | 58 | A graph large enough that the FTS backfill inside `connect()` is worth reporting on. **16 left this row on 2026-08-23** — its trigger had already fired |
