@@ -457,7 +457,7 @@ async def memory_segment(
             wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx)
+    judge, refused = await _judge_for_write(ctx, expected_graph)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -617,7 +617,7 @@ async def memory_store_decomposition(
             wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx)
+    judge, refused = await _judge_for_write(ctx, expected_graph)
     if refused is not None:
         return refused
 
@@ -843,7 +843,7 @@ async def memory_link(
             wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx)
+    judge, refused = await _judge_for_write(ctx, expected_graph)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -914,7 +914,7 @@ async def memory_update(
             wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx)
+    judge, refused = await _judge_for_write(ctx, expected_graph)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -970,7 +970,7 @@ async def memory_supersede_by(
             wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx)
+    judge, refused = await _judge_for_write(ctx, expected_graph)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1032,7 +1032,7 @@ async def memory_judge_importance(
             wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx)
+    judge, refused = await _judge_for_write(ctx, expected_graph)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1149,7 +1149,7 @@ async def memory_record_contradiction(
             wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx)
+    judge, refused = await _judge_for_write(ctx, expected_graph)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1190,7 +1190,7 @@ async def memory_record_variant(
             wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx)
+    judge, refused = await _judge_for_write(ctx, expected_graph)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1256,7 +1256,7 @@ async def memory_merge_facts(
             wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx)
+    judge, refused = await _judge_for_write(ctx, expected_graph)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1319,7 +1319,7 @@ async def memory_reverse_merge(
             wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx)
+    judge, refused = await _judge_for_write(ctx, expected_graph)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1581,7 +1581,7 @@ async def memory_apply_reflection(
             wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx)
+    judge, refused = await _judge_for_write(ctx, expected_graph)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1759,7 +1759,7 @@ async def epimemer_apply_review(
             wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx)
+    judge, refused = await _judge_for_write(ctx, expected_graph)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1826,7 +1826,7 @@ async def epimemer_rejudge(
             wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx)
+    judge, refused = await _judge_for_write(ctx, expected_graph)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -2185,7 +2185,7 @@ async def memory_restore(
             wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx)
+    judge, refused = await _judge_for_write(ctx, expected_graph)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -2644,7 +2644,9 @@ async def _bind_judge(ctx: Context, judge: JudgeRef | None) -> bool:
     return True
 
 
-async def _judge_for_write(ctx: Context) -> tuple[JudgeRef | None, str | None]:
+async def _judge_for_write(
+    ctx: Context, expected_graph: str | None = None
+) -> tuple[JudgeRef | None, str | None]:
     """The judge for this write, or the refusal to return instead of doing it.
 
     One gate for every write path, and the only place the per-graph
@@ -2655,8 +2657,30 @@ async def _judge_for_write(ctx: Context) -> tuple[JudgeRef | None, str | None]:
     Absent and *permitted* is the default and not a degraded mode: the write
     goes through and records an unknown judge, which is what blank has always
     meant (§3.3).
+
+    **Which graph, before who** (#71). This runs in the tool body, so it would
+    otherwise finish before `_run_with_timeout`'s gate ever ran — and everything
+    it reads is graph state: the approved-agent list a bound judge is checked
+    against, and the `require_judge` setting. On a wrong-graph call that is
+    twice misleading. The agent is refused with *claim an agent* rather than
+    *wrong graph*, which sends it to `claim_agent`; and the operator gets a
+    warning that a judge *"is not approved in graph Y"* — a revocation that
+    never happened, about a graph nobody meant to be in.
+
+    Never a wrong write either way, since the boundary gate refuses afterwards.
+    It is the messages that were wrong, and a guard that reads state it has not
+    established it should be reading is a gap worth closing even where the
+    consequence is only a bad sentence.
+
+    `tools.wrong_graph` stays the single declaration — this is a second call
+    site of one function, not a second policy, and the boundary keeps the
+    backstop for the tools that never come through here.
     """
     deps = ctx.lifespan_context
+    mismatch = tools.wrong_graph(deps["storage"], expected_graph)
+    if mismatch is not None:
+        result, meta = mismatch
+        return None, _build_response(result, meta, 0.0)
     judge = await _bound_judge(ctx)
     if judge is not None:
         return judge, None

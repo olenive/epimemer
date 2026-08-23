@@ -220,6 +220,11 @@ This is where it differs from `require_judge`, which *is* per graph and rightly
 so: that is a policy about rigour, and rigour legitimately varies by use case.
 There is no use case for not minding which graph a call lands in.
 
+**Which graph is answered before anything else** — before the judge gate, and
+before any tool body runs. Everything the judge gate reads is itself graph
+state, so a wrong-graph call would otherwise be refused by the *wrong graph's*
+policy and reported as an unapproved judge rather than a misdirected call.
+
 **Do not read the graph name out of a refusal and paste it back.** The check is
 worth something only because the agent's expectation and the server's state are
 worked out independently; echoing one into the other makes them agree by

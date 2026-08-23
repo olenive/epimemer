@@ -3442,12 +3442,25 @@ the same as parity.
 > the boundary cannot see what the boundary does to the answer.** The gate's
 > refusal now brings its own summariser.
 >
-> **One ordering left as-is and named:** `_judge_for_write` runs in the tool body,
-> *before* the gate, so an agent in the wrong graph is judged by the wrong
-> graph's judge policy first. Never a worse outcome — the gate still refuses and
-> nothing is written — but a worse message. Left as-is through change two: the
-> fix is either 37 call sites or moving the judge gate inside
-> `_run_with_timeout`, and neither is worth it for a message.
+> **The ordering gap was closed too, on the user's call, and it was worse than
+> first described.** `_judge_for_write` runs in the tool body and so finished
+> before the boundary gate ever ran — and *everything it reads is graph state*:
+> the approved-agent list a bound judge is checked against, and the
+> `require_judge` setting. On a wrong-graph call that is twice misleading. The
+> agent is refused with *claim an agent* rather than *wrong graph*, which sends
+> it to `claim_agent` — itself gated; and the **operator** gets a warning that a
+> judge *"is not approved in graph Y"*, a revocation that never happened, about
+> a graph nobody meant to be in. Never a wrong write either way, since the
+> boundary gate refuses afterwards.
+>
+> The cost was also misjudged: not 37 call sites but **14**, every one already
+> holding `expected_graph`. `tools.wrong_graph` stays the single declaration —
+> a second call site of one function, not a second policy — and the boundary
+> keeps the backstop for the tools that never come through here. The principle
+> worth banking: **anything that reads graph state before establishing which
+> graph it is in is reading state it has not earned the right to read**, and
+> *"the consequence is only a bad message"* is the same reasoning that left this
+> guard covering three tools in the first place.
 >
 > **Change two, same day: absence is a refusal.** `NAMES_ITS_OWN_GRAPH` in
 > `server.py` is the only exemption and the test suite reads it rather than

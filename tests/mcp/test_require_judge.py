@@ -231,7 +231,14 @@ class TestWhatARefusalSays:
 
 
 class TestTheGateAtTheBoundary:
-    """`_judge_for_write` is the only place the policy is read."""
+    """`_judge_for_write` is the only place the policy is read.
+
+    It also answers **which graph before who** (#71). Everything it reads is
+    graph state — the approved-agent list and the `require_judge` setting — so
+    on a wrong-graph call it would otherwise refuse with *claim an agent* rather
+    than *wrong graph*, and warn an operator that a judge is unapproved in a
+    graph nobody meant to be in.
+    """
 
     class _Ctx:
         def __init__(self, storage, config, stored=None, raises=False):
@@ -255,7 +262,9 @@ class TestTheGateAtTheBoundary:
     ):
         from epimemer.mcp.server import _judge_for_write
 
-        judge, refused = await _judge_for_write(self._Ctx(storage, config))
+        judge, refused = await _judge_for_write(
+            self._Ctx(storage, config), storage.current_database
+        )
 
         assert judge is None and refused is None
 
@@ -264,7 +273,9 @@ class TestTheGateAtTheBoundary:
 
         await storage.set_require_judge(True)
 
-        judge, refused = await _judge_for_write(self._Ctx(storage, config))
+        judge, refused = await _judge_for_write(
+            self._Ctx(storage, config), storage.current_database
+        )
 
         assert judge is None
         assert refused is not None and "claim_agent" in refused
@@ -276,9 +287,50 @@ class TestTheGateAtTheBoundary:
         await storage.set_approved_agent_ids(["critic"])
         ctx = self._Ctx(storage, config, stored=CRITIC.model_dump(mode="json"))
 
-        judge, refused = await _judge_for_write(ctx)
+        judge, refused = await _judge_for_write(ctx, storage.current_database)
 
         assert judge == CRITIC and refused is None
+
+    async def test_a_wrong_graph_is_answered_before_the_judge_is(
+        self, storage, config
+    ):
+        """The refusal names the graph, not the judge.
+
+        Without this the agent is sent to `claim_agent` — which is itself gated
+        — over a graph it never meant to be in, and it is the *wrong graph's*
+        policy that decided to send it there.
+        """
+        from epimemer.mcp.server import _judge_for_write
+
+        await storage.set_require_judge(True)
+
+        judge, refused = await _judge_for_write(
+            self._Ctx(storage, config), "somewhere-else"
+        )
+
+        assert judge is None
+        assert refused is not None
+        assert "somewhere-else" in refused
+        assert "claim_agent" not in refused
+
+    async def test_it_reads_no_graph_state_before_that(self, storage, config, caplog):
+        """The operator warning is the other half. A bound judge is checked
+        against the **active** graph's approved list, so a wrong-graph call
+        would report a revocation that never happened."""
+        import logging
+
+        from epimemer.mcp.server import _judge_for_write
+
+        # Approved somewhere the call did not mean to be. Without the graph
+        # check `_bound_judge` reads *this* list, misses the judge, and reports
+        # a revocation that never happened.
+        await storage.set_approved_agent_ids(["someone-else"])
+        ctx = self._Ctx(storage, config, stored=CRITIC.model_dump(mode="json"))
+
+        with caplog.at_level(logging.WARNING):
+            await _judge_for_write(ctx, "somewhere-else")
+
+        assert "not approved" not in caplog.text
 
     async def test_a_revoked_id_is_refused_where_a_judge_is_required(
         self, storage, config
@@ -291,7 +343,7 @@ class TestTheGateAtTheBoundary:
         await storage.set_approved_agent_ids(["someone-else"])
         ctx = self._Ctx(storage, config, stored=CRITIC.model_dump(mode="json"))
 
-        judge, refused = await _judge_for_write(ctx)
+        judge, refused = await _judge_for_write(ctx, storage.current_database)
 
         assert judge is None and refused is not None
 
@@ -324,7 +376,7 @@ class TestASessionlessClientCanStillClaim:
         bound = await _bind_judge(ctx, CRITIC)
 
         assert bound is False, "reported, so the caller can see what happened"
-        judge, refused = await _judge_for_write(ctx)
+        judge, refused = await _judge_for_write(ctx, storage.current_database)
         assert judge == CRITIC and refused is None
 
     async def test_a_session_binding_clears_the_fallback(self, storage, config):
