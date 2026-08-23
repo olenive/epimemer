@@ -53,6 +53,7 @@ the knowledge graph and pipeline execution in real time.
 | `EPIMEMER_IMPORTANCE_STEP` | `0.25` | Fraction of the gap to the bound closed by one `judge_importance` call, in either direction |
 | `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
 | `EPIMEMER_APPROVED_AGENTS` | (empty) | Comma-separated agent ids the user admits to every graph this server opens. The approval channel for clients that cannot elicit, and the only one that reaches an embedded store |
+| `EPIMEMER_REQUIRE_JUDGE` | `false` | Refuse any write that names no judge, on every graph this server opens. Off by default: a blank judge means *unknown*, and many graphs have no reason to care. Overridable per graph with `epimemer agents require`, and deliberately not settable by any MCP tool |
 | `EPIMEMER_VIZ_ENABLED` | `true` | `true`, `false` |
 | `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Any bind address |
 | `EPIMEMER_VIZ_PORT` | `8765` | Any port |
@@ -170,6 +171,11 @@ Approval reaches the user through the client's elicitation prompt, through
 works only against a served SurrealDB, since an embedded store lives inside the
 server process. No MCP tool can approve an id: a tool the agent calls cannot
 establish that the *user* called it.
+
+Every write records the claimed identity — ingest included. A graph can be set
+to **refuse** writes that name no judge (`epimemer agents require on`, or
+`EPIMEMER_REQUIRE_JUDGE` for the whole server); it is off by default, and no MCP
+tool can change it. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 
 ### Visualization
 

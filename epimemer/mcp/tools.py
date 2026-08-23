@@ -58,6 +58,7 @@ from epimemer.storage.protocol import (
     StorageBackend,
     resolve_merge_settings,
     resolve_reflect_threshold,
+    resolve_require_judge,
     validate_graph_name,
 )
 
@@ -182,6 +183,7 @@ async def segment_text(
     metadata: dict | None = None,
     segmentation_strategy: str | None = None,
     event_bus: InProcessEventBus | None = None,
+    judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Segment text and store the document and segments. Returns segments for the agent to decompose.
 
@@ -208,10 +210,17 @@ async def segment_text(
     await storage.store_document(doc)
 
     if published_by:
-        entity = await _upsert_entity_topic(published_by, storage, embedding_provider)
+        # The document and its segments carry no judge: they are the material,
+        # not a claim about it, and *who pasted this text* is a different
+        # question from *who judged what it says*. The entity topic and the
+        # attribution edge are claims — this publisher exists, and this document
+        # is theirs — so both name the agent that made them.
+        entity = await _upsert_entity_topic(
+            published_by, storage, embedding_provider, judge=judge
+        )
         await storage.store_edge(NodeEdge(
             src_id=doc.id, dst_id=entity.id, type=EdgeType.RELATED,
-            label="published_by", kind="attribution",
+            label="published_by", kind="attribution", judged_by=judge,
         ))
 
     if strategy == "semantic":
@@ -247,6 +256,7 @@ async def _upsert_entity_topic(
     embedding_provider: EmbeddingProvider,
     *,
     extraction_method: str = "agent:source",
+    judge: JudgeRef | None = None,
 ) -> Topic:
     """Resolve-or-create (by exact name) an entity Topic and persist it directly.
 
@@ -256,7 +266,13 @@ async def _upsert_entity_topic(
     existing = await storage.get_node_by_content(name, node_type=NodeType.TOPIC)
     if isinstance(existing, Topic):
         return existing
-    topic = Topic(content=name, source_id=None, extraction_method=extraction_method)
+    # Only a *new* entity names this agent. Reusing an existing one is not a
+    # second creation, and restamping it would credit whoever mentioned the name
+    # last with a node somebody else introduced.
+    topic = Topic(
+        content=name, source_id=None, extraction_method=extraction_method,
+        judged_by=judge,
+    )
     await storage.store_node(topic)
     vec = (await embedding_provider.embed([name]))[0]
     await storage.store_embedding(EmbeddingRecord(
@@ -405,6 +421,7 @@ async def store_decomposition(
     timeline_id: str | None = None,
     propose_timepoints: bool = True,
     event_bus: InProcessEventBus | None = None,
+    judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Store agent-provided decomposition: topics, facts, inferences per segment.
 
@@ -462,7 +479,10 @@ async def store_decomposition(
         if isinstance(existing, Topic):
             tag_cache[name] = existing
             return existing
-        topic = Topic(content=name, source_id=None, extraction_method="agent:tag")
+        topic = Topic(
+            content=name, source_id=None, extraction_method="agent:tag",
+            judged_by=judge,
+        )
         tag_cache[name] = topic
         batch_nodes.append(topic)
         vec = (await embedding_provider.embed([name]))[0]
@@ -492,6 +512,11 @@ async def store_decomposition(
                 node = cls(
                     content=parsed.content, source_id=segment_id,
                     value=_entry_value_signal(parsed), extraction_method="agent",
+                    # This is the read of the material, and the priors on it —
+                    # `claim_kind`, `confidence`, `importance` — are judgments
+                    # nothing downstream will re-make, which is why §3.1 calls
+                    # ingest the place the unreviewable judgments live.
+                    judged_by=judge,
                     # Beside the `reinforcements` trail rather than on the
                     # signal: the basis is prose about one judgment, and
                     # `ValueSignal` is the numbers every ranker reads.
@@ -568,6 +593,15 @@ async def store_decomposition(
         # to was never stored in the first place.
         if timepoints_proposed:
             batch_timelines.append(timeline)
+
+    # Every edge in this batch was created by this call, so the judge is stamped
+    # once here rather than at each of the five places they are built — three of
+    # which are inside a Petritype net that would have to grow an argument to
+    # carry it. A single stamp also cannot miss one.
+    if judge is not None:
+        batch_edges = [
+            edge.model_copy(update={"judged_by": judge}) for edge in batch_edges
+        ]
 
     # One atomic write for the entire document.
     await storage.write_batch_tx(
@@ -3612,6 +3646,46 @@ async def judge_is_approved(storage: StorageBackend, judge: JudgeRef) -> bool:
     the first from being a single point of failure (§10.3).
     """
     return judge.agent_id in await storage.get_approved_agent_ids()
+
+
+async def judge_required(
+    storage: StorageBackend, *, process_default: bool
+) -> bool:
+    """Whether this graph refuses a write that names no judge (§3.3.1).
+
+    The graph's own answer wins, `None` follows the process default. One
+    declaration, read at the MCP boundary and nowhere else — a backend that
+    refused on its own account would be a second place for the policy to differ,
+    and the two could differ silently.
+    """
+    return resolve_require_judge(
+        await storage.get_require_judge(), process_default
+    )
+
+
+def judge_required_reason(approved: Sequence[str]) -> str:
+    """Why a write was refused for naming no judge, written for the user.
+
+    It has to name the two ways out, because the agent reading it can do
+    neither: claiming an identity needs an id **the user has approved**, and
+    approving one is not something any tool can do (§2.3).
+    """
+    known = (
+        f"Approved ids here: {', '.join(approved)}."
+        if approved
+        else (
+            "**No id has been approved in this graph**, so no write can succeed "
+            "until one is — set EPIMEMER_APPROVED_AGENTS, or run "
+            "`epimemer agents confirm <id>` against a served SurrealDB."
+        )
+    )
+    return (
+        f"This graph requires every write to name a judge, and this session has "
+        f"not claimed one. Call claim_agent first. {known} If this is wrong — "
+        f"if the graph should not require a judge — the user can turn it off "
+        f"with `epimemer agents require off`; you cannot, and that is "
+        f"deliberate."
+    )
 
 
 def _unapproved_reason(agent_id: str, approved: Sequence[str]) -> str:

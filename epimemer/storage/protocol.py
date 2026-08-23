@@ -67,6 +67,18 @@ def resolve_reflect_threshold(override: int | None, default: int) -> int:
     return default if override is None else override
 
 
+def resolve_require_judge(override: bool | None, default: bool) -> bool:
+    """Whether this graph refuses a write that names no judge.
+
+    A graph's own answer wins; `None` means *follow the process default*, and
+    deliberately not the default's current **value** — so changing the
+    configured default later still reaches a graph that was once set and then
+    cleared. The same rule `resolve_reflect_threshold` states, for the same
+    reason.
+    """
+    return default if override is None else override
+
+
 class MergeOverrides(BaseModel):
     """A graph's own answers about merging, where it has any.
 
@@ -879,6 +891,31 @@ class StorageBackend(Protocol):
         Whole-record rather than per-field, so "clear this one" and "leave this
         one alone" cannot be confused: the caller reads, edits and writes back.
         A `None` field clears that override.
+        """
+        ...
+
+    async def get_require_judge(self) -> bool | None:
+        """This graph's own answer to *must a write name a judge?*, or None.
+
+        Stored beside the reflect counter and scoped the same way. `None` means
+        the graph follows the process default (`EPIMEMER_REQUIRE_JUDGE`).
+
+        **Off is the default, and blank means unknown either way** (§3.3). For
+        many graphs it does not matter who judged; for others the user wants
+        every write tied to an agent or a person, and this is where they say so.
+        Turning it on is not retroactive: the rows that had no judge still have
+        none, and still mean *unknown*.
+        """
+        ...
+
+    async def set_require_judge(self, required: bool | None) -> None:
+        """Set this graph's answer, or clear it with None.
+
+        Never reachable from an MCP tool. `configure_reflection` and
+        `configure_merge` are agent-callable because they tune how eagerly the
+        system nominates things; this is a gate on the agent itself, and a gate
+        the agent can open is decoration. Same channel as the approved-id list:
+        an environment variable read at connect, and a CLI subcommand.
         """
         ...
 

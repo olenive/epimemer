@@ -620,6 +620,12 @@ class InstrumentedStorage:
     async def set_approved_agent_ids(self, ids: list[str]) -> None:
         await self._inner.set_approved_agent_ids(ids)
 
+    async def get_require_judge(self) -> bool | None:
+        return await self._inner.get_require_judge()
+
+    async def set_require_judge(self, required: bool | None) -> None:
+        await self._inner.set_require_judge(required)
+
     # --- Multi-graph management (pass-through) ---
 
     @property

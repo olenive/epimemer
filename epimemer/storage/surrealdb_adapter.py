@@ -480,6 +480,26 @@ def _approved_agent_ids(rows) -> list[str]:
     return list(rows[0].get(_APPROVED_AGENTS_FIELD) or [])
 
 
+# The fourth field on the one graph-state row, same scope and same lifetime as
+# the other three. A tri-state: absent means *follow the process default*, which
+# is why it cannot collapse to a bare boolean — a stored `false` and no answer at
+# all are different, and only the first survives a change to the default.
+_REQUIRE_JUDGE_FIELD = "require_judge"
+
+_REQUIRE_JUDGE_GET = f"SELECT {_REQUIRE_JUDGE_FIELD} FROM {_REFLECT_RECORD};"
+_REQUIRE_JUDGE_SET = (
+    f"UPSERT {_REFLECT_RECORD} SET {_REQUIRE_JUDGE_FIELD} = $required RETURN AFTER;"
+)
+
+
+def _require_judge(rows) -> bool | None:
+    """Read the require-a-judge override out of a reflect-state row set."""
+    if not rows or rows[0] is None:
+        return None
+    value = rows[0].get(_REQUIRE_JUDGE_FIELD)
+    return None if value is None else bool(value)
+
+
 def _serialize(model) -> dict:
     """Serialize a Pydantic model to a dict suitable for SurrealDB.
 
@@ -1940,3 +1960,10 @@ class SurrealDBStorage:
 
     async def set_approved_agent_ids(self, ids: list[str]) -> None:
         await self._query(_APPROVED_AGENTS_SET, {"ids": list(ids)})
+
+    async def get_require_judge(self) -> bool | None:
+        rows = await self._query(_REQUIRE_JUDGE_GET)
+        return _require_judge(rows)
+
+    async def set_require_judge(self, required: bool | None) -> None:
+        await self._query(_REQUIRE_JUDGE_SET, {"required": required})

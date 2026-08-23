@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from epimemer.core.types import current_description
 from epimemer.mcp.config import ServerConfig, create_storage, load_config
 from epimemer.mcp.tools import approve_agent_ids
-from epimemer.storage.protocol import StorageBackend
+from epimemer.storage.protocol import StorageBackend, resolve_require_judge
 from epimemer.storage.surrealdb_adapter import is_embedded_url
 
 
@@ -50,7 +50,21 @@ def unreachable_store(config: ServerConfig) -> str | None:
     return None
 
 
-def _embedded_advice(reason: str, agent_id: str | None) -> str:
+def _embedded_advice(reason: str, agent_id: str | None, action: str) -> str:
+    """What to do instead, named for the thing the user was trying to do.
+
+    Two settings live behind this wall and they have different environment
+    variables, so one generic message would send half of its readers to the
+    wrong one.
+    """
+    if action == "require":
+        return (
+            f"{reason}\n\n"
+            f"Set the policy where the server will read it instead — set\n"
+            f"    EPIMEMER_REQUIRE_JUDGE=true\n"
+            f"before starting the server. It applies to every graph this server "
+            f"opens, which a per-graph setting written here would not."
+        )
     ids = agent_id or "<id>"
     return (
         f"{reason}\n\n"
@@ -113,12 +127,52 @@ async def _confirm(storage: StorageBackend, agent_id: str) -> str:
     )
 
 
+async def _require(storage: StorageBackend, setting: str, default: bool) -> str:
+    """Set, clear, or read this graph's require-a-judge policy (§3.3.1).
+
+    Here rather than in an MCP tool for the reason approvals are: a gate the
+    agent can open is decoration. `default` restores *follow the server's
+    setting*, which is deliberately not the same as writing today's value of it.
+    """
+    required = {"on": True, "off": False, "default": None}[setting]
+    await storage.set_require_judge(required)
+
+    effective = resolve_require_judge(await storage.get_require_judge(), default)
+    graph = storage.current_database
+    if required is None:
+        return (
+            f"Graph '{graph}' now follows the server setting for requiring a "
+            f"judge, which is currently {'on' if default else 'off'}."
+        )
+    if not required:
+        return f"Graph '{graph}' no longer requires a judge on writes."
+
+    approved = await storage.get_approved_agent_ids()
+    if not approved:
+        # Said now rather than discovered by the next write failing: this is the
+        # one setting that can make a working graph refuse everything.
+        return (
+            f"Graph '{graph}' now requires a judge on every write — and **no id "
+            f"is approved here**, so every write will be refused until one is. "
+            f"Run `epimemer agents confirm <id>`, or set "
+            f"EPIMEMER_APPROVED_AGENTS before starting the server."
+        )
+    return (
+        f"Graph '{graph}' now requires a judge on every write. Approved ids: "
+        f"{', '.join(approved)}. Effective: {'on' if effective else 'off'}."
+    )
+
+
 async def _list(storage: StorageBackend) -> str:
     approved = await storage.get_approved_agent_ids()
     agents = sorted(await storage.list_agents(), key=lambda a: a.id)
+    override = await storage.get_require_judge()
     lines = [
         f"graph: {storage.current_database}",
         f"approved ids: {', '.join(approved) if approved else '(none)'}",
+        f"requires a judge: "
+        + ("follows the server setting" if override is None
+           else ("yes" if override else "no")),
         "",
     ]
     if not agents:
@@ -162,6 +216,17 @@ def build_parser() -> argparse.ArgumentParser:
     listing.add_argument(
         "--graph", help="Graph to read (default: the configured one)."
     )
+
+    require = agents_sub.add_parser(
+        "require", help="Whether writes to a graph must name a judge."
+    )
+    require.add_argument(
+        "setting", choices=("on", "off", "default"),
+        help="'default' clears the graph's own answer and follows the server.",
+    )
+    require.add_argument(
+        "--graph", help="Graph to set (default: the configured one)."
+    )
     return parser
 
 
@@ -169,14 +234,21 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config()
 
-    if args.action == "confirm":
+    if args.action in ("confirm", "require"):
         unreachable = unreachable_store(config)
         if unreachable is not None:
-            print(_embedded_advice(unreachable, args.agent_id), file=sys.stderr)
+            print(
+                _embedded_advice(
+                    unreachable, getattr(args, "agent_id", None), args.action
+                ),
+                file=sys.stderr,
+            )
             return 2
-        print(asyncio.run(_with_storage(
-            config, args.graph, lambda s: _confirm(s, args.agent_id)
-        )))
+        run = (
+            (lambda s: _confirm(s, args.agent_id)) if args.action == "confirm"
+            else (lambda s: _require(s, args.setting, config.require_judge))
+        )
+        print(asyncio.run(_with_storage(config, args.graph, run)))
         return 0
 
     # Listing an embedded store is not wrong, only empty — it opens a store

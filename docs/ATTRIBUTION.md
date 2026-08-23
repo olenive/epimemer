@@ -1,11 +1,11 @@
 # Attribution — who judged this
 
-**Built so far: the registry, and the judge on every reflect-side decision.**
-An agent can be given an identity, the user assigns it, a session is bound to
-it, and the decisions that session makes during review carry it. **Ingest does
-not yet** — a fact's own wording still records no author — and nothing yet
-answers *what did this agent judge* as one query. Both are next; the design is
-`dev-docs/REVIEW_MODE.md`.
+**Built so far: the registry, the judge on every write, and the setting that
+can require one.** An agent can be given an identity, the user assigns it, a
+session is bound to it, and every decision that session makes — during review
+and at ingest — carries it. What is **not** built is the decision journal, so
+*what did this agent judge* is still five scans rather than one query, and
+`review()` does not exist. The design is `dev-docs/REVIEW_MODE.md`.
 
 ## The problem it exists for
 
@@ -112,6 +112,7 @@ thing the decision landed on:
 | `record_contradiction`, `record_variant`, `link`, `apply_reflection`'s similarity verdicts | the edge, as `judged_by` |
 | `judge_importance` | the value signal, as the latest judge — and every entry in the node's reinforcement trail names its own |
 | content written during reflect: synthesised parents, splits, enrichments, merge survivors, and `update`'s replacement | the new node, as `judged_by` |
+| `segment`, `store_decomposition` | every node and edge the ingest creates, as `judged_by` — including the priors `claim_kind`, `confidence` and `importance`, which nothing downstream re-makes |
 
 Three things follow that are easy to get wrong:
 
@@ -126,10 +127,45 @@ Three things follow that are easy to get wrong:
   records as unknown rather than failing the call: writing the name would assert
   an approval that no longer exists.
 
+A document and its segments carry **no** judge. They are the material rather
+than a claim about it — *who pasted this text* is a different question from *who
+judged what it says*. And reusing an existing entity or tag topic does not
+restamp it: mentioning a name again is not introducing it.
+
 Two things are deliberately **not** attributed yet, because both edit an
 existing record rather than adding one: accepting a boundary proposal, and
 merging relation labels. Stamping the first would overwrite whoever ingested the
 edge. Both want the decision journal, which is not built.
+
+## Requiring a judge
+
+By default a write may name a judge or not, and a blank means *unknown*. A user
+who wants every write tied to an agent or a person turns the requirement on:
+
+```
+epimemer agents require on            # this graph
+EPIMEMER_REQUIRE_JUDGE=true           # every graph this server opens
+```
+
+With it on, a write from a session that has not claimed an approved identity is
+**refused**, with a message naming `claim_agent` and this graph's approved ids.
+It covers the twelve tools that create or retire epistemic content; timelines and
+metacontexts are scaffolding rather than claims and stay outside it.
+
+Three things about it are deliberate:
+
+- **No MCP tool can change it.** `configure_reflection` and `configure_merge` are
+  agent-callable because they tune how eagerly the system nominates things. This
+  is a gate on the agent itself, and a gate the agent can open is decoration.
+- **It is not retroactive.** Turning it on says nothing about earlier writes:
+  the rows that had no judge still have none, and still mean unknown.
+- **Turning it on before approving an id refuses everything**, so the command
+  says so at the moment you switch it on rather than letting the next write
+  explain it.
+
+A client whose connection cannot hold a session binding is not locked out: a
+claim that could not bind to a session is held for the process instead, which is
+safe precisely because a transport with no sessions has one client.
 
 ## Where it lives
 

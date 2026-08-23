@@ -360,6 +360,9 @@ async def memory_segment(
         segmentation_strategy: "paragraph" or "semantic". Uses server default if omitted.
     """
     deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx)
+    if refused is not None:
+        return refused
     return await _run_with_timeout(
         "epimemer.segment",
         lambda: tools.segment_text(
@@ -374,6 +377,7 @@ async def memory_segment(
             metadata=metadata,
             segmentation_strategy=segmentation_strategy,
             event_bus=deps.get("event_bus"),
+            judge=judge,
         ),
         ctx,
         f"content_length={len(content)}",
@@ -510,6 +514,9 @@ async def memory_store_decomposition(
             than being guessed at. Set false to skip.
     """
     deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx)
+    if refused is not None:
+        return refused
 
     async def _do() -> tuple[dict, ResponseMeta]:
         result, meta = await tools.store_decomposition(
@@ -522,6 +529,7 @@ async def memory_store_decomposition(
             timeline_id=timeline_id,
             propose_timepoints=propose_timepoints,
             event_bus=deps.get("event_bus"),
+            judge=judge,
         )
         count = await deps["storage"].bump_reflect_counter()
         threshold = await tools.effective_reflect_threshold(
@@ -720,7 +728,9 @@ async def memory_link(
         metadata: Optional metadata for the edge.
     """
     deps = ctx.lifespan_context
-    judge = await _bound_judge(ctx)
+    judge, refused = await _judge_for_write(ctx)
+    if refused is not None:
+        return refused
     return await _run_with_timeout(
         "epimemer.link",
         lambda: tools.link(
@@ -783,7 +793,9 @@ async def memory_update(
     noticing rather than working around.
     """
     deps = ctx.lifespan_context
-    judge = await _bound_judge(ctx)
+    judge, refused = await _judge_for_write(ctx)
+    if refused is not None:
+        return refused
     return await _run_with_timeout(
         "epimemer.update",
         lambda: tools.update(
@@ -831,7 +843,9 @@ async def memory_supersede_by(
     its own.
     """
     deps = ctx.lifespan_context
-    judge = await _bound_judge(ctx)
+    judge, refused = await _judge_for_write(ctx)
+    if refused is not None:
+        return refused
     return await _run_with_timeout(
         "epimemer.supersede_by",
         lambda: tools.supersede_by(
@@ -885,7 +899,9 @@ async def memory_judge_importance(
             reassessment.
     """
     deps = ctx.lifespan_context
-    judge = await _bound_judge(ctx)
+    judge, refused = await _judge_for_write(ctx)
+    if refused is not None:
+        return refused
     return await _run_with_timeout(
         "epimemer.judge_importance",
         lambda: tools.judge_importance(
@@ -988,7 +1004,9 @@ async def memory_record_contradiction(
         b_id: The other fact id.
     """
     deps = ctx.lifespan_context
-    judge = await _bound_judge(ctx)
+    judge, refused = await _judge_for_write(ctx)
+    if refused is not None:
+        return refused
     return await _run_with_timeout(
         "epimemer.record_contradiction",
         lambda: tools.record_contradiction(
@@ -1021,7 +1039,9 @@ async def memory_record_variant(
         b_id: The other fact id.
     """
     deps = ctx.lifespan_context
-    judge = await _bound_judge(ctx)
+    judge, refused = await _judge_for_write(ctx)
+    if refused is not None:
+        return refused
     return await _run_with_timeout(
         "epimemer.record_variant",
         lambda: tools.record_variant(
@@ -1079,7 +1099,9 @@ async def memory_merge_facts(
             source's wording — this is new text and it is what gets embedded.
     """
     deps = ctx.lifespan_context
-    judge = await _bound_judge(ctx)
+    judge, refused = await _judge_for_write(ctx)
+    if refused is not None:
+        return refused
     return await _run_with_timeout(
         "epimemer.merge_facts",
         lambda: tools.merge_facts(
@@ -1134,7 +1156,9 @@ async def memory_reverse_merge(
             returned as `fact_id`.
     """
     deps = ctx.lifespan_context
-    judge = await _bound_judge(ctx)
+    judge, refused = await _judge_for_write(ctx)
+    if refused is not None:
+        return refused
     return await _run_with_timeout(
         "epimemer.reverse_merge",
         lambda: tools.reverse_merge(
@@ -1376,7 +1400,9 @@ async def memory_apply_reflection(
             to allow a merge (default 0.92, deliberately high).
     """
     deps = ctx.lifespan_context
-    judge = await _bound_judge(ctx)
+    judge, refused = await _judge_for_write(ctx)
+    if refused is not None:
+        return refused
     return await _run_with_timeout(
         "epimemer.apply_reflection",
         lambda: tools.apply_reflection(
@@ -1705,7 +1731,9 @@ async def memory_restore(
             document gives no dates — the common case, and better than a guess.
     """
     deps = ctx.lifespan_context
-    judge = await _bound_judge(ctx)
+    judge, refused = await _judge_for_write(ctx)
+    if refused is not None:
+        return refused
     return await _run_with_timeout(
         "epimemer.restore",
         lambda: tools.restore(
@@ -2069,7 +2097,13 @@ async def _bound_judge(ctx: Context) -> JudgeRef | None:
     try:
         stored = await ctx.get_state(JUDGE_STATE_KEY)
     except RuntimeError:
-        return None
+        # No session to read from, so fall back to the one this process was
+        # told about (see `_bind_judge`). Reachable only where session state
+        # does not exist at all, which today means a single-client transport —
+        # so "the process" and "the client" are the same thing, and this is not
+        # a shared binding two callers could confuse. It is per-server state
+        # passed through the lifespan, never a module global.
+        stored = ctx.lifespan_context.get("fallback_judge")
     if stored is None:
         return None
     judge = JudgeRef.model_validate(stored)
@@ -2091,13 +2125,42 @@ async def _bind_judge(ctx: Context, judge: JudgeRef | None) -> bool:
     from here (§3.2), so a claim that recorded the agent but bound nothing is a
     state the caller has to be able to see.
     """
+    payload = None if judge is None else judge.model_dump(mode="json")
     try:
-        await ctx.set_state(
-            JUDGE_STATE_KEY, None if judge is None else judge.model_dump(mode="json")
-        )
+        await ctx.set_state(JUDGE_STATE_KEY, payload)
     except RuntimeError:
+        # Nowhere session-scoped to put it. Held on the lifespan instead, which
+        # is what makes the require-a-judge setting usable from a transport
+        # that has no sessions — otherwise turning it on would refuse every
+        # write from such a client, with an identity it had correctly claimed.
+        ctx.lifespan_context["fallback_judge"] = payload
         return False
+    ctx.lifespan_context["fallback_judge"] = None
     return True
+
+
+async def _judge_for_write(ctx: Context) -> tuple[JudgeRef | None, str | None]:
+    """The judge for this write, or the refusal to return instead of doing it.
+
+    One gate for every write path, and the only place the per-graph
+    require-a-judge policy is read (§3.3.1). A backend that refused on its own
+    account would be a second home for the policy, and the two could differ
+    without anybody noticing.
+
+    Absent and *permitted* is the default and not a degraded mode: the write
+    goes through and records an unknown judge, which is what blank has always
+    meant (§3.3).
+    """
+    deps = ctx.lifespan_context
+    judge = await _bound_judge(ctx)
+    if judge is not None:
+        return judge, None
+    if not await tools.judge_required(
+        deps["storage"], process_default=deps["config"].require_judge
+    ):
+        return None, None
+    approved = await deps["storage"].get_approved_agent_ids()
+    return None, _error_response(tools.judge_required_reason(approved))
 
 
 async def _elicit_agent_id(ctx: Context, agent_id: str, description: str) -> str | None:

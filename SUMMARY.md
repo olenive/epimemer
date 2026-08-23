@@ -589,8 +589,12 @@ Decisions made during review carry that identity: retiring a node records who
 retired it and returning it records who brought it back, a judgment edge records
 who asserted it, and content written during reflect records who wrote it. A blank
 means **unknown** and nothing more — no date is implied, and a graph is free
-never to name anyone. **Ingest is not yet attributed**, and nothing yet answers
-*what did this agent judge* as one query. See
+never to name anyone. Ingest is attributed too, which is where the judgments nothing re-makes are
+supplied — the event/state call, the confidence prior. A graph can be set to
+**require** a judge and refuse writes without one (`epimemer agents require on`),
+though it never does by default. **Nothing yet answers *what did this agent
+judge* as one query**, which is the decision journal, and `review()` does not
+exist. See
 [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) for what is built and
 `dev-docs/REVIEW_MODE.md` for the rest of the design.
 

@@ -116,6 +116,7 @@ class _GraphStore:
     # reach them: two agents with similar descriptions are not a topic to merge.
     agents: dict[str, Agent] = field(default_factory=dict)
     approved_agent_ids: list[str] = field(default_factory=list)
+    require_judge: bool | None = None
     stores_since_reflect: int = 0
     reflect_threshold_override: int | None = None
     merge_overrides: MergeOverrides = field(default_factory=MergeOverrides)
@@ -992,6 +993,12 @@ class InMemoryStorage:
 
     async def set_approved_agent_ids(self, ids: list[str]) -> None:
         self._g.approved_agent_ids = list(ids)
+
+    async def get_require_judge(self) -> bool | None:
+        return self._g.require_judge
+
+    async def set_require_judge(self, required: bool | None) -> None:
+        self._g.require_judge = required
 
     # --- Multi-graph management ---
 

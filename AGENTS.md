@@ -82,8 +82,11 @@ Surface this information naturally: "Found 5 relevant nodes (2 topics, 2 facts, 
   your judge was unbound.
 - Once you have claimed one, the decisions you make carry it: who retired a
   node, who brought it back, who asserted a contradiction, who wrote a
-  synthesised topic. You pass nothing — it comes from the session. Ingest is not
-  yet attributed.
+  synthesised topic, and every node and prior you supply at ingest. You pass
+  nothing — it comes from the session.
+- If a graph requires a judge, a write without one is refused and the message
+  names `claim_agent`. That is not something to work around — put it to the
+  user, since only they can approve an id or turn the requirement off.
 
 ### Multi-graph management (list_graphs, use_graph, delete_graph)
 - Use `list_graphs` to see available knowledge graphs and which is active

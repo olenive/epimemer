@@ -55,6 +55,16 @@ class ServerConfig(BaseModel):
     # identity (§2.2).
     approved_agents: list[str] = []
 
+    # The process default for *must a write name a judge?* (REVIEW_MODE.md
+    # §3.3.1). Off, because blank means **unknown** and for many graphs it
+    # genuinely does not matter who judged; a user who wants every write tied to
+    # an agent or a person turns it on here or per graph.
+    #
+    # Not an MCP tool, and that is the whole reason it lives in config: a gate
+    # the agent can open is decoration. Turning it on without approving an id
+    # first refuses every write, which is why the refusal says so.
+    require_judge: bool = False
+
     # Whether `search` stamps `retrieved_at` on what it returns. Costs one
     # write per returned node; turning it off makes `never_retrieved` blind, so
     # archival nomination stops being able to tell used nodes from stale ones.
@@ -104,6 +114,7 @@ def load_config() -> ServerConfig:
         "similarity_threshold": "EPIMEMER_SIMILARITY_THRESHOLD",
         "reflect_threshold": "EPIMEMER_REFLECT_THRESHOLD",
         "approved_agents": "EPIMEMER_APPROVED_AGENTS",
+        "require_judge": "EPIMEMER_REQUIRE_JUDGE",
         "record_retrieval": "EPIMEMER_RECORD_RETRIEVAL",
         "importance_step": "EPIMEMER_IMPORTANCE_STEP",
         "tool_timeout_seconds": "EPIMEMER_TOOL_TIMEOUT_SECONDS",

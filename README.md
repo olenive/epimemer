@@ -164,6 +164,7 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_IMPORTANCE_STEP` | `0.25` | How much of the gap to its bound one `judge_importance` call closes, up or down. Nothing automatic moves it |
 | `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
 | `EPIMEMER_APPROVED_AGENTS` | (empty) | Comma-separated agent ids the user admits as judges in every graph this server opens. Read when the backend connects and when the server lands on a graph. The approval channel for clients that cannot elicit, and the only one that reaches an embedded store — see [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) |
+| `EPIMEMER_REQUIRE_JUDGE` | `false` | Refuse any write that names no judge, on every graph this server opens. Off by default: a blank judge means *unknown*, and many graphs have no reason to care. Overridable per graph with `epimemer agents require`, and deliberately not settable by any MCP tool |
 | `EPIMEMER_VIZ_ENABLED` | `true` | Publish visualization events to the hub |
 | `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Visualization hub host |
 | `EPIMEMER_VIZ_PORT` | `8765` | Visualization hub port |
@@ -353,13 +354,17 @@ make test-frontend      # npm run typecheck && npm test, in the frontend directo
 
 ## Administration
 
-`uv run epimemer agents list` shows a graph's approved judge ids and what each
-agent has said about itself. `uv run epimemer agents confirm <id>` admits an id
-— the act no MCP tool may perform, since a tool the agent calls cannot establish
-that the *user* called it. It works only against a **served** SurrealDB: an
-embedded store lives inside the server process, so approving there would write
-into a store the running server never reads. Use `EPIMEMER_APPROVED_AGENTS`
-instead in that case; the command says so rather than appearing to succeed.
+`uv run epimemer agents list` shows a graph's approved judge ids, whether it
+requires one, and what each agent has said about itself. `uv run epimemer agents
+confirm <id>` admits an id, and `uv run epimemer agents require on|off|default`
+decides whether writes to that graph must name one. Both are acts no MCP tool may
+perform — a tool the agent calls cannot establish that the *user* called it, and
+a gate the agent can open is decoration.
+
+Both work only against a **served** SurrealDB: an embedded store lives inside the
+server process, so writing there would land in a store the running server never
+reads. Use `EPIMEMER_APPROVED_AGENTS` and `EPIMEMER_REQUIRE_JUDGE` instead in
+that case; the command says which one rather than appearing to succeed.
 
 ## Not yet built
 

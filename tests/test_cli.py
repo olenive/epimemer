@@ -142,3 +142,67 @@ class TestListing:
 
         assert "approved ids: (none)" in out
         assert "No agent has claimed an identity" in out
+
+
+class TestRequiringAJudge:
+    """The other thing only a user may do. Same wall, different setting — and
+    the message behind it names a different environment variable, because one
+    generic refusal would send half its readers to the wrong one."""
+
+    async def test_turning_it_on_warns_when_nobody_is_approved(self, storage):
+        from epimemer.cli import _require
+
+        message = await _require(storage, "on", False)
+
+        assert await storage.get_require_judge() is True
+        # Said now rather than discovered by the next write failing: this is the
+        # one setting that can make a working graph refuse everything.
+        assert "no id is approved here" in message.lower()
+
+    async def test_turning_it_on_with_an_approved_id_says_so(self, storage):
+        from epimemer.cli import _require
+
+        await storage.set_approved_agent_ids(["critic"])
+
+        message = await _require(storage, "on", False)
+
+        assert "critic" in message
+        assert "no id is approved" not in message.lower()
+
+    async def test_off_is_recorded_as_the_graphs_own_answer(self, storage):
+        from epimemer.cli import _require
+
+        await _require(storage, "off", True)
+
+        assert await storage.get_require_judge() is False, (
+            "an explicit off must outrank a server default of on"
+        )
+
+    async def test_default_clears_rather_than_freezing_todays_value(self, storage):
+        from epimemer.cli import _require
+
+        await _require(storage, "on", False)
+
+        message = await _require(storage, "default", True)
+
+        assert await storage.get_require_judge() is None
+        assert "follows the server setting" in message
+
+    async def test_listing_reports_the_policy(self, storage):
+        from epimemer.cli import _list
+
+        await storage.set_require_judge(True)
+
+        assert "requires a judge: yes" in await _list(storage)
+
+    def test_the_refusal_names_the_right_environment_variable(
+        self, capsys, monkeypatch
+    ):
+        monkeypatch.setenv("EPIMEMER_STORAGE_BACKEND", "memory")
+
+        code = main(["agents", "require", "on"])
+
+        err = capsys.readouterr().err
+        assert code == 2
+        assert "EPIMEMER_REQUIRE_JUDGE=true" in err
+        assert "EPIMEMER_APPROVED_AGENTS" not in err

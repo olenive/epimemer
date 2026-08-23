@@ -1,6 +1,6 @@
 # Review mode: who judged this, and can someone else check it
 
-**Status: §7, §1, §2 and step 3 built, the rest designed (2026-08-23).** Built so far:
+**Status: §7, §1, §2, §3 and steps 3–4 built, the rest designed (2026-08-23).** Built so far:
 §10.2.1's precondition (`ISSUES.md` #65); **steps 0a, 0b and 0c** — the whole of
 merge reversal, from capture through the futile-cycle refusal to `reverse_merge`
 itself; **step 1**, `apply_reflection(similarities=[…])` and the `ASSESSED`
@@ -8,7 +8,9 @@ edge, which closes #64's presenting symptom; and **step 2**, the agent registry
 — `claim_agent`, the `agent` table on both backends, approval over elicitation
 and config, and the `epimemer` CLI; and **step 3**, the judge threaded through every
 reflect-side writer and recorded on the episode, edge, value signal or node the
-decision landed on. Steps 4 through 7 below are design.
+decision landed on; and **step 4**, ingest attributed and the per-graph
+require-a-judge setting with its CLI. Steps 5 through 7 below are design —
+the journal, and `review()`.
 Written
 before any code, at the user's direction; where an unbuilt section says "does",
 read "would". #65 went first because it is a defect in shipped code that
@@ -1403,7 +1405,7 @@ Each step is useful alone, and each is a precondition for the next.
 | 1 ✅ | `apply_reflection(similarities=[…])` + `ASSESSED` edge | #64's fix. Stops the re-nomination treadmill, and gives corroboration its first real input — **only from `one_claim` verdicts** (§1.2). Independent of everything below. **Built 2026-08-22**, with three refusals the design did not name and one ordering rule it did not state; see §10.2's amendment. |
 | 2 ✅ | `agent` table, approved-id settings, `claim_agent`, approval over `ctx.elicit` with `epimemer agents confirm` as fallback | Registry with nothing yet pointing at it. Full protocol on both backends, per the standing rule. **Built 2026-08-22**, with one gate split in two and one seeding rule widened; see §10.3's amendment. |
 | 3 ✅ | `judge` threaded through the reflect-side write paths | Smallest surface producing attributed decisions, so step 5 has something to read. **Built 2026-08-23**, with two writers the design's list had missed and one field shape changed; see §10.4's amendment. |
-| 4 | `judge` threaded through ingest (§3.2), plus the require-a-judge setting (§3.3.1) | The bigger churn, and where the unreviewable priors are. **No cutover** — the setting decides, per graph, and ships default-off, so an upgraded server keeps writing exactly as before. |
+| 4 ✅ | `judge` threaded through ingest (§3.2), plus the require-a-judge setting (§3.3.1) | The bigger churn, and where the unreviewable priors are. **No cutover** — the setting decides, per graph, and ships default-off, so an upgraded server keeps writing exactly as before. **Built 2026-08-23**; the sessionless escape hatch took a different shape from the one this section proposed, see the amendment below. |
 | 5 | `DecisionRecord` + journal writes + W&S §9 folded in (§9) | Makes *"what did this agent judge"* one query. |
 | 6 | `review(mode="all")`, capped, with tier-2 ordering (§6.2) | Works on the existing corpus and orders it usefully, since derived signals need no attribution. |
 | 7 | `by_agent`, `since`, `unreviewed`, `advisory`, tier-1 ordering, `certainty_ceiling`; `apply_review` | Need attributed decisions to exist; useful from the first session after step 4. |
@@ -1802,6 +1804,50 @@ never read from a module global (§3.2). Step 3 covers the reflect-side writers
 (`apply_reflection`, `merge_facts`, `supersede_by`, `record_contradiction`,
 `record_variant`, `judge_importance`, `archive`, `restore`); step 4 covers
 `store_decomposition` and `segment`.
+
+> **✅ STEP 4 BUILT 2026-08-23.** Ingest attributed (`segment`,
+> `store_decomposition`), `require_judge` as a per-graph setting on both
+> backends with `EPIMEMER_REQUIRE_JUDGE` behind it and `epimemer agents require`
+> in front, one gate at the boundary over twelve write tools, and 55 tests.
+>
+> **The escape hatch is not the shape proposed below.** This section said a
+> write should be able to name its judge with an explicit `agent_id`. Built
+> instead as a **fallback binding held on the lifespan**, used only where
+> session state does not exist at all. Three reasons, in order of weight: the
+> explicit parameter is ten tool schemas wider and something the agent has to
+> remember on *every* call, where the binding is claimed once; the security
+> argument is identical either way, because approving the id is the gate and the
+> binding was only ever ergonomics; and a transport with no session concept is
+> single-client, so *the process* and *the client* are the same thing and there
+> is nothing for two callers to confuse. It is not a module global — it is
+> per-server state reached through `ctx.lifespan_context`, and a successful
+> session binding clears it.
+>
+> **Five smaller things the design did not say:**
+>
+> 1. **The document and its segments carry no judge.** They are the material,
+>    not a claim about it: *who pasted this text* is a different question from
+>    *who judged what it says*, and only the second is a judgment review would
+>    ever want to select on.
+> 2. **Reusing an entity or tag topic does not restamp it**, the same rule step
+>    3 settled for a re-recorded edge. Mentioning a name again is not
+>    introducing it, and crediting the second agent would take the node from
+>    whoever created it.
+> 3. **Edges are stamped once, after the batch is assembled**, rather than at
+>    each of the five places ingest builds them — three of which are inside a
+>    Petritype net that would have had to grow an argument to carry it. One
+>    stamp also cannot miss one.
+> 4. **The gate covers twelve tools**: the ten from step 3 plus the two ingest
+>    steps. Timelines and metacontexts are scaffolding rather than claims, so
+>    they are outside it — named here rather than left as an apparent oversight.
+> 5. **`epimemer agents require on` warns when no id is approved yet.** It is
+>    the one setting that can make a working graph refuse everything, and being
+>    told at the moment of switching it on beats discovering it from the next
+>    write.
+>
+> The CLI's refusal against an embedded store is now **action-specific**: two
+> settings live behind that wall and they have different environment variables,
+> so one generic message would send half its readers to the wrong one.
 
 **Step 4 carries the setting, and there is no cutover** (§3.3, revised
 2026-08-23). `judge` is optional in every signature; one shared check at the
