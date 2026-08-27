@@ -304,13 +304,22 @@ class TestTheToolOverARealGraph:
 
     async def test_a_subject_that_is_gone_comes_back_named(self, storage):
         """A null preview is information — the merge survivor a reversal
-        destroyed — so the id stays rather than the row losing its subject."""
+        destroyed — so the id stays rather than the row losing its subject.
+
+        `subject_kind` is null too, and that is the distinction #74 added: a
+        vocabulary row's subjects resolve as `relation_label` rather than as
+        nodes, so *not a node* stopped being enough to mean *gone*."""
         await storage.record_decision(_row(DecisionKind.REVERSAL, ["gone"]))
 
         result, _ = await tools.review(storage)
         subject = result["decisions"][0]["subjects"][0]
 
-        assert subject == {"id": "gone", "content_preview": None, "status": None}
+        assert subject == {
+            "id": "gone",
+            "subject_kind": None,
+            "content_preview": None,
+            "status": None,
+        }
 
     async def test_an_unknown_mode_is_refused_by_name(self, storage):
         """A mode the list admitted but nothing implemented would be a filter

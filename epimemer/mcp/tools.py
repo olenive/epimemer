@@ -2987,7 +2987,9 @@ async def reflect(
         ]
 
     # 8. Find likely-synonymous user relationship labels (open vocabulary captured
-    #    fast, organized slow). Applied via apply_reflection relation_merges.
+    #    fast, organized slow). Applied via apply_reflection relation_merges, or
+    #    declined via relation_verdicts — which is what stops a pair the agent
+    #    has already considered coming back on every sweep (#74 FC1).
     async def _relations():
         return await find_similar_relation_pairs(
             storage, embedding_provider,
@@ -3084,6 +3086,7 @@ async def apply_reflection(
     archivals: list[str] | None = None,
     judgments: list[dict] | None = None,
     relation_merges: list[dict] | None = None,
+    relation_verdicts: list[dict] | None = None,
     boundaries: list[dict] | None = None,
     similarities: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
@@ -3144,6 +3147,22 @@ async def apply_reflection(
         back in ``relation_descriptions_orphaned`` rather than being folded in:
         settling two definitions into one is the agent's judgment to make with
         ``describe_relation``, not this call's.
+    relation_verdicts: [{pair: [label_a, label_b], kind: str, verdict:
+        "distinct" | "synonymous", because: str}] — what you decided about a
+        nominated **label** pair you are not merging. `similarities` one tier
+        down, and the fix for the same defect: a declined pair was recorded
+        nowhere, so `reflect` re-offered it for ever while *accepting* a merge
+        made one label vanish and suppressed itself. ``distinct`` is different
+        relationships that look alike; ``synonymous`` is one relationship
+        written two ways, and it acts on nothing today — recording it is still a
+        real judgment, and leaving it unrecordable would be the same treadmill
+        for the affirmative answer. **Both stop the pair being nominated, and
+        that suppression is permanent by design.** ``because`` is required.
+        Entries that could not be recorded come back in
+        ``relation_verdicts_refused`` with a reason. A label with no record gets
+        one, carrying no judge; a pair already carrying **your** identical
+        verdict is refused as a retry, and another agent's is recorded as a
+        confirmation rather than a second verdict.
     boundaries: [{node_id, source_id, endpoint, at, timeline_id?}] — accept a
         boundary reflect proposed (#53 T1 §9), filling in one open endpoint of
         one source's period. The written interval's basis becomes ``inferred``:
@@ -3162,6 +3181,10 @@ async def apply_reflection(
         supersede_node,
     )
     from epimemer.pipelines.reflection.boundaries import apply_boundary
+    from epimemer.pipelines.reflection.relation_verdicts import (
+        RelationVerdictRefused,
+        apply_relation_verdict,
+    )
     from epimemer.pipelines.reflection.similarity_decisions import (
         SimilarityRefused,
         apply_similarity_decision,
@@ -3219,6 +3242,46 @@ async def apply_reflection(
                 await journal(
                     storage, DecisionKind.SIMILARITY, [pair[0], pair[1]], judge=judge
                 )
+
+    # 1b. Record what was decided about nominated **label** pairs, and before
+    #     step 9 relabels any of them. A verdict is about the vocabulary as the
+    #     agent saw it, so a merge earlier in the same batch would make one side
+    #     of a pair vanish and the verdict would land on a label the agent never
+    #     judged — step 1's anchoring rule, applied to the tier below it.
+    relation_verdicts_recorded = 0
+    relation_verdicts_confirmed = 0
+    relation_verdicts_refused: list[dict] = []
+    for verdict_spec in (relation_verdicts or []):
+        verdict_pair = verdict_spec["pair"]
+        verdict_outcome = await apply_relation_verdict(
+            storage,
+            label_a=verdict_pair[0],
+            label_b=verdict_pair[1],
+            kind=verdict_spec.get("kind", "relationship"),
+            verdict=verdict_spec.get("verdict", ""),
+            because=verdict_spec.get("because", ""),
+            judge=judge,
+        )
+        if isinstance(verdict_outcome, RelationVerdictRefused):
+            relation_verdicts_refused.append(verdict_outcome.model_dump(mode="json"))
+            continue
+        if verdict_outcome.created:
+            relation_verdicts_recorded += 1
+        else:
+            relation_verdicts_confirmed += 1
+        # The journal row names the two **label record ids**, which is where
+        # #69's unanswerable question resolves: the subject of a decision about
+        # a relation finally has an identity that `review()` dereferences like
+        # any other. A second agent agreeing writes a confirmation citing the
+        # original, exactly as it does for a contradiction or a variant.
+        await _journal_pair_judgment(
+            storage,
+            DecisionKind.RELATION_VERDICT,
+            verdict_outcome.label_ids[0],
+            verdict_outcome.label_ids[1],
+            judge=judge,
+            created=verdict_outcome.created,
+        )
 
     # 2. Create parent topics for similar groups
     for parent_spec in (parents or []):
@@ -3524,6 +3587,9 @@ async def apply_reflection(
         "nodes_archived": len(to_archive),
         "archive_data": archive_data,
         "judgments_applied": judgments_applied,
+        "relation_verdicts_recorded": relation_verdicts_recorded,
+        "relation_verdicts_confirmed": relation_verdicts_confirmed,
+        "relation_verdicts_refused": relation_verdicts_refused,
         "relations_consolidated": relations_consolidated,
         "edges_relabeled": edges_relabeled,
         "relation_descriptions_orphaned": relation_descriptions_orphaned,
@@ -3535,6 +3601,7 @@ async def apply_reflection(
             similarities_recorded + parents_created + topics_split + topics_enriched
             + topics_merged + supersessions_applied + len(to_archive)
             + judgments_applied + relations_consolidated + boundaries_applied
+            + relation_verdicts_recorded
         ),
     )
     return result, meta
@@ -3548,6 +3615,48 @@ async def apply_reflection(
 # afterwards would be perverse. As there — when the response says it was cut,
 # act on what came back and review again rather than raising the number.
 REVIEW_MAX_RESULTS: int = 200
+
+
+def _review_subject(
+    subject_id: str,
+    nodes: dict[str, EpistemicNode],
+    labels: dict[str, RelationLabel],
+) -> dict:
+    """One subject of one journalled decision, from whichever table holds it.
+
+    Two tables and not one because a decision's subject is not always a claim:
+    a relation verdict and a relation description are judgments about the
+    graph's **words**, and their subjects are `RelationLabel` records (#74
+    §4.3). That is where #69's question resolves — it had no clean answer while
+    a label had no id, and the alternatives were a second namespace inside
+    `subject_ids` or the endpoint nodes of edges the decision was not about.
+
+    A label carries no status, so `status` stays null for one — the field
+    describes a node's place in the active graph and a vocabulary entry has
+    none.
+    """
+    node = nodes.get(subject_id)
+    if node is not None:
+        return {
+            "id": subject_id,
+            "subject_kind": "node",
+            "content_preview": _content_preview(node)["content_preview"],
+            "status": node.status.value,
+        }
+    label = labels.get(subject_id)
+    if label is not None:
+        return {
+            "id": subject_id,
+            "subject_kind": "relation_label",
+            "content_preview": f"{label.name} ({label.kind})",
+            "status": None,
+        }
+    return {
+        "id": subject_id,
+        "subject_kind": None,
+        "content_preview": None,
+        "status": None,
+    }
 
 
 async def review(
@@ -3634,6 +3743,20 @@ async def review(
         sid for record in records for sid in record.subject_ids
     ))
     subjects = await storage.get_nodes(subject_ids) if subject_ids else {}
+    # A vocabulary row's subjects are **label records**, not nodes (#74 §4.3) —
+    # which is the whole of what giving labels ids bought, and it is worth
+    # nothing if review renders them as two dead strings. Read only where
+    # something failed to resolve as a node, so an ordinary page pays nothing
+    # and the one extra query lands on the small table.
+    unresolved = [sid for sid in subject_ids if sid not in subjects]
+    labels = (
+        {
+            record.id: record
+            for record in await storage.query_relation_labels()
+            if record.id in set(unresolved)
+        }
+        if unresolved else {}
+    )
 
     scored = [
         ScoredDecision(record=record, signals=difficulty_signals(record, subjects))
@@ -3653,18 +3776,14 @@ async def review(
             "certainty": item.record.certainty,
             "certainty_basis": item.record.certainty_basis,
             "difficulty_signals": [s.value for s in item.signals],
-            # A null preview means the node is not in this graph: a merge
-            # survivor a reversal destroyed, or a row written elsewhere. That is
-            # information rather than an error, so the id stays.
+            # `subject_kind` says which table answered, and a null preview
+            # still means nothing did: a merge survivor a reversal destroyed, or
+            # a row written elsewhere. That is information rather than an error,
+            # so the id stays either way — but *gone* and *not a node in the
+            # first place* are different answers, and before #74 gave labels ids
+            # they were indistinguishable.
             "subjects": [
-                {
-                    "id": sid,
-                    "content_preview": (
-                        _content_preview(subjects[sid])["content_preview"]
-                        if sid in subjects else None
-                    ),
-                    "status": subjects[sid].status.value if sid in subjects else None,
-                }
+                _review_subject(sid, subjects, labels)
                 for sid in item.record.subject_ids
             ],
             # Derived from a row pointing back, never stored (§3.4), which is

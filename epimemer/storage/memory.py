@@ -32,7 +32,9 @@ from epimemer.core.types import (
     NodeType,
     RawDocument,
     RelationLabel,
+    RelationVerdict,
     recorded_relation_label,
+    relation_pair_key,
     Segment,
     Timeline,
     Topic,
@@ -124,6 +126,9 @@ class _GraphStore:
     relation_labels: dict[tuple[str, str], RelationLabel] = field(
         default_factory=dict
     )
+    # Verdicts about label pairs (#74 §4.2), append-only and never keyed: two
+    # rows for one pair is a second agent disagreeing, which both survive.
+    relation_verdicts: list[RelationVerdict] = field(default_factory=list)
     # Judges, and the ids the user has admitted (REVIEW_MODE.md §2.5). Their
     # own dict rather than entries in `nodes`, so `search` and `reflect` cannot
     # reach them: two agents with similar descriptions are not a topic to merge.
@@ -1016,6 +1021,29 @@ class InMemoryStorage:
 
     async def query_relation_labels(self) -> Sequence[RelationLabel]:
         return _copy_all(self._g.relation_labels.values())
+
+    # --- Relation verdicts (#74 §4.2) ---
+
+    async def record_relation_verdict(self, verdict: RelationVerdict) -> str:
+        self._g.relation_verdicts.append(_store(verdict))
+        return verdict.id
+
+    async def judged_relation_pairs(self) -> set[tuple[str, str]]:
+        return {
+            relation_pair_key(*v.label_ids)
+            for v in self._g.relation_verdicts
+            if len(v.label_ids) == 2
+        }
+
+    async def relation_verdicts_for(
+        self, label_ids: Sequence[str]
+    ) -> Sequence[RelationVerdict]:
+        wanted = set(label_ids)
+        return _copy_all(
+            v
+            for v in reversed(self._g.relation_verdicts)
+            if set(v.label_ids) == wanted
+        )
 
     # --- Reflection bookkeeping ---
 

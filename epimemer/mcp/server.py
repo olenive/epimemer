@@ -1447,8 +1447,10 @@ async def memory_reflect(
       supersede_by. evidence_merged asks for a re-read rather than a
       resolution: the premise absorbed another claim, so check the inference
       still says what the survivor's wording supports
-    - similar_relations: likely-synonymous user relationship labels to consolidate
-      via apply_reflection relation_merges
+    - similar_relations: likely-synonymous user relationship labels. Judge each
+      one: apply_reflection relation_merges to consolidate, or relation_verdicts
+      to record "distinct"/"synonymous" without merging. A pair you leave
+      unjudged comes back on every reflect, for ever
     - truncated: the names of any lists that hit `max_nominations` and were cut
       to their highest-scoring entries. Empty on an ordinary graph. When a list
       is named here, treat it as *this graph is denser than one pass can
@@ -1515,6 +1517,7 @@ async def memory_apply_reflection(
     archivals: list[str] | None = None,
     judgments: list[dict] | None = None,
     relation_merges: list[dict] | None = None,
+    relation_verdicts: list[dict] | None = None,
     boundaries: list[dict] | None = None,
     similarities: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
@@ -1583,6 +1586,23 @@ async def memory_apply_reflection(
             Read `relation_descriptions_orphaned` in the response: it names the
             prose on labels that just lost their last edge, which nothing folds
             into the survivor for you. Settle it with `describe_relation`.
+        relation_verdicts: What you decided about a pair from reflect's
+            similar_relations that you are **not** merging. Each: {pair:
+            [label_a, label_b], kind: str, verdict: "distinct" | "synonymous",
+            because: str} — copy `kind` from the nomination.
+            Use "distinct" when the two name different relationships that
+            happen to look alike: a servant *works for* a master in a world with
+            no employment relation, while a corporation *employs* a consultant
+            who does very little work. Near-identical strings, opposite
+            meanings, and the nominator sees only strings.
+            Use "synonymous" when they really are one relationship written two
+            ways. Nothing acts on it today, and recording it is still worth
+            doing — it is a judgment, and the alternative is being asked again.
+            **Either way the pair is never nominated again, and that is
+            permanent**: there is no undo, so judge it rather than clearing the
+            list. `because` is required. Entries that could not be recorded come
+            back in `relation_verdicts_refused` with a reason — a pair you have
+            already judged the same way is one of them.
         boundaries: Accept boundary proposals from reflect's
             `boundary_proposals` — where one claim's period ends and the next
             begins. Each: {node_id, source_id, endpoint: "start"|"end", at: ISO
@@ -1619,6 +1639,7 @@ async def memory_apply_reflection(
             archivals=archivals,
             judgments=judgments,
             relation_merges=relation_merges,
+            relation_verdicts=relation_verdicts,
             boundaries=boundaries,
             similarities=similarities,
             merge_similarity_threshold=merge_similarity_threshold,
@@ -1630,6 +1651,7 @@ async def memory_apply_reflection(
         f"supersessions={len(supersessions or [])} archivals={len(archivals or [])} "
         f"judgments={len(judgments or [])} "
         f"relation_merges={len(relation_merges or [])} "
+        f"relation_verdicts={len(relation_verdicts or [])} "
         f"boundaries={len(boundaries or [])} "
         f"similarities={len(similarities or [])}",
         # A refusal should reach the operator's log, not only the agent's
@@ -1639,6 +1661,11 @@ async def memory_apply_reflection(
             + (
                 f" similarities_refused={len(r['similarities_refused'])}"
                 if r["similarities_refused"] else ""
+            )
+            + (
+                f" relation_verdicts_refused="
+                f"{len(r['relation_verdicts_refused'])}"
+                if r["relation_verdicts_refused"] else ""
             )
         ),
         expected_graph=expected_graph,

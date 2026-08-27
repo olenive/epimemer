@@ -381,6 +381,17 @@ useful:
 - **Relation consolidation**: for `similar_relations` you judge synonymous, pass
   `relation_merges=[{labels: ["written_by"], into: "authored_by"}]`. Every user-tier
   edge with a listed label is relabelled in place (edges aren't versioned).
+- **Judge every relation pair you are shown, including the ones you decline.**
+  `relation_verdicts=[{pair: [a, b], kind, verdict: "distinct" | "synonymous",
+  because}]` — `distinct` for two different relationships that look alike (a
+  servant *works for* a master where no employment relation exists, beside a
+  corporation that *employs* a consultant who does very little), `synonymous` for
+  one relationship written two ways. A pair you simply skip is re-offered on
+  **every** reflect, for ever, to an agent who cannot see that you already
+  considered it — while merging removes a label and quietly suppresses itself, so
+  skipping pushes the graph toward the answer that tidies the list. Both verdicts
+  stop the nomination, and **there is no undo**: judge the pair rather than
+  clearing it.
 
 ### Cleanup (archival_candidates → apply_reflection archivals)
 Trivial knowledge is the counterpart to *wrong* knowledge, and it is handled by

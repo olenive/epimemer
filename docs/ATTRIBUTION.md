@@ -201,7 +201,11 @@ impossible is gone — labels have records with ids since `ISSUES.md` #74 stage 
 so a row naming them would resolve like any other — and what remains is that no
 writer has been built. That waits on #74 settling whether relation merging
 survives at all; if it does, the row is stage 4's work. Describing a label **is**
-attributed, under its own `relation_description` kind.
+attributed, under its own `relation_description` kind, and so is **judging one
+label against another** — `relation_verdict`, whose subjects are the two label
+records. That row is where the question this section used to call unanswerable
+actually got its answer: the subject of a decision about vocabulary is the
+vocabulary entry, and it needed the entry to exist.
 
 Accepting a boundary proposal, the other gap this section used to name, is
 closed: it edits an existing edge rather than adding one, which is exactly the
@@ -495,9 +499,12 @@ key, the date, the kind, the subjects and what a row reviews — the five reads
 review mode needs. Its rows are not nodes either, for the same reason and one
 more: a judgment about the graph is not a claim the graph holds.
 
-**Per graph, and that follows from the ids.** `subject_ids` holds node ids, and
-a node id resolves only in the graph that holds it — so a row filed anywhere
-else would carry ids that dereference nowhere. The row lives with its subjects,
+**Per graph, and that follows from the ids.** `subject_ids` holds node ids —
+or, for the two kinds that judge the graph's **vocabulary** rather than its
+claims, `relation_label` record ids; either way an id resolves only in the graph
+that holds it, so a row filed anywhere else would carry ids that dereference
+nowhere. `review` says which of the two answered, in each subject's
+`subject_kind`, and a null there still means *nothing did*. The row lives with its subjects,
 which is also true when a write lands somewhere unintended: the material and the
 record of it stay together. *What did this agent decide* is therefore asked once
 per graph, with `list_graphs` and `use_graph` between the asks, and deliberately

@@ -27,6 +27,7 @@ from epimemer.core.types import (
     NodeType,
     RawDocument,
     RelationLabel,
+    RelationVerdict,
     Segment,
     Timeline,
     agent_aliases,
@@ -876,6 +877,52 @@ class StorageBackend(Protocol):
 
     async def query_relation_labels(self) -> Sequence[RelationLabel]:
         """Every relation label record in the active graph. Unordered."""
+        ...
+
+    # --- Relation verdicts: the FC1 suppression index (#74 §4.2) ---
+
+    async def record_relation_verdict(self, verdict: RelationVerdict) -> str:
+        """Append one verdict about a pair of relation labels. Returns its id.
+
+        **Append-only, and nothing here updates or deletes a row.** That is what
+        makes a denormalised suppression index legitimate: it cannot drift from
+        the journal row that also records the decision.
+
+        Two rows for one pair are allowed and are not a bug — a second agent
+        disagreeing is a second judgment, and both survive. What must not
+        produce a row is a *retry*: the caller refuses an identical verdict from
+        the same judge before reaching this method.
+        """
+        ...
+
+    async def judged_relation_pairs(self) -> set[tuple[str, str]]:
+        """Every label pair this graph has judged, as sorted id pairs.
+
+        The read `find_similar_relation_pairs` does once per sweep, deliberately
+        the whole set rather than a per-pair lookup: the nominator holds every
+        candidate pair in memory already, and a query per pair would put the
+        cost on the graph with the most labels — the one this exists for.
+
+        Keyed by `relation_pair_key`, so a pair judged as `(b, a)` suppresses a
+        nomination of `(a, b)`.
+        """
+        ...
+
+    async def relation_verdicts_for(
+        self, label_ids: Sequence[str]
+    ) -> Sequence[RelationVerdict]:
+        """Every verdict covering exactly this pair of label ids, newest first.
+
+        The write path's read, and separate from `judged_relation_pairs`
+        because it needs what the sweep does not: the verdict itself and who
+        recorded it. A retry is refused on both, and a confirmation is
+        recognised by the verdict matching while the judge does not — neither
+        question can be answered from a set of pairs.
+
+        Order is unspecified beyond newest first, and only the newest-first part
+        is relied on: `_journal_pair_judgment` cites the **oldest** decision for
+        a pair and reads that from the journal, not from here.
+        """
         ...
 
     # --- Reflection bookkeeping ---

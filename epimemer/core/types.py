@@ -1192,6 +1192,73 @@ def recorded_relation_label(
     })
 
 
+RELATION_VERDICTS: tuple[str, ...] = ("distinct", "synonymous")
+
+
+def relation_pair_key(a_id: str, b_id: str) -> tuple[str, str]:
+    """The one key for a label pair, whichever order it was judged in.
+
+    Sorted, so `(a, b)` and `(b, a)` are one pair rather than two. It lives here
+    rather than in the sweep or the backend because three places have to agree
+    on it — the row that is written, the set the sweep reads, and the lookup
+    that refuses a retry — and a pair keyed two ways is a suppression index that
+    silently suppresses half of what it should.
+    """
+    return tuple(sorted((a_id, b_id)))  # type: ignore[return-value]
+
+
+class RelationVerdict(BaseModel):
+    """What an agent decided about a nominated pair of relation labels (#74).
+
+    **The suppression index for FC1.** `find_similar_relation_pairs` re-derives
+    from scratch on every `reflect` and recorded nothing about declines, so a
+    pair an agent considered and rejected came back on every pass, for ever, to
+    a fresh agent who could not see the previous refusals. Worse, the graph
+    applied quiet pressure toward the wrong answer: accepting a merge makes one
+    label stop existing, so **accepting is self-suppressing and declining is
+    not**.
+
+    `#64` closed exactly this for fact pairs with the `assessed` edge, and
+    relation labels could not have one: that edge runs between two **nodes**,
+    and `works_for` and `employed_by` are not nodes. They are now records, which
+    is what makes this row addressable.
+
+    **A small append-only table, not a field on the label record.** Storing the
+    pair on each side would be mutable state held twice, free to disagree —
+    #54, #55 and #56 for the fifth time. It is a denormalised suppression index
+    and is legitimate as one for `similarity_decisions.py`'s stated reason: it
+    is immutable and append-only, so it cannot drift from the journal row that
+    also records it. The journal is the audit record; this is what the sweep
+    reads without a journal query.
+
+    **Both verdicts suppress, and `synonymous` acts on nothing yet.** Recording
+    *"yes, these are synonyms, and I am not merging them"* is a real judgment,
+    and leaving it unrecordable would be FC1 again for the affirmative answer.
+    Whatever consolidates labels can then act on standing verdicts rather than
+    re-asking.
+
+    **Suppression is permanent**, inherited from the fact-pair layer
+    deliberately rather than by accident, so a wrong `distinct` silences a pair
+    for good. That is the dual of the futile-cycle rule and both are stated in
+    `RELATION_LABELS.md` §4.2; the retraction question for both layers lives in
+    `ISSUES.md` #80.
+    """
+
+    id: str = Field(default_factory=_new_id)
+    # Two `RelationLabel` ids, sorted by `relation_pair_key`. Ids and not names:
+    # a name is what edges join on, and keying suppression on a string would
+    # have made the journal row's subjects strings too — the second namespace
+    # #74 exists to avoid.
+    label_ids: list[str]
+    verdict: Literal["distinct", "synonymous"]
+    # Required by every writer, for #64's reason: a verdict with no reason marks
+    # the pair judged, so the next agent skips it without knowing whether it was
+    # examined or waved through.
+    because: str
+    judged_by: JudgeRef | None = None
+    decided_at: datetime = Field(default_factory=_now)
+
+
 # --- Agents: who judged this (REVIEW_MODE.md §2) ---
 
 
@@ -1483,10 +1550,12 @@ class DecisionKind(str, Enum):
     the same rule holds here, enforced by a test that reads both lists.
 
     Two kinds are therefore **not** here yet, and are named so nobody re-derives
-    them: `relation_merge`, once `ISSUES.md` #69 settles what a relation merge's
-    subjects are; and `proceeded_despite_advisory`, once advisories exist — that
-    one is `WARNINGS_AND_SETTINGS.md` §9's node note, folded in here so there is
-    one review machine rather than two (REVIEW_MODE.md §9).
+    them: `relation_merge`, whose subjects `RELATION_LABELS.md` settled — they
+    are the two labels' record ids, which #69 could not name because a label had
+    no id — and which waits only on whether label merging survives at all
+    (`RELATION_LABELS.md` §5); and `proceeded_despite_advisory`, once advisories
+    exist — that one is `WARNINGS_AND_SETTINGS.md` §9's node note, folded in
+    here so there is one review machine rather than two (REVIEW_MODE.md §9).
     """
 
     # Ingest. One row per `store_decomposition` call rather than per fact (§4.1)
@@ -1538,6 +1607,12 @@ class DecisionKind(str, Enum):
     # wrote `ENRICHMENT` because enriching is what it is — the right verb, and
     # the wrong side of the line. `RELATION_LABELS.md` §7.2.
     RELATION_DESCRIPTION = "relation_description"
+    # A pair of relation labels judged `distinct` or `synonymous` (#74 FC1).
+    # Its own kind rather than `SIMILARITY`: review *selects* on kind, and a
+    # reviewer auditing judgments about claims does not want judgments about
+    # vocabulary mixed in. Its subjects are the two labels' record ids, which is
+    # where #69 resolves — the subject finally has an identity to name.
+    RELATION_VERDICT = "relation_verdict"
     IMPORTANCE = "importance"
 
     # Review of a decision already in the journal (§6.4, step 7). All three

@@ -1,7 +1,7 @@
 # Relation labels: a vocabulary with a record
 
-**Status: stages 1–2 built (2026-08-26, 2026-08-27); stages 3–4 designed
-(2026-08-24).** Written
+**Status: stages 1–3 built (2026-08-26, 2026-08-27, 2026-08-27); stage 4
+designed (2026-08-24) and undecided (§5).** Written
 before any code, at the user's direction, and written to be implemented from:
 §7 breaks the build into four stages with the types, protocol methods, call
 sites and tests each one needs. Where an unbuilt section says "does", read
@@ -22,9 +22,13 @@ merge's journal subjects go and the answer was *nowhere clean*; this document is
 why — **the subject has no identity**, and giving it one dissolves #69 rather
 than answering it.
 
-**Stage 3 fixes a live defect** (#74's FC1): a relation-label pair an agent has
-considered and declined is re-nominated on every `reflect`, for ever. That is
+**Stage 3 fixed a live defect** (#74's FC1): a relation-label pair an agent had
+considered and declined was re-nominated on every `reflect`, for ever. That is
 the treadmill #64 closed for fact pairs and never closed here.
+`apply_reflection(relation_verdicts=[…])` records the decline, the `RelationVerdict`
+table is the suppression index, and the journal row naming both label records is
+**where #69 finally resolves** — the question was unanswerable only because the
+subject had no identity. §7.3 records what departed from the design and why.
 
 §8 records what this deliberately does not do and §9 what was rejected; both
 are worth reading before changing any of it.
@@ -718,11 +722,64 @@ no `EdgeType`, which is what #55 keeps catching.
 
 ### 7.3 Stage 3
 
+> **Built 2026-08-27.** As designed, with four departures worth recording.
+>
+> **A third protocol method, `relation_verdicts_for(label_ids)`.** The design
+> named two, and two are not enough: `judged_relation_pairs` answers *has this
+> pair been judged*, and the write path has to answer *by whom, and to what*.
+> A retry and a confirmation are told apart by the verdict matching while the
+> judge does not, and neither question can be answered from a set of pairs. The
+> alternative — reading it back off the journal — fails on the field: a
+> `DecisionRecord` carries the subjects and the judge but not the verdict, so
+> `distinct` and `synonymous` are indistinguishable there. The split is the
+> right one anyway and matches §4.2's own line: the sweep reads the cheap set,
+> the writer reads the rows.
+>
+> **A second verdict from a second judge, disagreeing, is recorded rather than
+> refused.** §4.1 enumerated the refusals and this case fell between them — it
+> is neither a retry (the verdict differs) nor a confirmation (likewise). It is
+> allowed, and the table keeps both rows with their judges and their reasons.
+> Nothing is withdrawn and nothing wins: both verdicts suppress, so the
+> disagreement changes nothing operationally, and it is **made visible rather
+> than resolved**. Resolving it is #80's question, and answering it here would
+> have been building #80 by accident.
+>
+> **Two unnamed judges compare equal, so an anonymous repeat is refused as a
+> retry.** The design did not say, because it assumed the judge. Where a graph
+> does not require one, a replayed batch and a genuine second reader are
+> indistinguishable, and they want opposite treatments. Refusing costs an
+> unnamed agent the ability to confirm — which the journal's first row already
+> records — while accepting would let a retried call manufacture agreement out
+> of nobody. #52's direction, applied to attribution rather than to
+> corroboration.
+>
+> **`review` now resolves a label subject, and §4.3 was optimistic without
+> it.** The claim was that the subjects are ids of records that exist in this
+> graph *"so `review()` dereferences them like any other row"* — and it did not:
+> `review` resolved subjects with `get_nodes` alone, so both ids came back with
+> a null preview, which its own comment defines as *the node is not in this
+> graph*. Every `relation_description` row shipped in stage 2 already read that
+> way. Subjects now carry `subject_kind` (`node`, `relation_label`, or null) and
+> a label resolves to its name and kind; the extra read happens only where
+> something failed to resolve as a node, and a label is still never declared in
+> `retrieved`, which drives focus in a **node** viewer. *Giving the subject an
+> identity is worth nothing until the reader dereferences it* — the same lesson
+> #74 is built on, missed one layer up.
+>
+> Two smaller notes. The verdict block is applied at **step 1b**, immediately
+> after `similarities` rather than merely somewhere before step 9's merges: both
+> are judgments about pairs as the agent saw them, and #65's anchoring rule
+> covers them jointly. And `apply_relation_verdict` takes a `judge` it
+> deliberately does not write onto a label record it creates — the argument is
+> accepted and dropped at the one call site most likely to reach for it, which
+> is where the coiner-never-the-judger rule needed to be visible.
+
 **Types** — `RelationVerdict`; `DecisionKind.RELATION_VERDICT`, which the
 drift guard in `tests/mcp/test_decision_journal.py` requires to have a writer in
 the same commit.
 
-**Protocol** — `record_relation_verdict`, `judged_relation_pairs`.
+**Protocol** — `record_relation_verdict`, `judged_relation_pairs`. (Built with a
+third, `relation_verdicts_for` — see the departures above.)
 
 **Call sites** — `apply_reflection` gains `relation_verdicts`, applied **before**
 `relation_merges`, mirroring §10.2's ordering rule: a verdict is about the

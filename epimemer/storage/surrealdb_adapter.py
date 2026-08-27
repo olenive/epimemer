@@ -33,7 +33,9 @@ from epimemer.core.types import (
     NodeType,
     RawDocument,
     RelationLabel,
+    RelationVerdict,
     recorded_relation_label,
+    relation_pair_key,
     Segment,
     Timeline,
     Topic,
@@ -965,6 +967,9 @@ class SurrealDBStorage:
                 FIELDS uid UNIQUE;
             DEFINE INDEX IF NOT EXISTS idx_rl_name_kind ON relation_label
                 FIELDS name, kind UNIQUE;
+            DEFINE TABLE IF NOT EXISTS relation_verdict SCHEMALESS;
+            DEFINE INDEX IF NOT EXISTS idx_rv_uid ON relation_verdict
+                FIELDS uid UNIQUE;
         """)
 
         # Judges. Their own table beside `fact` / `topic` / `inference` and
@@ -2111,6 +2116,45 @@ class SurrealDBStorage:
     async def query_relation_labels(self) -> Sequence[RelationLabel]:
         rows = await self._query("SELECT * FROM relation_label")
         return [RelationLabel.model_validate(_clean_record(r)) for r in rows]
+
+    # --- Relation verdicts (#74 §4.2) ---
+
+    async def record_relation_verdict(self, verdict: RelationVerdict) -> str:
+        """Append one verdict. `CREATE`, never `UPSERT`.
+
+        The table is append-only and the natural key is not unique — a second
+        agent disagreeing about a pair is a second row, not a replacement — so
+        there is nothing here to upsert on. `label_ids` arrives sorted from
+        `relation_pair_key`, which is what lets the pair read below match on two
+        `CONTAINS` rather than on order.
+        """
+        await self._query(
+            "CREATE relation_verdict CONTENT $data",
+            {"data": _serialize(verdict)},
+        )
+        return verdict.id
+
+    async def judged_relation_pairs(self) -> set[tuple[str, str]]:
+        rows = await self._query("SELECT label_ids FROM relation_verdict")
+        return {
+            relation_pair_key(*ids)
+            for row in rows
+            if len(ids := list(row.get("label_ids") or [])) == 2
+        }
+
+    async def relation_verdicts_for(
+        self, label_ids: Sequence[str]
+    ) -> Sequence[RelationVerdict]:
+        if len(set(label_ids)) != 2:
+            return []
+        a, b = sorted(set(label_ids))
+        rows = await self._query(
+            "SELECT * FROM relation_verdict "
+            "WHERE label_ids CONTAINS $a AND label_ids CONTAINS $b "
+            "ORDER BY decided_at DESC",
+            {"a": a, "b": b},
+        )
+        return [RelationVerdict.model_validate(_clean_record(r)) for r in rows]
 
     # --- Reflection bookkeeping ---
 

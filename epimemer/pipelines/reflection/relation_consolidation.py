@@ -5,12 +5,19 @@ User-tier relationship labels are open vocabulary, so synonyms accumulate
 the labels, scoped to the same behavioural kind (never merge a `relationship`
 label into an `attribution` one). Applied via apply_reflection relation_merges,
 which relabels the edges in place (edges are not versioned).
+
+A pair already judged — `distinct` or `synonymous`, via
+`apply_reflection(relation_verdicts=[…])` — is never nominated again (#74 FC1).
+That suppression is **permanent by design**, inherited from the fact-pair layer
+in as many words rather than by accident, so a wrong `distinct` silences a pair
+for good; `RELATION_LABELS.md` §4.2 states it beside its dual, and `ISSUES.md`
+#80 is where a retraction would be argued.
 """
 
 import math
 from collections import defaultdict
 
-from epimemer.core.types import EdgeType, NodeEdge
+from epimemer.core.types import EdgeType, NodeEdge, relation_pair_key
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.storage.protocol import StorageBackend
 
@@ -72,6 +79,21 @@ async def find_similar_relation_pairs(
     active nodes, their strings embedded, and pairs within the same kind whose
     embeddings are at least `similarity_threshold` similar are returned, highest
     first — each as {label_a, label_b, kind, count_a, count_b, similarity}.
+
+    **Pairs an agent has already judged are dropped** (#74 FC1). Without this
+    the sweep re-derives from scratch every time and a declined pair comes back
+    on every `reflect`, for ever, to a fresh agent who cannot see the previous
+    refusals — while *accepting* a merge makes one label vanish and is therefore
+    self-suppressing. The graph would apply quiet pressure toward the wrong
+    answer. Both verdicts suppress; `apply_relation_verdict` writes them.
+
+    **A pair either of whose sides has no record suppresses nothing**, and the
+    direction is deliberate. Suppression is keyed on record ids, and a graph
+    that predates stage 1 has labels with no records at all — so an unresolvable
+    side means *nothing has been judged here yet*, never *the judgment cannot be
+    found*. Failing the other way would silence pairs nobody has ever seen, on
+    exactly the oldest graphs. It costs nothing in practice: recording a verdict
+    creates both records first.
     """
     counts: dict[tuple[str, str], int] = {}
     seen_edges: set[str] = set()
@@ -91,11 +113,23 @@ async def find_similar_relation_pairs(
     for key in keys:
         groups[key[1]].append(key)
 
+    # One read for the whole sweep rather than a lookup per pair: the candidate
+    # pairs are already in memory, and a per-pair query would put the cost on
+    # the graph with the most labels — the one this exists for.
+    judged = await storage.judged_relation_pairs()
+    ids_by = {
+        (record.name, record.kind): record.id
+        for record in await storage.query_relation_labels()
+    }
+
     pairs: list[dict] = []
     for members in groups.values():
         for i in range(len(members)):
             for j in range(i + 1, len(members)):
                 a, b = members[i], members[j]
+                id_a, id_b = ids_by.get(a), ids_by.get(b)
+                if id_a and id_b and relation_pair_key(id_a, id_b) in judged:
+                    continue
                 sim = _cosine_similarity(vec_by[a], vec_by[b])
                 if sim >= similarity_threshold:
                     pairs.append({

@@ -97,8 +97,11 @@ siblings, and sit in a frame:
 - **Relations are open vocabulary** — engine edges are a typed enum; user relations
   use one `RELATED` sentinel with a free `label` and a `kind`
   (`relationship` followed in retrieval / `attribution` not). Behaviour is finite
-  and hardcoded; the vocabulary is open. Synonymous labels consolidate via
-  `reflect` → `apply_reflection relation_merges`.
+  and hardcoded; the vocabulary is open. A label also has a **record** — an id, a
+  description, and the thing a decision about it can name — so `reflect` →
+  `apply_reflection relation_merges` consolidates synonyms, and
+  `relation_verdicts` records a pair judged and *not* merged, which is what stops
+  the same pair being offered on every pass.
 
 These are *separate from metacontexts*: metacontexts are epistemic frames that
 change retrieval scope; sources/tags/relations are structure that (for sources and

@@ -100,7 +100,7 @@ Ten phases, ten keys. Each is a worklist, not a verdict:
 | `boundary_proposals` | where a succession lets a period close or open | `boundaries` |
 | `pending_review` | active nodes already carrying review state | `supersessions`, `record_variant` |
 | `archival_candidates` | nodes worth setting aside | `archivals`, `judgments` |
-| `similar_relations` | likely-synonymous user relationship labels | `relation_merges` |
+| `similar_relations` | likely-synonymous user relationship labels | `relation_merges`, or `relation_verdicts` where you are not merging |
 
 An eleventh key, `truncated`, is not a worklist: it names any of the lists that
 hit `max_nominations` and were cut.
@@ -215,6 +215,7 @@ Ten kinds of decision, all optional, applied in one call:
 | `supersessions` | resolve a flagged node against an existing one |
 | `archivals` | export and retire approved nominees |
 | `judgments` | re-judge importance, in either direction, with a reason |
+| `relation_verdicts` | record what you decided about a nominated label pair |
 | `relation_merges` | relabel synonymous user relationship labels |
 | `boundaries` | fill in one open endpoint of one source's period |
 

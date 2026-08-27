@@ -31,6 +31,7 @@ from epimemer.core.types import (
     NodeType,
     RawDocument,
     RelationLabel,
+    RelationVerdict,
     Segment,
     Timeline,
 )
@@ -563,6 +564,17 @@ class InstrumentedStorage:
 
     async def query_relation_labels(self) -> Sequence[RelationLabel]:
         return await self._inner.query_relation_labels()
+
+    async def record_relation_verdict(self, verdict: RelationVerdict) -> str:
+        return await self._inner.record_relation_verdict(verdict)
+
+    async def judged_relation_pairs(self) -> set[tuple[str, str]]:
+        return await self._inner.judged_relation_pairs()
+
+    async def relation_verdicts_for(
+        self, label_ids: Sequence[str]
+    ) -> Sequence[RelationVerdict]:
+        return await self._inner.relation_verdicts_for(label_ids)
 
     async def query_metacontexts(
         self,

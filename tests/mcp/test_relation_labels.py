@@ -292,8 +292,7 @@ class TestTheCliIsNeverTheOnlyWayIn:
     async def test_consolidating_records_one_for_the_surviving_label(self, storage):
         """The third path, and the one §2.3 did not enumerate — the design was
         written as if stage 4 had already replaced `relation_merges`. Finishing
-        this test is what found it (#81). The fourth, a relation verdict, arrives
-        with stage 3, and only then does this class state the whole claim."""
+        this test is what found it (#81)."""
         from epimemer.embeddings.mock import MockEmbeddingProvider
 
         a, b = await _pair(storage)
@@ -306,3 +305,39 @@ class TestTheCliIsNeverTheOnlyWayIn:
         )
 
         assert await storage.get_relation_label("employed_by", "relationship") is not None
+
+    async def test_a_verdict_records_both_labels_it_judges(self, storage):
+        """The fourth path, arriving with stage 3, and the one that completes
+        the claim. An earlier draft **refused** here and pointed at the CLI,
+        which would have left FC1 unfixable on exactly this backend — the
+        default development configuration. Both records are created judge-less:
+        judging two words against each other is not a claim to have introduced
+        either."""
+        from epimemer.embeddings.mock import MockEmbeddingProvider
+
+        a, b = await _pair(storage)
+        c, d = await _pair(storage, "c", "d")
+        for src, dst, label in ((a, b, "works_for"), (c, d, "employed_by")):
+            await storage.store_edge(
+                NodeEdge(
+                    src_id=src.id, dst_id=dst.id, type=EdgeType.RELATED,
+                    label=label, kind="relationship",
+                )
+            )
+        assert await storage.get_relation_label("works_for", "relationship") is None
+
+        await tools.apply_reflection(
+            storage,
+            MockEmbeddingProvider(model_id="mock-embed", dimension=8),
+            relation_verdicts=[{
+                "pair": ["works_for", "employed_by"],
+                "kind": "relationship",
+                "verdict": "distinct",
+                "because": "A servant, not an employee.",
+            }],
+            judge=CRITIC,
+        )
+
+        for label in ("works_for", "employed_by"):
+            record = await storage.get_relation_label(label, "relationship")
+            assert record is not None and record.judged_by is None
