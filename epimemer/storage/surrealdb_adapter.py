@@ -32,6 +32,8 @@ from epimemer.core.types import (
     NodeStatus,
     NodeType,
     RawDocument,
+    RelationLabel,
+    recorded_relation_label,
     Segment,
     Timeline,
     Topic,
@@ -550,7 +552,7 @@ def _decision_row(record: DecisionRecord) -> dict:
 
 def _decision_clauses(
     *,
-    agent_id: str | None = None,
+    agent_ids: Sequence[str] | None = None,
     kinds: Sequence[DecisionKind] | None = None,
     subject_id: str | None = None,
     reviews: str | None = None,
@@ -568,9 +570,13 @@ def _decision_clauses(
     """
     clauses: list[str] = []
     params: dict = {}
-    if agent_id is not None:
-        clauses.append("judged_by.agent_id = $agent_id")
-        params["agent_id"] = agent_id
+    if agent_ids is not None:
+        # `IN` over a list rather than `=` over one id: a judge is a set of keys
+        # once two records have been consolidated (#78), and an empty list
+        # matches nothing, which is what a caller naming a judge with no ids
+        # means. The index on `judged_by.agent_id` still serves it.
+        clauses.append("judged_by.agent_id IN $agent_ids")
+        params["agent_ids"] = list(agent_ids)
     if kinds is not None:
         clauses.append("kind IN $kinds")
         params["kinds"] = [kind.value for kind in kinds]
@@ -885,6 +891,15 @@ class SurrealDBStorage:
             )
             return [Metacontext.model_validate(_clean_record(r)) for r in rows]
 
+    async def viz_list_relation_labels(
+        self,
+        database: str,
+    ) -> Sequence[RelationLabel]:
+        """List every relation label record in a graph for visualization."""
+        async with self._borrowed(database):
+            rows = await self._query("SELECT * FROM relation_label")
+            return [RelationLabel.model_validate(_clean_record(r)) for r in rows]
+
     async def close(self) -> None:
         if self._db is not None:
             await self._db.close()
@@ -945,6 +960,11 @@ class SurrealDBStorage:
             DEFINE TABLE IF NOT EXISTS metacontext SCHEMALESS;
             DEFINE INDEX IF NOT EXISTS idx_mc_uid ON metacontext FIELDS uid UNIQUE;
             DEFINE INDEX IF NOT EXISTS idx_mc_status ON metacontext FIELDS status;
+            DEFINE TABLE IF NOT EXISTS relation_label SCHEMALESS;
+            DEFINE INDEX IF NOT EXISTS idx_rl_uid ON relation_label
+                FIELDS uid UNIQUE;
+            DEFINE INDEX IF NOT EXISTS idx_rl_name_kind ON relation_label
+                FIELDS name, kind UNIQUE;
         """)
 
         # Judges. Their own table beside `fact` / `topic` / `inference` and
@@ -2052,6 +2072,46 @@ class SurrealDBStorage:
         )
         return [Metacontext.model_validate(_clean_record(r)) for r in rows]
 
+    # --- Relation labels (#74) ---
+
+    async def store_relation_label(self, label: RelationLabel) -> str:
+        """Upsert by `(name, kind)`, which is the pair edges join on.
+
+        Not by `uid`: a create-or-fetch caller that lost the race would
+        otherwise write a second record under a fresh id, and the unique index
+        on `(name, kind)` would refuse it — turning a benign concurrent coin
+        into an error. Upserting on the natural key makes the second write the
+        no-op it should be.
+
+        The row written is `recorded_relation_label`'s, so an update keeps the
+        id it already had — read first, merge, then write, rather than letting
+        `CONTENT` replace an identity that journal rows may already name.
+        """
+        stored = recorded_relation_label(
+            await self.get_relation_label(label.name, label.kind), label
+        )
+        await self._query(
+            "UPSERT relation_label CONTENT $data WHERE name = $name AND kind = $kind",
+            {"data": _serialize(stored), "name": stored.name, "kind": stored.kind},
+        )
+        return stored.id
+
+    async def get_relation_label(
+        self, name: str, kind: str
+    ) -> RelationLabel | None:
+        rows = await self._query(
+            "SELECT * FROM relation_label WHERE name = $name AND kind = $kind "
+            "LIMIT 1",
+            {"name": name, "kind": kind},
+        )
+        if not rows:
+            return None
+        return RelationLabel.model_validate(_clean_record(rows[0]))
+
+    async def query_relation_labels(self) -> Sequence[RelationLabel]:
+        rows = await self._query("SELECT * FROM relation_label")
+        return [RelationLabel.model_validate(_clean_record(r)) for r in rows]
+
     # --- Reflection bookkeeping ---
 
     async def get_reflect_counter(self) -> int:
@@ -2134,7 +2194,7 @@ class SurrealDBStorage:
     async def query_decisions(
         self,
         *,
-        agent_id: str | None = None,
+        agent_ids: Sequence[str] | None = None,
         kinds: Sequence[DecisionKind] | None = None,
         subject_id: str | None = None,
         reviews: str | None = None,
@@ -2143,7 +2203,7 @@ class SurrealDBStorage:
         limit: int | None = None,
     ) -> list[DecisionRecord]:
         where, params = _decision_clauses(
-            agent_id=agent_id,
+            agent_ids=agent_ids,
             kinds=kinds,
             subject_id=subject_id,
             reviews=reviews,
@@ -2172,7 +2232,7 @@ class SurrealDBStorage:
         self,
         databases: Sequence[str],
         *,
-        agent_id: str | None = None,
+        agent_ids: Sequence[str] | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> dict[str, int]:
@@ -2193,7 +2253,9 @@ class SurrealDBStorage:
         table, which is a real zero rather than a missing graph — the two are
         distinguished above, not here.
         """
-        where, params = _decision_clauses(agent_id=agent_id, since=since, until=until)
+        where, params = _decision_clauses(
+            agent_ids=agent_ids, since=since, until=until
+        )
         counts: dict[str, int] = {}
         async with self._guard.moving():
             existing = set(await self.list_databases())

@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Iterable, Iterator, Literal, Mapping, Sequence
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from epimemer.core.types import (
     Agent,
@@ -34,13 +34,23 @@ from epimemer.core.types import (
     superseded_status_for,
     NodeType,
     RawDocument,
+    RelationLabel,
     Segment,
     Timeline,
     Topic,
     ValueSignal,
     JudgeRef,
+    absorbing,
+    agent_aliases,
+    agent_name,
     current_description,
     description_digest,
+    live_agents,
+    name_holder,
+    new_agent_id,
+    recorded_relation_label,
+    renamed,
+    resolve_agent,
     merged_value_signal,
     supersession_kind,
     with_description,
@@ -634,6 +644,56 @@ async def _extraction_timeline(
     )
 
 
+# How many frames a refusal names before it stops being readable.
+_FRAME_LISTING_LIMIT = 10
+
+
+async def require_metacontext(metacontext_id: str, storage: StorageBackend) -> None:
+    """Raise unless `metacontext_id` names a metacontext in the active graph.
+
+    Metacontext ids are **per graph**, so an id carried over from another graph
+    is a string that resolves nowhere here — and an unchecked one leaves the
+    node worse off than no frame at all. `frames_for` hands back whatever the
+    `has_metacontext` edge points at, so a node in a frame that does not exist
+    shares a frame with **nothing**: never nominated as contradicting anything,
+    never merged with anything, and absent from every frame-scoped search —
+    including a search for the frame the agent meant. It sits in the graph,
+    unreachable by every mechanism that would have questioned it (#76).
+
+    **The base frame is valid with or without a row.** `BASE_METACONTEXT_ID` is
+    reserved, and it is what `frames_for` answers for an untagged node, so it
+    names a real frame in every graph — including one nothing has been written
+    to yet, where `ensure_base_metacontext` has not run. Checking it against
+    storage would refuse the one id that cannot be wrong.
+
+    **The refusal lists what does exist**, because nothing else does: no MCP
+    tool enumerates metacontexts, so for an agent holding a stale id this
+    message is the only place the right one appears.
+    """
+    if metacontext_id == BASE_METACONTEXT_ID:
+        return
+    if await storage.get_metacontext(metacontext_id) is not None:
+        return
+
+    known = list(await storage.query_metacontexts())
+    if known:
+        shown = ", ".join(
+            f"'{mc.id}' ({mc.content})" for mc in known[:_FRAME_LISTING_LIMIT]
+        )
+        if len(known) > _FRAME_LISTING_LIMIT:
+            shown += f", and {len(known) - _FRAME_LISTING_LIMIT} more"
+        have = f"This graph has: {shown}."
+    else:
+        have = "This graph has no metacontexts yet."
+    raise ValueError(
+        f"Metacontext '{metacontext_id}' does not exist in graph "
+        f"'{storage.current_database}'. Metacontext ids are per graph, so an id "
+        f"from another graph names nothing here. {have} Create one with "
+        f"create_metacontext, or omit metacontext_id to store in base reality "
+        f"(The Real)."
+    )
+
+
 async def store_decomposition(
     document_id: str,
     segments: list[dict],
@@ -678,7 +738,20 @@ async def store_decomposition(
     # shadow the function of the same name.
     from epimemer.pipelines.timeline import functions as timeline_functions
 
-    # Checked here too, and not because the segment lookup below would miss it:
+    # The frame this document's nodes land in, given a row before anything is
+    # written. Here rather than at graph creation because this is where the
+    # claim is actually made: `frames_for` answers "the-real" for a node with no
+    # `has_metacontext` edges, and until the row exists that answer names
+    # nothing an agent can look up or read a description of (#76). Idempotent —
+    # one keyed read per ingest, which after the first document is all it is.
+    await ensure_base_metacontext(storage)
+    # A stated frame must resolve *here*, for the same reason a named timeline
+    # must already exist: an edge pointing at nothing isolates the node it was
+    # meant to frame. Checked before any of the document is built, so a bad id
+    # costs nothing and leaves nothing behind.
+    if metacontext_id:
+        await require_metacontext(metacontext_id, storage)
+
     # Accumulate the whole document's writes, then persist them atomically so a
     # mid-document failure cannot leave a partial graph.
     batch_nodes: list[EpistemicNode] = []
@@ -1266,6 +1339,15 @@ async def search(
     from epimemer.pipelines.query.validity import validity_for, verdict_for
     from epimemer.pipelines.reflection.review import review_labels_for
 
+    # A frame that does not resolve here would silently narrow to base reality
+    # alone and answer as though that were the frame — the wrong-graph failure
+    # one layer in, and on the read side, where there is no artifact left
+    # anywhere afterwards. Checked whatever `cross_frame` says: naming a frame
+    # that does not exist is a mistake in either mode, and one rule beats a
+    # rule with an exception.
+    if metacontext_id:
+        await require_metacontext(metacontext_id, storage)
+
     # Map string node types to enums
     nt_enums = None
     if node_types:
@@ -1675,8 +1757,15 @@ async def list_sources(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
 
 
 async def list_relations(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
-    """Distinct user-tier relationship labels (with kind + usage count) — discovery
-    before coining a new label or consolidating synonyms via apply_reflection."""
+    """Distinct user-tier relationship labels (with kind, usage count and
+    description) — discovery before coining a new label or consolidating
+    synonyms via apply_reflection.
+
+    **Counts stay derived from the edges** rather than stored on the record.
+    They are scoped to active nodes (#14 step 2), so a stored count would drift
+    the moment a node was retired, and the record has nothing to say about
+    usage — it holds what the label *means*.
+    """
     from epimemer.pipelines.reflection.relation_consolidation import (
         related_edges_of_active_nodes,
     )
@@ -1685,13 +1774,122 @@ async def list_relations(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
     for e in await related_edges_of_active_nodes(storage):
         counts[(e.label or "", e.kind)] = counts.get((e.label or "", e.kind), 0) + 1
 
+    # The vocabulary in one read rather than one per label, and the join is
+    # left-outer on purpose: a label with no record is a graph nobody has
+    # described since #74 shipped, not an error, and it answers exactly as it
+    # did before — with an empty description.
+    described = {
+        (rl.name, rl.kind): rl.description
+        for rl in await storage.query_relation_labels()
+    }
     relations = [
-        {"label": label, "kind": kind, "count": c}
+        {
+            "label": label,
+            "kind": kind,
+            "count": c,
+            "description": described.get((label, kind), ""),
+        }
         for (label, kind), c in sorted(counts.items(), key=lambda kv: -kv[1])
     ]
     result = {"relations": relations}
     meta = ResponseMeta(nodes_returned=len(relations))
     return result, meta
+
+
+async def describe_relation(
+    name: str,
+    storage: StorageBackend,
+    *,
+    description: str,
+    kind: str = "relationship",
+    judge: JudgeRef | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Say what one of this graph's relationship labels means here (#74).
+
+    Advisory prose, not a schema. It is free to say *"in the Court context this
+    means X; for corporate contracts use Y"* — the system never enforces it, and
+    making it enforceable is the step that would turn a vocabulary into a
+    schema. It describes the shared **label**, never one edge: per-edge meaning
+    is what would make this a hypergraph.
+
+    **This is the half that pays**, because it moves the intervention from
+    repair to prevention. An agent picking from a described vocabulary never
+    coins the fourth synonym, and no merge is needed to clean up after it.
+
+    Refused where the graph cannot back the claim up:
+
+    - **A label no edge carries.** Describing a word this graph has never used
+      would put a record in the vocabulary that names nothing, and the next
+      agent reading `list_relations` would see a label with a meaning and no
+      usage.
+    - **A `kind` the edges do not carry.** The kind decides whether retrieval
+      follows the edge, so it is in force on the edges and this record only
+      mirrors it; changing it here would leave the record disagreeing with every
+      edge it describes.
+
+    The record is created if the label has none, carrying **no judge**:
+    describing a label is not claiming to have introduced it, and the
+    description is journalled in its own right. Re-describing replaces the text
+    and journals a second row — the first row is not edited, and the record's
+    `judged_by` never moves.
+    """
+    in_force = await storage.get_relation_kind(name)
+    if in_force is None:
+        return (
+            {
+                "described": False,
+                "name": name,
+                "refused": (
+                    f"No edge in this graph carries the relation '{name}'. "
+                    f"`list_relations` shows the vocabulary that exists; `link` "
+                    f"coins a new label by using it."
+                ),
+            },
+            ResponseMeta(nodes_returned=0),
+        )
+    if in_force != kind:
+        return (
+            {
+                "described": False,
+                "name": name,
+                "kind": in_force,
+                "refused": (
+                    f"'{name}' is a '{in_force}' relation in this graph, not "
+                    f"'{kind}'. The kind is in force on the edges and this "
+                    f"record only mirrors it, so it cannot be changed from "
+                    f"here."
+                ),
+            },
+            ResponseMeta(nodes_returned=0),
+        )
+
+    existing = await storage.get_relation_label(name, in_force)
+    # `judged_by=None` on a record this call creates, and untouched on one it
+    # does not — `recorded_relation_label` keeps the coiner, which is what makes
+    # that rule structural rather than a convention every caller remembers.
+    #
+    # The merge is computed here as well as inside the backend so the response
+    # can report **what was stored** rather than what was asked for. The two
+    # differ in one case that matters: a blank `description` leaves existing
+    # prose alone, so echoing the argument back would tell the agent it had
+    # cleared a description it had not.
+    stored = recorded_relation_label(
+        existing, RelationLabel(name=name, kind=in_force, description=description)
+    )
+    label_id = await storage.store_relation_label(stored)
+    await journal(
+        storage, DecisionKind.RELATION_DESCRIPTION, [label_id], judge=judge
+    )
+
+    result = {
+        "described": True,
+        "relation_label_id": label_id,
+        "name": name,
+        "kind": in_force,
+        "description": stored.description,
+        "created": existing is None,
+    }
+    return result, ResponseMeta(nodes_returned=1)
 
 
 # --- Link ---
@@ -1716,10 +1914,30 @@ async def link(
     "relationship" (followed in retrieval) or "attribution" (not); a label already
     in use reuses its existing kind (set once per label).
     """
+    description = ""
     if relation is not None:
         et = EdgeType.RELATED
         resolved_kind = await storage.get_relation_kind(relation) or kind
         label = relation
+        # The label's record, created on first use (#74). One extra read on the
+        # common path and a write only when a label is coined — which is the
+        # moment, and the only moment, at which somebody is claiming to have
+        # introduced this word. A label already recorded is left exactly as it
+        # is: re-coining does not restamp the judge, because the second agent
+        # did not introduce it.
+        record = await storage.get_relation_label(label, resolved_kind)
+        if record is None:
+            await storage.store_relation_label(
+                RelationLabel(name=label, kind=resolved_kind, judged_by=judge)
+            )
+        else:
+            # What this graph already means by the word, told to the agent
+            # reusing it **at the moment it matters** rather than only to one
+            # that thought to call `list_relations` first. This is information,
+            # not a redirect: nothing here steers a coinage (§8), because a
+            # nudge that cannot carry the distinction it is overruling is the
+            # loop FC3 describes.
+            description = record.description
     elif edge_type is not None:
         try:
             et = EdgeType(edge_type)
@@ -1751,6 +1969,8 @@ async def link(
     await journal(storage, DecisionKind.RELATION, [src_id, dst_id], judge=judge)
 
     result = {"edge_id": edge.id, "kind": resolved_kind}
+    if description:
+        result["relation_description"] = description
     meta = ResponseMeta(nodes_returned=2)
     return result, meta
 
@@ -2919,7 +3139,11 @@ async def apply_reflection(
     relation_merges: [{labels: [str], into: str}] — consolidate synonymous user
         relationship labels (from reflect's similar_relations). Every user-tier
         edge with a listed label is relabelled to ``into``, in place (edges are
-        not versioned).
+        not versioned). The survivor gets a label record if it had none (#74
+        §2.3), and any description on a label that just lost its last edge comes
+        back in ``relation_descriptions_orphaned`` rather than being folded in:
+        settling two definitions into one is the agent's judgment to make with
+        ``describe_relation``, not this call's.
     boundaries: [{node_id, source_id, endpoint, at, timeline_id?}] — accept a
         boundary reflect proposed (#53 T1 §9), filling in one open endpoint of
         one source's period. The written interval's basis becomes ``inferred``:
@@ -3215,18 +3439,47 @@ async def apply_reflection(
     #    write a subject list in the hundreds. Filed rather than guessed at.
     relations_consolidated = 0
     edges_relabeled = 0
+    relation_descriptions_orphaned: list[dict] = []
     for rm_spec in (relation_merges or []):
         into = rm_spec["into"]
         applied = False
         for label in rm_spec["labels"]:
             if label == into:
                 continue
+            kind = await storage.get_relation_kind(label) or "relationship"
+            losing = await storage.get_relation_label(label, kind)
             n = await storage.relabel_edges(label, into)
             edges_relabeled += n
             if n:
                 applied = True
+                # The prose on the label that just lost its last edge. Nothing
+                # here folds it into the survivor: two definitions concatenated
+                # is the system making an editorial judgment it is not entitled
+                # to, and this design's whole shape is that agents judge and the
+                # graph records. So it is handed back instead, for the agent to
+                # settle with `describe_relation` — the same nominate-don't-
+                # decide split `reflect` uses everywhere else.
+                if losing is not None and losing.description:
+                    relation_descriptions_orphaned.append({
+                        "label": label,
+                        "kind": kind,
+                        "description": losing.description,
+                        "merged_into": into,
+                    })
         if applied:
             relations_consolidated += 1
+            # The survivor gets a record, judge-less. A merge is the fourth
+            # write path that names a label and §2.3 enumerated three, so
+            # consolidating into a label nobody had coined used to leave the
+            # edges pointing at a word with no record — the description being
+            # consolidated *toward* absent while the one consolidated *away*
+            # sat in the store unreachable. Judge-less because merging is not
+            # coining: the agent is not claiming to have introduced the word.
+            surviving_kind = await storage.get_relation_kind(into) or "relationship"
+            if await storage.get_relation_label(into, surviving_kind) is None:
+                await storage.store_relation_label(
+                    RelationLabel(name=into, kind=surviving_kind)
+                )
 
     # 10. Accept boundaries reflect proposed. Last because it is the only step
     #    that edits an existing assertion rather than adding one, so anything
@@ -3273,6 +3526,7 @@ async def apply_reflection(
         "judgments_applied": judgments_applied,
         "relations_consolidated": relations_consolidated,
         "edges_relabeled": edges_relabeled,
+        "relation_descriptions_orphaned": relation_descriptions_orphaned,
         "boundaries_applied": boundaries_applied,
         "boundaries_refused": boundaries_refused,
     }
@@ -3355,8 +3609,20 @@ async def review(
     # reviewed-set covering the **whole** selection rather than the page: a
     # reviewed-set built from the page would call every row on page two
     # unreviewed.
+    # One handle in, a set of ids out (#78): a judge that has absorbed another
+    # record answers under both, and nothing was rewritten to make that so.
+    # `judge` is None where no judge was named, which is every mode but
+    # `by_agent`.
+    judge = (
+        resolve_agent(await storage.list_agents(), agent_id)
+        if agent_id is not None else None
+    )
+    judge_ids = (
+        None if agent_id is None
+        else (agent_aliases(judge) if judge is not None else [agent_id.strip()])
+    )
     records = await storage.query_decisions(
-        agent_id=agent_id, since=since, until=until
+        agent_ids=judge_ids, since=since, until=until
     )
     records = [r for r in records if passes_ceiling(r, certainty_ceiling)]
 
@@ -3417,7 +3683,7 @@ async def review(
     others = [name for name in await storage.list_databases() if name != here]
     counts = (
         await storage.count_decisions_by_graph(
-            others, agent_id=agent_id, since=since, until=until
+            others, agent_ids=judge_ids, since=since, until=until
         )
         if others else {}
     )
@@ -3452,7 +3718,14 @@ async def review(
             # were not. `mode` and `certainty_ceiling` are not mirrored here, so
             # a graph counted at 12 can list fewer than 12 when you get there.
             "counted_with": {
-                "agent_id": agent_id,
+                # The ids the handle resolved to *here*, and not the handle:
+                # this says what the count **ran with**, and two keys for one
+                # filter would read as two filters. The handle is in `judge`.
+                # Another graph may know this judge under a different set, and
+                # the locator is allowed to be wider than what a review there
+                # would list, never narrower — so its own resolution is not
+                # consulted.
+                "agent_ids": judge_ids,
                 "since": since.isoformat() if since else None,
                 "until": until.isoformat() if until else None,
             },
@@ -3462,6 +3735,26 @@ async def review(
             "unreadable": [name for name in others if name not in counts],
         },
     }
+
+    if agent_id is not None:
+        # What the handle turned out to name (#78). A handle that resolves to
+        # nothing used to return an empty page indistinguishable from a judge
+        # that has decided nothing, which is the failure a rename or a typo
+        # produces — so the two are told apart here, and the judges that do
+        # exist are listed, since no tool enumerates them.
+        result["judge"] = {
+            "asked_for": agent_id,
+            "agent_id": judge.id if judge else None,
+            "name": agent_name(judge) if judge else None,
+            "also_recorded_as": list(judge.former_ids) if judge else [],
+        } | (
+            {} if judge is not None else {
+                "unknown_here": True,
+                "judges_here": [
+                    agent_name(a) for a in live_agents(await storage.list_agents())
+                ],
+            }
+        )
 
     # Declared, like every response carrying node ids: `retrieved` is what drives
     # focus in the viewer, so an undeclared subject greys out the moment a
@@ -3654,6 +3947,150 @@ async def rejudge(
     }
     return result, ResponseMeta(nodes_returned=1, retrieved=_declare([node_id]))
 
+
+async def reframe(
+    node_id: str,
+    storage: StorageBackend,
+    *,
+    withdraw: str,
+    because: str,
+    assign: str | None = None,
+    to_base_reality: bool = False,
+    judge: JudgeRef | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Withdraw a frame from a node, optionally putting another in its place.
+
+    A metacontext assignment used to be one-way, so a fact wrongly framed as
+    fiction stayed framed for ever — and that is not cosmetic. It becomes
+    permanently unmergeable with its own twin, it stops corroborating the real
+    copy, and a frame-scoped search misses it where it belongs while returning
+    it where it does not. All three fail silently.
+
+    **Prefer `assign` over a bare withdrawal when the claim belongs in another
+    frame.** Withdrawing and then linking passes through *untagged*, where the
+    claim is asserted in every frame, and it strands the node there if the
+    second call never happens.
+
+    **A withdrawal that leaves no frames is a promotion** — base-reality
+    knowledge is inherited by every frame — and requires `to_base_reality=True`
+    to say so on purpose.
+
+    Not a supersession: the claim is unchanged and the world has not moved, so
+    nothing is retired and no lineage moves. `ISSUES.md` #66.
+    """
+    from epimemer.pipelines.frames import ReframeRefused, reframe_node
+
+    outcome = await reframe_node(
+        storage,
+        node_id=node_id,
+        withdraw=withdraw,
+        because=because,
+        assign=assign,
+        to_base_reality=to_base_reality,
+        judge=judge,
+    )
+    if isinstance(outcome, ReframeRefused):
+        return (
+            {"reframed": False, "node_id": node_id, "refused": outcome.reason},
+            ResponseMeta(retrieved=_declare([node_id])),
+        )
+
+    record = await journal(
+        storage, DecisionKind.REFRAME, [node_id], judge=judge
+    )
+    result = {
+        "reframed": True,
+        "node_id": node_id,
+        "withdrew": outcome.withdrew,
+        "assigned": outcome.assigned,
+        # Empty means untagged, which is base reality.
+        "frames_now": outcome.frames_now,
+        "to_base_reality": outcome.to_base_reality,
+        "decision_id": record.id if record else None,
+    }
+    return result, ResponseMeta(nodes_returned=1, retrieved=_declare([node_id]))
+
+
+async def correct_interval(
+    node_id: str,
+    storage: StorageBackend,
+    *,
+    source_id: str,
+    intervals: list[dict],
+    because: str,
+    judge: JudgeRef | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Replace what one source is recorded as asserting about when a claim held.
+
+    For an endpoint that is **present and wrong**. `boundary_proposals` fills one
+    that is *open*, where a succession implies it; nothing derives that a stated
+    date was misread, so this is a separate act on separate evidence.
+
+    Since #62 corroboration reads intervals to decide whether a look-alike is a
+    witness to the same period or the neighbouring truth, so a wrong interval
+    moves a count as well as a date.
+
+    **The whole list for that (node, source) pair is replaced**, because an
+    interval is a position in a list on one edge and has no id of its own. An
+    empty list is allowed, and is the correction for a period that was invented
+    outright.
+
+    Not a supersession. `ISSUES.md` #66.
+    """
+    from epimemer.pipelines.reflection.boundaries import (
+        IntervalCorrectionRefused,
+        correct_interval as correct_interval_edge,
+    )
+
+    try:
+        parsed = [ValidityInterval.model_validate(entry) for entry in intervals]
+    except ValidationError as problem:
+        return (
+            {
+                "corrected": False,
+                "node_id": node_id,
+                "source_id": source_id,
+                "refused": (
+                    f"an interval did not validate: {problem.error_count()} "
+                    f"problem(s). `basis` has no default and must be 'stated' "
+                    f"or 'inferred' — the agent is not a source, so every "
+                    f"period says which it was."
+                ),
+            },
+            ResponseMeta(retrieved=_declare([node_id])),
+        )
+
+    outcome = await correct_interval_edge(
+        storage,
+        node_id=node_id,
+        source_id=source_id,
+        intervals=parsed,
+        because=because,
+        judge=judge,
+    )
+    if isinstance(outcome, IntervalCorrectionRefused):
+        return (
+            {
+                "corrected": False,
+                "node_id": node_id,
+                "source_id": source_id,
+                "refused": outcome.reason,
+            },
+            ResponseMeta(retrieved=_declare([node_id])),
+        )
+
+    record = await journal(
+        storage, DecisionKind.INTERVAL_CORRECTION, [node_id], judge=judge
+    )
+    result = {
+        "corrected": True,
+        "node_id": node_id,
+        "source_id": source_id,
+        "was": [interval.model_dump(mode="json") for interval in outcome.was],
+        "now": [interval.model_dump(mode="json") for interval in outcome.now],
+        "decision_id": record.id if record else None,
+    }
+    return result, ResponseMeta(nodes_returned=1, retrieved=_declare([node_id]))
 
 
 # --- Query Graph ---
@@ -4365,11 +4802,35 @@ async def graph_stats(
 
 # --- Agents (REVIEW_MODE.md §2) ---
 
-# Asks the user to admit an id, and returns the id they approved — which may not
-# be the one proposed, because the user edits. `None` means no answer: they
-# declined, or the client has no channel to them at all. The server owns *how*
-# the question is put; this module owns *when* it is worth asking.
-ApproveId = Callable[[str, str], Awaitable[str | None]]
+class ApprovalOutcome(BaseModel):
+    """What came back from asking the user which judge this agent is.
+
+    **Three states, not two.** `chosen` set is an approval — and may name a
+    different id from the one proposed, because the user picks or edits.
+    `chosen` empty splits in two, and the split is load-bearing (#78):
+
+    - **declined** — the question reached a person and they said no. Refuses,
+      whatever the approved list says. A user declining an id they approved
+      last week is withdrawing it for this bind, not being overruled by a list.
+    - **unavailable** — no channel to a person exists at all, which is a client
+      without the elicitation capability. Here an id the user approved through
+      `EPIMEMER_APPROVED_AGENTS` or `epimemer agents confirm` binds, because
+      that approval *is* the user's involvement (§2.3) and refusing it would
+      leave such a client unable to judge at all.
+
+    The two were one value until 2026-08-25 and the conflation was harmless
+    while an approved id skipped the question entirely. Asking on every bind is
+    what made them have to be told apart.
+    """
+
+    chosen: str | None = None
+    channel_available: bool = True
+
+
+# Asks the user to admit an id. The server owns *how* the question is put; this
+# module owns *when* it is worth asking, and reads the answer's three states off
+# `ApprovalOutcome`.
+ApproveId = Callable[[str, str], Awaitable[ApprovalOutcome]]
 
 # Asks the user to confirm a *new self-description* for an id they have already
 # admitted. Separate from `ApproveId` because the two questions have different
@@ -4397,6 +4858,26 @@ async def approve_agent_ids(
     updated = [*approved, *added]
     await storage.set_approved_agent_ids(updated)
     return updated
+
+
+async def seed_approved_judges(
+    storage: StorageBackend, handles: Sequence[str]
+) -> list[str]:
+    """Admit judges named the way a **person** would name them.
+
+    `EPIMEMER_APPROVED_AGENTS` and `epimemer agents confirm` take text a user
+    typed, and since the three-layer split the approved list holds opaque keys
+    (#78) — so a name has to be resolved to the judge it belongs to, or seeding
+    an existing judge by name would approve a second, empty identity under the
+    name as a key. **Where nothing matches, the handle is admitted as itself**,
+    which is exactly the old behaviour and the only sensible reading of seeding
+    a judge that does not exist yet: its first claim adopts the key.
+    """
+    agents = await storage.list_agents()
+    return await approve_agent_ids(storage, [
+        agent.id if (agent := resolve_agent(agents, handle)) is not None else handle
+        for handle in handles
+    ])
 
 
 async def judge_is_approved(storage: StorageBackend, judge: JudgeRef) -> bool:
@@ -4429,16 +4910,17 @@ def judge_required_reason(approved: Sequence[str]) -> str:
     """Why a write was refused for naming no judge, written for the user.
 
     It has to name the two ways out, because the agent reading it can do
-    neither: claiming an identity needs an id **the user has approved**, and
-    approving one is not something any tool can do (§2.3).
+    neither: claiming an identity needs a judge **the user has approved**, and
+    approving one is not something any tool can do (§2.3). `approved` arrives
+    as labels rather than keys — see `approved_labels`.
     """
     known = (
-        f"Approved ids here: {', '.join(approved)}."
+        f"Judges approved here: {', '.join(approved)}."
         if approved
         else (
-            "**No id has been approved in this graph**, so no write can succeed "
-            "until one is — set EPIMEMER_APPROVED_AGENTS, or run "
-            "`epimemer agents confirm <id>` against a served SurrealDB."
+            "**No judge has been approved in this graph**, so no write can "
+            "succeed until one is — set EPIMEMER_APPROVED_AGENTS, or run "
+            "`epimemer agents confirm <name>` against a served SurrealDB."
         )
     )
     return (
@@ -4450,29 +4932,255 @@ def judge_required_reason(approved: Sequence[str]) -> str:
     )
 
 
-def _unapproved_reason(agent_id: str, approved: Sequence[str]) -> str:
+# One picker line has to fit a terminal, so the parts are budgeted rather than
+# concatenated and hoped for.
+_ROSTER_LINE_BUDGET = 88
+# Choice keys are prefixed so that no agent id, whatever it contains, can
+# collide with the "mint a new one" option. Agent ids are user-assigned free
+# text and are validated for emptiness and nothing else, so a bare sentinel
+# would be a string somebody could legitimately be called.
+JUDGE_CHOICE_PREFIX = "use:"
+NEW_JUDGE_CHOICE = "new:"
+RENAME_JUDGE_CHOICE = "rename:"
+
+
+class JudgeChoice(BaseModel):
+    """One option in the judge picker: what it selects, and the line shown.
+
+    Built here rather than at the MCP boundary because it is a read of graph
+    state, and because the picker's whole value is the content of these lines —
+    which is testable without an elicitation channel and untestable with one.
+    """
+
+    key: str
+    agent_id: str
+    name: str
+    title: str
+
+
+def _roster_title(name: str, agent: Agent | None) -> str:
+    """One picker line: who this judge is, and when it last judged.
+
+    The **name**, never the id — the id is a key and is not shown to anybody
+    (#78). A record written before the split has no name and reads as its own
+    id, which is what it always was.
+    """
+    if agent is None:
+        return f"{name} · approved, never claimed"
+    used = (
+        f"last used {agent.last_seen_at.date().isoformat()}"
+        if agent.last_seen_at else "never used"
+    )
+    head = f"{name} · {used}"
+    current = current_description(agent)
+    if current is None or not current.text:
+        return head
+    room = _ROSTER_LINE_BUDGET - len(head) - 3
+    if room < 12:
+        return head
+    text = " ".join(current.text.split())
+    if len(text) > room:
+        text = text[: room - 1].rstrip() + "…"
+    return f"{head} · {text}"
+
+
+async def judge_roster(storage: StorageBackend) -> list[JudgeChoice]:
+    """The judges this graph offers to bind to, most recently used first.
+
+    The union of the agent records and the approved ids, because the two answer
+    different halves of *who could this be*: a record is a judge that has
+    decided something, an approved id may be one the user admitted out of band
+    and nothing has claimed yet.
+
+    **Absorbed records are not offered.** A record whose id another has taken as
+    a former id is no longer a judge in its own right, and offering it would
+    rebuild the split that consolidating it repaired. The same goes for an
+    approved id that is any live judge's — current or former — since it is that
+    judge, listed once already.
+
+    Ordering is load-bearing rather than cosmetic: the picker goes up on every
+    bind, which is affordable only while the answer the user wants is the first
+    line offered.
+    """
+    stored = await storage.list_agents()
+    live = live_agents(stored)
+    known = {alias for agent in stored for alias in agent_aliases(agent)}
+    bare = [
+        agent_id for agent_id in await storage.get_approved_agent_ids()
+        if agent_id not in known
+    ]
+
+    used = [a for a in live if a.last_seen_at]
+    unused = [a for a in live if not a.last_seen_at]
+    # Two passes rather than one composite key: the date runs descending and the
+    # name ascending, and Python's sort is stable, so sorting by the tiebreak
+    # first and the primary key second gives both without inventing a key that
+    # reverses one and not the other.
+    used.sort(key=agent_name)
+    used.sort(key=lambda agent: agent.last_seen_at, reverse=True)
+    unused.sort(key=agent_name)
+    bare.sort()
+
+    return [
+        JudgeChoice(
+            key=f"{JUDGE_CHOICE_PREFIX}{agent.id}",
+            agent_id=agent.id,
+            name=agent_name(agent),
+            title=_roster_title(agent_name(agent), agent),
+        )
+        for agent in (*used, *unused)
+    ] + [
+        JudgeChoice(
+            key=f"{JUDGE_CHOICE_PREFIX}{agent_id}",
+            agent_id=agent_id,
+            name=agent_id,
+            title=_roster_title(agent_id, None),
+        )
+        for agent_id in bare
+    ]
+
+
+def selected_judge_id(key: str) -> str | None:
+    """The agent id a picker key selects, or None for *mint a new one*."""
+    if key.startswith(JUDGE_CHOICE_PREFIX):
+        return key[len(JUDGE_CHOICE_PREFIX):]
+    return None
+
+
+def approved_labels(
+    approved: Sequence[str], agents: Sequence[Agent]
+) -> list[str]:
+    """The approved ids as the user would recognise them — names where known.
+
+    Every refusal that lists what this graph approves goes through here, because
+    an opaque id in a message meant for a person is worse than no message: it
+    names the right judge in a form nobody can act on. An id belonging to no
+    record is shown as itself, which is what it is.
+    """
+    by_alias = {
+        alias: agent_name(agent)
+        for agent in live_agents(agents)
+        for alias in agent_aliases(agent)
+    }
+    return list(dict.fromkeys(
+        by_alias.get(agent_id, agent_id) for agent_id in approved
+    ))
+
+
+def _unapproved_reason(handle: str, labels: Sequence[str]) -> str:
     """Why a claim was refused, written for the agent to put to the user.
 
     **The refusal is the prompt** (§2.2): there is no startup handshake, so this
     text is the whole mechanism by which a user ever hears that an agent wants
     an identity. It says what to run, because the user cannot be assumed to know
-    the tool exists.
+    the tool exists. `labels` are names rather than ids (#78) — an id in a
+    message meant for a person names the right judge in a form nobody can act on.
     """
     known = (
-        f"Ids already approved here: {', '.join(approved)}."
-        if approved
-        else "No id has been approved in this graph yet."
+        f"Judges already approved here: {', '.join(labels)}."
+        if labels
+        else "No judge has been approved in this graph yet."
     )
     return (
-        f"'{agent_id}' is not an approved agent id for this graph. {known} "
-        f"Ask the user which id you should judge under — the id is theirs to "
+        f"'{handle}' is not an approved judge for this graph. {known} "
+        f"Ask the user which judge you should be — the identity is theirs to "
         f"assign, and it is what lets a later review show that a *different* "
         f"agent made these decisions. They can admit one by answering the "
         f"prompt this call raises, or by running "
-        f"`epimemer agents confirm <id>` against a server backend, or by "
+        f"`epimemer agents confirm <name>` against a server backend, or by "
         f"setting EPIMEMER_APPROVED_AGENTS before starting the server. "
         f"Do not pick one yourself."
     )
+
+
+async def rename_judge(
+    storage: StorageBackend,
+    *,
+    handle: str,
+    name: str,
+    same_judge: bool = False,
+) -> dict:
+    """Rename a judge, or say why it cannot be renamed yet.
+
+    **The name layer is the only mutable one** (#78), and this is the only thing
+    that writes it. Renaming rewrites nothing: `judged_by` records the id, the
+    id never changes, and every old row follows the new name because the name is
+    resolved at read time. That is the opposite rule from a description, which
+    is pinned per decision — *which judge is this* wants the name the user knows
+    it by now, and *what did it claim to be then* wants the claim as it stood.
+
+    **A name already taken is not an error, it is a question.** Two records that
+    should be one is the commonest reason to be renaming at all — it is how
+    `Opus 5 Judge` and `Opus 5` came to exist here — so a collision returns
+    `same_judge_needed` and the caller asks. Answering yes consolidates: the
+    judge holding the name absorbs the other, gaining its ids and its
+    description history, and **nothing is deleted or rewritten**. Answering no
+    leaves both alone.
+
+    Not reachable from any MCP tool, for the reason approval is not: a handle an
+    agent could rename is a handle an agent could point at another judge's
+    history. Its callers are the elicitation prompt and the CLI, which are the
+    same two channels that terminate at the user (§2.3).
+    """
+    name = name.strip()
+    if not name:
+        return {"status": "refused", "reason": "a judge needs a name."}
+
+    agents = await storage.list_agents()
+    agent = resolve_agent(agents, handle)
+    if agent is None:
+        return {
+            "status": "refused",
+            "reason": (
+                f"No judge here answers to '{handle}'. Known: "
+                f"{', '.join(agent_name(a) for a in live_agents(agents)) or 'none'}."
+            ),
+        }
+
+    holder = name_holder(agents, name, excluding=agent.id)
+    if holder is not None and not same_judge:
+        return {
+            "status": "same_judge_needed",
+            "agent_id": agent.id,
+            "name": agent_name(agent),
+            "holder_id": holder.id,
+            "reason": (
+                f"'{name}' already names another judge here, with "
+                f"{len(holder.descriptions)} description version(s) and "
+                f"decisions of its own. If they are the same judge, say so and "
+                f"they are consolidated; nothing is deleted and no decision is "
+                f"rewritten. If they are not, choose a different name."
+            ),
+        }
+
+    if holder is not None:
+        merged = absorbing(holder, agent)
+        await storage.upsert_agent(merged)
+        return {
+            "status": "consolidated",
+            "agent_id": merged.id,
+            "name": agent_name(merged),
+            "former_ids": merged.former_ids,
+            "message": (
+                f"'{agent_name(agent)}' and '{name}' are now one judge. Its "
+                f"decisions are found under either, and both description "
+                f"histories are kept."
+            ),
+        }
+
+    was = agent_name(agent)
+    await storage.upsert_agent(renamed(agent, name))
+    return {
+        "status": "renamed",
+        "agent_id": agent.id,
+        "name": name,
+        "previous_name": was,
+        "message": (
+            f"'{was}' is now '{name}'. Every decision it has already made "
+            f"reads under the new name — the id it was recorded with has not "
+            f"changed and nothing was rewritten."
+        ),
+    }
 
 
 async def claim_agent(
@@ -4482,28 +5190,64 @@ async def claim_agent(
     description: str,
     approve_id: ApproveId | None = None,
     confirm_description: ConfirmDescription | None = None,
+    confirmed_identity: str | None = None,
     now: datetime | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Bind this session to a judge, or say why it cannot be bound.
 
     Two gates, and they are deliberately different in strength:
 
-    - **The id is a hard gate.** An id the user has not approved is refused,
-      because admitting one would hand identity back to the agent and *"a
-      different agent reviewed this"* would be self-asserted again (§2.2). Where
-      a channel to the user exists, this asks first rather than refusing blind.
+    - **The identity is a hard gate.** A judge the user has not approved is
+      refused, because admitting one would hand identity back to the agent and
+      *"a different agent reviewed this"* would be self-asserted again (§2.2).
+      Where a channel to the user exists, this asks first rather than refusing
+      blind.
     - **The description is not.** New wording is recorded either way; it carries
       `confirmed_at` only where a human saw it. *Self-described, unconfirmed* is
       a different epistemic object, never collapsed into the same field (§2.4).
+
+    **`agent_id` is a handle, not the key** (#78, 2026-08-26). It is resolved
+    against this graph's judges by name, by id, and by any id a judge used to be
+    recorded under — so an agent may propose whatever the user calls this judge,
+    and a returning one may pass back the id it was given. The key is in the
+    response as `agent_id` and the handle is in `name`; the key is not for
+    showing to anybody.
+
+    **The gate guards assuming an identity, not only minting one** (#78, revised
+    2026-08-25). It used to ask only where `agent_id` was not already approved,
+    which guarded the wrong act: an approved id then bound with no user
+    involvement at all, and the refusal names what this graph approves — so a
+    rejected guess returned the list that would have worked. Asking on every
+    bind is what closes that, and it is affordable only because the question is
+    a pick from a list rather than a name to type.
+
+    **What the user answers with is a handle too**, so choosing an existing
+    judge and typing the name of one land in the same place. That matters most
+    on the free-text path, which is reached by asking for a *new* judge: typing
+    the name of one that exists joins it rather than minting a second record
+    with the same name, which is exactly how this graph's own split began.
+
+    **`confirmed_identity` is the caller's cadence memo**, not a permission. It
+    names the judge this session has already had confirmed for this graph, and
+    the session-scoped state that answers it lives at the MCP boundary beside
+    the binding itself. It suppresses the question only while that judge is
+    still approved; a different judge, graph or session is a different question.
+    A **changed description** is still put to the user, because the memo records
+    an identity rather than a wording.
+
+    **Where no channel to the user exists, an approved id still binds.** That is
+    the `EPIMEMER_APPROVED_AGENTS` and `epimemer agents confirm` path (§2.3),
+    which is user involvement that happened earlier rather than none — and
+    refusing it would leave a client that cannot elicit unable to judge at all.
 
     Nothing here verifies the description. It is self-reported prose, exactly
     like a fact the agent ingests, and it must never be read as a credential.
     """
     at = now or datetime.now(timezone.utc)
-    agent_id = agent_id.strip()
+    handle = agent_id.strip()
     description = description.strip()
 
-    if not agent_id:
+    if not handle:
         return {
             "status": "refused",
             "reason": "an agent id is required; ask the user which one to use.",
@@ -4511,40 +5255,81 @@ async def claim_agent(
     if not description:
         return {
             "status": "refused",
-            "agent_id": agent_id,
+            "agent_id": handle,
             "reason": (
                 "a self-description is required: it is what a later review "
                 "reads to tell one judge from another."
             ),
         }, ResponseMeta()
 
+    agents = await storage.list_agents()
     approved = await storage.get_approved_agent_ids()
+    existing = resolve_agent(agents, handle)
+    # An id the user seeded but nothing has claimed has no record to resolve, so
+    # the handle stands in as its own key — which is what seeding one means.
+    key = existing.id if existing is not None else handle
+
     confirmed_now = False
-    if agent_id not in approved:
-        chosen = await approve_id(agent_id, description) if approve_id else None
-        if chosen is None:
+    memo_holds = (
+        confirmed_identity is not None
+        and key == confirmed_identity
+        and key in approved
+    )
+    if memo_holds:
+        # Asked and answered, this session, for this graph, for this identity.
+        pass
+    else:
+        outcome = (
+            await approve_id(handle, description) if approve_id is not None
+            else ApprovalOutcome(channel_available=False)
+        )
+        if outcome.chosen:
+            # The user picks or types, so what comes back is another handle —
+            # not necessarily the one proposed, and not necessarily an id.
+            # Recording the proposal would record a claim nobody approved.
+            agents = await storage.list_agents()
+            handle = outcome.chosen.strip()
+            existing = resolve_agent(agents, handle)
+            if existing is not None:
+                key = existing.id
+            elif handle in approved:
+                # A judge the user seeded out of band and nothing has claimed:
+                # the string *is* its key, because nothing else could be, and
+                # minting a second one beside it would orphan the approval the
+                # user actually gave.
+                key = handle
+            else:
+                key = new_agent_id()
+            approved = await approve_agent_ids(storage, [key])
+            confirmed_now = True
+        elif outcome.channel_available or key not in approved:
+            # Declined refuses even a pre-approved judge; unavailable falls
+            # through to the approved list, which is the only channel such a
+            # client has.
             return {
                 "status": "refused",
-                "agent_id": agent_id,
+                "agent_id": handle,
                 "approved_agent_ids": approved,
-                "reason": _unapproved_reason(agent_id, approved),
+                "approved_judges": approved_labels(approved, agents),
+                "reason": _unapproved_reason(
+                    handle, approved_labels(approved, agents)
+                ),
             }, ResponseMeta()
-        # The user edits, so what comes back is the id to use — not necessarily
-        # the one proposed. Recording the proposal would record a claim nobody
-        # approved.
-        agent_id = chosen.strip()
-        approved = await approve_agent_ids(storage, [agent_id])
-        confirmed_now = True
 
-    existing = await storage.get_agent(agent_id)
-    agent = existing or Agent(id=agent_id, authorised_at=at, first_seen_at=at)
+    agent = existing or Agent(
+        id=key, name=handle, authorised_at=at, first_seen_at=at
+    )
     current = current_description(agent)
     is_new_text = current is None or current.digest != description_digest(description)
 
     if is_new_text and not confirmed_now and confirm_description is not None:
-        confirmed_now = await confirm_description(agent_id, description)
+        confirmed_now = await confirm_description(agent_name(agent), description)
 
     updated = agent.model_copy(update={
+        # A record written before the split carries no name and reads as its own
+        # id; naming it on the next claim makes that explicit rather than
+        # leaving every reader to derive it.
+        "name": agent_name(agent),
         "descriptions": with_description(
             agent.descriptions,
             text=description,
@@ -4557,20 +5342,34 @@ async def claim_agent(
     await storage.upsert_agent(updated)
 
     version: AgentDescription = updated.descriptions[-1]
+    name = agent_name(updated)
     return {
         "status": "claimed",
-        "agent_id": agent_id,
+        # The key, for `review(mode="by_agent")` and nothing else. `name` is
+        # what to say to the user — an id is not for showing to anybody (#78).
+        "agent_id": updated.id,
+        "name": name,
+        "also_recorded_as": list(updated.former_ids),
         "digest": version.digest,
+        # Stated rather than left to be inferred from `description_versions: 1`
+        # (#78). *This judge has no history* is what tells an agent it has just
+        # created one instead of joining one, and an implication nobody reads
+        # is not a signal.
+        "new_agent": existing is None,
         "description_versions": len(updated.descriptions),
         "new_description": is_new_text,
         "description_confirmed": version.confirmed_at is not None,
         "approved_agent_ids": approved,
         "message": (
-            f"Judging as '{agent_id}'"
+            f"Judging as '{name}'"
             + (
-                " — the user confirmed this description."
+                " — a new judge, with no decisions before this session."
+                if existing is None else "."
+            )
+            + (
+                " The user confirmed this description."
                 if version.confirmed_at is not None
-                else " — this description is self-reported and unconfirmed, "
+                else " This description is self-reported and unconfirmed, "
                 "which is what a later review will see."
             )
         ),
@@ -4678,7 +5477,7 @@ async def _switched(
     the new graph at all.
     """
     if seed_agent_ids:
-        await approve_agent_ids(storage, seed_agent_ids)
+        await seed_approved_judges(storage, seed_agent_ids)
     result: dict = {
         "status": status,
         "active_graph": name,

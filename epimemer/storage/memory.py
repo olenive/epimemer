@@ -8,7 +8,7 @@ corpus on every call (`storage/bm25.py`) rather than maintaining an index.
 
 import copy
 import math
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, Sequence, TypeVar
@@ -31,6 +31,8 @@ from epimemer.core.types import (
     NodeStatus,
     NodeType,
     RawDocument,
+    RelationLabel,
+    recorded_relation_label,
     Segment,
     Timeline,
     Topic,
@@ -114,6 +116,14 @@ class _GraphStore:
     by_item: dict[str, set[str]] = field(default_factory=dict)
     timelines: dict[str, Timeline] = field(default_factory=dict)
     metacontexts: dict[str, Metacontext] = field(default_factory=dict)
+    # Relation-label records (#74), keyed by `(name, kind)` — the pair edges
+    # join on. Beside `metacontexts` rather than in `nodes` for the same reason:
+    # vocabulary is not knowledge, and a node here would enter search, reflect
+    # and merging, which would have the graph answering questions about its own
+    # words.
+    relation_labels: dict[tuple[str, str], RelationLabel] = field(
+        default_factory=dict
+    )
     # Judges, and the ids the user has admitted (REVIEW_MODE.md §2.5). Their
     # own dict rather than entries in `nodes`, so `search` and `reflect` cannot
     # reach them: two agents with similar descriptions are not a topic to merge.
@@ -234,7 +244,7 @@ def _destroy_node(g: _GraphStore, node_id: str) -> None:
 def _decision_matches(
     record: DecisionRecord,
     *,
-    agent_id: str | None,
+    agent_ids: Collection[str] | None,
     kinds: set[DecisionKind] | None,
     subject_id: str | None,
     reviews: str | None,
@@ -250,9 +260,9 @@ def _decision_matches(
     agreement structural rather than a thing to remember.
     """
     return (
-        (agent_id is None
+        (agent_ids is None
          or (record.judged_by is not None
-             and record.judged_by.agent_id == agent_id))
+             and record.judged_by.agent_id in agent_ids))
         and (kinds is None or record.kind in kinds)
         and (subject_id is None or subject_id in record.subject_ids)
         and (reviews is None or record.reviews == reviews)
@@ -990,6 +1000,23 @@ class InMemoryStorage:
             mc for mc in self._g.metacontexts.values() if mc.status == status
         )
 
+    # --- Relation labels (#74) ---
+
+    async def store_relation_label(self, label: RelationLabel) -> str:
+        key = (label.name, label.kind)
+        stored = recorded_relation_label(self._g.relation_labels.get(key), label)
+        self._g.relation_labels[key] = _store(stored)
+        return stored.id
+
+    async def get_relation_label(
+        self, name: str, kind: str
+    ) -> RelationLabel | None:
+        label = self._g.relation_labels.get((name, kind))
+        return None if label is None else _copy(label)
+
+    async def query_relation_labels(self) -> Sequence[RelationLabel]:
+        return _copy_all(self._g.relation_labels.values())
+
     # --- Reflection bookkeeping ---
 
     async def get_reflect_counter(self) -> int:
@@ -1053,7 +1080,7 @@ class InMemoryStorage:
     async def query_decisions(
         self,
         *,
-        agent_id: str | None = None,
+        agent_ids: Sequence[str] | None = None,
         kinds: Sequence[DecisionKind] | None = None,
         subject_id: str | None = None,
         reviews: str | None = None,
@@ -1062,11 +1089,12 @@ class InMemoryStorage:
         limit: int | None = None,
     ) -> list[DecisionRecord]:
         wanted = set(kinds) if kinds is not None else None
+        judges = None if agent_ids is None else set(agent_ids)
         matches = [
             record for record in self._g.decisions.values()
             if _decision_matches(
                 record,
-                agent_id=agent_id,
+                agent_ids=judges,
                 kinds=wanted,
                 subject_id=subject_id,
                 reviews=reviews,
@@ -1092,7 +1120,7 @@ class InMemoryStorage:
         self,
         databases: Sequence[str],
         *,
-        agent_id: str | None = None,
+        agent_ids: Sequence[str] | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> dict[str, int]:
@@ -1103,6 +1131,7 @@ class InMemoryStorage:
         `.get`, never `self._graphs[...]`, which would create it (#73).
         """
         counts: dict[str, int] = {}
+        judges = None if agent_ids is None else set(agent_ids)
         for database in databases:
             graph = self._graphs.get(database)
             if graph is None:
@@ -1111,7 +1140,7 @@ class InMemoryStorage:
                 1 for record in graph.decisions.values()
                 if _decision_matches(
                     record,
-                    agent_id=agent_id,
+                    agent_ids=judges,
                     kinds=None,
                     subject_id=None,
                     reviews=None,
@@ -1199,3 +1228,12 @@ class InMemoryStorage:
         return _copy_all(
             mc for mc in graph.metacontexts.values() if mc.status == NodeStatus.ACTIVE
         )
+
+    async def viz_list_relation_labels(
+        self,
+        database: str,
+    ) -> Sequence[RelationLabel]:
+        graph = self._graphs.get(database)
+        if graph is None:
+            return []
+        return _copy_all(graph.relation_labels.values())

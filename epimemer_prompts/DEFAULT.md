@@ -85,6 +85,15 @@ retrieval scope; these do not).
   (followed in retrieval) or `attribution` (where it came from / who said it — not
   followed); a label reuses its kind after first use. Known engine edges still use
   `link(..., edge_type="supports")`.
+- **Say what a label means here, once, with `describe_relation(name, description)`.**
+  The same word means different things in different graphs — `advised` is a
+  retainer in one and employment in another — and the description is advisory
+  prose the next agent reads, never a schema. `link` hands it back to you when
+  you reuse a described label, so you learn what the word already means at the
+  moment you use it rather than only if you thought to look first. Nothing
+  steers your coinage: reuse the label if it fits, coin a new one if the
+  distinction is real. Refused for a label no edge carries, and for a `kind` the
+  edges do not carry — the kind is set by use.
 
 Discovery & lookup:
 - **`find_nodes(sourced_from=…)` / `find_nodes(tagged_with=…)`** — exactly the nodes
@@ -93,6 +102,9 @@ Discovery & lookup:
   want provenance/aboutness, not similarity.
 - **`list_sources`** / **`list_relations`** — discover the sources and the
   user-defined relationship labels present before filtering or coining new ones.
+  `list_relations` carries each label's `description`; an empty one means
+  **nobody has said**, not that the word is meaningless, and is worth filling in
+  if you have just learned what this graph uses it for.
 
 ### When to search (search)
 - Before answering questions that might benefit from prior context, or when the
@@ -416,22 +428,58 @@ graph learned it.
   timestamp clears it.
 
 ### Metacontexts (epistemic frames)
-- Untagged knowledge is implicitly "The Real" — base physical reality.
+- Untagged knowledge is implicitly "The Real" — base physical reality. It is a
+  real record (`the-real`), created on the first ingest into a graph, so you can
+  see the frame you have been writing into rather than infer it.
+- **A metacontext id must resolve in the graph you are in**, and is refused if it
+  does not — on `store_decomposition` and on `search`. Ids are per graph, so one
+  remembered from another graph names nothing here; unchecked it would leave the
+  node in a frame it shares with nothing, never compared and never returned by a
+  search for the frame you meant. The refusal lists the frames that do exist,
+  which is the only listing there is.
 - Tag framed knowledge (a fiction setting, a specific source/perspective) with a
   metacontext so it never bleeds into base reality. A fact that is true *within* a
   fiction is not a contradiction of real history — it is a different frame.
+- **A frame need not be fictional.** *"What Milanese people knew by 1860"* and
+  *"what Londoners knew by 1860"* are two frames over the same real past.
+- **Never add "The Real" alongside a perspective frame.** Base-frame knowledge
+  applies *everywhere* — a frame-scoped search returns that frame plus base
+  reality, and excludes sibling frames — so a perspective claim tagged into the
+  base frame is asserted in every frame at once. Tag the perspective alone.
+- **Ask: would this hold in every other frame here?** Yes → base reality. No →
+  the perspective frame by itself. *"Milan is in Lombardy"* is shared
+  background; *"Milanese merchants believed the pass was closed"* is not.
+- **Two perspectives disagreeing about one world are not nominated as a
+  contradiction** — they share no frame, and the sweep skips such pairs. Usually
+  right: they coexist, neither claiming the other is wrong. Where the
+  disagreement *is* the finding, call `record_contradiction` directly; it does
+  not refuse, and `same_frame: false` marks it as cross-frame.
 - Never present framed/fictional information as fact; always surface the
   `metacontexts` label, and when creating new metacontexts use clear, descriptive
   names.
 
 ### Saying which judge you are (claim_agent)
 - Call it once per session, before writing anything, if the user has set up
-  agent identities. **Propose** an id and describe yourself; the user approves,
-  and may hand back a different id. Never pick an id and assume it.
+  agent identities. **Propose a name** and describe yourself; the user approves,
+  and may hand back a different judge. Never pick one and assume it.
+- **A different judge coming back is the normal case, not a correction.** The
+  user picks from the judges this graph already knows, so a proposed new name
+  usually resolves to an existing judge. Use what comes back from then on.
+- **Say `name` to the user, and keep `agent_id` for `review`.** The response
+  carries both: `agent_id` is an opaque key not meant for showing to anybody,
+  and `name` is what this judge is called. Either works on the way in, as does
+  any key the judge used to be recorded under.
+- **A name can be changed later, so do not agonise over it.** The user renames a
+  judge from this prompt or the command line, and every decision it has already
+  made follows the new name — nothing is rewritten.
+- **`new_agent: true` means you made a judge rather than joined one.** Say so:
+  near-duplicate judges are how a review of one agent's decisions ends up
+  returning half of them. If two judges here are obviously the same one, tell
+  the user — they can consolidate them, and only they can.
 - A refusal is not an error to work around — it is the prompt. Put its message
-  to the user and let them decide what you should be called; the id is theirs to
-  assign, and it is what lets a later review show that a *different* agent made
-  these decisions.
+  to the user and let them decide what you should be called; the identity is
+  theirs to assign, and it is what lets a later review show that a *different*
+  agent made these decisions.
 - **Your description is a claim, not a credential.** Nothing verifies it.
   Describe what you are in a way that would let someone tell you from another
   agent — the model or harness, the role you were given — and do not overstate
@@ -444,7 +492,7 @@ graph learned it.
   nothing — it comes from the session.
 - If a graph requires a judge, a write without one is refused and the message
   names `claim_agent`. That is not something to work around — put it to the
-  user, since only they can approve an id or turn the requirement off.
+  user, since only they can approve a judge or turn the requirement off.
 
 ### Reviewing what was decided (review)
 - `review` returns this graph's recorded decisions **shakiest first** and writes
@@ -462,6 +510,10 @@ graph learned it.
 - Check `unrated_count` and `unattributed_count` before reporting a conclusion:
   three shaky rows out of four hundred unrated is not three out of four. Check
   `truncated` too — ask again rather than raising `max_results`.
+- **`by_agent` takes a handle**, not only a key: a name, a key, or a key that
+  judge used to be recorded under. The `judge` block says what it resolved to,
+  and `unknown_here` means it named nobody — otherwise an empty page reads like
+  a judge that decided nothing.
 - **It answers for one graph**, named in `graph`. For another, `use_graph` and
   ask again.
 - **`elsewhere` tells you whether there is anything to go and see** — a count of
@@ -515,9 +567,23 @@ graph learned it.
   `confidence` is about the **material**, `certainty` is about **this act of
   re-judging**.
 - `importance` is not here — `judge_importance` already revises that one.
-- A metacontext assignment and a validity interval still cannot be revised at
-  all. If either is wrong, raise it with the user rather than working around it
-  with a supersession.
+- **A wrong frame is `reframe`, not a supersession.** `reframe(node_id,
+  withdraw=…, because=…)` takes a metacontext off a node. **Prefer
+  `assign=<other_frame>`** when the claim belongs somewhere else: withdrawing
+  and then linking passes through *untagged*, where the claim is asserted in
+  **every** frame, and strands it there if the second call never happens.
+  Withdrawing a node's **last** frame is that same promotion, so it needs
+  `to_base_reality=True` said on purpose — and is refused where it does not
+  apply. A wrong frame is not cosmetic: it makes a fact permanently unmergeable
+  with its own twin, stops it corroborating, and hides it from the frame it
+  belongs to.
+- **A wrong period is `correct_interval`, not a supersession.**
+  `correct_interval(node_id, source_id=…, intervals=[…], because=…)` replaces
+  the **whole** list for that (node, source) pair — an interval has no id of its
+  own. For an endpoint that is *present and wrong*; `reflect`'s
+  `boundary_proposals` is the tool for one that is still open. An empty list is
+  allowed and is how a period that was invented outright comes off. A wrong
+  interval moves a corroboration count as well as a date.
 
 ### Interpreting _meta
 Every tool response includes a `_meta` field:

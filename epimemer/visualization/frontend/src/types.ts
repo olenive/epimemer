@@ -115,6 +115,22 @@ export interface MetacontextView {
   graph: string;
 }
 
+/**
+ * One entry in this graph's relationship vocabulary, with what it means here.
+ *
+ * An edge carries its label as a bare string, so a viewer reading edges alone
+ * can show what a relation is called and nothing about what this graph means
+ * by it. Absent for a label nobody has recorded, which is the ordinary state
+ * of a graph that predates the record.
+ */
+export interface RelationLabelView {
+  relation_label_id: string;
+  name: string;
+  kind: string;
+  description: string;
+  graph: string;
+}
+
 // --- Graph events ---
 
 export interface NodeStored extends BaseEvent {

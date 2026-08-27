@@ -18,7 +18,7 @@ def _(mo):
 def _():
     import marimo as mo
     from petritype.core.executable_graph_components import ExecutableGraphOperations
-    from petritype.core.rustworkx_graph import RustworkxGraph
+    from petritype.plotting.rustworkx_graph import RustworkxGraph
     from petritype.plotting.simple_graphviz import SimpleGraphvizVisualization
     from epimemer.core.types import EdgeType, EmbeddingRecord, Fact, Inference, NodeEdge, Topic
     from epimemer.embeddings.mock import MockEmbeddingProvider

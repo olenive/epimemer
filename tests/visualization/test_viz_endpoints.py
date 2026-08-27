@@ -16,6 +16,7 @@ from epimemer.core.types import (
     NodeEdge,
     EdgeType,
     NodeStatus,
+    RelationLabel,
     Timeline,
     Topic,
     ValueSignal,
@@ -169,11 +170,32 @@ class TestSnapshotAssembly:
 
         assert data["timelines"][0]["timepoints"][0]["start"] is None
 
+    async def test_assemble_snapshot_includes_relation_labels(self, storage):
+        """An edge carries its label as a bare string, so the vocabulary's
+        descriptions live nowhere a viewer can reach from the edge alone (#74).
+        They ride along for the reason metacontexts do."""
+        await storage.store_relation_label(
+            RelationLabel(
+                name="advised",
+                kind="relationship",
+                description="Retained counsel, not employment.",
+            )
+        )
+
+        data = await assemble_snapshot(storage, "default")
+
+        [view] = data["relation_labels"]
+        assert view["name"] == "advised"
+        assert view["kind"] == "relationship"
+        assert view["description"] == "Retained counsel, not employment."
+        assert view["graph"] == "default"
+
     async def test_assemble_snapshot_empty_graph(self, storage):
         data = await assemble_snapshot(storage, "default")
         assert data["nodes"] == []
         assert data["edges"] == []
         assert data["timelines"] == []
+        assert data["relation_labels"] == []
 
     async def test_assemble_snapshot_does_not_switch_active_graph(self, storage):
         await storage.switch_database("other")

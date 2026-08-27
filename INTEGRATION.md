@@ -62,12 +62,12 @@ the knowledge graph and pipeline execution in real time.
 
 ### Verify Connection
 
-In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 41 tools.
+In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 44 tools.
 
 ## Available Tools
 
 Tools are auto-prefixed as `mcp__epimemer__<name>` by Claude Code. This table is
-the canonical list of the 41 tools — other docs should link here rather than
+the canonical list of the 44 tools — other docs should link here rather than
 restate the count.
 
 ### Core Memory Operations
@@ -90,7 +90,8 @@ restate the count.
 | `topic_tree` | Drill into a topic hierarchy — ancestors and subtopics, previews only |
 | `find_nodes` | Return nodes linked to a source or topic hub (traversal, not similarity) |
 | `list_sources` | List the distinct source/origin nodes, with reference counts |
-| `list_relations` | List the distinct user-defined relationship labels, with usage counts |
+| `list_relations` | List the distinct user-defined relationship labels, with usage counts and descriptions |
+| `describe_relation` | Say what one of this graph's relationship labels means here — advisory prose the next agent reads before coining |
 | `graph_stats` | Node/edge counts, type breakdown, and reflection pressure for the active graph |
 
 ### Conflict Handling
@@ -120,8 +121,10 @@ Every judgment the graph records — who decided, about what, and when — see
 
 | Tool | Purpose |
 |------|---------|
-| `review` | This graph's decisions, shakiest first: a declared low `certainty` before anything unrated, then by derived difficulty (thin sources, wide merges, open contradictions, ground that moved since). Modes `all` / `by_agent` / `since` / `unreviewed`, narrowed by `agent_id`, `since`/`until` and `certainty_ceiling`. Read-only, capped, and one graph wide — `graph` names which, and `elsewhere` counts the journal in every other graph so a reviewer is told where else to look |
+| `review` | This graph's decisions, shakiest first: a declared low `certainty` before anything unrated, then by derived difficulty (thin sources, wide merges, open contradictions, ground that moved since). Modes `all` / `by_agent` / `since` / `unreviewed`, narrowed by `agent_id` (a handle: a judge's name, its key, or a key it used to be recorded under), `since`/`until` and `certainty_ceiling`. Read-only, capped, and one graph wide — `graph` names which, and `elsewhere` counts the journal in every other graph so a reviewer is told where else to look |
 | `apply_review` | Record that you checked decisions and what you concluded — `confirmations` and `dissents`, each with a required `because`. Neither changes the graph: a dissent records the finding, and the undo is `reverse_merge` / `restore` / `apply_reflection` / `rejudge` |
+| `reframe` | Withdraw a frame from a node, or move it to another in one call — a metacontext assignment was one-way |
+| `correct_interval` | Replace what one source is recorded as asserting about when a claim held |
 | `rejudge` | Revise a judgment made at ingest — `claim_kind`, `confidence`, `confidence_basis` — without touching the claim. Not a supersession: nothing is retired, no edge moves, and the value replaced is kept on the node |
 
 ### Temporal Access
@@ -261,7 +264,7 @@ unbind a judge.
 
 | Tool | Purpose |
 |------|---------|
-| `claim_agent` | Propose an id and a self-description; binds this session to the judge the user approves |
+| `claim_agent` | Propose a name and a self-description; binds this session to the judge the user picks. Returns both `name` (say this to a person) and `agent_id` (an opaque key, for `review`) |
 
 Approval reaches the user through the client's elicitation prompt, through
 `EPIMEMER_APPROVED_AGENTS`, or through `epimemer agents confirm <id>` — which

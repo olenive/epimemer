@@ -23,28 +23,80 @@ independent review.
 
 ## Identity is assigned, not minted
 
-An agent **proposes** an id and describes itself; the **user** approves, edits,
-or names a different one. The approved pair is what gets recorded.
+An agent **proposes a name** and describes itself; the **user** picks which
+judge it is, from the judges this graph already knows, or names a new one. What
+the user picked is what gets recorded.
 
 ```
 claim_agent(agent_id="olegs-critic", description="Claude Opus, running as the reviewer pass")
 ```
 
-Three things follow from the id being the user's:
+Three things follow from the identity being the user's:
 
-- **An unapproved id is refused.** The refusal is the prompt — there is no
+- **An unapproved judge is refused.** The refusal is the prompt — there is no
   separate startup handshake, so the message the agent gets is what it puts to
   the user, and it names every channel they can approve through.
-- **The user owns the semantics.** Whether ids track a model (*"my llama
+- **The user owns the semantics.** Whether judges track a model (*"my llama
   agent"*), a role (*"my critic"*), or a task (*"my editor reviewer"*) is their
   scheme. Two harnesses running the same model are one judge or two exactly as
   they decide.
-- **The same id can appear in two graphs**, because the user can assign it in
+- **The same name can appear in two graphs**, because the user can assign it in
   both. Correlating them is a human act.
 
-Hashing the description to get an id was rejected: reword it and you become a
-different judge; paste someone else's and you become the same one. The hash
-survives one level down, as the **digest** of a description *version*.
+Hashing the description to get an identity was rejected: reword it and you
+become a different judge; paste someone else's and you become the same one. The
+hash survives one level down, as the **digest** of a description *version*.
+
+## Three layers: the key, the name, and the claim
+
+One field used to be all three, and the collapse was the problem: the name the
+user typed on first contact was frozen into every decision, so it could never be
+changed, and one character's difference made a second judge with a permanently
+separate history.
+
+| Layer | Mutable | What it is for |
+|---|---|---|
+| key (`agent_id`) | never | The join key. Frozen into every decision, and shown to nobody. |
+| name | freely, by the user | The handle: the picker, `review(mode="by_agent")`, a frontend label. Resolved **at read time**. |
+| descriptions | append-only | What the judge claimed to be **then**. Pinned per decision by digest. |
+
+**The name and the description resolve by opposite rules, and that is not an
+inconsistency.** *Which judge is this* wants the name the user knows it by now,
+so a rename carries every old decision with it. *What did this judge claim to be
+when it decided this* wants the claim as it stood, or an old decision stops
+being readable — which is what the digest is for.
+
+**A handle is anything that names a judge**: its name, its key, or a key it used
+to be recorded under. `claim_agent` and `review` both take one, so an agent may
+propose whatever the user calls this judge, and a returning one may pass back
+the key it was handed. `claim_agent` returns both: `name` is what to say to a
+person, `agent_id` is the key.
+
+## Renaming, and repairing a split
+
+**A name can be changed, and the decisions follow it.** Nothing is rewritten:
+the key each decision recorded does not change, and the name is resolved when
+the row is read. So nobody has to name a judge correctly before knowing what it
+will be used for.
+
+Two channels, the same two that can approve — a handle an agent could rename is
+a handle an agent could point at another judge's history:
+
+- the judge picker's **rename** option, which then asks which judge and what to
+  call it;
+- `epimemer agents rename <handle> <name>`, on a served SurrealDB.
+
+**A name already taken is a question, not an error.** Two records that should be
+one is the commonest reason to be renaming at all, so the collision asks whether
+they are the same judge. Answering yes **consolidates** them: the judge holding
+the name takes the other's keys as former keys and both description histories
+are kept, so its old decisions stay readable through the record that now answers
+for them. Nothing is deleted and no journal row is rewritten — an absorbed
+record is kept and simply stops being offered as a judge in its own right.
+
+After consolidating, *this judge's decisions* is a query over a **set** of keys.
+That is what `former_ids` is for, and a judge that was never consolidated has a
+set of one.
 
 ## Descriptions append, and are never edited
 
@@ -78,7 +130,7 @@ No MCP tool can approve an id: a tool the agent calls cannot establish that the
 |---|---|---|
 | the client's elicitation prompt | the client supports elicitation | the user answered through their own UI |
 | `EPIMEMER_APPROVED_AGENTS` | always; read when the backend connects and when the server lands on a graph | the user configured the server before starting it |
-| `epimemer agents confirm <id>` | **served SurrealDB only** | the user ran a command the agent cannot run |
+| `epimemer agents confirm <handle>` | **served SurrealDB only** | the user ran a command the agent cannot run |
 
 The CLI's limit is not an oversight. Approvals live in per-graph settings inside
 the backend, and an embedded store (`mem://`, `file://`, `surrealkv://`, or the
@@ -87,12 +139,19 @@ is a *separate store*, not a second view of one. Writing there would report
 success into a store the running server never reads, so the command refuses and
 names the environment variable instead.
 
-`epimemer agents list` shows a graph's approved ids and what each agent has said
-about itself, marked confirmed or self-reported.
+`epimemer agents list` shows a graph's approved judges by name, the key each was
+recorded under, any keys consolidated into it, and what each has said about
+itself, marked confirmed or self-reported.
+
+Both configuration channels take **names**, because a person types names: a
+handle is resolved to the judge that holds it, and one matching nothing is
+admitted as its own key, which is what seeding a judge that has not claimed yet
+has always meant.
 
 ## Approval is per graph
 
-Graphs are isolated, and so are their approved-id lists. A session binds **one**
+Graphs are isolated, and so are their approved lists, their names and their
+keys. A session binds **one**
 judge, so `use_graph` re-checks it: a judge the new graph has not approved is
 unbound, and the response says so. Carrying a judge approved for graph A into
 every write on graph B is how attribution starts recording something nobody
@@ -115,6 +174,8 @@ thing the decision landed on:
 | `judge_importance` | the value signal, as the latest judge — and every entry in the node's reinforcement trail names its own |
 | content written during reflect: synthesised parents, splits, enrichments, merge survivors, and `update`'s replacement | the new node, as `judged_by` |
 | `segment`, `store_decomposition` | every node and edge the ingest creates, as `judged_by` — including the priors `claim_kind`, `confidence` and `importance`, which nothing downstream re-makes |
+| `link` coining a relation label for the first time | the label's record, as `judged_by` — **the coiner, never the describer**. `describe_relation`, a verdict, or a backfill creates a record carrying no judge at all, since none of them is claiming to have introduced the word |
+| `reframe`, `correct_interval`, `describe_relation` | nothing on the node or edge — each journals its own row instead, because the thing being revised was somebody else's judgment and overwriting their name would hide that |
 
 Three things follow that are easy to get wrong:
 
@@ -134,12 +195,17 @@ than a claim about it — *who pasted this text* is a different question from *w
 judged what it says*. And reusing an existing entity or tag topic does not
 restamp it: mentioning a name again is not introducing it.
 
-One decision is still **not** attributed: merging relation labels. Every subject
-in the journal is a node id and this judgment's subjects are labels, so the row
-has nowhere honest to put them — filed as `ISSUES.md` #69. Accepting a boundary
-proposal, the other gap, is closed: it edits an existing edge rather than adding
-one, which is exactly the case the journal is for, and both of its subjects are
-nodes.
+One decision is still **not** attributed: merging relation labels, through
+`apply_reflection(relation_merges=…)`. The obstacle that used to make it
+impossible is gone — labels have records with ids since `ISSUES.md` #74 stage 1,
+so a row naming them would resolve like any other — and what remains is that no
+writer has been built. That waits on #74 settling whether relation merging
+survives at all; if it does, the row is stage 4's work. Describing a label **is**
+attributed, under its own `relation_description` kind.
+
+Accepting a boundary proposal, the other gap this section used to name, is
+closed: it edits an existing edge rather than adding one, which is exactly the
+case the journal is for, and both of its subjects are nodes.
 
 ## The journal — what did this agent judge
 
@@ -217,7 +283,7 @@ rather than one borrowed mid-call.
 The reviewer this is for is a **later, different agent**. The one that made the
 decisions switched those graphs itself and never needed telling.
 
-**It counts wider than it reads, deliberately.** Only `agent_id`, `since` and
+**It counts wider than it reads, deliberately.** Only the judge, `since` and
 `until` narrow the counts; `mode` and `certainty_ceiling` do not. So a graph
 counted at 12 can list fewer than 12 once you get there, and `counted_with` is
 what tells you that is scope rather than a defect. A count too high costs a
@@ -235,6 +301,12 @@ one call rather than three vocabularies.
 | `by_agent` | one judge's decisions | `agent_id` |
 | `since` | a time window; `until` is exclusive | `since` |
 | `unreviewed` | rows no other record points back at | — |
+
+`by_agent`'s `agent_id` is a **handle**: a name, a key, or a key the judge used
+to be recorded under. The response's `judge` block says what it resolved to, and
+says `unknown_here` where it resolved to nothing — an empty page is otherwise
+indistinguishable from a judge that has decided nothing, which is exactly what a
+typo or a forgotten rename produces.
 
 `by_agent` and `since` are the same filters the other modes accept, made
 **mandatory**. That is their whole value: asking for `all` with an `agent_id`
@@ -302,11 +374,73 @@ in the system that destroys a judgment rather than superseding it.
 field, and two writers for one value is how it ends up depending on which ran
 last.
 
-**Two gaps it deliberately does not cover** (`ISSUES.md` #66): a metacontext
-assignment still cannot be withdrawn, and a validity interval still cannot be
-corrected. Both are the same shape, and both are load-bearing enough that
-answering them inside a tool named for ingest priors would bury an epistemic
-move in a metadata utility.
+**Two more revisions live in their own tools** — `reframe` and
+`correct_interval` (`ISSUES.md` #66) — and the split is about **how each is
+addressed**, not about tidiness. `rejudge` names a `node_id` and promises that no
+status, edge or lineage moves. A frame revision moves an edge and changes what
+merges, what corroborates and what a frame-scoped search returns, so that promise
+would become false the day it grew a frame field. An interval belongs to a
+**(node, source) pair**, so folding it in would grow a `source_id` that applies to
+one field out of five — the tell that two tools are wearing one name.
+
+`rejudge`'s docstring and its "nothing to revise" refusal both name all three
+siblings, because the one real argument for a single tool was that an agent looks
+in the obvious place. So the obvious place points on — otherwise it reaches for
+`supersede_by`, which files a true claim as an error.
+
+## Withdrawing a frame — `reframe`
+
+A metacontext assignment used to be one-way: `link` writes a `has_metacontext`
+edge and nothing removed one, so a fact wrongly framed as fiction stayed framed.
+That is not cosmetic. It becomes permanently unmergeable with its own twin
+(`merge_refusal` refuses cross-frame pairs), it stops corroborating the real copy,
+and a frame-scoped search misses it where it belongs while returning it where it
+does not. All three fail silently.
+
+**`assign` makes the common repair atomic, and that is the point.** A claim
+mis-filed under frame A that belongs in frame B could be moved by withdrawing then
+linking — but that path passes through *untagged*, where the claim is asserted in
+**every** frame, and it strands the node there permanently if the second call
+never happens.
+
+**A withdrawal that leaves no frames is a promotion**, and has to be said out
+loud. Untagged is not neutral: base-reality knowledge is inherited by every frame,
+so a claim made inside one novel becomes a claim made in all of them.
+`to_base_reality=True` is required there — required rather than inferred for
+`expected_graph`'s reason, that the check is worth something only because the
+agent's intent is stated independently of the state. It is refused where it does
+not apply, because a flag that lies about what it authorised is worse than none.
+
+**The withdrawal deletes the edge rather than marking it**, and #68's
+carry-forward is why: *before designing a mechanism for undo-without-delete, check
+whether the read that would honour it is already there.* Here it is not — frames
+are derived by scanning `has_metacontext` edges, so a `withdrawn` marker would
+need every such site to subtract it, and any site missed would fail **open**, with
+the frame still applying. Deleting fails closed. The withdrawn frame survives in
+the node's `reframings` trail and in the journal row, which matters more here than
+for a rejudgment: every search and corroboration answer given while the frame was
+wrong was wrong, and the trail plus the row's timestamp is the only thing that
+bounds which answers those were.
+
+## Correcting a period — `correct_interval`
+
+For an endpoint that is **present and wrong**. `reflect`'s `boundary_proposals`
+fills one that is *open*, where a succession implies it — and that is the half
+that can ever be automated, because nothing can derive that a stated date was
+misread. Different evidence, different act, two calls.
+
+A wrong interval moves a count as well as a date: corroboration reads intervals to
+decide whether a look-alike witnesses the same period or is the neighbouring
+truth.
+
+**The whole list for that (node, source) pair is replaced**, because an interval
+is a position in a list on one edge and has no id of its own. An empty list is
+allowed, and is the correction for a period that was invented outright — refusing
+it would leave a fabricated period unremovable, which is #66's own shape a second
+time. `basis` stays the caller's to state per interval rather than being forced to
+`inferred` as `apply_boundary` forces it: a correction is often restoring what the
+document actually said. The prior list is kept in the edge's
+`interval_corrections` trail.
 
 ## Requiring a judge
 
@@ -319,7 +453,8 @@ EPIMEMER_REQUIRE_JUDGE=true           # every graph this server opens
 ```
 
 With it on, a write from a session that has not claimed an approved identity is
-**refused**, with a message naming `claim_agent` and this graph's approved ids.
+**refused**, with a message naming `claim_agent` and this graph's approved
+judges.
 It covers the twelve tools that create or retire epistemic content; timelines and
 metacontexts are scaffolding rather than claims and stay outside it.
 
@@ -330,7 +465,7 @@ Three things about it are deliberate:
   is a gate on the agent itself, and a gate the agent can open is decoration.
 - **It is not retroactive.** Turning it on says nothing about earlier writes:
   the rows that had no judge still have none, and still mean unknown.
-- **Turning it on before approving an id refuses everything**, so the command
+- **Turning it on before approving a judge refuses everything**, so the command
   says so at the moment you switch it on rather than letting the next write
   explain it.
 
@@ -350,13 +485,13 @@ draws the line from that moment forward; it cannot draw one backwards.
 ## Where it lives
 
 A per-graph `agent` table beside `fact` / `topic` / `inference`, with the
-approved-id list in per-graph settings beside the reflect counter. Agents are
+approved-key list in per-graph settings beside the reflect counter. Agents are
 deliberately **not** graph nodes: as nodes they would surface in `search` and be
 swept by `reflect`, and two agents with similar descriptions are not a topic to
 merge.
 
 The journal is a per-graph `decision` table beside them, indexed on the judge's
-id, the date, the kind, the subjects and what a row reviews — the five reads
+key, the date, the kind, the subjects and what a row reviews — the five reads
 review mode needs. Its rows are not nodes either, for the same reason and one
 more: a judgment about the graph is not a claim the graph holds.
 

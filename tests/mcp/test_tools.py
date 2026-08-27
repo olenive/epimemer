@@ -2345,6 +2345,162 @@ class TestMetacontextTools:
         assert sum(1 for m in all_mcs if m.id == BASE_METACONTEXT_ID) == 1
 
 
+class TestTheBaseFrameGetsARow:
+    """Ingest declares the frame it is writing into (#76).
+
+    `frames_for` answers `the-real` for every untagged node, so the base frame
+    has always been the answer to *which world is this about*. What it did not
+    have was a record: the largest real graph held 684 nodes and reported
+    `metacontexts: 0`, so the frame every one of them stood in was absent from
+    `graph_stats`, absent from the dashboard, and impossible to look up. These
+    pin that writing into it now says so.
+    """
+
+    async def test_ingest_creates_the_real(
+        self, storage, embedding_provider, config
+    ):
+        from epimemer.core.types import BASE_METACONTEXT_ID
+
+        assert await storage.query_metacontexts() == [] or all(
+            mc.id != BASE_METACONTEXT_ID for mc in await storage.query_metacontexts()
+        )
+
+        await _two_step_ingest("Some content.", storage, embedding_provider, config)
+
+        base = await storage.get_metacontext(BASE_METACONTEXT_ID)
+        assert base is not None
+        assert base.content == "The Real"
+        assert base.description
+
+    async def test_a_second_ingest_does_not_duplicate_it(
+        self, storage, embedding_provider, config
+    ):
+        from epimemer.core.types import BASE_METACONTEXT_ID
+
+        await _two_step_ingest("First document.", storage, embedding_provider, config)
+        await _two_step_ingest("Second document.", storage, embedding_provider, config)
+
+        all_mcs = await storage.query_metacontexts()
+        assert sum(1 for mc in all_mcs if mc.id == BASE_METACONTEXT_ID) == 1
+
+    async def test_graph_stats_counts_it(
+        self, storage, embedding_provider, config
+    ):
+        before, _ = await graph_stats(storage, default_reflect_threshold=10)
+        assert before["metacontexts"] == 0
+
+        await _two_step_ingest("Some content.", storage, embedding_provider, config)
+
+        after, _ = await graph_stats(storage, default_reflect_threshold=10)
+        assert after["metacontexts"] == 1
+
+
+class TestAStatedFrameMustResolveHere:
+    """A metacontext id that names nothing is refused, not written (#76).
+
+    Ids are per graph, so one carried over from another graph resolves nowhere.
+    Unchecked, the `has_metacontext` edge points at nothing and `frames_for`
+    hands the dangling id back — leaving the node in a frame it shares with no
+    other node: never compared, never merged, and absent from every frame-scoped
+    search including the one the agent meant. That is strictly worse than being
+    untagged, which at least lands somewhere coherent.
+    """
+
+    async def test_ingest_refuses_an_id_that_names_nothing(
+        self, storage, embedding_provider, config
+    ):
+        with pytest.raises(ValueError, match="does not exist in graph"):
+            await _two_step_ingest(
+                "Some content.", storage, embedding_provider, config,
+                metacontext_id="mc-from-another-graph",
+            )
+
+    async def test_the_refusal_names_the_frames_that_do_exist(
+        self, storage, embedding_provider, config
+    ):
+        # No tool enumerates metacontexts, so the refusal is the only place an
+        # agent holding a stale id can find the right one.
+        real = Metacontext(content="Real world")
+        fiction = Metacontext(content="Fiction")
+        await storage.store_metacontext(real)
+        await storage.store_metacontext(fiction)
+
+        with pytest.raises(ValueError) as excinfo:
+            await _two_step_ingest(
+                "Some content.", storage, embedding_provider, config,
+                metacontext_id="nope",
+            )
+        message = str(excinfo.value)
+        assert real.id in message and "Real world" in message
+        assert fiction.id in message and "Fiction" in message
+        assert storage.current_database in message
+
+    async def test_nothing_is_written_when_the_frame_is_missing(
+        self, storage, embedding_provider, config
+    ):
+        # Checked before the document is built, so a bad id costs nothing —
+        # there is no partial decomposition to find and no edge to clean up.
+        with pytest.raises(ValueError):
+            await _two_step_ingest(
+                "Some content.", storage, embedding_provider, config,
+                metacontext_id="nope",
+            )
+        stats, _ = await graph_stats(storage, default_reflect_threshold=10)
+        assert stats["total_nodes"] == 0
+        assert stats["total_edges"] == 0
+
+    async def test_a_frame_that_exists_is_accepted(
+        self, storage, embedding_provider, config
+    ):
+        mc = Metacontext(content="Fiction")
+        await storage.store_metacontext(mc)
+
+        _, store_result = await _two_step_ingest(
+            "Some content.", storage, embedding_provider, config,
+            metacontext_id=mc.id,
+        )
+        assert store_result["nodes_created"]["topics"] >= 1
+
+    async def test_the_base_frame_needs_no_row(
+        self, storage, embedding_provider, config
+    ):
+        # `the-real` is reserved and is what an untagged node resolves to, so it
+        # names a real frame in every graph — including one nothing has been
+        # written to yet, where no row exists to check against.
+        from epimemer.core.types import BASE_METACONTEXT_ID
+
+        assert await storage.get_metacontext(BASE_METACONTEXT_ID) is None
+        result, _ = await search(
+            "anything", storage, embedding_provider,
+            k=5, graph_hops=0, metacontext_id=BASE_METACONTEXT_ID,
+        )
+        assert result["nodes"] == []
+
+    async def test_search_refuses_an_id_that_names_nothing(
+        self, storage, embedding_provider
+    ):
+        # The read is the worse half: a frame that does not resolve would narrow
+        # to base reality alone and answer as though that were the frame, and a
+        # wrong answer to a search leaves no artifact behind anywhere.
+        with pytest.raises(ValueError, match="does not exist in graph"):
+            await search(
+                "anything", storage, embedding_provider,
+                k=5, graph_hops=0, metacontext_id="mc-from-another-graph",
+            )
+
+    async def test_cross_frame_does_not_excuse_a_bad_id(
+        self, storage, embedding_provider
+    ):
+        # `cross_frame` makes the id inert for filtering, which is exactly why an
+        # agent would not notice it was wrong. One rule beats a rule with an
+        # exception.
+        with pytest.raises(ValueError, match="does not exist in graph"):
+            await search(
+                "anything", storage, embedding_provider,
+                k=5, graph_hops=0, metacontext_id="nope", cross_frame=True,
+            )
+
+
 class TestReviewEdgeTraversal:
 
     async def test_review_edges_hidden_from_default_traversal(self, storage):

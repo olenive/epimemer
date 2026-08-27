@@ -53,7 +53,7 @@ from epimemer.core.types import (
     Fact,
     JudgeRef,
 )
-from epimemer.storage.protocol import StorageBackend
+from epimemer.storage.protocol import StorageBackend, judge_aliases
 
 # The kinds whose row records a decision that *created* a node, and therefore
 # set the priors `rejudge` revises. A rejudgment points its `reviews` at the
@@ -201,8 +201,14 @@ async def review_decision(
         # Only where the judge is known. Two blank judges may be two agents or
         # one retry, and refusing on that guess would block a genuine second
         # opinion on every graph that does not require a judge.
+        # Every id this judge's rows may carry, not only the one bound now: a
+        # judge that absorbed another record has decisions under both, and a
+        # duplicate check that saw only the current id would let the same judge
+        # confirm the same decision twice (#78).
         for existing in await storage.query_decisions(
-            reviews=decision_id, kinds=[kind], agent_id=judge.agent_id
+            reviews=decision_id,
+            kinds=[kind],
+            agent_ids=await judge_aliases(storage, judge.agent_id),
         ):
             if _covers(existing, subjects):
                 verb = "confirmed" if agreed else "dissented from"
@@ -290,9 +296,15 @@ async def rejudge_node(
             node_id=node_id,
             reason=(
                 f"nothing to revise. Supply at least one of: "
-                f"{', '.join(REJUDGEABLE_FIELDS)}. `importance` is revised by "
-                f"`judge_importance`, which already is this tool for that one "
-                f"field."
+                f"{', '.join(REJUDGEABLE_FIELDS)}. Three ingest judgments are "
+                f"revised elsewhere, each because of how it is addressed: "
+                f"`importance` by `judge_importance`; a **frame** by "
+                f"`reframe`, since withdrawing a metacontext moves an edge and "
+                f"changes what merges, corroborates and searches; a **validity "
+                f"interval** by `correct_interval`, since an interval belongs "
+                f"to a (node, source) pair rather than to a node. None of the "
+                f"three is a job for `supersede_by`, which would file a true "
+                f"claim as an error."
             ),
         )
     if confidence is not None and not 0.0 <= confidence <= 1.0:

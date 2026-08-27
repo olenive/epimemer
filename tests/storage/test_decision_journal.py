@@ -84,7 +84,7 @@ class TestWhatDidThisAgentJudge:
         await storage.record_decision(mine)
         await storage.record_decision(theirs)
 
-        found = await storage.query_decisions(agent_id="critic")
+        found = await storage.query_decisions(agent_ids=["critic"])
 
         assert [r.id for r in found] == [mine.id]
 
@@ -98,7 +98,7 @@ class TestWhatDidThisAgentJudge:
         await storage.record_decision(first)
         await storage.record_decision(second)
 
-        found = await storage.query_decisions(agent_id="critic")
+        found = await storage.query_decisions(agent_ids=["critic"])
 
         assert {r.id for r in found} == {first.id, second.id}
 
@@ -106,7 +106,31 @@ class TestWhatDidThisAgentJudge:
         """Unknown is not an id, so it cannot be somebody's work."""
         await storage.record_decision(_record(judged_by=None))
 
-        assert await storage.query_decisions(agent_id="critic") == []
+        assert await storage.query_decisions(agent_ids=["critic"]) == []
+
+    async def test_several_ids_are_one_judge(self, storage):
+        """A judge is a **set** of keys once two records have been consolidated
+        (#78): the survivor takes the other's key as a former id and no journal
+        row is rewritten, so *this judge's decisions* is a query over the list.
+        """
+        early = _record(judged_by=JudgeRef(agent_id="Opus 5 Judge", digest="d1"))
+        late = _record(judged_by=CRITIC)
+        await storage.record_decision(early)
+        await storage.record_decision(late)
+
+        found = await storage.query_decisions(agent_ids=["critic", "Opus 5 Judge"])
+
+        assert {r.id for r in found} == {early.id, late.id}
+
+    async def test_no_ids_at_all_matches_nothing(self, storage):
+        """Not everything. An empty list is a caller that named a judge with no
+        keys, which is not the same as a caller that named no judge — and the
+        two backends have to agree, because a `WHERE … IN []` and a Python `in`
+        over an empty set are two implementations of one promise."""
+        await storage.record_decision(_record(judged_by=CRITIC))
+
+        assert await storage.query_decisions(agent_ids=[]) == []
+        assert len(await storage.query_decisions()) == 1
 
 
 class TestTheOtherThreeReads:
@@ -160,7 +184,7 @@ class TestTheOtherThreeReads:
         await storage.record_decision(_record(kind=DecisionKind.INGEST, judged_by=CRITIC))
 
         found = await storage.query_decisions(
-            agent_id="critic", kinds=[DecisionKind.MERGE]
+            agent_ids=["critic"], kinds=[DecisionKind.MERGE]
         )
 
         assert [r.id for r in found] == [wanted.id]

@@ -223,6 +223,39 @@ The append-only-list-with-dates shape is deliberately the one `LifecycleEpisode`
 already uses for node history. Same problem, same answer: a scalar plus a
 timestamp cannot express *changed, and here is what it was before*.
 
+> **Amended 2026-08-26 (#78 stage 2): `id` was doing three jobs, and is now
+> three fields.** The reasoning above is intact — an identity must not be
+> derived from the description — but the conclusion, *one stable string assigned
+> by the user*, collapsed the join key with the human handle. Everything the
+> user typed on first contact was frozen into every `judged_by`, so a name could
+> never be corrected, and one character's difference made a second judge with a
+> permanently separate history. Measured on this repository's own `memory`
+> graph: one row under `Opus 5 Judge`, one under `Opus 5`.
+>
+> `Agent` now carries `id` (opaque, never displayed, minted by
+> `new_agent_id()`), `name` (freely renamable, resolved at read time, unique per
+> graph), and `former_ids` (the keys this judge's rows may already record).
+> `descriptions` is unchanged and still pinned per decision by digest.
+>
+> **The name and the description resolve by opposite rules on purpose.** *Which
+> judge is this* wants the name the user knows it by now, so a rename carries
+> old rows with it; *what did this judge claim to be when it decided this* wants
+> the claim as it stood, which is the whole reason the digest exists. #77
+> rejected an opaque id partly by running these two together.
+>
+> **`former_ids` is aliasing, migration and repair in one list.** Consolidating
+> two records that were always one judge rewrites nothing and deletes nothing:
+> the survivor takes the other's keys and both description histories, and its
+> old journal rows keep the key they were written with. An absorbed record is
+> kept and stops being *live* — derived by `live_agents`, never stored as a
+> flag. `judge_aliases` is the one place *which judge did the caller mean* is
+> answered, and `query_decisions` takes `agent_ids` rather than `agent_id`
+> because after a consolidation a judge **is** a set of keys.
+>
+> A record written before this has no name and reads as its own id, which is
+> what that id was. No migration writes anything; the next claim fills the name
+> in.
+
 ### 2.2 The user assigns the id, and that is what makes review provable
 
 An agent that mints or claims its own id cannot establish that it is a
@@ -248,6 +281,47 @@ so **the refusal is the prompt**, and no separate startup handshake is needed.
 Admitting unapproved ids would hand identity straight back to the agent, and
 *"a different agent reviewed this"* would be self-asserted again, which is the
 whole thing this section exists to prevent.
+
+> **Amended 2026-08-25 (#78): the gate guards *assuming* an id, not only
+> minting one.** As built, `claim_agent` asked only where the proposed id was
+> not already approved — so once an id was admitted, every later session bound
+> to it with no user involvement at all, and the refusal above names the
+> approved ids, which made a wrong guess a directory lookup. The question now
+> goes up on **every bind**, and is a **pick from the judges this graph already
+> knows** rather than a name to type: `list_agents` had the answer all along
+> and no consumer outside the CLI. What makes asking every time affordable is
+> that the answer is usually the first line offered.
+>
+> Two states that were one value until now, because the conflation only became
+> load-bearing here: **declined** (the question reached a person and they said
+> no) refuses even a pre-approved id, while **unavailable** (no elicitation
+> channel exists) falls back to the approved list, since that approval is §2.3's
+> user involvement happening earlier rather than none.
+>
+> Asked **once per session, per graph, per identity** — keyed on the identity,
+> because a memo meaning *this session confirmed something* would let an agent
+> be approved as one judge and bind silently as another. A changed description
+> is still put to the user: the memo records an identity, not a wording.
+
+> **Extended 2026-08-26 (#78 stage 2): renaming lives on this channel too.** The
+> name layer is the only mutable one (§2.1's amendment), and it is reachable
+> from exactly the two places approval is — the elicitation prompt and the CLI
+> — for the same reason: a handle an agent could rename is a handle an agent
+> could point at another judge's history. It is in the picker and not only in
+> the CLI because the CLI cannot reach an embedded or in-memory store at all,
+> and the picker is where a user *sees* the wrong name.
+>
+> **A name collision is a question, not a refusal.** Two records that should be
+> one is the commonest reason to be renaming, so the collision asks whether they
+> are the same judge; yes consolidates, and the consolidation is the migration
+> step §2.1's amendment describes. The CLI answers it with `--same-judge`,
+> because a command has nowhere to ask.
+>
+> What the user answers the *identity* question with is a handle as well, so
+> choosing an existing judge and typing the name of one land in the same place.
+> That matters on the free-text path, reached by asking for a **new** judge:
+> typing the name of an existing one now joins it rather than minting a second
+> record with the same name, which is exactly how this graph's own split began.
 
 **The user owns the semantics, and the system imposes none.** Whether ids track
 a model (*"my llama agent"*), a role (*"my critic"*), or a task (*"my editor
@@ -832,6 +906,33 @@ Everything an agent supplies at ingest, and where revising it belongs:
 
 Both should be filed. Neither belongs in this document, and `rejudge` stays the
 three fields above.
+
+> **Filed as `ISSUES.md` #66 and built 2026-08-27, as `reframe` and
+> `correct_interval`.** The conclusion above — keep them out of `rejudge` — held.
+> **The reason given was not the strongest one available**, and the better one is
+> worth recording here because this is where the survey was made: the split is
+> about **addressing**, not about a tool's name. `rejudge` takes a `node_id` and
+> promises no status, edge or lineage moves. A frame revision *moves an edge* and
+> changes what merges, what corroborates and what a frame-scoped search returns,
+> so that promise would become false the day it grew a frame field. An interval
+> belongs to a **(node, source) pair**, so folding it in would grow a `source_id`
+> read for exactly one field — this repo's own tell that two tools are wearing
+> one name.
+>
+> Two things review added before either was built. **`reframe` takes an optional
+> `assign`**, so moving a claim from frame A to frame B never passes through
+> *untagged* — where the claim is asserted in **every** frame, and where a failed
+> second call would strand it. And **withdrawing a node's last frame is a
+> promotion**, not something to forbid: the motivating case *is* a last-frame
+> withdrawal, so a flat refusal would have left the tool unable to fix what it
+> was built for. It takes `to_base_reality=True` as an acknowledgment instead,
+> refused where it does not apply.
+>
+> Carry-forward: **a refusal that blocks the motivating example is a design
+> error, not a safety feature.**
+>
+> The table above is also one column out of date: `rejudge` covers **five**
+> fields, not three — `certainty` and `certainty_basis` arrived with step 7.
 
 ### 6.6 Review is per graph, and says so
 
@@ -2385,6 +2486,11 @@ worth filing on their own:
 
 Neither is a review-mode question, and answering them inside a tool named for
 ingest priors would bury an epistemic move in a metadata utility.
+
+> **Both filed as `ISSUES.md` #66 and built 2026-08-27** — `reframe` and
+> `correct_interval`. Kept out of `rejudge` as this section said, though on
+> better grounds than the ones given: **addressing**, not naming. §6.5.1's
+> amendment has the argument.
 
 ### 12.2 Settled
 

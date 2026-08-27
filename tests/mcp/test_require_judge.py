@@ -219,7 +219,7 @@ class TestWhatARefusalSays:
         """Otherwise the advice is *call claim_agent*, which will also fail."""
         reason = tools.judge_required_reason([])
 
-        assert "No id has been approved" in reason
+        assert "No judge has been approved" in reason
         assert "EPIMEMER_APPROVED_AGENTS" in reason
         assert "epimemer agents confirm" in reason
 

@@ -314,7 +314,12 @@ wrong manufactures support rather than merely withholding it.
 ### Frame scoping
 
 Passing `metacontext_id` scopes results to that frame plus untagged base-reality
-nodes; `cross_frame=True` ignores frames entirely. Frame-scoped retrieval
+nodes; `cross_frame=True` ignores frames entirely. **The id must resolve in the
+active graph** — metacontext ids are per graph, and one that names nothing here
+is refused rather than silently narrowing the search to base reality alone and
+answering as though that were the frame. `the-real` is always accepted, with or
+without a stored row. The check runs whatever `cross_frame` says: the flag makes
+a wrong id inert, which is exactly why it would go unnoticed. Frame-scoped retrieval
 **over-fetches**, so an in-frame node ranked below the raw vector top-k is still
 found rather than lost to a filter applied after the cut.
 

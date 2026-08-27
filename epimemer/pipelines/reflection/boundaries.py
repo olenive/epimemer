@@ -45,6 +45,7 @@ from epimemer.core.temporal import (
 )
 from epimemer.core.types import (
     EdgeType,
+    JudgeRef,
     EpistemicNode,
     Fact,
     Inference,
@@ -367,3 +368,137 @@ def _with_validity(edge: NodeEdge, validity: list[ValidityInterval]) -> NodeEdge
     appending to it would reach back into whatever the backend handed over.
     """
     return edge.model_copy(update={"validity": validity})
+
+
+# --- Correcting an interval that is present and wrong (`ISSUES.md` #66, part 2)
+
+
+class IntervalCorrectionRefused(BaseModel):
+    """Why one interval correction was not made. Prose, as `BoundaryRefused` is."""
+
+    node_id: str
+    source_id: str
+    reason: str
+
+
+class IntervalCorrected(BaseModel):
+    """One corrected set of periods, and what it replaced.
+
+    `was` is the whole prior list rather than a diff, because an interval has no
+    identity of its own — it is a position in a list on one edge — so there is
+    nothing a diff could be keyed on.
+    """
+
+    node_id: str
+    source_id: str
+    was: list[ValidityInterval]
+    now: list[ValidityInterval]
+
+
+async def correct_interval(
+    storage: StorageBackend,
+    *,
+    node_id: str,
+    source_id: str,
+    intervals: Sequence[ValidityInterval],
+    because: str,
+    judge: JudgeRef | None = None,
+) -> IntervalCorrectionRefused | IntervalCorrected:
+    """Replace what one source is recorded as asserting about when a claim held.
+
+    **This lives here rather than in `rejudge` because of how it is addressed.**
+    `rejudge` names a node; an interval belongs to a **(node, source) pair**, so
+    folding it in would grow a `source_id` parameter that applies to exactly one
+    of that tool's fields — this repo's own tell that two tools are wearing one
+    name. It lives beside `apply_boundary` because that is the other code that
+    reasons about endpoints on this edge.
+
+    **And it is not `apply_boundary`.** That fills an endpoint which is *open*,
+    where a succession implies one, and it is the half that can ever be
+    automated. This overwrites an endpoint that is **present and wrong**, which
+    no proposal can derive — the graph has no way to know a stated date was
+    misread. Different evidence, different act, so two calls rather than a flag.
+
+    **The whole list is replaced.** An interval is a position in a list on one
+    edge and has no id, so there is nothing to address one by. Supplying an
+    empty list is allowed and is the correction for an interval that was
+    invented outright: refusing it would leave a fabricated period unremovable,
+    which is #66's own shape a second time.
+
+    **The prior list is kept** in the edge's `metadata["interval_corrections"]`.
+    Since #62 corroboration reads intervals to decide whether a look-alike is a
+    witness or an adjacent period, so a wrong interval has been silently moving
+    counts for as long as it stood; the trail plus the journal row's timestamp is
+    what bounds which answers were affected.
+
+    `basis` is the caller's to state per interval and is not forced to
+    `inferred` here, unlike `apply_boundary`: a correction is often restoring
+    what the document actually said, and calling that inferred would understate
+    it.
+    """
+    if not because.strip():
+        return IntervalCorrectionRefused(
+            node_id=node_id,
+            source_id=source_id,
+            reason=(
+                "`because` is required: this overwrites what a source is "
+                "recorded as asserting, which corroboration and `graph_as_of` "
+                "both read. The graph has to carry why."
+            ),
+        )
+
+    node = await storage.get_node(node_id)
+    if node is None:
+        return IntervalCorrectionRefused(
+            node_id=node_id, source_id=source_id, reason=f"no such node: {node_id}."
+        )
+
+    edges = [
+        edge
+        for edge in await storage.get_edges_from(
+            node_id, edge_type=EdgeType.SOURCED_FROM
+        )
+        if edge.dst_id == source_id
+    ]
+    if len(edges) != 1:
+        return IntervalCorrectionRefused(
+            node_id=node_id,
+            source_id=source_id,
+            reason=(
+                f"{len(edges)} provenance edges name source '{source_id}'. "
+                f"Exactly one is needed, because the periods being replaced "
+                f"belong to one edge and there is no way to say which."
+            ),
+        )
+    edge = edges[0]
+
+    replacement = list(intervals)
+    if replacement == list(edge.validity):
+        return IntervalCorrectionRefused(
+            node_id=node_id,
+            source_id=source_id,
+            reason=(
+                "every period supplied is what the edge already carries, so "
+                "there is nothing to revise."
+            ),
+        )
+
+    was = list(edge.validity)
+    revised = _with_validity(edge, replacement)
+    revised.metadata = {
+        **edge.metadata,
+        # Append-only, and the only place the prior periods survive.
+        "interval_corrections": [
+            *edge.metadata.get("interval_corrections", []),
+            {
+                "because": because,
+                "was": [interval.model_dump(mode="json") for interval in was],
+                "now": [interval.model_dump(mode="json") for interval in replacement],
+                "judged_by": judge.model_dump(mode="json") if judge else None,
+            },
+        ],
+    }
+    await storage.store_edge(revised)
+    return IntervalCorrected(
+        node_id=node_id, source_id=source_id, was=was, now=replacement
+    )

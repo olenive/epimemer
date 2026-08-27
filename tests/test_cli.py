@@ -9,8 +9,13 @@ than a refusal, because the user then believes they have done it.
 
 from datetime import datetime, timezone
 
-from epimemer.cli import _confirm, _list, main, unreachable_store
-from epimemer.core.types import Agent, with_description
+from epimemer.cli import _confirm, _list, _rename, main, unreachable_store
+from epimemer.core.types import (
+    Agent,
+    agent_name,
+    live_agents,
+    with_description,
+)
 from epimemer.mcp.config import ServerConfig
 
 
@@ -61,7 +66,54 @@ class TestWhereThisCommandCannotReach:
         captured = capsys.readouterr()
         assert code == 0
         assert "Note:" in captured.err
-        assert "approved ids: (none)" in captured.out
+        assert "approved judges: (none)" in captured.out
+
+
+class TestRenamingAJudge:
+    """The name is the only mutable layer (#78), and this is one of its two
+    channels — the other being the elicitation prompt. It is here for the reason
+    approval is: a handle an agent could rename is a handle an agent could point
+    at another judge's history (§2.2).
+
+    It also has to be here, and not only in the prompt, for a reason the prompt
+    cannot cover: `epimemer agents list` reaches a served store, so a user with
+    no agent session at all can still repair a name.
+    """
+
+    async def test_a_judge_is_renamed_by_name(self, storage):
+        await storage.upsert_agent(Agent(id="k1", name="Opus 5", authorised_at=AT))
+
+        message = await _rename(storage, "Opus 5", "reviewer", False)
+
+        assert "'Opus 5' is now 'reviewer'" in message
+        assert (await storage.get_agent("k1")).name == "reviewer"
+
+    async def test_a_collision_says_what_the_flag_is_for(self, storage):
+        # A command has nowhere to ask, so the question a collision raises is
+        # answered up front or not at all.
+        await storage.upsert_agent(Agent(id="k1", name="Opus 5 Judge", authorised_at=AT))
+        await storage.upsert_agent(Agent(id="k2", name="Opus 5", authorised_at=AT))
+
+        message = await _rename(storage, "Opus 5 Judge", "Opus 5", False)
+
+        assert "--same-judge" in message
+        assert len(live_agents(await storage.list_agents())) == 2, "nothing changed"
+
+    async def test_the_flag_consolidates(self, storage):
+        await storage.upsert_agent(Agent(id="k1", name="Opus 5 Judge", authorised_at=AT))
+        await storage.upsert_agent(Agent(id="k2", name="Opus 5", authorised_at=AT))
+
+        message = await _rename(storage, "Opus 5 Judge", "Opus 5", True)
+
+        assert "one judge" in message
+        assert [agent_name(a) for a in live_agents(await storage.list_agents())] == [
+            "Opus 5"
+        ]
+        assert await storage.get_agent("k1") is not None, "kept, not deleted"
+
+    async def test_a_handle_naming_nobody_is_refused(self, storage):
+        message = await _rename(storage, "nobody", "x", False)
+        assert "No judge here answers to 'nobody'" in message
 
 
 class TestConfirmingAnId:
@@ -71,7 +123,7 @@ class TestConfirmingAnId:
         message = await _confirm(storage, "critic")
 
         assert await storage.get_approved_agent_ids() == ["critic"]
-        assert "has not claimed an identity here yet" in message
+        assert "No judge here answers to it yet" in message
 
     async def test_confirming_stamps_the_description_in_front_of_the_user(
         self, storage
@@ -135,12 +187,12 @@ class TestListing:
 
         assert "a rigorous critic" in out
         assert "self-reported, unconfirmed" in out
-        assert "approved ids: critic" in out
+        assert "approved judges: critic" in out
 
     async def test_an_empty_graph_says_so(self, storage):
         out = await _list(storage)
 
-        assert "approved ids: (none)" in out
+        assert "approved judges: (none)" in out
         assert "No agent has claimed an identity" in out
 
 

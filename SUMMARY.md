@@ -223,6 +223,8 @@ Because metacontexts are nodes, they can relate to each other via the same edge 
 - **Inheritance**: when a document is ingested with a metacontext, all nodes extracted from it inherit that metacontext.
 - **Multiple metacontexts per node**: a node can carry multiple metacontexts (e.g., something can be "propaganda" and also "true as far as we know" — these are different axes).
 - **No predefined axes**: rather than pre-defining categories (source reliability, fictionality, domain), metacontexts are created, split, and merged dynamically — the same way Topics are managed.
+- **Untagged means base reality, and it is a real record** (*2026-08-25, #76*): `frames_for` answers the reserved id `the-real` for a node with no `has_metacontext` edges, and the first ingest into a graph creates that row, so the default frame is something an agent can see rather than infer. It is the one place absence is promoted to a positive claim, and the defaulting is forced — a contradiction detector cannot skip an unknown frame the way a ranker skips an unrated confidence.
+- **A stated metacontext must exist in the graph you are in** (*2026-08-25, #76*): ids are per graph, and `store_decomposition` and `search` both refuse one that resolves nowhere. Unchecked, the framing edge points at nothing and the node shares a frame with *no other node* — never compared, never merged, and absent from every frame-scoped search including the one that was meant. That is worse than untagged, which at least lands somewhere real.
 
 ### Impact on Retrieval
 
@@ -574,19 +576,33 @@ Memory is exposed as tools, not as a raw database. Claude Code auto-prefixes the
 
 Ingestion is a two-step process: `segment` breaks text into chunks, then the agent extracts topics/facts/inferences and passes them to `store_decomposition`. Epimemer does not decompose text itself — that is the calling agent's job.
 
-The tools group into: **core memory** (`segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`, `judge_importance`); **discovery & stats** (`query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`); **conflict handling** (`check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`, `reverse_merge`, `configure_merge`); **reflection** (`reflect`, `configure_reflection`, `apply_reflection`); **temporal access** (`graph_as_of`, `query_changes`); **archival** (`archive`, `restore`); **timelines** (`create_timeline`, `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`); **metacontexts** (`create_metacontext`, `get_metacontexts`); **graph management** (`list_graphs`, `use_graph`, `delete_graph`); **agents** (`claim_agent`); **review** (`review`, `apply_review`, `rejudge`); and **visualization** (`viz_status`).
+The tools group into: **core memory** (`segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`, `judge_importance`); **discovery & stats** (`query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `describe_relation`, `graph_stats`); **conflict handling** (`check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`, `reverse_merge`, `configure_merge`); **reflection** (`reflect`, `configure_reflection`, `apply_reflection`); **temporal access** (`graph_as_of`, `query_changes`); **archival** (`archive`, `restore`); **timelines** (`create_timeline`, `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`); **metacontexts** (`create_metacontext`, `get_metacontexts`, `reframe`); **graph management** (`list_graphs`, `use_graph`, `delete_graph`); **agents** (`claim_agent`); **review** (`review`, `apply_review`, `rejudge`, `correct_interval`); and **visualization** (`viz_status`).
 
 See [INTEGRATION.md](INTEGRATION.md#available-tools) for the canonical table with one-line descriptions and the authoritative tool count — this document intentionally does not restate the count so it can only drift in one place.
 
 ### Who is judging
 
-An agent can be given an identity — `claim_agent` proposes an id and a
-self-description, and the **user** approves, edits, or names a different one. An
-id nobody approved is refused, because an agent that could admit its own id
-could not then establish that a *different* agent reviewed anything. Descriptions
-append and are never edited; a description is a self-reported claim, not a
-credential, and only `confirmed_at` carries human weight. Approval is per graph,
-so `use_graph` can unbind a judge.
+An agent can be given an identity — `claim_agent` proposes a **name** and a
+self-description, and the **user** picks which judge it is from the judges this
+graph already knows, or names a new one. A judge nobody approved is refused,
+because an agent that could admit its own identity could not then establish that
+a *different* agent reviewed anything.
+
+**Three layers, with different rules** (2026-08-26). The **key** is opaque,
+frozen into every decision and shown to nobody. The **name** is the handle —
+freely renamable by the user, resolved at read time, so a rename carries every
+old decision with it and nobody has to name a judge correctly before knowing
+what it will be used for. **Descriptions** append and are never edited, pinned
+per decision by digest, because a decision made last week was made by whatever
+the agent claimed to be last week. A description is a self-reported claim, not a
+credential, and only `confirmed_at` carries human weight.
+
+Renaming to a name another judge holds asks whether they are the **same judge**,
+and yes consolidates them: the survivor answers for both sets of keys, both
+description histories are kept, and no journal row is rewritten. That is the
+repair for one judge accidentally recorded twice, and it reaches the user
+through the same two channels approval does. Approval is per graph, so
+`use_graph` can unbind a judge.
 
 Decisions made during review carry that identity: retiring a node records who
 retired it and returning it records who brought it back, a judgment edge records

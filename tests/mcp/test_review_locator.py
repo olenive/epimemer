@@ -217,8 +217,11 @@ class TestWhatItDeliberatelyDoesNotNarrowBy:
         )
 
         counted_with = result["elsewhere"]["counted_with"]
-        assert set(counted_with) == {"agent_id", "since", "until"}
-        assert counted_with["agent_id"] == "critic"
+        assert set(counted_with) == {"agent_ids", "since", "until"}
+        # The ids the handle resolved to, not the handle: a judge nothing here
+        # has a record for resolves to itself, which is this graph's case.
+        assert counted_with["agent_ids"] == ["critic"]
+        assert result["judge"]["asked_for"] == "critic"
         assert "certainty_ceiling" not in counted_with
         assert "mode" not in counted_with
 

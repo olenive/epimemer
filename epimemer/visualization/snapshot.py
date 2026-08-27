@@ -15,6 +15,7 @@ from epimemer.visualization.events import (
     edge_to_view,
     metacontext_to_view,
     node_to_view,
+    relation_label_to_view,
     timeline_to_view,
 )
 
@@ -24,11 +25,15 @@ async def assemble_snapshot(storage: StorageBackend, graph: str) -> dict:
 
     Metacontexts ride along because `has_metacontext` edges carry only ids, and
     a frame the viewer cannot name is a frame it cannot offer as a filter.
+    Relation labels ride along for the same reason one layer over: an edge
+    carries its label as a bare string, so the vocabulary's descriptions live
+    nowhere the viewer can reach from the edge alone (#74).
     """
     nodes = await storage.viz_list_nodes(graph)
     edges = await storage.viz_list_edges(graph)
     timelines = await storage.viz_list_timelines(graph)
     metacontexts = await storage.viz_list_metacontexts(graph)
+    relation_labels = await storage.viz_list_relation_labels(graph)
     return {
         "graph": graph,
         "nodes": [node_to_view(n, graph).model_dump(mode="json") for n in nodes],
@@ -38,6 +43,10 @@ async def assemble_snapshot(storage: StorageBackend, graph: str) -> dict:
         ],
         "metacontexts": [
             metacontext_to_view(m, graph).model_dump(mode="json") for m in metacontexts
+        ],
+        "relation_labels": [
+            relation_label_to_view(rl, graph).model_dump(mode="json")
+            for rl in relation_labels
         ],
     }
 

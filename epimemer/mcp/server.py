@@ -100,7 +100,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     # approved list and everything else reads it — and because on an embedded
     # backend this is the *only* channel that reaches the running server, the
     # `epimemer agents confirm` CLI being a separate store (ISSUES.md #16).
-    await tools.approve_agent_ids(storage, config.approved_agents)
+    await tools.seed_approved_judges(storage, config.approved_agents)
 
     embedding_provider = create_embedding_provider(config)
 
@@ -610,6 +610,13 @@ async def memory_store_decomposition(
               time (a novel's chronology), so fictional and real dates are never
               compared as though they shared a clock.
         metacontext_id: Optional metacontext ID — all nodes will inherit this.
+            It must already exist **in this graph**: ids are per graph, so one
+            carried over from another names nothing here, and a node framed by
+            nothing is worse off than an untagged one — it shares a frame with
+            no other node, so it is never compared, never merged, and missing
+            from every frame-scoped search including the frame you meant. A
+            wrong id is refused, and the refusal lists the frames that do exist.
+            Omitted, the nodes stand in base reality ("The Real").
         tags: Optional document-level tag names applied to every node. Each tag
             becomes (or reuses) a Topic linked by a tagged_with edge. Every node
             also gets a sourced_from edge to the document.
@@ -762,7 +769,9 @@ async def memory_search(
         node_types: Filter to specific types: "topic", "fact", "inference".
         graph_hops: Number of graph traversal hops from the fused results.
         metacontext_id: Optional — frame-scope results to this metacontext plus
-            untagged base-reality nodes (other frames are excluded).
+            untagged base-reality nodes (other frames are excluded). Must exist
+            in this graph; an id that does not resolve is refused rather than
+            quietly narrowing the search to base reality alone.
         cross_frame: Set true to ignore frame scoping and search across all
             metacontexts (opt-in; otherwise frames don't bleed together).
         terms: Exact strings that matter — identifiers, names, phrases. Matched
@@ -1571,6 +1580,9 @@ async def memory_apply_reflection(
         relation_merges: Consolidate synonymous user relationship labels from
             reflect's similar_relations. Each: {labels: [str], into: str}. Every
             user-tier edge with a listed label is relabelled to `into`, in place.
+            Read `relation_descriptions_orphaned` in the response: it names the
+            prose on labels that just lost their last edge, which nothing folds
+            into the survivor for you. Settle it with `describe_relation`.
         boundaries: Accept boundary proposals from reflect's
             `boundary_proposals` — where one claim's period ends and the next
             begins. Each: {node_id, source_id, endpoint: "start"|"end", at: ISO
@@ -1827,8 +1839,15 @@ async def epimemer_rejudge(
     claim up if challenged. `certainty` is about *this act of re-judging* — how
     sure you are the original was wrong. Omit either for the ordinary case.
 
-    `importance` is not here: `judge_importance` already revises that one, with
-    a reason and a clock.
+    **Three ingest judgments are revised elsewhere, and the split is about how
+    each is addressed rather than about tidiness.** `importance` →
+    `judge_importance`, which is already this tool for that one field. A **frame**
+    → `reframe`, because withdrawing a metacontext moves an edge and changes what
+    merges, what corroborates and what a frame-scoped search returns — which this
+    tool promises not to do. A **validity interval** → `correct_interval`,
+    because an interval belongs to a (node, source) pair rather than to a node.
+    Going to `supersede_by` for any of the three would file a true claim as an
+    error.
 
     Args:
         node_id: The node whose judgment you are revising.
@@ -1870,6 +1889,131 @@ async def epimemer_rejudge(
         expected_graph=expected_graph,
     )
 
+
+@mcp.tool(name="reframe")
+async def memory_reframe(
+    node_id: str,
+    withdraw: str,
+    because: str,
+    ctx: Context,
+    assign: str | None = None,
+    to_base_reality: bool = False,
+    expected_graph: str | None = None,
+) -> str:
+    """Withdraw a frame from a node, optionally putting another in its place.
+
+    A metacontext assignment used to be one-way, so a fact wrongly framed as
+    fiction stayed framed for ever. That is not cosmetic: it becomes permanently
+    unmergeable with its own twin, it stops corroborating the real copy, and a
+    frame-scoped search misses it where it belongs while returning it where it
+    does not. All three fail silently.
+
+    Not a supersession — the claim is unchanged and the world has not moved, so
+    nothing is retired. Use `update` when the claim itself was wrong.
+
+    Args:
+        node_id: The node whose framing you are revising.
+        withdraw: The metacontext id to remove. The node must currently hold it.
+        because: Why the original framing was wrong. Required.
+        assign: A metacontext id to put in its place, applied in the same call.
+            **Prefer this when the claim belongs in another frame** — withdrawing
+            and then linking passes through untagged, where the claim is asserted
+            in every frame, and strands the node there if the second call never
+            happens.
+        to_base_reality: Required when the withdrawal would leave the node in no
+            frame at all. Untagged is not neutral: base-reality knowledge is
+            inherited by every frame, so the claim goes from being asserted in one
+            world to being asserted in all of them. Say it on purpose.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else — naming it turns a
+            wrong-graph call from silent into refused.
+    """
+    deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx, expected_graph)
+    if refused is not None:
+        return refused
+    return await _run_with_timeout(
+        "epimemer.reframe",
+        lambda: tools.reframe(
+            node_id=node_id,
+            storage=deps["storage"],
+            withdraw=withdraw,
+            because=because,
+            assign=assign,
+            to_base_reality=to_base_reality,
+            judge=judge,
+        ),
+        ctx,
+        f"node_id={node_id}",
+        lambda r, m: (
+            f"refused node={node_id}" if not r["reframed"] else
+            f"reframed={node_id} withdrew={r['withdrew']} "
+            f"frames_now={len(r['frames_now'])}"
+        ),
+        expected_graph=expected_graph,
+    )
+
+
+@mcp.tool(name="correct_interval")
+async def memory_correct_interval(
+    node_id: str,
+    source_id: str,
+    intervals: list[dict],
+    because: str,
+    ctx: Context,
+    expected_graph: str | None = None,
+) -> str:
+    """Replace what one source is recorded as asserting about when a claim held.
+
+    For an endpoint that is **present and wrong**. `reflect`'s
+    `boundary_proposals` fills one that is *open*, where a succession implies it;
+    nothing can derive that a stated date was misread, so this is a separate act
+    on separate evidence.
+
+    A wrong interval moves a count as well as a date: corroboration reads
+    intervals to decide whether a look-alike witnesses the same period or is the
+    neighbouring truth.
+
+    Not a supersession — the claim is unchanged.
+
+    Args:
+        node_id: The claim whose period you are correcting.
+        source_id: The document whose assertion is being corrected. Periods are
+            per source, so this names one edge.
+        intervals: The **complete** replacement list for that (node, source)
+            pair — an interval is a position in a list and has no id of its own.
+            Each: {start?, end?, timeline_id?, witnessed_at?, basis}. `basis` has
+            no default and must be "stated" or "inferred". An empty list is
+            allowed, and is the correction for a period that was invented.
+        because: Why the recorded period was wrong. Required.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else — naming it turns a
+            wrong-graph call from silent into refused.
+    """
+    deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx, expected_graph)
+    if refused is not None:
+        return refused
+    return await _run_with_timeout(
+        "epimemer.correct_interval",
+        lambda: tools.correct_interval(
+            node_id=node_id,
+            storage=deps["storage"],
+            source_id=source_id,
+            intervals=intervals,
+            because=because,
+            judge=judge,
+        ),
+        ctx,
+        f"node_id={node_id} source_id={source_id}",
+        lambda r, m: (
+            f"refused node={node_id}" if not r["corrected"] else
+            f"corrected={node_id} periods={len(r['now'])}"
+        ),
+        expected_graph=expected_graph,
+    )
 
 
 @mcp.tool(name="query_graph")
@@ -2127,6 +2271,54 @@ async def memory_list_relations(
         ctx,
         "",
         lambda r, m: f"relations={len(r['relations'])}",
+        expected_graph=expected_graph,
+    )
+
+
+@mcp.tool(name="describe_relation")
+async def memory_describe_relation(
+    name: str,
+    description: str,
+    ctx: Context,
+    kind: str = "relationship",
+    expected_graph: str | None = None,
+) -> str:
+    """Say what one of this graph's relationship labels means here.
+
+    Advisory prose the next agent reads before coining a label, free to say "in
+    the Court context this means X; for corporate contracts use Y". Nothing
+    enforces it — it describes the shared label, not any one edge.
+
+    Refused for a label no edge in this graph carries, and for a `kind` the
+    edges do not carry: the kind decides whether retrieval follows the edge, so
+    it is set by use and only mirrored here.
+
+    Args:
+        name: The relation label, exactly as edges carry it.
+        description: What this graph means by it. Blank leaves existing prose
+            alone rather than clearing it.
+        kind: "relationship" or "attribution" — must match what the edges carry.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else — naming it turns a
+            wrong-graph call from silent into refused.
+    """
+    deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx, expected_graph)
+    if refused is not None:
+        return refused
+    return await _run_with_timeout(
+        "epimemer.describe_relation",
+        lambda: tools.describe_relation(
+            name=name,
+            storage=deps["storage"],
+            description=description,
+            kind=kind,
+            judge=judge,
+        ),
+        ctx,
+        f"name={name[:50]}",
+        lambda r, m: ("described" if r.get("described") else "refused"),
         expected_graph=expected_graph,
     )
 
@@ -2598,6 +2790,8 @@ async def epimemer_list_graphs(
 # never held in a module global, which is the whole of §3.2: two graphs or two
 # sessions must not be able to inherit each other's judge.
 JUDGE_STATE_KEY = "epimemer.judge"
+# Which identity this session has already had confirmed, per graph (#78).
+JUDGE_CONFIRMED_STATE_KEY = "epimemer.judge_confirmed"
 
 
 async def _bound_judge(ctx: Context) -> JudgeRef | None:
@@ -2662,6 +2856,57 @@ async def _bind_judge(ctx: Context, judge: JudgeRef | None) -> bool:
     return True
 
 
+async def _confirmed_judge_here(ctx: Context) -> str | None:
+    """The judge this session has already had confirmed for the active graph.
+
+    The cadence memo (#78, decided 2026-08-25). The picker goes up on every
+    bind, which is what stops an already-approved id binding with nobody
+    watching — and repeating the question for a claim this session has already
+    answered would train the user to dismiss it, so a re-claim of the same
+    judge in the same graph is silent.
+
+    **Keyed on the identity, never on the session alone.** A memo meaning
+    *this session confirmed something* would let an agent be approved as one
+    judge and then bind as another without a word, which is the defect this
+    exists to close, rebuilt inside its own fix.
+
+    Session-scoped, so it dies with the connection: after a reconnect the
+    question is asked again, and it is the picker rather than the frequency
+    that makes that tolerable. No session state at all means no memo, which
+    asks — the safe direction.
+
+    **The id, not a yes-or-no.** The proposal `claim_agent` receives is a
+    handle, and only that tool can resolve it against this graph's judges, so
+    the comparison has to happen there (#78). Returning a boolean here would
+    mean comparing a handle to an id and calling them equal.
+    """
+    try:
+        stored = await ctx.get_state(JUDGE_CONFIRMED_STATE_KEY)
+    except RuntimeError:
+        return None
+    if not isinstance(stored, dict):
+        return None
+    return stored.get(ctx.lifespan_context["storage"].current_database)
+
+
+async def _remember_judge_confirmed(ctx: Context, agent_id: str) -> None:
+    """Record that the user confirmed `agent_id` for the active graph.
+
+    Per graph rather than one value, because a session that works across two
+    graphs has answered two separate questions — approval is per graph, so a
+    single slot would let the answer for one stand in for the other.
+    """
+    database = ctx.lifespan_context["storage"].current_database
+    try:
+        stored = await ctx.get_state(JUDGE_CONFIRMED_STATE_KEY)
+        confirmed = dict(stored) if isinstance(stored, dict) else {}
+        confirmed[database] = agent_id
+        await ctx.set_state(JUDGE_CONFIRMED_STATE_KEY, confirmed)
+    except RuntimeError:
+        # No session to remember in. Every claim then asks, which is correct.
+        return
+
+
 async def _judge_for_write(
     ctx: Context, expected_graph: str | None = None
 ) -> tuple[JudgeRef | None, str | None]:
@@ -2706,45 +2951,198 @@ async def _judge_for_write(
         deps["storage"], process_default=deps["config"].require_judge
     ):
         return None, None
-    approved = await deps["storage"].get_approved_agent_ids()
-    return None, _error_response(tools.judge_required_reason(approved))
+    storage = deps["storage"]
+    approved = await storage.get_approved_agent_ids()
+    return None, _error_response(
+        tools.judge_required_reason(
+            tools.approved_labels(approved, await storage.list_agents())
+        )
+    )
 
 
-async def _elicit_agent_id(ctx: Context, agent_id: str, description: str) -> str | None:
-    """Ask the **user** which id this agent may judge under (§2.3).
+_NO_CHANNEL = tools.ApprovalOutcome(channel_available=False)
+_DECLINED = tools.ApprovalOutcome()
+
+
+async def _elicit_new_judge_name(
+    ctx: Context, proposed: str, description: str
+) -> tools.ApprovalOutcome:
+    """The free-text half: name a judge that does not exist yet.
+
+    Reached only by choosing *a new judge* in the picker, or where the graph
+    knows none to pick from. Keeping it off the common path is the point — free
+    text is what let one keystroke mint a permanent second judge (#78).
+
+    **What comes back is a handle, not a decision to mint.** Typing the name of
+    a judge that already exists joins it, because `claim_agent` resolves the
+    answer the same way it resolves the proposal — which is right, and is the
+    case this prompt used to get wrong.
+
+    **A raise here is the elicitation-less client**, and it is reported as
+    *unavailable* rather than as a refusal, because the two have opposite
+    consequences for a judge the user already approved out of band.
+    """
+    try:
+        answer = await ctx.elicit(
+            f"Name the new judge. Accept to use '{proposed}', or type another "
+            f"name.\n\nA name can be changed later and the decisions follow it, "
+            f"so it does not have to be right for ever.\n\nIt describes itself "
+            f"as: {description}",
+            response_type=str,
+        )
+    except Exception:
+        _tool_logger.info(
+            "claim_agent: no elicitation channel to the user for '%s'", proposed
+        )
+        return _NO_CHANNEL
+    if isinstance(answer, AcceptedElicitation):
+        # An accepted-but-empty answer is agreement with the prompt, which named
+        # the proposal. Reading it as a blank name would refuse the thing the
+        # user just approved.
+        return tools.ApprovalOutcome(chosen=(answer.data or "").strip() or proposed)
+    return _DECLINED
+
+
+async def _elicit_rename(ctx: Context, roster: list[tools.JudgeChoice]) -> str | None:
+    """Rename a judge, from inside the picker. Returns a note for the log, or None.
+
+    **The one channel that can rename**, alongside the CLI, and for the same
+    reason approval has only those two: a handle an agent could rename is a
+    handle an agent could point at another judge's history (§2.2). It lives here
+    rather than only in the CLI because the CLI cannot reach an in-memory or
+    embedded store at all, and the picker is where a user *sees* the wrong name.
+
+    Three prompts at most, and only ever after the user asked for this: which
+    judge, what to call it, and — if that name is taken — whether the two are
+    the same judge. That last one is the repair for a split history, arriving
+    exactly where the split is visible.
+    """
+    choices = {choice.key: {"title": choice.title} for choice in roster}
+    try:
+        picked = await ctx.elicit("Which judge should be renamed?", response_type=choices)
+    except Exception:
+        return None
+    if not isinstance(picked, AcceptedElicitation):
+        return None
+    handle = tools.selected_judge_id(str(picked.data or ""))
+    if handle is None:
+        return None
+
+    try:
+        typed = await ctx.elicit("What should it be called?", response_type=str)
+    except Exception:
+        return None
+    if not isinstance(typed, AcceptedElicitation):
+        return None
+    name = (typed.data or "").strip()
+    if not name:
+        return None
+
+    storage = ctx.lifespan_context["storage"]
+    result = await tools.rename_judge(storage, handle=handle, name=name)
+    if result["status"] != "same_judge_needed":
+        return result.get("message") or result.get("reason")
+
+    try:
+        same = await ctx.elicit(
+            f"{result['reason']}\n\nAccept if they are the same judge.",
+            response_type=None,
+        )
+    except Exception:
+        return result["reason"]
+    if not isinstance(same, AcceptedElicitation):
+        return "Left both judges as they were."
+    merged = await tools.rename_judge(
+        storage, handle=handle, name=name, same_judge=True
+    )
+    return merged.get("message") or merged.get("reason")
+
+
+# A picker that renames has to put itself up again afterwards, because renaming
+# is not an answer to *which judge is this*. Bounded so that a client answering
+# "rename" for ever cannot spin: three is more rounds than anyone wants and far
+# fewer than a loop.
+_PICKER_ROUNDS = 3
+
+
+async def _elicit_agent_id(
+    ctx: Context, proposed: str, description: str
+) -> tools.ApprovalOutcome:
+    """Ask the **user** which judge this agent may be, in this graph (§2.3).
 
     `ctx.elicit` inverts the direction of an MCP call — the server asks, and the
     answer comes back from the user through their own client's UI. That is what
     lets `confirmed_at` mean what it says: no path exists by which the agent
     alone sets it.
 
-    Every failure reads as *no answer*. A client without the elicitation
-    capability raises here, and a raise has to refuse the claim rather than
-    admit an id nobody approved — the one direction this must not fail in.
+    **A picker over the judges this graph already knows** (#78). It used to be a
+    free-text box naming only the proposed id, so the one place a human chooses
+    an identity was the one place the existing identities were invisible — and
+    what the user typed had to match an existing judge character for character
+    or it silently became a second one with a permanently separate history.
+    That is how `Opus 5 Judge` and `Opus 5` both came to exist on this
+    repository's own graph. `list_agents` had the answer the whole time and no
+    consumer outside the CLI.
+
+    **Lines carry names, never ids.** Since the three-layer split the key is a
+    UUID, and a picker offering those would be unusable — which is why #77
+    rejected an opaque id, and why the picker had to come first.
+
+    **The question comes first and the self-description last**, because the
+    terminal cuts the end: what gets lost is prose the user may weigh, never the
+    thing being asked.
+
+    **A picker that fails degrades to free text rather than to a refusal.**
+    Rendering a choice schema is the client's business and not every client will
+    do it, so the fallback is the interaction that used to be the only one. What
+    must not degrade is *asking*: every failure below reads as **no answer**,
+    and no answer refuses.
     """
-    try:
-        answer = await ctx.elicit(
-            f"An agent asks to judge in graph "
-            f"'{ctx.lifespan_context['storage'].current_database}' as "
-            f"'{agent_id}'.\n\n"
-            f"It describes itself as: {description}\n\n"
-            f"The id is yours to assign — accept it, or edit it to whatever you "
-            f"want this judge called. Decline to refuse. Nothing verifies the "
-            f"description; it is what the agent says about itself, and it is "
-            f"recorded as a claim rather than as a credential.",
-            response_type=str,
+    storage = ctx.lifespan_context["storage"]
+    for _ in range(_PICKER_ROUNDS):
+        roster = await tools.judge_roster(storage)
+        if not roster:
+            # Nothing to pick from — a graph nobody has judged in yet.
+            return await _elicit_new_judge_name(ctx, proposed, description)
+
+        choices: dict[str, dict[str, str]] = {
+            choice.key: {"title": choice.title} for choice in roster
+        }
+        choices[tools.NEW_JUDGE_CHOICE] = {
+            "title": f"A new judge — proposed: {proposed}"
+        }
+        choices[tools.RENAME_JUDGE_CHOICE] = {
+            "title": "Rename a judge — decisions follow the new name"
+        }
+        message = (
+            f"Which judge is this agent, in graph '{storage.current_database}'?"
+            f"\n\nDecline to refuse it an identity. Nothing verifies what an "
+            f"agent says about itself; it is recorded as a claim, not a "
+            f"credential.\n\nIt proposes '{proposed}' and describes itself as: "
+            f"{description}"
         )
-    except Exception:
-        _tool_logger.info(
-            "claim_agent: no elicitation channel to the user; refusing '%s'", agent_id
-        )
-        return None
-    if isinstance(answer, AcceptedElicitation):
-        # An accepted-but-empty answer is agreement with the prompt, which named
-        # the proposed id. Reading it as a blank id would refuse the thing the
-        # user just approved.
-        return (answer.data or "").strip() or agent_id
-    return None
+        try:
+            answer = await ctx.elicit(message, response_type=choices)
+        except Exception:
+            _tool_logger.info(
+                "claim_agent: could not offer a judge picker; falling back to "
+                "free text"
+            )
+            return await _elicit_new_judge_name(ctx, proposed, description)
+        if not isinstance(answer, AcceptedElicitation):
+            return _DECLINED
+        key = str(answer.data or "")
+        if key == tools.RENAME_JUDGE_CHOICE:
+            note = await _elicit_rename(ctx, roster)
+            _tool_logger.info("claim_agent: rename from the picker: %s", note)
+            # Renaming answered a different question, so the picker goes back up
+            # — now showing the name the user just chose.
+            continue
+        chosen = tools.selected_judge_id(key)
+        if chosen is None:
+            return await _elicit_new_judge_name(ctx, proposed, description)
+        return tools.ApprovalOutcome(chosen=chosen)
+    return _DECLINED
 
 
 async def _elicit_description_confirmation(
@@ -2778,10 +3176,25 @@ async def memory_claim_agent(
 ) -> str:
     """Say which judge you are, so later review can tell your decisions apart.
 
-    Propose an id and describe yourself; the **user** approves, and may hand
-    back a different id. An id the user has not approved is refused — the id is
-    theirs to assign, and that is what makes *"a different agent reviewed this"*
-    something a graph can show rather than something an agent asserts.
+    Propose a name and describe yourself; the **user** approves, and may hand
+    back a different judge. One the user has not approved is refused — the
+    identity is theirs to assign, and that is what makes *"a different agent
+    reviewed this"* something a graph can show rather than something an agent
+    asserts.
+
+    **Expect to be answered with a different judge, and do not argue with it.**
+    The user is shown the judges this graph already knows and picks one, so the
+    commonest outcome of proposing a new name is being told which existing judge
+    you are. `new_agent` in the response says which happened: `true` means you
+    created a judge with no history rather than joining one, and it is worth
+    telling the user, since a graph accumulating near-duplicate judges is how a
+    review of *this agent's decisions* starts returning half the answer.
+
+    **Read `name` back, not `agent_id`.** The response carries both: `name` is
+    what to call this judge when you speak to the user, and `agent_id` is an
+    opaque key for `review(mode="by_agent")`. The name can be changed later —
+    by the user, from this prompt or the CLI — and every decision already made
+    follows it, so nobody has to name a judge perfectly on first contact.
 
     **Your description is a claim, not a credential.** Nothing verifies it. It
     is recorded like a fact you ingest, and a later reader is entitled to weigh
@@ -2794,9 +3207,12 @@ async def memory_claim_agent(
     graph, so switching graphs can unbind you; claim again after a use_graph.
 
     Args:
-        agent_id: The id you propose to judge under. Ask the user what they want
-            you called rather than inventing one; a refusal names the ids this
-            graph already approved.
+        agent_id: What you propose to be called, or the `agent_id` a previous
+            claim handed back. Either works: it is resolved against this
+            graph's judges by name, by key, and by any key a judge used to be
+            recorded under. Ask the user what they want you called rather than
+            inventing something; a refusal names the judges this graph already
+            approved.
         description: What you are, in your own words. One or two sentences.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
@@ -2814,6 +3230,7 @@ async def memory_claim_agent(
             confirm_description=lambda claimed_id, text: (
                 _elicit_description_confirmation(ctx, claimed_id, text)
             ),
+            confirmed_identity=await _confirmed_judge_here(ctx),
         )
         if result["status"] == "claimed":
             # The binding is the point of the call, and it is written only after
@@ -2822,6 +3239,9 @@ async def memory_claim_agent(
             result["session_bound"] = await _bind_judge(
                 ctx, JudgeRef(agent_id=result["agent_id"], digest=result["digest"])
             )
+            # Remembered under the id that was *chosen*, which the picker may
+            # have made a different one from the id proposed.
+            await _remember_judge_confirmed(ctx, result["agent_id"])
         return result, meta
 
     return await _run_with_timeout(
@@ -2831,7 +3251,10 @@ async def memory_claim_agent(
         f"agent_id={agent_id}",
         lambda r, m: (
             f"status={r['status']}"
-            + (f" digest={r['digest']}" if r["status"] == "claimed" else "")
+            + (
+                f" name={r['name']} digest={r['digest']}"
+                if r["status"] == "claimed" else ""
+            )
         ),
         # This call can be waiting on a person to read a prompt.
         waits_for_user=True,

@@ -5,9 +5,9 @@ How the built system works, and why it works that way.
 | Page | Covers |
 |---|---|
 | [RETRIEVAL.md](RETRIEVAL.md) | How `search` is answered — the vector and keyword arms, rank fusion, segment hits, result provenance, lineage collapse, valid-time buckets |
-| [VALIDITY.md](VALIDITY.md) | When a claim was true — intervals per source, the two clocks, correction vs world-change, recurrence, the soundness check, boundary proposals |
+| [VALIDITY.md](VALIDITY.md) | When a claim was true — intervals per source, the two clocks, correction vs world-change, recurrence, the soundness check, boundary proposals, and correcting a period that is present and wrong |
 | [REFLECTION.md](REFLECTION.md) | The review loop — the verdict taxonomy, what `reflect` nominates, what `apply_reflection` writes, archival |
-| [ATTRIBUTION.md](ATTRIBUTION.md) | Who judged this — the agent registry, why the user assigns the id, how approval reaches them, what a self-description is worth, the append-only journal that answers *what did this agent judge*, and reading it back with `review` / `apply_review` / `rejudge` |
+| [ATTRIBUTION.md](ATTRIBUTION.md) | Who judged this — the agent registry, why the user assigns the id, how approval reaches them, what a self-description is worth, the append-only journal that answers *what did this agent judge*, and reading it back with `review` / `apply_review` / `rejudge`, plus `reframe` and `correct_interval` for the two revisions addressed differently |
 
 Start with [SUMMARY.md](../SUMMARY.md) for the architecture as a whole; these
 pages are the detail behind the sections that point here.

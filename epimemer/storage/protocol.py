@@ -26,8 +26,11 @@ from epimemer.core.types import (
     NodeStatus,
     NodeType,
     RawDocument,
+    RelationLabel,
     Segment,
     Timeline,
+    agent_aliases,
+    resolve_agent,
 )
 from epimemer.storage.active_graph import GraphGuard
 
@@ -842,6 +845,39 @@ class StorageBackend(Protocol):
         """Query metacontexts by status."""
         ...
 
+    # --- Relation labels (#74) ---
+
+    async def store_relation_label(self, label: RelationLabel) -> str:
+        """Store a relation label, or update its description and metadata.
+
+        **Those are the only fields an update may move.** `name` cannot change,
+        because edges join to it by string; `kind` cannot, because the kind is
+        in force on the edges and this record only mirrors it. Said here rather
+        than left to the callers, or the next one discovers the update path is
+        wider than the design.
+
+        Uniqueness is `(name, kind)` within a graph, enforced by the writer —
+        the same name under a different kind is a different record, because the
+        kind decides whether retrieval follows the edge.
+        """
+        ...
+
+    async def get_relation_label(
+        self, name: str, kind: str
+    ) -> RelationLabel | None:
+        """The record for one label, or None if it has none.
+
+        **`None` is the ordinary answer on any graph that predates this**, and
+        every caller must degrade to today's behaviour rather than refuse. A
+        label without a record is not an error; it is a graph nobody has touched
+        since the record existed.
+        """
+        ...
+
+    async def query_relation_labels(self) -> Sequence[RelationLabel]:
+        """Every relation label record in the active graph. Unordered."""
+        ...
+
     # --- Reflection bookkeeping ---
 
     async def get_reflect_counter(self) -> int:
@@ -999,7 +1035,7 @@ class StorageBackend(Protocol):
     async def query_decisions(
         self,
         *,
-        agent_id: str | None = None,
+        agent_ids: Sequence[str] | None = None,
         kinds: Sequence[DecisionKind] | None = None,
         subject_id: str | None = None,
         reviews: str | None = None,
@@ -1013,10 +1049,20 @@ class StorageBackend(Protocol):
         compose: *"what did agent-1 decide yesterday"* is two of them, and a
         method per filter would make the composition the caller's problem.
 
-        `agent_id` matches `judged_by.agent_id` and never the digest — a judge
-        that re-described itself is the same judge, which is the whole reason
-        the id is assigned rather than derived from the description (§2.1).
-        Rows with no judge match no `agent_id`, since unknown is not an id.
+        `agent_ids` matches `judged_by.agent_id` against **any** of them, and
+        never the digest — a judge that re-described itself is the same judge,
+        which is the whole reason the id is assigned rather than derived from
+        the description (§2.1). Rows with no judge match no id, since unknown is
+        not an id, and an empty list matches nothing rather than everything: it
+        is a caller that named a judge with no ids, not a caller that named
+        none.
+
+        **A list rather than one id, because a judge is a set of keys** (#78).
+        Consolidating two records that were always one agent rewrites no rows —
+        the survivor gains the other's id as a former id and lookup resolves
+        through the list — so *this judge's decisions* is a query over
+        `agent_aliases`, which is a single id for every judge that has never
+        been consolidated.
 
         `since` is inclusive and `until` exclusive, the half-open convention
         `query_changes` already uses, so adjacent windows neither overlap nor
@@ -1041,7 +1087,7 @@ class StorageBackend(Protocol):
         self,
         databases: Sequence[str],
         *,
-        agent_id: str | None = None,
+        agent_ids: Sequence[str] | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> dict[str, int]:
@@ -1060,7 +1106,7 @@ class StorageBackend(Protocol):
         which stays the fallback and is not a workaround.
 
         **A locator may overcount and must never undercount.** Only the filters
-        `query_decisions` already implements are mirrored here — `agent_id`,
+        `query_decisions` already implements are mirrored here — `agent_ids`,
         `since`, `until` — and the narrowings a reviewer applies while browsing
         (`certainty_ceiling`, `mode="unreviewed"`) are not. Every filter
         reimplemented for a second read is somewhere the two can disagree, and a
@@ -1176,3 +1222,44 @@ class StorageBackend(Protocol):
         offer no better than a list of UUIDs.
         """
         ...
+
+    async def viz_list_relation_labels(
+        self,
+        database: str,
+    ) -> Sequence[RelationLabel]:
+        """List every relation label record in a graph, for visualization.
+
+        The vocabulary a graph has coined, with whatever prose describes it. An
+        edge carries the label as a bare string, so without these the dashboard
+        can show what a relation is *called* and nothing about what it means.
+
+        A graph that predates #74 answers with an empty list, exactly as one
+        with no relations at all does — the two are indistinguishable here and
+        do not need distinguishing, because the viewer falls back to the labels
+        on the edges either way.
+        """
+        ...
+
+
+async def judge_aliases(storage: StorageBackend, handle: str) -> list[str]:
+    """Every id whose journal rows belong to the judge `handle` names.
+
+    A handle is a name, an id, or an id this judge used to be recorded under
+    (#78), so this is the one place *which judge did the caller mean* is
+    answered — and the answer is a **set**, because consolidating two records
+    that were always one agent rewrites no rows: the survivor gains the other's
+    id as a former id, and lookup resolves through the list.
+
+    It sits beside the protocol rather than at the MCP boundary because both
+    layers need it: the review tool resolves what a reader asked for, and
+    `apply_review`'s duplicate check resolves the judge already bound. A judge
+    that has never been consolidated yields a list of one, and the query is what
+    it always was.
+
+    **A handle naming no judge here resolves to itself.** The caller may be
+    asking about an id whose agent record this graph never held — an approved id
+    nothing has claimed, or a row written elsewhere — and answering with nothing
+    would read as a judge that decided nothing.
+    """
+    agent = resolve_agent(await storage.list_agents(), handle)
+    return agent_aliases(agent) if agent is not None else [handle.strip()]

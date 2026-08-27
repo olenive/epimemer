@@ -22,6 +22,7 @@ from epimemer.core.types import (
     Inference,
     Metacontext,
     NodeEdge,
+    RelationLabel,
     Timeline,
     Timepoint,
     Topic,
@@ -87,6 +88,20 @@ class MetacontextView(BaseModel):
     """An epistemic frame, so the dashboard can name one rather than show a uuid."""
     metacontext_id: str
     content: str
+    description: str = ""
+    graph: str
+
+
+class RelationLabelView(BaseModel):
+    """One entry in a graph's relationship vocabulary, with what it means here.
+
+    An edge carries its label as a bare string, so without this the dashboard
+    can show what a relation is called and nothing about what this graph means
+    by it — which is the whole of #74 restated for the viewer.
+    """
+    relation_label_id: str
+    name: str
+    kind: str
     description: str = ""
     graph: str
 
@@ -162,6 +177,17 @@ def metacontext_to_view(mc: Metacontext, graph: str) -> MetacontextView:
         metacontext_id=mc.id,
         content=mc.content,
         description=mc.description,
+        graph=graph,
+    )
+
+
+def relation_label_to_view(label: RelationLabel, graph: str) -> RelationLabelView:
+    """Convert a storage RelationLabel to a RelationLabelView for the frontend."""
+    return RelationLabelView(
+        relation_label_id=label.id,
+        name=label.name,
+        kind=label.kind,
+        description=label.description,
         graph=graph,
     )
 

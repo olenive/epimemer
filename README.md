@@ -177,7 +177,7 @@ All configuration is via `EPIMEMER_` environment variables:
 Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<name>` by Claude Code), grouped by purpose:
 
 - **Core memory**: `segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`, `judge_importance`
-- **Discovery & stats**: `query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `graph_stats`
+- **Discovery & stats**: `query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `describe_relation`, `graph_stats`
 - **Conflict handling**: `check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`, `reverse_merge`, `configure_merge`
 - **Reflection**: `reflect`, `configure_reflection`, `apply_reflection`
 - **Temporal access**: `graph_as_of`, `query_changes`
@@ -185,10 +185,14 @@ Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<
 - **Timelines**: `create_timeline`, `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`
 - **Metacontexts**: `create_metacontext`, `get_metacontexts`
 - **Graph management**: `list_graphs`, `use_graph`, `delete_graph`
-- **Agents**: `claim_agent` — say which judge you are; the user assigns the id
+- **Agents**: `claim_agent` — say which judge you are; the user picks it, and
+  can rename it later without disturbing a single decision
 - **Review**: `review` — the decisions this graph has recorded, shakiest first;
   `apply_review` — record that you checked one, and whether you agree;
-  `rejudge` — revise a judgment made at ingest without touching the claim
+  `rejudge` — revise a judgment made at ingest without touching the claim;
+  `reframe` — withdraw a metacontext from a node, or move it to another in
+  one call; `correct_interval` — replace what one source is recorded as
+  asserting about when a claim held
 - **Visualization**: `viz_status`
 
 See [INTEGRATION.md](INTEGRATION.md#available-tools) for the canonical table with one-line descriptions and the authoritative tool count.
@@ -357,17 +361,24 @@ make test-frontend      # npm run typecheck && npm test, in the frontend directo
 
 ## Administration
 
-`uv run epimemer agents list` shows a graph's approved judge ids, whether it
-requires one, and what each agent has said about itself. `uv run epimemer agents
-confirm <id>` admits an id, and `uv run epimemer agents require on|off|default`
-decides whether writes to that graph must name one. Both are acts no MCP tool may
+`uv run epimemer agents list` shows a graph's approved judges, whether it
+requires one, and what each has said about itself. `uv run epimemer agents
+confirm <name>` admits one, `uv run epimemer agents rename <handle> <name>`
+renames one (add `--same-judge` to consolidate two that are really one), and `uv run epimemer agents require on|off|default`
+decides whether writes to that graph must name one. These are acts no MCP tool may
 perform — a tool the agent calls cannot establish that the *user* called it, and
 a gate the agent can open is decoration.
 
-Both work only against a **served** SurrealDB: an embedded store lives inside the
-server process, so writing there would land in a store the running server never
-reads. Use `EPIMEMER_APPROVED_AGENTS` and `EPIMEMER_REQUIRE_JUDGE` instead in
-that case; the command says which one rather than appearing to succeed.
+`uv run epimemer relations backfill` gives every relationship label already in
+use a record, in one go. It is idempotent, never touches a label that has one,
+and is a convenience rather than a precondition: every write path that names a
+label creates its record, so a graph's vocabulary fills in as it is used.
+
+All of these work only against a **served** SurrealDB: an embedded store lives
+inside the server process, so writing there would land in a store the running
+server never reads. Use `EPIMEMER_APPROVED_AGENTS` and `EPIMEMER_REQUIRE_JUDGE`
+instead for the two settings; the command says which one rather than appearing
+to succeed. The backfill has no substitute and needs none — its refusal says so.
 
 ## Not yet built
 

@@ -515,6 +515,15 @@ each step is independently reviewable.
   contradiction for facts; inferences are meant to coexist).
 - Contradiction handling is **unified** into the review loop, not separate.
 - Base frame **"The Real"**, **implicit** untagged membership, **reserved id**.
+  > **Amended 2026-08-27 (`ISSUES.md` #76).** The *read* rule is unchanged —
+  > untagged still resolves to The Real, in `frames_for`. What changes is that
+  > **ingest will stop producing untagged nodes**: `metacontext_id` becomes
+  > required on `store_decomposition`, and `apply_reflection`'s synthesis and
+  > splits will inherit their sources' frames rather than creating nodes with
+  > none. So implicit membership becomes a **legacy path** — correct for the
+  > nodes written before the rule and unreachable for anything after it. The
+  > reserved id is unaffected and is what a base-reality ingest now states
+  > explicitly.
 - `variant_of` is **in v1** (divergences queryable).
 - **Association, not inheritance**, for metacontexts.
 - Human-in-the-loop is **in-conversation**, with notification on genuine

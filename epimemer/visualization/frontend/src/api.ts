@@ -11,6 +11,7 @@ import type {
   MetacontextView,
   NodeView,
   ReflectPressure,
+  RelationLabelView,
   RetrievalRecordWire,
   SessionInfo,
   TimelineView,
@@ -31,6 +32,8 @@ export interface SnapshotResponse {
   /** Both absent from a hub that predates the timeline panel. */
   timelines?: TimelineView[];
   metacontexts?: MetacontextView[];
+  /** Absent from a hub that predates the relation label record (#74). */
+  relation_labels?: RelationLabelView[];
 }
 
 /**

@@ -124,8 +124,11 @@ Epimemer makes no LLM calls, so the calling agent supplies validity at
 `store_decomposition`, per node. It has to be there: tense and the dates written
 in the text are visible at ingest and nowhere afterwards.
 
-Everything downstream **reads**. Nothing infers a date from the text later,
-because the text is gone by then.
+Everything downstream **reads**, with two exceptions that write an endpoint
+without reading the text: `apply_reflection(boundaries=[…])` fills one that is
+still **open**, from a succession two documents imply together (§7); and
+`correct_interval` replaces one that is **present and wrong** (§7.1). Nothing
+infers a date from the text later, because the text is gone by then.
 
 ---
 
@@ -267,6 +270,36 @@ which interval is meant from the graph as it stands and **refuses** rather than
 guesses when the request no longer names exactly one open period — several means
 ambiguous, none means already answered. Refusals come back with a reason, because
 a boundary silently not applied is worse than one rejected out loud.
+
+### 7.1 Correcting a period that is present and wrong
+
+`boundary_proposals` fills an endpoint that is **open**. Nothing derives that a
+date already recorded was *misread* — a republication date taken for the
+original, a tense read the wrong way — so correcting one is a separate act on
+separate evidence, and it is `correct_interval(node_id, source_id, intervals,
+because)`.
+
+**It is not a supersession.** The claim is unchanged and the world has not moved,
+so `because` in the `update` sense has no honest value; this is the same category
+as a mislabelled `claim_kind`, and `dev-docs/ISSUES.md` #66 is where the split
+between it and `rejudge` is argued. Nothing is retired and no lineage moves.
+
+**The whole list for that (node, source) pair is replaced**, because an interval
+is a position in a list on one `sourced_from` edge and has no id of its own.
+Supplying an empty list is allowed, and is how a period that was invented outright
+comes off — refusing that would leave a fabricated interval unremovable.
+
+**`basis` stays yours to state per interval**, unlike an accepted boundary, which
+is forced to `inferred`. A correction is often restoring what the document
+actually said, and calling that inferred would understate it.
+
+Refused where the graph cannot back the change: a blank `because`, no node, a
+source no `sourced_from` edge names, or a replacement identical to what is already
+there — a restatement is not a revision. The prior list is kept in the edge's
+`interval_corrections` trail, which matters because corroboration reads intervals
+to decide whether a look-alike witnesses the same period or is the neighbouring
+truth: a wrong interval has been moving counts for as long as it stood, and the
+trail plus the journal row's timestamp is what bounds which answers were affected.
 
 ---
 

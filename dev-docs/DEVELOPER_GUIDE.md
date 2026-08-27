@@ -200,6 +200,36 @@ To isolate one stage, call its module function directly — e.g.
 `find_similar_topic_pairs` from `topic_consolidation`, or
 `nominate_archival_candidates` from `archival`.
 
+**Two rules for any new nominator, and they are a pair.** Every sweep here is
+recomputed from the graph as it stands, which makes both failures easy to ship
+without noticing:
+
+- **A sweep that records no declines is a futile cycle by construction.** It
+  re-offers what an agent already refused, on every pass, and cannot know it is
+  doing so. The cost is agent attention, and the pressure runs the wrong way:
+  *accepting* a nomination usually removes its subject from the population, so
+  acceptance is self-suppressing and refusal is not. #64 is the worked example
+  — thirteen of eighteen nominated pairs were declined and vanished — and the
+  `ASSESSED` edge is the fix: a suppression index the sweep reads, separate
+  from the journal that audits it.
+- **And its dual: a suppression with no retraction makes every wrong decline
+  permanent by construction.** `assessed` is deliberately terminal
+  (`similarity_decisions.py`), and #68's retraction left it untouched on
+  purpose. That is a choice, not an oversight, and a new nominator inherits it
+  knowingly or decides otherwise — **but not by copying**. #68 is one-way
+  because a false unification manufactures agreement while a withdrawal only
+  under-counts; where neither failure applies, a one-way retraction buys
+  nothing for the permanence it costs.
+
+`ISSUES.md` #74 has both stated against a live instance: relation-label
+nominations have no suppression at all, so a declined pair returns on every
+`reflect`. `dev-docs/RELATION_LABELS.md` is the design.
+
+**A cycle in a feature nobody has built is a precondition, not a defect.**
+Record it against the thing that would create it rather than in a shared list —
+three of #74's four futile cycles need deprecation, steering or renaming, none
+of which exists, and a list that does not say so reads as four outstanding bugs.
+
 ### Timeline Functions
 
 Timeline functions are pure — no async, no storage needed:

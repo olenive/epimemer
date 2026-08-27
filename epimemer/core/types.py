@@ -1116,6 +1116,82 @@ class Metacontext(BaseModel):
     created_at: datetime = Field(default_factory=_now)
 
 
+class RelationLabel(BaseModel):
+    """The vocabulary entry behind a user-tier edge's `label` (#74).
+
+    A relationship label used to exist **nowhere**: `list_relations` derived the
+    vocabulary by scanning edges and grouping by `(label, kind)`, so there was no
+    row, no id and no description — just a string repeated on every edge
+    carrying it. Three things follow from that, and they are the three open
+    questions about relations: nothing to describe, so an agent choosing a label
+    sees words with counts and no way to learn what this graph means by each;
+    nothing to name in a decision, so a judgment about a label had no
+    `subject_ids` to put it under; and nothing to change but the edges, so
+    "renaming" meant an irreversible bulk rewrite.
+
+    **Not a node, deliberately.** A label is vocabulary, not knowledge, and a
+    node enters search, embeddings, reflection and merging — every one of which
+    would then be answering questions about the *words* the graph uses.
+    `Metacontext` is the precedent and the shape: a named, described thing that
+    lives beside the graph rather than in it.
+
+    **The name is the join key and does not move.** `NodeEdge.label` keeps its
+    string, so renaming would break the join unless every edge were rewritten —
+    which is the bulk relabel this design exists to stop needing. Renaming is
+    therefore not supported, and if it is ever built its history belongs here,
+    one entry per rename rather than one per edge, since that survives a rename
+    that touched zero edges.
+    """
+
+    id: str = Field(default_factory=_new_id)
+    # What edges actually carry. The join key to `NodeEdge.label`, which keeps
+    # its string — edges are not re-pointed at ids.
+    name: str
+    kind: Literal["relationship", "attribution"] = "relationship"
+    # Advisory prose an agent reads before coining. Empty means **undescribed**,
+    # which is a true and useful state, and is why this field exists before
+    # anything writes it.
+    description: str = ""
+    # **The coiner, and never the describer.** A later agent may describe this
+    # label, judge it against another, or deprecate it, and none of that
+    # restamps this field — those are journalled in their own right. A record
+    # created by anything other than `link` carries no judge at all, because
+    # nobody is claiming to have introduced the label.
+    judged_by: JudgeRef | None = None
+    metadata: dict = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=_now)
+
+
+def recorded_relation_label(
+    existing: RelationLabel | None, incoming: RelationLabel
+) -> RelationLabel:
+    """What to store for `incoming`, given whatever `(name, kind)` already holds.
+
+    **The identity survives the write, and that is the whole point of the
+    record.** A caller that constructs a fresh `RelationLabel` for a label that
+    already has one would otherwise mint a new id on top of the old, and a
+    journal row naming the label would then point at an id nothing resolves —
+    which is the defect #74 exists to remove, rebuilt one layer down. So `id`,
+    `created_at` and `judged_by` come from the record that is already there.
+
+    **`judged_by` is the coiner and never the describer.** Preserving it here is
+    what makes that rule structural rather than a convention every caller has to
+    remember: describing a label, judging it against another, or backfilling it
+    are not claims to have introduced the word.
+
+    Only `description` and `metadata` move, exactly as
+    `store_relation_label` promises — and **a blank description never
+    overwrites prose**, so a path that writes a record without one (a coin, a
+    backfill) cannot quietly erase what somebody wrote.
+    """
+    if existing is None:
+        return incoming
+    return existing.model_copy(update={
+        "description": incoming.description or existing.description,
+        "metadata": {**existing.metadata, **incoming.metadata},
+    })
+
+
 # --- Agents: who judged this (REVIEW_MODE.md §2) ---
 
 
@@ -1157,10 +1233,38 @@ class AgentDescription(BaseModel):
 class Agent(BaseModel):
     """A judge: something that made decisions in this graph.
 
-    Not a user account and not a credential. The id is **assigned by the user**,
-    which is what makes review provable — an agent that mints its own id cannot
-    establish that it is a different agent from the one that decided yesterday,
-    and self-review becomes indistinguishable from independent review (§2.2).
+    Not a user account and not a credential. The identity is **assigned by the
+    user**, which is what makes review provable — an agent that mints its own
+    cannot establish that it is a different agent from the one that decided
+    yesterday, and self-review becomes indistinguishable from independent
+    review (§2.2).
+
+    **Three layers, because one field was doing three jobs** (#78, 2026-08-26).
+    `id` is the join key: opaque, frozen into every `judged_by` at write time,
+    and never shown to anybody. `name` is the handle — what the picker lists,
+    what `review(mode="by_agent")` accepts, what a frontend labels a row with —
+    and it is **freely renamable**, resolved at read time so a rename carries
+    old rows with it. `descriptions` is what this judge *claimed to be*, pinned
+    per decision by digest and never resolved at read time. The two resolution
+    rules are opposite on purpose: *which judge is this* wants the name the user
+    knows it by now, and *what did it claim to be when it decided this* wants
+    the claim as it stood, or an old decision stops being readable.
+
+    Before the split, the id was all three at once, so naming a judge badly on
+    first contact was permanent and splitting one judge's history in two was a
+    typo away — which is how `Opus 5 Judge` and `Opus 5` both came to exist on
+    this repository's own graph.
+
+    **`name` empty means *use the id*.** That is what a row written before the
+    split looks like, and `agent_name` is the one place the fallback lives, so
+    nothing else has to know. Every write since fills it in.
+
+    **`former_ids` is the whole of aliasing.** It carries the ids this judge's
+    rows may already record: the keys of records absorbed into this one. Nothing
+    is ever rewritten — old rows keep the id they recorded and lookup resolves
+    through this list, the same shape as `rejudge` keeping the value it replaces
+    (#78). An agent record whose id appears here has been absorbed and is no
+    longer a judge in its own right; `live_agents` is where that is decided.
 
     The append-only-list-with-dates shape is deliberately `LifecycleEpisode`'s.
     Same problem, same answer: a scalar plus a timestamp cannot express
@@ -1168,10 +1272,26 @@ class Agent(BaseModel):
     """
 
     id: str
+    name: str = ""
+    former_ids: list[str] = Field(default_factory=list)
     descriptions: list[AgentDescription] = Field(default_factory=list)
     authorised_at: datetime = Field(default_factory=_now)
     first_seen_at: datetime | None = None
     last_seen_at: datetime | None = None
+
+
+def new_agent_id() -> str:
+    """A fresh opaque key for a judge.
+
+    Opaque rather than the name the user typed, so the name stays free to
+    change. #77 rejected this and was overturned the same week: both its
+    objections — *approving an id you cannot identify* and *the name-to-identity
+    problem only moves* — were premised on a free-text prompt. With a picker the
+    user never sees the key, and a **human** resolves name to identity on every
+    bind rather than a machine guessing. The picker is the precondition for the
+    opaque id, not an alternative to it.
+    """
+    return _new_id()
 
 
 def with_description(
@@ -1203,6 +1323,141 @@ def with_description(
 def current_description(agent: Agent) -> AgentDescription | None:
     """The version in force now — the last appended, never the newest by date."""
     return agent.descriptions[-1] if agent.descriptions else None
+
+
+def agent_name(agent: Agent) -> str:
+    """What to call this judge. The id where no name was ever set.
+
+    One place for the fallback, because a record written before the three-layer
+    split (#78) has no name and every display path would otherwise carry the
+    same `or`. A legacy id reads as a name because it *was* one.
+    """
+    return agent.name or agent.id
+
+
+def agent_aliases(agent: Agent) -> list[str]:
+    """Every id this judge's journal rows may record — current first.
+
+    Nothing is rewritten when judges are consolidated, so *this judge's
+    decisions* is a query over a set of ids rather than one. Callers pass the
+    whole list to `query_decisions`; a judge that has never been consolidated
+    yields a list of one and the query is what it always was.
+    """
+    return [agent.id, *(fid for fid in agent.former_ids if fid != agent.id)]
+
+
+def absorbed_agent_ids(agents: Sequence[Agent]) -> set[str]:
+    """Ids that some *other* agent record has claimed as a former id.
+
+    A record so named is no longer a judge in its own right: its rows resolve to
+    the judge that absorbed it. It is kept rather than deleted — nothing here
+    hard-deletes, and its description history is what makes its old decisions
+    readable — so *absorbed* has to be derived, and this is the one place that
+    derivation lives.
+    """
+    return {
+        former
+        for agent in agents
+        for former in agent.former_ids
+        if former != agent.id
+    }
+
+
+def live_agents(agents: Sequence[Agent]) -> list[Agent]:
+    """The judges this graph actually has, absorbed records dropped."""
+    absorbed = absorbed_agent_ids(agents)
+    return [agent for agent in agents if agent.id not in absorbed]
+
+
+def resolve_agent(agents: Sequence[Agent], handle: str) -> Agent | None:
+    """The live judge a handle names — an id, a name, or a former id.
+
+    **Precedence is id, then name, then former id**, and the order is not
+    arbitrary. An id is exact and unambiguous, so it wins. A name is what the
+    user sees and types, so it beats a historical alias: where a judge was once
+    called *Opus 5* and a different one is called that **now**, the one it names
+    today is the one meant. Names match case-insensitively, because a picker
+    offering `Opus 5` and `opus 5` as separate judges is the split this exists
+    to stop.
+
+    Absorbed records are invisible here, so a handle that named one resolves to
+    whatever absorbed it — which is the whole point of consolidating.
+    """
+    handle = handle.strip()
+    if not handle:
+        return None
+    live = live_agents(agents)
+    for agent in live:
+        if agent.id == handle:
+            return agent
+    folded = handle.casefold()
+    for agent in live:
+        if agent_name(agent).casefold() == folded:
+            return agent
+    for agent in live:
+        if handle in agent.former_ids:
+            return agent
+    return None
+
+
+def name_holder(
+    agents: Sequence[Agent], name: str, *, excluding: str = ""
+) -> Agent | None:
+    """The live judge already called `name`, ignoring the one being renamed.
+
+    Names must be unique per graph or `by_agent` stops being answerable after a
+    rename and the picker shows two identical lines. Enforced where a name is
+    *set*, which is the only place it can be enforced at all.
+    """
+    folded = name.strip().casefold()
+    return next(
+        (
+            agent for agent in live_agents(agents)
+            if agent.id != excluding and agent_name(agent).casefold() == folded
+        ),
+        None,
+    )
+
+
+def renamed(agent: Agent, name: str) -> Agent:
+    """`agent` under a new handle. The id, the history and the rows are untouched."""
+    return agent.model_copy(update={"name": name.strip()})
+
+
+def absorbing(survivor: Agent, absorbed: Agent) -> Agent:
+    """`survivor`, now answering for `absorbed`'s ids and description history.
+
+    The repair for one judge recorded twice. **Nothing is rewritten and nothing
+    is deleted**: the absorbed record stays where it is, its id becomes a former
+    id here, and its journal rows keep the id they were written with. What
+    changes is only where a lookup lands.
+
+    **The descriptions are merged, not discarded**, and that is what makes it
+    safe. A decision records `(agent_id, digest)`, and reading *what did this
+    judge claim to be then* resolves the id to an agent and the digest to a
+    version — so dropping the absorbed history would leave its own old decisions
+    unreadable through the very record that now answers for them. Ordered by
+    when they were recorded, deduplicated by digest, so `current_description`
+    still returns the latest claim either judge made.
+    """
+    merged: dict[str, AgentDescription] = {}
+    for version in sorted(
+        [*survivor.descriptions, *absorbed.descriptions],
+        key=lambda v: v.recorded_at,
+    ):
+        merged.setdefault(version.digest, version)
+    seen = [survivor.first_seen_at, absorbed.first_seen_at]
+    last = [survivor.last_seen_at, absorbed.last_seen_at]
+    return survivor.model_copy(update={
+        "former_ids": list(dict.fromkeys([
+            *survivor.former_ids,
+            *agent_aliases(absorbed),
+        ])),
+        "descriptions": list(merged.values()),
+        "authorised_at": min(survivor.authorised_at, absorbed.authorised_at),
+        "first_seen_at": min((s for s in seen if s), default=None),
+        "last_seen_at": max((s for s in last if s), default=None),
+    })
 
 
 
@@ -1265,8 +1520,24 @@ class DecisionKind(str, Enum):
     REACTIVATION = "reactivation"
     BOUNDARY = "boundary"
 
+    # Revisions of an ingest-time judgment that are *not* supersessions — the
+    # claim is unchanged and the world has not moved, so `because` has no honest
+    # value (#66). `rejudge` covers the node-scoped fields; these two are
+    # separate because they are addressed differently, which is the tell that
+    # they are different tools: a frame is an edge onto a metacontext, and an
+    # interval belongs to a (node, source) pair rather than to a node.
+    REFRAME = "reframe"
+    INTERVAL_CORRECTION = "interval_correction"
+
     # Everything else an agent asserts about the graph.
     RELATION = "relation"
+    # Prose about what one of this graph's relationship labels *means* (#74).
+    # Its own kind rather than `ENRICHMENT`, which is reflect's enrichment of a
+    # **topic**: a reviewer auditing changes to what the graph claims does not
+    # want prose about what the graph's words mean mixed in. The first draft
+    # wrote `ENRICHMENT` because enriching is what it is — the right verb, and
+    # the wrong side of the line. `RELATION_LABELS.md` §7.2.
+    RELATION_DESCRIPTION = "relation_description"
     IMPORTANCE = "importance"
 
     # Review of a decision already in the journal (§6.4, step 7). All three

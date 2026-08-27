@@ -32,16 +32,36 @@ async def _approved(storage, *ids):
 def _accept(chosen: str | None = None):
     """An approval channel that answers — with `chosen`, or with what was asked."""
 
-    async def approve(proposed: str, description: str) -> str:
+    async def approve(proposed: str, description: str) -> tools.ApprovalOutcome:
         assert description, "the user is shown the description they are approving"
-        return chosen or proposed
+        return tools.ApprovalOutcome(chosen=chosen or proposed)
 
     return approve
 
 
-async def _silent(proposed: str, description: str) -> None:
-    """A client with no channel to the user: the elicitation-less case."""
-    return None
+async def _silent(proposed: str, description: str) -> tools.ApprovalOutcome:
+    """A client with no channel to the user: the elicitation-less case.
+
+    Distinct from `_declined`, and the distinction is the point (#78): this one
+    could not put the question, so an id the user approved out of band still
+    binds. That one put the question and got *no*.
+    """
+    return tools.ApprovalOutcome(channel_available=False)
+
+
+async def _declined(proposed: str, description: str) -> tools.ApprovalOutcome:
+    """A user who saw the question and said no."""
+    return tools.ApprovalOutcome()
+
+
+def _asked(record: list[str]):
+    """An approval channel that answers yes and records that it was asked."""
+
+    async def approve(proposed: str, description: str) -> tools.ApprovalOutcome:
+        record.append(proposed)
+        return tools.ApprovalOutcome(chosen=proposed)
+
+    return approve
 
 
 class TestTheIdIsTheUsersToAssign:
@@ -94,22 +114,26 @@ class TestTheIdIsTheUsersToAssign:
         assert result["agent_id"] == "critic"
         assert meta.nodes_returned == 1
 
-    async def test_the_user_may_hand_back_a_different_id(self, storage):
-        """They edit, and what they typed is what gets recorded.
+    async def test_the_user_may_hand_back_a_different_name(self, storage):
+        """They edit, and what they typed is what the judge is called.
 
         Recording the *proposal* after the user renamed it would record a claim
         nobody approved — quietly, and under a name the graph then treats as
-        approved.
+        approved. Since the three-layer split the name is not the key: a judge
+        nothing here knows gets an opaque one (#78), which is what leaves the
+        name free to change later.
         """
         result, _ = await tools.claim_agent(
             storage, agent_id="claude", description="a critic",
             approve_id=_accept("olegs-critic"), now=AT,
         )
 
-        assert result["agent_id"] == "olegs-critic"
-        assert await storage.get_approved_agent_ids() == ["olegs-critic"]
+        assert result["name"] == "olegs-critic"
+        assert result["agent_id"] not in ("claude", "olegs-critic")
+        assert await storage.get_approved_agent_ids() == [result["agent_id"]]
         assert await storage.get_agent("claude") is None
-        assert (await storage.get_agent("olegs-critic")) is not None
+        agent = await storage.get_agent(result["agent_id"])
+        assert agent is not None and agent.name == "olegs-critic"
 
     async def test_approval_from_the_user_admits_the_id_for_next_time(self, storage):
         await tools.claim_agent(
@@ -137,6 +161,270 @@ class TestTheIdIsTheUsersToAssign:
         assert blank_id["status"] == "refused"
         assert blank_text["status"] == "refused"
         assert await storage.list_agents() == []
+
+
+class TestTheGateGuardsAssumingAnIdNotOnlyMintingOne:
+    """An approved id does not bind without the user seeing it (#78).
+
+    The gate used to fire only where `agent_id not in approved`, which guarded
+    the wrong act. Once an id was approved, any session bound to it with no user
+    involvement at all — and `_unapproved_reason` names the approved ids in its
+    refusal, so a rejected guess handed back the list of ids that would work.
+    Guessing wrong was a directory lookup.
+    """
+
+    async def test_an_already_approved_id_is_still_put_to_the_user(self, storage):
+        await _approved(storage, "critic")
+        asked: list[str] = []
+
+        result, _ = await tools.claim_agent(
+            storage, agent_id="critic", description="a critic",
+            approve_id=_asked(asked), now=AT,
+        )
+
+        assert asked == ["critic"], "an approved id is asked about, not assumed"
+        assert result["status"] == "claimed"
+
+    async def test_declining_refuses_an_id_the_user_approved_earlier(self, storage):
+        # Declining is the user withdrawing this identity for this bind. A list
+        # they added to last week does not overrule the answer they just gave.
+        await _approved(storage, "critic")
+
+        result, _ = await tools.claim_agent(
+            storage, agent_id="critic", description="a critic",
+            approve_id=_declined, now=AT,
+        )
+
+        assert result["status"] == "refused"
+
+    async def test_no_channel_still_binds_an_approved_id(self, storage):
+        # The EPIMEMER_APPROVED_AGENTS / `epimemer agents confirm` path (§2.3):
+        # user involvement that happened earlier rather than none. Refusing it
+        # would leave a client that cannot elicit unable to judge at all.
+        await _approved(storage, "critic")
+
+        result, _ = await tools.claim_agent(
+            storage, agent_id="critic", description="a critic",
+            approve_id=_silent, now=AT,
+        )
+
+        assert result["status"] == "claimed"
+
+    async def test_no_channel_does_not_admit_an_unapproved_id(self, storage):
+        result, _ = await tools.claim_agent(
+            storage, agent_id="self-appointed", description="a critic",
+            approve_id=_silent, now=AT,
+        )
+
+        assert result["status"] == "refused"
+        assert await storage.get_approved_agent_ids() == []
+
+
+class TestTheCadenceMemo:
+    """Asked once per session, per graph, per identity — and no wider.
+
+    The picker goes up on every bind, so a re-claim of the same judge has to be
+    silent or the user is trained to dismiss the question. What the memo must
+    never do is widen: *this session confirmed something* would let an agent be
+    approved as one judge and then bind as another without a word, which is the
+    defect the picker exists to close, rebuilt inside its own fix.
+    """
+
+    async def test_a_confirmed_identity_is_not_asked_about_again(self, storage):
+        await _approved(storage, "critic")
+        asked: list[str] = []
+
+        result, _ = await tools.claim_agent(
+            storage, agent_id="critic", description="a critic",
+            approve_id=_asked(asked), confirmed_identity="critic", now=AT,
+        )
+
+        assert asked == [], "the memo answers for this identity in this graph"
+        assert result["status"] == "claimed"
+
+    async def test_the_memo_does_not_cover_an_id_that_is_not_approved(self, storage):
+        # A memo is a record of an answer, not a substitute for one. An id the
+        # graph does not know cannot have been the identity that was confirmed.
+        asked: list[str] = []
+
+        result, _ = await tools.claim_agent(
+            storage, agent_id="never-approved", description="a critic",
+            approve_id=_asked(asked), confirmed_identity="never-approved", now=AT,
+        )
+
+        assert asked == ["never-approved"]
+        assert result["status"] == "claimed", "asked, and the user said yes"
+
+    async def test_a_changed_description_is_still_put_to_the_user(self, storage):
+        # The memo records an identity, not a wording. A judge that re-describes
+        # itself mid-session is making a new claim about what it is.
+        await _approved(storage, "critic")
+        await tools.claim_agent(
+            storage, agent_id="critic", description="a critic",
+            approve_id=_accept(), now=AT,
+        )
+        shown: list[str] = []
+
+        async def confirm(claimed_id: str, text: str) -> bool:
+            shown.append(text)
+            return True
+
+        result, _ = await tools.claim_agent(
+            storage, agent_id="critic", description="a critic, and a reviewer",
+            approve_id=_asked([]), confirm_description=confirm,
+            confirmed_identity="critic", now=LATER,
+        )
+
+        assert shown == ["a critic, and a reviewer"]
+        assert result["new_description"] is True
+
+
+class TestTheResponseSaysWhetherTheJudgeIsNew:
+    """`description_versions: 1` implied it; an implication nobody reads is not
+    a signal (#78)."""
+
+    async def test_a_first_claim_reports_a_new_judge(self, storage):
+        result, _ = await tools.claim_agent(
+            storage, agent_id="critic", description="a critic",
+            approve_id=_accept(), now=AT,
+        )
+
+        assert result["new_agent"] is True
+        assert "new judge" in result["message"]
+
+    async def test_a_second_claim_does_not(self, storage):
+        await tools.claim_agent(
+            storage, agent_id="critic", description="a critic",
+            approve_id=_accept(), now=AT,
+        )
+
+        result, _ = await tools.claim_agent(
+            storage, agent_id="critic", description="a critic",
+            approve_id=_accept(), now=LATER,
+        )
+
+        assert result["new_agent"] is False
+        assert "new judge" not in result["message"]
+
+    async def test_the_message_reads_as_sentences_either_way(self, storage):
+        # Assembled from three optional clauses, so the seams are where it
+        # stops being a sentence — as it did on the day it shipped, reading
+        # "Judging as 'Opus 5' The user confirmed this description."
+        first, _ = await tools.claim_agent(
+            storage, agent_id="critic", description="a critic",
+            approve_id=_accept(), now=AT,
+        )
+        again, _ = await tools.claim_agent(
+            storage, agent_id="critic", description="a critic",
+            approve_id=_accept(), now=LATER,
+        )
+
+        for message in (first["message"], again["message"]):
+            assert "' The" not in message and "' This" not in message
+            assert ". " in message
+
+    async def test_the_id_the_user_handed_back_is_the_one_judged(self, storage):
+        # The picker may return a judge other than the one proposed, and
+        # newness is a fact about *that* judge.
+        await _approved(storage, "critic")
+        await tools.claim_agent(
+            storage, agent_id="critic", description="a critic",
+            approve_id=_accept(), now=AT,
+        )
+
+        result, _ = await tools.claim_agent(
+            storage, agent_id="something-else", description="a critic",
+            approve_id=_accept("critic"), now=LATER,
+        )
+
+        assert result["agent_id"] == "critic"
+        assert result["new_agent"] is False
+
+
+class TestTheRosterIsWhatTheUserPicksFrom:
+    """The picker's lines, which are the whole of what a user has to go on.
+
+    Tested here rather than through an elicitation channel: the content is a
+    read of graph state and is testable, while the rendering is the client's and
+    is not.
+    """
+
+    async def test_it_offers_agents_and_approved_ids_alike(self, storage):
+        # The two differ in both directions: an id approved by config has no
+        # record until something claims it, and an agent whose approval was
+        # withdrawn still has a history worth seeing.
+        await _approved(storage, "configured-only")
+        await tools.claim_agent(
+            storage, agent_id="critic", description="a critic",
+            approve_id=_accept(), now=AT,
+        )
+
+        roster = await tools.judge_roster(storage)
+
+        assert {choice.name for choice in roster} == {"critic", "configured-only"}
+        # Keyed on the key, never on the name: what the picker returns is what
+        # `claim_agent` resolves, and a name the user is about to change would
+        # be a poor thing to return.
+        assert {choice.key for choice in roster} == {
+            f"use:{choice.agent_id}" for choice in roster
+        }
+
+    async def test_a_line_says_what_the_judge_was_for(self, storage):
+        await tools.claim_agent(
+            storage, agent_id="critic", description="reviews merge decisions",
+            approve_id=_accept(), now=AT,
+        )
+
+        (choice,) = await tools.judge_roster(storage)
+        assert "critic" in choice.title
+        assert "reviews merge decisions" in choice.title
+        assert "2026-08-22" in choice.title, "last used, so a stale judge is visible"
+
+    async def test_an_approved_id_nothing_has_claimed_says_so(self, storage):
+        await _approved(storage, "configured-only")
+
+        (choice,) = await tools.judge_roster(storage)
+        assert "never claimed" in choice.title
+
+    async def test_the_most_recently_used_judge_comes_first(self, storage):
+        # The cadence asks on every bind, which is affordable only while the
+        # answer the user wants is the first one offered.
+        await _approved(storage, "older", "newer", "unused")
+        await tools.claim_agent(
+            storage, agent_id="older", description="a critic",
+            approve_id=_accept(), now=AT,
+        )
+        await tools.claim_agent(
+            storage, agent_id="newer", description="a critic",
+            approve_id=_accept(), now=LATER,
+        )
+
+        order = [choice.agent_id for choice in await tools.judge_roster(storage)]
+        assert order == ["newer", "older", "unused"]
+
+    async def test_a_long_description_is_cut_and_the_id_never_is(self, storage):
+        await tools.claim_agent(
+            storage, agent_id="a-judge-with-a-fairly-long-identifier",
+            description="x " * 200, approve_id=_accept(), now=AT,
+        )
+
+        (choice,) = await tools.judge_roster(storage)
+        assert choice.title.startswith("a-judge-with-a-fairly-long-identifier")
+        assert len(choice.title) <= 90
+        assert choice.title.endswith("…")
+
+    async def test_a_choice_key_cannot_be_confused_with_the_new_judge_option(
+        self, storage
+    ):
+        # Agent ids are user-assigned free text, validated for emptiness and
+        # nothing else, so a bare sentinel would be a string somebody could
+        # legitimately be called.
+        await _approved(storage, tools.NEW_JUDGE_CHOICE)
+
+        (choice,) = await tools.judge_roster(storage)
+        assert choice.key != tools.NEW_JUDGE_CHOICE
+        assert tools.selected_judge_id(choice.key) == tools.NEW_JUDGE_CHOICE
+        assert tools.selected_judge_id(tools.NEW_JUDGE_CHOICE) is None
 
 
 class TestADescriptionIsAClaimNotACredential:
@@ -169,7 +457,7 @@ class TestADescriptionIsAClaimNotACredential:
         )
 
         assert result["description_confirmed"] is True
-        agent = await storage.get_agent("critic")
+        agent = await storage.get_agent(result["agent_id"])
         assert agent.descriptions[-1].confirmed_at == AT
 
     async def test_a_new_description_under_a_known_id_is_asked_about(self, storage):

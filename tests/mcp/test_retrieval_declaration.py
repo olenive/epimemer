@@ -184,6 +184,11 @@ def _args(tool: str, seeded: dict) -> dict:
         "find_nodes": {"sourced_from": seeded["document_id"], "limit": 100},
         "list_sources": {},
         "list_relations": {},
+        # Refused: the seeded graph carries no relation edges, so there is no
+        # label to describe. A refusal is still a response, which is what is
+        # under test — and this one names no node ids at all, which is itself
+        # the property the oracle checks.
+        "describe_relation": {"name": "concerns", "description": "what it means"},
         "archive": {"max_age_days": 0},
         "restore": {"archive_data": {"nodes": [], "edges": []}},
         "create_timeline": {"name": "Another"},
@@ -205,6 +210,17 @@ def _args(tool: str, seeded: dict) -> dict:
         # Refused — no field is supplied — and a refusal still names the id back
         # at the agent, which is the property under test.
         "rejudge": {"node_id": facts[0], "because": "checking the shape"},
+        # Refused — the seeded facts carry no frame — and a refusal still names
+        # the id back at the agent, which is the property under test.
+        "reframe": {
+            "node_id": facts[0], "withdraw": "not-a-frame",
+            "because": "checking the shape",
+        },
+        # Refused — no source edge names this document — same property.
+        "correct_interval": {
+            "node_id": facts[0], "source_id": "not-a-document",
+            "intervals": [], "because": "checking the shape",
+        },
         # Not a merge survivor, so this refuses — and a refusal still names the
         # id back at the agent, which is the property under test.
         "reverse_merge": {"survivor_id": facts[0]},
@@ -234,8 +250,9 @@ ALL_TOOLS = [
     "judge_importance", "check_conflicts", "record_contradiction", "record_variant",
     "merge_facts", "reverse_merge", "configure_merge",
     "reflect", "apply_reflection", "review", "apply_review", "rejudge",
+    "reframe", "correct_interval",
     "query_graph", "topic_tree",
-    "graph_as_of", "query_changes", "find_nodes", "list_sources", "list_relations", "archive",
+    "graph_as_of", "query_changes", "find_nodes", "list_sources", "list_relations", "describe_relation", "archive",
     "restore", "create_timeline", "set_reference_time", "add_timepoint",
     "query_timeline", "create_timelink", "create_metacontext", "get_metacontexts",
     "graph_stats", "configure_reflection", "list_graphs", "use_graph",

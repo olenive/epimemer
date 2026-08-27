@@ -30,6 +30,7 @@ from epimemer.core.types import (
     NodeStatus,
     NodeType,
     RawDocument,
+    RelationLabel,
     Segment,
     Timeline,
 )
@@ -539,6 +540,11 @@ class InstrumentedStorage:
     async def viz_list_metacontexts(self, database: str) -> Sequence[Metacontext]:
         return await self._inner.viz_list_metacontexts(database)
 
+    async def viz_list_relation_labels(
+        self, database: str
+    ) -> Sequence[RelationLabel]:
+        return await self._inner.viz_list_relation_labels(database)
+
     # --- Metacontexts (pass-through) ---
 
     async def store_metacontext(self, mc: Metacontext) -> str:
@@ -546,6 +552,17 @@ class InstrumentedStorage:
 
     async def get_metacontext(self, mc_id: str) -> Metacontext | None:
         return await self._inner.get_metacontext(mc_id)
+
+    async def store_relation_label(self, label: RelationLabel) -> str:
+        return await self._inner.store_relation_label(label)
+
+    async def get_relation_label(
+        self, name: str, kind: str
+    ) -> RelationLabel | None:
+        return await self._inner.get_relation_label(name, kind)
+
+    async def query_relation_labels(self) -> Sequence[RelationLabel]:
+        return await self._inner.query_relation_labels()
 
     async def query_metacontexts(
         self,
@@ -644,7 +661,7 @@ class InstrumentedStorage:
     async def query_decisions(
         self,
         *,
-        agent_id: str | None = None,
+        agent_ids: Sequence[str] | None = None,
         kinds: Sequence[DecisionKind] | None = None,
         subject_id: str | None = None,
         reviews: str | None = None,
@@ -653,7 +670,7 @@ class InstrumentedStorage:
         limit: int | None = None,
     ) -> list[DecisionRecord]:
         return await self._inner.query_decisions(
-            agent_id=agent_id, kinds=kinds, subject_id=subject_id,
+            agent_ids=agent_ids, kinds=kinds, subject_id=subject_id,
             reviews=reviews, since=since, until=until, limit=limit,
         )
 
@@ -664,12 +681,12 @@ class InstrumentedStorage:
         self,
         databases: Sequence[str],
         *,
-        agent_id: str | None = None,
+        agent_ids: Sequence[str] | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> dict[str, int]:
         return await self._inner.count_decisions_by_graph(
-            databases, agent_id=agent_id, since=since, until=until
+            databases, agent_ids=agent_ids, since=since, until=until
         )
 
     # --- Multi-graph management (pass-through) ---
