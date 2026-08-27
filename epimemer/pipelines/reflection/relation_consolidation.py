@@ -17,6 +17,8 @@ for good; `RELATION_LABELS.md` §4.2 states it beside its dual, and `ISSUES.md`
 import math
 from collections import defaultdict
 
+from pydantic import BaseModel
+
 from epimemer.core.types import EdgeType, NodeEdge, relation_pair_key
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.storage.protocol import StorageBackend
@@ -67,12 +69,28 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
-async def find_similar_relation_pairs(
+class RelationPairSweep(BaseModel):
+    """One sweep's nominations, plus what standing verdicts held back.
+
+    `suppressed` counts the judged pairs the sweep skipped — counted where the
+    skip happens, before scoring, so it is the number of pairs a verdict took
+    off the table rather than the number that would have cleared today's
+    threshold. It exists because the suppression is silent by design: without
+    it, an empty `pairs` on a well-judged graph is indistinguishable from a
+    graph with nothing similar in it, and the agent reading the response
+    cannot tell *settled* from *unexamined*.
+    """
+
+    pairs: list[dict]
+    suppressed: int
+
+
+async def sweep_similar_relation_pairs(
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
     *,
     similarity_threshold: float = 0.9,
-) -> list[dict]:
+) -> RelationPairSweep:
     """Find pairs of likely-synonymous user-tier relationship labels.
 
     Distinct labels are collected (with usage counts) by scanning the edges of
@@ -103,7 +121,7 @@ async def find_similar_relation_pairs(
             counts[(edge.label, edge.kind)] = counts.get((edge.label, edge.kind), 0) + 1
 
     if len(counts) < 2:
-        return []
+        return RelationPairSweep(pairs=[], suppressed=0)
 
     keys = list(counts.keys())
     vectors = await embedding_provider.embed([label for (label, _) in keys])
@@ -123,12 +141,14 @@ async def find_similar_relation_pairs(
     }
 
     pairs: list[dict] = []
+    suppressed = 0
     for members in groups.values():
         for i in range(len(members)):
             for j in range(i + 1, len(members)):
                 a, b = members[i], members[j]
                 id_a, id_b = ids_by.get(a), ids_by.get(b)
                 if id_a and id_b and relation_pair_key(id_a, id_b) in judged:
+                    suppressed += 1
                     continue
                 sim = _cosine_similarity(vec_by[a], vec_by[b])
                 if sim >= similarity_threshold:
@@ -142,4 +162,23 @@ async def find_similar_relation_pairs(
                     })
 
     pairs.sort(key=lambda p: p["similarity"], reverse=True)
-    return pairs
+    return RelationPairSweep(pairs=pairs, suppressed=suppressed)
+
+
+async def find_similar_relation_pairs(
+    storage: StorageBackend,
+    embedding_provider: EmbeddingProvider,
+    *,
+    similarity_threshold: float = 0.9,
+) -> list[dict]:
+    """The nominations alone, for callers with no report to file.
+
+    `reflect` reads the full sweep instead, because its response has to say
+    what the standing verdicts held back as well as what survived them —
+    without the count, an agent cannot tell "nothing similar" from "N pairs
+    already judged".
+    """
+    sweep = await sweep_similar_relation_pairs(
+        storage, embedding_provider, similarity_threshold=similarity_threshold
+    )
+    return sweep.pairs

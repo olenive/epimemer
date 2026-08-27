@@ -571,6 +571,9 @@ class InstrumentedStorage:
     async def judged_relation_pairs(self) -> set[tuple[str, str]]:
         return await self._inner.judged_relation_pairs()
 
+    async def query_relation_verdicts(self) -> Sequence[RelationVerdict]:
+        return await self._inner.query_relation_verdicts()
+
     async def relation_verdicts_for(
         self, label_ids: Sequence[str]
     ) -> Sequence[RelationVerdict]:

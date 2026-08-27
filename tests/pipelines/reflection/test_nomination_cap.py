@@ -231,5 +231,10 @@ class TestTheMetaCountsWhatWasReturned:
         )
 
         assert meta.nodes_returned == sum(
-            len(value) for key, value in result.items() if key != "truncated"
+            len(value)
+            for key, value in result.items()
+            # Neither is a nominee list: `truncated` names cut lists, and
+            # `relation_pairs_suppressed` counts pairs standing verdicts held
+            # out of similar_relations.
+            if key not in ("truncated", "relation_pairs_suppressed")
         )

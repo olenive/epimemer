@@ -1045,6 +1045,9 @@ class InMemoryStorage:
             if set(v.label_ids) == wanted
         )
 
+    async def query_relation_verdicts(self) -> Sequence[RelationVerdict]:
+        return _copy_all(self._g.relation_verdicts)
+
     # --- Reflection bookkeeping ---
 
     async def get_reflect_counter(self) -> int:

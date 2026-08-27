@@ -458,6 +458,9 @@ class TestAnswersAreUnchanged:
             # Not a nominee list: the names of any quadratic lists that hit the
             # cap and were cut (#60). Empty here, and on any ordinary graph.
             "truncated",
+            # Also not a nominee list: how many label pairs standing relation
+            # verdicts held out of similar_relations. Zero here.
+            "relation_pairs_suppressed",
         }
         assert meta.nodes_returned >= len(result["contradictions"])
 

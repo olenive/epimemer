@@ -1451,6 +1451,10 @@ async def memory_reflect(
       one: apply_reflection relation_merges to consolidate, or relation_verdicts
       to record "distinct"/"synonymous" without merging. A pair you leave
       unjudged comes back on every reflect, for ever
+    - relation_pairs_suppressed: how many label pairs standing relation
+      verdicts kept out of similar_relations this pass — an empty list beside a
+      non-zero count means already judged, not nothing similar; `list_relations`
+      shows the verdicts themselves
     - truncated: the names of any lists that hit `max_nominations` and were cut
       to their highest-scoring entries. Empty on an ordinary graph. When a list
       is named here, treat it as *this graph is denser than one pass can
@@ -1589,7 +1593,9 @@ async def memory_apply_reflection(
         relation_verdicts: What you decided about a pair from reflect's
             similar_relations that you are **not** merging. Each: {pair:
             [label_a, label_b], kind: str, verdict: "distinct" | "synonymous",
-            because: str} — copy `kind` from the nomination.
+            because: str} — copy `kind` from the nomination; it has no default,
+            so an entry omitting it is refused rather than judged against a
+            kind you never stated.
             Use "distinct" when the two name different relationships that
             happen to look alike: a servant *works for* a master in a world with
             no employment relation, while a corporation *employs* a consultant
@@ -2289,7 +2295,10 @@ async def memory_list_relations(
     """Discover the distinct user-defined relationship labels in the active graph.
 
     Returns each label with its kind (relationship/attribution) and usage count —
-    useful before coining a new label or proposing consolidations.
+    useful before coining a new label or proposing consolidations. Each label
+    also carries the standing relation verdicts that name it — the other label,
+    the verdict, the reason, who judged it and when — so a pair reflect no
+    longer nominates can be read back rather than re-asked.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(

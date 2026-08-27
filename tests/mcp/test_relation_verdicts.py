@@ -541,6 +541,135 @@ class TestVerdictsArePerGraph:
         assert await _nominated(storage) == set()
 
 
+class TestAVerdictIsReadableWhereTheVocabularyIs:
+    """Requiring `because` was justified by the next agent — who otherwise
+    skips the pair without knowing whether it was examined or waved through —
+    and until `list_relations` carried the verdicts, that next agent could not
+    learn either, from anywhere: the table's other reads serve the sweep and
+    the write path, and the journal row names the pair but never which way or
+    why."""
+
+    async def test_list_relations_carries_the_standing_verdict(self, storage):
+        await _twin_labels(storage)
+        await _judge_pair(storage, "distinct", judge=CRITIC)
+
+        result, _ = await tools.list_relations(storage)
+        by_label = {r["label"]: r for r in result["relations"]}
+
+        [v] = by_label["works_for"]["verdicts"]
+        assert v["with"] == "employed_by"
+        assert v["verdict"] == "distinct"
+        assert v["because"] == "Different relationships."
+        assert v["judged_by"] == "critic"
+        assert v["decided_at"]
+
+    async def test_the_verdict_reads_from_both_sides_of_the_pair(self, storage):
+        """One row, two labels: the reader arrives from either one."""
+        await _twin_labels(storage)
+        await _judge_pair(storage)
+
+        result, _ = await tools.list_relations(storage)
+        by_label = {r["label"]: r for r in result["relations"]}
+
+        [v] = by_label["employed_by"]["verdicts"]
+        assert v["with"] == "works_for"
+        assert by_label["funded_by"]["verdicts"] == []
+
+    async def test_an_unjudged_vocabulary_carries_none(self, storage):
+        await _twin_labels(storage)
+
+        result, _ = await tools.list_relations(storage)
+
+        assert all(r["verdicts"] == [] for r in result["relations"])
+
+    async def test_a_disagreement_shows_both_rows(self, storage):
+        """Append-only survives into the read: a disagreement is made visible
+        rather than resolved, so both verdicts are shown with their reasons."""
+        await _twin_labels(storage)
+        await _judge_pair(storage, "distinct", judge=CRITIC)
+        await _judge_pair(
+            storage, "synonymous", because="One relationship.", judge=EDITOR
+        )
+
+        result, _ = await tools.list_relations(storage)
+        by_label = {r["label"]: r for r in result["relations"]}
+
+        assert {
+            v["verdict"] for v in by_label["works_for"]["verdicts"]
+        } == {"distinct", "synonymous"}
+
+    async def test_an_unattributed_verdict_names_no_judge(self, storage):
+        await _twin_labels(storage)
+        await _judge_pair(storage, judge=None)
+
+        result, _ = await tools.list_relations(storage)
+        by_label = {r["label"]: r for r in result["relations"]}
+
+        [v] = by_label["works_for"]["verdicts"]
+        assert v["judged_by"] is None
+
+
+class TestReflectSaysWhatItSuppressed:
+    async def test_the_count_tells_settled_from_unexamined(self, storage):
+        """The sweep drops judged pairs silently, so without the count an
+        empty `similar_relations` on a well-judged graph reads exactly like a
+        graph with nothing similar in it."""
+        await _twin_labels(storage)
+
+        before, _ = await tools.reflect(storage, TWINS)
+        assert before["relation_pairs_suppressed"] == 0
+        assert before["similar_relations"] != []
+
+        await _judge_pair(storage)
+
+        after, _ = await tools.reflect(storage, TWINS)
+        assert after["similar_relations"] == []
+        assert after["relation_pairs_suppressed"] == 1
+
+
+class TestKindIsCopiedNotDefaulted:
+    """A default would state 'relationship' on behalf of an agent who stated
+    nothing, and the stale-kind refusal would then blame them for it — an
+    attribution pair refused for a claim the agent never made. Missing reads
+    like missing `because`: refused, naming the field."""
+
+    async def test_an_entry_omitting_kind_is_refused(self, storage):
+        await _edge(storage, "cited_in", kind="attribution")
+        await _edge(storage, "quoted_in", kind="attribution")
+
+        result, _ = await tools.apply_reflection(
+            storage,
+            TWINS,
+            relation_verdicts=[{
+                "pair": ["cited_in", "quoted_in"],
+                "verdict": "distinct",
+                "because": "Citation is not quotation.",
+            }],
+            judge=CRITIC,
+        )
+
+        assert result["relation_verdicts_recorded"] == 0
+        assert "`kind` is required" in (
+            result["relation_verdicts_refused"][0]["reason"]
+        )
+
+    async def test_a_kind_less_entry_does_not_suppress(self, storage):
+        await _twin_labels(storage)
+
+        await tools.apply_reflection(
+            storage,
+            TWINS,
+            relation_verdicts=[{
+                "pair": ["works_for", "employed_by"],
+                "verdict": "distinct",
+                "because": "Different relationships.",
+            }],
+            judge=CRITIC,
+        )
+
+        assert frozenset(("works_for", "employed_by")) in await _nominated(storage)
+
+
 class TestSuppressionIsPermanentByDesign:
     """Inherited from the fact-pair layer deliberately rather than by accident,
     so a wrong `distinct` silences a pair for good. Stated here rather than left

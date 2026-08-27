@@ -1765,6 +1765,13 @@ async def list_relations(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
     They are scoped to active nodes (#14 step 2), so a stored count would drift
     the moment a node was retired, and the record has nothing to say about
     usage — it holds what the label *means*.
+
+    **Standing verdicts ride on each label they cover.** Requiring `because`
+    at the write was justified by the next agent — *who otherwise skips the
+    pair without knowing whether it was examined or waved through* — and this
+    is where that agent reads it back: each relation carries the verdicts
+    naming it, with the other label, the verdict, the reason, who judged, and
+    when. Newest first, both rows of a disagreement included.
     """
     from epimemer.pipelines.reflection.relation_consolidation import (
         related_edges_of_active_nodes,
@@ -1777,17 +1784,55 @@ async def list_relations(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
     # The vocabulary in one read rather than one per label, and the join is
     # left-outer on purpose: a label with no record is a graph nobody has
     # described since #74 shipped, not an error, and it answers exactly as it
-    # did before — with an empty description.
-    described = {
-        (rl.name, rl.kind): rl.description
-        for rl in await storage.query_relation_labels()
-    }
+    # did before — with an empty description and no verdicts.
+    labels = await storage.query_relation_labels()
+    described = {(rl.name, rl.kind): rl.description for rl in labels}
+
+    # Verdicts read whole and grouped onto both sides of their pair in memory:
+    # the table is structurally small (at most two rows per pair), and ids
+    # resolve to names here because the row stores record ids — the name is
+    # what the reader recognises, the id is what suppression is keyed on.
+    names_by_id = {rl.id: rl.name for rl in labels}
+    ids_by_name = {(rl.name, rl.kind): rl.id for rl in labels}
+    verdict_rows = await storage.query_relation_verdicts()
+    # The judge as the user knows them (#78): a name where the registry holds
+    # one, the recorded id where it does not — which is what an unregistered
+    # judge is called.
+    judge_names = (
+        {
+            alias: agent_name(agent)
+            for agent in live_agents(await storage.list_agents())
+            for alias in agent_aliases(agent)
+        }
+        if any(v.judged_by for v in verdict_rows)
+        else {}
+    )
+    verdicts_by_label: dict[str, list[dict]] = {}
+    for v in sorted(verdict_rows, key=lambda row: row.decided_at, reverse=True):
+        if len(v.label_ids) != 2:
+            continue
+        for this_id, other_id in (v.label_ids, list(reversed(v.label_ids))):
+            verdicts_by_label.setdefault(this_id, []).append({
+                "with": names_by_id.get(other_id, other_id),
+                "verdict": v.verdict,
+                "because": v.because,
+                "judged_by": (
+                    judge_names.get(v.judged_by.agent_id, v.judged_by.agent_id)
+                    if v.judged_by
+                    else None
+                ),
+                "decided_at": v.decided_at.isoformat(),
+            })
+
     relations = [
         {
             "label": label,
             "kind": kind,
             "count": c,
             "description": described.get((label, kind), ""),
+            "verdicts": verdicts_by_label.get(
+                ids_by_name.get((label, kind), ""), []
+            ),
         }
         for (label, kind), c in sorted(counts.items(), key=lambda kv: -kv[1])
     ]
@@ -2797,7 +2842,7 @@ async def reflect(
     """
     from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
     from epimemer.pipelines.reflection.archival import nominate_archival_candidates
-    from epimemer.pipelines.reflection.relation_consolidation import find_similar_relation_pairs
+    from epimemer.pipelines.reflection.relation_consolidation import sweep_similar_relation_pairs
     from epimemer.pipelines.reflection.boundaries import propose_boundaries
     from epimemer.pipelines.reflection.soundness import find_unsound_inferences
     from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
@@ -2989,12 +3034,20 @@ async def reflect(
     # 8. Find likely-synonymous user relationship labels (open vocabulary captured
     #    fast, organized slow). Applied via apply_reflection relation_merges, or
     #    declined via relation_verdicts — which is what stops a pair the agent
-    #    has already considered coming back on every sweep (#74 FC1).
+    #    has already considered coming back on every sweep (#74 FC1). The sweep
+    #    also counts what those standing verdicts held back, because suppression
+    #    is silent: without the count, an empty list on a well-judged graph
+    #    reads as *nothing similar here* rather than *already judged*.
+    relation_pairs_suppressed = 0
+
     async def _relations():
-        return await find_similar_relation_pairs(
+        nonlocal relation_pairs_suppressed
+        sweep = await sweep_similar_relation_pairs(
             storage, embedding_provider,
             similarity_threshold=relation_similarity_threshold,
         )
+        relation_pairs_suppressed = sweep.suppressed
+        return sweep.pairs
 
     # Reflect is the longest operation in the system and the one users most want
     # to watch, but it is plain functions rather than a Petri net — so it
@@ -3059,6 +3112,11 @@ async def reflect(
     # sum this replaced would have needed.
     nominees_returned = sum(len(value) for value in result.values())
     result["truncated"] = truncated
+    # A count, not a nominee list, so it joins `truncated` on this side of the
+    # sum. Like `truncated` it is metadata about what the lists above do not
+    # show: label pairs standing relation verdicts kept out of
+    # `similar_relations` this pass.
+    result["relation_pairs_suppressed"] = relation_pairs_suppressed
 
     meta = ResponseMeta(
         nodes_returned=nominees_returned,
@@ -3157,7 +3215,10 @@ async def apply_reflection(
         written two ways, and it acts on nothing today — recording it is still a
         real judgment, and leaving it unrecordable would be the same treadmill
         for the affirmative answer. **Both stop the pair being nominated, and
-        that suppression is permanent by design.** ``because`` is required.
+        that suppression is permanent by design.** ``because`` is required, and
+        so is ``kind`` — copy it from the nomination; there is no default, so
+        an entry omitting it is refused rather than judged against a kind the
+        agent never stated.
         Entries that could not be recorded come back in
         ``relation_verdicts_refused`` with a reason. A label with no record gets
         one, carrying no judge; a pair already carrying **your** identical
@@ -3253,11 +3314,27 @@ async def apply_reflection(
     relation_verdicts_refused: list[dict] = []
     for verdict_spec in (relation_verdicts or []):
         verdict_pair = verdict_spec["pair"]
+        # Absent `kind` refuses, where absent `because` already did. A default
+        # would state 'relationship' on behalf of an agent who stated nothing,
+        # and the stale-kind refusal downstream would then blame them for a
+        # claim this call invented — an attribution pair refused for naming a
+        # kind the agent never named.
+        if "kind" not in verdict_spec:
+            relation_verdicts_refused.append(RelationVerdictRefused(
+                pair=list(verdict_pair),
+                reason=(
+                    "`kind` is required: copy it from the nomination. There is "
+                    "no default — a kind filled in here would be judged on "
+                    "behalf of an agent who stated none, and an attribution "
+                    "pair would be refused as stale for a claim it never made."
+                ),
+            ).model_dump(mode="json"))
+            continue
         verdict_outcome = await apply_relation_verdict(
             storage,
             label_a=verdict_pair[0],
             label_b=verdict_pair[1],
-            kind=verdict_spec.get("kind", "relationship"),
+            kind=verdict_spec["kind"],
             verdict=verdict_spec.get("verdict", ""),
             because=verdict_spec.get("because", ""),
             judge=judge,

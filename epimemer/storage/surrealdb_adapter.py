@@ -2156,6 +2156,10 @@ class SurrealDBStorage:
         )
         return [RelationVerdict.model_validate(_clean_record(r)) for r in rows]
 
+    async def query_relation_verdicts(self) -> Sequence[RelationVerdict]:
+        rows = await self._query("SELECT * FROM relation_verdict")
+        return [RelationVerdict.model_validate(_clean_record(r)) for r in rows]
+
     # --- Reflection bookkeeping ---
 
     async def get_reflect_counter(self) -> int:

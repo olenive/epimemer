@@ -925,6 +925,23 @@ class StorageBackend(Protocol):
         """
         ...
 
+    async def query_relation_verdicts(self) -> Sequence[RelationVerdict]:
+        """Every relation verdict in the active graph. Unordered.
+
+        The reader's read, and the third for a reason: `judged_relation_pairs`
+        strips each row to its pair for the sweep, and `relation_verdicts_for`
+        answers for one pair at a time for the write path — so neither could
+        show an agent what was decided, or why, across the vocabulary. That is
+        what `list_relations` surfaces, and it is the whole point of requiring
+        `because`: a verdict nobody can read back marks the pair judged without
+        saying whether it was examined or waved through.
+
+        Whole-table on purpose, mirroring `query_relation_labels`: the caller
+        groups in memory, and the table is structurally small — at most two
+        rows per pair.
+        """
+        ...
+
     # --- Reflection bookkeeping ---
 
     async def get_reflect_counter(self) -> int:
