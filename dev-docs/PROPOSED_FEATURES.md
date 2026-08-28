@@ -28,11 +28,11 @@ wrong" belongs in `ISSUES.md` instead.
 
 **Running two of these in parallel.** The ready-to-build set below touches
 mostly disjoint trees, which is what makes it parallelisable — *Colour
-customisation* is `epimemer/visualization/frontend/`, *the three missing
-notebooks* are `notebooks/`, *Benchmark coverage* is `scripts/bench.py` plus
-fixtures, and *Specialized timelines* is `epimemer/core/` and both storage
-backends. The last one is the only member that collides with ordinary backend
-work, and it is also the only one asked to settle a modelling question first.
+customisation* is `epimemer/visualization/frontend/`, *Benchmark coverage* is
+`scripts/bench.py` plus fixtures, and *Specialized timelines* is
+`epimemer/core/` and both storage backends. The last one is the only member that
+collides with ordinary backend work, and it is also the only one asked to settle
+a modelling question first.
 Claim an entry by name in your commit message.
 
 ---
@@ -163,6 +163,34 @@ ordering, filters, `apply_review` and `rejudge`.
 `correct_interval`: a metacontext assignment that could not be withdrawn, and a
 validity interval that could not be corrected. Both were kept out of `rejudge`,
 on the grounds that the split is about **addressing** rather than naming.
+### The missing notebooks — built
+
+**Built 2026-08-28.** `00_foundation.py` (the three node types, the store,
+vector search, and a type diagram) and `07_timelines_metacontext.py` (frames
+against periods — which world a claim is about, versus when it held).
+
+**`08_orchestration.py` was not written, and should not be.** `06_orchestration`
+already covers the orchestration net; a second notebook on the same subject
+would duplicate it. What it needed was fixing, not doubling — it offered an
+`ingest` action the net has never had and looked for an `IngestInput` place that
+does not exist, so it raised on load. Fixed in the same visit.
+
+**That defect is why `test_every_notebook_runs` exists.** `test_notebooks.py`
+had named this class as out of reach — *"a notebook whose imports are fine but
+whose body reads something gone still passes"* — on the grounds that catching it
+needs execution, and execution needs providers, storage and a runtime. It turns
+out to need none of those: marimo compiles the dataflow into each cell's
+signature and final `return`, so running the cells in file order with a stub for
+the UI reproduces what marimo does, and the notebooks build their own in-memory
+store. The check caught two bugs in `00_foundation.py` as it was written.
+
+**The remaining gaps are 02 and 05** — decomposition and reflection — deleted
+when they broke rather than repaired. Reflection is the larger loss: it is the
+subsystem hardest to understand from the code, and it now has no notebook at
+all. Not filed as work here until somebody wants it.
+
+---
+
 
 ---
 
@@ -232,23 +260,6 @@ One constraint already decided ahead of it (2026-08-17, recorded in
 annually" — are `CyclicalTimeline`'s case and **never route through
 supersession or restore**; they never stop being true, so they have no
 lifecycle, and their occurrences are separate event facts.
-
----
-
-### The three missing notebooks
-
-**What.** `notebooks/00_foundation.py` (storage + vector search + type
-diagrams), `07_timelines_metacontext.py`, and `08_orchestration.py`.
-
-**Why.** The existing notebooks are how the system is explained to someone
-approaching it. The gaps are conspicuous: `00_` is the entry point, and the two
-missing later ones cover the parts hardest to understand from the code alone.
-
-**Cost.** Small each, and independent. Marimo, so remember the constraints in
-CLAUDE.md — cells are functions, they return values, and no variable is
-redefined across cells.
-
-**Blockers.** None.
 
 ---
 

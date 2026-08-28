@@ -45,6 +45,7 @@ providers, storage and a runtime.
 """
 
 import ast
+import asyncio
 import importlib
 from pathlib import Path
 
@@ -152,3 +153,121 @@ def test_there_are_notebooks_to_check():
     deliberately.
     """
     assert _notebooks(), f"no notebooks found under {NOTEBOOK_DIR}"
+
+
+# --- Running the cells, which is the gap the module docstring names ---------
+
+
+class _UIStub:
+    """Stands in for a marimo UI element, which needs a running frontend.
+
+    A notebook reads `element.value`, so the stub carries whatever `value=` the
+    cell constructed it with and answers every other attribute with another
+    stub. That is enough to reach the code under test: what the widget renders
+    is marimo's business, and what the notebook *does with the value* is this
+    project's.
+    """
+
+    def __init__(self, value=None):
+        self.value = value
+
+    def __call__(self, *args, **kwargs):
+        return _UIStub(kwargs.get("value", args[0] if args else None))
+
+    def __getattr__(self, name):
+        return _UIStub()
+
+    def __bool__(self):
+        return True
+
+
+def _returned_names(cell: ast.AST) -> list[str]:
+    """The names a cell hands to the cells below it.
+
+    marimo compiles dataflow into the signature and the final `return`: a cell
+    declares what it needs as arguments and what it defines as returns. Reading
+    both is what lets this run them in order without marimo present.
+    """
+    last = cell.body[-1]
+    if not isinstance(last, ast.Return) or last.value is None:
+        return []
+    match last.value:
+        case ast.Tuple(elts=elts):
+            return [e.id for e in elts if isinstance(e, ast.Name)]
+        case ast.Name(id=name):
+            return [name]
+    return []
+
+
+def _cells(tree: ast.AST) -> list[ast.AST]:
+    return [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(getattr(d, "attr", "") == "cell" for d in node.decorator_list)
+    ]
+
+
+def _run_cells(notebook: Path) -> list[str]:
+    """Execute every cell in order, returning what went wrong.
+
+    The environment is real except for the frontend: `InMemoryStorage` and the
+    mock embedding provider are what the notebooks construct themselves, so
+    nothing is substituted for the system under test.
+    """
+    tree = ast.parse(notebook.read_text(), filename=str(notebook))
+    env: dict = {"mo": _UIStub()}
+    problems: list[str] = []
+    for cell in _cells(tree):
+        names = _returned_names(cell)
+        runnable = type(cell)(
+            name="_cell", args=cell.args, body=cell.body,
+            decorator_list=[], returns=None, type_comment=None, type_params=[],
+        )
+        module = ast.Module(body=[runnable], type_ignores=[])
+        ast.fix_missing_locations(module)
+        scope = dict(env)
+        try:
+            exec(compile(module, str(notebook), "exec"), scope)
+            result = scope["_cell"](*[env.get(a.arg, _UIStub()) for a in cell.args.args])
+            if asyncio.iscoroutine(result):
+                result = asyncio.run(result)
+            if names:
+                values = result if isinstance(result, tuple) else (result,)
+                env.update(dict(zip(names, values)))
+        except Exception as exc:
+            line = getattr(cell, "lineno", "?")
+            problems.append(f"line {line}: {type(exc).__name__}: {exc}")
+    return problems
+
+
+@pytest.mark.parametrize("notebook", _notebooks(), ids=lambda path: path.name)
+def test_every_notebook_runs(notebook: Path):
+    """The third gap, closed: a notebook whose imports resolve and whose body does not.
+
+    `06_orchestration.py` offered an `ingest` action the orchestration net has
+    never had — the real four are `segment`, `store_decomposition`, `search` and
+    `reflect` — and looked for an `IngestInput` place that does not exist. Every
+    import resolved, so both checks above passed while the notebook raised on
+    load. That is the case the module docstring called out as needing execution.
+
+    Execution turns out to be cheap, because marimo compiles the dataflow into
+    the cell signatures: each cell declares what it consumes and what it
+    produces, so running them in file order with a stub for the UI reproduces
+    what marimo would do. Only the frontend is absent.
+
+    What this still does not catch is a cell whose output is *wrong* rather than
+    raising — the `if _dp and _dp.tokens` shape, where a deleted phase reads as
+    a phase that produced nothing. Asserting on rendered output would pin the
+    prose of every notebook to a test, which costs more than that class is
+    worth.
+    """
+    absent = "notebook dependencies absent — run `uv sync --extra notebooks`"
+    pytest.importorskip(
+        "petritype.plotting.simple_graphviz", reason=absent, exc_type=ImportError
+    )
+    pytest.importorskip("graphviz", reason=absent, exc_type=ImportError)
+
+    problems = _run_cells(notebook)
+
+    assert not problems, f"{notebook.name}:\n  " + "\n  ".join(problems)

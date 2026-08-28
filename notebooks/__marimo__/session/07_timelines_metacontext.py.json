@@ -1,0 +1,139 @@
+{
+  "version": "1",
+  "metadata": {
+    "marimo_version": "0.23.16",
+    "script_metadata_hash": null
+  },
+  "cells": [
+    {
+      "id": "Hbol",
+      "code_hash": "0df98ce8b8f8eeb8ecab9bcbefe65c3d",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h1 id=\"timelines-and-metacontexts-when-a-claim-held-and-which-world-it-is-about\">Timelines and metacontexts \u2014 <em>when</em> a claim held, and <em>which world</em> it is about</h1>\n<span class=\"paragraph\">Two things that look similar and answer opposite questions. Both are hard to\nread from the code alone, which is why they share a notebook.</span>\n<span class=\"paragraph\"><strong>A metacontext is a frame: which world the claim is about.</strong> Saint\nPetersburg being in Russia and a novel's Petersburg being haunted are not a\ncontradiction, because they are asserted in different frames. Every ingested\nnode states one \u2014 absence is <em>no information</em>, not base reality \u2014 and a node\nstating no frame shares a frame with nothing: never compared, never merged,\nreturned by no scoped search. <code>the-real</code> is the conventional id for\nreal-world claims and has no special status in the code.</span>\n<span class=\"paragraph\"><strong>A validity interval is a period: when the claim held.</strong> Saint Petersburg\nwas Petrograd was Leningrad was Saint Petersburg, and every one of those was\ntrue of its own period. Intervals live on the <code>sourced_from</code> edge, per\nsource, so two documents disagreeing about dates keeps both accounts rather\nthan averaging them. Endpoints distinguish <strong>unknown</strong> from <strong>unbounded</strong>,\nwhich is the distinction the whole comparison rests on.</span>\n<span class=\"paragraph\">The rule for telling them apart: a frame answers <em>would this hold in every\nother world here?</em>, an interval answers <em>when?</em></span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "MJUe",
+      "code_hash": "113016d356d2c0eb4da5632a8cf9404e",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "vblA",
+      "code_hash": "0954d0b9e2171a1e16be39f38d90c176",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h2 id=\"1-frames-two-claims-about-one-city-in-two-worlds\">1. Frames \u2014 two claims about one city, in two worlds</h2></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "bkHC",
+      "code_hash": "28c82a7a8415d0ae883e380583ac998a",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><span class=\"paragraph\">Three facts stored: one framed <code>the-real</code>, one framed as the novel's world, and one <strong>stating no frame at all</strong> \u2014 the state a graph written before frames were required is full of, and the one <code>epimemer frames declare</code> exists to end.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "lEQa",
+      "code_hash": "788bcfec5bca477b4463e5eeef0722dc",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><table>\n<thead>\n<tr>\n<th>node</th>\n<th>frames it states</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>real-world fact</td>\n<td>the-real</td>\n</tr>\n<tr>\n<td>in-novel fact</td>\n<td>petersburg-novel</td>\n</tr>\n<tr>\n<td>unframed fact</td>\n<td><em>(none)</em></td>\n</tr>\n</tbody>\n</table>\n<h3 id=\"what-that-decides\">What that decides</h3>\n<ul>\n<li>Merging the real and in-novel facts: <strong>refused</strong> \u2014 they do not stand in the same set of frames, and a merged node would assert in one world what was only ever claimed in another.</li>\n<li>Merging the real and unframed facts: <strong>refused</strong> \u2014 the unframed node speaks for no world, so there is no set to agree on.</li>\n</ul>\n<span class=\"paragraph\"><em>Two perspectives disagreeing about one world are also never nominated as a contradiction, because the sweep skips pairs sharing no frame. Where the disagreement is the point, <code>record_contradiction</code> takes it and marks it cross-frame.</em></span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "PKri",
+      "code_hash": "b4b989277181eb263c7de15ca6b3164a",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "Xref",
+      "code_hash": "2f14f8fcac97d7f83324491cae43f986",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h2 id=\"2-intervals-one-city-three-names-three-periods\">2. Intervals \u2014 one city, three names, three periods</h2></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "SFPL",
+      "code_hash": "b152cb6561a54dfa6a5834dccf83d4db",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<marimo-ui-element object-id='SFPL-0' random-id='2ab9842a-c898-9b38-c17f-86f1e85d5565'><marimo-dropdown data-initial-value='[&quot;unknown \u2014 nobody has said&quot;]' data-label='&quot;&#92;u003cspan class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&#92;u003e&#92;u003cspan class=&#92;&quot;paragraph&#92;&quot;&#92;u003eHow the last period ends&#92;u003c/span&#92;u003e&#92;u003c/span&#92;u003e&quot;' data-options='[&quot;unknown \u2014 nobody has said&quot;,&quot;unbounded \u2014 no end exists&quot;]' data-allow-select-none='false' data-searchable='false' data-full-width='false' data-disabled='false'></marimo-dropdown></marimo-ui-element>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "BYtC",
+      "code_hash": "f9cfe6eaefd1a0fa7f4a538aa8c331ac",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><table>\n<thead>\n<tr>\n<th>the city was called</th>\n<th>from</th>\n<th>until</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>Saint Petersburg</td>\n<td>1703</td>\n<td>1914</td>\n</tr>\n<tr>\n<td>Petrograd</td>\n<td>1914</td>\n<td>1924</td>\n</tr>\n<tr>\n<td>Leningrad</td>\n<td>1924</td>\n<td>1991</td>\n</tr>\n<tr>\n<td>Saint Petersburg (again)</td>\n<td>1991</td>\n<td><strong>unknown</strong> \u2014 nobody has said</td>\n</tr>\n</tbody>\n</table></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "RGSE",
+      "code_hash": "15526f3a96c8238b3a8f9a598dbaf481",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h3 id=\"comparison-concludes-only-what-cannot-be-otherwise\">Comparison concludes only what cannot be otherwise</h3>\n<ul>\n<li>1703\u20131914 against 1991\u2013now: <strong>before</strong></li>\n<li>1703\u20131914 against 1914\u20131924: <strong>before</strong></li>\n<li><strong>1991\u2013now against 2050\u20132060: <code>unknown</code></strong></li>\n</ul>\n<span class=\"paragraph\"><strong>Switch the dropdown and only the third answer moves.</strong> That is the whole distinction: <em>unbounded</em> settles the comparison, because every moment of a period with no end falls after 2050; <em>unknown</em> settles nothing, because nobody has said whether the period reaches that far. Collapsing the two into one null is the mistake this type exists to prevent \u2014 it would turn <em>we do not know</em> into <em>no</em>.</span>\n<span class=\"paragraph\">The first two answers do <strong>not</strong> move, and that is worth as much: 1703\u20131914 sits wholly before 1991 whatever happens afterwards, so how the last period ends cannot change them. An open endpoint only withholds where it is actually load-bearing.</span>\n<span class=\"paragraph\"><em>The same four values run everywhere. Retrieval answers a valid-time question in buckets \u2014 provably valid, or unknown \u2014 rather than as a filter, because a filter turns missing metadata into a silent false negative.</em></span></span>"
+          }
+        }
+      ],
+      "console": []
+    }
+  ]
+}

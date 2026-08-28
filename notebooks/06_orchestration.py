@@ -10,6 +10,12 @@ def _(mo):
     # Orchestration Pipeline
 
     Step through the top-level orchestration net that routes requests to sub-pipelines. Select an action and watch it route through the Petri net.
+
+    The net routes four actions. Three of them take a self-contained payload and
+    are offered below. The fourth, `store_decomposition`, is **step 2 of ingest**:
+    its payload is the segment ids that `segment` returns, plus the topics, facts
+    and inferences an agent extracted from them, so it cannot be driven from a
+    text box. `tests/pipelines/test_orchestration.py` shows the two steps chained.
     """)
     return
 
@@ -41,8 +47,8 @@ def _():
 @app.cell
 def _(mo):
     action = mo.ui.dropdown(
-        options=["ingest", "search", "reflect"],
-        value="ingest",
+        options=["segment", "search", "reflect"],
+        value="segment",
         label="Action",
     )
     action
@@ -53,7 +59,7 @@ def _(mo):
 def _(mo):
     content = mo.ui.text_area(
         value="Neural networks learn from large datasets.",
-        label="Content (for ingest) / Query (for search)",
+        label="Content (for segment) / Query (for search)",
         full_width=True,
     )
     content
@@ -86,7 +92,7 @@ async def _(
     emb = MockEmbeddingProvider(model_id="mock", dimension=8)
     config = ServerConfig(storage_backend="memory", embedding_provider="mock")
 
-    if action.value == "ingest":
+    if action.value == "segment":
         payload = {"content": content.value}
     elif action.value == "search":
         payload = {"query": content.value, "k": 5}
@@ -122,7 +128,7 @@ def _(graph, mo):
         _output = mo.md(f"### Result (action: {_mr.action})\n```json\n{_mr.model_dump_json(indent=2)}\n```")
     else:
         _occ = []
-        for _pn in ["IngestInput", "SearchInput", "ReflectInput"]:
+        for _pn in ["SegmentInput", "StoreInput", "SearchInput", "ReflectInput"]:
             _pp = graph.place_named(_pn)
             if _pp and _pp.tokens:
                 _occ.append(_pn)
