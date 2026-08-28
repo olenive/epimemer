@@ -110,6 +110,14 @@ fixed. The advisory arrives instead, **with the nomination and in the response,
 before the content is written**, which is the only moment at which it can change
 the answer.
 
+Going ahead past it is recorded — a `proceeded_despite_advisory` row naming the
+survivor and its sources, written whether or not the graph is set to *show*
+advisories, and read back by `review(mode="advisory")`. That is what makes
+proceeding cost something. It applies to advisories that **object**; one that
+merely escalates a correct call — a same-frame contradiction is the only kind
+that does — sets `notify_user` and journals nothing, because there was nothing
+to proceed against.
+
 ---
 
 ## 3. What `reflect` returns

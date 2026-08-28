@@ -18,6 +18,7 @@ nomination, `epimemer/storage/protocol.py` for how a per-graph setting resolves.
 | Piece | Where |
 |---|---|
 | `Advisory`, `AdvisoryKind`, `AdvisoryAction`, `WarningPolicy` | `core/advisories.py` |
+| `AdvisoryStance` and the total `ADVISORY_STANCE` map | `core/advisories.py` (added on review, §4) |
 | Per-graph overrides and `resolve_warning_policy` | `storage/protocol.py`, both backends |
 | `configure_warnings` | `mcp/tools.py`, `mcp/server.py` |
 | `merge_inferences(source_ids, content)` | `mcp/tools.py` |

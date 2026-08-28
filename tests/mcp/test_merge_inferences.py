@@ -330,7 +330,11 @@ class TestTheAdvisoryRidesWithTheMerge:
 
         result, _ = await _merge(storage, embedding_provider, [one, other])
 
-        assert "warnings" not in result and "notify_user" not in result
+        assert "warnings" not in result and "warning" not in result
+        # Present and false, not absent. *No advisory*, *advisory muted* and
+        # *advisory shown but quiet* are one answer to the only question this
+        # key asks, and three response shapes for it leak which branch ran.
+        assert result["notify_user"] is False
         assert await storage.query_decisions(
             kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY]
         ) == []

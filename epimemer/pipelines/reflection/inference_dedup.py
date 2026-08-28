@@ -32,8 +32,8 @@ reasons that are not interchangeable:
   inferences onto one survivor and flags each with `evidence_merged`; that is
   the population worth reviewing, and it did not exist until facts merged.
 - It is cheap. One batched premise read, grouped by premise id, comparing only
-  within groups — where a global sweep is quadratic in *all* inferences and
-  would be a fifth capped nominee list immediately after four were capped.
+  within groups — where a global sweep would be quadratic in *all* inferences,
+  with nothing but the response cap standing between it and a runaway.
 - A global sweep nominates nothing. Measured on both real graphs: 123 active
   inferences, 5,053 pairs, **zero** at the nomination bar (p50 0.16–0.24, p99
   0.44–0.55, max 0.66). The top-scoring pairs are not duplicates at all — they
@@ -313,9 +313,14 @@ async def nominate_inference_merges(
     Reads only. The work is bounded by how many inferences rest on any one
     premise rather than by the graph: a premise supporting *k* inferences
     contributes k(k-1)/2 pairs, and the sum over premises is what a fact merge
-    concentrates. That is why this is not in the capped nominee lists — a graph
-    can only produce a runaway here by resting hundreds of inferences on one
-    fact, which is a different problem with a different answer.
+    concentrates.
+
+    **That bound is real and is not treated as sufficient.** The response is
+    capped in `reflect` like every other pair-built list, because *every pair
+    list is capped* is a simpler invariant to hold than *capped except where a
+    grouping argument says otherwise* — and this ceiling rises in exactly the
+    graphs the list is for, since a heavily merged graph is one that
+    concentrates inferences onto surviving premises.
     """
     effective_model_id = model_id or embedding_provider.model_id
 

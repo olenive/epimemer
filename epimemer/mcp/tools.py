@@ -428,13 +428,16 @@ async def carry_advisories(
     at 0.5 would sort above the genuinely unrated ones and read as a judgment
     the agent never made.
 
-    **`notify_user` is always present and always a boolean**, on every response
-    that could carry an advisory at all. Omitting it where nothing escalates
-    would leak which branch ran, and a key documented in `INTEGRATION.md` that
-    is sometimes absent is worse to read than one that is sometimes false.
+    **`notify_user` is always present and always a boolean**, including when
+    there is no advisory at all. Omitting it where nothing escalates leaks which
+    branch ran — and it leaked in three shapes before this was made total, since
+    *no advisory*, *advisory muted* and *advisory shown but quiet* are the same
+    answer to the only question the key asks. A key documented in
+    `INTEGRATION.md` that is sometimes absent is worse to read than one that is
+    sometimes false.
     """
     if not advisories:
-        return {}
+        return {"notify_user": False}
     if objects_to_the_call(advisories):
         await journal(
             storage,
@@ -3102,10 +3105,16 @@ async def configure_warnings(
     the graph's own answers laid over the process default.
 
     **`surface` governs surfacing only, never recording.** A graph with it off
-    still journals every advisory an operation carried, so
-    `review(mode="advisory")` keeps answering *what was decided while nobody was
-    looking* — which is exactly when that question is worth asking. Label it for
-    what it does; it is not "turn off warnings".
+    still journals every operation that went ahead against an objecting
+    advisory, so `review(mode="advisory")` keeps answering *what was decided
+    while nobody was looking* — which is exactly when that question is worth
+    asking. Label it for what it does; it is not "turn off warnings".
+
+    **And a kind explicitly named `flag` outranks it.** Naming a kind is the
+    more specific statement, so muting a graph does not withdraw an escalation
+    somebody asked for by name — which is also what stops `notify_user: true`
+    arriving with no text to relay. Setting that kind to `proceed` is how the
+    escalation is withdrawn.
 
     **`actions` is merged, not replaced.** A graph with an opinion about one
     kind has not withdrawn the defaults for the others, and a map override that
@@ -3420,9 +3429,10 @@ async def reflect(
     #     globally**: a fact merge collects duplicate inferences onto one
     #     survivor, which is the population worth reviewing and the only one
     #     that exists — a global sweep over all inference pairs was measured at
-    #     zero nominations and is quadratic besides. Not in `CAPPED_KEYS`
-    #     because it is not quadratic in the graph: the bound is how many
-    #     inferences rest on any one premise.
+    #     zero nominations and is quadratic besides. Capped like every other
+    #     pair-built list, though the grouping already bounds it by
+    #     inferences-per-premise rather than by the graph; `CAPPED_KEYS` says
+    #     why the lower bound was not treated as enough.
     async def _inference_merges():
         return [
             candidate.model_dump(mode="json")
@@ -4158,8 +4168,8 @@ async def apply_reflection(
 
 # One page of decisions, and the cap is the nomination cap applied verbatim: `all`
 # over an append-only journal fed by every ingest is precisely the unbounded
-# response that capped four reflect lists, and designing this one uncapped
-# afterwards would be perverse. As there — when the response says it was cut,
+# response the reflect nominee lists are capped for, and designing this one
+# uncapped afterwards would be perverse. As there — when the response says it was cut,
 # act on what came back and review again rather than raising the number.
 REVIEW_MAX_RESULTS: int = 200
 

@@ -800,7 +800,7 @@ means *"the graph is in good shape"*.
 
 **Every mode is capped and reports `truncated`**, the nomination cap's treatment applied
 verbatim. `all` over an append-only journal fed by every ingest is precisely the
-unbounded response the nomination cap capped four lists for, and designing it uncapped the day
+unbounded response the nomination cap exists for, and designing it uncapped the day
 after would be perverse. As there: when a list is named in `truncated`, act on
 what came back and review again rather than raising the number.
 

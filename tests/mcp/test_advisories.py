@@ -322,6 +322,7 @@ class TestTheTwoExistingWarningsBecameAdvisories:
 
         assert result["same_frame"] is False
         assert "warning" not in result and "warnings" not in result
+        assert result["notify_user"] is False
 
     async def test_a_same_frame_variant_is_advised_against_and_stays_quiet(
         self, storage

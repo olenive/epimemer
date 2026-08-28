@@ -424,7 +424,7 @@ than the convenience, and it is far easier to give up later than to win back.
   crossing.~~ **Measured 2026-08-20 and withdrawn.** Real fact pairs clear the
   0.80 threshold at **0.0105%**, projecting ~5,200 surviving pairs and ~3 MB at
   10,000 facts — not the ~14 GB the estimate implied, which had been taken from
-  longer templated text and applied to fact-length pairs. The four quadratic
+  longer templated text and applied to fact-length pairs. The pair-built
   lists are capped anyway as of 2026-08-21, but as a **response** bound
   for readability, not as a memory fix. There is no successor concern; the next
   performance issue should come from a profile.

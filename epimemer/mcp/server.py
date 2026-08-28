@@ -1215,7 +1215,9 @@ async def memory_record_variant(
     Creates one `variant_of` edge (idempotent per pair) so a cross-frame
     divergence (e.g. real history vs. a fiction frame) is queryable. Both facts
     stay active. Use for facts in different metacontexts; if they share a frame
-    and conflict, use record_contradiction instead.
+    and conflict, use record_contradiction instead — recording a variant between
+    two facts in one frame comes back with a `warning` saying so, and is
+    recorded as a decision taken against advice.
 
     Args:
         a_id: One fact id.
@@ -1517,11 +1519,13 @@ async def memory_configure_warnings(
     decide, and nothing here refuses on one.
 
     Args:
-        surface: Whether advisories are returned to you at all (default true).
-            **It does not stop them being recorded**: with this off, every
-            advisory an operation carried is still journalled and still shows up
-            in review(mode="advisory"). Turning it off makes the graph quiet,
-            not clean.
+        surface: The global mute (default true). **It does not stop advisories
+            being recorded**: with this off, an operation that went ahead
+            against one is still journalled and still shows up in
+            review(mode="advisory"). Turning it off makes the graph quiet, not
+            clean. A kind explicitly set to "flag" outranks it and still
+            reaches you; a kind following the default does not. To silence a
+            flagged kind, set that kind to "proceed".
         actions: Per-kind overrides, e.g. {"same_frame_contradiction":
             "proceed"}. "proceed" surfaces the advisory; "flag" also sets
             notify_user, meaning you are expected to raise it with the user.

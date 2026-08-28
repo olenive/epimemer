@@ -105,7 +105,7 @@ restate the count.
 | `reverse_merge` | Undo a merge: restore the sources with their own edges and destroy the survivor. The only tool that deletes a node. Refuses when anything has been added to the survivor since |
 | `merge_inferences` | Collapse inferences that state one conclusion into a single node. The survivor rests on the union of the sources' premises; where those premises are dated and fall clear of each other the response says so in `warnings` rather than refusing |
 | `configure_merge` | Read or set this graph's `merge_undo_depth` (how far back a merge stays reversible) and `merge_cycle_limit` (how many merge/un-merge rounds before a merge refuses) |
-| `configure_warnings` | Read or set what this graph does about advisories: `surface` (whether you are shown them — never whether they are recorded) and per-kind `proceed` / `flag` |
+| `configure_warnings` | Read or set what this graph does about advisories: per-kind `proceed` / `flag`, and `surface` — the global mute, which governs whether you are *shown* them and never whether they are recorded. A kind explicitly set to `flag` outranks the mute; one following the default does not |
 
 ### Reflection
 
@@ -123,7 +123,7 @@ Every judgment the graph records — who decided, about what, and when — see
 
 | Tool | Purpose |
 |------|---------|
-| `review` | This graph's decisions, shakiest first: a declared low `certainty` before anything unrated, then by derived difficulty (thin sources, wide merges, open contradictions, ground that moved since). Modes `all` / `by_agent` / `since` / `unreviewed` / `advisory` (operations that completed carrying an advisory), narrowed by `agent_id` (a handle: a judge's name, its key, or a key it used to be recorded under), `since`/`until` and `certainty_ceiling`. Read-only, capped, and one graph wide — `graph` names which, and `elsewhere` counts the journal in every other graph so a reviewer is told where else to look |
+| `review` | This graph's decisions, shakiest first: a declared low `certainty` before anything unrated, then by derived difficulty (thin sources, wide merges, open contradictions, ground that moved since). Modes `all` / `by_agent` / `since` / `unreviewed` / `advisory` (operations that completed against an objecting advisory — an advisory that merely escalates a correct call writes no row), narrowed by `agent_id` (a handle: a judge's name, its key, or a key it used to be recorded under), `since`/`until` and `certainty_ceiling`. Read-only, capped, and one graph wide — `graph` names which, and `elsewhere` counts the journal in every other graph so a reviewer is told where else to look |
 | `apply_review` | Record that you checked decisions and what you concluded — `confirmations` and `dissents`, each with a required `because`. Neither changes the graph: a dissent records the finding, and the undo is `reverse_merge` / `restore` / `apply_reflection` / `rejudge` |
 | `reframe` | Withdraw a frame from a node, or move it to another in one call — a metacontext assignment was one-way |
 | `correct_interval` | Replace what one source is recorded as asserting about when a claim held |

@@ -307,7 +307,7 @@ one call rather than three vocabularies.
 | `by_agent` | one judge's decisions | `agent_id` |
 | `since` | a time window; `until` is exclusive | `since` |
 | `unreviewed` | rows no other record points back at | — |
-| `advisory` | operations that completed carrying an advisory | — |
+| `advisory` | operations that went ahead against an objecting advisory | — |
 
 `advisory` is the one mode that is a selection on **kind**
 (`proceeded_despite_advisory`), and it answers a question none of the others
