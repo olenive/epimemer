@@ -42,7 +42,7 @@ def _accept(chosen: str | None = None):
 async def _silent(proposed: str, description: str) -> tools.ApprovalOutcome:
     """A client with no channel to the user: the elicitation-less case.
 
-    Distinct from `_declined`, and the distinction is the point (#78): this one
+    Distinct from `_declined`, and the distinction is the point: this one
     could not put the question, so an id the user approved out of band still
     binds. That one put the question and got *no*.
     """
@@ -120,7 +120,7 @@ class TestTheIdIsTheUsersToAssign:
         Recording the *proposal* after the user renamed it would record a claim
         nobody approved — quietly, and under a name the graph then treats as
         approved. Since the three-layer split the name is not the key: a judge
-        nothing here knows gets an opaque one (#78), which is what leaves the
+        nothing here knows gets an opaque one, which is what leaves the
         name free to change later.
         """
         result, _ = await tools.claim_agent(
@@ -164,7 +164,7 @@ class TestTheIdIsTheUsersToAssign:
 
 
 class TestTheGateGuardsAssumingAnIdNotOnlyMintingOne:
-    """An approved id does not bind without the user seeing it (#78).
+    """An approved id does not bind without the user seeing it.
 
     The gate used to fire only where `agent_id not in approved`, which guarded
     the wrong act. Once an id was approved, any session bound to it with no user
@@ -281,7 +281,7 @@ class TestTheCadenceMemo:
 
 class TestTheResponseSaysWhetherTheJudgeIsNew:
     """`description_versions: 1` implied it; an implication nobody reads is not
-    a signal (#78)."""
+    a signal."""
 
     async def test_a_first_claim_reports_a_new_judge(self, storage):
         result, _ = await tools.claim_agent(

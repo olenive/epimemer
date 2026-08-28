@@ -1,4 +1,4 @@
-"""Revising the two ingest judgments that had no way back (#66).
+"""Revising the two ingest judgments that had no way back.
 
 Both are `rejudge`'s category — *the claim is fine, the judgment about it was
 wrong* — and both are their own tool for a **structural** reason rather than a
@@ -136,10 +136,10 @@ class TestMovingAFrameIsOneCall:
 class TestWithdrawingTheLastFrameIsRefused:
     """It used to be allowed behind `to_base_reality=True`, because absence
     meant base reality and the withdrawal was a *promotion* worth stating on
-    purpose. Absence means nothing now (#76): a frameless node shares a frame
+    purpose. Absence means nothing now: a frameless node shares a frame
     with nothing, so it is never compared, never merged, and returned by no
     scoped search. There is nothing left to authorise, so the flag is gone
-    rather than renamed — the paradigm case #66 was built for is `assign`.
+    rather than renamed — the paradigm case revisable ingest judgments was built for is `assign`.
     """
 
     async def test_a_bare_last_withdrawal_is_refused(self, storage):
@@ -352,7 +352,7 @@ class TestCorrectingAPeriodThatIsPresentAndWrong:
 
     async def test_an_empty_list_removes_a_period_that_was_invented(self, storage):
         """Refusing this would leave a fabricated interval unremovable, which is
-        #66's own shape a second time."""
+        revisable ingest judgments's own shape a second time."""
         node, doc = await _sourced(storage, _interval(1979, 1999))
 
         result, _ = await tools.correct_interval(

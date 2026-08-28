@@ -1,7 +1,7 @@
 """Reading validity back at retrieval — per source, and bucketed on request.
 
 T1 §3's read surface: *a query answers with `(source, interval)` pairs*. The
-intervals were stored on the `sourced_from` edge (#53 step 3) precisely so a
+intervals were stored on the `sourced_from` edge precisely so a
 period is always attributable, and this is where that attribution reaches a
 caller. Nothing is collapsed on the way out — union takes one careful source and
 one sloppy one and yields a period neither claims, intersection turns two

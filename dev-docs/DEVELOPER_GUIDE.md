@@ -208,26 +208,26 @@ without noticing:
   re-offers what an agent already refused, on every pass, and cannot know it is
   doing so. The cost is agent attention, and the pressure runs the wrong way:
   *accepting* a nomination usually removes its subject from the population, so
-  acceptance is self-suppressing and refusal is not. #64 is the worked example
+  acceptance is self-suppressing and refusal is not. The `assessed` edge is the worked example
   — thirteen of eighteen nominated pairs were declined and vanished — and the
   `ASSESSED` edge is the fix: a suppression index the sweep reads, separate
   from the journal that audits it.
 - **And its dual: a suppression with no retraction makes every wrong decline
   permanent by construction.** `assessed` is deliberately terminal
-  (`similarity_decisions.py`), and #68's retraction left it untouched on
+  (`similarity_decisions.py`), and the `one_claim` retraction's retraction left it untouched on
   purpose. That is a choice, not an oversight, and a new nominator inherits it
-  knowingly or decides otherwise — **but not by copying**. #68 is one-way
+  knowingly or decides otherwise — **but not by copying**. The `one_claim` retraction is one-way
   because a false unification manufactures agreement while a withdrawal only
   under-counts; where neither failure applies, a one-way retraction buys
   nothing for the permanence it costs.
 
-`ISSUES.md` #74 has both stated against a live instance: relation-label
+The label record has both stated against a live instance: relation-label
 nominations have no suppression at all, so a declined pair returns on every
 `reflect`. `dev-docs/RELATION_LABELS.md` is the design.
 
 **A cycle in a feature nobody has built is a precondition, not a defect.**
 Record it against the thing that would create it rather than in a shared list —
-three of #74's four futile cycles need deprecation, steering or renaming, none
+three of the label record's four futile cycles need deprecation, steering or renaming, none
 of which exists, and a list that does not say so reads as four outstanding bugs.
 
 ### Timeline Functions
@@ -380,7 +380,7 @@ same way.
 
 This shipped for months and was invisible, because `datetime.now()` essentially
 never lands on a whole second — so every test that built a timestamp built a
-safe one by accident (`ISSUES.md` #70).
+safe one by accident.
 
 **The rule has two halves, and the index decides which applies.**
 
@@ -395,7 +395,7 @@ The measurements behind the split, taken 2026-08-23 on embedded SurrealDB:
   `query_nodes` window over 10,000 rows, and under 2 ms on the real graphs.
 - It costs nothing else at the unindexed sites, because `created_at`,
   `superseded_at` and the `lifecycle` timestamps **have no index**: both forms
-  already plan as `Iterate Table`. (The first draft of #70 assumed an index was
+  already plan as `Iterate Table`. (The first draft of the timestamp-text trap assumed an index was
   being given up here. There was none to give up — check the plan before
   believing that argument.)
 - Where a timestamp *is* indexed the picture inverts. A range over the decision
@@ -450,7 +450,7 @@ move.** Both backends resolve it per call — `InMemoryStorage` indexes
 `self._graphs[self._database]`, `SurrealDBStorage` sends `USE ns db` down one
 shared connection — so a switch landing between two steps of an operation sends
 the rest of that operation somewhere else. It is not a SurrealDB problem, and it
-took a month to see that because it was filed as one (#16).
+took a month to see that because it was filed as one.
 
 Two things move it, and that is the whole list:
 
@@ -475,7 +475,7 @@ dashboard.
 The guard stops the graph moving *underneath* a call. It cannot tell you the
 call started in the right graph — the agent's belief and `current_database` can
 agree while a reconnect has put both somewhere else. That is `expected_graph`,
-and since #71 it is **required on every tool** except the four that are *about*
+and since the mandatory `expected_graph` it is **required on every tool** except the four that are *about*
 graphs (`NAMES_ITS_OWN_GRAPH` in `mcp/server.py`).
 
 Adding a tool means adding the parameter and forwarding it — the oracle in
@@ -508,7 +508,7 @@ Three rules for anything new:
   says so — but the tool has to be declared, because the default fails open.
 - **A cross-graph read takes a mover's turn**, even though it only reads. It
   moves the graph to get there. `review` is the worked example: its `elsewhere`
-  locator counts the journal in every other graph (#73), so a read ended up in
+  locator counts the journal in every other graph, so a read ended up in
   `MOVES_THE_GRAPH`. You cannot borrow the graph while being one of the calls
   using it, and the turn has to be taken at the boundary for the whole call —
   which is why `review` now excludes other calls for its duration, and reads a

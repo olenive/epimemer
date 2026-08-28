@@ -50,7 +50,7 @@ def embedder():
 async def _fact(storage, embedder, content: str, *, claim_kind=None, source="doc1"):
     node = Fact(content=content, source_id="seg1", claim_kind=claim_kind)
     await storage.store_node(node)
-    # States a frame, as every ingested node has since #76: absence names none,
+    # States a frame, as every ingested node has since the frame requirement: absence names none,
     # so two frameless nodes share none and a `one_claim` verdict is refused.
     await storage.store_edge(NodeEdge(
         src_id=node.id, dst_id=BASE_METACONTEXT_ID,
@@ -360,7 +360,7 @@ class TestTheValueSignalCarriesWhoJudgedImportance:
         trail = (await storage.get_node(node.id)).metadata["reinforcements"]
         # An unknown judge is stored as **absence**, not as a null — the rule
         # every backend applies to metadata, and the same one `confidence`
-        # follows (#46). So the third entry has no key at all.
+        # follows. So the third entry has no key at all.
         assert [
             (e.get("judged_by") or {}).get("agent_id") for e in trail
         ] == ["critic", "editor", None]

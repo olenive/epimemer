@@ -25,7 +25,7 @@ from epimemer.visualization.protocol import Register, SessionInfo
 def _graph_with_the_real() -> InMemoryStorage:
     """An in-memory graph somebody has set up.
 
-    Since #76 a frame is required at ingest and `the-real` is an ordinary
+    Since the frame requirement a frame is required at ingest and `the-real` is an ordinary
     metacontext, created once like any other. A server fixture without it would
     make every test here start by creating a frame, which tests the fixture.
     """

@@ -30,7 +30,7 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     which runs over the two or three nodes of a single proposed merge — bounded
     by the merge, not by the graph — so the setup cost of a matrix product would
     exceed the comparisons it replaces. The graph-scaled loop that used to be
-    here is now `similar_pairs` (#47).
+    here is now `similar_pairs`.
     """
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = math.sqrt(sum(x * x for x in a))
@@ -101,7 +101,7 @@ async def find_similar_topic_pairs(
         return []
 
     # One fetch for every topic's vector rather than one per topic: a vector is
-    # the most expensive row in the store, and this walks all of them (#14).
+    # the most expensive row in the store, and this walks all of them.
     by_item = await storage.get_embeddings_for_items(
         [topic.id for topic in topics], model_id=effective_model_id
     )
@@ -114,7 +114,7 @@ async def find_similar_topic_pairs(
     # Score every pair at once, over the topics whose vectors can form a matrix.
     # This was the last per-pair Python loop in `reflect`, and once storage
     # stopped being the cost it was most of the wall clock: 71% on SurrealDB and
-    # 88% in-memory at 1,200 nodes, against 9 ms of storage (#47).
+    # 88% in-memory at 1,200 nodes, against 9 ms of storage.
     by_id = {topic.id: topic for topic in topics}
     kept_ids, vectors = stack_uniform_width(
         [topic.id for topic in topics], topic_vectors
@@ -165,7 +165,7 @@ async def merge_similar_topics(
     # reads as the default rather than losing outright: this is a choice
     # between two pieces of text, and one of them has to lead. Two unrated
     # topics tie and the `>=` takes the first — honestly the *unrated* case
-    # now, where before priors existed it was every case (#46).
+    # now, where before priors existed it was every case.
     if rated_confidence(topic_a.value.confidence) >= rated_confidence(
         topic_b.value.confidence
     ):
@@ -178,7 +178,7 @@ async def merge_similar_topics(
 
     # Shared with the wired merge in `apply_reflection`, and shared deliberately:
     # rebuilding a signal field by field silently resets whatever it forgets to
-    # name, which is how both clocks came to be dropped here (#45).
+    # name, which is how both clocks came to be dropped here.
     merged_value = merged_value_signal([topic_a.value, topic_b.value])
 
     # Create the merged topic

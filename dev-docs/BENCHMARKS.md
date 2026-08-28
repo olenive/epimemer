@@ -4,7 +4,7 @@ Measurements from `scripts/bench.py` (`make bench`). This file describes **where
 the system stands now**, not how it got here — superseded runs are deleted rather
 than kept, and `git log` holds them if a comparison is ever wanted.
 
-It is what keeps ISSUES.md **#14** honest. #14 is the full-scan / N+1 entry, and
+It is what keeps the batching work honest — the full-scan / N+1 problem, and
 these numbers are what decides which of its remaining N+1 sites is worth
 attacking — and, twice now, what proved the site it had nominated was not the
 one costing the time.
@@ -40,7 +40,7 @@ trustworthy; a cross-run comparison is not.
   longer describes this configuration. **Every `reflect` figure below is
   therefore measured on a corpus that generates essentially no surviving pairs**,
   and understates anything scaling with them. Node- and edge-scaled costs are
-  unaffected and remain trustworthy. What this hid is filed as ISSUES.md **#60**.
+  unaffected and remain trustworthy. What this hid is filed as **the nomination cap**.
 - **The 49% did not stand, and why it did not is the more useful finding**
   (measured 2026-08-20, `scripts/corpus_measure.py`). It was carried here as
   "49% for real `all-MiniLM-L6-v2` on similarly templated text" and used to
@@ -124,7 +124,7 @@ a claim that the pair comparison went away.
 per *surviving* pair, which nothing caps — on a corpus where pairs actually
 survive, memory can fail before the timeout does, at a size below the ~26,000
 crossing. The corpus here produces almost none, so these figures cannot show it.
-Measurements and projection: ISSUES.md **#60**.
+Measurements and projection: **the nomination cap**.
 
 ---
 
@@ -133,7 +133,7 @@ Measurements and projection: ISSUES.md **#60**.
 **Ingest — not a problem.** Flat across every size measured on both backends. The
 write path has never been the ceiling.
 
-**The exact-content lookup, though, was linear in table size (#48, fixed
+**The exact-content lookup, though, was linear in table size (the content-lookup index, fixed
 2026-08-19).** `get_node_by_content` runs on the write path, and left to itself
 SurrealDB resolved it through `idx_{table}_status` — an index matching every
 active row — with `content` applied afterwards as a predicate. Measured per call
@@ -153,7 +153,7 @@ The write cost that made this worth measuring rather than patching is not
 there: three seeds of 3,000 nodes each way came out at 1,944 ms median
 unindexed against 2,033 ms indexed — **+4.6%**, inside a run-to-run spread of
 1,728–2,721 ms. Cheap enough that ingest now affords one such lookup per fact,
-which is what the verbatim-recurrence check needs (#53 T2).
+which is what the verbatim-recurrence check needs.
 
 **`search` — the cheapest of the three, on both backends.** In-memory it is
 linear and always was. On SurrealDB it is close to flat: ranking happens before
@@ -178,16 +178,16 @@ is also what flattened its exponent from 1.56 to ~1.
   which is genuine work rather than redundancy, so both were made fast rather
   than made smaller: `similar_pairs` (`pipelines/reflection/pair_scoring.py`)
   stacks the vectors and takes a matrix product per 512-row block instead of one
-  Python call per pair. Facts went first (#39, 4.1–4.6×) and topics followed
-  once storage stopped hiding them (#47, **7.3× at 1,000 nodes and 16.5× at
+  Python call per pair. Facts went first (the profiling pass, 4.1–4.6×) and topics followed
+  once storage stopped hiding them (the pair-loop fix, **7.3× at 1,000 nodes and 16.5× at
   2,000** in-memory — the ratio grows with size because what was removed was
   quadratic and what remains is not). Storage batching buys nothing on this
-  backend, as expected of one with no round-trips: **1.03–1.10×** for #14 step 4,
+  backend, as expected of one with no round-trips: **1.03–1.10×** for batching step 4,
   which is noise.
 - **On SurrealDB it was round-trip bound, and is not any more.** Step 4 bought
   **6.19× at 1,000 nodes and 7.09× at 2,000** (6,464 → 1,044 ms; 24,946 →
   3,519 ms), measured same-session, and took round-trips at 1,200 nodes from
-  3,086 to **56**. Vectorizing the topic phase on top of that (#47) bought a
+  3,086 to **56**. Vectorizing the topic phase on top of that bought a
   further **2.9× and 4.4×** at the same two sizes.
 
   Three separate causes, and the batching everyone predicted was the smallest:
@@ -205,11 +205,11 @@ is also what flattened its exponent from 1.56 to ~1.
      table once per chunk *and* paying O(rows × ids) for the predicate. Reading
      the candidate rows and matching them in Python is 14× faster past ~100 ids.
   3. **The batched reads themselves** (`get_nodes`, `get_embeddings_for_items`),
-     which is what #14 step 4 nominated. Worth 3,868 → 1,465 ms once the two
+     which is what batching step 4 nominated. Worth 3,868 → 1,465 ms once the two
      above were fixed. Real, and the smallest of the three.
 
   The write side had already gone: value decay was one `UPSERT` per active node
-  per pass, and removing `relevance` (#44) removed it, making `reflect` a pure
+  per pass, and removing `relevance` removed it, making `reflect` a pure
   read.
 
   **What binds it now is payload, not round-trips or arithmetic.** At 4,000
@@ -219,10 +219,10 @@ is also what flattened its exponent from 1.56 to ~1.
   of edges, 349 ms of nodes. That is close to irreducible with this design —
   pairwise comparison needs the vectors, and they are 384 floats each. Reducing
   it means moving the comparison to the server or keeping vectors across calls,
-  both of which are larger changes than anything in #14 or #47, and neither is
+  both of which are larger changes than anything in batching or the pair-loop fix, and neither is
   worth making while the crossing sits at ~26,000 nodes.
 
-### What the two validity phases add to `reflect` (#53 T1 §9 and §11, 2026-08-19)
+### What the two validity phases add to `reflect` (boundary proposals and §11, 2026-08-19)
 
 The only phases added to `reflect` since it became the limiting operation, so
 their cost is worth stating rather than assuming. In-memory, mock embeddings,
@@ -267,7 +267,7 @@ graph — split like this:
 | 13 | *all* × active | relation consolidation | **1,000** |
 
 **Four of them are the same query.** Rows 6, 8, 12 and 13 each read the whole
-active set, and row 13 uses nothing but the ids. None is the per-node shape #14
+active set, and row 13 uses nothing but the ids. None is the per-node shape batching
 removed — every one is a single batched call — which is exactly why they went
 unnoticed: the round-trip count stayed flat while the payload multiplied.
 
@@ -323,9 +323,9 @@ a constant — visible on SurrealDB where each write is a round-trip, near-invis
 in-memory. It changes no crossing. Since value decay was removed this is the only
 per-node write left in the read path, so it is what a batched write would serve.
 
-### What corroboration costs, and why it is opt-in (#51, 2026-08-20)
+### What corroboration costs, and why it is opt-in (read-time corroboration, 2026-08-20)
 
-`ISSUES.md` #51 asked for this number before deciding whether corroboration
+Read-time corroboration asked for this number before deciding whether corroboration
 could go on the default `search` path. It could not. Median ms per call, over
 the node set a real `search(k=10, graph_hops=1)` returns, against a localhost
 SurrealDB 3.0.5 and the in-memory store, mock embeddings at 384 dimensions:
@@ -374,7 +374,7 @@ this inherits its vocabulary limits like everything else here.
 >
 > **"Similarity edges are written by `apply_reflection`" is false.** It writes
 > nine kinds of decision and none of them is a `similarity` edge; nothing in the
-> codebase writes one at all (`ISSUES.md` #64). The census: **0 of 4,386** edges
+> codebase writes one at all. The census: **0 of 4,386** edges
 > on `memory`, **0 of 1,028** on `petritype-server`.
 >
 > **What survives.** The *shape* of the finding is untouched — the fan-out is
@@ -390,14 +390,14 @@ this inherits its vocabulary limits like everything else here.
 > every other annotation, so **default-off survives on the round-trip cost
 > alone**. The conclusion was right and one of its two reasons was not.
 >
-> **The order this leaves things in.** Whatever #64 builds will be the first
+> **The order this leaves things in.** Whatever the `assessed` edge builds will be the first
 > thing that puts real similarity edges in a graph, and the degree column
 > becomes an observation the first time it does. Re-measure then, against a
 > graph whose edges came from judgments rather than from `--similarity-degree`.
 >
 > > **2026-08-22 — the writer exists now.**
 > > `apply_reflection(similarities=[{pair, verdict: "one_claim", …}])` writes a
-> > `similarity` edge, one agent judgment at a time (#64 step 1). So the degree
+> > `similarity` edge, one agent judgment at a time. So the degree
 > > column stops being a dial the moment a graph accumulates a few dozen, and
 > > **the re-measurement above is now takeable rather than hypothetical** —
 > > against real degrees, which the census can read directly.
@@ -431,7 +431,7 @@ the degree-10 one, which is why it was left alone rather than guessed at.
 
 ---
 
-## What real text actually looks like (#59 and #60, 2026-08-20)
+## What real text actually looks like (the embedding-window measurement and the nomination cap, 2026-08-20)
 
 Everything above is measured on generated text. Two open issues turned on what
 *real* text does instead, so this takes it directly from graphs of real ingested
@@ -460,7 +460,7 @@ construction.
 **Segments cross it routinely.** 10.0% of `memory`'s and 14.3% of
 `petritype-server`'s exceed the window, and the worst loses **48% of its text**
 to truncation. Segments are a *searchable corpus* in their own right
-(`docs/RETRIEVAL.md` §3), so this is the silent under-return #59 describes,
+(`docs/RETRIEVAL.md` §3), so this is the silent under-return the embedding-window measurement describes,
 confined entirely to the half nobody suspected — the entry guessed at "`Segment`
 text and unusually long inference content", and inferences turn out to top out
 at 63 word-pieces.
@@ -483,7 +483,7 @@ at 63 word-pieces.
 > read segment text out of the `segment` table — the right place to ask the
 > tokenizer question — and had no way to see whether that text is ever
 > tokenized. **A measured quantity is not yet a measured consequence:** before a
-> distribution becomes a cost, something has to be shown to pay it. #59 closed
+> distribution becomes a cost, something has to be shown to pay it. The embedding-window measurement closed
 > on this without code; the precondition now lives on
 > `EmbeddingRecord.item_id`, where anyone adding segment embedding will meet it.
 
@@ -503,10 +503,10 @@ re-derived here:
 **Read the distribution, not the rate.** Four survivors is too few to trust as a
 rate, but 38,226 pairs is plenty to locate the distribution, and it sits nowhere
 near the threshold: the median real fact pair scores **0.164**, and 99.9% of
-them stay under **0.683**. For #60's projection to bite, the whole distribution
+them stay under **0.683**. For the nomination cap's projection to bite, the whole distribution
 would have to move — not its tail.
 
-What that projects to at the sizes #60 names, at ~580 bytes per surviving pair:
+What that projects to at the sizes the nomination cap names, at ~580 bytes per surviving pair:
 
 | facts | surviving pairs | pair memory |
 |---|---|---|
@@ -520,7 +520,7 @@ magnitude**, and the difference between an urgent fix and cheap insurance.
 **Three things this does not establish**, because the temptation is to read it
 as an all-clear:
 
-- **A near-duplicate corpus is untested and was #60's actual worst case.** The
+- **A near-duplicate corpus is untested and was the nomination cap's actual worst case.** The
   same news story from fifty outlets is claim-duplicate; dev notes are
   subject-similar, which is a much weaker thing. No claim-duplicate corpus
   exists here to measure, so the honest scope is *the alarm does not fire on any
@@ -528,7 +528,7 @@ as an all-clear:
 - **The rate's behaviour with size is unmeasured.** Subsets at n = 50/100/200
   produced 0, 0 and 1 survivors — too few to fit a trend. If mutual similarity
   rises as a graph fills in one domain, the projection above is a floor.
-- **Nothing here caps anything.** The bound #60 proposes is still absent; the
+- **Nothing here caps anything.** The bound the nomination cap proposes is still absent; the
   measurement changes its priority, not its correctness.
 
 ---
@@ -537,7 +537,7 @@ as an all-clear:
 
 **Profile first. Every performance fix in this project so far has overturned the
 cause its issue predicted** — six times running, and in each case a profile
-redirected the work to something the issue had not mentioned. #14 first named
+redirected the work to something the issue had not mentioned. Batching first named
 the contradiction phase's edge queries as what held `reflect` at the timeout;
 they were 14% of its storage calls, and removing all of them left the crossing
 where it was. Step 4 then named batched node and embedding reads; those turned
@@ -545,13 +545,13 @@ out to be the *smallest* of the three causes, behind a query that never used the
 right index. The recipe: seed via `bench._seed`, wrap one `await reflect(...)` in
 `cProfile`, sort by cumulative time.
 
-**#47 is the one exception, and worth knowing why.** It was predicted correctly
-and it under-promised: the issue expected ~4× by analogy with #39 and measured
-7.3–16.5× in-memory. The difference is that #39 removed a quadratic from a
-`reflect` that had other quadratics left, while #47 removed the last one — so
+**The pair-loop fix is the one exception, and worth knowing why.** It was predicted correctly
+and it under-promised: the issue expected ~4× by analogy with the profiling pass and measured
+7.3–16.5× in-memory. The difference is that the profiling pass removed a quadratic from a
+`reflect` that had other quadratics left, while the pair-loop fix removed the last one — so
 the ratio kept growing with graph size instead of settling at a constant. A
-profile is what made the prediction reliable: #47 was written *from* the
-measurement that closed #14, not from a guess about where time goes.
+profile is what made the prediction reliable: The pair-loop fix was written *from* the
+measurement that closed batching, not from a guess about where time goes.
 
 On a networked backend, **count round-trips before timing anything** — wrap
 `SurrealDBStorage._query`, or the individual storage methods, in a counter and
@@ -659,7 +659,7 @@ index, which would leave `text_search` silently returning nothing.
   premises, which is a small number in every case anyone has described — but it
   is unmeasured, and "small in every case described" is how a ceiling gets
   missed.
-- **`query_changes` after #57 (2026-08-17).** The window predicate now adds two
+- **`query_changes` after counterpart ids (2026-08-17).** The window predicate now adds two
   array-filter scans per row (lifecycle episodes) on top of the existing full
   scan, on SurrealDB. Correct, unindexed, unmeasured — flagged at resolution
   time; probably irrelevant at current graph sizes. Per house policy, act on a
@@ -691,7 +691,7 @@ checking out an older commit — the test suite may reference symbols the benchm
 does not, so `git stash push <file>` gives a clean baseline with everything else
 identical.
 
-### The real-corpus figures (#59, #60)
+### The real-corpus figures
 
 ```bash
 uv run python scripts/corpus_measure.py \
@@ -711,9 +711,9 @@ reproducing this on a different corpus should expect different rates — that is
 the point of the measurement, and the reason the tables name the corpus and its
 size in every row. Guarded by `tests/test_corpus_measure_smoke.py`.
 
-### Do supplied priors carry a reason? (#46's trigger, 2026-08-21)
+### Do supplied priors carry a reason? (the confidence prior's trigger, 2026-08-21)
 
-The same read answers a question #46 left open and nothing measured: whether tool
+The same read answers a question the confidence prior left open and nothing measured: whether tool
 guidance actually produces a `confidence_basis`, given it is asked for rather
 than enforced.
 
@@ -731,7 +731,7 @@ uv run python scripts/corpus_measure.py \
 ```
 
 **Guidance is producing them, so the enforcement fallback stays unbuilt.** The
-second reading is the one a bare rate would hide: **no post-#46 node sits at a
+second reading is the one a bare rate would hide: **no post-the confidence prior node sits at a
 rated `0.5`** — they are stored absent instead, which is the ladder's own
 instruction and what makes absence informative rather than ambiguous.
 

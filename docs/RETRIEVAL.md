@@ -255,7 +255,7 @@ Five things to know before reading the number:
 - **It is computed over a similarity neighbourhood**, because facts are only
   deduplicated where an agent judged them the same claim *and* the merge cleared
   its gate — which is nothing written before 2026-08-21, since dedup reads a
-  judgment recorded at ingest (#52). That is deliberate: a wrong `similarity`
+  judgment recorded at ingest. That is deliberate: a wrong `similarity`
   edge overstates a number you can inspect, where a wrong merge would destroy a
   node. Merging moves a pair from the neighbourhood reading to the identity one;
   the `sources` list on every result is what makes a count taken before and
@@ -292,7 +292,7 @@ fixed degree.
 **One thing to know before reading a count on an older graph.** Until
 2026-08-22 nothing in the system wrote a `similarity` edge: the neighbourhood
 bullet above described a walk whose input no tool produced, and both real graphs
-carried zero of them (`dev-docs/ISSUES.md` #64). Any count taken before then is
+carried zero of them. Any count taken before then is
 the identity reading — the distinct publishers behind *that node's own*
 documents, with no restatement folded in. Honest, and cheaper than the table
 suggests, but not the cross-restatement count this section describes.
@@ -314,7 +314,7 @@ wrong manufactures support rather than merely withholding it.
 ### Frame scoping
 
 `metacontexts` is a list of frame ids, and results are the nodes standing in
-**any** of them — a set union the caller states per query. **No frame inherits
+**Any** of them — a set union the caller states per query. **No frame inherits
 another**, and there is no base-reality background a frame is read against: a
 question about a novel's world read against real history names both
 (`["world-of-anarres", "the-real"]`), and one about only what the novel says

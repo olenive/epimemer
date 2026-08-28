@@ -26,7 +26,7 @@ from epimemer.storage.surrealdb_adapter import SurrealDBStorage
 async def _set_up(store):
     """A graph somebody has set up, which is the only kind worth testing against.
 
-    Since #76 a frame is required at ingest and `the-real` is an ordinary
+    Since the frame requirement a frame is required at ingest and `the-real` is an ordinary
     metacontext — a convention, not a mechanism — so it exists because somebody
     created it, once, like any other frame. A fixture that omitted it would make
     every ingest test start by creating it, which tests the fixture rather than

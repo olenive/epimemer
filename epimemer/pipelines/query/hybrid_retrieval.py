@@ -29,7 +29,7 @@ guarantee applies.
 top-k cut has to be. A retired claim competes with its own replacement for a
 slot before anything can fold it into one, so fusion over-fetches and the cut
 happens after the fold — and it happens before expansion, so no hop is spent
-walking out of a node that was about to be folded away (#53 T3).
+walking out of a node that was about to be folded away.
 """
 
 import time

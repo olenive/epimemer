@@ -109,7 +109,7 @@ class TestTagTopicEmission:
 
 
 class TestSupersessionCounterpart:
-    """#57: a retirement event has to say *by whom*.
+    """Counterpart ids: a retirement event has to say *by whom*.
 
     The relation also arrives as an `EdgeStored` a moment later, so a consumer
     could in principle join the two by their adjacency in the stream. That join
@@ -143,7 +143,7 @@ class TestSupersessionCounterpart:
         assert received[0].counterpart == new.id
 
     async def test_world_change_names_the_node_that_followed_it(self, bus):
-        """A world-change and a correction are opposite acts (#53) and both need
+        """A world-change and a correction are opposite acts and both need
         the counterpart — the status says which act it was, the id says with what."""
         old, new, received = await self._superseded(bus, status=NodeStatus.HISTORICAL)
 
@@ -195,7 +195,7 @@ class TestSupersessionCounterpart:
 
     async def test_merge_publishes_the_flags_it_wrote_on_dependents(self, bus):
         """Both supersession paths publish their evidence edges; a merge writes
-        the same kind of flag (#61) and the dashboard has to see it, or the live
+        the same kind of flag and the dashboard has to see it, or the live
         graph is missing an edge the store has."""
         inner = InMemoryStorage()
         wrapped = instrument_storage(inner, bus)
@@ -409,7 +409,7 @@ def test_wrapper_takes_the_same_arguments_as_the_protocol(bus):
     A protocol method that *gains* or *renames* one leaves the wrapper accepting
     the old shape and raising `TypeError` from inside a search, which the
     membership check above cannot see. That is not hypothetical: `text_search`
-    went from `status` to `statuses` under #53 T3 and this wrapper kept the
+    went from `status` to `statuses` under history-by-default retrieval and this wrapper kept the
     singular, so every visualised search would have failed on the keyword.
     """
     import inspect

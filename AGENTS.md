@@ -20,7 +20,8 @@ is the policy here* after a `use_graph`. Where a setting needs a per-graph
 override, copy the `reflect_threshold` pattern: a process default on
 `ServerConfig`, a persisted override on the backend, and a pure
 `resolve_*(override, default)` as the only place the fallback lives. **First ask
-whether it needs a setting at all** — `ISSUES.md` #71 is the counter-case, where
+whether it needs a setting at all** — the mandatory `expected_graph` is the
+counter-case, where
 a guard must not be configured by the state it is guarding against.
 
 Every backend implements the **full** `StorageBackend` protocol, and callers

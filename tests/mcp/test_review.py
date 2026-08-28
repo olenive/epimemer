@@ -7,8 +7,8 @@ so a reviewer can stop reading when it stops repaying the attention.
 **The rule these tests exist to protect is the one that looks like a detail.**
 Declared doubt and derived doubt are two tiers that never mix, and tier 1 comes
 first *even when a tier-2 row carries more signals* — because a blank
-`certainty` means **unrated**, not doubtful (#46), and letting an unrated
-decision outrank one an agent actually flagged re-commits the sin #46 fixed.
+`certainty` means **unrated**, not doubtful, and letting an unrated
+decision outrank one an agent actually flagged re-commits the sin the confidence prior fixed.
 
 Nothing supplies a `certainty` yet, so the whole live corpus is tier 2. That is
 why the derived half is what step 6 ships: it needs no attribution and works on
@@ -96,7 +96,7 @@ class TestTheDerivedSignals:
 
     def test_unrated_confidence_is_not_a_signal(self):
         """The majority state, and §5's own correction to its first draft:
-        absence is *the ordinary case* on the #46 ladder, so reading it as
+        absence is *the ordinary case* on the confidence prior ladder, so reading it as
         thinness floods the list with ordinary decisions."""
         unrated = _fact("a plain claim")
         assert unrated.value.confidence is None
@@ -162,7 +162,7 @@ class TestTheDerivedSignals:
 
     def test_a_naive_timestamp_is_compared_rather_than_raising(self):
         """Backends round-trip datetimes here rather than text, so this is not
-        #70 — but one side coming back naive would raise instead of answering,
+        the timestamp-text trap — but one side coming back naive would raise instead of answering,
         and a review that dies on one row answers nothing."""
         naive = _fact("a claim", superseded_at=datetime(2026, 8, 24, 12, 0))
         record = _row(DecisionKind.INGEST, [naive.id])
@@ -173,7 +173,7 @@ class TestTheDerivedSignals:
 
     def test_a_subject_that_is_gone_contributes_nothing(self):
         """A reversal destroys its survivor, and a row can be read beside a
-        graph it was not written in (#72). Ranking by the reader's position
+        graph it was not written in. Ranking by the reader's position
         rather than by the decision would be worse than ranking it low."""
         present = _fact("a claim")
         record = _row(DecisionKind.REVERSAL, [present.id, "a-node-that-is-gone"])
@@ -256,7 +256,7 @@ class TestTheToolOverARealGraph:
         assert meta.nodes_returned == 2
 
     async def test_it_names_the_graph_it_answered_from(self, storage):
-        """#72: the journal is per graph, so an answer that does not say which
+        """The misdirected-write scope: the journal is per graph, so an answer that does not say which
         reads as the whole story."""
         result, _ = await tools.review(storage)
 
@@ -307,7 +307,7 @@ class TestTheToolOverARealGraph:
         """A null preview is information — the merge survivor a reversal
         destroyed — so the id stays rather than the row losing its subject.
 
-        `subject_kind` is null too, and that is the distinction #74 added: a
+        `subject_kind` is null too, and that is the distinction the label record added: a
         vocabulary row's subjects resolve as `relation_label` rather than as
         nodes, so *not a node* stopped being enough to mean *gone*."""
         await storage.record_decision(_row(DecisionKind.REVERSAL, ["gone"]))
@@ -544,7 +544,7 @@ class TestTheCertaintyCeiling:
         assert not passes_ceiling(_row(DecisionKind.INGEST, [], certainty=0.7), 0.5)
 
     def test_an_unrated_row_is_excluded_rather_than_read_as_a_half(self):
-        """Blank cannot be told from ordinary (#46), and this filter's use is a
+        """Blank cannot be told from ordinary, and this filter's use is a
         gate — a blank counted in either direction is an invented answer."""
         assert not passes_ceiling(_row(DecisionKind.INGEST, []), 0.5)
 
@@ -553,7 +553,7 @@ class TestTheCertaintyCeiling:
 
     async def test_the_response_names_the_ceiling_this_call_used(self, storage):
         """Never what the graph would have done: a caller can pass its own, and
-        #63's carry-forward is a message that stated a threshold as the
+        the single nomination bar's carry-forward is a message that stated a threshold as the
         system's and was false for exactly the caller who overrode it."""
         result, _ = await tools.review(storage, certainty_ceiling=0.3)
         assert result["certainty_ceiling"] == 0.3

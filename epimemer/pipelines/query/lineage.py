@@ -1,6 +1,6 @@
 """Folding a matched claim's retired versions into the version that replaced it.
 
-The condition under which #53 T3 makes `HISTORICAL` reachable by default. A
+The condition under which `HISTORICAL` is reachable by default. A
 historical claim and its replacement are near-identical text — *"the city is
 called Leningrad"* against *"the city is called Saint Petersburg"* — so both
 score near the top of the same search, and a claim with four predecessors fills
@@ -38,7 +38,7 @@ async def _successors_within(
 
     Two batched queries, one per edge type, rather than one untyped query per
     node: the whole seed set is known before any of its edges are read, which is
-    the shape ISSUES.md #14 exists to keep in the read paths.
+    the shape batching exists to keep in the read paths.
     """
     out: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
     for edge_type in LINEAGE_FOLD_EDGE_TYPES:

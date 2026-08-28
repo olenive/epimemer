@@ -1,4 +1,4 @@
-"""One tool call is one logical operation, and the graph holds still for it (#16).
+"""One tool call is one logical operation, and the graph holds still for it.
 
 `storage/active_graph.py` has the primitive and `tests/storage/test_active_graph.py`
 has its semantics. This is about the boundary: which turn each tool call takes,
@@ -29,7 +29,7 @@ from epimemer.storage.memory import InMemoryStorage
 def _graph_with_the_real() -> InMemoryStorage:
     """An in-memory graph somebody has set up.
 
-    Since #76 a frame is required at ingest and `the-real` is an ordinary
+    Since the frame requirement a frame is required at ingest and `the-real` is an ordinary
     metacontext, created once like any other. A server fixture without it would
     make every test here start by creating a frame, which tests the fixture.
     """

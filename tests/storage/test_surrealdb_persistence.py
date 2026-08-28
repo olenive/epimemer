@@ -3,7 +3,7 @@
 Two properties, one setup. **The data** must survive — the trap that once
 shipped as a setup script printing "persistent graph" while running ``start ...``
 with no storage path, so every restart wiped the graph. **The client** must
-survive too (issue #40): the SDK neither reconnects nor admits to being
+survive too: the SDK neither reconnects nor admits to being
 disconnected, so before the adapter learned to rebuild its connection, a
 restarted server wedged every caller for the life of the process.
 
@@ -119,7 +119,7 @@ async def test_rocksdb_data_survives_server_restart():
 
 
 async def test_storage_recovers_after_server_restart():
-    """The *same* store keeps working across a restart — issue #40.
+    """The *same* store keeps working across a restart.
 
     The test above proves the data survives; this one proves the client does.
     They differ in one line: this one never reconnects by hand, because that is

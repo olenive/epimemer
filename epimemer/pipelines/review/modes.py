@@ -92,7 +92,7 @@ def passes_ceiling(record: DecisionRecord, ceiling: float | None) -> bool:
     so an agent that typed 0.5 anyway was making a point of it.
 
     Unrated rows are excluded rather than treated as 0.5: blank cannot be
-    distinguished from ordinary (#46), and this filter's use is *counting*
+    distinguished from ordinary, and this filter's use is *counting*
     — *"is anything below 0.5 still outstanding?"* — where a blank counted in
     either direction is an invented answer. `unrated_count` is in every
     response so the excluded population stays visible.

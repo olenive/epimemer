@@ -56,7 +56,8 @@ class SegmentHit(BaseModel):
 class QueryRequest(BaseModel):
     """Input to the query pipeline.
 
-    Two clocks reach this type and they are named apart, on #53 T3's rule: the
+    Two clocks reach this type and they are named apart, on the validity model's
+    rule: the
     unmarked name inherits the default reading, and in a knowledge graph the
     default reading of "as of 1980" is *what was true in 1980* — which is the
     valid-time axis. So transaction time is marked too.

@@ -36,7 +36,7 @@ Every ingested text is decomposed into three types of nodes:
 Paragraph-length semantic summaries — not keywords or short labels. Topics act as "soft ontological nodes" that embed well, support clustering, and can evolve over time. They describe the underlying theme of a segment in enough detail to preserve nuance.
 
 ### Facts
-Atomic, verifiable, grounded statements tied to source material. Minimal ambiguity. Each fact tracks provenance (source, extraction method) and may carry a confidence prior — the ingesting agent's reading of how well the record backs the claim, supplied once and never measured. A fact also carries a **claim kind** — `state` (a condition holding over a period) or `event` (an occurrence) — judged at ingest and read by deduplication, which merges states and never events. Nullable, and an unjudged fact simply never merges (#52).
+Atomic, verifiable, grounded statements tied to source material. Minimal ambiguity. Each fact tracks provenance (source, extraction method) and may carry a confidence prior — the ingesting agent's reading of how well the record backs the claim, supplied once and never measured. A fact also carries a **claim kind** — `state` (a condition holding over a period) or `event` (an occurrence) — judged at ingest and read by deduplication, which merges states and never events. Nullable, and an unjudged fact simply never merges.
 
 ### Inferences
 Higher-level interpretive derivations reasoned from facts and context. Explicitly provisional and revisable. Multiple competing inferences from the same evidence are permitted to coexist. Distinguished from facts to maintain epistemic clarity.
@@ -52,7 +52,7 @@ Higher-level interpretive derivations reasoned from facts and context. Explicitl
 ### Graph Space (structural)
 - Derived from but not dependent on a specific embedding
 - Relationships are typed: `about`, `contains`, `implies`, `supports`, `derived_from`, `similarity`, `contradiction`, etc.
-- Graph edges carry a `weight` and a free-form `metadata` dict — the dict *can* hold a source model or a derivation method, but nothing writes a confidence there today. Per-source support levels on the `sourced_from` edge are #51's work, and the node's own confidence prior (#46) is a different number answering a different question
+- Graph edges carry a `weight` and a free-form `metadata` dict — the dict *can* hold a source model or a derivation method, but nothing writes a confidence there today. Per-source support levels on the `sourced_from` edge remain unbuilt, and the node's own confidence prior is a different number answering a different question
 - Structure is contextual and interpretive, not "ground truth"
 
 ## Segmentation and Topic Assignment
@@ -123,7 +123,7 @@ ingest is the only place they can come from, since tense and the dates written i
 the text are visible there and nowhere afterwards. They are supplied per node,
 land on its `sourced_from` edge, and are marked `stated` or `inferred` — a date
 the agent knows from world knowledge and the document does not give is neither,
-and must not be supplied at all (#53 T1 §8).
+and must not be supplied at all.
 
 ### Test-driven development with analysis and benchmarking
 The memory system's correctness is hard to assess during normal use, so development follows a test-driven approach combined with frequent analysis and benchmarking:
@@ -135,14 +135,14 @@ The memory system's correctness is hard to assess during normal use, so developm
 
 Every node carries a `ValueSignal`. One member is a score, one is a judgment, and two are clocks — and the split is deliberate: **a score can be computed, a judgment cannot, and use is an event rather than either.**
 
-- **Confidence** (0.0–1.0, nullable) — how well the record would back a claim up if it were challenged. A **caller-supplied prior**, never computed: only the ingesting agent has read the material, so it is supplied at `store_decomposition` on a four-value ladder (0.3 hedged or partisan / 0.5 default, omit it / 0.7 established / 0.9 primary or authoritative), with an optional one-line `confidence_basis` in node metadata saying why a non-default value was chosen. **Omitting it stores absence, not 0.5**, so "nobody assessed this" and "assessed, and ordinary" are different states — the same reason both clocks below are nullable. Code that ranks or compares reads absence as 0.5 via `rated_confidence`; code that displays or relays passes it through — the merge rule (where an unrated signal loses to a rated one), the dict a caller reads, and the visualisation, whose tooltip prints a dash rather than a number nobody supplied. The corroboration half of its old documented promise moved out to a read-time derivation (#51). Per-source levels on the provenance edge remain #51's work.
+- **Confidence** (0.0–1.0, nullable) — how well the record would back a claim up if it were challenged. A **caller-supplied prior**, never computed: only the ingesting agent has read the material, so it is supplied at `store_decomposition` on a four-value ladder (0.3 hedged or partisan / 0.5 default, omit it / 0.7 established / 0.9 primary or authoritative), with an optional one-line `confidence_basis` in node metadata saying why a non-default value was chosen. **Omitting it stores absence, not 0.5**, so "nobody assessed this" and "assessed, and ordinary" are different states — the same reason both clocks below are nullable. Code that ranks or compares reads absence as 0.5 via `rated_confidence`; code that displays or relays passes it through — the merge rule (where an unrated signal loses to a rated one), the dict a caller reads, and the visualisation, whose tooltip prints a dash rather than a number nobody supplied. The corroboration half of its old documented promise moved out to a read-time derivation. Per-source levels on the provenance edge remain unbuilt.
 - **Importance** (0.0–1.0) — *does this matter?* Moved only by the `judge_importance` tool, in either direction, asymptotically toward its bound, and every move records a reason. Nothing automatic touches it: a decayed judgment would be a number nobody stands behind.
 - **`retrieved_at`** — null until a search returns the node, then the time it last did. *Is this being used?*
 - **`importance_judged_at`** — null until someone judges it. What ages is not the judgment but confidence in its *currency*, which is what the `stale_judgment` archival class reads.
 
 Both clocks are nullable because "never" and "long ago" are different states, and only a nullable timestamp can tell them apart.
 
-A merge collapses several nodes into a fresh one, so its signal is built by `merged_value_signal` — max importance and confidence, and **the later of each clock**, with null losing to any real value. Max confidence looks wrong for a supplied prior until you see what it pairs with: in a topic merge the higher-confidence description becomes the merged node's *primary* content, so the number describes the text the node leads with, and breaking either half makes the pair lie. **A fact merge pairs it differently** (#52): the agent writes fresh content for the survivor, so there is no winning description to point at — instead the `confidence_basis` of whichever source supplied the kept confidence travels with it into the survivor's metadata, since a prior separated from its reason is the state that guidance exists to prevent (#46). Carrying the number without its date would be worse than losing both: the merged node would claim a judgment nobody made, and since `stale_judgment` reads the *pair*, an unjudged node is never stale and the merged node stayed exempt from every archival class forever (#45). One shared function, because a merge rebuilds the signal field by field and silently resets whatever it forgets to name.
+A merge collapses several nodes into a fresh one, so its signal is built by `merged_value_signal` — max importance and confidence, and **the later of each clock**, with null losing to any real value. Max confidence looks wrong for a supplied prior until you see what it pairs with: in a topic merge the higher-confidence description becomes the merged node's *primary* content, so the number describes the text the node leads with, and breaking either half makes the pair lie. **A fact merge pairs it differently:** the agent writes fresh content for the survivor, so there is no winning description to point at — instead the `confidence_basis` of whichever source supplied the kept confidence travels with it into the survivor's metadata, since a prior separated from its reason is the state that guidance exists to prevent. Carrying the number without its date would be worse than losing both: the merged node would claim a judgment nobody made, and since `stale_judgment` reads the *pair*, an unjudged node is never stale and the merged node stayed exempt from every archival class forever. One shared function, because a merge rebuilds the signal field by field and silently resets whatever it forgets to name.
 
 `reflect` reads these to nominate candidates — it never writes them:
 
@@ -151,9 +151,9 @@ A merge collapses several nodes into a fresh one, so its signal is built by `mer
 
 That is the whole of it today. The other `reflect` phases — splitting,
 enrichment, contradiction detection, recurrence detection, the soundness check,
-boundary proposals, relation consolidation — key off embeddings, edge shape, text
+Boundary proposals, relation consolidation — key off embeddings, edge shape, text
 length and validity intervals rather than value signals. Topic consolidation is
-the exception, and only since #46: it picks the primary description by
+the exception: it picks the primary description by
 confidence, a comparison that was a permanent tie while every node sat at the
 constant 0.5.
 
@@ -228,13 +228,13 @@ Because metacontexts are nodes, they can relate to each other via the same edge 
 - **Inheritance**: a document is ingested *with* a metacontext, and every node extracted from it inherits that metacontext. There is no frame-inherits-frame machinery — a reader that wants two frames names two.
 - **Multiple metacontexts per node**: a node can carry multiple metacontexts (e.g., something can be "propaganda" and also "true as far as we know" — these are different axes).
 - **No predefined axes**: rather than pre-defining categories (source reliability, fictionality, domain), metacontexts are created, split, and merged dynamically — the same way Topics are managed.
-- **Absence names no frame** (*2026-08-28, #76*): a node with no `has_metacontext` edge is a node nobody said anything about — what absence means everywhere else here (an omitted `confidence` is unrated, an absent `judged_by` is unknown, an omitted `claim_kind` is unjudged). Nothing is inferred from silence, so an agent that ingested fiction and said nothing leaves claims nobody has framed rather than a graph asserting fiction as fact.
+- **Absence names no frame:** a node with no `has_metacontext` edge is a node nobody said anything about — what absence means everywhere else here (an omitted `confidence` is unrated, an absent `judged_by` is unknown, an omitted `claim_kind` is unjudged). Nothing is inferred from silence, so an agent that ingested fiction and said nothing leaves claims nobody has framed rather than a graph asserting fiction as fact.
 - **The consequence is deliberate**: a frameless node shares a frame with **nothing** — never compared, never merged, and returned by no scoped search. It is reachable only on a graph written before the requirement, `graph_stats.nodes_without_frame` counts them, and `epimemer frames declare` is how a graph stops holding any.
 - **`the-real` is a convention, not a mechanism**: the id every graph should use for the frame holding real-world claims, so two graphs do not end up with one frame under two strings. Nothing reads it specially, and it must exist like any other frame — `create_metacontext` takes a chosen id for exactly this.
-- **The frame is required at ingest** (*2026-08-28, #76*): `store_decomposition` takes `metacontext_id` as a required argument. It does not prevent a wrong frame — a reflexive answer is as wrong as silence was — but it makes the error *recoverable*: the frame is an edge carrying the judge who wrote it and a journal row naming it, so `review` finds it and `reframe` fixes it. One frame per call, so a mixed document is two calls; a per-node override belongs beside the per-node `importance` and `confidence`, and is deliberately not foreclosed.
+- **The frame is required at ingest:** `store_decomposition` takes `metacontext_id` as a required argument. It does not prevent a wrong frame — a reflexive answer is as wrong as silence was — but it makes the error *recoverable*: the frame is an edge carrying the judge who wrote it and a journal row naming it, so `review` finds it and `reframe` fixes it. One frame per call, so a mixed document is two calls; a per-node override belongs beside the per-node `importance` and `confidence`, and is deliberately not foreclosed.
 - **Search names the frames it wants, as a list**: results are nodes standing in **any** of them. No frame inherits another — a question about a novel's world read against real history names both. Omitting the list searches every frame, which is a coherent question rather than an unstated assumption, and is why the read side is optional where ingest is not.
 - **Nothing invents a frame on a node's behalf**: splits inherit what the parent states, a synthesised parent inherits the one set its children all stand in and is refused when they differ, and a merge **re-states** the survivor's frame under the merging agent's judge rather than migrating an edge somebody else wrote — the survivor's content is synthesised, so no source's framing was made about that wording. Union is never the answer: one node asserted in two worlds is the worst outcome available.
-- **A stated metacontext must exist in the graph you are in** (*2026-08-25, #76*): ids are per graph, and `store_decomposition` and `search` both refuse one that resolves nowhere — every id in a search's list, not just the first. Unchecked, the framing edge points at nothing and the node shares a frame with *no other node*: never compared, never merged, and absent from every frame-scoped search including the one that was meant.
+- **A stated metacontext must exist in the graph you are in:** ids are per graph, and `store_decomposition` and `search` both refuse one that resolves nowhere — every id in a search's list, not just the first. Unchecked, the framing edge points at nothing and the node shares a frame with *no other node*: never compared, never merged, and absent from every frame-scoped search including the one that was meant.
 
 ### Impact on Retrieval
 
@@ -244,7 +244,7 @@ Because metacontexts are nodes, they can relate to each other via the same edge 
 
 ### Why This Matters
 
-The "Fall of Carthage" means different things in a historical metacontext vs. the World of Darkness fictional universe. AI safety capabilities described in a sci-fi novel are different from real-world AI safety research. Political events described by opposing parties carry different framing. Without metacontext, the memory system risks conflating these — silently corrupting retrieval quality.
+The "Fall of Carthage" means different things in a historical metacontext vs. The World of Darkness fictional universe. AI safety capabilities described in a sci-fi novel are different from real-world AI safety research. Political events described by opposing parties carry different framing. Without metacontext, the memory system risks conflating these — silently corrupting retrieval quality.
 
 ## Retrieval
 
@@ -313,7 +313,7 @@ against a baseline nothing records.
 
 It counts *independence*, not strength: three hedged reports from three outlets
 score 3, exactly as three confident ones would. **A claim about another period is
-not a second witness** (#62): where source dates put a similar node provably
+not a second witness:** where source dates put a similar node provably
 outside the subject's periods, it stops counting and is returned separately as
 `adjacent_periods` — nothing leaves the graph, both claims stay true of their
 own stretch, and the caller is told what was set aside rather than left with a
@@ -324,7 +324,7 @@ graphs where it says most.
 
 **Until 2026-08-22 it said less than that implies**, and the reason is worth
 knowing before you read any count taken earlier: nothing *wrote* a `similarity`
-edge (`dev-docs/ISSUES.md` #64), so the neighbourhood was the node itself and
+edge, so the neighbourhood was the node itself and
 the number was a count of publishers behind one node — correct and cheap rather
 than wrong, but not the cross-restatement reading described here.
 `apply_reflection(similarities=[…])` now writes one, and only on an agent's
@@ -346,10 +346,10 @@ nodes (
   id, type, content, source_id, embedding_id, metadata,   -- content (immutable)
   extraction_method, created_at,                           -- content (immutable)
   claim_kind,      -- facts only: "state" | "event" | null (content, immutable)
-                   -- judged at ingest; null is unjudged, and never merges (#52)
+                   -- judged at ingest; null is unjudged, and never merges
   status,          -- "active" | "corrected" | "historical" |
                    -- "merged" | "archived"                 (mutated in place)
-                   -- ("superseded" is the pre-#53 legacy value: retired by
+                   -- ("superseded" is the legacy value: retired by
                    --  supersession, reason unrecorded. Nothing writes it now.)
   superseded_at,   -- timestamp, nullable                  (mutated in place)
   lifecycle,       -- append-only list of episodes: retired_at, because,
@@ -358,7 +358,7 @@ nodes (
                    -- superseded_at) pair is a single slot that cannot say
                    -- "retired, then came back". query_changes reads this
   confidence,      -- 0.0–1.0, nullable; supplied at ingest,   (mutated in place)
-                   -- absent when unrated, read as 0.5 (#46)
+                   -- absent when unrated, read as 0.5
   importance,      -- 0.0–1.0, moved only by judgment      (mutated in place)
   retrieved_at          -- timestamp, null until first retrieval
   importance_judged_at  -- timestamp, null until an agent judges it
@@ -370,7 +370,7 @@ documents (
   id, content, source, source_type, metadata, created_at,
   published_at   -- imprecise instant, nullable. When the document was
                  -- published, as against created_at, which is when it was
-                 -- ingested. Never falls back to created_at (#53 T1 §7)
+                 -- ingested. Never falls back to created_at
 )
 
 edges (
@@ -378,7 +378,7 @@ edges (
   validity       -- list of intervals, `sourced_from` edges only. When *this
                  -- source* asserts the claim held: per source, never unioned
                  -- onto the node, so one careful source and one sloppy one
-                 -- cannot produce a period neither claims (#53 T1 §2)
+                 -- cannot produce a period neither claims
   -- engine types: about, contains, implies, supports, abstracts, derived_from,
   --   similarity, contradiction, subtopic_of, superseded_by,
   --   temporally_followed_by, merged_into,
@@ -415,9 +415,9 @@ encodes), its `source_id`, `created_at`, and `provenance` are never changed. A
 correction or consolidation does not modify or delete the existing node — it creates
 a new node linked to its predecessor via typed edges:
 
-- **Update**: `node_v1 --superseded_by--> node_v2` for a correction, `node_v1 --temporally_followed_by--> node_v2` for a world-change, and `node_v1.status` records the same *why* — `corrected` (it was wrong) or `historical` (it was right, and remains right of its period). The caller must say which; there is no default, because filing a change in the world as an error is how a graph forgets its own history (#53).
-  - The status also decides **which edges follow the replacement** (#54, built 2026-08-12). A correction hands over everything but history and review — the retired node is an audit husk and the replacement is the same claim, corrected. A world-change hands over the frame and the tags only: the historical node keeps its own provenance, because it is still true of its period and its sources are what say so. Judgments — `similarity`, `contradiction`, `variant_of` — stay on the node they were made about under **every** retirement, correction and merge included (#65, 2026-08-22): the claim may survive a correction, but the wording the judgment was made against does not, and a merged survivor's content is synthesised. `migration_disposition(edge_type, status)` is the whole rule.
-  - **The edge splits the same way (#53 T2, built 2026-08-19).** A correction keeps `superseded_by` and is terminal; a world-change writes `temporally_followed_by`, which states order rather than replacement and so survives a claim becoming true again. `lineage_edge_type_for(status)` is the rule, paired with `superseded_status_for(because)` so the node and the edge cannot disagree. The edge never claims adjacency — Saint Petersburg → Petrograd → Leningrad → Saint Petersburg is three separately observed transitions — so cycles and parallel same-direction edges are legal, and nothing may dedup them by `(src, dst, type)`.
+- **Update**: `node_v1 --superseded_by--> node_v2` for a correction, `node_v1 --temporally_followed_by--> node_v2` for a world-change, and `node_v1.status` records the same *why* — `corrected` (it was wrong) or `historical` (it was right, and remains right of its period). The caller must say which; there is no default, because filing a change in the world as an error is how a graph forgets its own history.
+  - The status also decides **which edges follow the replacement**. A correction hands over everything but history and review — the retired node is an audit husk and the replacement is the same claim, corrected. A world-change hands over the frame and the tags only: the historical node keeps its own provenance, because it is still true of its period and its sources are what say so. Judgments — `similarity`, `contradiction`, `variant_of` — stay on the node they were made about under **every** retirement, correction and merge included: the claim may survive a correction, but the wording the judgment was made against does not, and a merged survivor's content is synthesised. `migration_disposition(edge_type, status)` is the whole rule.
+  - **The edge splits the same way.** A correction keeps `superseded_by` and is terminal; a world-change writes `temporally_followed_by`, which states order rather than replacement and so survives a claim becoming true again. `lineage_edge_type_for(status)` is the rule, paired with `superseded_status_for(because)` so the node and the edge cannot disagree. The edge never claims adjacency — Saint Petersburg → Petrograd → Leningrad → Saint Petersburg is three separately observed transitions — so cycles and parallel same-direction edges are legal, and nothing may dedup them by `(src, dst, type)`.
   - **Recurrence is built (2026-08-19)** — the reversibility the split exists to enable. `historical` is restorable and `corrected` is not (`RESTORABLE_STATUSES`), and similarity nomination now sees historical candidates (`vector_search(statuses=…)`, `NOMINATED_STATUSES`), which is what makes the **`recurs`** verdict reachable at all: the guard saying retired nodes must never resurface was also what hid the twin. `check_conflicts` returns each candidate's status — telling `redundant` from `recurs` *is* that distinction — and `reflect` reports mixed pairs under `recurrences`, apart from `contradictions`, since a claim beside its own successor is not in conflict with it. `restore` reactivates a named node and writes the new source's `sourced_from` edge in one transaction; without naming that source it refuses, because a claim back to active with no edge saying who asserts it is one the graph states and cannot attribute. `store_decomposition` reports `historical_twins` as a cheap verbatim floor.
 - **Merge**: `node_a --merged_into--> node_c`, `node_b --merged_into--> node_c`
 
@@ -431,7 +431,7 @@ knowledge claim and editing it rewrites no history:
 
 | Mutated in place | Set by | Why it's not a version |
 |---|---|---|
-| `status`, `superseded_at` | supersede / merge | this is precisely how a node is *retired*, and how "what the graph held at time T" is reconstructed — **transaction time, not validity**: it says when belief changed, never when the claim was true (#53) |
+| `status`, `superseded_at` | supersede / merge | this is precisely how a node is *retired*, and how "what the graph held at time T" is reconstructed — **transaction time, not validity**: it says when belief changed, never when the claim was true |
 | `value.confidence` | the ingesting agent's prior at `store_decomposition`, or absent; a topic or fact merge combines it via `merged_value_signal`, clocks included | supplied once at creation and never re-set — a correction mints a new node rather than rewriting this one, which is why the basis beside it is a single line and not a trail |
 | `importance`, `importance_judged_at` | `judge_importance` | a recorded assessment of the same claim, with its own provenance trail |
 | `retrieved_at` | `search` | a record that the node was read, not a change to what it says |
@@ -547,7 +547,7 @@ thing*; only an agent can answer *do they contradict, supersede, or coexist?* So
 
 Ten phases, each a worklist: topic consolidation, split detection, enrichment,
 contradiction detection, recurrence detection, the temporal soundness check,
-boundary proposals, the pending-review worklist, archival nomination, and relation
+Boundary proposals, the pending-review worklist, archival nomination, and relation
 consolidation.
 
 Two separations in that list are load-bearing. **Recurrences are reported apart
@@ -562,7 +562,7 @@ is deliberately high — every pair of sources must clear the threshold or the
 merge is rejected and reported. It is **Topics only**: facts collapse through
 `merge_facts`, which is a resolution action on the review-loop path rather than a
 reflection decision, because `redundant` is judged when a document arrives and
-not when the graph is next swept (#52).
+not when the graph is next swept.
 
 **A fact merge is reversible, and it is the one operation in the system that
 destroys anything** (built 2026-08-22, `dev-docs/REVIEW_MODE.md` §7). The
@@ -648,9 +648,9 @@ All backends support multiple named graphs. The `StorageBackend` protocol requir
 
 ### Scaling Limits
 
-The read paths that were O(N) with a round-trip per node — `list_sources` / `list_relations`, `reflect`'s pending-review gather, `search`'s per-result enrichment — now ask once for the whole set instead (ISSUES.md #14). What remains linear is the *payload*, not the round-trips.
+The read paths that were O(N) with a round-trip per node — `list_sources` / `list_relations`, `reflect`'s pending-review gather, `search`'s per-result enrichment — now ask once for the whole set instead. What remains linear is the *payload*, not the round-trips.
 
-These limits are **measured** rather than estimated — see [dev-docs/BENCHMARKS.md](dev-docs/BENCHMARKS.md) for data and ISSUES.md #14 for the analysis. Against the 30 s default tool timeout (`EPIMEMER_TOOL_TIMEOUT_SECONDS`), the operations fail at roughly:
+These limits are **measured** rather than estimated — see [dev-docs/BENCHMARKS.md](dev-docs/BENCHMARKS.md) for the data and the analysis. Against the 30 s default tool timeout (`EPIMEMER_TOOL_TIMEOUT_SECONDS`), the operations fail at roughly:
 
 | Operation | in-memory | SurrealDB (loopback) |
 |---|---|---|
@@ -660,9 +660,9 @@ These limits are **measured** rather than estimated — see [dev-docs/BENCHMARKS
 
 So: `reflect` is the limiting operation on both backends, and everything else has been pushed past any size worth quoting. Ingest is flat and not a concern. Don't point a large persistent graph at this unwarned.
 
-**Those are time limits only.** `reflect` also allocates ~580 bytes per *surviving* candidate pair, and the pair lists are quadratic in the node set. **Measured on real prose 2026-08-20: 0.0105% of fact pairs clear the 0.80 threshold, which projects to ~3 MB at 10,000 facts** — not the gigabytes an earlier estimate predicted from a rate measured on templated text. That moved the argument from memory to the *response*, and **the response is now capped (2026-08-21)**: each of the four pair lists returns its highest-scoring `max_nominations` (200 by default) and any list that was cut is named in the response's `truncated` key. The peak allocation is deliberately not bounded by that — it would mean capping inside the scorer, which is a large change against a 3 MB problem. What the measurement does not cover is a corpus of genuine near-duplicates, which nothing here has ingested. Measurements, the corrected projection and what was built: ISSUES.md **#60**.
+**Those are time limits only.** `reflect` also allocates ~580 bytes per *surviving* candidate pair, and the pair lists are quadratic in the node set. **Measured on real prose 2026-08-20: 0.0105% of fact pairs clear the 0.80 threshold, which projects to ~3 MB at 10,000 facts** — not the gigabytes an earlier estimate predicted from a rate measured on templated text. That moved the argument from memory to the *response*, and **the response is now capped (2026-08-21)**: each of the four pair lists returns its highest-scoring `max_nominations` (200 by default) and any list that was cut is named in the response's `truncated` key. The peak allocation is deliberately not bounded by that — it would mean capping inside the scorer, which is a large change against a 3 MB problem. What the measurement does not cover is a corpus of genuine near-duplicates, which nothing here has ingested. Measurements and the corrected projection: `dev-docs/BENCHMARKS.md`.
 
-These figures depend on two optimisations worth knowing about, because the naive form of each is what a reader would otherwise expect: in-memory edge lookups go through endpoint indexes (`by_src` / `by_dst` in `storage/memory.py`) rather than scanning the edge set, and SurrealDB's `vector_search` ranks before filtering by status rather than filtering inside the ranking query — SurrealDB re-runs such a subquery per row, which cost `search` two orders of magnitude. What remains under `search` on SurrealDB is ~120 ms of per-result enrichment round-trips, the N+1 pattern ISSUES.md #14 tracks.
+These figures depend on two optimisations worth knowing about, because the naive form of each is what a reader would otherwise expect: in-memory edge lookups go through endpoint indexes (`by_src` / `by_dst` in `storage/memory.py`) rather than scanning the edge set, and SurrealDB's `vector_search` ranks before filtering by status rather than filtering inside the ranking query — SurrealDB re-runs such a subquery per row, which cost `search` two orders of magnitude. What remains under `search` on SurrealDB is ~120 ms of per-result enrichment round-trips, the N+1 pattern that batching removed elsewhere.
 
 ## Update Behaviours
 
@@ -784,13 +784,14 @@ MCP process exiting; pointed at a non-loopback address, sessions mirror
 ## Open Questions
 
 - **Incremental clustering**: online HDBSCAN, centroid drift detection, split heuristics
-- **Value signal computation**: decided 2026-08-12; **the node half is built (#46, 2026-08-19), the read-time half is not (#51)**. The documented promise — "how well-supported by evidence" *and* "multiple independent sources increase confidence" — was two claims wanting opposite storage. Support is now a **caller-supplied prior** on a four-value ladder, nullable so an unrated node is distinguishable from an ordinary one, with an optional one-line basis beside it. Still open: per-source levels on the `sourced_from` edge rather than a dict on the node, so a level cannot outlive the source it describes; and corroboration **derived at read time** from distinct publishers over a similarity neighbourhood, never written back. A known gap accepted rather than solved: **there is no path for source discredit** — when a document turns out fabricated, every prior derived from it overstates and nothing can sweep per-source until the provenance-edge levels land. (Neither decay curves nor novelty are among these any more — both signals were removed rather than tuned, and the "relative to what baseline?" that dogged novelty is answered by asking at read time instead of storing an answer. See the removal note under *Node Value Signals*.)
+- **Value signal computation**: decided 2026-08-12; **the node half is built, the read-time half is not**. The documented promise — "how well-supported by evidence" *and* "multiple independent sources increase confidence" — was two claims wanting opposite storage. Support is now a **caller-supplied prior** on a four-value ladder, nullable so an unrated node is distinguishable from an ordinary one, with an optional one-line basis beside it. Still open: per-source levels on the `sourced_from` edge rather than a dict on the node, so a level cannot outlive the source it describes; and corroboration **derived at read time** from distinct publishers over a similarity neighbourhood, never written back. A known gap accepted rather than solved: **there is no path for source discredit** — when a document turns out fabricated, every prior derived from it overstates and nothing can sweep per-source until the provenance-edge levels land. (Neither decay curves nor novelty are among these any more — both signals were removed rather than tuned, and the "relative to what baseline?" that dogged novelty is answered by asking at read time instead of storing an answer. See the removal note under *Node Value Signals*.)
 - **Value-driven consolidation thresholds**: how do value signals translate into concrete merge/split decisions? Archival thresholds are settled (importance ceiling, judgment age); merge and split still key off embedding similarity alone.
 - **Topic evolution**: the structural mechanisms need design. The input a split wants is *surprise* — how unlike the material a topic already holds a new member is — which is a read-time question over embeddings rather than a stored field. It is also nearly free where it would be asked: `reflect` already builds the block-wise similarity matrix over every topic and fact (`pair_scoring.similar_pairs`), and a per-row max over that same matrix is one reduction on data already in hand
 - **Contradiction handling**: contradictions surface today via embedding similarity plus an LLM judgment; the resolution or coexistence strategy needs design
 - **Timeline implementation details**: efficient storage and querying of precise timelines (DataFrame-backed), vague timeline ordering heuristics, cyclical timeline template-to-instance mapping
 - **Metacontext inheritance scope**: how deep does inheritance go? If a metacontext is inherited from a document, do inferences derived from those facts also inherit it? Probably yes, but edge cases need thought.
-- **Metacontext-aware value signals**: *answered 2026-08-12, and now stated in the `store_decomposition` guidance an agent reads (#46)* — the scale is the same, the record it measures against is the frame's. A fictional fact can honestly score 0.9: the question is how well that frame's material backs the claim, not whether the frame is real. Left here because the reasoning matters — without it an agent conflates "is this true?" with "does the frame assert this?", every fiction node lands at the bottom of the scale, and confidence quietly becomes a fiction detector, duplicating badly what metacontexts already carry.
-- **Temporal validity — the "Saint Petersburg Problem"** — *answered, and built in full 2026-08-19 (ISSUES.md #53).* It was the largest gap this document ever recorded: **the graph could not say when a claim was true**, so historical truth was filed as error, contradiction detection was unsound in both directions, corroboration inflated, fact dedup could not be made safe, and inference could combine claims that were never simultaneously true. The model, its retrieval surface, recurrence, the soundness check and boundary proposals all now exist — see **Valid Time** above and [docs/VALIDITY.md](docs/VALIDITY.md), with the design history in ISSUES.md #53 and `dev-docs/REVIEW_EPISTEMIC.md` §13.
-  - **What it left open**, all recorded rather than forgotten: `basis` is per interval rather than per endpoint, so accepting a proposed boundary makes a *stated* start unreportable as stated (under-claiming, the safe direction); fact deduplication was unblocked by it and is now **built** (2026-08-21, #52) — it dedupes **states** and never **events**, on a `claim_kind` judgment recorded at ingest because two documents years apart yield near-identical sentences and nothing computed from them separates the cases; and the timeline panel does not yet draw intervals, though the grammar is designed (`dev-docs/TIMELINE_VISUALISATION.md` §13).
+- **Metacontext-aware value signals**: *answered 2026-08-12, and now stated in the `store_decomposition` guidance an agent reads* — the scale is the same, the record it measures against is the frame's. A fictional fact can honestly score 0.9: the question is how well that frame's material backs the claim, not whether the frame is real. Left here because the reasoning matters — without it an agent conflates "is this true?" with "does the frame assert this?", every fiction node lands at the bottom of the scale, and confidence quietly becomes a fiction detector, duplicating badly what metacontexts already carry.
+- **Temporal validity — the "Saint Petersburg Problem"** — *answered, and built in full; the design is `dev-docs/VALIDITY_DESIGN.md`.* It was the largest gap this document ever recorded: **the graph could not say when a claim was true**, so historical truth was filed as error, contradiction detection was unsound in both directions, corroboration inflated, fact dedup could not be made safe, and inference could combine claims that were never simultaneously true. The model, its retrieval surface, recurrence, the soundness check and boundary proposals all now exist — see **Valid Time** above and [docs/VALIDITY.md](docs/VALIDITY.md), with the design history in `dev-docs/VALIDITY_DESIGN.md` and
+`dev-docs/REVIEW_EPISTEMIC.md` §13.
+  - **What it left open**, all recorded rather than forgotten: `basis` is per interval rather than per endpoint, so accepting a proposed boundary makes a *stated* start unreportable as stated (under-claiming, the safe direction); fact deduplication was unblocked by it and is now **built** — it dedupes **states** and never **events**, on a `claim_kind` judgment recorded at ingest because two documents years apart yield near-identical sentences and nothing computed from them separates the cases; and the timeline panel does not yet draw intervals, though the grammar is designed (`dev-docs/TIMELINE_VISUALISATION.md` §13).
 - **Cross-metacontext retrieval**: when a query straddles metacontexts (e.g., "compare real AI with sci-fi AI"), how should retrieval compose results from multiple metacontexts?

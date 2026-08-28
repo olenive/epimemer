@@ -792,7 +792,7 @@ reason: axis chrome that has to overwrite what is behind it. That colour was
 called `breakBackground`, which named its one caller rather than the idea, so
 it became **`surfaceChrome`** with three callers — break marker, tick plate,
 expanded card. Three separately tuned near-background greys is exactly the
-drift #56 was about.
+drift the drifted lookup tables was about.
 
 **What it costs.** The plate is opaque, so marks landing at a tick's exact time
 are hidden — ~34×12px at five to ten places. That is a real cost, since
@@ -818,7 +818,7 @@ painted after every mark, a plate behind each one, and the plate filled from
 ## 13. Valid-time grammar (designed 2026-08-12 — not built)
 
 How the panel draws **validity intervals** — concrete and vague ranges, per
-`ISSUES.md` #53 T1/T2/T3. **Blocked on #53 construction**: none of the data this
+`VALIDITY_DESIGN.md` T1/T2/T3. **Blocked on the validity model being built**: none of the data this
 renders exists yet. Designed now because the grammar exposed two rendering
 decisions (gaps, the now-line) that would otherwise be made by accident in code.
 
@@ -880,7 +880,7 @@ They are constraints, not suggestions:
 4. **No filled union bar.** "No default collapse" is a data rule (T1 §3);
    the hollow envelope is the only summary allowed.
 5. **Historical is muted, not hidden; corrected is hidden, not deleted.**
-   The two halves of the #55 opacity rule and the T3 reachability defaults,
+   The two halves of the drifted lookup tables opacity rule and the T3 reachability defaults,
    applied consistently.
 6. **Cross-clock claims never share an axis.** Comparison across timelines is
    `unknown` by definition (T1 §5); an in-universe claim on the CE axis asserts
@@ -900,7 +900,7 @@ run with a perceptual checker, not eyeballed.
 > **Amended and built 2026-08-12.** This set was promoted to the **shared
 > semantic palette for both panels** and lives in `theme.ts` as
 > `SemanticPalette`; `VISUALISATION.md` C.6 is the source of truth, and the
-> graph panel now draws from it rather than its own table (#56). Two tokens
+> graph panel now draws from it rather than its own table. Two tokens
 > changed in the promotion, and the mock at
 > `dev-docs/mockups/valid-time-grammar.html` still shows the originals — it is
 > the reference for the *marks*, not for the hues.
@@ -936,7 +936,7 @@ sit with `claim` — reuse them or re-derive, but do not fall back to pure grey.
   referencing the CSS variables — see the mock for working markup, including
   the symmetric witness fade and the 45° hatch.
 - **Every `temporally_followed_by` walk must be cycle-safe** — recurrence makes
-  cycles legal for this edge type (see #53 T2 and the review note on repeated
+  cycles legal for this edge type (see the edge split and the review note on repeated
   transitions). The elbow renderer and any lineage layout must terminate on
   revisited nodes.
 - **The tooltip layer** carries what the mark compresses: the `(source,

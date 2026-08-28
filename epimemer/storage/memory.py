@@ -118,7 +118,7 @@ class _GraphStore:
     by_item: dict[str, set[str]] = field(default_factory=dict)
     timelines: dict[str, Timeline] = field(default_factory=dict)
     metacontexts: dict[str, Metacontext] = field(default_factory=dict)
-    # Relation-label records (#74), keyed by `(name, kind)` — the pair edges
+    # Relation-label records, keyed by `(name, kind)` — the pair edges
     # join on. Beside `metacontexts` rather than in `nodes` for the same reason:
     # vocabulary is not knowledge, and a node here would enter search, reflect
     # and merging, which would have the graph answering questions about its own
@@ -126,7 +126,7 @@ class _GraphStore:
     relation_labels: dict[tuple[str, str], RelationLabel] = field(
         default_factory=dict
     )
-    # Verdicts about label pairs (#74 §4.2), append-only and never keyed: two
+    # Verdicts about label pairs, append-only and never keyed: two
     # rows for one pair is a second agent disagreeing, which both survive.
     relation_verdicts: list[RelationVerdict] = field(default_factory=list)
     # Judges, and the ids the user has admitted (REVIEW_MODE.md §2.5). Their
@@ -261,7 +261,7 @@ def _decision_matches(
 
     Shared by `query_decisions` and `count_decisions_by_graph` because the two
     have to agree: a locator that counts a window differently from the reader it
-    sends you to is worse than no locator (#73). One predicate makes that
+    sends you to is worse than no locator. One predicate makes that
     agreement structural rather than a thing to remember.
     """
     return (
@@ -581,7 +581,7 @@ class InMemoryStorage:
         `status` is why the old node is being retired, and it decides each
         edge's fate: a correction (or a merge) re-points everything but history,
         review and judgments, while a world-change re-points nothing and copies
-        only the frame and the tags (#54). A judgment (#65) is anchored whatever
+        only the frame and the tags. A judgment is anchored whatever
         the status — it was made against a wording, and no retirement leaves
         that wording in place.
 
@@ -607,7 +607,7 @@ class InMemoryStorage:
                 # drop the edge, since leaving it would strand it on a retired
                 # endpoint it no longer describes. What the dropped edge
                 # *asserted* is kept: collapsing two provenance edges to one
-                # document must not lose either one's periods (#53 T1 §2).
+                # document must not lose either one's periods.
                 if survivor is not None:
                     survivor.validity = merged_validity(survivor.validity, edge.validity)
                 if disposition == "move":
@@ -889,7 +889,7 @@ class InMemoryStorage:
             # Which nodes are retrievable is the caller's to say, and the
             # default keeps the old guard: retired nodes do not resurface
             # unless somebody asked for them by name. `{ACTIVE, HISTORICAL}` is
-            # what makes a recurrence visible (#53 T2).
+            # what makes a recurrence visible.
             if node is None or node.status not in statuses:
                 continue
             if node_type is not None:
@@ -1008,7 +1008,7 @@ class InMemoryStorage:
             mc for mc in self._g.metacontexts.values() if mc.status == status
         )
 
-    # --- Relation labels (#74) ---
+    # --- Relation labels ---
 
     async def store_relation_label(self, label: RelationLabel) -> str:
         key = (label.name, label.kind)
@@ -1025,7 +1025,7 @@ class InMemoryStorage:
     async def query_relation_labels(self) -> Sequence[RelationLabel]:
         return _copy_all(self._g.relation_labels.values())
 
-    # --- Relation verdicts (#74 §4.2) ---
+    # --- Relation verdicts ---
 
     async def record_relation_verdict(self, verdict: RelationVerdict) -> str:
         self._g.relation_verdicts.append(_store(verdict))
@@ -1162,7 +1162,7 @@ class InMemoryStorage:
 
         A graph this store has never seen is left out of the answer rather than
         counted zero, and asking about one must not bring it into existence:
-        `.get`, never `self._graphs[...]`, which would create it (#73).
+        `.get`, never `self._graphs[...]`, which would create it.
         """
         counts: dict[str, int] = {}
         judges = None if agent_ids is None else set(agent_ids)
@@ -1221,7 +1221,7 @@ class InMemoryStorage:
     # These take no `moving()` turn, and the asymmetry with SurrealDB is the
     # point: a dict lookup reads another graph without going near the active
     # one, so there is nothing to borrow and nothing to give back. Only
-    # `switch_database` moves anything here (#16).
+    # `switch_database` moves anything here.
 
     async def viz_list_nodes(
         self,

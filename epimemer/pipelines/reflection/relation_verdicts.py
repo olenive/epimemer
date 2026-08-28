@@ -1,4 +1,4 @@
-"""What an agent decided about a nominated pair of relation labels (#74 FC1).
+"""What an agent decided about a nominated pair of relation labels.
 
 The label layer's answer to `similarity_decisions.py`, and the same defect one
 tier down. `sweep_similar_relation_pairs` re-derives from scratch on every
@@ -19,10 +19,10 @@ the asymmetry rather than this module: with nothing self-suppressing, a verdict
 is the *only* thing that stops a pair coming back, so what was the fix for a
 bias is now the whole mechanism.
 
-#64 closed exactly this for fact pairs with the `assessed` edge, and relation
+The `assessed` edge closed exactly this for fact pairs, and relation
 labels could not have one: that edge runs **between two nodes**, and `works_for`
 and `employed_by` are not nodes. Stage 1 gave them records, which is what makes
-this row addressable at all — the same identity that resolves #69's question
+this row addressable at all — the same identity that answers the question
 about a relation decision's subjects.
 
 **Both verdicts suppress.** `distinct` is *different relationships that look
@@ -156,7 +156,7 @@ async def apply_relation_verdict(
     append-only, both rows survive with their judges and their reasons, and
     since suppression is what both verdicts do, a disagreement changes nothing
     operationally. It is a disagreement made visible rather than resolved, and
-    resolving it is not this call's business (`ISSUES.md` #80).
+    resolving it is not this call's business.
     """
     pair = [label_a, label_b]
 
@@ -241,7 +241,7 @@ async def apply_relation_verdict(
                 f"you have already judged this pair '{verdict}', and a retry is "
                 f"not a second opinion. The pair is suppressed; nothing further "
                 f"is needed. A verdict that should be revisited is "
-                f"`ISSUES.md` #80, not a second row."
+                f"`ISSUES.md`, not a second row."
             ),
         )
     if agreeing:

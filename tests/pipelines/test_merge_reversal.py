@@ -1,4 +1,4 @@
-"""Reversing a merge (#64 step 0c, REVIEW_MODE.md §7).
+"""Reversing a merge (the `assessed` edge step 0c, REVIEW_MODE.md §7).
 
 **Reversing returns the graph to the status it had before the merge, and
 reversing back and forth N times is indistinguishable from doing it once.**
@@ -228,7 +228,7 @@ class TestTheGraphComesBack:
 class TestNCyclesEqualOne:
     """Status is restored, history is appended — the one place exactness does
     not hold, and it is by design: `lifecycle` is append-only because a node
-    leaving the active set twice is #53's recurrence."""
+    leaving the active set twice is the validity model's recurrence."""
 
     async def _cycle(self, storage, embedding_provider, sources):
         survivor = await _merge(storage, embedding_provider, sources)

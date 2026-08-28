@@ -2,7 +2,7 @@
 
 Step 6 made the journal readable, shakiest first. On its own that is a reviewer
 who can find every mistake and record nothing about any of them — which is
-#64's defect one layer up: *a verdict with no writer*. These are the writers.
+the `assessed` edge's defect one layer up: *a verdict with no writer*. These are the writers.
 
 **The rule most of this file protects is that neither of them changes the
 graph, for opposite reasons.** A confirmation has nothing to change. A dissent

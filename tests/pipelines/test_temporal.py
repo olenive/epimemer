@@ -105,7 +105,7 @@ class TestRanges:
         assert (found.start, found.end) == (utc(1897, 1, 1), utc(1902, 1, 1))
 
     def test_a_backwards_range_is_not_a_range(self):
-        """"from 1901 to 1897" is a typo, or a sentence that happens to contain
+        """"From 1901 to 1897" is a typo, or a sentence that happens to contain
         two years. Either way, silently swapping the ends would be a guess — so
         it falls back to whichever endpoints stand on their own."""
         found = detect_temporal_expressions("from 1901 to 1897")

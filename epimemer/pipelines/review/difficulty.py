@@ -9,7 +9,7 @@ other is an observation about the graph — and an average of the two is neither
 So the ordering is two tiers, never one score. Tier 1 is the declared value,
 ascending. Tier 2 is everything unrated, ordered by how many of the signals
 below it carries. **Tier 1 comes first, and that is itself a rule**: absence is
-not a claim of doubt (#46), so an unrated decision never sorts above one an
+not a claim of doubt, so an unrated decision never sorts above one an
 agent actually flagged.
 
 **The whole existing corpus is tier 2**, which is why this earns its place at
@@ -18,10 +18,10 @@ entirely derived — and it still works. As certainties accumulate tier 1 fills
 from the top and the order improves with nothing else changing.
 
 **Unrated confidence is not a signal**, and the first draft of §5 said it was.
-The #46 ladder defines absence as *the ordinary case* — "stated plainly, no
+The confidence ladder defines absence as *the ordinary case* — "stated plainly, no
 specific reason to doubt → omit the field" — and it is the majority state (125
 unrated on `memory`). Reading absence as thinness floods the list with ordinary
-decisions and re-commits exactly the sin #46 fixed.
+decisions and re-commits exactly the sin that ladder fixed.
 
 One population these are blind to, recorded rather than papered over: rows
 written before 2026-08-19 carry a literal `0.5` confidence and are *genuinely*
@@ -70,9 +70,9 @@ class DifficultySignal(str, Enum):
 
 # Below the ladder's middle rung is *thin*; the rung itself is *ordinary*. The
 # same number as `UNRATED_CONFIDENCE` and deliberately derived from it rather
-# than typed again: they are one anchor on one ladder (#46), and if that anchor
+# than typed again: they are one anchor on one ladder, and if that anchor
 # ever moves, a copy left behind here would silently disagree about what
-# "ordinary" means. #63's carry-forward is what this avoids — one constant with
+# "ordinary" means. A single bar is what this keeps — one constant with
 # several declarations pretending to be independent.
 THIN_CONFIDENCE_BELOW: float = UNRATED_CONFIDENCE
 
@@ -84,7 +84,8 @@ WIDE_MERGE_SOURCES: int = 3
 def _utc(at: datetime) -> datetime:
     """A timestamp comparable with another one.
 
-    Backends round-trip `datetime` rather than text here, so this is not #70 —
+    Backends round-trip `datetime` rather than text here, so the string-comparison
+    trap does not apply —
     but one of the two sides may still come back naive, and comparing naive with
     aware raises rather than answering wrongly. Assume UTC, which is what every
     writer in this system stores.
@@ -114,7 +115,7 @@ def difficulty_signals(
 
     **An absent subject is not a signal.** A row can name a node that is no
     longer in the graph — a merge survivor a reversal destroyed, or a row read
-    beside a graph it was not written in (#72) — and reading that as difficulty
+    beside a graph it was not written in — and reading that as difficulty
     would rank a decision by the reader's position rather than by the decision.
     """
     present = [subjects[sid] for sid in record.subject_ids if sid in subjects]

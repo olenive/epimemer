@@ -1,6 +1,6 @@
 """Corroboration derived at read time — how many *independent* sources say this.
 
-`ISSUES.md` #51. The `ValueSignal` docs promised two things and #46 gave the
+read-time corroboration. The `ValueSignal` docs promised two things and the confidence prior gave the
 first one a home: *"how well-supported by evidence"* became the caller-supplied
 `confidence` prior. This is the second, *"multiple independent sources increase
 confidence"* — and it is a fact about the **graph** rather than about the
@@ -18,15 +18,15 @@ structural importance. Distinct *documents* — better, distinct *publishers* �
 the thing the claim is about.
 
 **Computed over a similarity neighbourhood, not over node identity.** Facts are
-never deduplicated (#52), so the same claim is many nodes. Including
+never deduplicated, so the same claim is many nodes. Including
 ``{node} ∪ {SIMILARITY neighbours}`` is not a workaround for that: a wrong
 similarity edge overstates a number whose workings are returned and can be
 checked, where a wrong merge destroys a node and cannot be undone.
 
 The inaccuracy the entry shipped with — "the city is called Leningrad" and
 "the city is called Saint Petersburg" are similar, so they corroborated each
-other — is closed by #62, at the bottom of this file. The rule it applies is
-#53's, which was expected to remove the defect and did not until something read
+other — is closed by the successor-corroboration fix, at the bottom of this file. The rule it applies is
+the validity model's, which was expected to remove the defect and did not until something read
 the intervals it stores.
 """
 
@@ -133,7 +133,7 @@ async def _dated_fact(
 ) -> Fact:
     """A fact whose *source note* carries the periods that source asserts.
 
-    The periods ride on the `sourced_from` edge rather than on the node (#53
+    The periods ride on the `sourced_from` edge rather than on the node (the validity model
     T1), which is the whole reason they are reachable here: it is the source
     being counted, so the source's dates are the ones that decide whether it
     witnessed this claim.
@@ -162,7 +162,7 @@ async def _count(storage, node) -> int:
 
 
 class TestCountingDistinctSources:
-    """The four cases #51 specified before any of this existed.
+    """The four cases read-time corroboration specified before any of this existed.
 
     Three supporters drawn from one document score 1, not 3; two documents with
     distinct publishers score 2; two documents sharing a publisher score 1; and
@@ -375,7 +375,7 @@ class TestTheAnswerIsAuditable:
 class TestBatching:
     """One round-trip for the whole result set, like every other read-time
     annotation. Asking per node is what made `gather_pending_review` the largest
-    single source of round-trips in `reflect` (#14)."""
+    single source of round-trips in `reflect`."""
 
     async def test_many_nodes_in_one_call(self, storage):
         bbc = await _document(storage, "bbc-report", publisher="BBC")
@@ -398,9 +398,9 @@ class TestBatching:
 class TestStatusDecisionsTakenHere:
     """**Not inherited from the entry — decided while writing this file.**
 
-    #51 says nothing about node status, which means it would otherwise be
+    read-time corroboration says nothing about node status, which means it would otherwise be
     settled by whichever query the implementation happened to reach for. Both
-    rules below follow from #53's split rather than from anything new, but they
+    rules below follow from the validity model's split rather than from anything new, but they
     are flagged because they are a decision and deserve to be argued with.
     """
 
@@ -421,7 +421,7 @@ class TestStatusDecisionsTakenHere:
     async def test_a_historical_neighbour_still_corroborates(self, storage):
         """`historical` means *the world moved on* — the claim was right and is
         **still right of its period**. Dropping it here would be the same
-        forgetting #53 exists to prevent, one layer along."""
+        forgetting the validity model exists to prevent, one layer along."""
         ours = await _document(storage, "our-report", publisher="BBC")
         theirs = await _document(storage, "their-report", publisher="Reuters")
         claim = await _fact(storage, "the city is Leningrad", ours)
@@ -469,7 +469,7 @@ class TestTheNonInteractionWithConfidence:
 
 
 class TestAClaimAboutAnotherPeriodIsNotASecondWitness:
-    """#62 — the Leningrad defect this module shipped with, and what closed it.
+    """The successor-corroboration fix — the Leningrad defect this module shipped with, and what closed it.
 
     "The city is called Leningrad" (BBC, 1924–1991) and "the city is called
     Saint Petersburg" (Reuters, 1991–) are near-identical sentences, so
@@ -497,7 +497,7 @@ class TestAClaimAboutAnotherPeriodIsNotASecondWitness:
     async def test_a_successor_claim_does_not_corroborate_its_predecessor(
         self, storage
     ):
-        """The defect, stated as the entry states it. Two before #62, one after."""
+        """The defect, stated as the entry states it. Two before the successor-corroboration fix, one after."""
         bbc = await _document(storage, "bbc-1970", publisher="BBC")
         reuters = await _document(storage, "reuters-2020", publisher="Reuters")
         leningrad = await _dated_fact(

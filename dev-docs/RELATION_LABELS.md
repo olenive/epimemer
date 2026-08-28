@@ -17,17 +17,17 @@ and in `link`'s response, the `describe_relation` tool journalling
 intervention from repair to prevention — an agent picking from a described
 vocabulary never coins the fourth synonym. §7.2 records its departures.
 
-Raised by `ISSUES.md` #74, which supersedes #69. #69 asked where a relation
+Raised by the label record, which supersedes the label-merge attribution question. That question asked where a relation
 merge's journal subjects go and the answer was *nowhere clean*; this document is
-why — **the subject has no identity**, and giving it one dissolves #69 rather
+why — **the subject has no identity**, and giving it one dissolves the question rather
 than answering it.
 
-**Stage 3 fixed a live defect** (#74's FC1): a relation-label pair an agent had
+**Stage 3 fixed a live defect** (the label record's FC1): a relation-label pair an agent had
 considered and declined was re-nominated on every `reflect`, for ever. That is
-the treadmill #64 closed for fact pairs and never closed here.
+the treadmill the `assessed` edge closed for fact pairs and never closed here.
 `apply_reflection(relation_verdicts=[…])` records the decline, the `RelationVerdict`
 table is the suppression index, and the journal row naming both label records is
-**where #69 finally resolves** — the question was unanswerable only because the
+**where label-merge attribution finally resolves** — the question was unanswerable only because the
 subject had no identity. §7.3 records what departed from the design and why.
 
 §8 records what this deliberately does not do and §9 what was rejected; both
@@ -56,7 +56,7 @@ Three consequences, and they are the three open questions about relations:
 
 - **Nothing to describe.** An agent choosing a label sees words and counts, and
   no way to learn what *this graph* means by each.
-- **Nothing to name in a decision.** #69's question, unanswerable because the
+- **Nothing to name in a decision.** The label-merge attribution question, unanswerable because the
   subject has no id.
 - **Nothing to change but the edges.** "Renaming" means rewriting every edge
   carrying the label, in place, irreversibly.
@@ -86,10 +86,10 @@ threshold. The tag premise did not survive: a tag *was* the retrieval handle, so
 `billing` and `billings` really were two buckets and a search for one missed the
 other. A relation label is a handle for nothing.
 
-**And there is no frame check** (**#75**). `merge_facts` refuses cross-frame
+**And there is no frame check** (**the metacontext check**). `merge_facts` refuses cross-frame
 pairs; `sweep_similar_relation_pairs` groups by `kind` alone, so two fictional
 universes in one graph pool their vocabularies and are judged on string
-similarity. **The asymmetry is smaller than it looks**, and #75 has the working:
+similarity. **The asymmetry is smaller than it looks**, and the metacontext check has the working:
 a merged *fact* inherits the union of its sources' frames, which is why that
 refusal exists, and nothing here inherits anything — so the harm is a
 vocabulary that has lost a distinction, not a claim asserted in a world nobody
@@ -115,7 +115,7 @@ self-suppressing and declining is not. The graph therefore applies quiet
 pressure toward the wrong answer, on a fresh agent each time who cannot see the
 previous refusals.
 
-**#64 closed exactly this for fact pairs**, and its measurement is the shape of
+**The `assessed` edge closed exactly this for fact pairs**, and its measurement is the shape of
 the problem: of eighteen pairs nominated on `memory`, five merged and
 **thirteen were declined and vanished**. The fix was the `ASSESSED` edge as a
 suppression index. Relation labels got no equivalent, and could not: that edge
@@ -260,7 +260,7 @@ and no stage below adds it.
 
 If renaming is ever built, the history belongs **on the record**: one entry per
 rename rather than one per edge, and it survives a rename that touched zero
-edges, which a per-edge log cannot (#74's FC4).
+edges, which a per-edge log cannot (the label record's FC4).
 
 ---
 
@@ -312,7 +312,7 @@ relation_verdicts: [{pair: [label_a, label_b], kind: str,
 leaving it unrecordable would be FC1 again for the affirmative answer. When
 stage 4 lands it can act on standing verdicts rather than re-asking.
 
-`because` is required on both, for #64's reason: a verdict with no reason marks
+`because` is required on both, for the `assessed` edge's reason: a verdict with no reason marks
 the pair judged, so the next agent skips it without knowing whether it was
 examined or waved through.
 
@@ -337,8 +337,8 @@ pairs.
 **A different judge disagreeing is recorded, not refused.** It is neither a
 retry nor a confirmation; both rows survive with their judges and their
 reasons, and since both verdicts suppress, the disagreement changes nothing
-operationally — it is made visible rather than resolved. Resolving it is #80's
-question, and answering it here would be building #80 by accident. One
+operationally — it is made visible rather than resolved. Resolving it is the missing suppression retraction's
+question, and answering it here would be building the missing suppression retraction by accident. One
 structural consequence: a row is only written when no agreeing row stands, so
 the table holds at most one row per (pair, verdict) — two rows per pair, ever.
 
@@ -347,7 +347,7 @@ retry.** Where a graph does not require a judge, a replayed batch and a genuine
 second reader are indistinguishable, and they want opposite treatments.
 Refusing costs an unnamed agent the ability to confirm — which the journal's
 first row already records — while accepting would let a retried call
-manufacture agreement out of nobody. #52's direction, applied to attribution
+manufacture agreement out of nobody. Fact dedup's direction, applied to attribution
 rather than to corroboration.
 
 ### 4.2 The suppression read
@@ -380,7 +380,7 @@ verdict**, so the journal cannot answer it; and the whole-table read serves the
 agent, below.
 
 Storing the pair **on the label record** was rejected: it is mutable state held
-twice, once on each side, free to disagree — #54, #55 and #56 for the fifth
+twice, once on each side, free to disagree — per-edge-type migration, the drifted lookup tables and the drifted lookup tables for the fifth
 time.
 
 The sweep gains the filter. It resolves each label name to a record, drops any
@@ -407,7 +407,7 @@ runtime consults without a journal query.
 **Suppression is permanent, and that is inherited deliberately rather than by
 accident.** The fact-pair layer decided it in as many words — *"the `assessed`
 edge stays and the pair stays out of every future nomination: the agent has now
-judged it twice, and re-offering it would restart the treadmill"* — and #68's
+judged it twice, and re-offering it would restart the treadmill"* — and the `one_claim` retraction's
 retraction, which fixed the *other* half of that problem, left suppression
 explicitly untouched. So a wrong `distinct` here silences a pair for good.
 
@@ -416,10 +416,10 @@ retraction makes every wrong decline permanent by construction**, exactly as a
 sweep with no memory makes every right decline futile. Both are stated; neither
 is fixed here.
 
-**If a retraction is ever built for labels, #68's one-directional shape must not
+**If a retraction is ever built for labels, the `one_claim` retraction's one-directional shape must not
 be copied across unexamined.** It is one-directional for a reason specific to
 facts: a false unification manufactures agreement — the worst failure this
-system can produce — while a withdrawal merely under-counts, so #52's direction
+system can produce — while a withdrawal merely under-counts, so fact dedup's direction
 settles it. **Neither failure exists here.** Nothing corroborates on a label, so
 a wrong `synonymous` invents no support and a wrong `distinct` costs no count.
 The asymmetry that justifies the fact layer's terminal retraction is simply
@@ -431,14 +431,14 @@ stage 4, whose deprecation would act on it. The asymmetry still does not
 reappear — but only because deprecation is **reversible** by design (§5, and
 FC2's whole shape assumes it), so acting on a wrong `synonymous` invents nothing
 permanent. **Ship an irreversible deprecation and this argument needs re-deriving
-from scratch.** Filed as `ISSUES.md` #80, which is where the retraction question
+from scratch.** Filed as the missing suppression retraction, which is where the retraction question
 now lives for both layers.
 
 ### 4.3 The journal row
 
 `DecisionKind.RELATION_VERDICT`, with `subject_ids = [label_a.id, label_b.id]`.
 
-**This is where #69 resolves.** The subjects are ids of records that exist in
+**This is where label-merge attribution resolves.** The subjects are ids of records that exist in
 this graph, and `review()` dereferences them — through `subject_kind` (`node`,
 `relation_label`, or null), because a decision's subject is not always a claim
 and `get_nodes` alone rendered a label id as *not in this graph*. The label
@@ -446,12 +446,12 @@ read happens only where an id failed to resolve as a node, so an ordinary page
 pays nothing; a label is never declared in `retrieved`, which drives focus in a
 **node** viewer. `node.notes` surfaces nothing spurious, and no field acquires
 a second namespace. *Giving the subject an identity is worth nothing until the
-reader dereferences it* — the same lesson #74 is built on, one layer up.
+reader dereferences it* — the same lesson the label record is built on, one layer up.
 
 Its own kind rather than `SIMILARITY`: review *selects* on kind, and a reviewer
 auditing judgments about claims does not want judgments about vocabulary.
 
-`DecisionKind`'s docstring names `relation_merge` as pending on #69 — stage 3
+`DecisionKind`'s docstring names `relation_merge` as pending on that question — stage 3
 updates that pointer to this document, and stage 4 adds the member if merging
 survives.
 
@@ -536,7 +536,7 @@ that history and the early oscillations are unreconstructible, which is
 `REVIEW_MODE.md` §10's 0a/0b argument in a third place: **the only steps with a
 deadline are the ones recording something that exists once.**
 
-**Terminality is the wrong bound here, and it is worth saying why**, since #68
+**Terminality is the wrong bound here, and it is worth saying why**, since the `one_claim` retraction
 is the obvious model and is right next door. A retraction there is one-way
 because a false unification manufactures agreement while a withdrawal only
 under-counts. Neither failure exists for a label (§4.2), so a deprecation
@@ -563,7 +563,7 @@ reasoning from the parallel:
 
 ## 6. Futile cycles
 
-From #74. **Only one of the four is reachable today**, and the other three are
+From the label record. **Only one of the four is reachable today**, and the other three are
 cycles in features nobody has built — which is the useful thing to say about
 them, because a shared list reads like a defect register when three of its
 entries are *preconditions attached to features that would create them*.
@@ -607,7 +607,7 @@ make each one possible, not as work outstanding.
 **The general rule, worth checking against any new nominator: a sweep
 recomputed from current state that records no declines is a futile cycle by
 construction.** It re-offers what was already refused and cannot know it is
-doing so. That is #64's lesson stated once rather than rediscovered per feature.
+doing so. That is the `assessed` edge's lesson stated once rather than rediscovered per feature.
 
 ---
 
@@ -620,7 +620,7 @@ away by a later one.
 |---|---|---|
 | 1 | `RelationLabel`, the three protocol methods on both backends, `link` create-or-fetch, `epimemer relations backfill` | Additive; changes no behaviour. Every later stage needs identity to exist first, and this is the only stage that can be built without deciding anything else |
 | 2 | `description` surfaced in `list_relations` and in `link`'s response; `describe_relation` tool with `DecisionKind.RELATION_DESCRIPTION`; `viz_list_relation_labels` | **The half that pays**, and independent of FC1. Must precede stage 3 (FC3) |
-| 3 | `relation_verdicts` in `apply_reflection`, `RelationVerdict` + two protocol methods, the filter in `sweep_similar_relation_pairs`, `DecisionKind.RELATION_VERDICT` | **Fixes the live defect**, on every backend and without the CLI (§2.3). Needs stage 1 for ids and stage 2 so a verdict is made against a described vocabulary. Resolves #69 |
+| 3 | `relation_verdicts` in `apply_reflection`, `RelationVerdict` + two protocol methods, the filter in `sweep_similar_relation_pairs`, `DecisionKind.RELATION_VERDICT` | **Fixes the live defect**, on every backend and without the CLI (§2.3). Needs stage 1 for ids and stage 2 so a verdict is made against a described vocabulary. Resolves label-merge attribution |
 | 4 | Deprecation / `alias_of` / `status`, **its own state-change history and a cycle limit over it** (§5) | **Not built, and not scheduled.** `relation_merges` was removed on 2026-08-28 rather than replaced, so this stage no longer has anything to displace: it is a new capability whenever somebody wants it. If it is built, the history is day-one work rather than a follow-on — it is what FC2's bound counts, and it exists only while the changes happen |
 
 **Urgency is low and stated as such.** FC1 causes zero harm today: one label in
@@ -636,7 +636,7 @@ properly rather than quickly.
 > leaving that to the callers. The design said *"those are the only fields an
 > update may move"* and left the enforcement unstated; passing a freshly
 > constructed `RelationLabel` for a label that already had one therefore minted
-> a new id over the old, silently. That is #74's own defect one layer down — a
+> a new id over the old, silently. That is the label record's own defect one layer down — a
 > journal row naming the label would point at an id nothing resolves — and it
 > reached a passing test, which checked the description and not the id.
 > `recorded_relation_label` is now the pure merge both backends write through:
@@ -705,8 +705,7 @@ Built 2026-08-27. The rules that decide behaviour:
 
 **The kind is resolved from the edges by `get_relation_kind`** — the method
 `link` already trusts for a reused label, so the two agree by construction. It
-reads every edge while `list_relations` is scoped to *active* nodes (#14 step
-2), so a label whose only remaining edges hang off retired nodes is describable
+reads every edge while `list_relations` is scoped to *active* nodes, so a label whose only remaining edges hang off retired nodes is describable
 but not listed. Right way round: the vocabulary outlives the claims that used
 it, and the alternative would make a word undescribable exactly when the graph
 had begun to forget what it meant.
@@ -728,7 +727,7 @@ column rather than an unstated meaning.
 
 **Call sites** — `tools.list_relations` joins each derived `(label, kind)` to
 its record and returns `description` (empty when absent). Counts stay derived
-from edges: they are scoped to active nodes for a reason (#14 step 2) and a
+from edges: they are scoped to active nodes for a reason and a
 stored count would drift. `tools.link` returns `description` when it reused an
 existing label.
 
@@ -747,7 +746,7 @@ in the same commit as this writer, per `DecisionKind`'s drift guard.
 **Frontend** — `assemble_snapshot` carries `relation_labels` and
 `RelationLabelView` exists on both sides of the wire; nothing renders them
 until an edge inspector exists, which is a UI feature rather than a row.
-`EDGE_MEANINGS` untouched: this adds no `EdgeType`, which is what #55 keeps
+`EDGE_MEANINGS` untouched: this adds no `EdgeType`, which is what the drifted lookup tables keeps
 catching.
 
 **Tests:**
@@ -780,7 +779,7 @@ the same commit.
 
 **Call sites** — `apply_reflection` gains `relation_verdicts`, applied at
 **step 1b**, immediately after `similarities`: both are judgments about pairs
-as the agent saw them, and #65's anchoring rule covers them jointly — a merge
+as the agent saw them, and the anchoring rule covers them jointly — a merge
 earlier in the same batch would make one side of a pair vanish. The sweep
 gains the suppression filter and the `suppressed` count; `list_relations`
 carries each label's standing verdicts (§4.2). `apply_relation_verdict` takes
@@ -837,10 +836,10 @@ it, which is where the coiner-never-the-judger rule needed to be visible.
   plausible next idea and it carries FC3, so whatever proposes it owes the
   answer there: a nudge that cannot show *why* two names differ produces a loop
   with no exit.
-- **It does not settle whether relation merging should exist.** #74 raises the
+- **It does not settle whether relation merging should exist.** The label record raises the
   question; stage 4 is where it would be answered.
 - **It does not add the missing frame check** to the nominator (§1.2), now
-  **#75**, and that entry corrects an overclaim made here first: a frame check
+  **the metacontext check**, and that entry corrects an overclaim made here first: a frame check
   would **not** stop the servant/consultant pair being proposed. Both usages sit
   in the same fictional universe, so their derived frame sets are identical and
   nothing fires. It catches a different case — two universes, or fiction beside
@@ -861,17 +860,17 @@ it, which is where the coiner-never-the-judger rule needed to be visible.
 2. **Edges pointing at label records by id.** A migration over every user-tier
    edge, for no gain: nothing traverses on the label, so the indirection buys
    nothing and costs the ability to read an edge without a join.
-3. **A `subject_labels` field on `DecisionRecord`** — #69's second option. One
+3. **A `subject_labels` field on `DecisionRecord`** — the second option considered. One
    field with two namespaces, which is the tell this codebase names repeatedly.
    Stage 3 makes it unnecessary: the subjects are ids.
-4. **The endpoint node ids as a relation merge's subjects** — #69's third
+4. **The endpoint node ids as a relation merge's subjects** — the third
    option. It satisfies *ids only* by making the row surface under nodes the
    decision was not about: `node.notes` would show *"somebody merged two
    relation labels"* against a topic nobody judged. Note that `link` **does**
    journal `[src_id, dst_id]`, and correctly — there the endpoints really are
    what the decision was about.
 5. **Suppression stored on the label record.** Mutable state held twice, once
-   per side, free to disagree. #54, #55, #56.
+   per side, free to disagree. Per-edge-type migration, the drifted lookup tables, the drifted lookup tables.
 6. **A `ValueSignal` on the record.** Nothing ranks or retrieves a label.
 7. **`status` in stage 1.** A status with one reachable value is a constant, not
    a state.

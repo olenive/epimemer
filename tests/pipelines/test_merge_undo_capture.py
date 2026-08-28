@@ -1,4 +1,4 @@
-"""Capturing the pre-merge edge partition (#64 step 0a, REVIEW_MODE.md §7).
+"""Capturing the pre-merge edge partition (the merge-partition capture, REVIEW_MODE.md §7).
 
 **Capture or lose.** `merge_nodes_tx` re-points every migrating edge onto the
 survivor and collapses duplicates by `(src, dst, type)`, recording nothing about
@@ -220,7 +220,7 @@ class TestWhatIsDeliberatelyNotCaptured:
         self, storage, embedding_provider
     ):
         """Judgment edges stay on the source under `migration_disposition`
-        (#65), so capturing one would have a reversal recreate an edge that
+        , so capturing one would have a reversal recreate an edge that
         never left — a duplicate, not a restoration."""
         a = await _fact(storage, embedding_provider, "Bonn is the capital.")
         b = await _fact(storage, embedding_provider, "The capital is Bonn.")

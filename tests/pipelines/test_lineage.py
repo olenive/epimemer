@@ -1,4 +1,4 @@
-"""Folding a claim's retired versions into the claim that replaced them (#53 T3).
+"""Folding a claim's retired versions into the claim that replaced them.
 
 The condition under which returning `HISTORICAL` by default is not a ranking
 regression. *"The city is called Leningrad"* and *"the city is called Saint
@@ -237,7 +237,7 @@ class TestTheWalkTerminates:
 
         Asserted as query count rather than as output because the output is the
         same either way — and two batched edge reads on every search that
-        happens to return only current claims is the shape ISSUES.md #14 exists
+        happens to return only current claims is the shape batching exists
         to keep out of the read paths.
         """
         current = [_fact("a", "one claim"), _fact("b", "another claim")]

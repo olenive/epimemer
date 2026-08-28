@@ -14,7 +14,7 @@ into the `epimemer-docs` graph (15 topics / 55 facts / 2 inferences, tagged
 `epimemer-repo-docs`). **All phases complete.**
 
 **Update (2026-08-07):** §12 extends the loop with a value model and an archival
-(hygiene) arm — designed, **not built**. Implementation plan: ISSUES.md #35–37.
+(hygiene) arm — designed, **not built**. Implementation plan: The value-model plan–37.
 
 Decisions settled for 2b: separate `check_conflicts` tool (opt-in); pre-compute
 frame + scores; dedicated verdict tools; agent authority per §7; build
@@ -101,18 +101,18 @@ classifies the pair:
 
 | Verdict | Meaning | Action |
 | --- | --- | --- |
-| **redundant** | same claim restated | `merge_facts(source_ids, content)` — one node keeping a `sourced_from` edge per contributing document; refused (event, unjudged, retired, cross-frame, below the bar) → record `SIMILARITY` and keep both (#52, built 2026-08-21) |
+| **redundant** | same claim restated | `merge_facts(source_ids, content)` — one node keeping a `sourced_from` edge per contributing document; refused (event, unjudged, retired, cross-frame, below the bar) → record `SIMILARITY` and keep both (fact dedup, built 2026-08-21) |
 | **supersedes** | new corrects old — the old claim was wrong | correction (label old `superseded_candidate`; resolves via `superseded_by`, old → `CORRECTED`) |
 | **contradicts** | conflicting claims, same frame, unclear which holds | record `CONTRADICTION`; resolve (agent/human) |
 | **cross-frame** | "conflict" only because frames differ (fiction vs real) | not a conflict; both coexist; optional `variant_of` |
-| **succeeds** | both true, over different periods — the world moved | write `temporally_followed_by` (old → new); old node → `HISTORICAL`, restorable (#53 T2) |
-| **recurs** | the same claim, previously retired `HISTORICAL`, is true again | surface the historical twin; **explicit reactivation** — a `restore` widened to accept `HISTORICAL`, plus a new `sourced_from` edge with the new document's interval, in one transaction (#53 T2, third pass) |
+| **succeeds** | both true, over different periods — the world moved | write `temporally_followed_by` (old → new); old node → `HISTORICAL`, restorable |
+| **recurs** | the same claim, previously retired `HISTORICAL`, is true again | surface the historical twin; **explicit reactivation** — a `restore` widened to accept `HISTORICAL`, plus a new `sourced_from` edge with the new document's interval, in one transaction (the edge split, third pass) |
 | **compatible** | no conflict | nothing |
 
 A separate, non-similarity trigger handles **evidential staleness**: when a fact
 is superseded, inferences derived from it become suspect.
 
-> **The sixth row was missing until 2026-08-12 and is now filled (#53 T2).**
+> **The sixth row was missing until 2026-08-12 and is now filled.**
 > The table had no verdict for *both true, over different periods*, and
 > `supersedes` quietly assumes the old version was wrong ("newer **correct**
 > version") — true of a correction, false of a change in the world. `succeeds`
@@ -137,9 +137,9 @@ is superseded, inferences derived from it become suspect.
 > agent into a supersession whose required `because` has no honest answer:
 > "same claim" is neither *it was wrong* nor *the world changed*. That is the
 > same forced-wrong-verdict failure as the missing sixth row, and unlike that
-> one it is live today. Until dedup lands (ISSUES.md #52, deferred behind #53),
+> one it is live today. Until dedup lands, deferred behind the validity model,
 > the honest action for `redundant` is **record `SIMILARITY` and keep both** —
-> which is also exactly what corroboration (#51) consumes.
+> which is also exactly what corroboration consumes.
 
 > **`redundant` has an action (2026-08-21).** `merge_facts(source_ids, content)`
 > collapses facts restating one claim into a single node that keeps one
@@ -188,7 +188,7 @@ The node stays `ACTIVE`. Labels are surfaced the same way `metacontexts` already
 are on search results, alongside the contesting/retired node id so the caller
 can hop to it.
 
-> **Case B split in two (2026-08-21, #61).** A merge changes a premise without
+> **Case B split in two (2026-08-21, evidence-stale flagging).** A merge changes a premise without
 > retiring it, and until this row existed it fired nothing at all: the
 > `derived_from` edge migrates onto the survivor in the same transaction, the
 > survivor is `ACTIVE`, and `MERGED` is not in `SUPERSEDED_STATUSES`, so both
@@ -210,10 +210,10 @@ can hop to it.
 | --- | --- | --- |
 | `supersession_candidate` | newer fact → older fact | "this may replace that — review" (Case A) |
 | `evidence_superseded` | superseded fact → dependent inference | "this inference's basis changed" (Case B) |
-| `evidence_merged` | absorbed fact → dependent inference | "the premise you were drawn from absorbed another claim" (Case B, 2026-08-21, #61). The src is the fact that *went away*: which wording is gone is the whole content of the flag |
+| `evidence_merged` | absorbed fact → dependent inference | "the premise you were drawn from absorbed another claim" (Case B, 2026-08-21, evidence-stale flagging). The src is the fact that *went away*: which wording is gone is the whole content of the flag |
 | `contradiction` | fact ↔ fact | genuine same-frame conflict (the enum exists today but is **never created** — wire it up) |
 | `variant_of` | fact ↔ fact (across frames) | "same proposition, resolved differently per frame" — makes divergence queryable |
-| `temporally_followed_by` | older fact → newer fact | "both true, over different periods" — order, **not** replacement, so it survives recurrence (#53 T2; designed, not built) |
+| `temporally_followed_by` | older fact → newer fact | "both true, over different periods" — order, **not** replacement, so it survives recurrence (the edge split; designed, not built) |
 | `based_on` / `associated_with` | metacontext → metacontext | frames relate (association, **not** inheritance) |
 
 `supersession_candidate`, `evidence_superseded`, `contradiction`, and the history
@@ -267,13 +267,13 @@ bites.
 > recency-driven `supersedes` (or, once it exists, `succeeds`) verdict points
 > backwards in time. Verdicts about temporal succession must be
 > validity-directed, not arrival-directed, and for undated pairs that needs
-> world knowledge the agent may not have. ISSUES.md #53, review item 3.
+> world knowledge the agent may not have. `VALIDITY_DESIGN.md`, review item 3.
 
 > **Second pass (2026-08-12): step 1's recall must include `HISTORICAL`
-> candidates once #53 T2 lands.** Both nomination passes scan active facts
+> candidates once the edge split lands.** Both nomination passes scan active facts
 > only today, so a historical twin is never nominated and the `recurs` verdict
 > (§3) can never fire — active-only recall is precisely what hides the twin
-> the recurrence design depends on surfacing. ISSUES.md #53 → T2, second pass.
+> the recurrence design depends on surfacing. `VALIDITY_DESIGN.md` → T2, second pass.
 >
 > **Third pass, same date — where that change lives.** `check_conflicts` does
 > no status filtering of its own; it inherits `vector_search`'s, which is
@@ -296,11 +296,11 @@ bites.
 > not a contradiction, and filing it under that word is the misreading `recurs`
 > exists to prevent, arriving from the other side. The wider sweep still scores
 > one matrix — the set is partitioned after scoring, not scored twice — because
-> this is the phase that crosses the tool timeout as a graph grows (#39).
+> this is the phase that crosses the tool timeout as a graph grows.
 >
 > A cheap floor sits under both: `store_decomposition` reports
 > **`historical_twins`**, facts just stored that are word-for-word a retired
-> claim. It reports and never acts, and it is affordable only because #48 was
+> claim. It reports and never acts, and it is affordable only because the content-lookup index was
 > fixed in the same visit — one indexed lookup per fact rather than a table
 > scan.
 
@@ -427,7 +427,7 @@ human-in-the-loop; no metacontext association; inferences never revisited.
   direct dependent inferences) folded atomically into *both* supersede paths;
   candidate-edge clearing on supersession. Helpers in
   `pipelines/reflection/review.py` (`plan_evidence_stale_edges`,
-  `find_candidate_edge_ids_into`). **Merge joined them 2026-08-21 (#61)** with
+  `find_candidate_edge_ids_into`). **Merge joined them 2026-08-21** with
   its own flag — `plan_evidence_merged_edges`, carried into `merge_nodes_tx` on
   both backends and the wrapper. Both planners now share
   `dependent_inference_ids`, so "what depends on this fact" is answered in one
@@ -443,7 +443,7 @@ human-in-the-loop; no metacontext association; inferences never revisited.
     returns candidates with score + the candidate's metacontext labels + same-frame
     flag. Tool + MCP. Opt-in; the agent calls it on freshly-ingested facts.
     *(The threshold was a literal 0.83 here and 0.80 in reflect's sweeps until
-    2026-08-21; it is one constant at 0.80 now, ISSUES.md #63.)*
+    2026-08-21; it is one constant at 0.80 now, the single nomination bar.)*
   - `record_contradiction(a_id, b_id, storage)` — idempotent `contradiction` edge
     (one per pair, either direction); both stay active; returns `notify_user`
     (= same-frame) and a warning when cross-frame. Tool + MCP.
@@ -515,7 +515,7 @@ each step is independently reviewable.
   contradiction for facts; inferences are meant to coexist).
 - Contradiction handling is **unified** into the review loop, not separate.
 - Base frame **"The Real"**, **implicit** untagged membership, **reserved id**.
-  > **Amended 2026-08-27 (`ISSUES.md` #76).** The *read* rule is unchanged —
+  > **Amended 2026-08-27.** The *read* rule is unchanged —
   > untagged still resolves to The Real, in `frames_for`. What changes is that
   > **ingest will stop producing untagged nodes**: `metacontext_id` becomes
   > required on `store_decomposition`, and `apply_reflection`'s synthesis and
@@ -544,7 +544,7 @@ stale. They do nothing about *trivial* knowledge: small decisions, transient
 error records, one-off details that were worth writing but not worth keeping.
 Under principle 2 these accumulate forever — active, retrievable, diluting
 every similarity search. This section extends the review loop with a hygiene
-arm. **Built 2026-08-07** — ISSUES.md #35–37 carry the implementation notes,
+arm. **Built 2026-08-07** — the value-model plan–37 carry the implementation notes,
 including four things the plan below did not anticipate (a generic status-flip
 transaction rather than an archival-specific one; `restore` needing to flip
 rather than re-insert; `last_reinforced == created_at` never being exactly
@@ -560,7 +560,7 @@ nodes), and topic-merge; nothing reinforces it and nothing reads it — not
 retrieval ranking, not archival candidacy. Relevance is therefore a monotone
 function of age and carries no information about a node's worth.
 
-> **Outcome (ISSUES.md #44, since resolved): `relevance` was deleted, not
+> **Outcome (the field with no reader, since resolved): `relevance` was deleted, not
 > fixed.** Adding retrieval reinforcement made it non-monotone, as planned
 > below — and it still had no reader, because §12.4 rules it out of ranking on
 > purpose and archival ended up reading `retrieved_at` instead. The deeper
@@ -576,14 +576,14 @@ function of age and carries no information about a node's worth.
 > primary) and both it and `novelty` are rendered in the viz tooltip, so neither
 > was write-only in the way `relevance` was. But neither is ever *computed*:
 > every ingested node gets 1.0 / 0.5 and nothing updates them, which makes the
-> merge comparison a permanent tie. That is ISSUES.md **#46**, and it is a
+> merge comparison a permanent tie. That is **the confidence prior**, and it is a
 > different problem with a different answer — the fields are documented as
 > measurements and are really unset priors, so the fix is more likely to be
 > letting the calling agent supply them than deleting them.
 >
-> **Outcome (2026-08-11): #46 was split, and the two halves went different
+> **Outcome (2026-08-11): The confidence prior was split, and the two halves went different
 > ways.** Bundling them was the mistake — they shared a symptom (an uncomputed
-> constant documented as a measurement) and nothing else. #46 now covers
+> constant documented as a measurement) and nothing else. The confidence prior now covers
 > `confidence` alone; the `novelty` half is resolved and its entry deleted.
 >
 > **`novelty` was deleted.** Not for want of a reader, and not because
@@ -603,7 +603,7 @@ function of age and carries no information about a node's worth.
 > misleads on a computed one — surprisal has a definition (−log p) with
 > additivity a cosine distance does not have.
 >
-> **`confidence` stayed open as #46 and was decided on 2026-08-12.** It has a
+> **`confidence` stayed open as the confidence prior and was decided on 2026-08-12.** It has a
 > live reader, it is already returned to the caller, and unlike `novelty` a
 > stored form is defensible — so it survives, as a **caller-supplied prior**
 > with a four-value ladder and written tool guidance, on the same footing as
@@ -625,14 +625,14 @@ function of age and carries no information about a node's worth.
 > stored prior. *"Multiple independent sources increase confidence"* is a fact
 > about the graph that changes as the graph does, so it is derived at read time
 > from distinct source documents — better, distinct `published_by` entities —
-> and never writes the field. That is ISSUES.md **#51**.
+> and never writes the field. That is **read-time corroboration**.
 >
 > Recorded because the shape keeps recurring: **`relevance` mixed use with
 > judgment, `novelty` mixed newness with unexpectedness, `confidence` mixed
 > support with corroboration.** In all three the fix was to ask which half the
 > stored form serves, and to derive the other at read time.
 >
-> **The same audit found the model's one live defect (#45, since resolved).**
+> **The same audit found the model's one live defect (the shared value rebuild, since resolved).**
 > Both merge sites rebuilt the signal field by field and named only the scalars,
 > so a merged node carried `importance = max(sources)` forward while both clocks
 > reset to null. The lost timestamp was not the damage; the false *pair* was.
@@ -743,13 +743,13 @@ are the expensive-to-recreate layer.
   and are then protected from cleanup for it. If ranking ever wants a value
   term, that is a deliberate future decision with its own analysis, not a free
   by-product of this design. This is the rule that left `relevance` with no
-  consumer and eventually removed it (#44).
+  consumer and eventually removed it.
 
 ---
 
 ## 13. Temporal validity — the Saint Petersburg Problem (found 2026-08-12)
 
-Filed as ISSUES.md **#53**, recorded here because it is an epistemic defect
+Designed in `VALIDITY_DESIGN.md`, recorded here because it is an epistemic defect
 rather than an implementation one, and because it lands squarely on §3 and §5.1
 of this document.
 
@@ -812,7 +812,7 @@ cannot express something true, and it propagates:
   `supersede(old_id, by=existing_id)` is the mechanism).
 - **Contradiction detection is unsound in both directions** — temporal change
   reads as conflict, and genuine conflict is indistinguishable from change.
-- **Corroboration (#51) inflates**, and **dedup (#52) cannot be made safe**.
+- **Corroboration inflates**, and **dedup cannot be made safe**.
 
 ### 13.4 The constraint that decides the design
 
@@ -824,7 +824,7 @@ This eliminates the cheap answer (two nullable datetimes on the node cannot hold
 a disjoint set) and it eliminates a lineage chain (alternating claims would need
 `succeeded_by` in both directions between one pair — a cycle). It also **inverts
 the outlook for dedup**: identical claims recurring over disjoint periods are one
-node whose intervals union, so a set model turns #52's worst case into its
+node whose intervals union, so a set model turns fact dedup's worst case into its
 cleanest.
 
 `Timepoint` (`core/types.py:377`) already models intervals *and* already
@@ -832,12 +832,12 @@ tolerates vagueness — `label` alone, "during the Renaissance" — which matter
 because vagueness is the normal case here ("under the USSR", "before the
 merger"). Attaching several validity timepoints per node gives the set for free
 and composes with both timelines and metacontexts. That is the recommendation;
-see #53 for the alternatives and the open sub-question about whether the gaps
+see the validity model for the alternatives and the open sub-question about whether the gaps
 between intervals need to be explicit.
 
 ### 13.5 What is built
 
-**The floor, and only the floor** — ISSUES.md #53 step 1, guarded by
+**The floor, and only the floor** — the first step of the validity design, guarded by
 `tests/pipelines/test_supersession_kind.py`. Supersession now records *why*: a
 node retired because the world changed is `HISTORICAL`, one retired because it
 was wrong is `CORRECTED`, and the caller must say which. Archival skips the
@@ -858,7 +858,7 @@ kind.
 > reads validity yet either, so the floor is wider than it was but the sentence
 > above still describes what the graph *does* with any of it.
 
-**Edge ownership was the third item and is now fixed** (ISSUES.md **#54**, built
+**Edge ownership was the third item and is now fixed** (**per-edge-type migration**, built
 2026-08-12). It did not wait for the interval model, because migration was a
 **move** — `_migrate_edges_inplace` re-pointed edges in place — so every
 world-change supersession stripped the historical node of its own provenance,
@@ -872,7 +872,7 @@ drops the frame, which would move a fiction-frame replacement into base reality.
 The *validity* half still waits for the interval model, but it waits safely: the
 intervals will ride on `sourced_from` edges that no longer go anywhere.
 
-> **Amended 2026-08-22 (ISSUES.md #65).** "A correction moves everything but
+> **Amended 2026-08-22.** "A correction moves everything but
 > history and review" was too wide by three types. The argument this paragraph
 > makes for a world-change — *a judgment is about the old claim, and re-pointing
 > one asserts it of a claim nobody assessed* — was stated for one branch of the
@@ -890,7 +890,7 @@ intervals will ride on `sourced_from` edges that no longer go anywhere.
 > is synthesised, so it is nobody's judged wording either.
 >
 > Latent when found — both real graphs held zero edges of all three types — and
-> fixed before #64's step 1, which is what would have started writing them.
+> fixed before the `assessed` edge's step 1, which is what would have started writing them.
 >
 > > **2026-08-22, on building that step.** `assessed` joins them, through
 > > `REVIEW_EDGE_TYPES` rather than `JUDGMENT_EDGE_TYPES`: it needs the same
@@ -904,14 +904,14 @@ intervals will ride on `sourced_from` edges that no longer go anywhere.
 ### 13.6 The method that found it
 
 **When an issue is blocked on a precondition, check whether the precondition's
-absence is itself the larger defect.** #52 was blocked on "can we require
+absence is itself the larger defect.** Fact dedup was blocked on "can we require
 temporal agreement before merging two facts?" The answer was no, and the reason
 was not about dedup at all. Fourth method worth reusing, alongside the three in
 ISSUES.md.
 
 ### 13.7 Review findings (2026-08-12)
 
-A design review of the open set (#46, #51, #52, #53) confirmed recommendation
+A design review of the open set confirmed recommendation
 (b) and found six places where it is not yet decidable as written. The full
 detail — evidence, options, and what each decision must say — lives in
 ISSUES.md as blockquotes marked *Review 2026-08-12* inside each entry; this is
@@ -944,17 +944,17 @@ the shape, so this document stays the design record:
   validity timepoints per node" has to name its timeline and harden that
   reference before soundness depends on it.
 
-The same review amended the neighbouring designs: #46 (store the unrated
+The same review amended the neighbouring designs: The confidence prior (store the unrated
 confidence case as absent, not 0.5; record a basis alongside non-default
-priors), #51 (exclude contradictors and variants from the corroboration
+priors), read-time corroboration (exclude contradictors and variants from the corroboration
 neighbourhood; state that corroboration and confidence do not interact), and
-#52 (the interval model dedupes *states*, never *events* — the re-open trigger
+Fact dedup (the interval model dedupes *states*, never *events* — the re-open trigger
 now carries that distinction, and §3's `redundant` verdict has an interim
 action).
 
 One finding did not wait for any decision: world-change supersession *moves*
 the old node's provenance onto its replacement, so the node kept for being
-true of its period cannot say who asserted it. Filed as **#54**, actionable
+true of its period cannot say who asserted it. filed as **per-edge-type migration**, actionable
 now.
 
 ### 13.8 T1 decided (2026-08-12) — the shape of valid time
@@ -963,7 +963,7 @@ The decision was split three ways in dependency order: **T1** what a validity
 interval *is* and where it lives, **T2** which mechanism owns a world-change,
 **T3** the retrieval surface and naming. T1 is settled. The full statement —
 eleven numbered sections, with the arguments and the rejected alternatives —
-lives in `ISSUES.md` #53 under *T1 decided*; this section records the shape and
+lives in `VALIDITY_DESIGN.md` under *T1 decided*; this section records the shape and
 what it changes about the design above.
 
 **Valid time versus transaction time.** The vocabulary is fixed before the
@@ -978,7 +978,7 @@ off a new edge type. Six things decide the shape:
    node-level set must union what its sources assert, and union takes one
    careful source and one sloppy one and yields a period *neither claims*. Same
    failure as a false dedup manufacturing corroboration. It also puts validity
-   beside #46's per-source confidence, on the same edge for the same reason.
+   beside the confidence prior's per-source confidence, on the same edge for the same reason.
 2. **It is read back per source, with no default collapse.** Union breaks when
    sources disagree about the same episode; intersection breaks when they
    describe different episodes; nothing in the data says which. That is §3's
@@ -1056,8 +1056,8 @@ written, and the wording of the guarantee matters more than its strength.
 **Where the six review findings stand.** Items 2 (empty set), 4 (three-valued
 check) and 6 (a home for timepoints) are closed by T1. Item 3 is partly closed.
 Item 5's vocabulary half is fixed and its retrieval half is T3. **Item 1 — which
-mechanism owns a world-change — is T2**, and it decides how #54 is written, so
-#54 no longer goes first.
+mechanism owns a world-change — is T2**, and it decides how per-edge-type migration is written, so
+Per-edge-type migration no longer goes first.
 
 **Built 2026-08-19 — the type and the comparison.** `epimemer/core/temporal.py`:
 `ImpreciseInstant` (a discriminated union over precise / named / unknown /
@@ -1107,12 +1107,11 @@ state is **two classes**, `precise` and `named` — the single-class version is
 `at: datetime | None` with a label beside it, the same `None`-means-two-things
 shape that disqualified `Timepoint`. A named endpoint compares identically to
 `unknown` and differs only in carrying the source's words, which are the
-evidence for any later resolution. The full construction note is in `ISSUES.md`
-#53.
+evidence for any later resolution. The full construction note is in the validity model.
 
 ### 13.9 T2 decided (2026-08-12) — which mechanism owns a world-change
 
-Review item 1. Full statement in `ISSUES.md` #53 → *T2 decided*; this section
+Review item 1. Full statement in `VALIDITY_DESIGN.md` → *T2 decided*; this section
 existed only as dangling references until the second pass — the shape:
 
 **Status and intervals are not alternatives; they answer different questions.**
@@ -1164,7 +1163,7 @@ putting it on a different claim fabricates attribution — while `has_metacontex
 and `tagged_with` *are* copied, because a frame and a topic are not claims about
 the world. The blanket answer in either direction was wrong, and "migrate
 nothing" was wrong dangerously: it moves a fiction-frame replacement into base
-reality. ISSUES.md **#54** carries the table.
+reality. **per-edge-type migration** carries the table.
 
 **Third pass, same date:** the two mechanisms above now name the code they
 change — recall via a `statuses` parameter on `vector_search` (§5.1), and
@@ -1174,16 +1173,15 @@ reactivation via a `restore` widened to accept `HISTORICAL` while still refusing
 ### 13.10 T3 decided (2026-08-12) — retrieval and naming; the design is complete
 
 Review item 5, in two halves: `HISTORICAL` had no reader at retrieval, and
-`as_of` would be misread once valid time existed. Full statement in `ISSUES.md`
-#53 → *T3 decided*. **With this, #53's design is complete and none of it is
-built.**
+`as_of` would be misread once valid time existed. Full statement in
+`VALIDITY_DESIGN.md` → *T3 decided*.
 
 > *True on the day it was written.* **T3 is built (2026-08-19)**, and with it
 > everything below this line: reachability, lineage collapse, the buckets, the
 > rename, and the `(source, interval)` read the earlier steps deferred to it.
 > Validity can now be written *and* read. §11's soundness check and §9's
-> boundary proposals followed the same day (see §13.8), which completes **all**
-> of #53 — the six-step order and the one decided piece it had omitted.
+> Boundary proposals followed the same day (see §13.8), which completes **all**
+> of the validity model — the six-step order and the one decided piece it had omitted.
 >
 > **One decided detail did not survive its own document.** T3 names three
 > buckets, the third being *provably not valid at t*. §13.8's open-world rule
@@ -1244,7 +1242,7 @@ because "as of" alone does not say which clock. The decisive argument is which
 name gets marked: **the unmarked name inherits the default reading**, and in a
 knowledge graph "as of 1980" reads as *what was true then* — the wrong axis.
 Leaving `as_of` bare would mark the safe name and leave the misreadable one
-unmarked. The only piece of #53 carrying a migration cost, and cheapest now.
+unmarked. The only piece of the validity model carrying a migration cost, and cheapest now.
 
 **A constraint recorded before anyone builds the reader: "current" is
 timeline-relative.** §13.8 keys intervals by timeline and
@@ -1260,4 +1258,4 @@ unpicking that later is painful.
 > the first implementation to reach for.
 
 **All six review findings are now answered** — 2, 4 and 6 by T1 (§13.8), 1 by T2
-(§13.9), 3 across both, 5 here. What remains in #53 is construction.
+(§13.9), 3 across both, 5 here. What remains in the validity model is construction.

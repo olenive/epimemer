@@ -230,7 +230,7 @@ class TestPayloadFidelity:
         assert got.value.importance == pytest.approx(0.5)
 
     async def test_an_unrated_confidence_round_trips_as_absent(self, store):
-        """#46: absence has to survive the trip, or the field is 0.5 again.
+        """The confidence prior: absence has to survive the trip, or the field is 0.5 again.
 
         `confidence` is the one value field where "nobody rated this" is a
         distinct state, and it is expressed by the key being missing. A backend
@@ -412,7 +412,7 @@ HOSTILE_GRAPH_NAMES = [
 
 class TestVectorSearchStatusFilter:
     """Which nodes may be nominated is the caller's to say, and the default is
-    the guard this method used to enforce by construction (#53 T2).
+    the guard this method used to enforce by construction.
 
     The whole of recurrence hangs off this parameter: until a historical twin
     could be nominated, nobody was ever asked whether a claim had come back, and
@@ -491,7 +491,7 @@ class TestVectorSearchStatusFilter:
 
 
 class TestStatusFlipCanCarryAnEdge:
-    """Reactivation writes the flip and its provenance together (#53 T2).
+    """Reactivation writes the flip and its provenance together.
 
     A node back to ACTIVE with no edge recording *why* is an assertion the graph
     makes and cannot attribute, and two transactions can leave exactly that
@@ -952,7 +952,7 @@ class TestVectorSearchReturnsOnlyActiveNodes:
 
 
 class TestBatchedEdgeFetch:
-    """`get_edges_for` answers many nodes in one call (#14 step 1).
+    """get_edges_for answers many nodes in one call.
 
     The oracle throughout is the pair it batches: whatever
     `get_edges_from`/`get_edges_to` say about a node one at a time,
@@ -1088,7 +1088,7 @@ class TestBatchedEdgeFetch:
 
     @pytest.mark.parametrize("count", [40, 250])
     async def test_a_large_request_answers_the_same_as_a_small_one(self, store, count):
-        """Both sides of the adapter's `IN`-versus-scan seam (#14 step 4).
+        """Both sides of the adapter's `IN`-versus-scan seam.
 
         SurrealDB evaluates `IN` per row instead of through the index, so past
         a measured size the adapter stops asking for the ids and reads the
@@ -1145,7 +1145,7 @@ class TestBatchedEdgeFetch:
 
 
 class TestBatchedNodeFetch:
-    """`get_nodes` answers many ids in a bounded number of statements (#14 step 4).
+    """get_nodes answers many ids in a bounded number of statements.
 
     The oracle is `get_node`, one id at a time. On SurrealDB the single-node
     form cannot know which table holds an id, so it probes topic, then fact,
@@ -1240,7 +1240,7 @@ class TestBatchedNodeFetch:
 
 
 class TestBatchedEmbeddingFetch:
-    """`get_embeddings_for_items` answers many items in one round-trip (#14 step 4).
+    """get_embeddings_for_items answers many items in one round-trip.
 
     The oracle is `get_embeddings_for_item`. Vectors are the heaviest rows in
     the store and every phase of `reflect` that compares them was reading them
@@ -1479,7 +1479,7 @@ class TestLifecycleComesFromTheStoredRow:
     whether the argument is a *request* — which nodes to retire — or a
     *snapshot* of their state. It is a request: a caller holding a node it
     loaded before an earlier retirement carries a stale `lifecycle`, and
-    appending to that silently drops every episode since (#67).
+    appending to that silently drops every episode since.
 
     Parity rather than a SurrealDB test because the two backends answered
     differently: `InMemoryStorage` always re-read the stored node, so the same
@@ -1765,7 +1765,7 @@ class TestLexicalSearch:
         assert [node_id for node_id, _ in corrected] == [facts[0].id]
 
     async def test_both_seed_routes_take_the_same_status_set(self, store):
-        """#53 T3: a hybrid search asks one set of both arms, so both take a set.
+        """History-by-default retrieval: a hybrid search asks one set of both arms, so both take a set.
 
         The asymmetry this closes was real and one-sided — `vector_search` went
         plural for recurrence while this stayed singular — and it would have
@@ -2009,7 +2009,7 @@ class TestBatchedSegmentFetch:
 
 
 class TestTimestampsAtAWholeSecond:
-    """The divergence this fixture exists to catch, and nearly missed (#70).
+    """The divergence this fixture exists to catch, and nearly missed.
 
     SurrealDB stores timestamps as ISO strings. Comparing them as strings is
     chronologically correct only while every rendering has the same shape — and

@@ -55,7 +55,7 @@ def config():
 
 async def _node(storage, embedder, node):
     await storage.store_node(node)
-    # States a frame, as every ingested node has since #76: absence names none,
+    # States a frame, as every ingested node has since the frame requirement: absence names none,
     # so two frameless nodes share none and a `one_claim` verdict is refused.
     await storage.store_edge(NodeEdge(
         src_id=node.id, dst_id=BASE_METACONTEXT_ID,
@@ -197,7 +197,7 @@ class TestIngest:
 class TestSupersession:
     """`because` is carried by the *kind*, rather than by a second field
     repeating it: a correction and a world-change are opposite claims about what
-    happened (#53), and a reviewer asking for one does not want the other."""
+    happened, and a reviewer asking for one does not want the other."""
 
     async def test_a_correction_is_a_correction(self, storage, embedder):
         node = await _fact(storage, embedder, "the office is in Leeds")
@@ -495,7 +495,7 @@ class TestReflectionAppliesManyDecisionsAndJournalsEachOne:
     ):
         """Its own kind, not `REVERSAL`: a merge reversal deletes the survivor,
         and a reviewer selecting `REVERSAL` to audit that must not get rows
-        where nothing was destroyed (#68)."""
+        where nothing was destroyed."""
         a = await _fact(storage, embedder, "the treaty was signed in Vienna")
         b = await _fact(storage, embedder, "the treaty was signed at Vienna")
         await tools.apply_reflection(

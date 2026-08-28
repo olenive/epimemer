@@ -1,4 +1,4 @@
-"""The verdict that had no writer (`REVIEW_MODE.md` §1, `ISSUES.md` #64).
+"""The verdict that had no writer (`REVIEW_MODE.md` §1, the `assessed` edge).
 
 `reflect` nominated eighteen pairs on `memory` on 2026-08-21. Five merged.
 **Thirteen were declined and vanished** — and came back on the next pass, and
@@ -90,7 +90,7 @@ async def _fact(
         value=ValueSignal(),
     )
     await storage.store_node(fact)
-    # Every fact states a frame, as every ingested one has since #76 — absence
+    # Every fact states a frame, as every ingested one has since the frame requirement — absence
     # names no frame, so two frameless facts share none and nothing here would
     # be nominated at all.
     await storage.store_edge(NodeEdge(
@@ -220,7 +220,7 @@ class TestBothVerdictsSuppressAndOnlyOneCorroborates:
 
 
 class TestThePairStopsComingBack:
-    """#64's presenting symptom: thirteen declined pairs, re-offered forever."""
+    """The presenting symptom: thirteen declined pairs, re-offered forever."""
 
     async def _nominations(self, storage, embedding_provider):
         return await detect_contradictions(
@@ -275,7 +275,7 @@ class TestThePairStopsComingBack:
 
 
 class TestAJudgmentIsAnchoredToTheWordingItWasMadeAgainst:
-    """#65's rule, extended to the edge #64 invents.
+    """The anchoring rule, extended to the edge the `assessed` edge invents.
 
     `assessed` is in `REVIEW_EDGE_TYPES`, which is consulted before the status
     branch, so this holds on every retirement rather than on a chosen few.
@@ -317,7 +317,7 @@ class TestAJudgmentIsAnchoredToTheWordingItWasMadeAgainst:
 
 class TestWhatIsRefusedRatherThanGuessedAt:
     """Refusals carry a reason and come back in the response. A decision
-    silently not recorded is the whole of #64, so this module does not have the
+    silently not recorded is the whole of the `assessed` edge, so this module does not have the
     option of failing that way."""
 
     async def test_an_unknown_verdict_is_reported_not_defaulted(
@@ -445,7 +445,7 @@ class TestReplayAndReversal:
 
     The second used to be refused: nothing could unmake a `one_claim`, and the
     honest refusal was better than writing `assessed` beside a `similarity` edge
-    that went on corroborating a pair the agent had disowned. #68 gave it a
+    that went on corroborating a pair the agent had disowned. the `one_claim` retraction gave it a
     writer, and the direction it can travel is deliberately one-way.
     """
 
@@ -468,7 +468,7 @@ class TestReplayAndReversal:
         self, storage, embedding_provider
     ):
         """Nothing in this system deletes, this call included — so the
-        `similarity` edge stays and a second edge stops it counting (#68). The
+        `similarity` edge stays and a second edge stops it counting. The
         same shape `contradiction` already has, one judgment along."""
         a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
         b = await _fact(
@@ -507,7 +507,7 @@ class TestReplayAndReversal:
     ):
         """A retraction changes what corroboration counts and nothing else. The
         agent has now judged this pair twice; re-offering it would restart the
-        treadmill #64 closed."""
+        treadmill the `assessed` edge closed."""
         a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
         b = await _fact(
             storage, embedding_provider, "the deployment failed", publisher="Reuters"
@@ -636,7 +636,7 @@ class TestTheToolSurface:
     async def test_judgments_are_recorded_before_the_batch_retires_anything(
         self, storage, embedding_provider
     ):
-        """#65's anchoring rule, applied to the order of one call. A judgment is
+        """The anchoring rule, applied to the order of one call. A judgment is
         about the wording it was made against; a supersession later in the same
         batch would otherwise turn it into a skip."""
         a = await _fact(storage, embedding_provider, "the deploy failed")

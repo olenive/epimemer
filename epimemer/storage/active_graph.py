@@ -4,7 +4,7 @@
 `MemoryStorage` resolves `self._graphs[self._database]` on every call and
 `SurrealDBStorage` sends `USE ns db` down one shared connection — so in both, a
 switch landing between two steps of one operation sends the rest of it
-somewhere else. `ISSUES.md` #16 filed this as a connection problem and it is
+somewhere else. It was filed as a connection problem and it is
 not; a dedicated second connection would have fixed the smaller half of it, on
 one backend.
 

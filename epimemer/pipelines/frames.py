@@ -1,7 +1,8 @@
 """A node's epistemic frame: withdrawing one, moving one, inheriting one,
 declaring one.
 
-Withdrawal and reassignment are `ISSUES.md` #66 part 1. The rest is #76, which
+Withdrawal and reassignment revise a judgment made at ingest. The rest is the
+frame requirement, which
 ended in a rule worth stating once here: **absence names no frame.** A node with
 no `has_metacontext` edge is not in base reality — it is a node nobody said
 anything about, and it shares a frame with nothing. Every function below exists
@@ -29,7 +30,7 @@ is addressed by `node_id` and promises that no status, edge or lineage moves;
 a frame revision moves an edge and changes what retrieval does, so the promise
 would become false the day `rejudge` grew a frame field.
 
-**The withdrawal deletes the edge rather than marking it.** #68's carry-forward
+**The withdrawal deletes the edge rather than marking it.** The retraction rule
 is the test: *before designing a mechanism for undo-without-delete, check whether
 the read that would honour it is already there.* Here it is not — frames are
 derived by scanning `has_metacontext` edges in `frames_for` and in
@@ -104,7 +105,7 @@ async def reframe_node(
     **Leaving a node stating no frame at all is refused outright.** It used to
     be allowed behind a flag, back when absence meant base reality and the
     withdrawal was a *promotion* worth authorising deliberately. Absence means
-    nothing now (#76): a frameless node shares a frame with nothing, so it is
+    nothing now: a frameless node shares a frame with nothing, so it is
     never compared, never merged, and returned by no scoped search. There is no
     longer any reason to want one, so the flag is gone rather than renamed —
     a claim goes somewhere, or it stays where it is.
@@ -254,7 +255,7 @@ def frame_edges(
 
     `the-real` is written like any other id: it is a conventional name for the
     frame holding real-world claims, not a mechanism, and nothing reads it
-    specially since absence stopped meaning it (#76).
+    specially since absence stopped meaning it.
     """
     return [
         NodeEdge(

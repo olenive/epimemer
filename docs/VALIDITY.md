@@ -9,7 +9,7 @@ an inference combine claims that were never simultaneously true, with nothing to
 detect it.**
 
 This page is the model that fixes it. Design history and the arguments that were
-rejected: `dev-docs/ISSUES.md` #53 and `dev-docs/REVIEW_EPISTEMIC.md` §13.
+rejected: `dev-docs/VALIDITY_DESIGN.md` and `dev-docs/REVIEW_EPISTEMIC.md` §13.
 
 ---
 
@@ -281,7 +281,7 @@ because)`.
 
 **It is not a supersession.** The claim is unchanged and the world has not moved,
 so `because` in the `update` sense has no honest value; this is the same category
-as a mislabelled `claim_kind`, and `dev-docs/ISSUES.md` #66 is where the split
+as a mislabelled `claim_kind`, and `dev-docs/VALIDITY_DESIGN.md` is where the split
 between it and `rejudge` is argued. Nothing is retired and no lineage moves.
 
 **The whole list for that (node, source) pair is replaced**, because an interval
@@ -310,7 +310,7 @@ trail plus the journal row's timestamp is what bounds which answers were affecte
   stated. The alternative — leaving it `stated` — would have a source appear to
   assert a date no document gave, which is the one thing the rule exists to
   prevent. Under-claiming is the safe direction.
-- **Fact deduplication is built** (2026-08-21, `dev-docs/ISSUES.md` #52), and
+- **Fact deduplication is built**, and
   this model is what made it safe: identical claims recurring over disjoint
   periods are one node with several intervals, and because validity lives on the
   `sourced_from` edge the intervals survive a merge with no combination rule to

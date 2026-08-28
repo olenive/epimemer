@@ -37,7 +37,7 @@ class NodeType(str, Enum):
 class NodeStatus(str, Enum):
     ACTIVE = "active"
     # Retired by supersession, reason unrecorded. **Legacy only** — kept so
-    # graphs written before #53 still load, since those rows genuinely do not
+    # graphs written before the split still load, since those rows genuinely do not
     # say which of the two below they were and inventing an answer would be a
     # lie. Nothing writes it any more.
     SUPERSEDED = "superseded"
@@ -47,7 +47,7 @@ class NodeStatus(str, Enum):
     # The world moved on. The claim was right and is **still right of its
     # period** — only no longer current. Filing this as an error is how a graph
     # forgets history: Saint Petersburg became Leningrad became Saint
-    # Petersburg, each name correct in its turn (#53).
+    # Petersburg, each name correct in its turn.
     HISTORICAL = "historical"
     MERGED = "merged"
     # Retired for triviality rather than for being wrong: the node was fine,
@@ -72,7 +72,7 @@ SUPERSEDED_STATUSES: frozenset[NodeStatus] = frozenset({
 # verdict nothing can record, and restoring it would resurrect an error the
 # graph already ruled on. That was always `restore`'s stated reason; before the
 # status split it could only be enforced as "not superseded", which caught the
-# world-change case too (#53 T2).
+# world-change case too.
 NOMINATED_STATUSES: frozenset[NodeStatus] = frozenset({
     NodeStatus.ACTIVE, NodeStatus.HISTORICAL,
 })
@@ -123,7 +123,8 @@ def reachable_statuses(
 
 
 # Why a node was superseded, as the caller states it. There is deliberately no
-# default: the whole finding behind #53 is that the two cases are opposite and
+# default: the whole finding behind the validity model is that the two cases
+# are opposite and
 # that picking either silently mislabels the other.
 SUPERSESSION_REASONS: dict[str, NodeStatus] = {
     "it_was_wrong": NodeStatus.CORRECTED,
@@ -150,7 +151,7 @@ def superseded_status_for(because: str) -> NodeStatus:
 class ClaimKind(str, Enum):
     """Whether a fact describes a condition that holds, or an occurrence.
 
-    The distinction fact dedup cannot be built without (#52). Under the validity
+    The distinction fact dedup cannot be built without. Under the validity
     model two ingests of one claim over separate periods are one node whose
     intervals union — correct for a **state**, and fabricated history for an
     **event**. *"Labour is in government"* read from a 1997 document and from a
@@ -168,8 +169,8 @@ class ClaimKind(str, Enum):
     **Judged at ingest, and effectively only there.** The judgment wants the
     document — the tense, the sentences either side, whether "the election" is a
     particular one — and a merge is offered two stripped sentences with none of
-    that. Same argument that put `confidence` and `validity` at ingest (#46,
-    #53 T1 §9). What it costs is that a claim nobody judged stays unjudged; see
+    that. Same argument that put `confidence` and `validity` at ingest. What it
+    costs is that a claim nobody judged stays unjudged; see
     `Fact.claim_kind`, where an absence refuses rather than guesses.
 
     Two members, not three. A unique occurrence — *"Napoleon was born in
@@ -205,7 +206,7 @@ class EdgeType(str, Enum):
     SUPERSEDED_BY = "superseded_by"  # node → node (correction)
     # node → node (world-change). States temporal order, not replacement, which
     # is what lets a claim become true *again* without contradicting the edge
-    # that recorded it stepping aside (#53). It deliberately does **not** claim
+    # that recorded it stepping aside. It deliberately does **not** claim
     # adjacency: Saint Petersburg → Petrograd → Leningrad → Saint Petersburg is
     # three separately observed transitions, and discovering a missing step
     # later must not make an existing edge wrong. So the chain is walkable but
@@ -231,7 +232,7 @@ class EdgeType(str, Enum):
     # merged fact → dependent inference. Its own type rather than a qualified
     # `evidence_superseded`, because the two events say opposite things about
     # the claim: a correction says it was wrong, a merge says two phrasings of
-    # it collapsed and the survivor carries every source (#61). Consumers route
+    # it collapsed and the survivor carries every source. Consumers route
     # on the type — labels, archival, migration all do — so a reader that has
     # never heard of this one sees an edge it does not handle rather than a
     # familiar edge that has quietly grown a second meaning.
@@ -241,10 +242,10 @@ class EdgeType(str, Enum):
     # wanting opposite breadth: nomination wants every pair anybody assessed
     # suppressed, corroboration wants only restatements of one claim. One edge
     # serving both makes "these are different claims" corroborate — which is
-    # manufactured support, the worst failure this system has (#64 §1.2).
+    # manufactured support, the worst failure this system has.
     ASSESSED = "assessed"
     # fact ↔ fact: an earlier `one_claim` verdict about this pair has been
-    # **withdrawn** (#68). Written only where one stands, because that is the
+    # **withdrawn**. Written only where one stands, because that is the
     # only place it does anything: `similarity` is not deleted — nothing here
     # deletes — so this is what stops it corroborating, exactly as
     # `contradiction` already does for a pair judged the other way.
@@ -253,7 +254,7 @@ class EdgeType(str, Enum):
     # re-asserts `one_claim` over one, because the two directions fail
     # differently: a false unification manufactures agreement, which is the
     # worst thing this system can produce (`fact_dedup.py`), while a withdrawn
-    # one under-counts. Under-counting is the direction #52 already chose when
+    # one under-counts. Under-counting is the direction fact dedup already chose when
     # it left the pre-`claim_kind` corpus unmergeable.
     RETRACTED_SIMILARITY = "retracted_similarity"
     VARIANT_OF = "variant_of"                          # fact ↔ fact, across frames
@@ -314,7 +315,7 @@ def lineage_edge_type_for(status: NodeStatus) -> EdgeType:
 # (superseded_candidate / evidence_stale / evidence_merged). `assessed` is the
 # first member with no label at all: nothing downstream should treat "a pair was
 # looked at" as a flag on either node. It is read by one caller, the nomination
-# sweep, and read there as a suppression index (#64 §1.2).
+# sweep, and read there as a suppression index.
 REVIEW_EDGE_TYPES: frozenset[EdgeType] = frozenset(
     {
         EdgeType.SUPERSESSION_CANDIDATE,
@@ -384,7 +385,7 @@ def traversal_excluded(edge: "NodeEdge") -> bool:
 # Not in `NON_KNOWLEDGE_EDGE_TYPES`, deliberately: these stay traversable. This
 # set answers what a *retirement* does to them, not what a *search* does.
 #
-# `assessed` (#64 step 1) is a judgment too, but belongs in `REVIEW_EDGE_TYPES`
+# `assessed` is a judgment too, but belongs in `REVIEW_EDGE_TYPES`
 # rather than here: it needs the same anchoring *and* exclusion from traversal,
 # being a suppression index rather than knowledge. Listing it in both would be
 # redundant — `NON_KNOWLEDGE_EDGE_TYPES` is consulted first.
@@ -416,7 +417,7 @@ def migration_disposition(edge_type: EdgeType, status: NodeStatus) -> EdgeDispos
     the *same claim*, corrected, so what the claim was drawn from is genuinely
     its own.
 
-    **No retirement moves a judgment** (#65) — the one rule here that does not
+    **No retirement moves a judgment** — the one rule here that does not
     vary by status, see `JUDGMENT_EDGE_TYPES`. A correction is the case that
     makes it necessary rather than merely tidy: "the population is 500,000"
     corrected to "5,000,000" is the same claim by this module's own reckoning,
@@ -427,9 +428,9 @@ def migration_disposition(edge_type: EdgeType, status: NodeStatus) -> EdgeDispos
     *synthesised*, so it is not the wording any judgment was made against
     either.
 
-    **A world-change moves nothing** (#54). The historical node is kept because
+    **A world-change moves nothing**. The historical node is kept because
     it is still true of its period, and what makes it true of a period is its own
-    provenance — with, once #53 lands, the validity intervals riding on those
+    provenance — with the validity intervals riding on those
     `sourced_from` edges. Moving them leaves it unable to say who asserted it or
     when it held. Copying them is not the alternative: a `sourced_from` edge on
     the replacement records the old claim's document asserting the *new* claim,
@@ -441,7 +442,7 @@ def migration_disposition(edge_type: EdgeType, status: NodeStatus) -> EdgeDispos
     Frames and tags are the exception, and copy: see
     `WORLD_CHANGE_COPIED_EDGE_TYPES`.
 
-    **A merge does not move the frame** (#76). Every other edge on a survivor is
+    **A merge does not move the frame**. Every other edge on a survivor is
     something its sources genuinely brought with them, but a frame is a claim
     about which world this is — and the survivor's content is *synthesised*, so
     nobody has yet said which world the synthesised wording is about. Moving the
@@ -453,11 +454,11 @@ def migration_disposition(edge_type: EdgeType, status: NodeStatus) -> EdgeDispos
     if edge_type in NON_KNOWLEDGE_EDGE_TYPES:
         return "keep"  # anchored to a specific node version
     if edge_type in JUDGMENT_EDGE_TYPES:
-        return "keep"  # anchored to the wording that was judged (#65)
+        return "keep"  # anchored to the wording that was judged
     if status is NodeStatus.HISTORICAL:
         return "copy" if edge_type in WORLD_CHANGE_COPIED_EDGE_TYPES else "keep"
     if status is NodeStatus.MERGED and edge_type is EdgeType.HAS_METACONTEXT:
-        return "keep"  # re-stated by the merger, never inherited (#76)
+        return "keep"  # re-stated by the merger, never inherited
     return "move"
 
 
@@ -537,7 +538,7 @@ class ValueSignal(BaseModel):
     on a graph that reflects a lot" — so it described operator habit as much as
     the node. A timestamp separates *never* from *long ago* without that.
 
-    A `novelty` float was removed for a related reason (#46). It was meant as
+    A `novelty` float was removed for a related reason. It was meant as
     how unlike existing graph state a node is, and it went not because nothing
     read it — though nothing did — but because the number cannot be stored
     honestly: measured at ingest it answers "unexpected relative to what the
@@ -555,7 +556,7 @@ class ValueSignal(BaseModel):
     """
     # How well the record would back this claim up if it were challenged —
     # supplied by the ingesting agent, which is the only party that has read the
-    # material, and never computed (#46). `None` is the unrated case and is
+    # material, and never computed. `None` is the unrated case and is
     # stored as absence: a deliberate middling 0.5 and a question nobody put
     # are different states, and a default that cannot express "never happened"
     # is the trap both clocks below were pulled out of. Read it through
@@ -630,7 +631,7 @@ def merged_value_signal(signals: Sequence[ValueSignal]) -> ValueSignal:
       was judged is not a lost timestamp but a false pair: the merged node claims
       a judgment nobody ever made, and `judgment_is_stale` reads the pair, so an
       unjudged node is never stale and the merged node stays exempt from every
-      archival class permanently (#45). The same argument holds for retrieval —
+      archival class permanently. The same argument holds for retrieval —
       knowledge that has been retrieved does not become unretrieved by being
       merged.
     - `confidence` takes the max — which looks wrong for a caller-supplied
@@ -640,15 +641,15 @@ def merged_value_signal(signals: Sequence[ValueSignal]) -> ValueSignal:
       makes the **higher-confidence description the primary content**, so the
       merged topic's confidence describes the text it actually leads with —
       one rule read from either end, and changing either alone makes the node
-      claim a strength for wording it no longer leads with. `merge_facts` (#52)
+      claim a strength for wording it no longer leads with. `merge_facts`
       does *not* work that way: the survivor's content is written fresh by the
       agent, so nothing is inherited to lead with. Max is still right there, for
-      the field's own definition (#46) — confidence asks *how well would the
+      the field's own definition — confidence asks *how well would the
       record back this claim up*, and a survivor keeping one `sourced_from` edge
       per contributing document is backed by every one of them, so the
       best-supported rating is a floor rather than a ceiling. `merged_confidence_basis`
       carries that rating's stated reason across with it, or the prior arrives
-      stripped of the reason #46 asks for. An unrated signal takes no part:
+      stripped of the reason the ladder asks for. An unrated signal takes no part:
       `None` means nobody put the question, so it loses to any real value the
       way the clocks do, and a merge of unrated nodes stays unrated rather than
       inventing a judgment.
@@ -677,7 +678,7 @@ class RawDocument(BaseModel):
     # When the document was published, as against `created_at` below, which is
     # when it was ingested — a 1970 memoir read today carries `created_at =
     # 2026`. It bounds what this source could have known, and it is what anyone
-    # would sort or weigh sources by (#53 T1 §7).
+    # would sort or weigh sources by.
     #
     # **Never fall back to `created_at`.** The fallback is the bug it exists to
     # fix, with an extra step: every undated document would claim its facts were
@@ -706,7 +707,7 @@ class LifecycleEpisode(BaseModel):
     """One spell a node spent out of the active set, and the return that ended it.
 
     `(status, superseded_at)` is a single slot, and a node can leave the active
-    set more than once — #53 T2 legalised that, and Saint Petersburg is the
+    set more than once — the validity model legalised that, and Saint Petersburg is the
     standing example. The pair cannot say *retired, then came back*: clear
     `superseded_at` on the return and the retirement disappears from every time
     window; keep it and the retirement reports the node's *current* status, which
@@ -807,7 +808,7 @@ class Fact(BaseModel):
     id: str = Field(default_factory=_new_id)
     content: str
     source_id: str                    # Segment.id that generated this
-    # Condition or occurrence, judged by the ingesting agent (#52). `None` is
+    # Condition or occurrence, judged by the ingesting agent. `None` is
     # *unjudged* — the state every fact written before this field existed is in
     # — and never a third kind of claim. Dedup refuses on it rather than picking
     # a side: the two answers have opposite consequences, and the safe direction
@@ -872,11 +873,11 @@ class NodeChangeEvent(BaseModel):
     window, `restored` when it came back, and otherwise the status the
     retirement gave it, since that is exactly what the retirement was.
     `corrected` and `historical` are the two halves of the old `superseded`,
-    which survives only on rows written before #53. A node both born and retired
+    which survives only on rows written before the split. A node both born and retired
     inside one window yields two events.
 
     `counterpart` is the node that replaced, followed or absorbed this one — the
-    "by whom" of a supersession (#57). It is `None` for births, returns, and
+    "by whom" of a supersession. It is `None` for births, returns, and
     retirements that had no counterpart (archival) or predate episodes.
     """
     kind: Literal[
@@ -905,7 +906,7 @@ class NodeEdge(BaseModel):
     label: str | None = None
     kind: Literal["relationship", "attribution"] = "relationship"
     weight: float = Field(default=1.0, ge=0.0)
-    # When *this source* asserts the claim was true (#53 T1 §2). A list, because
+    # When *this source* asserts the claim was true. A list, because
     # one source can assert several disjoint periods — a party in government
     # over five separate spans is one claim, not five.
     #
@@ -1059,14 +1060,14 @@ class EmbeddingRecord(BaseModel):
     # A node id, in practice always. This was written as "node or segment id",
     # but no path writes a segment: all 624 records across the real graphs point
     # at nodes, and `vector_search` resolves every hit through `get_node`, so a
-    # segment record would be fetched and dropped (#59, measured 2026-08-21).
+    # segment record would be fetched and dropped (measured 2026-08-21).
     # Segments reach retrieval through BM25 instead, which indexes the whole
     # field — that is why they answer *where did I read that?* well.
     #
     # **That absence is what keeps the 256 word-piece window off them.** 11.1%
     # of real segment text crosses it and the worst loses 48%, so embedding
     # segments would make a silent truncation real on the day it was added. It
-    # is a precondition of doing so, not a detail — ISSUES.md #59 carries it.
+    # is a precondition of doing so, not a detail.
     item_id: str
     model_id: str                     # e.g. "all-mpnet-base-v2"
     vector: list[float]
@@ -1138,7 +1139,7 @@ class Metacontext(BaseModel):
 
 
 class RelationLabel(BaseModel):
-    """The vocabulary entry behind a user-tier edge's `label` (#74).
+    """The vocabulary entry behind a user-tier edge's `label`.
 
     A relationship label used to exist **nowhere**: `list_relations` derived the
     vocabulary by scanning edges and grouping by `(label, kind)`, so there was no
@@ -1192,7 +1193,7 @@ def recorded_relation_label(
     record.** A caller that constructs a fresh `RelationLabel` for a label that
     already has one would otherwise mint a new id on top of the old, and a
     journal row naming the label would then point at an id nothing resolves —
-    which is the defect #74 exists to remove, rebuilt one layer down. So `id`,
+    which is the defect this record exists to remove, rebuilt one layer down. So `id`,
     `created_at` and `judged_by` come from the record that is already there.
 
     **`judged_by` is the coiner and never the describer.** Preserving it here is
@@ -1229,7 +1230,7 @@ def relation_pair_key(a_id: str, b_id: str) -> tuple[str, str]:
 
 
 class RelationVerdict(BaseModel):
-    """What an agent decided about a nominated pair of relation labels (#74).
+    """What an agent decided about a nominated pair of relation labels.
 
     **The suppression index for FC1.** `sweep_similar_relation_pairs` re-derives
     from scratch on every `reflect` and recorded nothing about declines, so a
@@ -1239,14 +1240,15 @@ class RelationVerdict(BaseModel):
     label stop existing, so **accepting is self-suppressing and declining is
     not**.
 
-    `#64` closed exactly this for fact pairs with the `assessed` edge, and
+    The `assessed` edge closed exactly this for fact pairs, and
     relation labels could not have one: that edge runs between two **nodes**,
     and `works_for` and `employed_by` are not nodes. They are now records, which
     is what makes this row addressable.
 
     **A small append-only table, not a field on the label record.** Storing the
     pair on each side would be mutable state held twice, free to disagree —
-    #54, #55 and #56 for the fifth time. It is a denormalised suppression index
+    a lookup table drifting from what it encodes, for the fifth time. It is a
+    denormalised suppression index
     and is legitimate as one for `similarity_decisions.py`'s stated reason: it
     is immutable and append-only, so it cannot drift from the journal row that
     also records it. The journal is the audit record; this is what the sweep
@@ -1262,17 +1264,17 @@ class RelationVerdict(BaseModel):
     deliberately rather than by accident, so a wrong `distinct` silences a pair
     for good. That is the dual of the futile-cycle rule and both are stated in
     `RELATION_LABELS.md` §4.2; the retraction question for both layers lives in
-    `ISSUES.md` #80.
+    `ISSUES.md`.
     """
 
     id: str = Field(default_factory=_new_id)
     # Two `RelationLabel` ids, sorted by `relation_pair_key`. Ids and not names:
     # a name is what edges join on, and keying suppression on a string would
     # have made the journal row's subjects strings too — the second namespace
-    # #74 exists to avoid.
+    # the label record exists to avoid.
     label_ids: list[str]
     verdict: Literal["distinct", "synonymous"]
-    # Required by every writer, for #64's reason: a verdict with no reason marks
+    # Required by every writer, for the same reason a verdict does: no reason marks
     # the pair judged, so the next agent skips it without knowing whether it was
     # examined or waved through.
     because: str
@@ -1327,7 +1329,7 @@ class Agent(BaseModel):
     yesterday, and self-review becomes indistinguishable from independent
     review (§2.2).
 
-    **Three layers, because one field was doing three jobs** (#78, 2026-08-26).
+    **Three layers, because one field was doing three jobs.**
     `id` is the join key: opaque, frozen into every `judged_by` at write time,
     and never shown to anybody. `name` is the handle — what the picker lists,
     what `review(mode="by_agent")` accepts, what a frontend labels a row with —
@@ -1351,7 +1353,7 @@ class Agent(BaseModel):
     rows may already record: the keys of records absorbed into this one. Nothing
     is ever rewritten — old rows keep the id they recorded and lookup resolves
     through this list, the same shape as `rejudge` keeping the value it replaces
-    (#78). An agent record whose id appears here has been absorbed and is no
+    . An agent record whose id appears here has been absorbed and is no
     longer a judge in its own right; `live_agents` is where that is decided.
 
     The append-only-list-with-dates shape is deliberately `LifecycleEpisode`'s.
@@ -1372,7 +1374,7 @@ def new_agent_id() -> str:
     """A fresh opaque key for a judge.
 
     Opaque rather than the name the user typed, so the name stays free to
-    change. #77 rejected this and was overturned the same week: both its
+    change. An earlier proposal rejected this and was overturned the same week: both its
     objections — *approving an id you cannot identify* and *the name-to-identity
     problem only moves* — were premised on a free-text prompt. With a picker the
     user never sees the key, and a **human** resolves name to identity on every
@@ -1417,7 +1419,7 @@ def agent_name(agent: Agent) -> str:
     """What to call this judge. The id where no name was ever set.
 
     One place for the fallback, because a record written before the three-layer
-    split (#78) has no name and every display path would otherwise carry the
+    split has no name and every display path would otherwise carry the
     same `or`. A legacy id reads as a name because it *was* one.
     """
     return agent.name or agent.id
@@ -1557,7 +1559,7 @@ class DecisionKind(str, Enum):
 
     One value per writer, and the list is deliberately fine-grained where two
     outcomes look alike but mean opposite things — `CORRECTION` and
-    `WORLD_CHANGE` are the two halves of `because`, and #53 exists because
+    `WORLD_CHANGE` are the two halves of `because`, and the validity model exists because
     collapsing them is how a graph forgets its own history.
 
     It is not a free string: review selects on it, and a vocabulary that grows
@@ -1572,7 +1574,7 @@ class DecisionKind(str, Enum):
 
     Two kinds are therefore **not** here yet, and are named so nobody re-derives
     them: `relation_merge`, whose subjects `RELATION_LABELS.md` settled — they
-    are the two labels' record ids, which #69 could not name because a label had
+    are the two labels' record ids, which nothing could name while a label had
     no id — and which waits only on whether label merging survives at all
     (`RELATION_LABELS.md` §5); and `proceeded_despite_advisory`, once advisories
     exist — that one is `WARNINGS_AND_SETTINGS.md` §9's node note, folded in
@@ -1591,7 +1593,7 @@ class DecisionKind(str, Enum):
     CONTRADICTION = "contradiction"
     VARIANT = "variant"
     SIMILARITY = "similarity"
-    # A `similarity` verdict withdrawn (#68). Its own kind rather than
+    # A `similarity` verdict withdrawn. Its own kind rather than
     # `REVERSAL`, though both undo an earlier decision, because the two differ
     # in what they did: a merge reversal **deletes** the survivor — the system's
     # only hard delete — and a reviewer selecting `REVERSAL` to audit that would
@@ -1612,7 +1614,7 @@ class DecisionKind(str, Enum):
 
     # Revisions of an ingest-time judgment that are *not* supersessions — the
     # claim is unchanged and the world has not moved, so `because` has no honest
-    # value (#66). `rejudge` covers the node-scoped fields; these two are
+    # value. `rejudge` covers the node-scoped fields; these two are
     # separate because they are addressed differently, which is the tell that
     # they are different tools: a frame is an edge onto a metacontext, and an
     # interval belongs to a (node, source) pair rather than to a node.
@@ -1621,18 +1623,18 @@ class DecisionKind(str, Enum):
 
     # Everything else an agent asserts about the graph.
     RELATION = "relation"
-    # Prose about what one of this graph's relationship labels *means* (#74).
+    # Prose about what one of this graph's relationship labels *means*.
     # Its own kind rather than `ENRICHMENT`, which is reflect's enrichment of a
     # **topic**: a reviewer auditing changes to what the graph claims does not
     # want prose about what the graph's words mean mixed in. The first draft
     # wrote `ENRICHMENT` because enriching is what it is — the right verb, and
     # the wrong side of the line. `RELATION_LABELS.md` §7.2.
     RELATION_DESCRIPTION = "relation_description"
-    # A pair of relation labels judged `distinct` or `synonymous` (#74 FC1).
+    # A pair of relation labels judged `distinct` or `synonymous`.
     # Its own kind rather than `SIMILARITY`: review *selects* on kind, and a
     # reviewer auditing judgments about claims does not want judgments about
     # vocabulary mixed in. Its subjects are the two labels' record ids, which is
-    # where #69 resolves — the subject finally has an identity to name.
+    # where that question resolves — the subject finally has an identity to name.
     RELATION_VERDICT = "relation_verdict"
     IMPORTANCE = "importance"
 
@@ -1680,7 +1682,7 @@ class DecisionRecord(BaseModel):
     mutable flag on a row that claims to be append-only. The first draft had
     both, and the contradiction was load-bearing: a mutable field on this row
     also has to stay in sync with a copy on the node, across two backends
-    (#54, #55, #56).
+    .
 
     There is no update path on the protocol either, which is what makes the
     claim structural rather than a convention.
@@ -1699,7 +1701,7 @@ class DecisionRecord(BaseModel):
     # agent that did not name itself.
     judged_by: JudgeRef | None = None
     decided_at: datetime = Field(default_factory=_now)
-    # §5. The same ladder as `confidence` (#46) rather than a second
+    # §5. The same ladder as `confidence` rather than a second
     # near-identical one, and absent means **unrated** — deliberately not a
     # rated 0.5. Supplied by the review writers (`apply_review`, `rejudge`),
     # where a declared judgment is the whole point of the call; every other
@@ -1719,7 +1721,7 @@ class DecisionRecord(BaseModel):
     # touch, so one value per row is the whole of it — and it is what turns the
     # recoverability argument for requiring a frame into a supported read: *what
     # did this agent file into the real world* is one query here rather than a
-    # walk from ingest rows out to the edges of the nodes they name (#76).
+    # walk from ingest rows out to the edges of the nodes they name.
     frame: str | None = None
 
 

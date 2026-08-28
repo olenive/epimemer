@@ -1,4 +1,4 @@
-"""The gate a fact merge has to clear (ISSUES.md #52).
+"""The gate a fact merge has to clear.
 
 Deduplication's error mode is the worst one the system can produce. Two distinct
 claims wrongly unified become one node with two independent sources, which reads
@@ -204,9 +204,9 @@ def merged_confidence_basis(sources: Sequence[Fact]) -> str | None:
 
     `merged_value_signal` takes the highest confidence of its sources, and the
     prose explaining that number lives in `metadata` rather than beside it, so
-    that `ValueSignal` stays the numbers every ranker reads (#46). The
+    that `ValueSignal` stays the numbers every ranker reads. The
     consequence is that a merge which rebuilds the signal and not the metadata
-    leaves a prior with its reason stripped off — the exact state #46's guidance
+    leaves a prior with its reason stripped off — the exact state the guidance
     exists to prevent, reached by a path nobody chose.
 
     Unrated sources take no part, as they take none in the signal itself: a

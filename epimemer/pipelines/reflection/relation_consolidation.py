@@ -13,11 +13,11 @@ of what happens next.** `apply_reflection(relation_verdicts=[…])` records
 `describe_relation` rather than through collapse.
 
 A pair already judged — `distinct` or `synonymous`, via
-`apply_reflection(relation_verdicts=[…])` — is never nominated again (#74 FC1).
+`apply_reflection(relation_verdicts=[…])` — is never nominated again.
 That suppression is **permanent by design**, inherited from the fact-pair layer
 in as many words rather than by accident, so a wrong `distinct` silences a pair
 for good; `RELATION_LABELS.md` §4.2 states it beside its dual, and `ISSUES.md`
-#80 is where a retraction would be argued.
+`ISSUES.md` is where a retraction would be argued.
 """
 
 import math
@@ -43,7 +43,7 @@ async def related_edges_of_active_nodes(
     count labels that only archived and superseded nodes still use — reporting a
     vocabulary the live graph no longer has, and proposing merges between
     labels nobody can reach. That scoping is why this is two queries and not one
-    aggregate (ISSUES.md #14 step 2).
+    aggregate.
 
     De-duplicated by edge id, since an edge between two active nodes is found
     from both ends. Node order, then outgoing before incoming: label discovery
@@ -104,7 +104,7 @@ async def sweep_similar_relation_pairs(
     embeddings are at least `similarity_threshold` similar are returned, highest
     first — each as {label_a, label_b, kind, count_a, count_b, similarity}.
 
-    **Pairs an agent has already judged are dropped** (#74 FC1). Without this
+    **Pairs an agent has already judged are dropped**. Without this
     the sweep re-derives from scratch every time and a declined pair comes back
     on every `reflect`, for ever, to a fresh agent who cannot see the previous
     refusals — while *accepting* a merge makes one label vanish and is therefore

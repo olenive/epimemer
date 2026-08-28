@@ -44,7 +44,7 @@ from epimemer.core.types import (
 class TestEdgeBehaviour:
     """Traversal and migration are independent questions about an edge.
 
-    Migration gained a third answer with #54: a world-change neither moves an
+    Migration gained a third answer with per-edge-type migration: a world-change neither moves an
     edge nor leaves everything behind, so `copy` exists for the two types that
     describe *where a claim sits* rather than asserting it.
     """
@@ -79,7 +79,7 @@ class TestEdgeBehaviour:
 
 
 class TestWorldChangeMigrationPolicy:
-    """#54. The historical node keeps what it asserted; the replacement does not
+    """Per-edge-type migration. The historical node keeps what it asserted; the replacement does not
     inherit assertions it never made."""
 
     def test_provenance_stays_with_the_claim_its_document_asserted(self):
@@ -115,7 +115,7 @@ class TestWorldChangeMigrationPolicy:
         """A correction's replacement is the same claim, so its frame follows.
         A merge's survivor is *synthesised*, so no source's framing was made
         about that wording — the merging agent re-states it under its own judge
-        instead, which is `describe_relation`'s coiner rule one layer up (#76).
+        instead, which is `describe_relation`'s coiner rule one layer up.
         """
         assert EdgeType.HAS_METACONTEXT in moved_edge_types(NodeStatus.CORRECTED)
         assert EdgeType.HAS_METACONTEXT not in moved_edge_types(NodeStatus.MERGED)
@@ -158,7 +158,7 @@ class TestCountingMergeCycles:
         assert completed_merge_cycles(node) == 0
 
     def test_a_recurrence_is_not_an_oscillation(self):
-        """A claim that stepped aside for its period and came back is #53's
+        """A claim that stepped aside for its period and came back is the validity model's
         recurrence — the case the lifecycle was built for, and not this one."""
         node = Fact(content="c", source_id="s", lifecycle=[
             _episode(NodeStatus.HISTORICAL, restored=True),
@@ -171,7 +171,7 @@ class TestCountingMergeCycles:
 
 
 class TestAJudgmentIsAnchoredWhateverTheRetirement:
-    """#65. A judgment was made against a wording, and no retirement leaves that
+    """The anchoring rule. A judgment was made against a wording, and no retirement leaves that
     wording in place — so none of them re-point one.
 
     The correction case is the one with teeth. `migration_disposition` holds
@@ -212,7 +212,7 @@ class TestAJudgmentIsAnchoredWhateverTheRetirement:
 
 
 class TestTheLineageEdgeSplitsWithTheStatus:
-    """#53 T2. The status split landed first and the edge did not, which left a
+    """The edge split. The status split landed first and the edge did not, which left a
     world-change writing `superseded_by` onto a node marked `HISTORICAL` — an
     edge saying *replaced* about a claim the status calls still true of its
     period. The two now split together.
@@ -271,7 +271,7 @@ class TestValueSignal:
         assert v.importance == 0.5
 
     def test_an_unrated_node_stores_absence_not_the_default_number(self):
-        """#46 amendment 1, signed off 2026-08-19.
+        """The confidence-prior amendment, signed off 2026-08-19.
 
         A stored 0.5 cannot say which of two things happened: an agent read
         the material and judged it middling, or no agent considered the
@@ -303,7 +303,7 @@ class TestValueSignal:
         assert v.confidence == 0.5
 
     def test_a_node_stored_with_relevance_still_loads(self):
-        """The migration case for #44's removal, and the whole risk of it.
+        """The migration case for the field with no reader's removal, and the whole risk of it.
 
         `relevance` was written into every node of every existing graph. It is
         gone from the model, so loading one of those rows now hands Pydantic a
@@ -328,7 +328,7 @@ class TestValueSignal:
         assert "relevance" not in restored.model_dump(mode="json")
 
     def test_a_node_stored_with_novelty_still_loads(self):
-        """The migration case for #46's removal, and the wider one of the two.
+        """The migration case for the confidence prior's removal, and the wider one of the two.
 
         `relevance` was at least written by something. `novelty` was written by
         nothing after creation: every node in every existing graph carries it at
@@ -399,7 +399,7 @@ class TestValueSignal:
 
 
 class TestMergedValueSignal:
-    """The one place a merge decides what a combined signal says (#45)."""
+    """The one place a merge decides what a combined signal says."""
 
     def _at(self, days_ago: int) -> datetime:
         return datetime.now(timezone.utc) - timedelta(days=days_ago)
@@ -672,7 +672,7 @@ class TestNewEdgeTypes:
 
 
 class TestValidityBelongsToASource:
-    """Intervals hang off the provenance edge, and nowhere else (#53 T1 §2).
+    """Intervals hang off the provenance edge, and nowhere else (per-source intervals).
 
     Per source rather than per node is the decision the whole model turns on: a
     node-level set has to union what its sources assert, and union takes one
@@ -736,7 +736,7 @@ class TestValidityBelongsToASource:
 
 
 class TestDocumentsCarryTheirPublicationDate:
-    """`created_at` is ingest time and cannot stand in for it (#53 T1 §7).
+    """created_at is ingest time and cannot stand in for it (the witness point).
 
     A 1970 memoir read today carries `created_at = 2026`. Using that as evidence
     about when a claim held is transaction time wearing valid time's clothes.

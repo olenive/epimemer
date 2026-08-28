@@ -239,7 +239,7 @@ class TestWhatARefusalSays:
 class TestTheGateAtTheBoundary:
     """`_judge_for_write` is the only place the policy is read.
 
-    It also answers **which graph before who** (#71). Everything it reads is
+    It also answers **which graph before who**. Everything it reads is
     graph state — the approved-agent list and the `require_judge` setting — so
     on a wrong-graph call it would otherwise refuse with *claim an agent* rather
     than *wrong graph*, and warn an operator that a judge is unapproved in a

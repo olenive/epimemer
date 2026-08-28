@@ -1,7 +1,7 @@
-"""Check an `apply_reflection` batch before any of it applies (#82).
+"""Check an `apply_reflection` batch before any of it applies.
 
 `apply_reflection` applies in ten steps with no transaction across them, and the
-step order is load-bearing — #65's anchoring rule: judgments first, because
+step order is load-bearing — the anchoring rule: judgments first, because
 later steps retire the nodes those judgments name. So a malformed entry part-way
 down a batch cannot be rolled back. Everything above it is already committed,
 and the caller receives `{"error": "'pair'"}`: a response that says the call
@@ -73,7 +73,7 @@ REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
 # Keys a loop reads but which are **deliberately** not batch-level, listed so
 # the drift guard treats each as a decision rather than an omission.
 #
-# `relation_verdicts.kind` is refused per entry by #74 stage 3, and the reason
+# `relation_verdicts.kind` is refused per entry deliberately, and the reason
 # is specific: an absent `kind` is an agent who stated none, and the refusal
 # says so and asks them to copy it from the nomination. Promoting it here would
 # throw away nine good verdicts because the tenth was incomplete — the shape

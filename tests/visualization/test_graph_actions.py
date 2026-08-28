@@ -101,7 +101,7 @@ class TestVocabulary:
 
     def test_there_is_no_superseded_verb(self):
         """The one thing §3.1 rules out by name: "superseded 123 → 124" flattens
-        the distinction #53 exists to record. The legacy `SUPERSEDED` status —
+        the distinction the validity model exists to record. The legacy `SUPERSEDED` status —
         rows that genuinely do not say which act they were — reads as the
         unclassified `undetermined`, not as a guess at one of the two."""
         assert "superseded" not in {verb.value for verb in ActionVerb}
@@ -127,7 +127,7 @@ class TestVocabulary:
         assert line == "status undetermined: 1 node"
 
     async def test_recurrence_is_restored_plus_counts_not_a_new_verb(self, bus):
-        """#53 T2's `recurs` verdict resolves as restore + a new source edge.
+        """The edge split's `recurs` verdict resolves as restore + a new source edge.
         Recorded as `restored` with the edge in `counts`, so nobody mints a
         `recurs` verb later and splits the vocabulary again."""
         wrapped = instrument_storage(InMemoryStorage(), bus)

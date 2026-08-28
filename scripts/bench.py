@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Measure Epimemer's cost as a graph grows.
 
-ISSUES.md #14 documents a known scaling ceiling — full scans and per-node
+batching documents a known scaling ceiling — full scans and per-node
 round-trips in `list_sources`, `reflect` and `search` enrichment — and defers
 the fix until "latency is felt". That trigger is only checkable if something
 measures it, which is what this does.
@@ -30,7 +30,7 @@ Usage:
     uv run python scripts/bench.py --quick --n 10       # smoke test
     EPIMEMER_BENCH_URL=ws://localhost:8000/rpc uv run python scripts/bench.py
 
-    # the annotation costs behind BENCHMARKS.md's corroboration table (#51)
+    # the annotation costs behind BENCHMARKS.md's corroboration table
     uv run python scripts/bench.py --n 400,2000 --skip-reflect \
         --publishers 4 --similarity-degree 10
 
@@ -206,7 +206,7 @@ async def _time_annotations(storage, provider, *, runs: int, rng) -> dict:
 
     Timed separately from `search` itself because they are the part that grows
     with what the graph has *become* rather than with its size — and because
-    corroboration is opt-in on exactly this evidence (ISSUES.md #51). The node
+    corroboration is opt-in on exactly this evidence. The node
     set is whatever a real `search(k=10, graph_hops=1)` returns, expansion
     included, since that is what the annotations are handed.
     """

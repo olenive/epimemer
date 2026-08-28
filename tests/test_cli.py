@@ -25,7 +25,7 @@ AT = datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
 class TestWhereThisCommandCannotReach:
     """Approvals live in per-graph settings *inside* the backend, and an
     embedded store lives inside the server process — a second connection to
-    `mem://` is a separate store, not a second view of one (ISSUES.md #16)."""
+    `mem://` is a separate store, not a second view of one."""
 
     def test_the_in_memory_backend_is_unreachable(self):
         assert unreachable_store(ServerConfig(storage_backend="memory")) is not None
@@ -70,7 +70,7 @@ class TestWhereThisCommandCannotReach:
 
 
 class TestRenamingAJudge:
-    """The name is the only mutable layer (#78), and this is one of its two
+    """The name is the only mutable layer, and this is one of its two
     channels — the other being the elicitation prompt. It is here for the reason
     approval is: a handle an agent could rename is a handle an agent could point
     at another judge's history (§2.2).

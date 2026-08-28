@@ -1,10 +1,11 @@
-"""The temporal soundness check over stored inferences (#53 T1 §11).
+"""The temporal soundness check over stored inferences.
 
 The graph makes no inferences; the agent does and the graph stores them. So the
 defect this catches is not one the engine can prevent at write time — an
 inference drawn across *"the city is called Leningrad"* and a claim about 2020
 is unsound, and nothing in the model noticed until validity existed. This is the
-reason #53 outranks everything else in `ISSUES.md`: not a display defect but a
+reason the validity model mattered more than anything else: not a display
+defect but a
 soundness defect in the layer the system exists to provide.
 
 **It flags and never blocks, and it never fires on unknown.** Both are
@@ -80,8 +81,8 @@ async def _premise_ids(
     (`plan_evidence_stale_edges`): an inference is `derived_from` a fact, and a
     fact `supports` an inference. Two batched queries for the whole set rather
     than two per inference — this runs inside the phase that fails first as a
-    graph grows (#39), so it may not be the thing that adds a round-trip per
-    node (ISSUES.md #14).
+    graph grows, so it may not be the thing that adds a round-trip per
+    node.
     """
     derived = await storage.get_edges_for(
         list(inference_ids), direction="from", edge_type=EdgeType.DERIVED_FROM
@@ -127,7 +128,7 @@ async def find_unsound_inferences(
     **Validity is read before the facts are**, which is the ordering the cost
     argues for rather than the one the sentence above reads in. Undated premises
     cannot fire, most of the graph is undated and always will be, and this phase
-    sits inside the tool that crosses the timeout first (#39) — so on a graph
+    sits inside the tool that crosses the timeout first — so on a graph
     with no intervals it fetches no nodes at all, and on one with a few it
     fetches those few. Fetching every premise first and discarding them was
     measurably worse for exactly the graphs that cannot produce a flag.

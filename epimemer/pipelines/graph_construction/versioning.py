@@ -57,13 +57,13 @@ async def supersede_node(
         status: Why the old node is being retired — `CORRECTED` (it was wrong)
             or `HISTORICAL` (the world changed, and it is still right of its
             period). No default: the two are opposite events and only the
-            caller knows which one happened (#53). It selects two things
+            caller knows which one happened. It selects two things
             besides the status itself: the edge migration policy — see
-            `migration_disposition` (#54), under which a `HISTORICAL` node
+            `migration_disposition`, under which a `HISTORICAL` node
             keeps its own provenance while only its frame and tags are copied
             onto the replacement — and which lineage edge is written, see
             `lineage_edge_type_for`. Judgments made about the old node stay on
-            it under *either* status (#65), so that is not one of the
+            it under *either* status, so that is not one of the
             differences.
 
     Returns:
@@ -115,7 +115,7 @@ async def supersede_by_existing(
 
     Used where the current truth is a node that already exists (rather than
     freshly-written content) — either because the earlier claim was wrong or
-    because the world changed, which ``status`` distinguishes (#53). Marks the
+    because the world changed, which ``status`` distinguishes. Marks the
     old node with ``status`` and writes the lineage edge that goes with it
     (old → existing) — `superseded_by` for a correction,
     `temporally_followed_by` for a world-change, see `lineage_edge_type_for`.
@@ -166,7 +166,7 @@ async def plan_merge_undo(
     exists.
 
     Only the edges the merge actually *moves or drops* are captured. Judgment
-    edges stay on the source under `migration_disposition` (#65), so recording
+    edges stay on the source under `migration_disposition`, so recording
     them would have a reversal recreate edges that never left.
 
     Read before the transaction, the way `merge_nodes_tx` and
@@ -278,7 +278,7 @@ async def merge_nodes(
     operation so the merged node is searchable and inherits its sources'
     supporting evidence rather than being orphaned.
 
-    **The pre-merge edge partition is captured on the survivor** (#64 step 0a,
+    **The pre-merge edge partition is captured on the survivor** (
     REVIEW_MODE.md §7). Migration re-points every migrating edge and collapses
     duplicates, recording nothing about which source owned which — so the
     partition exists at this moment and at no other, and a merge taken without
@@ -288,7 +288,7 @@ async def merge_nodes(
     only because its cost rises while it waits.
 
     **Dependent inferences are flagged, as they are on every other event that
-    changes a premise** (#61). A merge is the only one that does not retire the
+    changes a premise**. A merge is the only one that does not retire the
     claim — the survivor is ACTIVE and carries every source — so it writes
     `evidence_merged` rather than `evidence_superseded`: the wording under the
     inference changed, which is worth a re-read, and nothing was overturned,
@@ -342,7 +342,7 @@ async def merge_nodes(
         for source in source_nodes
     ]
 
-    # The survivor's frame is **re-stated**, not inherited (#76). Its content is
+    # The survivor's frame is **re-stated**, not inherited. Its content is
     # synthesised, so no source's framing was ever made about this wording, and
     # a migrated edge would answer *which world is this about* on the merging
     # agent's behalf while crediting somebody else. `migration_disposition`
@@ -475,7 +475,7 @@ async def reversal_refusal(
         (source_id, survivor.id, EdgeType.MERGED_INTO.value)
         for source_id in source_ids
     } | {
-        # The frame the merge **re-stated** on the survivor (#76). It is not in
+        # The frame the merge **re-stated** on the survivor. It is not in
         # the captured partition, because a merge no longer migrates
         # `has_metacontext` — the sources kept theirs, and these are new edges
         # the merge itself wrote. Left out, every merge became irreversible the
@@ -527,7 +527,8 @@ async def reverse_merge(
 
     **One boundary, and it is the only place exactness does not hold: status is
     restored, history is appended.** `lifecycle` is append-only by design — a
-    node leaving the active set twice is the recurrence #53 legalised — so a
+    node leaving the active set twice is the recurrence the validity model
+    legalised — so a
     merge/reverse cycle leaves a closed episode behind. That is the record that
     it happened, which is not a flag and is not returned.
 

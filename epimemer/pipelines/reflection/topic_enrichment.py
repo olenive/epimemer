@@ -27,7 +27,7 @@ async def gather_associated_material_for(
 
     Two queries for the whole topic set rather than two per topic — both
     `reflect` phases that need material walk every active topic, so per-topic
-    reads made this one of the larger N+1 sites (ISSUES.md #14).
+    reads made this one of the larger N+1 sites.
     """
     topic_ids = [topic.id for topic in topics]
     by_edge_type = {
@@ -40,7 +40,7 @@ async def gather_associated_material_for(
     # The linked nodes in one read rather than one per edge. This was the
     # largest remaining N+1 in `reflect`: 900 fetches at 1,200 nodes, and on
     # SurrealDB each cost 1-3 round-trips, because a node's table is not known
-    # from its id and `get_node` probes all three (#14).
+    # from its id and `get_node` probes all three.
     linked = await storage.get_nodes([
         edge.src_id
         for by_topic in by_edge_type.values()

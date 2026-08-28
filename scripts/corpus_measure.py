@@ -5,10 +5,10 @@
 17-word vocabulary — which is the right corpus for timing graph operations and
 the wrong one for two open questions that depend on what real text looks like:
 
-- **ISSUES.md #59** — `all-MiniLM-L6-v2` truncates at 256 word-pieces and
+- **the embedding-window measurement** — `all-MiniLM-L6-v2` truncates at 256 word-pieces and
   nothing guards it. The entry says to take the token-length distribution over
   a real graph before choosing between its four options.
-- **ISSUES.md #60** — `reflect`'s candidate pair lists are quadratic and
+- **the nomination cap** — `reflect`'s candidate pair lists are quadratic and
   unbounded. Its projection to gigabytes borrows a 49% survival rate from a
   corpus the entry itself calls degenerate in this exact dimension.
 
@@ -17,7 +17,7 @@ Both want the same input, so this takes it once: a graph of real ingested text.
 **Read-only by construction, and that is not incidental.** The only real graphs
 on a developer's machine live in the `epimemer` namespace, which nothing may
 write to. `SurrealDBStorage.connect()` defines tables and runs the FTS backfill
-(#58), so this reaches the rows over HTTP `SELECT` instead and never opens a
+, so this reaches the rows over HTTP `SELECT` instead and never opens a
 storage backend at all. A measurement that modified what it measured would be
 worthless twice over.
 
@@ -49,19 +49,19 @@ from epimemer.pipelines.reflection.contradiction_detection import detect_contrad
 from epimemer.pipelines.reflection.pair_scoring import similar_pairs
 from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
 
-# The model `SentenceTransformersProvider` defaults to, and the window #59 is
+# The model `SentenceTransformersProvider` defaults to, and the window the embedding-window measurement is
 # about. Read from the model itself when the survival pass loads it; this is
 # the value used for the tokenizer-only pass, where loading the full model to
 # read one integer is not worth the seconds.
 MODEL_NAME = "all-MiniLM-L6-v2"
 WINDOW = 256
 
-# ~580 bytes per surviving pair, measured directly in #60 across the scored
+# ~580 bytes per surviving pair, measured directly in the nomination cap across the scored
 # tuples, the nominated list and the response dicts.
 BYTES_PER_PAIR = 580
 
 # Which tables hold text, and under which field. Segments are separate from
-# nodes throughout because #59 names them separately — they are a second corpus
+# nodes throughout because the embedding-window measurement names them separately — they are a second corpus
 # with a different length distribution, and averaging them together would hide
 # whichever one is at risk.
 NODE_TABLES = ("fact", "inference", "topic")
@@ -122,7 +122,7 @@ def _texts(sql, table: str, field: str) -> list[str]:
 
 
 def _priors(sql) -> dict:
-    """How many supplied priors arrive carrying a reason (#46's open trigger).
+    """How many supplied priors arrive carrying a reason (the confidence prior's open question).
 
     `confidence` is a prior the agent supplies and `confidence_basis` is the one
     line saying why. The basis is asked for by tool guidance rather than enforced
@@ -136,9 +136,9 @@ def _priors(sql) -> dict:
     - **rated non-default** — a supplied 0.3/0.7/0.9. Guidance asks for a line.
     - **unrated** — the field absent, which is what the ladder says to store
       when there is no specific reason to doubt or trust. Owes nothing.
-    - **legacy 0.5** — written before #46 landed on 2026-08-19, when the field
+    - **legacy 0.5** — written before the confidence prior landed on 2026-08-19, when the field
       was a non-nullable default. These read as *rated ordinary* though nobody
-      rated them, which is the carry-over #46 left behind.
+      rated them, which is the carry-over the confidence prior left behind.
 
     `confidence_basis` lives in `node.metadata`, deliberately apart from the
     numbers every ranker reads (`tools.py`) — so a query looking for it beside
@@ -244,7 +244,7 @@ def _survival(vectors: np.ndarray, threshold: float) -> dict:
         "survival_rate_pct": round(rate * 100, 4),
         "top_score": round(max(scores), 4) if scores else None,
         "median_score": round(statistics.median(scores), 4) if scores else None,
-        # What the measured rate says about the sizes #60 projects to. The rate
+        # What the measured rate says about the sizes the nomination cap projects to. The rate
         # is the measurement; these are arithmetic on it, and are labelled as
         # projections so nobody reads them as observations.
         "projected": {
@@ -281,7 +281,7 @@ def _score_spread(vectors: np.ndarray) -> dict:
 def _scaling(vectors: np.ndarray, threshold: float, *, seed: int = 1) -> list[dict]:
     """Survival rate at growing subset sizes of the same corpus.
 
-    The projection in #60 multiplies a measured rate by a pair count, which is
+    The projection in the nomination cap multiplies a measured rate by a pair count, which is
     only sound if the rate does not itself move with size. It might: as a graph
     fills in one domain its facts grow more mutually similar, and a rate rising
     with n would make the projection an underestimate by an unknown factor.
@@ -308,7 +308,7 @@ def _scaling(vectors: np.ndarray, threshold: float, *, seed: int = 1) -> list[di
 def _synthetic_control(threshold: float, *, count: int, seed: int = 1) -> dict:
     """The same measurement over `bench.py`'s own generated text.
 
-    This is the control the whole of #60 turns on. Its projection multiplies a
+    This is the control the whole of the nomination cap turns on. Its projection multiplies a
     **49% survival rate for real `all-MiniLM-L6-v2` on "similarly templated
     text"** by a real graph's fact count — but the templated text is sentences
     drawn from a 17-word vocabulary, so a high rate there may say more about
@@ -390,7 +390,7 @@ def main() -> None:
     parser.add_argument("--user", default="root")
     parser.add_argument("--password", default="root")
     parser.add_argument(
-        "--skip-survival", action="store_true", help="token lengths only (#59)"
+        "--skip-survival", action="store_true", help="token lengths only"
     )
     parser.add_argument(
         "--synthetic-control",
@@ -398,7 +398,7 @@ def main() -> None:
         default=0,
         help=(
             "also score this many bench-generated sentences through the real "
-            "model, as a control on the 49%% figure #60's projection uses"
+            "model, as a control on the 49%% figure the nomination cap's projection uses"
         ),
     )
     args = parser.parse_args()
@@ -428,7 +428,7 @@ def main() -> None:
 
     # Pooled truncation, emitted whenever more than one graph was read. The
     # per-database rows are the honest unit — this one exists because the
-    # question #59 asks ("does real node text reach the window?") is about the
+    # question the embedding-window measurement asks ("does real node text reach the window?") is about the
     # text, not about which graph it came from, and a pooled p95 is what a
     # decision about the embedding path would be taken against.
     if len(databases) > 1:

@@ -3,7 +3,8 @@
 This module is about when a claim was **true**. That is *valid time*, and it is
 a different axis from *transaction time* — `created_at`, `superseded_at` and
 `graph_as_of`, which record what the graph held and when. The two blur silently
-once there is code and are near-impossible to separate afterwards, so #53 T1
+once there is code and are near-impossible to separate afterwards, so the
+validity model
 fixed the vocabulary before the fields existed and this module keeps to it.
 
 Everything here is pure: no clock is read, no storage is touched, no network
@@ -265,7 +266,7 @@ class TemporalRelation(str, Enum):
 
     `unknown` is its own value and never a probability. *No information about
     the ordering* and *genuinely even odds* are different claims, and collapsing
-    them is the defect #53's review caught on `relevance`, `novelty`,
+    them is the defect review caught on `relevance`, `novelty`,
     `confidence` and the empty validity set. If distributions ever land, a
     probability rides on the three known answers and never stands in for this
     one.

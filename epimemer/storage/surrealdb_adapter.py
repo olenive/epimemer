@@ -69,7 +69,7 @@ def is_embedded_url(url: str) -> bool:
     Public because it is not only a reconnect concern: a separate process
     cannot reach an embedded store at all, so the `epimemer` CLI has to ask
     this before offering to write anything a running server is meant to read
-    (REVIEW_MODE.md §10.3, ISSUES.md #16).
+    (`REVIEW_MODE.md` §10.3).
     """
     return url.startswith(_EMBEDDED_SCHEMES)
 
@@ -232,7 +232,7 @@ async def _ranked_items_with_status(
 # only its answer. `WITH INDEX` is the whole point: without it SurrealDB
 # resolves this through `idx_{table}_status`, which matches every active row,
 # and applies `content` as a predicate afterwards — a scan of the live table on
-# every ingest (#48). Defining a `content` index does not fix that on its own;
+# every ingest. Defining a `content` index does not fix that on its own;
 # the planner keeps choosing the status index, and so does a composite
 # `(content, status)`. Only naming the index moves `content` into the access
 # path and leaves `status` as the cheap post-filter.
@@ -565,7 +565,7 @@ def _decision_clauses(
 
     Shared by `query_decisions` and `count_decisions_by_graph`, which have to
     agree about what a window contains: a locator that counts a window
-    differently from the reader it sends you to is worse than no locator (#73).
+    differently from the reader it sends you to is worse than no locator.
 
     `since`/`until` are padded to the microsecond because `decided_at` is stored
     and compared as text — see `_iso_micros` for the case that breaks otherwise.
@@ -574,7 +574,7 @@ def _decision_clauses(
     params: dict = {}
     if agent_ids is not None:
         # `IN` over a list rather than `=` over one id: a judge is a set of keys
-        # once two records have been consolidated (#78), and an empty list
+        # once two records have been consolidated, and an empty list
         # matches nothing, which is what a caller naming a judge with no ids
         # means. The index on `judged_by.agent_id` still serves it.
         clauses.append("judged_by.agent_id IN $agent_ids")
@@ -616,7 +616,7 @@ def instant(expr: str) -> str:
     on a whole second renders `…:41Z` while a bound renders `…:41.500000Z`, and
     `"Z" > "."` puts the earlier row *after* the later bound. The `+00:00` and
     `Z` suffixes differ the same way. Wrapping both sides removes the whole class
-    rather than the instances (`ISSUES.md` #70).
+    rather than the instances.
 
     **It costs a full scan, and that is why it is not used everywhere.** Measured
     2026-08-23 on embedded SurrealDB: the conversion adds ~2.3 µs per row
@@ -796,7 +796,7 @@ class SurrealDBStorage:
         """Switch to a different database and set up its schema.
 
         Takes the guard's mover turn, so a call in flight finishes against the
-        graph it started on rather than half of it landing here (#16).
+        graph it started on rather than half of it landing here.
         """
         validate_graph_name(database)
         async with self._guard.moving():
@@ -823,7 +823,7 @@ class SurrealDBStorage:
     # the wrong-graph incident's mechanism running inside the server, and
     # `expected_graph` cannot see it — the agent and `current_database` agree
     # while the database on the wire has moved. So the borrow takes the guard's
-    # mover turn and nothing else runs during it (#16).
+    # mover turn and nothing else runs during it.
 
     @contextlib.asynccontextmanager
     async def _borrowed(self, database: str):
@@ -1146,7 +1146,7 @@ class SurrealDBStorage:
     ) -> EpistemicNode | None:
         """First node with exactly this content and status (for exact-name upsert).
 
-        Measured at 3,000 topics against a real server (#48): 4.0 ms with the
+        Measured at 3,000 topics against a real server: 4.0 ms with the
         planner's own choice, 4.3 ms with an unused content index, **0.53 ms**
         once the index is named — and the write side pays under 5% for that
         index, inside the run-to-run spread, which was the cost that made this
@@ -1397,7 +1397,7 @@ class SurrealDBStorage:
     async def _stored_lifecycles(
         self, nodes: Sequence[EpistemicNode]
     ) -> dict[str, Sequence[LifecycleEpisode]]:
-        """Each node's lifecycle **as stored**, keyed by id (#67).
+        """Each node's lifecycle **as stored**, keyed by id.
 
         A transaction argument is a *request* — which nodes to retire — and its
         `lifecycle` field was being read as a *snapshot*. A caller holding a node
@@ -1431,8 +1431,8 @@ class SurrealDBStorage:
         judge: JudgeRef | None = None,
     ) -> None:
         # Which edges follow the replacement depends on *why* the old node is
-        # being retired (#54): a correction re-points everything but history,
-        # review and judgments (#65); a world-change re-points nothing and
+        # being retired: a correction re-points everything but history,
+        # review and judgments; a world-change re-points nothing and
         # copies only the frame and the tags. Both answers come from
         # `migration_disposition`, so this backend cannot develop an opinion of
         # its own.
@@ -1562,7 +1562,7 @@ class SurrealDBStorage:
                 f"WHERE uid = $uid_{i}"
             )
         # Inside the same transaction, so a reactivated node can never be left
-        # ACTIVE without the edge saying what asserted it again (#53 T2).
+        # ACTIVE without the edge saying what asserted it again.
         if edges:
             statements.append("INSERT INTO node_edge $new_edges")
             params["new_edges"] = [_edge_row(edge) for edge in edges]
@@ -1626,7 +1626,7 @@ class SurrealDBStorage:
             if new_src == new_dst or survivor is not None:
                 # ...self-loops and duplicates are not recreated, but what a
                 # duplicate *asserted* is: collapsing two provenance edges to one
-                # document must not lose either one's periods (#53 T1 §2).
+                # document must not lose either one's periods.
                 # Rebound rather than appended — `model_copy` shares the list.
                 if survivor is not None:
                     survivor.validity = merged_validity(survivor.validity, edge.validity)
@@ -1667,7 +1667,7 @@ class SurrealDBStorage:
             statements.append("INSERT INTO node_edge $lineage_data")
 
         # The *stored* lifecycle, not the caller's copy — `_stored_lifecycles`
-        # has the whole argument (#67).
+        # has the whole argument.
         lifecycles = await self._stored_lifecycles(source_nodes)
         source_params: dict = {}
         for i, source in enumerate(source_nodes):
@@ -1740,7 +1740,7 @@ class SurrealDBStorage:
             params["restored_rows"] = rows
 
         # One statement per source: the status and instant are shared, each
-        # source's history is its own. Stored rather than passed (#67).
+        # source's history is its own. Stored rather than passed.
         lifecycles = await self._stored_lifecycles(source_nodes)
         for i, source in enumerate(source_nodes):
             params[f"source_{i}"] = source.id
@@ -2022,7 +2022,7 @@ class SurrealDBStorage:
 
         A node's table is not derivable from its `source_id`, so the segment
         bridge would otherwise probe topic, then fact, then inference for every
-        segment a lexical search hit. That is the shape ISSUES.md #14 exists to
+        segment a lexical search hit. That is the shape batching exists to
         keep out of the read paths.
         """
         wanted = list(dict.fromkeys(source_ids))
@@ -2088,7 +2088,7 @@ class SurrealDBStorage:
         )
         return [Metacontext.model_validate(_clean_record(r)) for r in rows]
 
-    # --- Relation labels (#74) ---
+    # --- Relation labels ---
 
     async def store_relation_label(self, label: RelationLabel) -> str:
         """Upsert by `(name, kind)`, which is the pair edges join on.
@@ -2128,7 +2128,7 @@ class SurrealDBStorage:
         rows = await self._query("SELECT * FROM relation_label")
         return [RelationLabel.model_validate(_clean_record(r)) for r in rows]
 
-    # --- Relation verdicts (#74 §4.2) ---
+    # --- Relation verdicts ---
 
     async def record_relation_verdict(self, verdict: RelationVerdict) -> str:
         """Append one verdict. `CREATE`, never `UPSERT`.
@@ -2300,7 +2300,7 @@ class SurrealDBStorage:
         **One mover turn wraps the whole sweep**, the way `assemble_snapshot`
         takes one for its four reads: the counts are then of a single instant,
         and the borrows nested inside re-enter the guard rather than queueing
-        against it (#16). The caller is already a mover — `review` is in
+        against it. The caller is already a mover — `review` is in
         `MOVES_THE_GRAPH` — so this nests again and takes nothing.
 
         **A graph is counted only if it already exists.** `USE` on an unknown

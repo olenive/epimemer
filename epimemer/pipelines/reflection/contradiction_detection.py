@@ -3,11 +3,11 @@
 Finds pairs of active facts with high embedding similarity that may
 represent contradictions or redundancies, for further analysis.
 
-This phase is the one that fails first as a graph grows (#39). Pairs are
+This phase is the one that fails first as a graph grows. Pairs are
 quadratic in facts and there is no redundancy left to remove — the comparisons
 are genuine work — so the fix was to do that work in bulk rather than less of
 it. The scoring itself now lives in `pair_scoring`, shared with the topic phase
-(#47); this module keeps the part that is about facts.
+; this module keeps the part that is about facts.
 """
 
 from epimemer.core.types import (
@@ -38,7 +38,7 @@ __all__ = [
 # of somebody and decided. Nominating it again would be asking a question that
 # has an answer. Deliberately wider than the edges corroboration reads: this set
 # is about *suppression*, and `assessed` and `variant_of` suppress without
-# supporting (#64 §1.2).
+# supporting.
 ALREADY_JUDGED_EDGE_TYPES: tuple[EdgeType, ...] = (
     EdgeType.SIMILARITY,
     EdgeType.CONTRADICTION,
@@ -60,7 +60,7 @@ async def detect_contradictions(
     High semantic similarity between facts can indicate either:
     - Redundancy (same fact stated differently)
     - Contradiction (opposing claims about the same thing)
-    - Recurrence, when one side is HISTORICAL: the same claim true again (#53)
+    - Recurrence, when one side is HISTORICAL: the same claim true again
 
     Returns candidate pairs for further analysis. Excludes pairs anybody has
     already judged — see `already_linked` below.
@@ -94,7 +94,7 @@ async def detect_contradictions(
 
     # One fetch for every fact's vector, on the same terms as the edge reads
     # below: this walks the whole active fact set, so asking per fact made the
-    # phase round-trip bound on a networked backend (#14).
+    # phase round-trip bound on a networked backend.
     by_item = await storage.get_embeddings_for_items(
         [fact.id for fact in facts], model_id=effective_model_id
     )
@@ -106,7 +106,7 @@ async def detect_contradictions(
     # `ASSESSED` is what makes the set complete: before it there was no writer
     # for the *compatible* verdict, so a declined pair was recorded nowhere and
     # came back on every pass — thirteen of eighteen, on the graph that
-    # motivated #64. The other three are the pairs that got an action.
+    # motivated the verdict record. The other three are the pairs that got an action.
     #
     # Eight queries for the whole fact set: the edge type is part of the query
     # rather than a filter over every edge each fact has. If that ever costs

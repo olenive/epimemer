@@ -57,7 +57,7 @@ class ServerConfig(BaseModel):
     # (REVIEW_MODE.md §2.3, §10.3). This is the approval channel for clients
     # that cannot elicit **and** for the embedded backend, where the
     # `epimemer agents confirm` CLI cannot help: a second `mem://` connection is
-    # a separate store (ISSUES.md #16), so the CLI would write approvals into a
+    # a separate store, so the CLI would write approvals into a
     # store this process will never read. Empty means every claim_agent is
     # refused until a user answers an elicitation — which is the right default,
     # since an agent that could admit its own id would be asserting its own

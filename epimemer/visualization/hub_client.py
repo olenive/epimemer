@@ -61,7 +61,7 @@ async def start_hub_client(
     type, exactly as ``PublishEvent.payload`` is opaque to the hub.
     """
     stop_event = asyncio.Event()
-    # Every RPC read takes the storage guard's mover turn (ISSUES.md #16). Two
+    # Every RPC read takes the storage guard's mover turn. Two
     # things follow from that one line. Snapshot reads still do not interleave
     # with each other — a mover excludes a mover — which is what the plain
     # `asyncio.Lock` here used to buy. And they no longer interleave with **tool

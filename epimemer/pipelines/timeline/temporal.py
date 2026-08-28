@@ -1,7 +1,7 @@
 """Detect temporal expressions in text, and resolve them only when they resolve.
 
 Extraction proposes timepoints so that content-time mode is not empty on any
-graph nobody has hand-curated (ISSUES.md #34). The whole design turns on one
+graph nobody has hand-curated. The whole design turns on one
 asymmetry:
 
     A missed expression costs a mark on the timeline. An invented one is

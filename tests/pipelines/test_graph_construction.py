@@ -505,7 +505,7 @@ class TestVersioning:
         """Two provenance edges to one document become one, keeping both periods.
 
         "Intervals survive a merge for free" is the property that put validity on
-        the edge (#53 T1 §2), and the dedup is where it would quietly stop being
+        the edge (per-source intervals), and the dedup is where it would quietly stop being
         true: the collapse is by `(src, dst, type)`, so the loser's intervals go
         with it unless they are handed over. Both nodes were extracted from the
         same document, so this is one source's several periods — not the

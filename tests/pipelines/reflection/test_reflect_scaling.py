@@ -46,7 +46,7 @@ def embedding_provider() -> MockEmbeddingProvider:
 def _counting(storage, requests: list):
     """Record each frame-resolution request, as the ids it asked about.
 
-    Frames are read in bulk now (#14), so what a per-pair implementation would
+    Frames are read in bulk now, so what a per-pair implementation would
     inflate is the number of *requests*, not the number of ids in them: a
     resolver that fell back to answering pairs one at a time would show up here
     as many single-id requests rather than one request naming the whole set.
@@ -80,7 +80,7 @@ async def _facts_that_look_alike(storage, provider, count: int):
     for i in range(count):
         fact = Fact(content=f"Claim number {i}", source_id="s1")
         await storage.store_node(fact)
-        # States a frame, as every ingested node has since #76 — absence names
+        # States a frame, as every ingested node has since the frame requirement — absence names
         # none, so frameless nodes are never paired at all.
         await storage.store_edge(NodeEdge(
             src_id=fact.id, dst_id=BASE_METACONTEXT_ID,
@@ -134,7 +134,7 @@ class TestFrameResolutionScales:
 
 
 class TestContradictionScoringIsBatched:
-    """Scoring must cost one matrix product, not one Python call per pair (#39).
+    """Scoring must cost one matrix product, not one Python call per pair.
 
     This is the phase that crosses the 30 s tool timeout — at ~1,400 nodes on
     SurrealDB and ~2,900 in-memory, which is around 70 documents. Unlike every
@@ -207,7 +207,7 @@ async def _topics_that_look_alike(storage, provider, count: int):
     for i in range(count):
         topic = Topic(content=f"Subject number {i}", source_id="s1")
         await storage.store_node(topic)
-        # States a frame, as every ingested node has since #76 — absence names
+        # States a frame, as every ingested node has since the frame requirement — absence names
         # none, so frameless nodes are never paired at all.
         await storage.store_edge(NodeEdge(
             src_id=topic.id, dst_id=BASE_METACONTEXT_ID,
@@ -221,15 +221,15 @@ async def _topics_that_look_alike(storage, provider, count: int):
 
 
 class TestTopicScoringIsBatched:
-    """The same obligation as contradiction scoring, on the topic phase (#47).
+    """The same obligation as contradiction scoring, on the topic phase.
 
-    Once storage stopped being the cost (#14 step 4), this loop became **71% of
+    Once storage stopped being the cost, this loop became **71% of
     `reflect` on SurrealDB and 88% in-memory** — 800 ms of Python at 1,200
     nodes against 9 ms of storage. It is the same quadratic and the same fix:
     the comparisons are genuine work, so they move into one matrix product
     rather than being reduced.
 
-    As with #39, neither test asserts a duration. The exponent does not change,
+    As with the earlier profiling pass, neither test asserts a duration. The exponent does not change,
     so what is pinned is the shape; `make bench` measures the constant.
     """
 
@@ -285,12 +285,12 @@ class TestTopicScoringIsBatched:
 
 
 class TestEdgeFetchesDoNotScaleWithTheGraph:
-    """Every phase asks for its edges in bulk (#14 step 1).
+    """Every phase asks for its edges in bulk.
 
-    Profiling `reflect` on SurrealDB after #39 put it at **4,323 storage calls
-    for 400 nodes**, and the dominant sites were not the ones #14 predicted:
+    Profiling `reflect` on SurrealDB after the earlier profiling pass put it at **4,323 storage calls
+    for 400 nodes**, and the dominant sites were not the ones batching predicted:
     `gather_pending_review` alone issued three per node (35%), relation
-    consolidation two more (18%), while the contradiction phase #14 named was
+    consolidation two more (18%), while the contradiction phase batching named was
     14%. All of them share one shape — iterate nodes, fetch that node's edges —
     so all of them are fixed by asking once for many.
 
@@ -377,7 +377,7 @@ class TestMaterialIsGatheredOnce:
         """Split detection and the enrichment scan both need every topic's
         material. Gathering it twice doubles the read for nothing.
 
-        Now that the read is batched (#14) the count to watch is per edge type
+        Now that the read is batched the count to watch is per edge type
         across the whole topic set, not per topic: one `SUPPORTS` query and one
         `ABSTRACTS` query serve both phases.
         """
@@ -469,7 +469,7 @@ class TestAnswersAreUnchanged:
             "archival_candidates",
             "similar_relations",
             # Not a nominee list: the names of any quadratic lists that hit the
-            # cap and were cut (#60). Empty here, and on any ordinary graph.
+            # cap and were cut. Empty here, and on any ordinary graph.
             "truncated",
             # Also not a nominee list: how many label pairs standing relation
             # verdicts held out of similar_relations. Zero here.
@@ -479,13 +479,13 @@ class TestAnswersAreUnchanged:
 
 
 class TestReflectWritesNothing:
-    """`reflect` proposes; it does not act (#44).
+    """reflect proposes; it does not act.
 
     Value decay was the one exception — a write per active node per pass, to a
     field nothing read. With it gone the invariant is clean and worth pinning:
     every phase is a read, the agent decides, and `apply_reflection` is the only
     thing that changes the graph. It is also what makes `reflect` safe to run
-    speculatively, and it removes the largest write from the path #14 is
+    speculatively, and it removes the largest write from the path batching is
     still trying to make fit inside the tool timeout.
     """
 
@@ -515,7 +515,7 @@ class TestReflectWritesNothing:
 
 
 class TestReflectCatchesRecurrenceItsOwnWay:
-    """The safety net under the ingest-time detector (#53 T2).
+    """The safety net under the ingest-time detector.
 
     `check_conflicts` is opt-in, so a graph whose agent never ran it can hold a
     live claim beside the retired one it repeats and nobody would ever be asked.
@@ -582,7 +582,7 @@ class TestReflectCatchesRecurrenceItsOwnWay:
         """Widening what is compared must not mean scoring the matrix twice.
 
         This phase is the one that crosses the tool timeout as a graph grows
-        (#39). The pairs are quadratic; splitting the scored set into
+        . The pairs are quadratic; splitting the scored set into
         contradictions and recurrences is free, and computing it twice is not.
         """
         sizes: list[int] = []
@@ -602,7 +602,7 @@ class TestReflectCatchesRecurrenceItsOwnWay:
 
 
 class TestReflectFlagsAnInferenceItsPremisesCannotSupport:
-    """#53 T1 §11 reaching the surface an agent actually reads.
+    """The soundness check reaching the surface an agent actually reads.
 
     The check itself is exercised in `test_soundness.py`; what this pins is that
     reflect runs it, reports it under its own key, and — the part that matters

@@ -213,7 +213,7 @@ def wrong_graph(
     `active_graph` in the response helps an agent that looks; this stops one
     that does not.
 
-    **Every tool that touches graph content, read and write alike** (#71). This
+    **Every tool that touches graph content, read and write alike**. This
     read three tools at first, on the argument that everything else dereferences
     a node id and so already fails on the wrong graph. That argument was wrong
     twice.
@@ -229,7 +229,7 @@ def wrong_graph(
       not say *wrong graph*, so the agent's next move is a workaround rather
       than a `use_graph`. `apply_reflection` does not even raise — it skips.
       And where two graphs share ids, which is what a restored archive or a
-      copied database produces (#54, #55, #56), the ids resolve and the call
+      copied database produces, the ids resolve and the call
       lands.
 
     Exempt, and the list is short because each is *about* graphs rather than in
@@ -421,7 +421,7 @@ async def segment_text(
     publishing/authoring entity — resolved-or-created as an entity Topic and linked
     to the document by a `published_by` (attribution) edge. `published_at` is when
     the document was published, which bounds what it could have known; it is left
-    absent rather than falling back to the ingest time (#53 T1 §7).
+    absent rather than falling back to the ingest time.
     """
     from epimemer.pipelines.segmentation.paragraph_split import paragraph_split_segmentation_net
     from epimemer.pipelines.segmentation.semantic_similarity import semantic_similarity_segmentation_net
@@ -528,7 +528,7 @@ class DecompositionEntry(BaseModel):
     `confidence` cannot be judged later by anything — the material is in front
     of the agent now and nothing downstream will read it again — so an omitted
     value means the question was never put, and stays absent rather than
-    landing on the default number (#46).
+    landing on the default number.
 
     No bounds here: `ValueSignal` already holds them, and restating a range in
     two places is how the two come to disagree.
@@ -543,12 +543,12 @@ class DecompositionEntry(BaseModel):
     # request, not a refusal, because failing an ingest over it costs more
     # than the missing line.
     confidence_basis: str | None = None
-    # Condition or occurrence — the judgment dedup is gated on (#52). Facts
+    # Condition or occurrence — the judgment dedup is gated on. Facts
     # only; supplying it on a topic or an inference is refused rather than
     # dropped, since a judgment silently discarded is one the agent believes it
     # made. Omitted is *unjudged*, and unjudged never merges.
     claim_kind: ClaimKind | None = None
-    # When this document says the claim was true (#53 T1 §9). Ingest is the only
+    # When this document says the claim was true. Ingest is the only
     # place that can supply it: tense and the dates written in the text are
     # visible here and nowhere later, and reflect has facts and a graph rather
     # than a document. It lands on the node's `sourced_from` edge, so it is
@@ -663,7 +663,7 @@ async def require_metacontext(
     shares a frame with **nothing**: never nominated as contradicting anything,
     never merged with anything, and absent from every frame-scoped search —
     including a search for the frame the agent meant. It sits in the graph,
-    unreachable by every mechanism that would have questioned it (#76).
+    unreachable by every mechanism that would have questioned it.
 
     **`the-real` is not special.** It is a convention — the string every graph
     should use for the frame holding real-world claims — and it must exist here
@@ -680,7 +680,7 @@ async def require_metacontext(
     **An empty id is refused here too**, so that the one home for frame
     validation is also the one place the requirement is explained. `search`
     never reaches it — an omitted filter there is a coherent question, not an
-    unstated assumption, and searching every frame is the answer to it (#76).
+    unstated assumption, and searching every frame is the answer to it.
 
     **`writing=True` additionally refuses the quarantine frame**, which is the
     one rule that differs between reading and writing. Searching *for* what
@@ -697,7 +697,7 @@ async def require_metacontext(
             "perspective. It is required because a claim has to say which world "
             "it is about: a node with no frame is one nobody spoke for, and "
             "nothing compares it, merges it, or returns it from a scoped "
-            "search (#76)."
+            "search."
         )
     if writing and metacontext_id == QUARANTINE_METACONTEXT_ID:
         raise ValueError(
@@ -755,7 +755,7 @@ async def store_decomposition(
             `confidence_basis` records why a supplied one was chosen. A fact may
             also carry `claim_kind` — condition or occurrence — which is the
             judgment fact dedup is gated on and which only this step can make
-            (#52). The ladder an agent calibrates against lives in `server.py`'s
+            . The ladder an agent calibrates against lives in `server.py`'s
             tool docstring, which is what an agent actually reads before
             ingesting.
 
@@ -766,7 +766,7 @@ async def store_decomposition(
     because a claim has to say which world it is about: a node with no frame is
     one nobody spoke for, so nothing compares it, merges it, or returns it from
     a scoped search. On 684 real nodes no agent had ever said which world it
-    meant (#76). The requirement does not prevent a wrong frame — a reflexive
+    meant. The requirement does not prevent a wrong frame — a reflexive
     `the-real` on a fiction ingest is exactly as wrong as silence was. What it
     buys is that the error is **findable** (the frame is on the ingest journal
     row) and **fixable** (`reframe`), where silence left nothing to find.
@@ -919,7 +919,7 @@ async def store_decomposition(
         # what makes requiring it worth anything. A node carrying no edge is
         # read as base reality anyway, so an unwritten `the-real` would be
         # indistinguishable from an agent that never considered the question,
-        # which is the whole defect (#76). `frames_of` reduces both to the same
+        # which is the whole defect. `frames_of` reduces both to the same
         # single-frame set, so no consumer sees a difference; a reviewer does.
         for node in seg_nodes:
             batch_edges.append(NodeEdge(
@@ -979,7 +979,7 @@ async def store_decomposition(
             judge=judge,
             # One frame per call, so one value on the row. This is what makes
             # *which claims did this agent file into the real world* a query
-            # rather than a walk out to every node's edges (#76).
+            # rather than a walk out to every node's edges.
             frame=metacontext_id,
         )
 
@@ -1008,7 +1008,7 @@ async def store_decomposition(
 async def _historical_twins(nodes: Sequence[EpistemicNode], storage) -> list[dict]:
     """Facts just stored that are word-for-word a claim the graph retired.
 
-    The cheap floor under recurrence detection (#53 T2). `check_conflicts` is
+    The cheap floor under recurrence detection. `check_conflicts` is
     the load-bearing detector — it nominates by similarity, so it sees the
     recurrence two documents phrase differently, which is nearly all of them —
     but it is opt-in, and an agent that never calls it gets no recurrence
@@ -1020,7 +1020,7 @@ async def _historical_twins(nodes: Sequence[EpistemicNode], storage) -> list[dic
     silently, and the agent has the new document in front of it and can tell a
     recurrence from a coincidence.
 
-    Affordable only because #48 was fixed in the same visit: this is one indexed
+    Affordable only because the content lookup was indexed in the same visit: this is one indexed
     lookup per fact, 0.53 ms at 3,000 nodes against a real server, where the
     unhinted query it replaced was a table scan at 4.0 ms and climbing.
     """
@@ -1086,12 +1086,12 @@ async def _in_frame_nodes(
     A node stating none of the listed frames does not match, and a node stating
     no frame at all matches nothing scoped — it is only reachable by leaving the
     list out, which is what makes it findable at all while a graph waits to be
-    declared (#76).
+    declared.
 
     One query for the whole set. This was previously an `asyncio.gather` over a
     round-trip per node, which bought concurrency at the cost of issuing
     overlapping reads on the shared SurrealDB connection — the hazard ISSUES.md
-    #16 describes. Batching is faster *and* sequential, so the trade goes away
+    the active-graph guard describes. Batching is faster *and* sequential, so the trade goes away
     rather than being taken.
     """
     from epimemer.pipelines.reflection.review import frames_for
@@ -1359,7 +1359,7 @@ async def search(
     question about a novel's world read against real history names both;
     omitting the list searches every frame, which is a coherent question rather
     than an unstated assumption, and is why this side is optional where ingest
-    is not (#76). Frame-scoping over-fetches so an in-frame node ranked below
+    is not. Frame-scoping over-fetches so an in-frame node ranked below
     the vector top-k is still found (see `_retrieve_frame_scoped`). Metacontext labels and computed
     review labels (superseded_candidate / evidence_stale / evidence_merged /
     contested) are always included on returned nodes. Returned Topics that sit in a split hierarchy also
@@ -1393,8 +1393,8 @@ async def search(
     periods provably fall clear of this claim's is a claim about *another*
     stretch of time rather than a witness to this one, so it does not count; it
     comes back named under `adjacent_periods`, which is often the only place a
-    caller learns the adjacent claim exists (#62). **Off by default, on a
-    measurement** (#51): it is the most expensive annotation on this path by a
+    caller learns the adjacent claim exists. **Off by default, on a
+    measurement**: it is the most expensive annotation on this path by a
     wide margin, and it costs more the more similarity edges `reflect` has
     written, so it grows fastest on exactly the graphs where it says most.
 
@@ -1465,7 +1465,7 @@ async def search(
     # Asked for rather than always run. Every other annotation here is a fixed
     # number of batched queries over the result set; this one walks out to each
     # node's similarity neighbourhood, so its cost follows an edge density
-    # nothing bounds (#51, and #60's shape one path along).
+    # nothing bounds.
     corroboration_by_node = (
         await corroboration_for([n.id for n in nodes], storage)
         if include_corroboration
@@ -1563,7 +1563,7 @@ def events_in_window(
     Emits `created` when the node was born in the window, and one event per
     lifecycle episode boundary that falls inside it: the status the retirement
     gave the node — retiring as `historical` and retiring as `corrected` are
-    different things to report (#53) — with the counterpart that caused it, and
+    different things to report — with the counterpart that caused it, and
     `restored` where the node came back.
 
     The episodes are read rather than `(status, superseded_at)` because that
@@ -1620,7 +1620,7 @@ async def graph_as_of(
     APPLICATION_TIME AS OF`) because "as of" alone does not say which clock, and
     an unmarked name inherits the default reading: in a knowledge graph, "as of
     1980" reads as *what was true in 1980*, which is the axis this does not
-    answer. It was called `as_of` until #53 T3.
+    answer. It was called `as_of` until valid time arrived.
     """
     nt_enums = [NodeType(t) for t in node_types] if node_types else [None]
     nodes: list[EpistemicNode] = []
@@ -1830,7 +1830,7 @@ async def list_relations(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
     synonyms via apply_reflection.
 
     **Counts stay derived from the edges** rather than stored on the record.
-    They are scoped to active nodes (#14 step 2), so a stored count would drift
+    They are scoped to active nodes, so a stored count would drift
     the moment a node was retired, and the record has nothing to say about
     usage — it holds what the label *means*.
 
@@ -1851,7 +1851,7 @@ async def list_relations(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
 
     # The vocabulary in one read rather than one per label, and the join is
     # left-outer on purpose: a label with no record is a graph nobody has
-    # described since #74 shipped, not an error, and it answers exactly as it
+    # described since labels gained records, not an error, and it answers exactly as it
     # did before — with an empty description and no verdicts.
     labels = await storage.query_relation_labels()
     described = {(rl.name, rl.kind): rl.description for rl in labels}
@@ -1863,7 +1863,7 @@ async def list_relations(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
     names_by_id = {rl.id: rl.name for rl in labels}
     ids_by_name = {(rl.name, rl.kind): rl.id for rl in labels}
     verdict_rows = await storage.query_relation_verdicts()
-    # The judge as the user knows them (#78): a name where the registry holds
+    # The judge as the user knows them: a name where the registry holds
     # one, the recorded id where it does not — which is what an unregistered
     # judge is called.
     judge_names = (
@@ -1917,7 +1917,7 @@ async def describe_relation(
     kind: str = "relationship",
     judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
-    """Say what one of this graph's relationship labels means here (#74).
+    """Say what one of this graph's relationship labels means here.
 
     Advisory prose, not a schema. It is free to say *"in the Court context this
     means X; for corporate contracts use Y"* — the system never enforces it, and
@@ -2032,7 +2032,7 @@ async def link(
         et = EdgeType.RELATED
         resolved_kind = await storage.get_relation_kind(relation) or kind
         label = relation
-        # The label's record, created on first use (#74). One extra read on the
+        # The label's record, created on first use. One extra read on the
         # common path and a write only when a label is coined — which is the
         # moment, and the only moment, at which somebody is claiming to have
         # introduced this word. A label already recorded is left exactly as it
@@ -2105,11 +2105,11 @@ async def update(
     The replacement is embedded so it remains searchable.
 
     `because` says which of two opposite things happened — `"it_was_wrong"` or
-    `"the_world_changed"` — and has no default on purpose (#53). A claim that
+    `"the_world_changed"` — and has no default on purpose. A claim that
     stopped being true was never an error, and recording it as one is how a
     graph forgets its own history.
 
-    It also decides which edges follow the replacement (#54). A correction
+    It also decides which edges follow the replacement. A correction
     hands over everything but history, review and judgments: the old node is an
     audit husk and the replacement is the same claim, corrected. A world-change
     hands over the frame and the tags only — the retired node keeps its own
@@ -2117,12 +2117,12 @@ async def update(
     say so.
 
     Judgments — similarity, contradiction, variant_of — stay behind under
-    *either* reason (#65). The claim may survive a correction; the wording the
+    *either* reason. The claim may survive a correction; the wording the
     judgment was made against does not.
 
     And it decides which lineage edge records the step: `superseded_by` says
     *replaced* and is terminal, `temporally_followed_by` says only *came after*
-    and survives the same claim becoming true again (#53).
+    and survives the same claim becoming true again.
     """
     from epimemer.pipelines.graph_construction.versioning import supersede_node
 
@@ -2167,7 +2167,7 @@ async def update(
     )
     # The kind carries `because`, rather than a second field repeating it: a
     # correction and a world-change are opposite claims about what happened
-    # (#53), and a reviewer asking for one does not want the other.
+    #, and a reviewer asking for one does not want the other.
     await journal(
         storage, supersession_kind(status), [old_node.id, new_node.id], judge=judge
     )
@@ -2329,7 +2329,7 @@ async def supersede_by(
     Use this where the current truth already exists in the graph (rather than
     arriving as new content). `because` distinguishes the two reasons that can
     be true of — `"it_was_wrong"` (a correction) or `"the_world_changed"` (the
-    old claim still holds of its period); see #53. The old
+    old claim still holds of its period). The old
     node is marked accordingly and joined to `existing_id` by the lineage edge
     that matches — `superseded_by` for a correction, `temporally_followed_by`
     for a world-change; inferences that depended on it are flagged
@@ -2386,7 +2386,7 @@ async def check_conflicts(
     nomination included it, nobody was ever asked: ingest saw no twin and wrote
     a second node saying what the first one said. `corrected` nodes stay out,
     because a claim concluded *wrong* has no route back and nominating it would
-    invite a verdict that cannot be recorded (#53 T2).
+    invite a verdict that cannot be recorded.
 
     Each candidate carries its `status` for the same reason. Once retired nodes
     can appear, an agent cannot tell an active twin from a historical one — and
@@ -2596,7 +2596,7 @@ async def merge_facts(
     similarity_threshold: float = SIMILARITY_NOMINATION_THRESHOLD,
     judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
-    """Collapse facts that restate one claim into a single node (#52).
+    """Collapse facts that restate one claim into a single node.
 
     The action the `redundant` verdict never had. Until this existed the verdict
     either no-opped or tempted the agent into a supersession whose required
@@ -2624,7 +2624,7 @@ async def merge_facts(
     the `restored_at` the count reads — built alongside the episodes it counts,
     because a limit added after an oscillation has run has nothing to look at.
 
-    **Inferences drawn on the sources are flagged `evidence_merged`** (#61), not
+    **Inferences drawn on the sources are flagged `evidence_merged`**, not
     `evidence_stale`: their premise was reworded and better sourced, not
     overturned. The flag asks for a re-read against the survivor's wording, and
     it is where the merge records which phrasing went away — afterwards the
@@ -2856,7 +2856,7 @@ REFLECT_PHASES = (
 # The four nominee lists built out of *pairs*. Pairs are quadratic in the node
 # set while every other list reflect returns is linear in it, so these are the
 # only ones that can run away — and nothing bounded them: no limit parameter, no
-# top-k, no size check anywhere on the path (#60). Named here for the same
+# top-k, no size check anywhere on the path. Named here for the same
 # reason as the phases above: a fifth pair list added without this line would be
 # unbounded again and nothing would say so.
 CAPPED_KEYS = (
@@ -2973,7 +2973,7 @@ async def reflect(
 
     # Split detection and the enrichment scan walk the same topic set. Fetched
     # once and reused: a second full scan would add to exactly the N+1 cost
-    # (ISSUES.md #14) that makes reflect the slowest operation here. Lazy rather
+    # that makes reflect the slowest operation here. Lazy rather
     # than hoisted so the fetch stays attributed to the phase that needs it
     # first.
     topic_cache: list[Topic] = []
@@ -3022,7 +3022,7 @@ async def reflect(
         return found
 
     # Scored once over the nominated set and partitioned twice. This phase is
-    # the one that crosses the tool timeout as a graph grows (#39), so widening
+    # the one that crosses the tool timeout as a graph grows, so widening
     # it to see historical facts must not also mean scoring the matrix twice —
     # the pairs are quadratic and the split is free.
     nominated_pairs: list = []
@@ -3041,7 +3041,7 @@ async def reflect(
         ])
 
     # 5b. Recurrence, the safety net's other half: a live claim that says what a
-    #     retired-because-the-world-moved-on one said (#53 T2). Reported apart
+    #     retired-because-the-world-moved-on one said. Reported apart
     #     from the contradictions, because a claim beside its own successor is
     #     not a contradiction and filing it under that word is the misreading
     #     `recurs` exists to prevent. Only mixed pairs qualify: two active facts
@@ -3053,7 +3053,7 @@ async def reflect(
             == {NodeStatus.ACTIVE, NodeStatus.HISTORICAL}
         ])
 
-    # 5c. The temporal soundness check (#53 T1 §11): an inference whose premises
+    # 5c. The temporal soundness check: an inference whose premises
     #     no source puts in the same period. The graph stores inferences it did
     #     not draw, so this is the only place the combination is ever looked at
     #     — and reflect rather than ingest because the motivating case spans two
@@ -3065,7 +3065,7 @@ async def reflect(
             for flagged in await find_unsound_inferences(storage)
         ]
 
-    # 5d. Where a succession lets a period close (#53 T1 §9). The other half of
+    # 5d. Where a succession lets a period close. The other half of
     #     "ingest extracts, reflect proposes": a document cannot know its claim
     #     will ever stop being true, so only something seeing the next document
     #     can close the first interval. Proposes, never writes — the boundary is
@@ -3103,7 +3103,7 @@ async def reflect(
     #    fast, organized slow). Judged via apply_reflection relation_verdicts,
     #    which is the whole destination now that `relation_merges` is gone: a
     #    nomination is answered `distinct` or `synonymous` and stops coming back
-    #    (#74 FC1), and nothing rewrites an edge. The sweep also counts what
+    #, and nothing rewrites an edge. The sweep also counts what
     #    standing verdicts held back, because suppression is silent: without the
     #    count, an empty list on a well-judged graph reads as *nothing similar
     #    here* rather than *already judged*.
@@ -3155,7 +3155,7 @@ async def reflect(
         "similar_relations": similar_relations,
     }
 
-    # Cap the quadratic lists, and say which ones were cut (#60). Applied here,
+    # Cap the quadratic lists, and say which ones were cut. Applied here,
     # in one place over `CAPPED_KEYS`, rather than inside each phase: the phase
     # events above keep reporting what the pass actually found, which is what
     # makes a truncated response legible in the strip rather than invisible.
@@ -3167,7 +3167,7 @@ async def reflect(
     # **This bounds the response, not the peak allocation.** The scored tuples
     # in `similar_pairs` are still one per surviving pair; what goes away is the
     # response dicts and the unbounded JSON. That is the honest scope: the
-    # measurement that demoted #60 from urgent also moved its argument from
+    # measurement that demoted the cap from urgent also moved its argument from
     # memory to the response.
     truncated: list[str] = []
     for key in CAPPED_KEYS:
@@ -3285,7 +3285,7 @@ async def apply_reflection(
         verdict is refused as a retry, and another agent's is recorded as a
         confirmation rather than a second verdict.
     boundaries: [{node_id, source_id, endpoint, at, timeline_id?}] — accept a
-        boundary reflect proposed (#53 T1 §9), filling in one open endpoint of
+        boundary reflect proposed, filling in one open endpoint of
         one source's period. The written interval's basis becomes ``inferred``:
         the date came from another document read against this one, and leaving
         it ``stated`` would have this source appear to assert something it never
@@ -3298,7 +3298,7 @@ async def apply_reflection(
     **A malformed entry refuses the whole call, and nothing is written.** The
     steps below share no transaction and their order is load-bearing, so an
     entry missing a required key used to abort part-way and report a total
-    failure over a partial write (#82). Every entry is now checked first, and
+    failure over a partial write. Every entry is now checked first, and
     every problem is listed at once. This is structure only — a judgment the
     graph can evaluate is still refused on its own, into the matching
     ``*_refused`` list, so one already-judged pair never costs a batch.
@@ -3327,10 +3327,10 @@ async def apply_reflection(
     from epimemer.pipelines.reflection.topic_consolidation import all_pairs_above_threshold
 
     # 0. Nothing is applied until the whole batch is known to be applicable.
-    #    The nine steps below share no transaction and their order is #65's
+    #    The nine steps below share no transaction and their order is the
     #    anchoring rule, so a raise part-way down leaves everything above it
     #    committed under an error that cannot say what landed — and a similarity
-    #    verdict, being permanently suppressing, then refuses the retry (#82).
+    #    verdict, being permanently suppressing, then refuses the retry.
     #    Structural only: judgments the graph can evaluate are still refused one
     #    at a time, into the `*_refused` lists.
     malformed = malformed_entries({
@@ -3362,7 +3362,7 @@ async def apply_reflection(
     model_id = embedding_provider.model_id
 
     # 1. Record what was decided about nominated pairs. **First**, and that is
-    #    the #65 anchoring rule applied to a batch: a judgment is about the
+    #    the anchoring rule applied to a batch: a judgment is about the
     #    wording it was made against, and steps 4-7 below can retire a node
     #    named here. Recording afterwards would either lose the judgment to a
     #    skip or attach it to a replacement nobody assessed.
@@ -3448,7 +3448,7 @@ async def apply_reflection(
         else:
             relation_verdicts_confirmed += 1
         # The journal row names the two **label record ids**, which is where
-        # #69's unanswerable question resolves: the subject of a decision about
+        # the unanswerable question resolves: the subject of a decision about
         # a relation finally has an identity that `review()` dereferences like
         # any other. A second agent agreeing writes a confirmation citing the
         # original, exactly as it does for a contradiction or a variant.
@@ -3480,7 +3480,7 @@ async def apply_reflection(
         # honestly claim is the one its children already agree on. Inheriting a
         # union instead would let a topic drawn from a fiction claim and a real
         # one assert in both, which `fact_dedup` calls the worst outcome
-        # available; refusing is that gate, one tier up (#76).
+        # available; refusing is that gate, one tier up.
         inherited = await shared_frame_set(
             [child.id for child in children], storage
         )
@@ -3541,7 +3541,7 @@ async def apply_reflection(
         # Same content, refined — so a subtopic stands exactly where its parent
         # did. A parent that states nothing passes on nothing: inventing a frame
         # here would put words in a nobody's mouth, which is the declaration
-        # sweep's job and a person's call (#76).
+        # sweep's job and a person's call.
         inherited = await frames_of(parent.id, storage)
         edges = [
             *await plan_subtopic_edges(subtopics, parent.id, storage),
@@ -3584,7 +3584,7 @@ async def apply_reflection(
         )
         # supersede_node embeds the replacement and migrates edges.
         # Enrichment rewrites a topic's own description; the earlier wording
-        # was never true-of-a-period, so this is a correction (#53).
+        # was never true-of-a-period, so this is a correction.
         await supersede_node(
             old_topic, enriched, storage, embedding_provider,
             status=NodeStatus.CORRECTED, judge=judge,
@@ -3616,7 +3616,7 @@ async def apply_reflection(
             merges_rejected += 1
             continue
 
-        # The gate facts have had since #52, arriving late here because topic
+        # The gate facts have had since dedup, arriving late here because topic
         # merge grew its own path: `merge_nodes` migrates every source's edges
         # onto the survivor, `has_metacontext` among them, so merging across
         # frames leaves one topic asserted in both worlds. Exact set equality,
@@ -3635,7 +3635,7 @@ async def apply_reflection(
 
         # Combined in one shared place: a field-by-field rebuild here silently
         # reset both value clocks, leaving merged nodes permanently exempt from
-        # archival nomination (#45).
+        # archival nomination.
         merged_value = merged_value_signal([s.value for s in sources])
         merged_topic = Topic(
             content=content,
@@ -3786,7 +3786,7 @@ async def apply_reflection(
 
 # --- Review (reading the journal back, REVIEW_MODE.md §6) ---
 
-# One page of decisions, and the cap is #60's treatment applied verbatim: `all`
+# One page of decisions, and the cap is the nomination cap applied verbatim: `all`
 # over an append-only journal fed by every ingest is precisely the unbounded
 # response that capped four reflect lists, and designing this one uncapped
 # afterwards would be perverse. As there — when the response says it was cut,
@@ -3803,8 +3803,9 @@ def _review_subject(
 
     Two tables and not one because a decision's subject is not always a claim:
     a relation verdict and a relation description are judgments about the
-    graph's **words**, and their subjects are `RelationLabel` records (#74
-    §4.3). That is where #69's question resolves — it had no clean answer while
+    graph's **words**, and their subjects are `RelationLabel` records
+    (`RELATION_LABELS.md` §4.3). That is where the question resolves — it had no
+    clean answer while
     a label had no id, and the alternatives were a second namespace inside
     `subject_ids` or the endpoint nodes of edges the decision was not about.
 
@@ -3863,7 +3864,7 @@ async def review(
     declared `certainty` comes first, ascending; everything unrated follows,
     ordered by how many derived difficulty signals it carries. An unrated
     decision never outranks one an agent flagged: absence is not a claim of
-    doubt (#46).
+    doubt.
 
     **Nobody wants only the doubtful ones.** A reviewer checking a session's
     work wants all of it, ordered so the doubtful calls are at the top and they
@@ -3871,14 +3872,14 @@ async def review(
     an ordering rather than a filter, and why the cap is benign: a cut list
     loses the end nobody was going to read.
 
-    **The answer is one graph wide, and says which** (#72). The journal is per
+    **The answer is one graph wide, and says which**. The journal is per
     graph like every other table, because `subject_ids` are node ids and a node
     id resolves only where it lives. Covering more is `list_graphs`,
     `use_graph`, ask again — and that sequence is *safer* than a fan-out would
     be, since each switch is the active graph rather than one borrowed
-    mid-call (#16).
+    mid-call.
 
-    **`elsewhere` says where else to look, and nothing more** (#73). Counts per
+    **`elsewhere` says where else to look, and nothing more**. Counts per
     graph, no rows, no ids — the reviewer who needs this is a *later, different*
     agent, which is the reviewer the registry exists for; the one that made the
     decisions switched the graphs itself and never needed telling. It counts
@@ -3895,7 +3896,7 @@ async def review(
     # reviewed-set covering the **whole** selection rather than the page: a
     # reviewed-set built from the page would call every row on page two
     # unreviewed.
-    # One handle in, a set of ids out (#78): a judge that has absorbed another
+    # One handle in, a set of ids out: a judge that has absorbed another
     # record answers under both, and nothing was rewritten to make that so.
     # `judge` is None where no judge was named, which is every mode but
     # `by_agent`.
@@ -3920,7 +3921,7 @@ async def review(
         sid for record in records for sid in record.subject_ids
     ))
     subjects = await storage.get_nodes(subject_ids) if subject_ids else {}
-    # A vocabulary row's subjects are **label records**, not nodes (#74 §4.3) —
+    # A vocabulary row's subjects are **label records**, not nodes —
     # which is the whole of what giving labels ids bought, and it is worth
     # nothing if review renders them as two dead strings. Read only where
     # something failed to resolve as a node, so an ordinary page pays nothing
@@ -3957,7 +3958,7 @@ async def review(
             # still means nothing did: a merge survivor a reversal destroyed, or
             # a row written elsewhere. That is information rather than an error,
             # so the id stays either way — but *gone* and *not a node in the
-            # first place* are different answers, and before #74 gave labels ids
+            # first place* are different answers, and before labels had ids
             # they were indistinguishable.
             "subjects": [
                 _review_subject(sid, subjects, labels)
@@ -3976,7 +3977,7 @@ async def review(
         for item in page
     ]
 
-    # The locator (#73). Read after the graph's own answer and never merged into
+    # The locator. Read after the graph's own answer and never merged into
     # it: these counts come from graphs whose node ids do not resolve here, so
     # everything that could be dereferenced stays on the near side of the line.
     here = storage.current_database
@@ -3990,7 +3991,7 @@ async def review(
 
     result = {
         "mode": mode,
-        # #72: an answer that does not name its scope reads as the whole story.
+        # An answer that does not name its scope reads as the whole story.
         "graph": here,
         "decisions": decisions,
         "decisions_scanned": len(records),
@@ -4002,7 +4003,7 @@ async def review(
         "unattributed_count": sum(1 for r in records if r.judged_by is None),
         "unreviewed_count": sum(1 for r in records if r.id not in reviewed),
         # The value **this call** used, never what the graph would have done:
-        # a caller can pass its own, and #63's carry-forward is a refusal
+        # a caller can pass its own, and a single bar means a refusal
         # message that stated a threshold as the system's and was false for
         # exactly the caller who overrode it.
         "certainty_ceiling": certainty_ceiling,
@@ -4037,7 +4038,7 @@ async def review(
     }
 
     if agent_id is not None:
-        # What the handle turned out to name (#78). A handle that resolves to
+        # What the handle turned out to name. A handle that resolves to
         # nothing used to return an empty page indistinguishable from a judge
         # that has decided nothing, which is the failure a rename or a typo
         # produces — so the two are told apart here, and the judges that do
@@ -4165,13 +4166,14 @@ async def rejudge(
     `claim_kind`, `confidence` and `confidence_basis` are supplied by an agent
     that read the material, and nothing downstream re-makes them — so until this
     existed, review could find every ingest-time mistake and fix none of them,
-    which is the verdict-with-no-action shape #64 was filed for.
+    which is the verdict-with-no-action shape the `assessed` edge was built for.
 
     **Never a supersession.** `update` requires `because` to be *it was wrong* or
     *the world changed*, and a mislabelled `claim_kind` is neither: the claim was
     right and the world did not move — the *judgment about* the claim was wrong.
     Filing it as a correction would retire a true node and re-point its edges,
-    which is the forgetting #53 exists to prevent, over a metadata mistake. So
+    which is the forgetting the validity model exists to prevent, over a metadata
+    mistake. So
     no status moves, no edge moves, no lineage is written, and the node keeps its
     `judged_by`: that field records who wrote the wording, which is unchanged.
 
@@ -4275,7 +4277,7 @@ async def reframe(
     where the claim goes instead.
 
     Not a supersession: the claim is unchanged and the world has not moved, so
-    nothing is retired and no lineage moves. `ISSUES.md` #66.
+    nothing is retired and no lineage moves.
     """
     from epimemer.pipelines.frames import ReframeRefused, reframe_node
 
@@ -4323,7 +4325,7 @@ async def correct_interval(
     that is *open*, where a succession implies it; nothing derives that a stated
     date was misread, so this is a separate act on separate evidence.
 
-    Since #62 corroboration reads intervals to decide whether a look-alike is a
+    Corroboration reads intervals to decide whether a look-alike is a
     witness to the same period or the neighbouring truth, so a wrong interval
     moves a count as well as a date.
 
@@ -4332,7 +4334,7 @@ async def correct_interval(
     empty list is allowed, and is the correction for a period that was invented
     outright.
 
-    Not a supersession. `ISSUES.md` #66.
+    Not a supersession.
     """
     from epimemer.pipelines.reflection.boundaries import (
         IntervalCorrectionRefused,
@@ -4507,7 +4509,7 @@ async def restore(
     back to ACTIVE instead.
 
     A *reactivation* names `node_ids` directly: a claim retired as HISTORICAL
-    because the world moved on, asserted true again by a new source (#53 T2).
+    because the world moved on, asserted true again by a new source.
     Labour out of government in 2010 and back in 2024 is one claim recurring,
     not two claims, and the alternative — a second node saying what the first
     one said — is the duplication this graph exists to avoid, manufactured by
@@ -4647,7 +4649,7 @@ def _node_to_dict(node: EpistemicNode) -> dict:
     deliberately not substituted with the 0.5 that `rated_confidence` supplies
     elsewhere. This is the surface an agent reads, and it is the audience the
     nullable field exists for: "no one has assessed this" is worth knowing when
-    deciding how far to lean on a retrieved claim, and 0.5 cannot say it (#46).
+    deciding how far to lean on a retrieved claim, and 0.5 cannot say it.
     """
     data = node.model_dump(mode="json")
     # An unknown judge is dropped rather than sent as null, which is the
@@ -5111,7 +5113,7 @@ class ApprovalOutcome(BaseModel):
 
     **Three states, not two.** `chosen` set is an approval — and may name a
     different id from the one proposed, because the user picks or edits.
-    `chosen` empty splits in two, and the split is load-bearing (#78):
+    `chosen` empty splits in two, and the split is load-bearing:
 
     - **declined** — the question reached a person and they said no. Refuses,
       whatever the approved list says. A user declining an id they approved
@@ -5171,7 +5173,7 @@ async def seed_approved_judges(
 
     `EPIMEMER_APPROVED_AGENTS` and `epimemer agents confirm` take text a user
     typed, and since the three-layer split the approved list holds opaque keys
-    (#78) — so a name has to be resolved to the judge it belongs to, or seeding
+     — so a name has to be resolved to the judge it belongs to, or seeding
     an existing judge by name would approve a second, empty identity under the
     name as a key. **Where nothing matches, the handle is admitted as itself**,
     which is exactly the old behaviour and the only sensible reading of seeding
@@ -5266,7 +5268,7 @@ def _roster_title(name: str, agent: Agent | None) -> str:
     """One picker line: who this judge is, and when it last judged.
 
     The **name**, never the id — the id is a key and is not shown to anybody
-    (#78). A record written before the split has no name and reads as its own
+    . A record written before the split has no name and reads as its own
     id, which is what it always was.
     """
     if agent is None:
@@ -5377,7 +5379,7 @@ def _unapproved_reason(handle: str, labels: Sequence[str]) -> str:
     **The refusal is the prompt** (§2.2): there is no startup handshake, so this
     text is the whole mechanism by which a user ever hears that an agent wants
     an identity. It says what to run, because the user cannot be assumed to know
-    the tool exists. `labels` are names rather than ids (#78) — an id in a
+    the tool exists. `labels` are names rather than ids — an id in a
     message meant for a person names the right judge in a form nobody can act on.
     """
     known = (
@@ -5406,7 +5408,7 @@ async def rename_judge(
 ) -> dict:
     """Rename a judge, or say why it cannot be renamed yet.
 
-    **The name layer is the only mutable one** (#78), and this is the only thing
+    **The name layer is the only mutable one**, and this is the only thing
     that writes it. Renaming rewrites nothing: `judged_by` records the id, the
     id never changes, and every old row follows the new name because the name is
     resolved at read time. That is the opposite rule from a description, which
@@ -5510,14 +5512,14 @@ async def claim_agent(
       `confirmed_at` only where a human saw it. *Self-described, unconfirmed* is
       a different epistemic object, never collapsed into the same field (§2.4).
 
-    **`agent_id` is a handle, not the key** (#78, 2026-08-26). It is resolved
+    **`agent_id` is a handle, not the key.** It is resolved
     against this graph's judges by name, by id, and by any id a judge used to be
     recorded under — so an agent may propose whatever the user calls this judge,
     and a returning one may pass back the id it was given. The key is in the
     response as `agent_id` and the handle is in `name`; the key is not for
     showing to anybody.
 
-    **The gate guards assuming an identity, not only minting one** (#78, revised
+    **The gate guards assuming an identity, not only minting one** (revised
     2026-08-25). It used to ask only where `agent_id` was not already approved,
     which guarded the wrong act: an approved id then bound with no user
     involvement at all, and the refusal names what this graph approves — so a
@@ -5650,13 +5652,13 @@ async def claim_agent(
     return {
         "status": "claimed",
         # The key, for `review(mode="by_agent")` and nothing else. `name` is
-        # what to say to the user — an id is not for showing to anybody (#78).
+        # what to say to the user — an id is not for showing to anybody.
         "agent_id": updated.id,
         "name": name,
         "also_recorded_as": list(updated.former_ids),
         "digest": version.digest,
         # Stated rather than left to be inferred from `description_versions: 1`
-        # (#78). *This judge has no history* is what tells an agent it has just
+        #. *This judge has no history* is what tells an agent it has just
         # created one instead of joining one, and an implication nobody reads
         # is not a signal.
         "new_agent": existing is None,
@@ -5776,7 +5778,7 @@ async def _switched(
     Config-supplied approvals are applied to whatever graph this server lands
     on, and **before** the judge is re-checked — seeding afterwards would clear
     a judge the configuration was about to admit. On an embedded backend this is
-    the only approval channel that reaches the running process (ISSUES.md #16),
+    the only approval channel that reaches the running process,
     so a switch that skipped it would leave the user unable to admit a judge to
     the new graph at all.
     """

@@ -294,7 +294,7 @@ async def test_merge_carries_the_higher_importance(embedding_provider):
 
 
 class TestMergeConfidencePairing:
-    """Why `max` confidence is right here, which nobody had written down (#46).
+    """Why `max` confidence is right here, which nobody had written down.
 
     For a caller-supplied prior `max` looks wrong on its own — the more
     credulous assessment wins and the disagreement vanishes. It survives
@@ -328,7 +328,7 @@ class TestMergeConfidencePairing:
     async def test_an_unrated_pair_still_resolves_to_the_first_argument(
         self, embedding_provider
     ):
-        """The honest remainder of #46's fix, not a regression.
+        """The honest remainder of the confidence prior's fix, not a regression.
 
         Two nodes nobody rated tie at the default and the `>=` takes the first
         — which is what the comparison did for *every* pair before priors
@@ -345,7 +345,7 @@ class TestMergeConfidencePairing:
 
 
 class TestMergeCarriesTheValueClocks:
-    """A merge must carry *when* each signal was set, not only its value (#45).
+    """A merge must carry *when* each signal was set, not only its value.
 
     Merge builds a fresh node, and a field-by-field rebuild silently resets
     every field it forgets to name. Forgetting the two clocks is worse than
@@ -578,7 +578,7 @@ async def test_archive_nodes_exports_correctly(storage_with_archival_candidates)
 async def test_frames_of_untagged_names_nothing():
     """A node with no metacontext edges states no frame, and that is all it
     means. It used to resolve to base reality — the one place in this system
-    where absence became a positive claim, which #76 removed once the frame was
+    where absence became a positive claim, which the frame requirement removed once the frame was
     required at ingest. The consequence is deliberate: such a node shares a
     frame with nothing and is reachable only by an unscoped search."""
     from epimemer.pipelines.reflection.review import frames_of
@@ -679,7 +679,7 @@ async def test_review_labels_evidence_stale_via_flag():
 
 
 async def test_review_labels_evidence_merged_is_not_evidence_stale():
-    """A merged premise gets its own label (#61).
+    """A merged premise gets its own label.
 
     The two events are not the same one: a correction says the claim under the
     inference was wrong, a merge says two phrasings of it collapsed into one.
@@ -945,7 +945,7 @@ async def test_a_node_no_search_has_returned_is_nominated():
 
 
 class TestJudgmentStaleness:
-    """A judgment protects a node, but not forever (#42).
+    """A judgment protects a node, but not forever.
 
     Importance is what keeps a node out of the cheap nomination tier. Before
     this, one upward judgment removed it permanently — cleanup did not get the
@@ -1060,7 +1060,7 @@ async def test_archived_evidence_strands_its_inference():
 
 
 async def test_a_merged_premise_does_not_nominate_its_inference_for_archival():
-    """`evidence_merged` is a re-read request, not an archival claim (#61).
+    """evidence_merged is a re-read request, not an archival claim.
 
     The basis did not change — the same claim now has one node and every
     document that asserted it. Nominating here would propose discarding an

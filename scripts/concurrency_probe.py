@@ -1,13 +1,13 @@
 """Do a single MCP client's batched tool calls overlap inside the server?
 
-`ISSUES.md` #16 was deferred on the premise that *"the server is single-client
+The active-graph guard was deferred on the premise that *"the server is single-client
 stdio, so nothing issues concurrent tool calls against the shared connection"*.
 Batched parallel tool calls from one client are exactly what that premise
 denies, so the question is answerable rather than arguable.
 
     uv run python scripts/concurrency_probe.py
 
-Prints the entry/exit trace and one word. INTERLEAVED means #16's shared-
+Prints the entry/exit trace and one word. INTERLEAVED means the shared-
 connection hazard is reachable with one client, and the `viz_list_*`
 switch-and-restore window can overlap a write.
 """

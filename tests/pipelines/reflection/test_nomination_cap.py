@@ -4,7 +4,7 @@ Four of `reflect`'s ten nominee lists are pair lists — topic consolidation,
 contradictions, recurrences, relation consolidation — and pairs are quadratic in
 the node set while every other list is linear in it. Nothing bounded them: no
 limit parameter, no top-k, no size check anywhere on the path, and every
-survivor went into the response (#60).
+survivor went into the response.
 
 **What this bounds is the response, not the peak allocation.** The scored tuples
 upstream in `similar_pairs` are still one per surviving pair; what the cap
@@ -64,7 +64,7 @@ async def _fanned_facts(storage, provider, count: int) -> list[Fact]:
     for i in range(count):
         fact = Fact(content=f"Claim number {i}", source_id="s1")
         await storage.store_node(fact)
-        # Every node states a frame, as every ingested one has since #76:
+        # Every node states a frame, as every ingested one has since the frame requirement:
         # absence names none, so two frameless nodes share none and the
         # contradiction sweep would skip every pair here.
         await storage.store_edge(NodeEdge(
@@ -85,7 +85,7 @@ async def _identical_topics(storage, provider, count: int) -> list[Topic]:
     for i in range(count):
         topic = Topic(content=f"Subject number {i}", source_id="s1")
         await storage.store_node(topic)
-        # Every node states a frame, as every ingested one has since #76:
+        # Every node states a frame, as every ingested one has since the frame requirement:
         # absence names none, so two frameless nodes share none and the
         # contradiction sweep would skip every pair here.
         await storage.store_edge(NodeEdge(
@@ -199,7 +199,7 @@ class TestTheSurvivorsAreTheHighestScoring:
 class TestRecurrencesAreCappedOnTheirOwn:
     """Contradictions and recurrences are partitioned out of one scored set, so
     a cap applied before the split would let the larger half starve the other —
-    and recurrence is the safety net under an opt-in detector (#53 T2)."""
+    and recurrence is the safety net under an opt-in detector."""
 
     async def test_a_recurrence_survives_a_full_contradiction_list(
         self, storage, embedding_provider

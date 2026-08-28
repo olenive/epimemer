@@ -1,4 +1,4 @@
-"""A relation label gets a meaning (#74, stage 2).
+"""A relation label gets a meaning (the label record, stage 2).
 
 Stage 1 gave a label identity and nothing read it. This is the half that pays,
 and the reason is that it moves the intervention from **repair to prevention**:
@@ -103,7 +103,7 @@ class TestListRelationsCarriesTheDescription:
 
     async def test_the_count_stays_derived_from_the_edges(self, storage):
         """Not stored on the record, because counts are scoped to active nodes
-        (#14 step 2) and a stored one would drift the moment a node retired."""
+         and a stored one would drift the moment a node retired."""
         await _coin(storage, "advised")
         c, d = await _pair(storage, "Rome", "Italy")
         await tools.link(c.id, d.id, storage, relation="advised", judge=EDITOR)
@@ -299,7 +299,7 @@ class TestRedescribing:
     async def test_the_identity_survives_a_redescription(self, storage):
         """The whole point of the record: a journal row naming this label must
         keep resolving. A fresh `RelationLabel` minting a new id over the old is
-        #74's own defect one layer down."""
+        the label record's own defect one layer down."""
         await _coin(storage, "advised")
         first, _ = await tools.describe_relation(
             "advised", storage, description="first"

@@ -6,8 +6,8 @@ quadratic in the set. Neither has redundancy left to remove: the comparisons
 are genuine work, so the answer is to do that work in bulk rather than less of
 it, one matrix product per block instead of one Python call per pair.
 
-This lives on its own because it was written twice: once for facts (#39) and
-once, by copying, for topics (#47). The second time is what makes it shared —
+This lives on its own because it was written twice: once for facts and
+once, by copying, for topics. The second time is what makes it shared —
 the zero-vector rule below is subtle enough that two copies would eventually
 disagree, and a disagreement here is silent.
 

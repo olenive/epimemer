@@ -338,7 +338,7 @@ async def test_lifecycle_episodes_round_trip_over_a_real_connection(surreal):
 
 
 async def test_reactivation_writes_the_flip_and_its_edge_together(surreal):
-    """One transaction over a real connection, read back through another (#53 T2).
+    """One transaction over a real connection, read back through another.
 
     The embedded engine cannot vouch for this: the statement that carries the
     provenance edge is appended to the same `BEGIN…COMMIT` batch as the status
@@ -421,7 +421,7 @@ async def test_validity_intervals_round_trip_over_a_real_connection(surreal):
     catching is not loss but *substitution*: a discriminator that did not
     survive would hand back a different endpoint state, turning "we do not know
     when this started" into "it has no start" — the one distinction the type
-    exists to keep (#53 T1 §4).
+    exists to keep (the validity model §4).
     """
     store = await surreal()
     verifier = await surreal()
@@ -526,7 +526,7 @@ async def test_text_search_discriminates_a_near_miss_over_a_real_connection(surr
 async def test_a_status_set_gates_without_losing_the_index(surreal):
     """`status IN $statuses` sits where `status = $status` did, and must behave.
 
-    The gate went plural for #53 T3, so retrieval can ask both arms for history
+    The gate went plural for history-by-default retrieval, so retrieval can ask both arms for history
     with one set. The predicate is the reason to check it on the real engine
     rather than only on the embedded one: this planner drops the full-text index
     when the wrong predicate joins the match references, and `@@` then matches
@@ -604,7 +604,7 @@ async def test_containment_keeps_the_index_over_a_real_connection(surreal):
     assert [node_id for node_id, _ in hits] == [facts[0].id, facts[1].id]
 
 
-# --- The active graph, over a real connection (#16) ---
+# --- The active graph, over a real connection ---
 
 
 async def test_a_snapshot_borrow_waits_for_a_write_in_flight(surreal, db_name):

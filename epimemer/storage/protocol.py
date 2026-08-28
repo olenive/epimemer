@@ -293,7 +293,7 @@ class StorageBackend(Protocol):
         cost it exists to remove. On SurrealDB a node's table is not known from
         its id, so the single-node form probes topic, then fact, then inference:
         1–3 round-trips each, and 2,104 of them in one `reflect` at 1,200 nodes
-        (ISSUES.md #14).
+        .
         """
         ...
 
@@ -402,7 +402,7 @@ class StorageBackend(Protocol):
         would return for each id, so this is a batching of *cost*, not a change
         of *answer*. Reflection reads the edges of every active node several
         times over; asking once per node is what makes `reflect` round-trip
-        bound on a networked backend (ISSUES.md #14).
+        bound on a networked backend.
 
         **Every requested id is a key**, mapping to `[]` when it has no matching
         edges — including ids that are not nodes at all. Callers iterate the map
@@ -433,7 +433,7 @@ class StorageBackend(Protocol):
     # Every method here takes `judge: JudgeRef | None` and records it on the
     # lifecycle episode it writes — these are the calls that retire or return a
     # node, and *who decided that* belongs beside *when* (REVIEW_MODE.md §3).
-    # The episode is built inside the backend, from the stored history (#67), so
+    # The episode is built inside the backend, from the stored history, so
     # the judge has to arrive as an argument rather than on the node objects.
     #
     # `None` means **unknown**, and nothing more (§3.3). Whether a graph accepts
@@ -461,16 +461,16 @@ class StorageBackend(Protocol):
     ) -> None:
         """Atomically supersede ``old_node`` with ``new_node``.
 
-        ``status`` says *why* — `CORRECTED` or `HISTORICAL` (#53). It is passed
+        ``status`` says *why* — `CORRECTED` or `HISTORICAL`. It is passed
         in rather than assumed because the two are opposite events and only the
         caller knows which happened.
 
         Marks the old node with ``status`` and appends a lifecycle episode
-        naming ``new_node`` as the counterpart (#57 — "superseded by whom" must
+        naming ``new_node`` as the counterpart ("superseded by whom" must
         be readable without joining on the lineage edge), stores and embeds the
         new node, migrates the old node's edges onto the new node per
         ``migration_disposition`` (history, review and judgment edges stay
-        behind — a judgment was made against a wording, #65),
+        behind — a judgment was made against a wording),
         and persists ``lineage_edge`` (the superseded_by edge). Also inserts
         ``evidence_edges``
         (e.g. evidence_superseded flags on dependent inferences) and deletes
@@ -519,7 +519,7 @@ class StorageBackend(Protocol):
         transaction as the flip. Reactivating a claim needs it. A node put back
         to ACTIVE with no edge recording *why* is an assertion the graph makes
         and cannot attribute, and two transactions can leave exactly that state
-        behind (#53 T2). Omitted — which is every other caller — this creates
+        behind. Omitted — which is every other caller — this creates
         nothing, and archival's guarantee is unchanged.
 
         ``status`` says which direction this is and ``at`` is the instant it
@@ -561,7 +561,7 @@ class StorageBackend(Protocol):
         Stores and embeds the merged node, migrates the sources' edges onto it
         per ``migration_disposition`` — history, review and judgment edges stay
         on the source, the last because the survivor's content is *synthesised*
-        and so is not the wording anything was judged against (#65) — dropping
+        and so is not the wording anything was judged against — dropping
         self-loops where two merged sources were connected, and collapsing
         duplicate edges to one per src/dst/type,
         marks each source merged — appending a lifecycle episode naming
@@ -571,7 +571,7 @@ class StorageBackend(Protocol):
         operation is rolled back.
 
         ``evidence_edges`` are the review flags on dependent inferences
-        (``evidence_merged``, #61), inserted inside the same transaction. They
+        (``evidence_merged``), inserted inside the same transaction. They
         are anchored to the sources rather than the survivor, so they must be
         written *after* migration — a flag re-pointed onto the survivor would
         say a fact absorbed itself.
@@ -700,7 +700,7 @@ class StorageBackend(Protocol):
         the guard this method used to enforce by construction: only ACTIVE nodes
         come back, so nothing resurfaces a claim the graph has retired.
 
-        It is a *set* because recurrence needs two at once (#53 T2). A claim
+        It is a *set* because recurrence needs two at once. A claim
         retired as HISTORICAL becoming true again can only be judged if the
         historical twin is nominated beside the active candidates — otherwise
         nobody is ever asked, and ingest quietly writes a second node saying
@@ -785,7 +785,7 @@ class StorageBackend(Protocol):
         identifier (§10, R7). Ignored for `corpus="segments"`; segments have no
         status.
 
-        It was singular until #53 T3 made retrieval return historical nodes by
+        It was singular until retrieval began returning historical nodes by
         default. A hybrid search asks both routes with one set, and had this
         stayed singular the lexical half would have been the one that could not
         see them — a node reachable only by a rare identifier would have gone
@@ -860,7 +860,7 @@ class StorageBackend(Protocol):
         """Query metacontexts by status."""
         ...
 
-    # --- Relation labels (#74) ---
+    # --- Relation labels ---
 
     async def store_relation_label(self, label: RelationLabel) -> str:
         """Store a relation label, or update its description and metadata.
@@ -893,7 +893,7 @@ class StorageBackend(Protocol):
         """Every relation label record in the active graph. Unordered."""
         ...
 
-    # --- Relation verdicts: the FC1 suppression index (#74 §4.2) ---
+    # --- Relation verdicts: the FC1 suppression index ---
 
     async def record_relation_verdict(self, verdict: RelationVerdict) -> str:
         """Append one verdict about a pair of relation labels. Returns its id.
@@ -1097,7 +1097,7 @@ class StorageBackend(Protocol):
         reversal, a confirmation and an overturn are all new rows pointing back
         at old ones (§4). A backend that offered an edit would let review state
         become mutable in one place and derived in another, which is the shape
-        #54, #55 and #56 all were.
+        every drifted lookup table before it was.
 
         Written *after* the decision it records has succeeded, so a refused
         write leaves no row. The two are not one transaction: a lost row costs
@@ -1135,7 +1135,7 @@ class StorageBackend(Protocol):
         is a caller that named a judge with no ids, not a caller that named
         none.
 
-        **A list rather than one id, because a judge is a set of keys** (#78).
+        **A list rather than one id, because a judge is a set of keys**.
         Consolidating two records that were always one agent rewrites no rows —
         the survivor gains the other's id as a former id and lookup resolves
         through the list — so *this judge's decisions* is a query over
@@ -1171,7 +1171,7 @@ class StorageBackend(Protocol):
     ) -> dict[str, int]:
         """How many journal rows each named graph holds — counts and nothing else.
 
-        The locator behind `review()`'s `elsewhere` (#73). A reviewer checking a
+        The locator behind `review()`'s `elsewhere`. A reviewer checking a
         *later, different* agent's work does not know which graphs that agent
         worked in; the agent that made the decisions switched them itself and
         never needed telling.
@@ -1179,7 +1179,7 @@ class StorageBackend(Protocol):
         **A count, deliberately, and never a row.** `subject_ids` are node ids,
         and a node id resolves only in the graph that holds it — so rows read
         out of another graph would arrive readable but not actionable, and every
-        write path is single-graph anyway (#72). What a reviewer needs from here
+        write path is single-graph anyway. What a reviewer needs from here
         is *where else to look*; the looking is `use_graph` then `review()`,
         which stays the fallback and is not a workaround.
 
@@ -1198,7 +1198,7 @@ class StorageBackend(Protocol):
 
         Naming a graph must not create it. On SurrealDB the read borrows the
         connection and takes the guard's mover turn for the whole sweep, so the
-        counts are of one instant and nothing else runs during it (#16); the
+        counts are of one instant and nothing else runs during it; the
         in-memory backend indexes a dict and borrows nothing.
         """
         ...
@@ -1228,7 +1228,7 @@ class StorageBackend(Protocol):
         Every backend has one and none of them may skip it: the active graph is
         process state everywhere, so a switch landing mid-operation sends the
         rest of that operation to another graph on the in-memory backend as
-        surely as on SurrealDB (#16).
+        surely as on SurrealDB.
 
         Callers take `using()`; the two things that move the graph —
         `switch_database` and the `viz_list_*` borrow — take `moving()`
@@ -1311,7 +1311,7 @@ class StorageBackend(Protocol):
         edge carries the label as a bare string, so without these the dashboard
         can show what a relation is *called* and nothing about what it means.
 
-        A graph that predates #74 answers with an empty list, exactly as one
+        A graph written before labels had records answers with an empty list, exactly as one
         with no relations at all does — the two are indistinguishable here and
         do not need distinguishing, because the viewer falls back to the labels
         on the edges either way.
@@ -1323,7 +1323,7 @@ async def judge_aliases(storage: StorageBackend, handle: str) -> list[str]:
     """Every id whose journal rows belong to the judge `handle` names.
 
     A handle is a name, an id, or an id this judge used to be recorded under
-    (#78), so this is the one place *which judge did the caller mean* is
+    , so this is the one place *which judge did the caller mean* is
     answered — and the answer is a **set**, because consolidating two records
     that were always one agent rewrites no rows: the survivor gains the other's
     id as a former id, and lookup resolves through the list.

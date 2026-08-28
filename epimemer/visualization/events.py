@@ -44,11 +44,11 @@ class NodeView(BaseModel):
     node_type: str            # "topic" | "fact" | "inference"
     content: str
     # "active" | "corrected" | "historical" | "merged" | "archived", plus the
-    # legacy "superseded" on graphs written before #53.
+    # legacy "superseded" on graphs written before the supersession split.
     status: str
     source_id: str | None = None  # tag/entity topics have no segment origin
     extraction_method: str
-    # Null when nobody rated the node (#46). Substituting the 0.5 default here
+    # Null when nobody rated the node. Substituting the 0.5 default here
     # would put a number on a tooltip that no agent ever supplied — a false
     # statement about the graph, and the cheaper honest answer is for the panel
     # to render a dash.
@@ -97,7 +97,7 @@ class RelationLabelView(BaseModel):
 
     An edge carries its label as a bare string, so without this the dashboard
     can show what a relation is called and nothing about what this graph means
-    by it — which is the whole of #74 restated for the viewer.
+    by it — which is the label record restated for the viewer.
     """
     relation_label_id: str
     name: str
@@ -249,7 +249,7 @@ class NodeStatusChanged(Event):
     is carried here rather than left to the lineage edge that arrives as its own
     `EdgeStored` a moment later, because joining those two by their adjacency in
     the stream breaks as soon as anything interleaves — and "123 superseded by
-    124" is the one thing a reader of this event wants to know (#57). `None` where nothing superseded the node: archival retires a node for
+    124" is the one thing a reader of this event wants to know. `None` where nothing superseded the node: archival retires a node for
     triviality, and there is no counterpart to name.
     """
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
@@ -263,7 +263,7 @@ class NodeStatusChanged(Event):
 class ActionVerb(str, Enum):
     """What one act *did*, in the vocabulary the rest of the system already uses.
 
-    Deliberately **not** a `superseded` verb. #53 decided that supersession is
+    Deliberately **not** a `superseded` verb. The validity model decided that supersession is
     two opposite acts — a correction (the claim was wrong; terminal) and a
     world-change (the claim was right, and the world moved on; reversible) — and
     a log line reading "superseded 123 → 124" flattens exactly the distinction
@@ -274,13 +274,13 @@ class ActionVerb(str, Enum):
     `UNDETERMINED` is the absence of a determination, and it serves two cases
     that share exactly that. The legacy `NodeStatus.SUPERSEDED` is one: rows
     written before the split genuinely do not say which act they were, and
-    guessing one would be the lie #53 refused to tell. A status this module has
+    guessing one would be the lie that model refused to tell. A status this module has
     never heard of is the other. It is not a kind of act, and — since it was
     briefly named `RETIRED` — it deliberately does not claim the node left the
     active set: `ACTIVE → RESTORED` already proves non-retirement statuses flow
     through the same transaction, so the fall-through cannot assume otherwise.
 
-    Recurrence needs no verb of its own. #53 T2's `recurs` verdict resolves as a
+    Recurrence needs no verb of its own. The `recurs` verdict resolves as a
     restore plus a new source edge, which is `RESTORED` with the edge in
     `counts` — recorded so nobody mints a `recurs` verb later and splits the
     vocabulary again.

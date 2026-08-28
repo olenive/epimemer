@@ -1,4 +1,4 @@
-"""A relation label gets a record (#74, stage 1).
+"""A relation label gets a record (the label record, stage 1).
 
 A user-tier relationship label used to exist **nowhere**: `list_relations`
 derived the vocabulary by scanning edges and grouping by `(label, kind)`, so
@@ -111,7 +111,7 @@ class TestIdentityIsNameAndKindTogether:
 
     async def test_an_update_keeps_the_id_the_record_already_had(self, storage):
         # The id is what a decision about this label will name, so a write that
-        # reassigned it would leave journal rows pointing at nothing — #74's own
+        # reassigned it would leave journal rows pointing at nothing — the label record's own
         # defect, rebuilt one layer down.
         first = await storage.store_relation_label(RelationLabel(name="works_for"))
 
@@ -158,7 +158,7 @@ class TestIdentityIsNameAndKindTogether:
 class TestRecordsArePerGraph:
     async def test_a_label_in_one_graph_is_invisible_from_another(self, storage):
         # The same words mean different things in different graphs, which is the
-        # whole content of the servant/consultant example behind #74.
+        # whole content of the servant/consultant example behind the label record.
         here = storage.current_database
         await storage.store_relation_label(RelationLabel(name="works_for"))
 

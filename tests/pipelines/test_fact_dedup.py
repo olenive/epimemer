@@ -1,4 +1,4 @@
-"""Facts that restate one claim collapse into one node — and only those (#52).
+"""Facts that restate one claim collapse into one node — and only those.
 
 The same claim arriving in two documents used to produce two nodes, because no
 decomposition path deduplicates facts. That is wanted up to a point: plural
@@ -259,7 +259,7 @@ class TestOneClaimInTwoDocumentsBecomesOneFact:
 
 
 class TestAnOccurrenceNeverMerges:
-    """The pair the whole design turns on (ISSUES.md #52, review 2026-08-12)."""
+    """The pair the whole design turns on (fact dedup, review 2026-08-12)."""
 
     async def test_two_elections_stay_two_facts(self, storage, embedding_provider):
         first = await _fact(
@@ -513,7 +513,7 @@ class TestAFutileMergeCycleIsRefused:
     async def test_a_retirement_that_was_not_a_merge_does_not_count(
         self, storage, embedding_provider
     ):
-        """A claim that stepped aside for its period and came back is #53's
+        """A claim that stepped aside for its period and came back is the validity model's
         recurrence, not an oscillation — the case the lifecycle exists for."""
         recurred = await _fact(
             storage, embedding_provider, "Labour is in government.",
@@ -693,7 +693,7 @@ class TestTheSurvivorInheritsWhatItsSourcesCarried:
     async def test_the_value_signal_is_combined_rather_than_rebuilt(
         self, storage, embedding_provider
     ):
-        """#45's shared rebuild, whose second caller this is. A field-by-field
+        """The shared value rebuild, whose second caller this is. A field-by-field
         reconstruction silently resets whatever it forgets to name."""
         judged_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
         first = await _fact(
@@ -729,7 +729,7 @@ class TestTheSurvivorInheritsWhatItsSourcesCarried:
     ):
         """The confidence a merge keeps is the highest of its sources, and the
         prose explaining it lives in metadata — so rebuilding one without the
-        other leaves a prior nobody can review (#46)."""
+        other leaves a prior nobody can review."""
         first = await _fact(
             storage, embedding_provider, "The deploy failed.",
             value=ValueSignal(confidence=0.9),
@@ -768,7 +768,7 @@ class TestTheSurvivorInheritsWhatItsSourcesCarried:
 
 
 class TestADependentInferenceIsToldItsPremiseChanged:
-    """A merge rewords what an inference rests on, so it flags dependents (#61).
+    """A merge rewords what an inference rests on, so it flags dependents.
 
     Every other event that changes a premise already does: both supersession
     paths call `plan_evidence_stale_edges`, and `review_labels_for` derives

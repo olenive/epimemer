@@ -26,7 +26,7 @@ def next_action_id() -> str:
 
 
 # A status flip reads as the act that caused it. `SUPERSEDED` is the legacy
-# value #53 kept for rows that predate the split; it maps to `UNDETERMINED`
+# value kept for rows that predate the split; it maps to `UNDETERMINED`
 # rather than to a guess between the two acts it might have been.
 #
 # That entry sunsets with the enum member, not on its own: delete it in the same

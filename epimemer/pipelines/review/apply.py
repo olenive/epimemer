@@ -5,7 +5,7 @@ what it found goes through.
 
 **Confirming costs something, or the treadmill moves up a level.** If agent 2
 checks a decision and agrees, and nothing records that, agent 3 does the same
-work again — #64's defect one layer higher. So a review is a `DecisionRecord`
+work again — the unrecorded-verdict defect one layer higher. So a review is a `DecisionRecord`
 pointing back, and `reviewed` stays derived from a row's existence rather than
 stored as a flag on a row that claims to be append-only (§3.4).
 
@@ -17,7 +17,7 @@ reasons.**
   `reverse_merge`, for an archival `restore`, for a `one_claim` verdict a
   `distinct` through `apply_reflection` — each with its own refusals, its own
   transaction and its own journal row that sets `supersedes` because it really
-  did supersede something. A dispatcher over four such tools is the fan-out #72
+  did supersede something. A dispatcher over four such tools is the fan-out scope-blindness
   refused: *a convenience less safe than the sequence it replaces is not a
   convenience.* And the reviewer who most needs to record a dissent is the one
   whose undo was **refused** — a merge whose survivor has since been contradicted
@@ -179,7 +179,7 @@ async def review_decision(
             decision_id=decision_id,
             reason=(
                 f"no decision '{decision_id}' in graph "
-                f"'{storage.current_database}'. The journal is per graph (#72) "
+                f"'{storage.current_database}'. The journal is per graph "
                 f"— if this id came from another one, `use_graph` first."
             ),
         )
@@ -204,7 +204,7 @@ async def review_decision(
         # Every id this judge's rows may carry, not only the one bound now: a
         # judge that absorbed another record has decisions under both, and a
         # duplicate check that saw only the current id would let the same judge
-        # confirm the same decision twice (#78).
+        # confirm the same decision twice.
         for existing in await storage.query_decisions(
             reviews=decision_id,
             kinds=[kind],
@@ -263,7 +263,7 @@ async def rejudge_node(
     mislabelled `claim_kind` is neither: the claim was right and the world did
     not move — **the judgment about the claim was wrong**. Filing it as a
     correction would retire a true node and re-point its edges, which is the
-    forgetting #53 exists to prevent, for a metadata mistake.
+    forgetting the validity model exists to prevent, for a metadata mistake.
 
     So nothing here moves a status, an edge or a lineage. The node keeps its
     `judged_by`: that field records who wrote the *wording*, which is unchanged.

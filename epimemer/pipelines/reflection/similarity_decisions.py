@@ -1,4 +1,4 @@
-"""What an agent decided about a nominated pair (REVIEW_MODE.md §1, ISSUES #64).
+"""What an agent decided about a nominated pair (`REVIEW_MODE.md` §1).
 
 `reflect` nominates pairs and the agent classifies each one. Six of the seven
 verdicts had an action; the seventh — *compatible*, these merely look alike —
@@ -29,7 +29,7 @@ So the verdict picks the edges:
 | `distinct`, over a standing `one_claim` | **withdrawn**   | `retracted_similarity` + `assessed` |
 
 **The third row is a retraction, and it is the only conditional write here**
-(#68). `distinct` on a pair that already carries a `similarity` edge used to be
+. `distinct` on a pair that already carries a `similarity` edge used to be
 *refused*, because nothing could unmake a `one_claim` and writing `assessed`
 beside a standing `similarity` would have reported success while the pair went
 on corroborating. The edge is still not deleted — nothing here deletes — so the
@@ -41,13 +41,14 @@ retraction is a second edge that disqualifies the first, which is the mechanism
 omission. Nothing re-asserts `one_claim` over one, because the two directions
 fail differently: a false unification manufactures agreement — the worst failure
 this system has — while a withdrawn one under-counts. Under-counting is the
-direction #52 chose when it left the pre-`claim_kind` corpus unmergeable, and it
+direction dedup chose when it left the pre-`claim_kind` corpus unmergeable, and it
 is the direction to keep choosing.
 
 **Suppression is unaffected**, which is what keeps the retraction narrow. The
 `assessed` edge stays and the pair stays out of every future nomination: the
 agent has now judged it twice, and re-offering it would restart the treadmill
-#64 closed. A retraction changes what corroboration counts, and nothing else.
+the `assessed` edge closed. A retraction changes what corroboration counts, and
+nothing else.
 
 `assessed` is a denormalised suppression index, and it is legitimate as one
 because it is immutable and append-only: it cannot drift from the decision
@@ -57,7 +58,7 @@ edge is what the sweep reads without a journal query.
 **Nothing here writes on its own initiative.** These edges record a *judgment*.
 A sweep that wrote them for every pair over the bar would fill the graph with
 assertions nobody made, and suppress its own future nominations while doing it.
-Similarity nominates; the agent judges (#63).
+Similarity nominates; the agent judges.
 """
 
 from pydantic import BaseModel
@@ -105,7 +106,7 @@ class SimilarityRecorded(BaseModel):
     what was already there.
 
     `retracted` says **this call** withdrew a standing `one_claim` rather than
-    judging a fresh pair (#68). The caller needs it because the two are
+    judging a fresh pair. The caller needs it because the two are
     different decisions to journal — a verdict and the withdrawal of one — and
     they are indistinguishable from the verdict string alone. A `distinct`
     repeated over a pair already withdrawn reports `False`: it decided nothing
@@ -243,7 +244,7 @@ async def apply_similarity_decision(
             ),
         )
 
-    # `distinct` over a standing `one_claim` **retracts** it (#68). The
+    # `distinct` over a standing `one_claim` **retracts** it. The
     # `similarity` edge stays — nothing here deletes — and the retraction edge
     # is what stops corroboration counting it, the same way `contradiction`
     # already does for a pair judged the other way round.

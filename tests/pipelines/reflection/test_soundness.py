@@ -1,6 +1,6 @@
-"""The temporal soundness check over stored inferences (#53 T1 §11).
+"""The temporal soundness check over stored inferences (the soundness check).
 
-The strongest form of the problem #53 exists for: not a display defect but a
+The strongest form of the problem the validity model exists for: not a display defect but a
 soundness defect in the layer the system provides. The graph stores inferences
 the agent drew, and until validity existed nothing could notice that an
 inference combined claims no source ever put in the same period.
@@ -83,7 +83,7 @@ class TestWhatItFlags:
     async def test_premises_no_source_puts_in_the_same_period(
         self, storage, document
     ):
-        """The motivating case, and the reason #53 outranks everything else."""
+        """The motivating case, and the reason the validity model outranks everything else."""
         early = await _premise(
             storage, document, "Labour was in government", _period(1997, 2010)
         )
@@ -248,7 +248,7 @@ class TestWhatItStaysSilentAbout:
 
 class TestItOnlyReads:
     async def test_nothing_is_written(self, storage, document):
-        """Flags, never blocks — and never acts. `reflect` proposes (#44)."""
+        """Flags, never blocks — and never acts. `reflect` proposes."""
         early = await _premise(storage, document, "one claim", _period(1997, 2010))
         late = await _premise(storage, document, "another", _period(2024, 2030))
         drawn = await _inference(storage, "a conclusion", [early, late])

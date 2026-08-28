@@ -76,7 +76,7 @@ async def review_labels_for(
     edges of a *fixed* type at a *fixed* endpoint, which is one query for the
     whole node set rather than one per node. Doing it per node is what made
     `gather_pending_review` the largest single source of round-trips in
-    `reflect` — three queries per active node (ISSUES.md #14).
+    `reflect` — three queries per active node.
 
     Nodes with no review state are absent from the result rather than mapped to
     an empty dict, so a caller can filter by membership.
@@ -93,7 +93,7 @@ async def review_labels_for(
       wording under the inference changed while the claim did not; ids are the
       facts that were absorbed. Deliberately *not* folded into
       ``evidence_stale`` — nothing was overturned, and that label is what
-      archival nominates on (#61).
+      archival nominates on.
     - ``contested`` — node has a ``contradiction`` edge (either direction) to a
       node that is still ACTIVE and in the same frame (an unresolved same-frame
       conflict); ids are the contesting nodes.
@@ -168,7 +168,7 @@ async def review_labels_for(
                 evidence = await storage.get_node(edge.dst_id)
                 # Every supersession kind, not just the legacy one: an
                 # inference resting on a claim that has stopped being current
-                # is as suspect as one resting on a claim that was wrong (#53).
+                # is as suspect as one resting on a claim that was wrong.
                 if evidence is not None and evidence.status in SUPERSEDED_STATUSES:
                     stale_sources.append(edge.dst_id)
             if stale_sources:
@@ -219,7 +219,7 @@ async def frames_for(
 ) -> dict[str, set[str]]:
     """`frames_of` for many nodes at once, keyed by node id.
 
-    **This got materially more expensive when frames became explicit** (#76),
+    **This got materially more expensive when frames became explicit**,
     and the number is worth stating rather than assuming: before, almost no node
     carried a `has_metacontext` edge and the read came back nearly empty at any
     graph size; now every ingested node carries exactly one. Measured
@@ -250,7 +250,7 @@ async def frames_of(node_id: str, storage: StorageBackend) -> set[str]:
     is unknown, an omitted ``claim_kind`` is unjudged. This used to be the one
     exception, answering the base frame for an untagged node and so turning
     silence into an assertion about the real world; requiring the frame at
-    ingest made that exception unnecessary, and #76 removed it.
+    ingest made that exception unnecessary, and it was removed.
 
     The consequence is deliberate and worth stating: a frameless node shares a
     frame with **nothing**, so it is never nominated as contradicting anything,
@@ -398,7 +398,7 @@ async def plan_evidence_merged_edges(
     merged_fact_id: str,
     storage: StorageBackend,
 ) -> list[NodeEdge]:
-    """Edges telling inferences that a premise absorbed another claim (#61).
+    """Edges telling inferences that a premise absorbed another claim.
 
     The counterpart of `plan_evidence_stale_edges` for the one event that
     changes a premise without retiring it. Returns one ``evidence_merged`` edge

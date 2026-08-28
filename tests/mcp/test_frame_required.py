@@ -1,4 +1,4 @@
-"""The frame is required at ingest, and reflect stops laundering it away (#76).
+"""The frame is required at ingest, and reflect stops laundering it away.
 
 **The defect this closes is that absence was not neutral.** A node with no
 `has_metacontext` edge is read as a claim about the real world — the one place
@@ -18,7 +18,7 @@ The second half is the leak that would have made the guarantee false on day one:
 `apply_reflection` minted untagged Topics out of framed ones, so reflect
 converted framed knowledge into base-reality assertions through a side door.
 Splits inherit, synthesis inherits or refuses, and topic merge finally gets the
-frame gate facts have had since #52.
+frame gate facts have had since fact dedup.
 """
 
 import pytest
@@ -387,7 +387,7 @@ class TestTopicMergeGetsTheGateFactsAlreadyHad:
     """`merge_nodes` migrates every source's edges onto the survivor,
     `has_metacontext` among them — so a cross-frame topic merge left one topic
     asserted in two worlds. The equality check has lived in `fact_dedup` since
-    #52 and covered facts alone.
+    fact dedup and covered facts alone.
     """
 
     async def test_a_cross_frame_merge_is_refused(self, storage, embedder):
@@ -479,7 +479,7 @@ class TestTheLegacyPopulationIsLeftAlone:
         self, storage, embedder, config
     ):
         """Writing `the-real` onto nodes nobody asked would manufacture exactly
-        the deliberate-looking assertions this issue exists to end — #46's
+        the deliberate-looking assertions this issue exists to end — the confidence prior's
         treatment of the legacy `0.5` confidences, which were sized and dated
         rather than rewritten."""
         legacy = await _topic(storage, embedder, "written before the rule")
@@ -495,7 +495,7 @@ class TestTheLegacyPopulationIsLeftAlone:
         """There is no before-and-after to date. Absence meant base reality
         until the promotion went, and it means nothing now — in every graph, of
         every node, whenever it was written. The boundary that needed recording
-        was an artefact of the promotion rule, and went with it (#76)."""
+        was an artefact of the promotion rule, and went with it."""
         assert not hasattr(tools, "FRAME_REQUIRED_SINCE")
         assert not hasattr(tools, "ensure_base_metacontext")
 

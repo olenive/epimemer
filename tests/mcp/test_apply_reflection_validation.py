@@ -1,7 +1,7 @@
-"""A batch applies or it never existed (`ISSUES.md` #82).
+"""A batch applies or it never existed.
 
 `apply_reflection` applies in ten steps with no transaction across them, and it
-cannot get one: the order is #65's anchoring rule, where judgments are recorded
+cannot get one: the order is the anchoring rule's anchoring rule, where judgments are recorded
 before the steps that retire the nodes they name. So the guarantee has to come
 from the other end — nothing is attempted until the whole batch is known to be
 applicable.
@@ -168,7 +168,7 @@ class TestRefusableJudgmentsStillCostOneEntry:
     async def test_a_missing_kind_refuses_only_its_own_entry(
         self, storage, embedding_provider
     ):
-        """#74 stage 3's decision, which #82 must not quietly promote."""
+        """The label-verdict decision, which batch validation must not quietly promote."""
         first, second = await _twin_facts(storage, embedding_provider)
         result, _ = await tools.apply_reflection(
             storage, embedding_provider,
@@ -293,7 +293,7 @@ def _required_subscripts() -> dict[str, set[str]]:
     Read from the source rather than from a list somebody maintains, for the
     reason `test_every_kind_has_a_writer` gives: a guard whose reach is an
     accident of where the code sat is one that fails open. A required key added
-    to a loop and not to `REQUIRED_KEYS` is exactly the defect #82 was, arriving
+    to a loop and not to `REQUIRED_KEYS` is exactly the defect batch validation was, arriving
     back through a door nobody watched.
     """
     tree = ast.parse(Path("epimemer/mcp/tools.py").read_text())

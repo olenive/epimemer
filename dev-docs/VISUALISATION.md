@@ -6,7 +6,7 @@ customisation — is designed and not built** (written 2026-08-08); it starts
 below Part B.
 
 One piece of Part C went in ahead of the rest: **C.6's semantic palette is
-built** (2026-08-12, ISSUES.md #56). It was not a picker feature — the two
+built** (2026-08-12, the drifted lookup tables). It was not a picker feature — the two
 panels disagreed about what colour a fact is, and fixing that meant giving the
 hues a single per-theme home. C.1's token migration, the store and the picker are all
 still unbuilt.
@@ -16,7 +16,7 @@ port, so the browser shows *its* empty in-memory store while the session the
 user is actually driving fails to bind and serves no visualization at all —
 silently, with the bind error going only to a log file nobody reads. It was
 Issue 24 in ISSUES.md at the time; that entry is resolved and deleted, so this
-document is now its description. (#16, referenced below, is still open.)
+document is now its description.
 
 Two independent work packages:
 
@@ -24,7 +24,7 @@ Two independent work packages:
   with a standalone hub that MCP server processes publish to. Removes the
   port-contention failure class structurally — nothing but the hub ever binds
   the port, so there is no race to lose — and unblocks the multi-client
-  scenario (#16's trigger).
+  scenario (the active-graph guard's trigger).
 - **Part B — Pipeline strip.** Knowledge graph takes most of the viewport; a
   narrow bottom strip shows one small glyph per Petri net, lighting up as data
   flows, with counters. Click a glyph to expand the full net.
@@ -101,7 +101,7 @@ over classes). Type annotations without over-complication.
 ```
 browser ──ws──► ┌─────────────┐ ◄──ws (dial-out)── MCP server (session A, surrealdb/memory)
 browser ──ws──► │   viz hub    │ ◄──ws (dial-out)── MCP server (session B, mem://default)
-                │  :8765       │
+                │:8765       │
                 │  static UI   │        Hub owns the port. MCP processes never bind it.
                 └─────────────┘        Stale MCP orphans ⇒ dead sessions, not wrong UIs.
 ```
@@ -237,8 +237,8 @@ Behaviour:
     is its only caller after ws_server.py is deleted).
   - Serialize RPC reads with an `asyncio.Lock` shared with nothing else *yet* —
     but note in a comment this is the same shared-connection hazard as
-    ISSUES.md #16; the lock only prevents two concurrent *viz* reads from
-    interleaving their `use()` switches. #16 proper (viz read racing a tool
+    The active-graph guard; the lock only prevents two concurrent *viz* reads from
+    interleaving their `use()` switches. The guard proper (viz read racing a tool
     call) remains deferred; the hub makes it no worse and its RPC handler is
     where the eventual fix (dedicated read connection for surrealdb) will land.
 - Reconnect loop with capped exponential backoff (1s → 30s), forever. Events
@@ -346,7 +346,7 @@ graph": the tool names the session to select in the UI dropdown.
   browser-facing routes are shape-compatible).
 - ISSUES.md: the port-contention issue → resolved by this work (the failure
   class is structural now, so the entry can be deleted per the workflow); note
-  on #16 that viz reads now happen in the owning process behind a lock,
+  on the active-graph guard that viz reads now happen in the owning process behind a lock,
   remaining hazard unchanged and still deferred.
 - DEVELOPER_GUIDE / SUMMARY: hub lifecycle, `epimemer-viz` CLI, `viz_status`
   tool, env vars (`EPIMEMER_VIZ_HOST/PORT` now describe the hub;
@@ -576,7 +576,7 @@ choices persisted.
 ## C.0 The problem this runs into immediately
 
 The dashboard had **three** colour systems, and the request lands across all of
-them. (#56 turned the third into a runtime palette; the count below is the
+them. (the drifted lookup tables turned the third into a runtime palette; the count below is the
 current state, not the one this section was written against.)
 
 1. **Tailwind utility classes** — the chrome: header, toolbars, panels,
@@ -587,7 +587,7 @@ current state, not the one this section was written against.)
    time by the three *drawn* surfaces that Tailwind cannot reach: the cytoscape
    canvas, the timeline SVG, and the graphviz DOT for the pipeline detail.
    These *can* be changed live today.
-3. **The runtime `SemanticPalette`** (`theme.ts`, added by #56) — the hues that
+3. **The runtime `SemanticPalette`** (`theme.ts`, added by the drifted lookup tables) — the hues that
    say what kind of thing something is, read at render time by both the graph
    and the timeline. This *used* to be system 3, "hard-coded hues, deliberately
    outside the palette because 'fact green' must mean the same thing in both
@@ -755,7 +755,7 @@ was **not true**: the graph panel drew facts green and inferences amber
 (`graph-panel.ts:29`) while the timeline drew the same two blue and violet
 (`timeline-panel.ts:89`). One window, two answers to "what colour is a fact".
 
-**Decided and built 2026-08-12 (#56): one semantic palette, shared by both
+**Decided and built 2026-08-12: one semantic palette, shared by both
 panels**, taken from the valid-time grammar's set
 (`TIMELINE_VISUALISATION.md` §13.3) because that
 set was perceptually validated in both themes — lightness band, chroma floor,
@@ -767,7 +767,7 @@ graph panel's was not.
 | **fact / claim** | `#2a78d6` | `#3987e5` | graph green `#22c55e`, timeline `#3b82f6` |
 | **inference** | `#4a3aa7` | `#9085e9` | graph amber `#f59e0b`, timeline `#a78bfa` |
 | **topic** | `#1baf7a` | `#199e70` | indigo `#6366f1` |
-| **historical / retired** | `#8095aa` | `#5d6d7e` | — (new; see #55) |
+| **historical / retired** | `#8095aa` | `#5d6d7e` | — (new; see the drifted lookup tables) |
 | **pending / proposed** | `#9a6b00` on `#f6ecd4` | `#fab219` on `#33290e` | — |
 | **contradiction** | `#ef4444` | `#ef4444` | unchanged |
 | **selection** | `#ec4899` | `#ec4899` | unchanged |

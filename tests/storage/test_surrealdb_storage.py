@@ -943,7 +943,7 @@ class TestFullTextDialectAndIdfFloor:
 
 
 class TestContentLookupUsesTheContentIndex:
-    """A plan assertion, because behaviour cannot see this defect (#48).
+    """A plan assertion, because behaviour cannot see this defect.
 
     `get_node_by_content` reads correctly whatever the planner chooses, so the
     exact-name upsert tests pass either way. What they cannot notice is that
@@ -978,7 +978,7 @@ class TestContentLookupUsesTheContentIndex:
         )
         assert f"idx_{table}_status" not in plan, (
             f"the {table} lookup planned through the status index, which matches "
-            f"every active row — the scan #48 exists to remove: {plan}"
+            f"every active row — the scan the content-lookup index exists to remove: {plan}"
         )
 
     @pytest.mark.parametrize("table", ["topic", "fact", "inference"])

@@ -172,7 +172,7 @@ class TestSnapshotAssembly:
 
     async def test_assemble_snapshot_includes_relation_labels(self, storage):
         """An edge carries its label as a bare string, so the vocabulary's
-        descriptions live nowhere a viewer can reach from the edge alone (#74).
+        descriptions live nowhere a viewer can reach from the edge alone.
         They ride along for the reason metacontexts do."""
         await storage.store_relation_label(
             RelationLabel(
@@ -224,7 +224,7 @@ class TestViewConversion:
         assert view.confidence is None      # nothing has rated it
 
     def test_the_view_does_not_carry_novelty(self):
-        """The frontend contract drops it with the field (#46).
+        """The frontend contract drops it with the field.
 
         `NodeView` is the single shape both the event stream and the snapshot
         endpoints hand the frontend, so a field left here would keep the tooltip
@@ -235,7 +235,7 @@ class TestViewConversion:
         assert "novelty" not in view.model_dump()
 
     def test_an_unrated_node_reaches_the_frontend_as_null(self):
-        """The view relays absence rather than substituting the default (#46).
+        """The view relays absence rather than substituting the default.
 
         Reading `None` as 0.5 here would put a number on the panel's tooltip
         that no agent ever supplied — a false statement about the graph, made

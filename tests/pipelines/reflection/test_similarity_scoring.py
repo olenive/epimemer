@@ -1,4 +1,4 @@
-"""`similar_pairs` — the batched replacement for the pairwise loop (#39, #47).
+"""similar_pairs — the batched replacement for the pairwise loop.
 
 Vectorizing changes *how* the score is computed, not *which* pairs come back, so
 almost everything here is checked against the implementation being replaced
@@ -27,7 +27,7 @@ from epimemer.pipelines.reflection.pair_scoring import (
 
 
 def _naive(vectors, threshold: float) -> list[tuple[int, int, float]]:
-    """The pairwise loop #39 removed, kept as the oracle."""
+    """The pairwise loop the earlier profiling pass removed, kept as the oracle."""
 
     def cosine(a, b) -> float:
         dot = sum(x * y for x, y in zip(a, b))
@@ -150,7 +150,7 @@ class TestOrdering:
 
 
 class TestStackUniformWidth:
-    """The ragged-set rule, now that two phases depend on it (#47).
+    """The ragged-set rule, now that two phases depend on it.
 
     A mixed-width vector set is a re-embedding in progress. It cannot form a
     matrix, so something has to give: the loops this replaced gave silently,

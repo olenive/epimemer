@@ -65,7 +65,7 @@ did not change, only the wording that states it and the documents behind it, so
 what is wanted is a re-read rather than a re-derivation.
 
 `redundant` routes into `merge_facts(source_ids, content)` (built 2026-08-21,
-`dev-docs/ISSUES.md` #52): one node keeping a `sourced_from` edge per
+): one node keeping a `sourced_from` edge per
 contributing document, so provenance becomes plural rather than being
 overwritten. It refuses — with a reason — an **event** rather than a state, a
 fact ingested without a `claim_kind`, a retired twin (that is `recurs`, and
@@ -122,7 +122,7 @@ wants a different operation than a longer list.
 The cap bounds the **response**, not `reflect`'s peak allocation — the scored
 pairs still exist upstream. That is the scope the measurement asked for: real
 corpora clear the 0.80 threshold at 0.0105%, which projects to ~3 MB at 10,000
-facts, so the response was the thing worth bounding (`ISSUES.md` #60).
+facts, so the response was the thing worth bounding.
 
 Two of them exist to keep a distinction that a single list would destroy:
 
@@ -234,7 +234,7 @@ set its children all stand in, and is refused into `parents_refused` when they
 differ; a topic merge is refused into `topic_merges_refused` unless every source
 stands in exactly the same set. Union is never the answer: one node asserted in
 two worlds is the worst outcome available, which is the rule `merge_facts` has
-applied since #52.
+applied since fact dedup shipped.
 
 **A merge re-states the survivor's frame rather than migrating one.** Every
 other edge on a survivor is something its sources genuinely brought with them,
@@ -374,7 +374,7 @@ quadratic and nothing caps how many survive — about 580 bytes per surviving pa
 so on a corpus of genuinely similar documents `reflect` can want gigabytes at
 ~10,000 facts, *below* the timeout crossing. The benchmark corpus produces almost
 no surviving pairs, so it cannot show this. Measurements and options:
-`dev-docs/ISSUES.md` #60.
+`dev-docs/BENCHMARKS.md`.
 
 Practical consequence: run `reflect` deliberately, on a graph you know the size
 of, rather than on a schedule against an unbounded one.

@@ -59,7 +59,7 @@ async def _ingest(server: FastMCP, content: str, graph: str = "default") -> dict
     """Run the two-step ingest flow and return the store_decomposition result.
 
     `graph` is threaded because a test that switches graphs has to say which one
-    it means on every call (#71) — the parameter is not a formality that can be
+    it means on every call — the parameter is not a formality that can be
     defaulted once at the top.
     """
     # Frames are per graph, so a graph this test switches into names its own.

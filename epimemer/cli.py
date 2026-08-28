@@ -11,7 +11,7 @@ and this command, which the agent cannot run.
 hoped.** Approvals live in per-graph settings *inside the storage backend*, and
 an embedded store (`mem://`, `file://`, `surrealkv://`, or the in-memory
 backend) lives inside the server process — a second connection to `mem://` is a
-separate store, not a second view of one (`ISSUES.md` #16). Writing there would
+separate store, not a second view of one. Writing there would
 report success into a store the running server will never read, so it refuses
 and names `EPIMEMER_APPROVED_AGENTS`, which the server reads at connect.
 """
@@ -126,7 +126,7 @@ async def _confirm(storage: StorageBackend, handle: str) -> str:
     """Admit the judge `handle` names to the active graph, and say what changed.
 
     **A handle, because a person types names.** Since the three-layer split the
-    approved list holds opaque keys (#78), so a name is resolved to the judge
+    approved list holds opaque keys, so a name is resolved to the judge
     that holds it — otherwise approving an existing judge by name would admit a
     second, empty identity keyed on its name. A handle matching nothing is
     admitted as itself, which is what seeding a judge that has not claimed yet
@@ -173,7 +173,7 @@ async def _confirm(storage: StorageBackend, handle: str) -> str:
 
 
 async def _rename(storage: StorageBackend, handle: str, name: str, same: bool) -> str:
-    """Rename a judge, or consolidate two that were always one (#78).
+    """Rename a judge, or consolidate two that were always one.
 
     Here for the reason approval is here: a handle an agent could rename is a
     handle an agent could point at another judge's history (§2.2). `--same-judge`
@@ -253,7 +253,7 @@ async def _list(storage: StorageBackend) -> str:
         )
         # The key and the ids consolidated into it, on their own line: not for
         # reading, but this is the only place they can be seen at all, and a
-        # reviewer chasing a `judged_by` out of an old row needs them (#78).
+        # reviewer chasing a `judged_by` out of an old row needs them.
         lines.append(f"    key {agent.id}")
         if agent.former_ids:
             lines.append(
@@ -276,7 +276,7 @@ async def _list(storage: StorageBackend) -> str:
 async def _backfill_relations(storage: StorageBackend) -> str:
     """Give every label already in use a record, and say how many were new.
 
-    **A convenience, never a precondition** (#74). Every write path that names a
+    **A convenience, never a precondition**. Every write path that names a
     label creates its record, so a graph that has been touched since this
     shipped needs nothing from here — this is for a long-lived graph that wants
     its whole vocabulary at once. It matters that it is not the only remedy:

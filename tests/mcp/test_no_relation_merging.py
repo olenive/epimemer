@@ -1,4 +1,4 @@
-"""Relation labels are never rewritten (`RELATION_LABELS.md` §5, `ISSUES.md` #74).
+"""Relation labels are never rewritten (`RELATION_LABELS.md` §5, the label record).
 
 `apply_reflection(relation_merges=…)` used to relabel every user-tier edge
 carrying a listed label, in place. Edges are not versioned, so the old wording

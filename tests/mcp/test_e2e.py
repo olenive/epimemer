@@ -23,7 +23,7 @@ from epimemer.storage.memory import InMemoryStorage
 def _graph_with_the_real() -> InMemoryStorage:
     """An in-memory graph somebody has set up.
 
-    Since #76 a frame is required at ingest and `the-real` is an ordinary
+    Since the frame requirement a frame is required at ingest and `the-real` is an ordinary
     metacontext, created once like any other. A server fixture without it would
     make every test here start by creating a frame, which tests the fixture.
     """
@@ -82,7 +82,7 @@ async def _segment_and_store(
 
     `graph` is threaded rather than defaulted at each call because both steps
     have to name the same one, and a test that switches graphs first has to say
-    so — which is the whole point of the parameter (#71).
+    so — which is the whole point of the parameter.
     """
     seg_result = await server.call_tool(
         "segment",

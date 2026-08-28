@@ -77,7 +77,7 @@ class BoundaryProposal(BaseModel):
     basis is `inferred`, so an interval whose start a document *stated* stops
     being reportable as stated once the other end is worked out. `basis` is per
     interval rather than per endpoint (§8), which is what makes that a real cost
-    rather than a presentational one — see the entry in ISSUES.md #53.
+    rather than a presentational one — see `dev-docs/VALIDITY_DESIGN.md`.
     """
 
     node: NodeRef
@@ -370,7 +370,7 @@ def _with_validity(edge: NodeEdge, validity: list[ValidityInterval]) -> NodeEdge
     return edge.model_copy(update={"validity": validity})
 
 
-# --- Correcting an interval that is present and wrong (`ISSUES.md` #66, part 2)
+# --- Correcting an interval that is present and wrong
 
 
 class IntervalCorrectionRefused(BaseModel):
@@ -423,10 +423,10 @@ async def correct_interval(
     edge and has no id, so there is nothing to address one by. Supplying an
     empty list is allowed and is the correction for an interval that was
     invented outright: refusing it would leave a fabricated period unremovable,
-    which is #66's own shape a second time.
+    which is the same revisability defect a second time.
 
     **The prior list is kept** in the edge's `metadata["interval_corrections"]`.
-    Since #62 corroboration reads intervals to decide whether a look-alike is a
+    Corroboration reads intervals to decide whether a look-alike is a
     witness or an adjacent period, so a wrong interval has been silently moving
     counts for as long as it stood; the trail plus the journal row's timestamp is
     what bounds which answers were affected.

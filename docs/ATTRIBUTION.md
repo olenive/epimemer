@@ -82,7 +82,7 @@ will be used for.
 Two channels, the same two that can approve — a handle an agent could rename is
 a handle an agent could point at another judge's history:
 
-- the judge picker's **rename** option, which then asks which judge and what to
+- The judge picker's **rename** option, which then asks which judge and what to
   call it;
 - `epimemer agents rename <handle> <name>`, on a served SurrealDB.
 
@@ -197,9 +197,10 @@ restamp it: mentioning a name again is not introducing it.
 
 **The one decision that was never attributed no longer exists.** Merging
 relation labels wrote no journal row, and the obstacle had already gone — labels
-have records with ids since `ISSUES.md` #74 stage 1, so a row naming them would
-resolve like any other. What remained was that no writer had been built, and
-#74 settled the question by removing the operation instead (2026-08-28). Nothing
+have had records with ids since the vocabulary gained an identity, so a row
+naming them would resolve like any other. What remained was that no writer had
+been built, and the question was settled by removing the operation instead
+(2026-08-28). Nothing
 rewrites a label now, so there is nothing left here to attribute.
 
 Describing a label **is** attributed, under its own `relation_description` kind,
@@ -380,7 +381,7 @@ field, and two writers for one value is how it ends up depending on which ran
 last.
 
 **Two more revisions live in their own tools** — `reframe` and
-`correct_interval` (`ISSUES.md` #66) — and the split is about **how each is
+`correct_interval` — and the split is about **how each is
 addressed**, not about tidiness. `rejudge` names a `node_id` and promises that no
 status, edge or lineage moves. A frame revision moves an edge and changes what
 merges, what corroborates and what a frame-scoped search returns, so that promise
@@ -413,7 +414,7 @@ search. So a claim goes somewhere or it stays where it is — the paradigm case
 this tool was built for, a real-world fact filed inside a novel's frame, is
 `assign` to the frame holding real-world claims.
 
-**The withdrawal deletes the edge rather than marking it**, and #68's
+**The withdrawal deletes the edge rather than marking it**, and the retraction's
 carry-forward is why: *before designing a mechanism for undo-without-delete, check
 whether the read that would honour it is already there.* Here it is not — frames
 are derived by scanning `has_metacontext` edges, so a `withdrawn` marker would
@@ -438,7 +439,7 @@ truth.
 **The whole list for that (node, source) pair is replaced**, because an interval
 is a position in a list on one edge and has no id of its own. An empty list is
 allowed, and is the correction for a period that was invented outright — refusing
-it would leave a fabricated period unremovable, which is #66's own shape a second
+it would leave a fabricated period unremovable, which is the revisability defect a second
 time. `basis` stays the caller's to state per interval rather than being forced to
 `inferred` as `apply_boundary` forces it: a correction is often restoring what the
 document actually said. The prior list is kept in the edge's

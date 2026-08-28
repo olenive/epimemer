@@ -1,6 +1,6 @@
-"""The active graph holds still while a logical operation is using it (#16).
+"""The active graph holds still while a logical operation is using it.
 
-`ISSUES.md` #16 was filed as a SurrealDB connection problem and deferred on the
+The active-graph guard was filed as a SurrealDB connection problem and deferred on the
 premise that nothing issues concurrent tool calls. Both halves were wrong: one
 client's batched calls overlap (`scripts/concurrency_probe.py`), and the active
 graph is process state on *every* backend — `InMemoryStorage` resolves
@@ -169,7 +169,7 @@ class TestNesting:
 
 class TestTheBackendsTakeTheirOwnTurn:
     """Taken by `switch_database` itself, not by its callers — so a test, the
-    CLI, or a tool nobody has written yet is safe without knowing about #16."""
+    CLI, or a tool nobody has written yet is safe without knowing about it."""
 
     async def test_a_switch_waits_for_a_call_in_flight(self, storage):
         started_on = storage.current_database

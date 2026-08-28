@@ -1,4 +1,4 @@
-"""Three layers of judge identity, against a real store (#78, stage 2).
+"""Three layers of judge identity, against a real store (the judge identity split, stage 2).
 
 `tests/core/test_agent_identity.py` covers the pure resolutions. This covers
 what they mean once a graph holds records: that a handle binds to the judge the

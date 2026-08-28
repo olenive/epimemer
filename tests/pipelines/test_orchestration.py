@@ -41,7 +41,7 @@ def config() -> ServerConfig:
 async def _prepare_store_payload(storage, embedding_provider, config, content="Test content about AI."):
     """Segment content and build a store_decomposition payload.
 
-    The graph names its frames before writing into them: since #76 every ingest
+    The graph names its frames before writing into them: since the frame requirement every ingest
     states one, and `the-real` is an ordinary metacontext created like any other.
     """
     await storage.store_metacontext(Metacontext(

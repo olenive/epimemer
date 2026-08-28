@@ -1,4 +1,4 @@
-"""Which graph a call meant, checked at the boundary (ISSUES #71).
+"""Which graph a call meant, checked at the boundary (ISSUES the mandatory `expected_graph`).
 
 The active graph is **process state**. A client reconnect starts a fresh process
 and lands on whatever configuration resolves to, so a session that spent an hour

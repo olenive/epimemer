@@ -1,4 +1,4 @@
-"""Reflect proposing where one claim's period ends and the next begins (#53 T1 §9).
+"""Reflect proposing where one claim's period ends and the next begins (boundary proposals).
 
 The other half of *"ingest extracts, reflect proposes"*. A document asserting
 *"the city is called Leningrad"* cannot know the claim will ever stop being
@@ -167,7 +167,7 @@ class TestWhatItProposes:
         assert proposal.at.year == 1991
 
     async def test_nothing_is_written(self, storage, renaming):
-        """Proposes, never acts — `reflect` writes nothing (#44)."""
+        """Proposes, never acts — `reflect` writes nothing."""
         leningrad, _, older, _ = renaming
 
         await propose_boundaries(storage)

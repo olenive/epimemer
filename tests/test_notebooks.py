@@ -1,4 +1,4 @@
-"""Every notebook's imports still resolve (#49).
+"""Every notebook's imports still resolve.
 
 Two of the six notebooks sat broken for four months — `02_decomposition`
 imported a package that had been deleted, `05_reflection` a module that had —
@@ -23,7 +23,7 @@ There are two checks, split by what a failure would mean.
 name this codebase no longer exports is a defect no environment excuses.
 
 `test_every_notebook_dependency_is_declared` covers every import including
-third-party, and **skips where the demo dependencies are absent** (#50). Those
+third-party, and **skips where the demo dependencies are absent**. Those
 live in the `notebooks` extra, so `uv sync --extra notebooks` is what makes this
 one run; without it the failure would say only "you did not install the extra",
 which is not news and gets tests deleted.
@@ -38,7 +38,7 @@ machinery than the defect is worth.
 
 A third gap belongs to both: **a notebook whose imports are fine but whose body
 reads something gone still passes.** `05_reflection.py` rendered a "Value Decay"
-section against a Petri net place removed by #44, and rendered it silently — the
+section against a Petri net place removed by the field with no reader, and rendered it silently — the
 section was guarded by `if _dp and _dp.tokens`, so a deleted phase reads as a
 phase that produced nothing. Catching that needs execution, which needs
 providers, storage and a runtime.

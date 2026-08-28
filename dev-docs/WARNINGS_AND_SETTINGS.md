@@ -4,7 +4,7 @@
 user's direction. **§9 was superseded on 2026-08-22** — node notes fold into
 `dev-docs/REVIEW_MODE.md`'s decision journal; see the banner there and §5.3. Nothing here is implemented; where it says "does", read
 "would". **One exception, and it is marked in place**: §1's live defect — a fact
-merge not flagging its dependents — was built the same day (§7, ISSUES.md #61).
+merge not flagging its dependents — was built the same day (§7, evidence-stale flagging).
 Advisories, settings, notes and inference merge remain designed only.
 
 This document covers one theme in four parts, and they are together because
@@ -23,7 +23,7 @@ each is unusable without the others:
 
 ## 1. The motivating case
 
-Facts merge as of 2026-08-21 (`ISSUES.md` #52). The immediate consequence is
+Facts merge as of 2026-08-21. The immediate consequence is
 that a fact which used to exist as four near-identical nodes across four
 documents becomes one node — and the inferences drawn on those four nodes all
 migrate onto the survivor. What was four inferences hanging off four facts is
@@ -46,7 +46,7 @@ That is the same reasoning correction uses — the wording under the inference
 changed — so a merge should flag dependents too. It is a small fix and it is
 listed in §7.
 
-> **Built 2026-08-21 (ISSUES.md #61), and it is the one thing in this document
+> **Built 2026-08-21, and it is the one thing in this document
 > that is no longer "would".** The flag is its own edge type, `evidence_merged`,
 > deriving its own review label — not `evidence_superseded`, because archival
 > nominates on `evidence_stale` and one shared label would have every merge
@@ -250,7 +250,7 @@ should not thereby discard the process defaults for the others, so
 `resolve_warning_policy` merges `by_kind` maps rather than replacing them. This
 is the one place the two settings differ, because a threshold is a scalar and a
 policy is a map, and a map override that silently drops unnamed keys is the
-same class of bug as a field-by-field merge rebuild forgetting a field (#45).
+same class of bug as a field-by-field merge rebuild forgetting a field.
 
 ### 4.4 A settings menu in the UI — notes, not a design
 
@@ -337,7 +337,7 @@ Three notes on it:
 
 - **It is linear, not quadratic.** A scan of active nodes for a non-empty
   `notes` list, in the same batched read the other linear phases use. It does
-  not join the four capped lists (#60) and needs no cap of its own.
+  not join the four capped lists and needs no cap of its own.
 - **It is not the same as `unsound_inferences`**, and folding it in was
   considered and rejected. That list answers *"is this inference unsound
   now?"* — recomputed from the graph every time, and correctly silent once
@@ -362,11 +362,11 @@ premise**. Not a global sweep over all inference pairs, for three reasons:
   inferences onto one survivor; that is the population worth reviewing.
 - It is cheap. One batched `derived_from` read, grouped by premise id, comparing
   only within groups — where a global sweep is quadratic in *all* inferences and
-  would be a fifth capped list immediately after #60 capped four.
+  would be a fifth capped list immediately after the nomination cap capped four.
 - A global sweep would nominate nothing today. Measured on both real graphs
   (2026-08-21): **123 active inferences, 5,053 pairs, zero at the nomination
   bar**, p50 0.16–0.24, p99 0.44–0.55, max 0.66. Measured against 0.83 and
-  unaffected by the move to 0.80 (`ISSUES.md` #63) — the highest-scoring pair in
+  unaffected by the move to 0.80 — the highest-scoring pair in
   either graph is 0.14 below the lower bar. The top-scoring pairs are not
   duplicates at all: they share vocabulary and say different things.
 
@@ -375,7 +375,7 @@ duplication it addresses does not exist yet, and will not until fact merges star
 collecting inferences together.
 
 > **Amended 2026-08-21 — the precondition has since been created.** Later the
-> same day, five `merge_facts` calls on the `memory` graph (`ISSUES.md` #52) did
+> same day, five `merge_facts` calls on the `memory` graph did
 > exactly what the first bullet above anticipates: a fact merge collected
 > duplicate inferences onto one survivor. The merged fact *"Corroboration is off
 > by default…"* now `supports` three inferences, two of which state one claim in
@@ -453,8 +453,8 @@ edges migrated. Plus `proceeded_despite` when an advisory was in play.
   independent support, but it is a live change to a number callers read, not a
   retrieval nicety.
   *Files*: `pipelines/reflection/` (a nominee list beside the existing four,
-  capped as they are — #60), `pipelines/query/corroboration.py` for the
-  consequence. **The collision with `ISSUES.md` #62 is cleared** — #62 shipped
+  capped as they are), `pipelines/query/corroboration.py` for the
+  consequence. **The collision with the successor-corroboration fix is cleared** — the successor-corroboration fix shipped
   2026-08-21 — but it left the walk a shape worth reusing rather than a file
   merely free to edit: a `SIMILARITY` neighbour can now be *counted*, *excluded*
   (contradiction, variant, corrected) or *reported without counting*
@@ -506,7 +506,7 @@ edges migrated. Plus `proceeded_despite` when an advisory was in play.
 > change rather than a rename. Review state is mutable, so it lives in exactly
 > one place and is *derived* — a record is reviewed when another record points
 > back at it. Storing it on the note as well would be two homes for one mutable
-> fact across two backends, which is #54/#55/#56's shape.
+> fact across two backends, which is per-edge-type migration/the drifted lookup tables/the drifted lookup tables's shape.
 >
 > **§5.2's own argument is why this went the way it did**: two shapes for one
 > question is how "the reviewing agent ends up unable to ask one question".
@@ -617,7 +617,7 @@ thinks so.
 > open note on a node retired by supersession as reviewed-by-replacement, which
 > costs nothing and depends on nobody forgetting the rule. Prefer the write: a
 > derived rule with one reader today is how `evidence_merged` nearly went
-> wrong (ISSUES.md #61), and a note is a record rather than a label.
+> wrong, and a note is a record rather than a label.
 
 The alternative — copying open notes forward — was rejected for the reason above
 and for a second one: a copied note and its original can later disagree, and

@@ -27,7 +27,7 @@ async def assemble_snapshot(storage: StorageBackend, graph: str) -> dict:
     a frame the viewer cannot name is a frame it cannot offer as a filter.
     Relation labels ride along for the same reason one layer over: an edge
     carries its label as a bare string, so the vocabulary's descriptions live
-    nowhere the viewer can reach from the edge alone (#74).
+    nowhere the viewer can reach from the edge alone.
     """
     nodes = await storage.viz_list_nodes(graph)
     edges = await storage.viz_list_edges(graph)

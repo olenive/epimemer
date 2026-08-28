@@ -8,7 +8,7 @@ Two properties are load-bearing and tested as such. **Append is the only
 write**: a reversal, a confirmation and an overturn are all new rows, and the
 absence of an update path is what makes that structural rather than a habit.
 And **`reviewed` is derived** from a row pointing back, never stored as a flag —
-the mutable-copy-in-two-places shape that #54, #55 and #56 all were.
+the mutable-copy-in-two-places shape that per-edge-type migration, the drifted lookup tables and the drifted lookup tables all were.
 
 Both backends, because a nullable field one store keeps and the other drops is
 the divergence `tests/conftest.py` exists for — and here it would be invisible
@@ -65,7 +65,7 @@ class TestOneRowSurvivesTheRoundTrip:
         assert stored is not None and stored.judged_by is None
 
     async def test_unrated_certainty_stays_unrated(self, storage):
-        """Deliberately not a rated 0.5 — the #46 ladder's rule, and the reason
+        """Deliberately not a rated 0.5 — the confidence prior ladder's rule, and the reason
         `review()` orders in two tiers rather than one blended number (§6.2)."""
         record = _record()
 
@@ -110,7 +110,7 @@ class TestWhatDidThisAgentJudge:
 
     async def test_several_ids_are_one_judge(self, storage):
         """A judge is a **set** of keys once two records have been consolidated
-        (#78): the survivor takes the other's key as a former id and no journal
+        : the survivor takes the other's key as a former id and no journal
         row is rewritten, so *this judge's decisions* is a query over the list.
         """
         early = _record(judged_by=JudgeRef(agent_id="Opus 5 Judge", digest="d1"))

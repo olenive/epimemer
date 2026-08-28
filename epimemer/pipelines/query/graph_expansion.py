@@ -50,7 +50,7 @@ async def expand_via_graph(
 
         # Two queries per hop rather than two per node in the frontier. A hop is
         # exactly the batch: every id in it is known before any of its edges are
-        # read (ISSUES.md #14).
+        # read.
         frontier = list(frontier_ids)
         outgoing = await storage.get_edges_for(frontier, direction="from")
         incoming = await storage.get_edges_for(frontier, direction="to")

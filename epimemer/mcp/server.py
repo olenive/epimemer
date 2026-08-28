@@ -99,7 +99,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     # Seeded here rather than read at every check so that one channel writes the
     # approved list and everything else reads it — and because on an embedded
     # backend this is the *only* channel that reaches the running server, the
-    # `epimemer agents confirm` CLI being a separate store (ISSUES.md #16).
+    # `epimemer agents confirm` CLI being a separate store.
     await tools.seed_approved_judges(storage, config.approved_agents)
 
     embedding_provider = create_embedding_provider(config)
@@ -278,7 +278,7 @@ async def _record_response(
 # list — the invariant is *these and no others*.
 #
 # `review` is here for a reason worth stating, because it is a **read**: its
-# `elsewhere` locator counts the journal in every other graph (#73), and on
+# `elsewhere` locator counts the journal in every other graph, and on
 # SurrealDB that means borrowing the connection. To move the graph you must
 # exclude the calls using it, and you cannot do that while being one — a
 # `moving()` taken inside a `using()` raises rather than deadlocking. So the
@@ -289,7 +289,7 @@ async def _record_response(
 MOVES_THE_GRAPH = frozenset({"epimemer.use_graph", "epimemer.review"})
 
 # The tools that need no `expected_graph`, because each is *about* graphs rather
-# than in one (#71): `list_graphs` asks which exist, `use_graph` and
+# than in one: `list_graphs` asks which exist, `use_graph` and
 # `delete_graph` take the graph as their argument, and `viz_status` is
 # server-level. Every other tool must name the graph it means, and a tool absent
 # from both this list and the parameter is a hole — `tests/mcp/test_graph_gate.py`
@@ -303,7 +303,7 @@ NAMES_ITS_OWN_GRAPH = frozenset({
 
 
 def _graph_turn(deps: dict, tool_name: str, waits_for_user: bool):
-    """The guard turn this tool call takes, if any (#16).
+    """The guard turn this tool call takes, if any.
 
     **A call that waits on a person takes none.** `claim_agent` blocks until
     somebody answers an elicitation, and a user's turn held across that would
@@ -350,11 +350,11 @@ async def _run_with_timeout(
     — which is the difference between a claim refused and an identity admitted.
 
     **This is also where a call takes its turn over the active graph.** One tool
-    call is one logical operation, and the invariant #16 exists for is that the
+    call is one logical operation, and the invariant the guard exists for is that the
     graph does not move underneath one — so the turn has to be taken here, at
     the boundary, rather than inside the storage calls that make up the work.
 
-    **And it is the single home of the wrong-graph gate** (#71). Every content
+    **And it is the single home of the wrong-graph gate**. Every content
     tool accepts `expected_graph` and forwards it here; nothing checks it on its
     own account, so the policy has one declaration and the message one wording.
     The comparison happens **inside** the turn, which is what makes its answer
@@ -1690,7 +1690,7 @@ async def memory_apply_reflection(
         f"boundaries={len(boundaries or [])} "
         f"similarities={len(similarities or [])}",
         # A refusal should reach the operator's log, not only the agent's
-        # response — a decision silently not recorded is the whole of #64.
+        # response — a decision silently not recorded is the whole defect.
         lambda r, m: (
             f"applied={m.nodes_returned}"
             + (
@@ -2868,7 +2868,7 @@ async def epimemer_list_graphs(
 # never held in a module global, which is the whole of §3.2: two graphs or two
 # sessions must not be able to inherit each other's judge.
 JUDGE_STATE_KEY = "epimemer.judge"
-# Which identity this session has already had confirmed, per graph (#78).
+# Which identity this session has already had confirmed, per graph.
 JUDGE_CONFIRMED_STATE_KEY = "epimemer.judge_confirmed"
 
 
@@ -2937,7 +2937,7 @@ async def _bind_judge(ctx: Context, judge: JudgeRef | None) -> bool:
 async def _confirmed_judge_here(ctx: Context) -> str | None:
     """The judge this session has already had confirmed for the active graph.
 
-    The cadence memo (#78, decided 2026-08-25). The picker goes up on every
+    The cadence memo, decided 2026-08-25. The picker goes up on every
     bind, which is what stops an already-approved id binding with nobody
     watching — and repeating the question for a claim this session has already
     answered would train the user to dismiss it, so a re-claim of the same
@@ -2955,7 +2955,7 @@ async def _confirmed_judge_here(ctx: Context) -> str | None:
 
     **The id, not a yes-or-no.** The proposal `claim_agent` receives is a
     handle, and only that tool can resolve it against this graph's judges, so
-    the comparison has to happen there (#78). Returning a boolean here would
+    the comparison has to happen there. Returning a boolean here would
     mean comparing a handle to an id and calling them equal.
     """
     try:
@@ -2999,7 +2999,7 @@ async def _judge_for_write(
     goes through and records an unknown judge, which is what blank has always
     meant (§3.3).
 
-    **Which graph, before who** (#71). This runs in the tool body, so it would
+    **Which graph, before who**. This runs in the tool body, so it would
     otherwise finish before `_run_with_timeout`'s gate ever ran — and everything
     it reads is graph state: the approved-agent list a bound judge is checked
     against, and the `require_judge` setting. On a wrong-graph call that is
@@ -3049,7 +3049,7 @@ async def _elicit_new_judge_name(
 
     Reached only by choosing *a new judge* in the picker, or where the graph
     knows none to pick from. Keeping it off the common path is the point — free
-    text is what let one keystroke mint a permanent second judge (#78).
+    text is what let one keystroke mint a permanent second judge.
 
     **What comes back is a handle, not a decision to mint.** Typing the name of
     a judge that already exists joins it, because `claim_agent` resolves the
@@ -3153,7 +3153,7 @@ async def _elicit_agent_id(
     lets `confirmed_at` mean what it says: no path exists by which the agent
     alone sets it.
 
-    **A picker over the judges this graph already knows** (#78). It used to be a
+    **A picker over the judges this graph already knows**. It used to be a
     free-text box naming only the proposed id, so the one place a human chooses
     an identity was the one place the existing identities were invisible — and
     what the user typed had to match an existing judge character for character
@@ -3163,7 +3163,8 @@ async def _elicit_agent_id(
     consumer outside the CLI.
 
     **Lines carry names, never ids.** Since the three-layer split the key is a
-    UUID, and a picker offering those would be unusable — which is why #77
+    UUID, and a picker offering those would be unusable — which is why the earlier
+    proposal
     rejected an opaque id, and why the picker had to come first.
 
     **The question comes first and the self-description last**, because the

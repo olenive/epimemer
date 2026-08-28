@@ -1,10 +1,10 @@
 # Review mode: who judged this, and can someone else check it
 
 **Status: §7, §1, §2, §3, §4 and §9 built, the rest designed (2026-08-23).** Built so far:
-§10.2.1's precondition (`ISSUES.md` #65); **steps 0a, 0b and 0c** — the whole of
+§10.2.1's precondition; **steps 0a, 0b and 0c** — the whole of
 merge reversal, from capture through the futile-cycle refusal to `reverse_merge`
 itself; **step 1**, `apply_reflection(similarities=[…])` and the `ASSESSED`
-edge, which closes #64's presenting symptom; and **step 2**, the agent registry
+edge, which closes the `assessed` edge's presenting symptom; and **step 2**, the agent registry
 — `claim_agent`, the `agent` table on both backends, approval over elicitation
 and config, and the `epimemer` CLI; and **step 3**, the judge threaded through every
 reflect-side writer and recorded on the episode, edge, value signal or node the
@@ -15,7 +15,7 @@ the `decision` table on both backends, a row at every writer, and
 are design — `review()` and `apply_review`.
 Written
 before any code, at the user's direction; where an unbuilt section says "does",
-read "would". #65 went first because it is a defect in shipped code that
+read "would". The anchoring rule went first because it is a defect in shipped code that
 step 1 would make reachable, and fixing it after would mean shipping it
 knowingly. Steps 0a and 0b went next because both read something that exists at
 merge time and nowhere else: the edge partition, destroyed as the merge migrates
@@ -55,7 +55,7 @@ agent's.
 
 This document covers five parts, together because none of them works alone:
 
-1. **The missing actions** — `similarity`, the verdict with no writer (#64), and
+1. **The missing actions** — `similarity`, the verdict with no writer, and
    the suppression marker it turned out to be entangled with.
 2. **The registry** — what an agent is, how its identity survives being
    re-described, and why the user assigns it.
@@ -65,8 +65,8 @@ This document covers five parts, together because none of them works alone:
 5. **Reversal** — what review can actually undo, and the one thing that has to
    be captured before it can ever be built (§7).
 
-Design history it depends on: `ISSUES.md` #64 (the defect), #52 (fact merge),
-#63 (the one nomination bar), #60 (bounding a response), #46 (unrated is not
+Design history it depends on: The `assessed` edge (the defect), fact dedup (fact merge),
+The single nomination bar, the nomination cap (bounding a response), the confidence prior (unrated is not
 0.5), `REVIEW_EPISTEMIC.md` §3 (the verdict taxonomy), `EVENT_LOG.md` (the
 durable change path this extends), and **`WARNINGS_AND_SETTINGS.md` §5.3 and §9**
 (node notes, folded into this document's journal — see §9).
@@ -82,13 +82,13 @@ verdicts have an action. The seventh does not.
 
 | Verdict | Action | Exists |
 |---|---|---|
-| redundant | `merge_facts` | ✅ (#52, 2026-08-21) |
+| redundant | `merge_facts` | ✅ (fact dedup, 2026-08-21) |
 | supersedes | `supersede_by` | ✅ |
 | succeeds | `temporally_followed_by` | ✅ |
 | recurs | `restore` | ✅ |
 | contradicts | `record_contradiction` | ✅ |
 | cross-frame | `record_variant` | ✅ |
-| **compatible** | `apply_reflection(similarities=[…])` | ✅ (#64 step 1, 2026-08-22) |
+| **compatible** | `apply_reflection(similarities=[…])` | ✅ (the `assessed` edge step 1, 2026-08-22) |
 
 `grep EdgeType.SIMILARITY` returns three sites and all three read. Measured
 2026-08-21: **0 similarity edges of 4,386 on `memory`, 0 of 1,028 on
@@ -125,7 +125,7 @@ category ("related, kept apart") that collapsed them:
 
 The other two refusals need no new action: a **cross-frame** pair is
 `record_variant`, and a **retired twin** is `recurs` → `restore`. A below-bar
-refusal cannot reach a nominated pair, since #63 unified the bar.
+refusal cannot reach a nominated pair, since the single nomination bar unified the bar.
 
 So suppression gets a record of its own — an **`ASSESSED` edge** — and
 `already_linked` reads `SIMILARITY ∪ CONTRADICTION ∪ VARIANT_OF ∪ ASSESSED`.
@@ -165,7 +165,7 @@ two alternatives were rejected:
 **This is not licence to write these edges automatically.** They record a
 *judgment*. A sweep that wrote them for every pair over the bar would fill the
 graph with assertions nobody made and suppress its own future nominations while
-doing it. Similarity nominates; the agent judges (#63).
+doing it. Similarity nominates; the agent judges.
 
 ---
 
@@ -223,7 +223,7 @@ The append-only-list-with-dates shape is deliberately the one `LifecycleEpisode`
 already uses for node history. Same problem, same answer: a scalar plus a
 timestamp cannot express *changed, and here is what it was before*.
 
-> **Amended 2026-08-26 (#78 stage 2): `id` was doing three jobs, and is now
+> **Amended 2026-08-26: `id` was doing three jobs, and is now
 > three fields.** The reasoning above is intact — an identity must not be
 > derived from the description — but the conclusion, *one stable string assigned
 > by the user*, collapsed the join key with the human handle. Everything the
@@ -240,7 +240,7 @@ timestamp cannot express *changed, and here is what it was before*.
 > **The name and the description resolve by opposite rules on purpose.** *Which
 > judge is this* wants the name the user knows it by now, so a rename carries
 > old rows with it; *what did this judge claim to be when it decided this* wants
-> the claim as it stood, which is the whole reason the digest exists. #77
+> the claim as it stood, which is the whole reason the digest exists. The earlier identity proposal
 > rejected an opaque id partly by running these two together.
 >
 > **`former_ids` is aliasing, migration and repair in one list.** Consolidating
@@ -282,7 +282,7 @@ Admitting unapproved ids would hand identity straight back to the agent, and
 *"a different agent reviewed this"* would be self-asserted again, which is the
 whole thing this section exists to prevent.
 
-> **Amended 2026-08-25 (#78): the gate guards *assuming* an id, not only
+> **Amended 2026-08-25: the gate guards *assuming* an id, not only
 > minting one.** As built, `claim_agent` asked only where the proposed id was
 > not already approved — so once an id was admitted, every later session bound
 > to it with no user involvement at all, and the refusal above names the
@@ -303,7 +303,7 @@ whole thing this section exists to prevent.
 > be approved as one judge and bind silently as another. A changed description
 > is still put to the user: the memo records an identity, not a wording.
 
-> **Extended 2026-08-26 (#78 stage 2): renaming lives on this channel too.** The
+> **Extended 2026-08-26: renaming lives on this channel too.** The
 > name layer is the only mutable one (§2.1's amendment), and it is reachable
 > from exactly the two places approval is — the elicitation prompt and the CLI
 > — for the same reason: a handle an agent could rename is a handle an agent
@@ -487,8 +487,8 @@ attribution existed*.
 
 **This project has the scar twice already.** Every row written before
 2026-08-19 carries a literal `0.5` confidence, so those rows read as *rated
-ordinary* when nobody rated them — which is why #46 stores unrated as absent.
-And #52's 305 of 356 active facts carry no `claim_kind` and never will, an
+ordinary* when nobody rated them — which is why the confidence prior stores unrated as absent.
+And fact dedup's 305 of 356 active facts carry no `claim_kind` and never will, an
 island that does not shrink by waiting.
 
 So, decided now rather than discovered later:
@@ -528,8 +528,7 @@ that had no judge still have no judge, and still mean *unknown*.
 
 The first draft put `reviewed_by` / `reviewed_at` both on the journal row and
 inline on every node and edge — two homes for one *mutable* fact, kept in sync
-across two backends. That is the shape this repo has hit three times (#54, #55,
-#56) and it was reintroduced in a document that cites all three.
+across two backends. That is the shape this repo has hit three times and it was reintroduced in a document that cites all three.
 
 The rule that prevents it, stated once and applied throughout:
 
@@ -589,7 +588,7 @@ class DecisionRecord(BaseModel):
     judged_by: str | None = None
     judge_desc: str | None = None
     decided_at: datetime
-    # §5. Same ladder as `confidence` (#46), stated once and referenced — absent
+    # §5. Same ladder as `confidence`, stated once and referenced — absent
     # means unrated, which is deliberately not a rated 0.5.
     certainty: float | None = None
     certainty_basis: str | None = None
@@ -654,7 +653,7 @@ written down here.
 those are, and there are two sources that must not be blended into one number.
 
 **Declared.** The deciding agent supplies `certainty`, on **the same ladder as
-`confidence`** (#46) rather than a second near-identical one — 0.3 / 0.5 / 0.7 /
+`confidence`** rather than a second near-identical one — 0.3 / 0.5 / 0.7 /
 0.9 with the same anchors, absent meaning unrated, and a basis asked for
 whenever the value is not 0.5. Stated once in the shared guidance and referenced
 from both, so ingest guidance does not double in size.
@@ -669,10 +668,10 @@ from both, so ingest guidance does not double in size.
 | a decision whose subject has since been superseded | the ground moved under it |
 
 **Unrated confidence is not a difficulty signal**, and the first draft's table
-said it was. The #46 ladder defines absent as *the ordinary case* — "stated
+said it was. The confidence prior ladder defines absent as *the ordinary case* — "stated
 plainly, no specific reason to doubt → omit the field" — and it is the majority
 state (125 unrated on `memory`). Treating absence as thinness floods the mode
-with ordinary decisions and re-commits the exact sin #46 fixed: assigning a
+with ordinary decisions and re-commits the exact sin the confidence prior fixed: assigning a
 meaning to absence that nobody asserted.
 
 One population this signal is blind to, recorded rather than papered over: the
@@ -681,7 +680,7 @@ pre-2026-08-19 rows carrying a literal `0.5` are *genuinely* unrated and pass a
 that scar costs.
 
 **No similarity band, until it is measured.** The first draft proposed
-`[0.80, 0.85)` as *just cleared the bar*. The 0.85 was invented, and #63 is
+`[0.80, 0.85)` as *just cleared the bar*. The 0.85 was invented, and the single nomination bar is
 explicit that every bar reads one named, documented constant with a test across
 its declarations.
 
@@ -752,7 +751,7 @@ derived must not be mixed, applied to the sort rather than abandoned:
 | 2 | decisions with none | the derived signals of §5, most signals first |
 
 **Tier 1 before tier 2, and that ordering is itself a rule.** Absence is not a
-claim of doubt (#46), so an unrated decision never sorts above one an agent
+claim of doubt, so an unrated decision never sorts above one an agent
 actually flagged.
 
 **The graceful degradation is the point.** The whole existing corpus is tier 2 —
@@ -768,7 +767,7 @@ anything changing.
 
 **`certainty_ceiling`**, off by default. When supplied, keeps only decisions
 whose declared certainty is **at or below** it; unrated decisions are excluded,
-since blank cannot be distinguished from ordinary (#46).
+since blank cannot be distinguished from ordinary.
 
 Its use is not browsing — ordering already covers that — but **counting**:
 *"is anything below 0.5 still outstanding before I stop?"* is a gate, and a gate
@@ -781,13 +780,13 @@ rather than a verdict"*, and the same holds here. And the guidance says to
 anyway was making a point of it, and including it respects that.
 
 **Why 0.5 is a legitimate constant where §5's `0.85` was not**, since the two
-look alike and the difference matters: 0.5 is a labelled anchor on the `#46`
+look alike and the difference matters: 0.5 is a labelled anchor on the `the confidence prior`
 ladder that tool guidance actively teaches, so it means something before anybody
 measures anything. The `0.85` was a number with no referent anywhere in the
 system. Neither is derived from data — but only one of them needs to be.
 
 **The response names the ceiling this call used**, never asserting what the
-graph would have done, because a caller can pass their own. That is #63's
+graph would have done, because a caller can pass their own. That is the single nomination bar's
 carry-forward verbatim: `merge_facts`' refusal message stated a threshold as
 though it were the system's, and was false for exactly the caller who overrode
 it.
@@ -798,9 +797,9 @@ means *"the graph is in good shape"*.
 
 ### 6.4 Everything else about the response
 
-**Every mode is capped and reports `truncated`**, #60's treatment applied
+**Every mode is capped and reports `truncated`**, the nomination cap's treatment applied
 verbatim. `all` over an append-only journal fed by every ingest is precisely the
-unbounded response #60 capped four lists for, and designing it uncapped the day
+unbounded response the nomination cap capped four lists for, and designing it uncapped the day
 after would be perverse. As there: when a list is named in `truncated`, act on
 what came back and review again rather than raising the number.
 
@@ -830,7 +829,7 @@ unrevisited judgment protecting a node for ever (`docs/REFLECTION.md` §5).
 > **Revised 2026-08-23, on building it: `reversals` is `dissents`, and it
 > reverses nothing.** Every undo already has a tool with its own refusals and
 > its own row that legitimately sets `supersedes`; a dispatcher over four of
-> them is #72's fan-out. So a dissent sets only `reviews` — a row claiming to
+> them is the misdirected-write scope's fan-out. So a dissent sets only `reviews` — a row claiming to
 > supersede a decision whose effect still stands would put the journal in
 > disagreement with the graph (§4.2) — and its real use is where the undo was
 > **refused**, which is the case this section had not considered. §10.6's second
@@ -838,7 +837,7 @@ unrevisited judgment protecting a node for ever (`docs/REFLECTION.md` §5).
 
 ### 6.5 Every verdict needs a writer, including the ones review invents
 
-**This document's own flagship example had no action behind it**, which is #64's
+**This document's own flagship example had no action behind it**, which is the `assessed` edge's
 defect reborn one layer up. §3.1 offers *"agent-1 called 44 facts `state`; two
 look like events"* as what review recovers — and **nothing can act on it**.
 `update` takes `new_content` only (`tools.py:1474`); there is no path that
@@ -849,7 +848,7 @@ verdict with no action, which is the exact shape §1.1 tabulates.
 `update` requires `because` being *it was wrong* or *the world changed*, and a
 mislabelled `claim_kind` is neither: the claim was right and the world did not
 move — **the judgment about the claim was wrong**. Filing it as a correction
-retires a true node and re-points its edges, which is the forgetting #53 exists
+retires a true node and re-points its edges, which is the forgetting the validity model exists
 to prevent, for a metadata mistake.
 
 So the missing writer is narrow, and its narrowness is the design:
@@ -900,14 +899,14 @@ Everything an agent supplies at ingest, and where revising it belongs:
   not about ingest priors, and folding it into `rejudge` would put a
   load-bearing epistemic move behind a tool named for tidying metadata.
 - **A validity interval cannot be corrected.** Intervals are supplied per source
-  at ingest (#53 T1); `boundary_proposals` fills an **open** endpoint, and
+  at ingest; `boundary_proposals` fills an **open** endpoint, and
   nothing revises a wrong one. Same reasoning: this is a question about
   **validity**, and the answer probably belongs beside the boundary machinery.
 
 Both should be filed. Neither belongs in this document, and `rejudge` stays the
 three fields above.
 
-> **Filed as `ISSUES.md` #66 and built 2026-08-27, as `reframe` and
+> **Filed as revisable ingest judgments and built 2026-08-27, as `reframe` and
 > `correct_interval`.** The conclusion above — keep them out of `rejudge` — held.
 > **The reason given was not the strongest one available**, and the better one is
 > worth recording here because this is where the survey was made: the split is
@@ -936,7 +935,7 @@ three fields above.
 
 ### 6.6 Review is per graph, and says so
 
-> **Amended 2026-08-23 — the locator this section filed as #73 is built, and it
+> **Amended 2026-08-23 — the locator this section filed as `review`'s `elsewhere` is built, and it
 > cost a turn rather than a query.**
 >
 > `review()` carries `elsewhere`: one count per other graph, zeros included, no
@@ -946,7 +945,7 @@ three fields above.
 > **What the design did not see is that the locator changes what kind of call
 > `review` is.** Reading another graph on SurrealDB means borrowing the
 > connection; borrowing takes the guard's mover turn; and `moving()` inside
-> `using()` raises rather than deadlocking (#16), because you cannot exclude
+> `using()` raises rather than deadlocking, because you cannot exclude
 > the calls using the graph while being one of them. So `review` is now in
 > `MOVES_THE_GRAPH` — a **read** that declares itself a mover. It excludes
 > other tool calls and viz snapshots for its duration, and reads a single
@@ -966,7 +965,7 @@ one graph. The question that exposes it is the one review exists for: *"check
 everything this judge did"* means *"…in this graph"*, and an agent that worked
 in three graphs in one session cannot be reviewed in one question. That is
 `WARNINGS_AND_SETTINGS.md` §5.2's *"the reviewing agent ends up unable to ask
-one question"*, arriving through a door this design did not consider (#72).
+one question"*, arriving through a door this design did not consider.
 
 **Per graph is right, and the reason is the ids.** `subject_ids` holds node
 ids, and a node id resolves only in the graph that holds it. A row filed
@@ -974,7 +973,7 @@ anywhere else carries ids that dereference nowhere, so a central journal would
 have to store the graph name on every row and every reader would have to switch
 graphs before it could act on one. The row belongs beside its subjects.
 
-That also disposes of the forensic half of #72. Where a write lands in the
+That also disposes of the forensic half of the misdirected-write scope. Where a write lands in the
 wrong graph its journal row lands there too — *with* the material it describes,
 which is where somebody who found the material is already looking. Nothing is
 orphaned; what was lost was knowing which graph to open, and that is the hole
@@ -983,7 +982,7 @@ orphaned; what was lost was knowing which graph to open, and that is the hole
 **So `review()` takes no `graphs=` list, and the reason is not scope.** A
 fan-out has to borrow the active database and give it back — the `viz_list_*`
 pattern, which its own docstring calls unsafe under concurrent tool calls and
-which #16 has documented since July. Doing it by hand is *safer*: `list_graphs`,
+which the active-graph guard has documented since July. Doing it by hand is *safer*: `list_graphs`,
 then `use_graph`, then `review()`, once per graph, where each switch is the
 active state rather than one borrowed mid-call. A convenience less safe than the
 sequence it replaces is not a convenience.
@@ -999,12 +998,12 @@ turns *there is more elsewhere* from something the reviewer has to think of into
 something it is told, and leaves the reading where it is safe. It needs a
 cross-graph read that does not move the active database, which does not exist
 and cannot be added the obvious way, because a second connection to an embedded
-URL is a second store (#16). Filed as #73, gated on #16.
+URL is a second store. Filed as `review`'s `elsewhere`, gated on the guard.
 
 **One rule for whoever builds it: the graph is not a field on the row.** A
 merged listing tags each row with the graph it was *read from*. Stored, it would
 be free to disagree with where the row actually lives — a restored archive, a
-copied database — and #54, #55 and #56 are three instances of what that costs.
+copied database — and per-edge-type migration, the drifted lookup tables and the drifted lookup tables are three instances of what that costs.
 
 ---
 
@@ -1012,7 +1011,7 @@ copied database — and #54, #55 and #56 are three instances of what that costs.
 
 Undo was out of scope in the first draft. It is in scope now because of a
 property that only shows up when you look at what a merge leaves behind:
-**the information reversal needs is destroyed at merge time and is not
+**The information reversal needs is destroyed at merge time and is not
 reconstructible afterwards.** So the decision is not *build undo or don't* —
 it is *capture or lose*, and it has to be made before the next merge, not
 before the undo.
@@ -1085,7 +1084,7 @@ levels of a lineage stay reversible; the eleventh and beyond become permanent.
 > deferred to step 0c.
 >
 > **The reason is that the pair would have shipped with no writer**, which is
-> #64's exact shape and was closed three commits earlier: a stored setting whose
+> The `assessed` edge's exact shape and was closed three commits earlier: a stored setting whose
 > only user-facing surface is a tool that configures reversal, in a build where
 > reversal does not exist yet. The cost of waiting is bounded and self-limiting
 > — a graph would need an **eleven-deep** merge chain built between 0a and 0c to
@@ -1194,7 +1193,7 @@ undone. `evidence_merged` keeps its name and its single meaning.
 
 **One boundary, because it is the only place exactness does not hold: status is
 restored, history is appended.** `lifecycle` is append-only by design — a node
-leaving the active set twice is the Saint Petersburg case #53 legalised — so a
+leaving the active set twice is the Saint Petersburg case the validity model legalised — so a
 merge/reverse cycle leaves a closed episode behind, and the journal keeps both
 decisions. That is the record that it happened, which is not a flag and is not
 returned.
@@ -1383,7 +1382,7 @@ one edge class that is gone *immediately*, not merely re-pointed.
 
 > **Amended 2026-08-22, on building the capture.** This paragraph's example was
 > *"a `similarity` or `contradiction` edge between two merging sources"*, and
-> #65 has since made that the one case it is **not**. Judgment edges answer
+> The anchoring rule has since made that the one case it is **not**. Judgment edges answer
 > `keep`, so the migration loop skips them before it reaches the self-loop
 > branch and they survive intact on the retired sources. The mechanism is still
 > needed — a user `related` edge, a `supports` edge between two merging facts —
@@ -1502,7 +1501,7 @@ async def reverse_merge(
 
 **The cycle check** goes in `merge_refusal`
 (`pipelines/reflection/fact_dedup.py`), ordered with the other refusals —
-**after** the permanent ones (cross-frame, event) and before the similarity
+**After** the permanent ones (cross-frame, event) and before the similarity
 bar, since it is fixable by a human decision rather than by the graph changing.
 
 *(An earlier draft listed **unjudged** among the permanent refusals. It is not:
@@ -1598,7 +1597,7 @@ Each step is useful alone, and each is a precondition for the next.
 | **0a** ✅ | **`merge_nodes` captures the pre-merge edge partition** as `MergeUndo` on the survivor, with chain eviction past `merge_undo_depth` (§7.4, §7.9) | **Capture or lose.** The partition exists only at merge time (§7.1), so every merge taken before this lands is permanently irreversible. The only step with a deadline. **Built 2026-08-22**; the five merges of 2026-08-21 predate it and stay irreversible. |
 | **0b** ✅ | **`merge_cycle_limit` in `merge_refusal`** (§7.8) | Same file, same sitting, no new storage — the lifecycle episodes it counts already exist. Cheap now, and near-impossible to reconstruct once an oscillation has run. **Built 2026-08-22**; live since 0c, which is what writes the `restored_at` it counts. |
 | 0c ✅ | `reverse_merge_tx` on the protocol and both backends (the hard delete lives *inside* it, §7.7), plus `reverse_merge`, the `reverse_merge` and `configure_merge` tools, and the two stored per-graph settings | Needs 0a to have run for anything to be reversible. Carries the never-expose guard in all three places. **The settings are not optional here**: 0b's refusal tells the agent the limit is configurable, and this is the step where that stops being dormant, so shipping reversal without them leaves a promise the code does not keep. **Built 2026-08-22**, minus the reversal `DecisionRecord` (step 5) and the `judge` argument (steps 2–4). |
-| 1 ✅ | `apply_reflection(similarities=[…])` + `ASSESSED` edge | #64's fix. Stops the re-nomination treadmill, and gives corroboration its first real input — **only from `one_claim` verdicts** (§1.2). Independent of everything below. **Built 2026-08-22**, with three refusals the design did not name and one ordering rule it did not state; see §10.2's amendment. |
+| 1 ✅ | `apply_reflection(similarities=[…])` + `ASSESSED` edge | the `assessed` edge's fix. Stops the re-nomination treadmill, and gives corroboration its first real input — **only from `one_claim` verdicts** (§1.2). Independent of everything below. **Built 2026-08-22**, with three refusals the design did not name and one ordering rule it did not state; see §10.2's amendment. |
 | 2 ✅ | `agent` table, approved-id settings, `claim_agent`, approval over `ctx.elicit` with `epimemer agents confirm` as fallback | Registry with nothing yet pointing at it. Full protocol on both backends, per the standing rule. **Built 2026-08-22**, with one gate split in two and one seeding rule widened; see §10.3's amendment. |
 | 3 ✅ | `judge` threaded through the reflect-side write paths | Smallest surface producing attributed decisions, so step 5 has something to read. **Built 2026-08-23**, with two writers the design's list had missed and one field shape changed; see §10.4's amendment. |
 | 4 ✅ | `judge` threaded through ingest (§3.2), plus the require-a-judge setting (§3.3.1) | The bigger churn, and where the unreviewable priors are. **No cutover** — the setting decides, per graph, and ships default-off, so an upgraded server keeps writing exactly as before. **Built 2026-08-23**; the sessionless escape hatch took a different shape from the one this section proposed, see the amendment below. |
@@ -1652,11 +1651,11 @@ sits in the refusal ordering, and the eight tests.
 >    edge would go on corroborating a pair the agent had just disowned — while
 >    the response reported success. Refusing costs no suppression (the standing
 >    edge already suppresses) and surfaces a retraction nothing can yet perform.
->    **Filed as #68.** The opposite direction is additive and is allowed:
+>    **Filed as the `one_claim` retraction.** The opposite direction is additive and is allowed:
 >    `one_claim` after `distinct` adds the `similarity` beside the `assessed`
 >    that is already there.
 >
->    > **Superseded 2026-08-23 by #68's fix.** `distinct` over a standing
+>    > **Superseded 2026-08-23 by the `one_claim` retraction's fix.** `distinct` over a standing
 >    > `one_claim` is now a **retraction**, not a refusal: it writes a
 >    > `retracted_similarity` edge that disqualifies the standing one, which is
 >    > the mechanism `corroboration.py` already runs for `contradiction`. The
@@ -1667,12 +1666,12 @@ sits in the refusal ordering, and the eight tests.
 >    > it inverts the quantity. Point 3's *"the opposite direction is additive"*
 >    > still holds for a pair that was never `one_claim`.
 > 4. **Similarities are applied *first* in `apply_reflection`**, before any
->    argument that can retire a node. This is #65's anchoring rule applied to
+>    argument that can retire a node. This is the anchoring rule applied to
 >    the order of one call: a judgment is about the wording it was made against,
 >    and a supersession later in the same batch would otherwise turn it into a
 >    skip — or, worse, leave the agent thinking it had been recorded.
 > 5. **The frontend needed telling.** `EdgeType` growing a member that
->    `EDGE_MEANINGS` has never heard of is #55 exactly, one layer over: the edge
+>    `EDGE_MEANINGS` has never heard of is the drifted lookup tables exactly, one layer over: the edge
 >    draws in unknown-kind grey. `assessed` gets the similarity hue drained of
 >    saturation — same subject, no assertion of support — with a test that it is
 >    neither the similarity colour nor the neutral.
@@ -1698,7 +1697,7 @@ the survivor's content, so `S` is not the wording anybody judged `A` against.
 The two records still differ, but in traversal rather than migration —
 `SIMILARITY` is knowledge to follow, `ASSESSED` is a suppression index.
 
-> **Corrected 2026-08-22, on building #65.** The two subsections gave opposite
+> **Corrected 2026-08-22, on building the anchoring rule.** The two subsections gave opposite
 > answers for `SIMILARITY` on a merge, four pages apart — the same failure this
 > document names as a pattern, in a new place. The costs are asymmetric, which
 > is what settles it: anchoring costs one re-nomination of `S` against `B`,
@@ -1729,7 +1728,7 @@ assert that an `ASSESSED`-only pair does not corroborate.
 
 #### 10.2.1 A precondition: judgment edges must stop migrating on a correction
 
-> **✅ BUILT 2026-08-22** (`ISSUES.md` #65), ahead of step 1 as required.
+> **✅ BUILT 2026-08-22**, ahead of step 1 as required.
 > `JUDGMENT_EDGE_TYPES` is in `core/types.py` and `migration_disposition`
 > consults it before the status branch, so both backends inherit it — they
 > derive their answers from that one function and hold no policy of their own.
@@ -1804,7 +1803,7 @@ which is correct — `A′` against `B` is a pair nobody has judged.
 > belongs in the same rule.
 
 **Why it is latent today and stops being so at step 1**: both real graphs carry
-zero `similarity`, `contradiction` and `variant_of` edges (#64), so nothing has
+zero `similarity`, `contradiction` and `variant_of` edges, so nothing has
 ever migrated. Step 1 is the change that starts writing them. **File it as its
 own issue** — it is a defect in shipped code, not a design note.
 
@@ -1812,7 +1811,7 @@ own issue** — it is a defect in shipped code, not a design note.
 verdict raises corroboration for both nodes from 1 to 2 where the publishers
 differ; a `distinct` verdict does not; both suppress re-nomination on the next
 `detect_contradictions`; neither `ASSESSED` nor `SIMILARITY`
-migrates through a merge (#65, built — the earlier draft had `SIMILARITY`
+migrates through a merge (the anchoring rule, built — the earlier draft had `SIMILARITY`
 migrating); an unknown verdict is reported, not applied.
 
 ### 10.3 Step 2 — the registry
@@ -1901,8 +1900,7 @@ storage backend*.
 > upgrading. The gap is real for anyone who turns the setting **on** with a
 > client that cannot elicit and an embedded store — which is the same failure,
 > now reached by choice rather than by release date, and still worth closing
-> here. `epimemer agents confirm <id>` is a separate process — and `ISSUES.md`
-#16 records that **a second `mem://` connection is a separate store**. So
+> here. `epimemer agents confirm <id>` is a separate process — and the active-graph guard records that **a second `mem://` connection is a separate store**. So
 against an embedded backend the CLI writes approvals into a store the running
 server will never read. Combine that with an elicitation-less client and there
 is **no approval path at all** — which step 4's cutover then turns into a server
@@ -2096,7 +2094,7 @@ derived read over records whose `subject_ids` contains the node, and W&S §5.3's
 > and one writer is missing.
 >
 > **`kind` carries `because`, rather than a field repeating it.** A correction
-> and a world-change are opposite claims about what happened (#53) and a
+> and a world-change are opposite claims about what happened and a
 > reviewer asking for one does not want the other, so they are two kinds —
 > `supersession_kind(status)` in `types.py` is their single declaration, read by
 > `update`, `supersede_by` and reflect's supersessions.
@@ -2129,14 +2127,14 @@ derived read over records whose `subject_ids` contains the node, and W&S §5.3's
 > *labels*, and putting them in `subject_ids` would give one field two
 > namespaces — the tell §11 records twice. The alternative, the id of every edge
 > relabelled, needs `relabel_edges` to return them and writes subject lists in
-> the hundreds. Filed as `ISSUES.md` #69 rather than guessed at. Boundaries, the
+> the hundreds. Filed as an open question rather than guessed at. Boundaries, the
 > other gap `docs/ATTRIBUTION.md` named, are closed: both of their subjects are
 > nodes.
 >
-> *(Both halves are now settled and neither the way this expected. #74 stage 1
+> *(Both halves are now settled and neither the way this expected. The label record
 > gave a label an **id**, so the namespace objection dissolved and
 > `relation_verdict` rows name two label records like any other subject; then
-> #74 §5 removed merging outright on 2026-08-28, so the operation this paragraph
+> The label record §5 removed merging outright on 2026-08-28, so the operation this paragraph
 > is about has no row because it has no existence. The subject of a decision
 > about vocabulary is the vocabulary entry — it just needed the entry.)*
 >
@@ -2167,7 +2165,7 @@ derived read over records whose `subject_ids` contains the node, and W&S §5.3's
 > fractional part on a whole second, so a row at `…41Z` sorts *after* a bound at
 > `…41.5Z` because `"Z" > "."`. The journal writes microseconds on both sides.
 > `query_changes`' lifecycle window had the same latent case — **fixed the same
-> day** as `ISSUES.md` #70, by `instant()`, which compares instants rather than
+> day** as the timestamp-text trap, by `instant()`, which compares instants rather than
 > spellings. The journal keeps its padded strings rather than converting: it is
 > the one timestamp with an index a range actually uses, and wrapping the field
 > costs 45× at 50,000 rows. Reader converts where there is no index; writer pads
@@ -2192,9 +2190,9 @@ async def review(
 Read-only, like `reflect`. Ordering per §6.2 — tier 1 (declared `certainty`
 ascending) before tier 2 (unrated, ordered by count of §5's derived signals
 descending). Capped at `max_results` with `truncated` named in the response,
-#60's treatment. The response always reports `unrated_count` and
+The nomination cap's treatment. The response always reports `unrated_count` and
 `pre_attribution_excluded`, and — when `certainty_ceiling` was supplied — the
-value **this call** used (§6.3, #63).
+value **this call** used (§6.3, the single nomination bar).
 
 **`apply_review(confirmations=[…], reversals=[…])`** is the only writer;
 `review()` never writes.
@@ -2203,7 +2201,7 @@ value **this call** used (§6.3, #63).
 (§6.6). Cross-graph review is `list_graphs` → `use_graph` → `review()` per
 graph — safer than a fan-out rather than merely equivalent, since each switch is
 the active state instead of one borrowed mid-call. The locator that would tell a
-reviewer *where else to look* is #73, gated on #16. **Built 2026-08-23 as
+reviewer *where else to look* is `review`'s `elsewhere`, gated on the guard. **Built 2026-08-23 as
 `elsewhere`; see §6.6's amendment, including what it cost — `review` is a mover
 now.**
 
@@ -2247,7 +2245,7 @@ now.**
 > unreviewed), and `field-notes` and `petritype-server` hold **none** — their ingests
 > ran through a server that predated the journal. Every decision this project
 > has made before 2026-08-23 is invisible to review, permanently, and no later
-> pass can reconstruct it: the same island #52 left behind, in the other
+> pass can reconstruct it: the same island fact dedup left behind, in the other
 > direction. Review is right and nearly empty, and it fills from here.
 >
 > **The read is linear in journal size**, which §6.2 anticipated — *"a caller
@@ -2267,7 +2265,7 @@ corpus is tier 2, so the ordering is entirely derived and still useful (§6.2).
 >    with `distinct` for a `one_claim`, and now `rejudge` for an ingest prior —
 >    each with its own refusals and its own row that legitimately sets
 >    `supersedes`, because it really did supersede something. A dispatcher over
->    four such tools is #72's fan-out: *a convenience less safe than the sequence
+>    four such tools is the misdirected-write scope's fan-out: *a convenience less safe than the sequence
 >    it replaces is not a convenience.* So a dissent records the **finding** and
 >    sets only `reviews`. A row claiming to supersede a decision whose effect
 >    still stands would put the journal in disagreement with the graph, which is
@@ -2340,7 +2338,7 @@ corpus is tier 2, so the ordering is entirely derived and still useful (§6.2).
 >
 > **And the scope is unchanged from step 6's amendment.** `memory` still holds
 > one journal row; the two writers added here have nothing to act on yet. That is
-> not a defect in either — it is the island #52 left, and it fills from here.
+> not a defect in either — it is the island fact dedup left, and it fills from here.
 
 ### 10.7 Cross-cutting
 
@@ -2350,7 +2348,7 @@ corpus is tier 2, so the ordering is entirely derived and still useful (§6.2).
   explicit default, no singleton. Three new ones — `merge_undo_depth` (10),
   `merge_cycle_limit` (2), approved agent ids.
 - **Named constants, one declaration each**, with a test that reads every
-  declaration — #63's carry-forward, which is what caught two numbers pretending
+  declaration — the single nomination bar's carry-forward, which is what caught two numbers pretending
   to be one.
 - **Transactions.** Reversal (§7.9 step 4) and `apply_review` are each one
   transaction on both backends, with a test that a mid-way failure leaves the
@@ -2365,12 +2363,12 @@ carry-forwards this repo has banked before.
 
 | # | Defect in the first draft | Where |
 |---|---|---|
-| 1 | `DecisionRecord` claimed append-only and carried mutable review state, duplicated inline — two homes for one mutable fact, the #54/#55/#56 shape, in a document citing all three | §3.4, §4 |
-| 2 | One `similarity` edge for two populations whose readers want opposite breadth; would have manufactured corroboration. **The #46 carry-forward verbatim**: when a field is documented with an "and", check whether the two halves want the same storage | §1.2 |
+| 1 | `DecisionRecord` claimed append-only and carried mutable review state, duplicated inline — two homes for one mutable fact, the per-edge-type migration/the drifted lookup tables/the drifted lookup tables shape, in a document citing all three | §3.4, §4 |
+| 2 | One `similarity` edge for two populations whose readers want opposite breadth; would have manufactured corroboration. **The confidence prior carry-forward verbatim**: when a field is documented with an "and", check whether the two halves want the same storage | §1.2 |
 | 3 | Registry had no tool surface at all; identity "resolved at the boundary" from nothing, and self-review was indistinguishable from independent review | §2.2, §2.3 |
 | 4 | Did not reconcile with `WARNINGS_AND_SETTINGS.md`, designed one day earlier, and did not even cite it | §9 |
-| 5 | Unrated `confidence` used as a difficulty signal, re-committing the sin #46 fixed | §5 |
-| 6 | `all` mode unbounded (the day after #60); `[0.80, 0.85)` minted an unnamed constant (the week of #63) | §5, §6 |
+| 5 | Unrated `confidence` used as a difficulty signal, re-committing the sin the confidence prior fixed | §5 |
+| 6 | `all` mode unbounded (the day after the nomination cap); `[0.80, 0.85)` minted an unnamed constant (the week of the single nomination bar) | §5, §6 |
 | 7 | The absence rule held only if the judge were mandatory, which the signature did not say | §3.2 |
 
 Smaller: ingest journal granularity (§4.1), one ladder not two (§5), which record
@@ -2392,7 +2390,7 @@ wording nobody judged*.
 | # | Defect | Where |
 |---|---|---|
 | 1 | `MergedEdge` listed seven fields and omitted `metadata` and `created_at`, so reversal would have **stripped `judged_by` from every edge it replayed** | §7.9 |
-| 2 | Judgment edges migrate on a **correction**, manufacturing corroboration with §1.2's split entirely correct — a defect in shipped code, now `ISSUES.md` **#65**, blocking step 1 | §10.2.1 |
+| 2 | Judgment edges migrate on a **correction**, manufacturing corroboration with §1.2's split entirely correct — a defect in shipped code, now **the anchoring rule**, blocking step 1 | §10.2.1 |
 | 3 | The reversal guard checked inferences only, so `delete_node` would have destroyed post-merge contradictions, assessed verdicts and tags | §7.5 |
 | 4 | The CLI approval fallback cannot reach an embedded `mem://` store, so an elicitation-less client had **no approval path** and step 4 would have bricked it | §10.3 |
 
@@ -2446,13 +2444,13 @@ it is what the build left open.
   contradicted it — every occurrence was in this document, which is why the
   correction costs edits rather than a migration.
 
-- **Judgment edges migrate on a correction** → `ISSUES.md` **#65**, **✅ built
+- **Judgment edges migrate on a correction** → **the anchoring rule**, **✅ built
   2026-08-22**, before step 1 as required. `JUDGMENT_EDGE_TYPES` anchors them on
   every retirement (§10.2.1). Building it surfaced two things the design had
-  wrong: §10.2 and §10.2.1 disagreed about `SIMILARITY` on a merge, and #65's
+  wrong: §10.2 and §10.2.1 disagreed about `SIMILARITY` on a merge, and the anchoring rule's
   stated reasoning did not carry on its own terms. Both are corrected in place;
   the verdict did not change.
-- **Nothing retracts a `one_claim` verdict** → `ISSUES.md` **#68**, filed on
+- **Nothing retracts a `one_claim` verdict** → **the `one_claim` retraction**, filed on
   building step 1. The `similarity` edge it writes is what corroboration counts,
   and no call removes one; `apply_reflection(similarities=[…])` refuses a later
   `distinct` on that pair rather than writing `assessed` beside an edge that
@@ -2497,7 +2495,7 @@ worth filing on their own:
 Neither is a review-mode question, and answering them inside a tool named for
 ingest priors would bury an epistemic move in a metadata utility.
 
-> **Both filed as `ISSUES.md` #66 and built 2026-08-27** — `reframe` and
+> **Both filed as revisable ingest judgments and built 2026-08-27** — `reframe` and
 > `correct_interval`. Kept out of `rejudge` as this section said, though on
 > better grounds than the ones given: **addressing**, not naming. §6.5.1's
 > amendment has the argument.
@@ -2541,7 +2539,7 @@ Newest first.
 > the survivor after the merge.
 >
 > **Approval needs a transport the server reads** — decided 2026-08-22, §10.3.
-> The CLI fallback cannot reach an embedded `mem://` store (`ISSUES.md` #16), so
+> The CLI fallback cannot reach an embedded `mem://` store, so
 > config-at-connect is the fallback there. *Unreachable by the agent* and
 > *unreachable by the user* are different failures.
 >

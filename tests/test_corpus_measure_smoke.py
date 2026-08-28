@@ -1,6 +1,6 @@
 """The corpus measuring instrument still measures what it claims to.
 
-`scripts/corpus_measure.py` produced the numbers behind ISSUES.md #59 and #60,
+`scripts/corpus_measure.py` produced the numbers behind the embedding-window measurement and the nomination cap,
 and it reads two thresholds *out of the reflection code* rather than restating
 them. That is the right design and it is exactly what rots silently: rename the
 keyword and the script keeps running, reporting a survival rate for a threshold
@@ -113,7 +113,7 @@ class TestSurvivalIsMeasuredOnRealPairs:
 
 class TestTheScoreSpreadIsWhatSeparatesNoiseFromDistance:
     """A rate of 0 says nothing about *how far* below the threshold a corpus is,
-    and that is the difference between #60 firing and not."""
+    and that is the difference between the nomination cap firing and not."""
 
     def test_orthogonal_vectors_sit_at_zero_throughout(self, measure):
         spread = measure._score_spread(np.eye(8))
@@ -132,7 +132,7 @@ class TestTheScoreSpreadIsWhatSeparatesNoiseFromDistance:
 
 
 class TestPriorsSeparateThreePopulationsThatLookAlike:
-    """#46's open trigger, and the whole difficulty is the classification.
+    """The confidence prior's open question, and the whole difficulty is the classification.
 
     A supplied 0.9, an omitted confidence and a legacy literal 0.5 are three
     different things stored in one field, and only the first owes a
@@ -154,7 +154,7 @@ class TestPriorsSeparateThreePopulationsThatLookAlike:
         assert result["basis_pct"] == 90.0
 
     def test_the_legacy_default_is_not_counted_as_a_supplied_prior(self, measure):
-        """Nodes written before #46 carry a literal 0.5 nobody chose. Counting
+        """Nodes written before the confidence prior carry a literal 0.5 nobody chose. Counting
         them as rated would report a basis rate near zero for a population that
         was never asked for one."""
         result = measure._priors(self._sql([
@@ -191,7 +191,7 @@ class TestPriorsSeparateThreePopulationsThatLookAlike:
         )
 
     def test_nothing_owed_reports_no_rate_rather_than_a_perfect_one(self, measure):
-        """A graph written entirely before #46 has no supplied priors at all.
+        """A graph written entirely before the confidence prior has no supplied priors at all.
         Reporting 100% there would read as guidance succeeding."""
         result = measure._priors(self._sql([
             {"n": 136, "confidence": 0.5, "basis": False},

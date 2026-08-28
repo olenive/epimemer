@@ -467,7 +467,7 @@ returns, so the first four can land without touching agent-visible behaviour.
   A long fact's tail is silently absent from its embedding today. Lexical search
   incidentally mitigates this — BM25 indexes the whole field — but the
   underlying gap is separate and still unaddressed. It belongs in `ISSUES.md`,
-  not here. **Filed 2026-08-18 as `ISSUES.md` #59**, which carries the options
+  not here. **Filed 2026-08-18 as the embedding-window measurement**, which carries the options
   and the measurement that has to come first.
 
   > **Resolved 2026-08-21, and the incidental mitigation turned out to be the
@@ -475,7 +475,7 @@ returns, so the first four can land without touching agent-visible behaviour.
   > window — 81 word-pieces at worst against 256, three times the headroom —
   > and segment text, which does cross it, is never embedded at all: BM25 is not
   > *mitigating* the truncation for segments, it is the only thing that ever
-  > reads them. #59 closed with no code.
+  > reads them. The embedding-window measurement closed with no code.
 
 ---
 
@@ -532,16 +532,16 @@ computes — is the statistic that separates them, and R1/R3 use it.
 - **R7 — the status gate.** The FTS index matches every row regardless of
   status; `vector_search` filters to ACTIVE by default. Without a matching
   gate, a CORRECTED node — a claim concluded *wrong*, kept off by default per
-  #53 T3 — returns as a lexical seed, ranked high precisely when it holds a
+  History-by-default retrieval — returns as a lexical seed, ranked high precisely when it holds a
   rare identifier. So: `text_search` takes `status` with the same ACTIVE
   default as `vector_search` (a `WHERE status = …` clause on SurrealDB —
   `idx_{table}_status` already exists); the **segment bridge obeys the same
   rule** (nodes reached via `get_nodes_by_source` are filtered like direct
-  seeds, or the bridge is a side door around the gate); and when #53 T3's
+  seeds, or the bridge is a side door around the gate); and when history-by-default retrieval's
   retrieval surface lands (HISTORICAL on by default with lineage collapse,
   CORRECTED reachable but off), **both arms take their status semantics from
   that surface, not from their own defaults** — two arms disagreeing about
-  whether a historical claim exists would be #56's two-panel bug reborn
+  whether a historical claim exists would be the drifted lookup tables's two-panel bug reborn
   inside one tool. Statistics note, no action: `WHERE` exclusion does not
   change the index's corpus counts, so scores drift slightly as nodes retire
   — harmless under rank fusion, recorded here so nobody chases it as a bug.

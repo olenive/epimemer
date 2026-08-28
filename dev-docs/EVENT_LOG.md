@@ -44,7 +44,7 @@ adjacency in the stream, which breaks the moment anything interleaves.
 (`mcp/tools.py:764-782`) emits `created` plus the node's terminal status —
 `corrected` / `historical` / `merged` — from node timestamps, also with no
 counterpart. *(Corrected 2026-08-17: this originally said "`created` /
-`superseded` / `merged`" — stale vocabulary; the code already mirrors the #53
+`superseded` / `merged`" — stale vocabulary; the code already mirrors the validity model
 status split, with a comment saying retiring-as-historical and
 retiring-as-corrected are different things to report.)* So "superseded by whom" exists nowhere in
 this system except the edge itself — not in the live event, not in
@@ -54,8 +54,8 @@ Fix: carry the counterpart id on both surfaces. Both already hold it —
 `supersede_node_tx` is handed `old_node`, `new_node` and `lineage_edge`
 together, and `query_changes` can join the edge it already has access to.
 
-**This landed first, on its own — `ISSUES.md` #57, resolved 2026-08-17.** It
-was a defect in the event contract, not a missing feature: counterpart ids now
+**This landed first, on its own — counterpart ids, resolved 2026-08-17.** It
+was a defect in the event contract, not a missing feature: Counterpart ids now
 ride on both surfaces, via the append-only lifecycle-episode list of §6. §8's
 first two tests and §9's commit 1 are done; everything below builds on top.
 One known gap, ruled on separately: `update_node_status` bypassed the episode
@@ -134,7 +134,7 @@ the frontend assembles from parts is a second place where the vocabulary of the
 system gets decided, and it would drift from the tool responses that use the
 same words.
 
-> **Revised (2026-08-17, review): there is no `superseded` verb.** #53 decided
+> **Revised (2026-08-17, review): there is no `superseded` verb.** The validity model decided
 > supersession is two opposite acts — a correction (`it_was_wrong` →
 > CORRECTED, `superseded_by`, terminal) and a world-change
 > (`the_world_changed` → HISTORICAL, `temporally_followed_by`, restorable) —
@@ -144,7 +144,7 @@ same words.
 > and what `events_in_window` already emits, so the live log and the durable
 > history speak one vocabulary. Summaries render accordingly
 > ("corrected 123 → 124" vs "world-change: 123 → 124"). Recurrence needs no
-> new verb: #53 T2's `recurs` verdict resolves as *restore + new source
+> new verb: The edge split's `recurs` verdict resolves as *restore + new source
 > edge*, which is `restored` with the edge in `counts` — recorded here so
 > nobody mints a `recurs` verb later and splits the vocabulary again.
 
@@ -282,7 +282,7 @@ audit trail.
 > durability is the backend's (on `InMemoryStorage` it lives exactly as long
 > as the graph does).
 >
-> Second, a correctness collision with #53 T2, found by asking what happens
+> Second, a correctness collision with the edge split, found by asking what happens
 > when the `recurs` verdict restores a `HISTORICAL` node. The derivation
 > reads `(superseded_at, status)`, and that pair cannot represent *retired,
 > then came back*: clear `superseded_at` on restore and the retirement
@@ -297,7 +297,7 @@ audit trail.
 > paths. `events_in_window` derives from the episodes, so every retirement
 > and every return stays reportable, with the right kinds, through any number
 > of cycles. Episodes are append-only: nothing is ever cleared or
-> overwritten. The #57 counterpart id lives on the episode, which lands both
+> overwritten. The counterpart ids counterpart id lives on the episode, which lands both
 > changes in one shape. It grows only on actual transitions — most nodes
 > never have more than one episode.
 >
@@ -306,7 +306,7 @@ audit trail.
 > here. The first is **valid time** — T1's per-source interval lists, already
 > open-ended in count. The second is a **recurrence rule** — the
 > `CyclicalTimeline` case, no lifecycle at all; see the T2 constraint in
-> `ISSUES.md` #53. This section is transaction time only: what *the graph*
+> `VALIDITY_DESIGN.md`. This section is transaction time only: what *the graph*
 > did, and when.
 
 ---
@@ -341,7 +341,7 @@ before the code that satisfies it.
 
 - `test_node_status_changed_names_the_superseding_node` — §2, on the live event.
   Must be shown failing first; it is the whole reason the example does not work.
-  **Built with #57 (2026-08-17), as was the durable one below and §6's
+  **Built with counterpart ids (2026-08-17), as was the durable one below and §6's
   N-cycle episode test.**
 - `test_query_changes_names_the_superseding_node` — §2, durable path.
 - `test_supersede_publishes_one_action_for_four_events` — §3.1: the coarse event
@@ -376,7 +376,7 @@ beyond what §2's durable-path change requires.
 
 1. Counterpart id on `NodeStatusChanged` and `events_in_window` (§2).
    Independent of everything else here, and worth landing alone.
-   **Done — #57, 2026-08-17.**
+   **Done — counterpart ids, 2026-08-17.**
 2. `GraphActionRecorded` + emission at the transaction boundaries (§3.1).
    **Done 2026-08-18.**
 3. The bounded ring module, pure, with tests. **Done 2026-08-18.**
@@ -428,15 +428,15 @@ possible.
 
 ## 11. Construction notes (2026-08-18)
 
-Built and merged to `main`, §9 steps 2–6 (step 1 was #57, 2026-08-17).
+Built and merged to `main`, §9 steps 2–6 (step 1 was counterpart ids, 2026-08-17).
 Unit, integration and frontend suites green. **Where these conflict with
 earlier sections, these win.**
 
 1. **The verb list needed a seventh entry, and §3.1's rule is why.** "There is
    no `superseded` verb" is binding, but `NodeStatus.SUPERSEDED` still exists —
-   #53 kept it for rows that genuinely do not record which act they were. It
+   The validity model kept it for rows that genuinely do not record which act they were. It
    maps to the unclassified verb, not to a sixth kind of act. Mapping it to
-   `corrected` would have been the invented answer #53 refused to give, and
+   `corrected` would have been the invented answer the validity model refused to give, and
    mapping it to `superseded` is what the rule forbids. Guarded by
    `test_there_is_no_superseded_verb`.
 
@@ -477,7 +477,7 @@ earlier sections, these win.**
    >   writes the status, so the enum member is the whole remaining supply.
    >   Whoever removes it owns the read-side question too — a stored row still
    >   carrying the string would then fail at the Pydantic boundary, which is
-   >   #53's problem to answer, not this module's.
+   >   The validity model's problem to answer, not this module's.
    > - **The fall-through** `_STATUS_VERBS.get(status, ActionVerb.UNDETERMINED)`
    >   has no sunset. It answers for statuses that do not exist yet, so it is
    >   never spent. `ActionVerb.UNDETERMINED` therefore outlives the legacy

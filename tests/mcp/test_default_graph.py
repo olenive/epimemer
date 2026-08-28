@@ -138,7 +138,7 @@ class TestIngestSaysWhereItLanded:
 
 class TestTheGuardMovedToTheBoundary:
     """`tests/mcp/test_graph_gate.py` is where the wrong-graph gate is tested
-    now, and the move is the finding rather than a tidy-up (#71).
+    now, and the move is the finding rather than a tidy-up.
 
     These tests used to call `tools.segment_text(..., expected_graph=...)`
     directly and assert on the refusal dict. They passed, and the refusal they
@@ -168,7 +168,7 @@ class TestWhyAnIdThatDoesNotResolveIsNotEnough:
     """The guard first covered three tools, on the argument that every other
     write dereferences a node id and so already fails on the wrong graph. The
     calls below do fail — and each failure is worse than a refusal, which is
-    what #71 overturned.
+    what the mandatory `expected_graph` overturned.
 
     It also ignored reads entirely, and a wrong-graph read is the worse half: a
     misfiled write leaves the material and its journal row together in the graph

@@ -207,11 +207,11 @@ leaving them drawn, hoverable and clickable.
 
 `statusOpacity` (`frontend/src/graph-panel.ts:89`) maps `active` → full and
 every retired status → faded. The comment above it exists because two retired
-states once drew as live (ISSUES.md #55).
+states once drew as live.
 
 If focus mode also dimmed by opacity, *retired + retrieved* and *active +
 not-retrieved* would land at the same alpha — one channel carrying two meanings,
-decided in two files, and #55 silently re-opened in one mode. That is the
+decided in two files, and the drifted lookup tables silently re-opened in one mode. That is the
 pattern this codebase keeps producing.
 
 So focus mode owns **saturation**; status keeps **opacity**.
@@ -225,7 +225,7 @@ That matters more than it sounds, because `applyTheme` recomputes `color` from
 node type and theme **alone** (`graph-panel.ts:409-411`). Left as it is,
 toggling the theme while focus mode is on restores every node to full
 saturation and silently exits the mode — colour decided in two places, which is
-the #56 failure exactly.
+the drifted-lookup-table failure exactly.
 
 So the colour has one origin, and focus is an argument to it rather than a
 later mutation:
@@ -243,7 +243,7 @@ export const nodeFill = (nodeType: string, theme: Theme, inFocus: boolean): stri
 
 Timeline marks are the same nodes (`timeline-model.ts` builds them from nodes).
 Dim only the graph and the two panels disagree about what came back — the class
-of bug ISSUES.md #56 fixed for colour.
+of bug the drifted lookup tables fixed for colour.
 
 Focus state therefore lives above both panels in `main.ts`, like the theme does,
 and both are told on change.
@@ -344,7 +344,7 @@ grew with its text would re-lay out the panel under the cursor.
   2026-08-18.**
 - `test_focus_mode_leaves_status_opacity_alone` — §4.1. A retired-and-retrieved
   node and an active-not-retrieved node must remain distinguishable. This is
-  #55's guard extended, and an opacity-based implementation fails it. **Built
+  The drifted lookup tables's guard extended, and an opacity-based implementation fails it. **Built
   2026-08-18** (`focus.test.ts`).
 - `test_theme_toggle_preserves_focus_desaturation` — §4.1. The failure mode the
   `nodeFill` signature exists to prevent, and the one an implementation that
@@ -453,7 +453,7 @@ suites green. **Where these conflict with earlier sections, these win.**
    from the other side: nominees, never the scan.
 
    > **The oracle caught the next one, as promised (2026-08-21).** `merge_facts`
-   > (#52) was written returning `source_ids` and a survivor id with no
+   > was written returning `source_ids` and a survivor id with no
    > declaration, and the parametrised test failed on it before the tool was ever
    > run by hand — the thirty-fifth tool, found the way §10 said the fourteenth
    > would be. Worth recording because it is the first time the census cost
@@ -486,7 +486,7 @@ suites green. **Where these conflict with earlier sections, these win.**
    subscribes a browser. Neither alone would have caught the placement mistake
    §3.2's revision corrected.
 7. **`desaturate` lives in `theme.ts`, not in a panel.** Both panels dim, and a
-   second implementation is how they would come to disagree — #56 exactly. It
+   second implementation is how they would come to disagree — the drifted lookup tables exactly. It
    mixes each channel toward the grey of the *same luminance*, so lightness is
    untouched: a desaturation that also darkened would be an opacity change
    wearing another name, and retired-and-retrieved would land on
@@ -503,4 +503,4 @@ suites green. **Where these conflict with earlier sections, these win.**
     panel's rules are tested as pure functions and the drawer's through real
     DOM. That constraint shaped `refreshedFill` into an exported function
     rather than a line inside `applyTheme` — which is the better shape anyway,
-    since it is the rule the #56 failure broke.
+    since it is the rule the drifted-lookup-table failure broke.

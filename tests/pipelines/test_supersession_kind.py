@@ -1,4 +1,4 @@
-"""Supersession records *why* a node was retired (#53, first step).
+"""Supersession records *why* a node was retired (the validity model, first step).
 
 `SUPERSEDED` said a node had been replaced and nothing else, so it covered two
 opposite events. **We were wrong** — the claim should never have been believed —
@@ -8,9 +8,9 @@ Petersburg became Leningrad became Saint Petersburg, every name correct in its
 turn, and the only thing the model could say was that the earlier one had been
 replaced.
 
-This is the floor of #53, not the fix. It records the distinction; it does not
+This is the floor of the validity model, not the fix. It records the distinction; it does not
 give a node a validity interval, so a claim that becomes true *again* still has
-nowhere to say so. The full design is in `dev-docs/ISSUES.md` #53 and
+nowhere to say so. The full design is in `dev-docs/VALIDITY_DESIGN.md` and
 `REVIEW_EPISTEMIC.md` §13.
 
 One behavioural consequence is asserted here rather than left implied: a node
@@ -205,7 +205,7 @@ class TestLegacyGraphsStillLoad:
 
 
 class TestAJudgmentStaysOnTheWordingItWasMadeAgainst:
-    """#65. Judgment edges do not migrate, on any retirement.
+    """The anchoring rule. Judgment edges do not migrate, on any retirement.
 
     The world-change case was already right, and is covered above. What was
     wrong is that a **correction** re-pointed them, and a **merge** carried them
@@ -309,10 +309,10 @@ class TestWorldChangeKeepsTheHistoricalNodesEdges:
     """A world-change migrates per edge type; a correction still moves everything.
 
     The historical node is kept *because it is still true of its period*, and
-    what makes it true of a period is its own provenance — and, once #53 lands,
+    what makes it true of a period is its own provenance — and, once the validity model lands,
     the validity intervals riding on those `sourced_from` edges. Moving them
     onto the replacement leaves the historical node unable to say who asserted
-    it or when it held (#54).
+    it or when it held.
 
     Copying them is not the answer either: a `sourced_from` edge on the
     replacement records the old claim's document asserting the *new* claim,
@@ -452,7 +452,7 @@ class TestWorldChangeKeepsTheHistoricalNodesEdges:
 
 
 class TestTheLineageEdgeRecordsWhichEventHappened:
-    """#53 T2, the half the status split left behind.
+    """The edge split, the half the status split left behind.
 
     Retiring a node writes two things: a status on the node and an edge to its
     successor. The status learned the difference between *we were wrong* and
@@ -569,7 +569,7 @@ class TestTheLineageEdgeRecordsWhichEventHappened:
 
 class TestRepeatedTransitionsBetweenOnePair:
     """Two transitions the same way round are two facts about the world, not a
-    duplicate row (#53 T2, second pass).
+    duplicate row (the edge split).
 
     *"Labour is in government"* gives way to *"the Conservatives are in
     government"* in 1951, and again in 1970, and again in 1979, and again in

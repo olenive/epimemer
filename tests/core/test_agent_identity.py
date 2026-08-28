@@ -1,7 +1,7 @@
-"""The three layers of a judge: the key, the name, and the claim (#78).
+"""The three layers of a judge: the key, the name, and the claim.
 
 `agent_id` used to be all three at once, and the collapse is what made every
-defect in #78 unfixable in isolation — naming a judge badly on first contact was
+defect in the judge identity split unfixable in isolation — naming a judge badly on first contact was
 permanent, and splitting one judge's history in two was a typo away. These are
 the pure resolutions that replaced it: no storage, no elicitation, no MCP.
 
@@ -61,7 +61,7 @@ class TestANameIsNotAKey:
         assert after.descriptions == before.descriptions
 
     def test_a_new_key_is_opaque(self):
-        # #77 rejected this and was overturned: both its objections were
+        # the earlier identity proposal rejected this and was overturned: both its objections were
         # premised on a free-text prompt, and the picker removed them.
         assert new_agent_id() != new_agent_id()
         assert len(new_agent_id()) > 20

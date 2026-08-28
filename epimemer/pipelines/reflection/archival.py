@@ -32,7 +32,7 @@ async def find_archival_candidates(
     `superseded_at` is older than `max_age_days`. Active nodes are never
     included, and neither are HISTORICAL ones: those were retired because the
     world changed, not because they were wrong, so they remain true of their
-    period and ageing is not a reason to discard them (#53).
+    period and ageing is not a reason to discard them.
 
     Args:
         storage: The storage backend.
@@ -48,8 +48,8 @@ async def find_archival_candidates(
     # Superseded nodes, but *not* the historical ones. A node retired because
     # the world changed was never wrong — it is still true of its period — so
     # retiring it again for age would be the same defect one level down: the
-    # graph discarding something true because it is no longer current (#53).
-    # `SUPERSEDED` is the legacy status, kept because pre-#53 rows do not record
+    # graph discarding something true because it is no longer current.
+    # `SUPERSEDED` is the legacy status, kept because older rows do not record
     # which kind they were; they stay eligible, as they were before.
     for status in (NodeStatus.SUPERSEDED, NodeStatus.CORRECTED):
         for node in await storage.query_nodes(status=status):
@@ -275,7 +275,7 @@ async def nominate_archival_candidates(
        those whose entire evidence set has since been archived (the follow-on
        to class 1 and 3). Their basis changed; they are the
        expensive-to-recreate layer, so they are flagged rather than swept.
-       **`evidence_merged` is deliberately not read here** (#61): a premise that
+       **`evidence_merged` is deliberately not read here**: a premise that
        absorbed another claim gained provenance rather than losing its basis, so
        nominating on it would have every merge propose discarding its own
        dependents. That label asks the agent for a re-read, not for a verdict.
@@ -307,7 +307,7 @@ async def nominate_archival_candidates(
 
     # Each class needs edges for a different subset, so the subsets are decided
     # first and read in bulk after. Reading per node instead is what made this
-    # scan cost a round-trip per active node (ISSUES.md #14).
+    # scan cost a round-trip per active node.
     inferences = [node for node in active if isinstance(node, Inference)]
     labels_by_node = await review_labels_for(inferences, storage)
     gone_by_node = await evidence_gone_for(inferences, storage)

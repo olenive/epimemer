@@ -91,8 +91,8 @@ the graph held becomes historical, the agent decided it, and nothing shows. This
 is the queued feature with the clearest epistemic justification.
 
 **It started with a defect, now fixed.** `NodeStatusChanged` did not name the
-superseding node, and neither did `query_changes`. Filed as `ISSUES.md` #57 and
-**resolved 2026-08-17**: counterpart ids on both surfaces, with the append-only
+superseding node, and neither did `query_changes`. Filed as counterpart ids and
+**resolved 2026-08-17**: Counterpart ids on both surfaces, with the append-only
 lifecycle-episode list from `EVENT_LOG.md` §6. The panel itself
 (`EVENT_LOG.md` §9 steps 2–6) followed on 2026-08-18.
 
@@ -156,7 +156,7 @@ customisable. This entry exists only so the backlog is complete; read Part C
 rather than this paragraph.
 
 **One piece is already built.** C.6's semantic palette shipped 2026-08-12 as
-`SemanticPalette` in `theme.ts` (ISSUES.md #56) — not as picker work, but
+`SemanticPalette` in `theme.ts` — not as picker work, but
 because the graph and timeline panels disagreed about what colour a fact is.
 The hues now have a single per-theme home, which is a small down-payment on C1's
 "one source of truth for colour". Everything else in Part C is unbuilt.
@@ -204,7 +204,7 @@ concrete, interval, and label-only, so the case for three separate models is not
 obvious and should be argued before any of it is built.
 
 One constraint already decided ahead of it (2026-08-17, recorded in
-`ISSUES.md` #53 T2): recurrence-rule facts — "Christmas is Dec 24–26,
+`VALIDITY_DESIGN.md` T2): recurrence-rule facts — "Christmas is Dec 24–26,
 annually" — are `CyclicalTimeline`'s case and **never route through
 supersession or restore**; they never stop being true, so they have no
 lifecycle, and their occurrences are separate event facts.
@@ -250,11 +250,11 @@ there are the record.
 
 > **Corrected 2026-08-21.** This entry read "~19% for real embeddings …
 > understated by about three orders of magnitude … which is exactly why the
-> quadratic memory growth in `ISSUES.md` #60 was invisible here". Every clause
+> quadratic memory growth in the nomination cap was invisible here". Every clause
 > of that is now withdrawn elsewhere in the repo and was left standing here:
 > `BENCHMARKS.md` records that the 19% was taken at a narrower mock width and
 > "no longer describes this configuration", and this file's own *Tracked
-> elsewhere* bullet says #60's memory projection was measured and withdrawn with
+> elsewhere* bullet says the nomination cap's memory projection was measured and withdrawn with
 > "no successor concern". **A retraction has to be carried to every entry that
 > was resting on the retracted number** — a backlog entry keeping a motivation
 > the rest of the repo has dropped will send somebody to do work for a reason
@@ -283,7 +283,7 @@ first agent's work.
 the build order, what absence of a judge means, and why the judge never weights
 anything. Read that rather than this paragraph.
 
-**Step 1 was `apply_reflection(similarities=[…])`**, which is `ISSUES.md` #64's
+**Step 1 was `apply_reflection(similarities=[…])`**, which is the `assessed` edge's
 fix and was independent of everything above it: it stops declined pairs being
 re-nominated for ever, and gives corroboration the first real input its
 neighbourhood walk has ever had. **Built 2026-08-22**, along with steps 0a–0c
@@ -295,12 +295,12 @@ every write path rather than architecture, since `storage` is already threaded
 explicitly and the judge rides beside it. Step 5 (the journal) is the largest
 single piece.
 
-**Blockers.** None. **`ISSUES.md` #65 blocked step 1** — a correction re-pointed
+**Blockers.** None. **the anchoring rule blocked step 1** — a correction re-pointed
 judgment edges onto wording nobody judged, latent only while nothing writes
 `similarity` edges, and step 1 is what starts — and was **built 2026-08-22**,
 before the step it blocked. Nothing else blocks:
 §12.1 sorts what remains into filed work, resolved questions and two gaps
-scoped out (now `ISSUES.md` #66), and §12.2 indexes every decision with its
+scoped out (now revisable ingest judgments), and §12.2 indexes every decision with its
 reasoning. Two review rounds are recorded in §11 and §11.1. The design was reviewed and revised on 2026-08-22 — §11 records what
 moved, including `NodeNote` folding into the decision journal (which supersedes
 `WARNINGS_AND_SETTINGS.md` §9) and merge reversal, which added a **step 0**: the
@@ -316,7 +316,7 @@ capture and stay irreversible. Two tools are new — `reverse_merge` and
 `configure_merge` — and two pieces wait on later steps by design: the reversal
 `DecisionRecord` (step 5, needs the journal) and the `judge` argument (steps
 2–4, needs the registry). **Next is step 1**, `apply_reflection(similarities=…)`
-and the `ASSESSED` edge, whose precondition (#65) is already fixed.
+and the `ASSESSED` edge, whose precondition is already fixed.
 
 ---
 
@@ -324,7 +324,7 @@ and the `ASSESSED` edge, whose precondition (#65) is already fixed.
 
 ### Merge for Inferences
 
-> **The Facts half was decided and built on 2026-08-21** (`ISSUES.md` #52). It
+> **The Facts half was decided and built on 2026-08-21**. It
 > did not extend `apply_reflection(merges=...)`: the `redundant` verdict is
 > judged at ingest, on the `check_conflicts` path, so the action is its own tool
 > — `merge_facts(source_ids, content)` — beside the other resolution actions.
@@ -348,7 +348,7 @@ risks collapsing a disagreement the graph is supposed to preserve.
 rather than two claims that agree. Until that exists, extending the wired path
 would be guessing.
 
-**#52 did not settle it, and is evidence it is a separate question.** Facts got
+**Fact dedup did not settle it, and is evidence it is a separate question.** Facts got
 a merge because two documents restating one claim is redundancy worth
 collapsing; the same argument does not carry, because two inferences agreeing is
 not obviously redundancy — it may be independent support, which is the thing
@@ -369,7 +369,7 @@ provisionality is a different axis entirely.
 > Not built, deliberately: measured on both real graphs the same day, **123
 > active inferences yield 5,053 pairs and zero at the nomination bar** (p99
 > 0.44–0.55, max 0.66 — measured at 0.83 and unchanged by the move to 0.80,
-> `ISSUES.md` #63). The duplication this addresses does not exist yet
+> The single nomination bar). The duplication this addresses does not exist yet
 > and will not until fact merges start collecting inferences onto one survivor.
 > The design also carries three things that outlived it — a general advisory
 > facility, a per-graph warning policy, and the live defect that **a fact merge
@@ -377,7 +377,7 @@ provisionality is a different axis entirely.
 
 > **Amended 2026-08-21 — the "does not exist yet" is now dated.** The same day,
 > the first `merge_facts` calls on a real corpus collected duplicate inferences
-> onto shared premises (`ISSUES.md` #52), which is precisely the population this
+> onto shared premises, which is precisely the population this
 > entry says will not exist until fact merges start doing so. It is a handful of
 > candidates rather than a backlog, so the entry stays here rather than moving to
 > *Ready to build* — but **the blocker is no longer "there is nothing to
@@ -418,27 +418,27 @@ than the convenience, and it is far easier to give up later than to win back.
 
 ## Tracked elsewhere, listed so the backlog is complete
 
-- ~~**Batched node and embedding reads**~~ — `ISSUES.md` #14, step 4. **Done.**
+- ~~**Batched node and embedding reads**~~ — batching, step 4. **Done.**
   This row read "ahead of everything in this file" while `reflect` on SurrealDB
-  was the one operation failing at a size real use reaches (~2,000 nodes). #14
-  and #47 took that crossing to ~26,000 on SurrealDB and ~320,000 in-memory, and
+  was the one operation failing at a size real use reaches (~2,000 nodes). Batching
+  and the pair-loop fix took that crossing to ~26,000 on SurrealDB and ~320,000 in-memory, and
   what binds it now is the bytes moved to compare vectors. ~~**The successor
   concern is memory, not time**: `reflect`'s candidate pair lists are quadratic
-  and uncapped (`ISSUES.md` #60), and can exhaust memory *below* the timeout
+  and uncapped, and can exhaust memory *below* the timeout
   crossing.~~ **Measured 2026-08-20 and withdrawn.** Real fact pairs clear the
   0.80 threshold at **0.0105%**, projecting ~5,200 surviving pairs and ~3 MB at
   10,000 facts — not the ~14 GB the estimate implied, which had been taken from
   longer templated text and applied to fact-length pairs. The four quadratic
-  lists are capped anyway as of 2026-08-21 (#60), but as a **response** bound
+  lists are capped anyway as of 2026-08-21, but as a **response** bound
   for readability, not as a memory fix. There is no successor concern; the next
   performance issue should come from a profile.
-- **A dedicated read connection for viz snapshots** — `ISSUES.md` #16, deferred
+- **A dedicated read connection for viz snapshots** — deferred
   until the server gains concurrent clients.
 - **Native HNSW vector indexes** — `surrealdb_adapter.py:1105`. Waiting on
   SurrealDB, not on us.
 - **Valid-time rendering on the timeline panel** — designed:
   `TIMELINE_VISUALISATION.md` §13, with a checked-in visual reference at
-  `dev-docs/mockups/valid-time-grammar.html`. **Unblocked 2026-08-19** — #53 is
+  `dev-docs/mockups/valid-time-grammar.html`. **Unblocked 2026-08-19** — the validity model is
   built, so the intervals it renders now exist. One leg the entry did not
   anticipate has to come first: the viz snapshot carries no validity at all, so
   the grammar currently has nothing to draw. Two parts, then — per-source
@@ -446,7 +446,7 @@ than the convenience, and it is far easier to give up later than to win back.
   early because it pins two decisions — gaps are never styled as false, bars fade
   through the now-line — that would otherwise be made by accident in the first
   renderer.
-  **Its colour set shipped ahead of it** (2026-08-12, ISSUES.md #56): the
+  **Its colour set shipped ahead of it** (2026-08-12, the drifted lookup tables): the
   palette was promoted to serve both panels and now lives in
   `VISUALISATION.md` C.6, built as `SemanticPalette` in `theme.ts`. A shared
   palette never depended on the interval data, and the two panels were already

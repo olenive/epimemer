@@ -1,6 +1,6 @@
-"""How many *independent* sources say this — derived at read time (#51).
+"""How many *independent* sources say this — derived at read time.
 
-`ValueSignal` promised two things and #46 split them. *"How well-supported by
+`ValueSignal` promised two things and the confidence prior split them. *"How well-supported by
 evidence"* became the caller-supplied `confidence` prior; *"multiple independent
 sources increase confidence"* is this module. The difference between them is
 what the number is *about*: `confidence` describes the material, corroboration
@@ -20,7 +20,7 @@ tenfold while adding no support at all.
 **The neighbourhood, not node identity.** One claim is usually many nodes, so
 counting sources per node id would count each restatement's source once and
 stop. The walk covers ``{node} ∪ {SIMILARITY neighbours}`` instead. Facts can be
-deduplicated since #52, but only where an agent judged them one claim *and* the
+deduplicated, but only where an agent judged them one claim *and* the
 merge cleared its gate — which is nothing ingested before 2026-08-21, since the
 gate reads a `claim_kind` recorded at ingest. So the neighbourhood stays the
 right walk, and merging simply moves a pair from this reading to the identity
@@ -29,7 +29,7 @@ similarity edge overstates a number whose workings come back with it, and it
 works today.
 
 **No similarity edge is written anywhere, so today this walk always returns
-`{node}`** (#64, measured 2026-08-21: zero on both real graphs). The reads here
+`{node}`** (measured 2026-08-21: zero on both real graphs). The reads here
 are correct and the neighbourhood is the right design; it simply has no input
 yet, because the "record `SIMILARITY` and keep both" action every refusal
 recommends is reachable only through the generic `link` tool and is therefore
@@ -37,11 +37,12 @@ never taken. Two consequences worth knowing before changing anything here: every
 count in production is currently the *identity* reading, and the cost measured
 in `BENCHMARKS.md` was taken against edges assigned by a dial rather than
 produced by judgment. **This is not a reason to collapse the walk** — that
-migration was proposed under #52 and declined for exactly this reason, since
-removing the neighbourhood would delete the only consumer of the judgment #64
+migration was proposed for dedup and declined for exactly this reason, since
+removing the neighbourhood would delete the only consumer of the judgment the
+`assessed` edge
 exists to start recording.
 
-**A claim about another period is not a second witness (#62).** "The city is
+**A claim about another period is not a second witness.** "The city is
 called Leningrad" (BBC, 1924–1991) and "the city is called Saint Petersburg"
 (Reuters, 1991–) are near-identical sentences, so `reflect` pairs them — and
 neither exclusion above catches it, correctly: they do not contradict, since the
@@ -100,10 +101,10 @@ PUBLISHED_BY_LABEL = "published_by"
 # `retracted_similarity` for the first reason exactly, one judgment later: an
 # agent that withdraws a `one_claim` verdict leaves the `similarity` edge in
 # place, because nothing in this system deletes, so without this the pair goes
-# on corroborating after it has been disowned (#68). Reading it here is the
+# on corroborating after it has been disowned. Reading it here is the
 # whole of the retraction — the suppression the pair already had is untouched.
 #
-# Each member costs a round trip pair (out-edges and in-edges) on a path #51
+# Each member costs a round trip pair (out-edges and in-edges) on a path this
 # measured as the most expensive annotation in retrieval, which is why this list
 # grows by argument rather than by convenience.
 DISQUALIFYING_EDGE_TYPES: tuple[EdgeType, ...] = (
@@ -118,7 +119,7 @@ DISQUALIFYING_EDGE_TYPES: tuple[EdgeType, ...] = (
 #
 # `historical` is deliberately absent. That status means the world moved on —
 # the claim was right and is still right of its period — and dropping it here
-# would be the same forgetting #53 exists to prevent, one layer along.
+# would be the same forgetting the validity model exists to prevent, one layer along.
 DISQUALIFYING_STATUSES: frozenset[NodeStatus] = frozenset({NodeStatus.CORRECTED})
 
 
@@ -179,7 +180,7 @@ class Corroboration(BaseModel):
     # How many counted sources fell back to the document because it named no
     # publisher. Reported rather than hidden, per the entry.
     unattributed_documents: int = 0
-    # Look-alikes whose stated periods fall clear of this claim's (#62). Empty
+    # Look-alikes whose stated periods fall clear of this claim's. Empty
     # rather than absent, so a caller reads one shape for the ordinary case.
     adjacent_periods: list[AdjacentPeriod] = Field(default_factory=list)
 
@@ -249,8 +250,8 @@ async def _source_edges_by_node(
     """The `sourced_from` edges of each node — the document *and* the periods.
 
     One fetch with two readers. The count needs the document at the end of the
-    edge; the disjointness rule needs the intervals riding on it (#53 T1). This
-    used to take `dst_id` and discard the rest, which is the whole of #62: the
+    edge; the disjointness rule needs the intervals riding on it. This
+    used to take `dst_id` and discard the rest, which is the whole defect: the
     dates that would have settled the Leningrad pair were being read and thrown
     away on the same line.
     """
@@ -419,13 +420,13 @@ async def corroboration_for(
     The walk, in order: the similarity neighbourhood of each subject, less
     anything it contradicts or varies from; less anything whose stated periods
     fall clear of the subject's, which is a claim about another stretch of time
-    rather than a witness to this one (#62); what supports the survivors; the
+    rather than a witness to this one; what supports the survivors; the
     documents all of those were sourced from; and the publishing entity of each
     document, or the document itself where it names none.
 
     Batched, because this rides on the hottest path in the system and asking per
     node is what made `gather_pending_review` the largest single source of
-    round-trips in `reflect` (#14). Thirteen store calls — twelve where nothing
+    round-trips in `reflect`. Thirteen store calls — twelve where nothing
     supports the neighbourhood, since the provenance read is split in two so the
     periods arrive before they are needed and the second half asks only for what
     the supporter hop added. **Constant in the size of the result set** rather
@@ -447,7 +448,7 @@ async def corroboration_for(
         subject: set().union(*(partners[subject] for partners in disqualified_by_edge))
         for subject in subjects
     }
-    # #62, and it has to land *here* — before the supporter hop below. A
+    # the successor case, and it has to land *here* — before the supporter hop below. A
     # look-alike that survives to stage 2 walks its own supporters in behind it,
     # and their documents with them, so a comparison made later lets the same
     # publisher back through the side door by a different path.

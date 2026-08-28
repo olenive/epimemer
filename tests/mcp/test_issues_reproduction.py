@@ -58,7 +58,7 @@ async def _store_with_embedding(
 
 
 class TestIssue1UpdateEmbedsReplacement:
-    """ISSUES.md #1 (high): the corrected node must enter the vector index."""
+    """High: the corrected node must enter the vector index."""
 
     async def test_update_embeds_the_replacement_node(
         self, storage, embedding_provider
@@ -101,7 +101,7 @@ class TestIssue1UpdateEmbedsReplacement:
 
 
 class TestIssue2SearchExcludesSupersededNodes:
-    """ISSUES.md #2 (high): retrieval must apply a status guard."""
+    """High: retrieval must apply a status guard."""
 
     async def test_vector_search_excludes_superseded_nodes(self, storage):
         node = Topic(content="stale content", source_id="s1")
@@ -138,7 +138,7 @@ class TestIssue2SearchExcludesSupersededNodes:
 
 
 class TestIssue3SupersedeMigratesEdges:
-    """ISSUES.md #3 (medium): the replacement inherits the original's edges."""
+    """Medium: the replacement inherits the original's edges."""
 
     async def test_supporting_edge_follows_to_replacement(
         self, storage, embedding_provider
@@ -178,7 +178,7 @@ class TestIssue3SupersedeMigratesEdges:
 
 
 class TestIssue4LineageTraversal:
-    """ISSUES.md #4 (minor): history edges are hidden from default traversal.
+    """Minor: history edges are hidden from default traversal.
 
     This was kept intentionally — lineage is metadata, not knowledge — so the
     test documents both the default behaviour and the explicit-filter workaround.
@@ -230,7 +230,7 @@ class TestIssue4LineageTraversal:
 
 
 class TestIssue5LinkCannotTargetDocument:
-    """ISSUES.md #5 (minor): `link` resolves epistemic nodes only.
+    """Minor: `link` resolves epistemic nodes only.
 
     Provenance (`about`) edges remain ingest-only; this restriction is kept and
     documented rather than changed.

@@ -33,7 +33,7 @@ from epimemer.visualization.protocol import SessionInfo
 def _graph_with_the_real() -> InMemoryStorage:
     """An in-memory graph somebody has set up.
 
-    Since #76 a frame is required at ingest and `the-real` is an ordinary
+    Since the frame requirement a frame is required at ingest and `the-real` is an ordinary
     metacontext, created once like any other frame.
     """
     store = InMemoryStorage()

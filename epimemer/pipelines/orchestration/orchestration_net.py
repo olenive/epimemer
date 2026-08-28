@@ -61,7 +61,7 @@ class StoreDecompositionInput(BaseModel):
     """Routed input for storing agent-provided decomposition (step 2 of ingest)."""
     document_id: str
     segments: list[dict] = Field(default_factory=list)
-    # Required, like the tool it routes to (#76). Optional here it would default
+    # Required, like the tool it routes to. Optional here it would default
     # a frame the caller never named, and this path bypasses the tool signature
     # that is otherwise the enforcement — `the-real` for base reality.
     metacontext_id: str

@@ -1,4 +1,4 @@
-"""A declined label pair stays declined (#74 stage 3, FC1).
+"""A declined label pair stays declined.
 
 The live defect this closes: `sweep_similar_relation_pairs` re-derives from
 scratch on every `reflect` and recorded nothing about declines, so a pair an
@@ -8,11 +8,11 @@ agent who could not see the previous refusals. Worse than wasted attention —
 while declining did not**, so the graph applied quiet pressure toward the wrong
 answer.
 
-#64 closed exactly this for fact pairs with the `assessed` edge. Relation labels
+the `assessed` edge closed exactly this for fact pairs with the `assessed` edge. Relation labels
 could not have one: that edge runs between two *nodes*, and `works_for` and
 `employed_by` are not nodes. Stage 1 gave them records; this is what those
-records were for, and the journal row naming both of them is where `ISSUES.md`
-#69 finally resolves.
+records were for, and the journal row naming both of them is where label-merge
+attribution finally resolves.
 
 What is pinned here beyond the regression itself: that both verdicts suppress,
 that suppression is keyed on ids and so survives a description or a re-use, that
@@ -437,7 +437,7 @@ class TestASecondJudgeConfirms:
         """Append-only: both rows survive, with their judges and their reasons.
         Nothing is withdrawn and nothing is overruled — since both verdicts
         suppress, a disagreement changes nothing operationally. It is made
-        visible rather than resolved (`ISSUES.md` #80)."""
+        visible rather than resolved."""
         await _twin_labels(storage)
         await _judge_pair(storage, "distinct", judge=CRITIC)
 
@@ -452,7 +452,7 @@ class TestASecondJudgeConfirms:
 
 
 class TestTheJournalRow:
-    """Where #69 resolves. The question was unanswerable while a label had no
+    """Where label-merge attribution resolves. The question was unanswerable while a label had no
     id: the alternatives were a second namespace inside `subject_ids`, or the
     endpoint nodes of edges the decision was not about."""
 
@@ -510,7 +510,7 @@ class TestTheJournalRow:
 
     async def test_the_row_names_no_node(self, storage):
         """The subjects are label records, so nothing surfaces against a node
-        nobody judged. That is the rejected #69 option — the endpoint ids of the
+        nobody judged. That is the rejected attribution option — the endpoint ids of the
         edges carrying the label — which satisfied *ids only* by filing the row
         under topics the decision was not about."""
         await _twin_labels(storage)
@@ -674,7 +674,7 @@ class TestSuppressionIsPermanentByDesign:
     """Inherited from the fact-pair layer deliberately rather than by accident,
     so a wrong `distinct` silences a pair for good. Stated here rather than left
     for a later reader to decide it is a bug — the dual of the futile-cycle rule,
-    and `ISSUES.md` #80 is where a retraction would be argued."""
+    and the missing suppression retraction is where a retraction would be argued."""
 
     async def test_describing_a_label_does_not_reopen_the_pair(self, storage):
         await _twin_labels(storage)

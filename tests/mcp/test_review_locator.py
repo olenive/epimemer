@@ -1,6 +1,6 @@
-"""Where else this agent has decided things (ISSUES #73).
+"""Where else this agent has decided things (ISSUES `review`'s `elsewhere`).
 
-#72 settled that the journal stays per graph — `subject_ids` are node ids, and a
+the misdirected-write scope settled that the journal stays per graph — `subject_ids` are node ids, and a
 node id resolves only where it lives — and left one thing genuinely missing: a
 reviewer had no way to find out there was more elsewhere. The graph it is in
 answers loudly; every other graph is silent in a way indistinguishable from
@@ -59,7 +59,7 @@ def _row(judge: JudgeRef | None = CRITIC, *, at: datetime = NOW) -> DecisionReco
 async def _journal(storage, graph: str, *records: DecisionRecord) -> None:
     """Write rows into `graph` and put the active graph back where it was.
 
-    Switching rather than borrowing: that is the sequence #72 kept as the
+    Switching rather than borrowing: that is the sequence the misdirected-write scope kept as the
     fallback, and using it to *build* the fixture keeps the test's own writes
     out of the mechanism it is testing.
     """
@@ -89,7 +89,7 @@ class TestItCountsWhereElseToLook:
 
     async def test_a_graph_with_no_journal_is_counted_zero_not_omitted(self, storage):
         """*Nothing there* is an answer a reviewer can act on; a graph missing
-        from the list reads as *not checked*, which is the silence #73 is
+        from the list reads as *not checked*, which is the silence `review`'s `elsewhere` is
         about."""
         await _journal(storage, "field-notes", _row())
         await _journal(storage, "petritype-server")
@@ -103,7 +103,7 @@ class TestItCountsWhereElseToLook:
     async def test_it_carries_no_rows_and_no_ids(self, storage):
         """Counts and nothing else. A row read out of another graph arrives
         readable but not actionable — every write path is single-graph, so an
-        id from over there dereferences nowhere here (#72)."""
+        id from over there dereferences nowhere here."""
         await _journal(storage, "field-notes", _row(), _row())
 
         result, _ = await tools.review(storage)
@@ -322,7 +322,7 @@ def _result(raw) -> dict:
 class TestTheTurnTheSweepNeeds:
     """To move the active graph you must exclude the calls using it, and you
     cannot do that while being one — `moving()` inside `using()` raises rather
-    than waiting for itself (#16). So a read that borrows the connection has to
+    than waiting for itself. So a read that borrows the connection has to
     declare itself a mover at the boundary.
 
     On the in-memory backend the sweep is a dict lookup and borrows nothing, so

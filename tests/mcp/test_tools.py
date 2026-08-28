@@ -203,7 +203,7 @@ class TestSegment:
 
 class TestTimepointProposal:
     """Ingestion proposes timepoints, so content-time mode is not empty on a
-    graph nobody has hand-curated (ISSUES.md #34).
+    graph nobody has hand-curated.
 
     The proposals ride in the same `write_batch_tx` as everything else: a
     `TIMELINK` naming a timeline that was never stored resolves to an empty row
@@ -450,7 +450,7 @@ class TestStoreDecomposition:
 
 
 class TestIngestRecordsWhenAClaimWasTrue:
-    """Validity arrives at ingest and lands on the provenance edge (#53 T1 §9).
+    """Validity arrives at ingest and lands on the provenance edge (boundary proposals).
 
     Ingest is the only place it can come from: tense and the dates written in
     the text are visible here and nowhere afterwards. Reflect has facts and a
@@ -597,7 +597,7 @@ class TestIngestRecordsWhenAClaimWasTrue:
 
 
 class TestDocumentsRecordWhenTheyWerePublished:
-    """`published_at` bounds what a source could have known (#53 T1 §7)."""
+    """published_at bounds what a source could have known (the witness point)."""
 
     async def test_a_publication_date_is_stored_with_the_document(
         self, storage, embedding_provider, config
@@ -627,7 +627,7 @@ class TestDocumentsRecordWhenTheyWerePublished:
 
 
 class TestStoreDecompositionValuePriors:
-    """Both priors an ingesting agent may supply, and what absence means (#46).
+    """Both priors an ingesting agent may supply, and what absence means.
 
     They are priors, not verdicts, and they differ in what omitting them says.
     `importance` has a real default — triviality is only visible once the
@@ -1740,7 +1740,7 @@ class TestApplyReflectionMerge:
     async def test_the_wired_merge_carries_the_value_clocks(
         self, storage, embedding_provider
     ):
-        """The agent-driven path has the same obligation as the helper (#45).
+        """The agent-driven path has the same obligation as the helper.
 
         This is the merge that actually runs in production — `merge_similar_topics`
         is the pipeline helper. Carrying `importance` forward without the date it
@@ -1999,7 +1999,7 @@ class TestRestore:
 
 
 class TestAClaimComesBack:
-    """Reactivation — the `recurs` verdict's write half (#53 T2).
+    """Reactivation — the `recurs` verdict's write half.
 
     Labour out of government in 2010 and back in 2024 is one claim recurring.
     The alternative the graph used to produce is two nodes saying the same
@@ -2342,7 +2342,7 @@ class TestMetacontextTools:
         """`the-real` is a convention, not a mechanism: nothing reads it
         specially, so it has to be creatable like any other frame by whoever
         first needs it. `ensure_base_metacontext` used to create it behind the
-        scenes on every ingest, which was the last of its special cases (#76)."""
+        scenes on every ingest, which was the last of its special cases."""
         from epimemer.core.types import BASE_METACONTEXT_ID
 
         await storage.switch_database("virgin")
@@ -2367,7 +2367,7 @@ class TestMetacontextTools:
 
 class TestAnIngestNoLongerInventsAFrame:
     """The frame is required and `the-real` is ordinary, so ingest creates
-    nothing (#76). It used to call `ensure_base_metacontext` before writing,
+    nothing. It used to call `ensure_base_metacontext` before writing,
     back when an untagged node resolved to the base frame and the row was
     catching up with an answer the system was already giving.
     """
@@ -2402,7 +2402,7 @@ class TestAnIngestNoLongerInventsAFrame:
 
 
 class TestAStatedFrameMustResolveHere:
-    """A metacontext id that names nothing is refused, not written (#76).
+    """A metacontext id that names nothing is refused, not written.
 
     Ids are per graph, so one carried over from another graph resolves nowhere.
     Unchecked, the `has_metacontext` edge points at nothing and `frames_for`
@@ -2474,7 +2474,7 @@ class TestAStatedFrameMustResolveHere:
         resolved to it and it therefore named something in every graph. Nothing
         resolves to it now, so accepting it rowless would admit an id pointing
         at nothing — the isolation failure this check exists to prevent, waved
-        through by name (#76)."""
+        through by name."""
         from epimemer.core.types import BASE_METACONTEXT_ID
 
         # A graph nobody has set up yet — which is exactly where the old
@@ -2557,7 +2557,7 @@ async def _store_fact_with_embedding(
 class TestRecurrenceIsNominated:
     """A retired claim can only be judged if the pass that nominates sees it.
 
-    This is the detector half of `recurs` (#53 T2). Until `vector_search` could
+    This is the detector half of `recurs`. Until `vector_search` could
     be asked for historical nodes, no similarity pass ever surfaced the twin, no
     verdict was ever invited, and ingest wrote a second node saying what the
     first one said — the duplication the graph manufactured with its own
@@ -2636,7 +2636,7 @@ class TestRecurrenceIsNominated:
 
 
 class TestVerbatimRecurrenceIsFlaggedAtIngest:
-    """The cheap floor under the detector, affordable because #48 was fixed.
+    """The cheap floor under the detector, affordable because the content-lookup index was fixed.
 
     `check_conflicts` is opt-in, so an agent that never calls it gets no
     recurrence detection at all. An exact-content match is the one case cheap
@@ -2671,7 +2671,7 @@ class TestVerbatimRecurrenceIsFlaggedAtIngest:
     async def test_an_active_twin_is_not_a_recurrence(
         self, storage, embedding_provider, config
     ):
-        """Two live nodes saying the same thing is redundancy, which is #52's
+        """Two live nodes saying the same thing is redundancy, which is fact dedup's
         subject and a different verdict entirely."""
         claim = "Labour is in government."
         await storage.store_node(Fact(content=claim, source_id="s1"))
@@ -2904,7 +2904,7 @@ class TestSearchFrameScoping:
         used to return the named frame *plus* untagged base reality, on the
         reasoning that real-world knowledge is the background every frame is
         read against — hardcoded, invisible, and unaskable-for in any other
-        combination. It is a sentence now (#76)."""
+        combination. It is a sentence now."""
         mc_real = Metacontext(content="Real world")
         mc_fiction = Metacontext(content="Fiction")
         await storage.store_metacontext(mc_real)
@@ -3381,7 +3381,7 @@ class TestQueryChangesTool:
         assert "superseded_candidate" in by_id[a.id]["review"]
 
     async def test_query_changes_names_the_superseding_node(self, storage):
-        """#57, durable surface. Before this, the history reported *that* a node
+        """Counterpart ids, durable surface. Before this, the history reported *that* a node
         retired and never *by whom* — the relation existed only as an edge."""
         old = _fact_at("Leningrad", datetime(2026, 6, 12, tzinfo=timezone.utc))
         new = _fact_at("Saint Petersburg", datetime(2026, 6, 14, tzinfo=timezone.utc))
@@ -3422,7 +3422,7 @@ class TestQueryChangesTool:
         await _supersede(storage, node, first,
                          status=NodeStatus.HISTORICAL, at=retired_first)
         # The return, driven at the storage layer: the `recurs` verdict that will
-        # call this is #53 T2 work, and the contract it needs holds here already.
+        # call this is the edge split work, and the contract it needs holds here already.
         await storage.set_node_status_tx(
             [await storage.get_node(node.id)], status=NodeStatus.ACTIVE, at=came_back,
         )
@@ -4020,7 +4020,7 @@ class TestLexicalSearch:
 
 
 class TestWhatARetrievalCanReach:
-    """#53 T3's two switches, and the asymmetry in their defaults.
+    """History-by-default retrieval's two switches, and the asymmetry in their defaults.
 
     Knowledge that is not current is still knowledge — the reason `HISTORICAL`
     exists at all — so it comes back by default. A claim concluded *wrong* is
@@ -4308,7 +4308,7 @@ class TestAskingWhatWasTrueThen:
 class TestCorroborationOnTheSearchPath:
     """How many independent sources back a result — asked for, never assumed.
 
-    Off by default **on a measurement**, which is the condition `ISSUES.md` #51
+    Off by default **on a measurement**, which is the condition read-time corroboration
     set before it could go on the default path. Timed against the annotations
     `search` already runs, over the node set a real k=10 search returns: it cost
     3× `review_labels_for` on a graph with no similarity edges at all, and rose
