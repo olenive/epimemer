@@ -330,12 +330,6 @@ class StorageBackend(Protocol):
         """
         ...
 
-    async def relabel_edges(self, old_label: str, new_label: str) -> int:
-        """Rewrite the label on user-tier (RELATED) edges in place. Returns the
-        count relabelled. Edges are not versioned, so this is a plain update.
-        Used by edge-label consolidation."""
-        ...
-
     async def get_relation_kind(self, label: str) -> str | None:
         """The kind of any existing user-tier edge with this label, or None.
         Lets a coined label reuse its kind (classified once per label)."""
@@ -918,7 +912,7 @@ class StorageBackend(Protocol):
     async def judged_relation_pairs(self) -> set[tuple[str, str]]:
         """Every label pair this graph has judged, as sorted id pairs.
 
-        The read `find_similar_relation_pairs` does once per sweep, deliberately
+        The read `sweep_similar_relation_pairs` does once per sweep, deliberately
         the whole set rather than a per-pair lookup: the nominator holds every
         candidate pair in memory already, and a query per pair would put the
         cost on the graph with the most labels — the one this exists for.

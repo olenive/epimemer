@@ -98,10 +98,12 @@ siblings, and sit in a frame:
   use one `RELATED` sentinel with a free `label` and a `kind`
   (`relationship` followed in retrieval / `attribution` not). Behaviour is finite
   and hardcoded; the vocabulary is open. A label also has a **record** — an id, a
-  description, and the thing a decision about it can name — so `reflect` →
-  `apply_reflection relation_merges` consolidates synonyms, and
-  `relation_verdicts` records a pair judged and *not* merged, which is what stops
-  the same pair being offered on every pass.
+  description, and the thing a decision about it can name — so `reflect`
+  nominates likely synonyms and `apply_reflection relation_verdicts` records
+  what was decided about a pair, which is what stops it being offered on every
+  pass. **Nothing rewrites a label.** Consolidation by bulk relabel was removed
+  on 2026-08-28: edges are not versioned, so it was the one irreversible
+  operation in the system, spent on the one thing that affects no retrieval.
 
 These are *separate from metacontexts*: metacontexts are epistemic frames that
 change retrieval scope; sources/tags/relations are structure that (for sources and
@@ -433,11 +435,10 @@ knowledge claim and editing it rewrites no history:
 | `value.confidence` | the ingesting agent's prior at `store_decomposition`, or absent; a topic or fact merge combines it via `merged_value_signal`, clocks included | supplied once at creation and never re-set — a correction mints a new node rather than rewriting this one, which is why the basis beside it is a single line and not a trail |
 | `importance`, `importance_judged_at` | `judge_importance` | a recorded assessment of the same claim, with its own provenance trail |
 | `retrieved_at` | `search` | a record that the node was read, not a change to what it says |
-| edge `label` (user relations) | reflection (relation consolidation) | edges are not versioned; relabelling a synonym is a plain update |
 
 So "a node is never mutated" is shorthand for "a node's *content* is never mutated".
-Mutating metadata uses dedicated in-place storage operations (`set_node_status_tx`,
-`relabel_edges`) and never touches the content embedding. (Sources and tags are now
+Mutating metadata uses a dedicated in-place storage operation
+(`set_node_status_tx`) and never touches the content embedding. (Sources and tags are now
 Topics linked by edges, so they consolidate by topic-merge, not in-place mutation.)
 
 - **Current state** = all nodes with `status = "active"` (no outgoing `superseded_by`, `temporally_followed_by` or `merged_into` edges)

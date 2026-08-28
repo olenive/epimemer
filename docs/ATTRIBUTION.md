@@ -195,17 +195,18 @@ than a claim about it — *who pasted this text* is a different question from *w
 judged what it says*. And reusing an existing entity or tag topic does not
 restamp it: mentioning a name again is not introducing it.
 
-One decision is still **not** attributed: merging relation labels, through
-`apply_reflection(relation_merges=…)`. The obstacle that used to make it
-impossible is gone — labels have records with ids since `ISSUES.md` #74 stage 1,
-so a row naming them would resolve like any other — and what remains is that no
-writer has been built. That waits on #74 settling whether relation merging
-survives at all; if it does, the row is stage 4's work. Describing a label **is**
-attributed, under its own `relation_description` kind, and so is **judging one
-label against another** — `relation_verdict`, whose subjects are the two label
-records. That row is where the question this section used to call unanswerable
-actually got its answer: the subject of a decision about vocabulary is the
-vocabulary entry, and it needed the entry to exist.
+**The one decision that was never attributed no longer exists.** Merging
+relation labels wrote no journal row, and the obstacle had already gone — labels
+have records with ids since `ISSUES.md` #74 stage 1, so a row naming them would
+resolve like any other. What remained was that no writer had been built, and
+#74 settled the question by removing the operation instead (2026-08-28). Nothing
+rewrites a label now, so there is nothing left here to attribute.
+
+Describing a label **is** attributed, under its own `relation_description` kind,
+and so is **judging one label against another** — `relation_verdict`, whose
+subjects are the two label records. That row is where the question this section
+used to call unanswerable actually got its answer: the subject of a decision
+about vocabulary is the vocabulary entry, and it needed the entry to exist.
 
 Accepting a boundary proposal, the other gap this section used to name, is
 closed: it edits an existing edge rather than adding one, which is exactly the

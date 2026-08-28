@@ -275,24 +275,6 @@ class TestTheIndexTracksEverySimpleWrite:
         _assert_index_matches_edges(store)
         await _assert_lookups_match_brute_force(store)
 
-    async def test_relabelling_edges_does_not_disturb_the_index(self, store):
-        """`relabel_edges` mutates stored edges in place, but not their endpoints."""
-        topics, facts, _ = await _a_small_graph(store)
-        await store.store_edge(
-            NodeEdge(
-                src_id=facts[0].id,
-                dst_id=topics[1].id,
-                type=EdgeType.RELATED,
-                label="old",
-            )
-        )
-
-        await store.relabel_edges("old", "new")
-
-        _assert_index_matches_edges(store)
-        await _assert_lookups_match_brute_force(store)
-
-
 class TestTheIndexTracksTheCompoundTransactions:
     """The write paths that mutate edges directly rather than via `store_edge`."""
 

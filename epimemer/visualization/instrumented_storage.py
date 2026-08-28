@@ -138,9 +138,6 @@ class InstrumentedStorage:
         ))
         return result
 
-    async def relabel_edges(self, old_label: str, new_label: str) -> int:
-        return await self._inner.relabel_edges(old_label, new_label)
-
     async def get_relation_kind(self, label: str) -> str | None:
         return await self._inner.get_relation_kind(label)
 

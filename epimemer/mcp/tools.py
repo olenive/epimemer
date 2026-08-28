@@ -3100,12 +3100,13 @@ async def reflect(
         ]
 
     # 8. Find likely-synonymous user relationship labels (open vocabulary captured
-    #    fast, organized slow). Applied via apply_reflection relation_merges, or
-    #    declined via relation_verdicts — which is what stops a pair the agent
-    #    has already considered coming back on every sweep (#74 FC1). The sweep
-    #    also counts what those standing verdicts held back, because suppression
-    #    is silent: without the count, an empty list on a well-judged graph
-    #    reads as *nothing similar here* rather than *already judged*.
+    #    fast, organized slow). Judged via apply_reflection relation_verdicts,
+    #    which is the whole destination now that `relation_merges` is gone: a
+    #    nomination is answered `distinct` or `synonymous` and stops coming back
+    #    (#74 FC1), and nothing rewrites an edge. The sweep also counts what
+    #    standing verdicts held back, because suppression is silent: without the
+    #    count, an empty list on a well-judged graph reads as *nothing similar
+    #    here* rather than *already judged*.
     relation_pairs_suppressed = 0
 
     async def _relations():
@@ -3211,7 +3212,6 @@ async def apply_reflection(
     supersessions: list[dict] | None = None,
     archivals: list[str] | None = None,
     judgments: list[dict] | None = None,
-    relation_merges: list[dict] | None = None,
     relation_verdicts: list[dict] | None = None,
     boundaries: list[dict] | None = None,
     similarities: list[dict] | None = None,
@@ -3265,25 +3265,17 @@ async def apply_reflection(
         confirmed". Either way the node leaves the stale set, because the clock
         moves whichever direction the judgment goes. Unknown ids are skipped, as
         supersessions and archivals are.
-    relation_merges: [{labels: [str], into: str}] — consolidate synonymous user
-        relationship labels (from reflect's similar_relations). Every user-tier
-        edge with a listed label is relabelled to ``into``, in place (edges are
-        not versioned). The survivor gets a label record if it had none (#74
-        §2.3), and any description on a label that just lost its last edge comes
-        back in ``relation_descriptions_orphaned`` rather than being folded in:
-        settling two definitions into one is the agent's judgment to make with
-        ``describe_relation``, not this call's.
     relation_verdicts: [{pair: [label_a, label_b], kind: str, verdict:
         "distinct" | "synonymous", because: str}] — what you decided about a
-        nominated **label** pair you are not merging. `similarities` one tier
-        down, and the fix for the same defect: a declined pair was recorded
-        nowhere, so `reflect` re-offered it for ever while *accepting* a merge
-        made one label vanish and suppressed itself. ``distinct`` is different
-        relationships that look alike; ``synonymous`` is one relationship
-        written two ways, and it acts on nothing today — recording it is still a
-        real judgment, and leaving it unrecordable would be the same treadmill
-        for the affirmative answer. **Both stop the pair being nominated, and
-        that suppression is permanent by design.** ``because`` is required, and
+        nominated **label** pair. `similarities` one tier down, and the fix for
+        the same defect: a declined pair was recorded nowhere, so `reflect`
+        re-offered it for ever. ``distinct`` is different relationships that
+        look alike; ``synonymous`` is one relationship written two ways.
+        **Neither rewrites anything** — a verdict is a record, which is the
+        whole of what this tier does since `relation_merges` was removed, and
+        what a label means here is settled with ``describe_relation``. **Both
+        stop the pair being nominated, and that suppression is permanent by
+        design.** ``because`` is required, and
         so is ``kind`` — copy it from the nomination; there is no default, so
         an entry omitting it is refused rather than judged against a kind the
         agent never stated.
@@ -3302,6 +3294,14 @@ async def apply_reflection(
         period — refusals come back in ``boundaries_refused`` with a reason,
         since a boundary silently not applied is worse than one rejected out
         loud.
+
+    **A malformed entry refuses the whole call, and nothing is written.** The
+    steps below share no transaction and their order is load-bearing, so an
+    entry missing a required key used to abort part-way and report a total
+    failure over a partial write (#82). Every entry is now checked first, and
+    every problem is listed at once. This is structure only — a judgment the
+    graph can evaluate is still refused on its own, into the matching
+    ``*_refused`` list, so one already-judged pair never costs a batch.
     """
     from epimemer.pipelines.graph_construction.versioning import (
         merge_nodes,
@@ -3310,6 +3310,10 @@ async def apply_reflection(
         supersede_node,
     )
     from epimemer.pipelines.frames import frame_edges, shared_frame_set
+    from epimemer.pipelines.reflection.batch_validation import (
+        malformed_entries,
+        refusal_message,
+    )
     from epimemer.pipelines.reflection.boundaries import apply_boundary
     from epimemer.pipelines.reflection.relation_verdicts import (
         RelationVerdictRefused,
@@ -3321,6 +3325,28 @@ async def apply_reflection(
     )
     from epimemer.pipelines.reflection.review import frames_of
     from epimemer.pipelines.reflection.topic_consolidation import all_pairs_above_threshold
+
+    # 0. Nothing is applied until the whole batch is known to be applicable.
+    #    The nine steps below share no transaction and their order is #65's
+    #    anchoring rule, so a raise part-way down leaves everything above it
+    #    committed under an error that cannot say what landed — and a similarity
+    #    verdict, being permanently suppressing, then refuses the retry (#82).
+    #    Structural only: judgments the graph can evaluate are still refused one
+    #    at a time, into the `*_refused` lists.
+    malformed = malformed_entries({
+        "similarities": similarities,
+        "relation_verdicts": relation_verdicts,
+        "parents": parents,
+        "splits": splits,
+        "enrichments": enrichments,
+        "merges": merges,
+        "supersessions": supersessions,
+        "archivals": archivals,
+        "judgments": judgments,
+        "boundaries": boundaries,
+    })
+    if malformed:
+        raise ValueError(refusal_message(malformed))
 
     parents_created = 0
     # Refusals rather than counts, because a frame mismatch is something the
@@ -3696,61 +3722,7 @@ async def apply_reflection(
             continue        # unknown node or related id — skipped, as above
         judgments_applied += 1
 
-    # 9. Consolidate synonymous user relationship labels: relabel edges in place
-    #    (edges are not versioned).
-    #
-    #    **Still the one decision here with no journal row**, and the reason is
-    #    the field rather than the effort: a journal subject is a node id, and
-    #    this judgment's subjects are *labels*. Putting them in `subject_ids`
-    #    would give one field two namespaces, which is the tell this design
-    #    names twice (§11 #2, §11's closing note). The alternative — the ids of
-    #    every edge relabelled — needs `relabel_edges` to return them and would
-    #    write a subject list in the hundreds. Filed rather than guessed at.
-    relations_consolidated = 0
-    edges_relabeled = 0
-    relation_descriptions_orphaned: list[dict] = []
-    for rm_spec in (relation_merges or []):
-        into = rm_spec["into"]
-        applied = False
-        for label in rm_spec["labels"]:
-            if label == into:
-                continue
-            kind = await storage.get_relation_kind(label) or "relationship"
-            losing = await storage.get_relation_label(label, kind)
-            n = await storage.relabel_edges(label, into)
-            edges_relabeled += n
-            if n:
-                applied = True
-                # The prose on the label that just lost its last edge. Nothing
-                # here folds it into the survivor: two definitions concatenated
-                # is the system making an editorial judgment it is not entitled
-                # to, and this design's whole shape is that agents judge and the
-                # graph records. So it is handed back instead, for the agent to
-                # settle with `describe_relation` — the same nominate-don't-
-                # decide split `reflect` uses everywhere else.
-                if losing is not None and losing.description:
-                    relation_descriptions_orphaned.append({
-                        "label": label,
-                        "kind": kind,
-                        "description": losing.description,
-                        "merged_into": into,
-                    })
-        if applied:
-            relations_consolidated += 1
-            # The survivor gets a record, judge-less. A merge is the fourth
-            # write path that names a label and §2.3 enumerated three, so
-            # consolidating into a label nobody had coined used to leave the
-            # edges pointing at a word with no record — the description being
-            # consolidated *toward* absent while the one consolidated *away*
-            # sat in the store unreachable. Judge-less because merging is not
-            # coining: the agent is not claiming to have introduced the word.
-            surviving_kind = await storage.get_relation_kind(into) or "relationship"
-            if await storage.get_relation_label(into, surviving_kind) is None:
-                await storage.store_relation_label(
-                    RelationLabel(name=into, kind=surviving_kind)
-                )
-
-    # 10. Accept boundaries reflect proposed. Last because it is the only step
+    # 9. Accept boundaries reflect proposed. Last because it is the only step
     #    that edits an existing assertion rather than adding one, so anything
     #    that moves a node's status above has already happened.
     boundaries_applied = 0
@@ -3798,9 +3770,6 @@ async def apply_reflection(
         "relation_verdicts_recorded": relation_verdicts_recorded,
         "relation_verdicts_confirmed": relation_verdicts_confirmed,
         "relation_verdicts_refused": relation_verdicts_refused,
-        "relations_consolidated": relations_consolidated,
-        "edges_relabeled": edges_relabeled,
-        "relation_descriptions_orphaned": relation_descriptions_orphaned,
         "boundaries_applied": boundaries_applied,
         "boundaries_refused": boundaries_refused,
     }
@@ -3808,7 +3777,7 @@ async def apply_reflection(
         nodes_returned=(
             similarities_recorded + parents_created + topics_split + topics_enriched
             + topics_merged + supersessions_applied + len(to_archive)
-            + judgments_applied + relations_consolidated + boundaries_applied
+            + judgments_applied + boundaries_applied
             + relation_verdicts_recorded
         ),
     )

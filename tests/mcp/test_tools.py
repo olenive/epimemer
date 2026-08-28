@@ -3636,9 +3636,9 @@ class TestTraversalVsMigration:
 
 class TestRelationConsolidation:
 
-    async def test_find_similar_relation_pairs(self, storage):
+    async def test_sweep_similar_relation_pairs(self, storage):
         from epimemer.pipelines.reflection.relation_consolidation import (
-            find_similar_relation_pairs,
+            sweep_similar_relation_pairs,
         )
         emb = _FixedEmbed({
             "authored_by": [1.0, 0.0], "written_by": [1.0, 0.0], "funded_by": [0.0, 1.0],
@@ -3652,26 +3652,9 @@ class TestRelationConsolidation:
                                           label="written_by", kind="relationship"))
         await storage.store_edge(NodeEdge(src_id=a.id, dst_id=d.id, type=EdgeType.RELATED,
                                           label="funded_by", kind="relationship"))
-        pairs = await find_similar_relation_pairs(storage, emb, similarity_threshold=0.9)
+        pairs = (await sweep_similar_relation_pairs(storage, emb, similarity_threshold=0.9)).pairs
         got = {frozenset((p["label_a"], p["label_b"])) for p in pairs}
         assert got == {frozenset(("authored_by", "written_by"))}
-
-    async def test_apply_relation_merges(self, storage, embedding_provider):
-        a, b, c = (Topic(content=x) for x in ("a", "b", "c"))
-        for n in (a, b, c):
-            await storage.store_node(n)
-        await storage.store_edge(NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.RELATED,
-                                          label="written_by", kind="relationship"))
-        await storage.store_edge(NodeEdge(src_id=a.id, dst_id=c.id, type=EdgeType.RELATED,
-                                          label="authored_by", kind="relationship"))
-        result, _ = await apply_reflection(
-            storage, embedding_provider,
-            relation_merges=[{"labels": ["written_by"], "into": "authored_by"}],
-        )
-        assert result["relations_consolidated"] == 1
-        assert result["edges_relabeled"] == 1
-        labels = {e.label for e in await storage.get_edges_from(a.id)}
-        assert labels == {"authored_by"}
 
     async def test_reflect_surfaces_similar_relations_key(self, storage, embedding_provider):
         result, _ = await reflect(storage, embedding_provider)

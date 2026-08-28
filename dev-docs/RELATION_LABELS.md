@@ -87,7 +87,7 @@ threshold. The tag premise did not survive: a tag *was* the retrieval handle, so
 other. A relation label is a handle for nothing.
 
 **And there is no frame check** (**#75**). `merge_facts` refuses cross-frame
-pairs; `find_similar_relation_pairs` groups by `kind` alone, so two fictional
+pairs; `sweep_similar_relation_pairs` groups by `kind` alone, so two fictional
 universes in one graph pool their vocabularies and are judged on string
 similarity. **The asymmetry is smaller than it looks**, and #75 has the working:
 a merged *fact* inherits the union of its sources' frames, which is why that
@@ -101,7 +101,7 @@ Near-identical strings, opposite meanings, and the nominator sees only strings.
 
 ### 1.3 FC1, the live defect
 
-`find_similar_relation_pairs` re-derives from scratch on every `reflect` and
+`sweep_similar_relation_pairs` re-derives from scratch on every `reflect` and
 **records nothing about declines.** Reflection nominates; a merge happens only
 if the agent calls `apply_reflection(relation_merges=[…])`. Declining means not
 making that call, so there is no record anywhere that the question was asked.
@@ -218,17 +218,15 @@ and `relation_verdicts` when a pair is judged. Each already writes and already
 carries a judge, so the record comes into existence at exactly the moments an
 agent touches the vocabulary, and no path can be blocked waiting for one.
 
-> **Corrected 2026-08-27: there are four, and this list was wrong two stages
-> after it was written.** `apply_reflection(relation_merges=…)` names labels,
-> exists today, and is reached from `reflect`'s `similar_relations`. It is
-> missing above because §7.3 has stage 4 *replacing* it — the list was written as
-> if the path were already gone, and §5 has not decided that merging survives at
-> all. It now creates-or-fetches the survivor's record, judge-less, and hands
-> back the merged-away label's description in
-> `relation_descriptions_orphaned` rather than folding it in. `ISSUES.md` #81
-> has the measurement and the residue that stage 4 owns. **The carry-forward: an
-> enumeration of write paths is a claim that ages, and the guard that catches it
-> is §7.1's test 9.**
+> **Three is right again, and the route back is worth keeping.** On 2026-08-27
+> this list was corrected to *four*: `apply_reflection(relation_merges=…)` named
+> labels, existed, and was reached from `reflect`'s `similar_relations`, and it
+> was missing here only because §7.3 had stage 4 *replacing* it — the list had
+> been written as if the path were already gone. On 2026-08-28 merging was
+> removed (§5), so the fourth path stopped existing and the count is three by
+> deletion rather than by the correction being wrong. **The carry-forward
+> survives both moves intact: an enumeration of write paths is a claim that
+> ages, and the guard that catches it is §7.1's test 9.**
 
 **Only `link` records a judge**, because only `link` coins. A record created by
 `describe_relation` or by a verdict carries `judged_by=None`: the agent
@@ -459,9 +457,31 @@ survives.
 
 ---
 
-## 5. Deprecation, if merging survives at all — stage 4, undecided
+## 5. Merging is removed; deprecation is unbuilt — stage 4
 
-Not settled, and deliberately last. Recorded here so the shape is known.
+**Decided 2026-08-28: `relation_merges` is removed, and stage 4 is not built.**
+A relation label is never rewritten. `reflect` still nominates likely synonyms,
+`relation_verdicts` records what was decided about a pair, and
+`describe_relation` is what makes a vocabulary converge — a described word is
+what stops the third synonym being coined.
+
+**What removal costs, said plainly.** A `synonymous` verdict now acts on
+nothing, permanently rather than provisionally: an agent who concludes that two
+labels are one relationship can record that and describe both, and no mechanism
+folds them. That is the gap deprecation would fill, and the decision is that an
+unfilled gap beats an irreversible fill.
+
+**What it buys.** The system had exactly one operation with no undo, and it
+spent that on the least valuable thing in the graph. Edges are not versioned, so
+a bulk relabel destroyed the pre-rewrite partition at the moment it ran, with no
+journal row naming what it had done — the one decision `ATTRIBUTION.md` had to
+list as unattributed. Removing it makes *every* retained operation reversible or
+recorded, which is a property worth having whole.
+
+**Nothing about this blocks deprecation later**, and that asymmetry is why the
+call went this way: dropping is reversible and building is not. The design below
+stands unchanged as the shape stage 4 would take, and the deadline inside it is
+still binding — on **how** it is built whenever it is built, never on when.
 
 > **2026-08-27: put to the user, and with a reviewer as this is written.** The
 > recommendation was **remove `relation_merges` and do not build stage 4 yet**;
@@ -523,11 +543,12 @@ under-counts. Neither failure exists for a label (§4.2), so a deprecation
 nobody may reverse would make a wrong deprecation permanent and buy nothing for
 it. Count the cycles; do not forbid the second one.
 
-**If `relation_merges` is kept** — for a genuine typo fix across the graph, say
-— then it must capture the pre-rewrite partition at the moment it runs, by
-`REVIEW_MODE.md` §7.1's rule. Any operation collapsing many into one destroys
-the partition, and the partition exists only while the operation is happening.
-That rule is not about nodes; it is about collapse.
+**`relation_merges` was not kept**, and the condition it would have had to meet
+is why. It would have needed to capture the pre-rewrite partition at the moment
+it ran, by `REVIEW_MODE.md` §7.1's rule — any operation collapsing many into one
+destroys the partition, and the partition exists only while the operation is
+happening. That rule is not about nodes; it is about collapse. Meeting it is
+most of the cost of building deprecation, on an operation deprecation replaces.
 
 `reverse_merge`'s three caveats transfer unevenly, which is worth knowing before
 reasoning from the parallel:
@@ -599,8 +620,8 @@ away by a later one.
 |---|---|---|
 | 1 | `RelationLabel`, the three protocol methods on both backends, `link` create-or-fetch, `epimemer relations backfill` | Additive; changes no behaviour. Every later stage needs identity to exist first, and this is the only stage that can be built without deciding anything else |
 | 2 | `description` surfaced in `list_relations` and in `link`'s response; `describe_relation` tool with `DecisionKind.RELATION_DESCRIPTION`; `viz_list_relation_labels` | **The half that pays**, and independent of FC1. Must precede stage 3 (FC3) |
-| 3 | `relation_verdicts` in `apply_reflection`, `RelationVerdict` + two protocol methods, the filter in `find_similar_relation_pairs`, `DecisionKind.RELATION_VERDICT` | **Fixes the live defect**, on every backend and without the CLI (§2.3). Needs stage 1 for ids and stage 2 so a verdict is made against a described vocabulary. Resolves #69 |
-| 4 | Deprecation / `alias_of` / `status`, **its own state-change history and a cycle limit over it** (§5), replacing `relation_merges` | **Undecided** (§5). Last, because #74 has not settled whether merging survives at all — but if it is built, the history is day-one work rather than a follow-on: it is what FC2's bound counts, and it exists only while the changes happen |
+| 3 | `relation_verdicts` in `apply_reflection`, `RelationVerdict` + two protocol methods, the filter in `sweep_similar_relation_pairs`, `DecisionKind.RELATION_VERDICT` | **Fixes the live defect**, on every backend and without the CLI (§2.3). Needs stage 1 for ids and stage 2 so a verdict is made against a described vocabulary. Resolves #69 |
+| 4 | Deprecation / `alias_of` / `status`, **its own state-change history and a cycle limit over it** (§5) | **Not built, and not scheduled.** `relation_merges` was removed on 2026-08-28 rather than replaced, so this stage no longer has anything to displace: it is a new capability whenever somebody wants it. If it is built, the history is day-one work rather than a follow-on — it is what FC2's bound counts, and it exists only while the changes happen |
 
 **Urgency is low and stated as such.** FC1 causes zero harm today: one label in
 the largest real graph means zero nominations are possible. This is a defect
@@ -673,10 +694,10 @@ stage may depend on it.
    raises.
 8. Records are per graph: a label in one graph is invisible from another.
 9. Every record a label can acquire is reachable without the CLI — a test that
-   coins, describes, **consolidates** and judges on an in-memory store, since
-   that backend is exactly where the CLI refuses. Four paths, not the three this
-   line said: §2.3's correction of 2026-08-27 added `relation_merges`, and this
-   test is what found it.
+   coins, describes and judges on an in-memory store, since that backend is
+   exactly where the CLI refuses. Three paths: this test is what found the
+   fourth (`relation_merges`, §2.3's correction of 2026-08-27), and it is also
+   what shows the count back down after §5 removed it on 2026-08-28.
 
 ### 7.2 Stage 2
 
@@ -691,8 +712,7 @@ it, and the alternative would make a word undescribable exactly when the graph
 had begun to forget what it meant.
 
 **Every write path creates a missing record** (§2.3's enumeration, guarded by
-one test that ages with it): coining via `link`, describing, judging, and
-`relation_merges` for a survivor (`ISSUES.md` #81).
+one test that ages with it): coining via `link`, describing, and judging.
 
 **The response reports what was stored, not what was asked for.** A blank
 `description` leaves existing prose alone (`recorded_relation_label`'s rule),

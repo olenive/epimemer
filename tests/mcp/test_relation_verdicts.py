@@ -1,6 +1,6 @@
 """A declined label pair stays declined (#74 stage 3, FC1).
 
-The live defect this closes: `find_similar_relation_pairs` re-derives from
+The live defect this closes: `sweep_similar_relation_pairs` re-derives from
 scratch on every `reflect` and recorded nothing about declines, so a pair an
 agent considered and rejected came back on every pass, for ever, to a fresh
 agent who could not see the previous refusals. Worse than wasted attention —
@@ -35,7 +35,7 @@ from epimemer.core.types import (
 )
 from epimemer.mcp import tools
 from epimemer.pipelines.reflection.relation_consolidation import (
-    find_similar_relation_pairs,
+    sweep_similar_relation_pairs,
 )
 
 
@@ -103,7 +103,7 @@ async def _twin_labels(storage, *, bare=False):
 
 
 async def _nominated(storage):
-    pairs = await find_similar_relation_pairs(storage, TWINS, similarity_threshold=0.9)
+    pairs = (await sweep_similar_relation_pairs(storage, TWINS, similarity_threshold=0.9)).pairs
     return {frozenset((p["label_a"], p["label_b"])) for p in pairs}
 
 
@@ -167,7 +167,7 @@ class TestTheTreadmillStops:
 
         await _judge_pair(storage, "distinct")
 
-        pairs = await find_similar_relation_pairs(storage, embed, similarity_threshold=0.9)
+        pairs = (await sweep_similar_relation_pairs(storage, embed, similarity_threshold=0.9)).pairs
         got = {frozenset((p["label_a"], p["label_b"])) for p in pairs}
         assert frozenset(("works_for", "employed_by")) not in got
         assert frozenset(("works_for", "retained_by")) in got
@@ -297,7 +297,7 @@ class TestBecauseIsRequired:
 
         assert result["relation_verdicts_recorded"] == 1
         assert len(result["relation_verdicts_refused"]) == 1
-        pairs = await find_similar_relation_pairs(storage, embed, similarity_threshold=0.9)
+        pairs = (await sweep_similar_relation_pairs(storage, embed, similarity_threshold=0.9)).pairs
         got = {frozenset((p["label_a"], p["label_b"])) for p in pairs}
         assert got == {frozenset(("works_for", "employed_by"))}
 

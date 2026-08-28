@@ -1464,9 +1464,11 @@ async def memory_reflect(
       resolution: the premise absorbed another claim, so check the inference
       still says what the survivor's wording supports
     - similar_relations: likely-synonymous user relationship labels. Judge each
-      one: apply_reflection relation_merges to consolidate, or relation_verdicts
-      to record "distinct"/"synonymous" without merging. A pair you leave
-      unjudged comes back on every reflect, for ever
+      one with apply_reflection relation_verdicts, recording
+      "distinct"/"synonymous". Nothing rewrites an edge either way — a label is
+      a word this graph uses, and recording what you decided about two of them
+      is the whole action. A pair you leave unjudged comes back on every
+      reflect, for ever
     - relation_pairs_suppressed: how many label pairs standing relation
       verdicts kept out of similar_relations this pass — an empty list beside a
       non-zero count means already judged, not nothing similar; `list_relations`
@@ -1536,7 +1538,6 @@ async def memory_apply_reflection(
     supersessions: list[dict] | None = None,
     archivals: list[str] | None = None,
     judgments: list[dict] | None = None,
-    relation_merges: list[dict] | None = None,
     relation_verdicts: list[dict] | None = None,
     boundaries: list[dict] | None = None,
     similarities: list[dict] | None = None,
@@ -1609,14 +1610,9 @@ async def memory_apply_reflection(
             longer treated as important. Judging it up is equally valid and
             equally useful: either way the judgment clock moves and the node
             leaves the stale set.
-        relation_merges: Consolidate synonymous user relationship labels from
-            reflect's similar_relations. Each: {labels: [str], into: str}. Every
-            user-tier edge with a listed label is relabelled to `into`, in place.
-            Read `relation_descriptions_orphaned` in the response: it names the
-            prose on labels that just lost their last edge, which nothing folds
-            into the survivor for you. Settle it with `describe_relation`.
         relation_verdicts: What you decided about a pair from reflect's
-            similar_relations that you are **not** merging. Each: {pair:
+            similar_relations. The only thing to do with one: nothing rewrites
+            an edge, so the judgment is the whole action. Each: {pair:
             [label_a, label_b], kind: str, verdict: "distinct" | "synonymous",
             because: str} — copy `kind` from the nomination; it has no default,
             so an entry omitting it is refused rather than judged against a
@@ -1627,8 +1623,12 @@ async def memory_apply_reflection(
             who does very little work. Near-identical strings, opposite
             meanings, and the nominator sees only strings.
             Use "synonymous" when they really are one relationship written two
-            ways. Nothing acts on it today, and recording it is still worth
-            doing — it is a judgment, and the alternative is being asked again.
+            ways. Nothing acts on it — no edge is relabelled and no label stops
+            existing — and recording it is still worth doing: it is a judgment,
+            and the alternative is being asked again. Use `describe_relation` to
+            say in each label's own description that the other is the same
+            relationship; a described vocabulary is what stops the third and
+            fourth synonym being coined.
             **Either way the pair is never nominated again, and that is
             permanent**: there is no undo, so judge it rather than clearing the
             list. `because` is required. Entries that could not be recorded come
@@ -1652,6 +1652,12 @@ async def memory_apply_reflection(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+
+    A **malformed** entry — one missing a required key, or not an object at all
+    — refuses the whole call and writes nothing, listing every problem it found
+    so you can fix them in one pass. Resend the corrected batch; nothing in it
+    landed. This is separate from a refused *judgment*, which costs only its own
+    entry and comes back in the matching `*_refused` list.
     """
     deps = ctx.lifespan_context
     judge, refused = await _judge_for_write(ctx, expected_graph)
@@ -1669,7 +1675,6 @@ async def memory_apply_reflection(
             supersessions=supersessions,
             archivals=archivals,
             judgments=judgments,
-            relation_merges=relation_merges,
             relation_verdicts=relation_verdicts,
             boundaries=boundaries,
             similarities=similarities,
@@ -1681,7 +1686,6 @@ async def memory_apply_reflection(
         f"enrichments={len(enrichments or [])} merges={len(merges or [])} "
         f"supersessions={len(supersessions or [])} archivals={len(archivals or [])} "
         f"judgments={len(judgments or [])} "
-        f"relation_merges={len(relation_merges or [])} "
         f"relation_verdicts={len(relation_verdicts or [])} "
         f"boundaries={len(boundaries or [])} "
         f"similarities={len(similarities or [])}",

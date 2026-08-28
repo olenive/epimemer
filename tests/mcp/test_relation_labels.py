@@ -289,23 +289,6 @@ class TestTheCliIsNeverTheOnlyWayIn:
         record = await storage.get_relation_label("works_for", "relationship")
         assert record is not None and record.description == "Employment, not retainer."
 
-    async def test_consolidating_records_one_for_the_surviving_label(self, storage):
-        """The third path, and the one §2.3 did not enumerate — the design was
-        written as if stage 4 had already replaced `relation_merges`. Finishing
-        this test is what found it (#81)."""
-        from epimemer.embeddings.mock import MockEmbeddingProvider
-
-        a, b = await _pair(storage)
-        await tools.link(a.id, b.id, storage, relation="works_for", judge=CRITIC)
-
-        await tools.apply_reflection(
-            storage,
-            MockEmbeddingProvider(model_id="mock-embed", dimension=8),
-            relation_merges=[{"labels": ["works_for"], "into": "employed_by"}],
-        )
-
-        assert await storage.get_relation_label("employed_by", "relationship") is not None
-
     async def test_a_verdict_records_both_labels_it_judges(self, storage):
         """The fourth path, arriving with stage 3, and the one that completes
         the claim. An earlier draft **refused** here and pointed at the CLI,

@@ -639,29 +639,6 @@ class TestReflectionAppliesManyDecisionsAndJournalsEachOne:
 
         await _only(storage, DecisionKind.IMPORTANCE)
 
-    async def test_merging_relation_labels_still_journals_nothing(
-        self, storage, embedder
-    ):
-        """Deliberate, and the reason is the field rather than the effort: a
-        journal subject is a node id and this judgment's subjects are *labels*.
-        Pinned so the gap is a decision somebody can find, not an oversight."""
-        a = await _topic(storage, embedder, "Vienna")
-        b = await _topic(storage, embedder, "Austria")
-        await tools.link(a.id, b.id, storage, relation="capital_of")
-        before = {r.id for r in await storage.query_decisions()}
-
-        result, _ = await tools.apply_reflection(
-            storage, embedder,
-            relation_merges=[{"labels": ["capital_of"], "into": "is_capital_of"}],
-            judge=CRITIC,
-        )
-
-        assert result["edges_relabeled"] == 1
-        # No row of any kind. There is no `relation_merge` kind either — the
-        # same decision said twice rather than two decisions.
-        assert {r.id for r in await storage.query_decisions()} == before
-
-
 class TestAcceptedBoundaries:
     """The other gap `ATTRIBUTION.md` named. Accepting a boundary edits an
     existing `sourced_from` edge, so stamping it inline would take the edge from

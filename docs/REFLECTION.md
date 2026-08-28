@@ -100,7 +100,7 @@ Ten phases, ten keys. Each is a worklist, not a verdict:
 | `boundary_proposals` | where a succession lets a period close or open | `boundaries` |
 | `pending_review` | active nodes already carrying review state | `supersessions`, `record_variant` |
 | `archival_candidates` | nodes worth setting aside | `archivals`, `judgments` |
-| `similar_relations` | likely-synonymous user relationship labels | `relation_merges`, or `relation_verdicts` where you are not merging |
+| `similar_relations` | likely-synonymous user relationship labels | `relation_verdicts` |
 
 Two more keys are not worklists: `truncated` names any of the lists that hit
 `max_nominations` and were cut, and `relation_pairs_suppressed` counts the
@@ -220,7 +220,6 @@ Ten kinds of decision, all optional, applied in one call:
 | `archivals` | export and retire approved nominees |
 | `judgments` | re-judge importance, in either direction, with a reason |
 | `relation_verdicts` | record what you decided about a nominated label pair |
-| `relation_merges` | relabel synonymous user relationship labels |
 | `boundaries` | fill in one open endpoint of one source's period |
 
 **`merges` is the one consolidation that retires nodes from the active graph**, so
@@ -259,6 +258,30 @@ silently resets whatever it forgets to name — and the specific thing it forgot
 
 Unknown or already-retired ids are **skipped**, not errors. Refused boundaries
 come back in `boundaries_refused` with a reason.
+
+### A batch applies, or it never existed
+
+The ten steps share no transaction, and cannot: their order is load-bearing, so
+judgments are recorded before the steps that retire the nodes those judgments
+name. The guarantee comes from the other end instead — **every entry is checked
+before the first step writes**, and a batch containing one that cannot be
+applied at all is refused whole, with nothing written and every problem listed
+at once.
+
+This matters because the alternative was worse than it looked. An entry missing
+a required key used to raise part-way down, leaving everything above it
+committed under a response that said the call had failed and could not say what
+had landed. Where what landed was a `similarities` or `relation_verdicts` entry
+— both **permanently suppressing** — the obvious next move, fixing the entry and
+resending the batch, was then refused as a repeat verdict on the pairs that had
+gone through.
+
+The check is about *shape*, not judgment: a missing key, an entry that is not an
+object, a `pair` that does not name two, a supersession reason outside the
+closed set, an unparseable date. Whether an entry *should* apply stays where it
+was — an unknown id is skipped, and a judgment the graph can evaluate and reject
+comes back in its own `*_refused` list. One already-judged pair never costs a
+batch.
 
 ### `similarities` — the verdict that used to have no writer
 

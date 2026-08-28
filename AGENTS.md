@@ -116,15 +116,19 @@ Each topic/fact/inference may be an object rather than a bare string, carrying p
 - When explicitly asked to consolidate or organize knowledge
 - Periodically during long sessions
 - Check `truncated` in the response. The four pair-built lists (`similar_pairs`, `contradictions`, `recurrences`, `similar_relations`) are capped at `max_nominations` (200), and any that was cut is named there. Empty means you saw everything; named means act on what came back and reflect again, rather than raising the number.
-- **A nominated pair you decline still needs recording, and `similar_relations`
-  is where that is easiest to forget.** Merging two labels makes one of them
-  stop existing, so *accepting* suppresses itself while *declining* leaves no
-  trace — the pair comes back on every reflect, for ever, to an agent who cannot
-  see that you already considered it, and the graph quietly pushes toward the
-  answer that shortens the list. `apply_reflection(relation_verdicts=[{pair,
-  kind, verdict: "distinct" | "synonymous", because}])` is the decline, and
-  `similarities` is the same move for fact pairs. Both suppressions are
-  **permanent**, so judge the pair rather than clearing the list.
+- **Every nominated pair needs a recorded verdict, and `similar_relations` is
+  where that is easiest to forget.** Nothing rewrites a label — relation
+  merging was removed, so a `synonymous` answer changes no edge and neither
+  answer makes a label stop existing. The judgment *is* the action, and a pair
+  you leave unrecorded comes back on every reflect, for ever, to an agent who
+  cannot see that you already considered it.
+  `apply_reflection(relation_verdicts=[{pair, kind, verdict: "distinct" |
+  "synonymous", because}])` is how you record either, and `similarities` is the
+  same move for fact pairs. Both suppressions are **permanent**, so judge the
+  pair rather than clearing the list. Where two labels really are one
+  relationship, `describe_relation` on each is what makes the vocabulary
+  converge — a described word is the thing that stops the third synonym being
+  coined.
 
 ### Interpreting _meta
 Every tool response includes a _meta field with:

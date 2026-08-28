@@ -1,18 +1,23 @@
 """What an agent decided about a nominated pair of relation labels (#74 FC1).
 
 The label layer's answer to `similarity_decisions.py`, and the same defect one
-tier down. `find_similar_relation_pairs` re-derives from scratch on every
-`reflect` and **recorded nothing about declines**: reflection nominates, and a
-merge happens only if the agent calls `apply_reflection(relation_merges=[…])`,
-so declining means *not making that call* and leaves no trace anywhere. The next
-session a different agent scans the same edges, embeds the same strings, gets the
-same cosine, and is asked the same question. For ever.
+tier down. `sweep_similar_relation_pairs` re-derives from scratch on every
+`reflect` and **recorded nothing about declines**: reflection nominated, a merge
+happened only if the agent called `apply_reflection(relation_merges=[…])`, and
+declining therefore meant *not making that call* and left no trace anywhere. The
+next session a different agent scans the same edges, embeds the same strings,
+gets the same cosine, and is asked the same question. For ever.
 
-**Getting it right is what causes the loop.** Accepting a merge makes one label
-stop existing, so the pair can never be nominated again — accepting is
-self-suppressing and declining is not, and the graph therefore applies quiet
-pressure toward the wrong answer, on a fresh agent each time who cannot see the
-previous refusals.
+**Getting it right is what caused the loop.** Accepting a merge made one label
+stop existing, so that pair could never be nominated again — accepting was
+self-suppressing and declining was not, and the graph therefore applied quiet
+pressure toward the wrong answer, on a fresh agent each time who could not see
+the previous refusals.
+
+**Merging is gone as of 2026-08-28** (`RELATION_LABELS.md` §5), which removes
+the asymmetry rather than this module: with nothing self-suppressing, a verdict
+is the *only* thing that stops a pair coming back, so what was the fix for a
+bias is now the whole mechanism.
 
 #64 closed exactly this for fact pairs with the `assessed` edge, and relation
 labels could not have one: that edge runs **between two nodes**, and `works_for`
@@ -25,7 +30,8 @@ alike* — the worked example is a servant who *works for* a master in a culture
 with no employment relation, beside a corporation that formally *employs* a
 consultant who does very little work: near-identical strings, opposite meanings,
 and the nominator sees only strings. `synonymous` is *the same relationship
-written two ways*, and it acts on nothing today. Recording *"yes, these are
+written two ways*, and it acts on nothing — no edge is relabelled and neither
+label stops existing. Recording *"yes, these are
 synonyms, and I am not merging them"* is a real judgment, and leaving it
 unrecordable would be FC1 again for the affirmative answer; whatever
 consolidates labels can then act on standing verdicts rather than re-asking.

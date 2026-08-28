@@ -1231,7 +1231,7 @@ def relation_pair_key(a_id: str, b_id: str) -> tuple[str, str]:
 class RelationVerdict(BaseModel):
     """What an agent decided about a nominated pair of relation labels (#74).
 
-    **The suppression index for FC1.** `find_similar_relation_pairs` re-derives
+    **The suppression index for FC1.** `sweep_similar_relation_pairs` re-derives
     from scratch on every `reflect` and recorded nothing about declines, so a
     pair an agent considered and rejected came back on every pass, for ever, to
     a fresh agent who could not see the previous refusals. Worse, the graph

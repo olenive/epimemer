@@ -1,10 +1,16 @@
 """Relation-label consolidation for the reflection layer.
 
 User-tier relationship labels are open vocabulary, so synonyms accumulate
-(`authored_by` / `written_by`). This proposes merges by embedding similarity over
-the labels, scoped to the same behavioural kind (never merge a `relationship`
-label into an `attribution` one). Applied via apply_reflection relation_merges,
-which relabels the edges in place (edges are not versioned).
+(`authored_by` / `written_by`). This nominates likely-synonymous pairs by
+embedding similarity over the labels, scoped to the same behavioural kind (a
+`relationship` label is never paired with an `attribution` one).
+
+**Nomination is the whole of what this module does, and judgment is the whole
+of what happens next.** `apply_reflection(relation_verdicts=[…])` records
+`distinct` or `synonymous` against both label records and nothing is rewritten
+— `relation_merges`, which relabelled edges in place, was removed on 2026-08-28
+(`RELATION_LABELS.md` §5). A vocabulary converges here through
+`describe_relation` rather than through collapse.
 
 A pair already judged — `distinct` or `synonymous`, via
 `apply_reflection(relation_verdicts=[…])` — is never nominated again (#74 FC1).
@@ -163,22 +169,3 @@ async def sweep_similar_relation_pairs(
 
     pairs.sort(key=lambda p: p["similarity"], reverse=True)
     return RelationPairSweep(pairs=pairs, suppressed=suppressed)
-
-
-async def find_similar_relation_pairs(
-    storage: StorageBackend,
-    embedding_provider: EmbeddingProvider,
-    *,
-    similarity_threshold: float = 0.9,
-) -> list[dict]:
-    """The nominations alone, for callers with no report to file.
-
-    `reflect` reads the full sweep instead, because its response has to say
-    what the standing verdicts held back as well as what survived them —
-    without the count, an agent cannot tell "nothing similar" from "N pairs
-    already judged".
-    """
-    sweep = await sweep_similar_relation_pairs(
-        storage, embedding_provider, similarity_threshold=similarity_threshold
-    )
-    return sweep.pairs

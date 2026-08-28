@@ -1992,7 +1992,10 @@ makes the first not a single point of failure.
 > whoever ingested it, and relabelling has no slot at all. Both want a
 > **journal** row (§4, step 5) rather than an inline field, which is the
 > distinction §3.4 already draws: inline is the original judgment and never
-> changes; anything that revisits one belongs in the journal.
+> changes; anything that revisits one belongs in the journal. *(Boundaries got
+> their row. `relation_merges` was removed on 2026-08-28 —
+> `RELATION_LABELS.md` §5 — so the second gap closed by the operation ceasing
+> to exist rather than by being attributed.)*
 >
 > Smaller: an unknown judge is **dropped** from retrieval responses rather than
 > sent as null. That is the opposite of what `confidence` does, and the
@@ -2129,6 +2132,13 @@ derived read over records whose `subject_ids` contains the node, and W&S §5.3's
 > the hundreds. Filed as `ISSUES.md` #69 rather than guessed at. Boundaries, the
 > other gap `docs/ATTRIBUTION.md` named, are closed: both of their subjects are
 > nodes.
+>
+> *(Both halves are now settled and neither the way this expected. #74 stage 1
+> gave a label an **id**, so the namespace objection dissolved and
+> `relation_verdict` rows name two label records like any other subject; then
+> #74 §5 removed merging outright on 2026-08-28, so the operation this paragraph
+> is about has no row because it has no existence. The subject of a decision
+> about vocabulary is the vocabulary entry — it just needed the entry.)*
 >
 > **`DecisionKind` carries no member without a writer**, corrected on review the
 > same day: `relation_merge` and `proceeded_despite_advisory` both shipped

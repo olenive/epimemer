@@ -387,9 +387,6 @@ useful:
   `merge_facts` is the call.
 - **Source/tag/entity consolidation** is ordinary topic-merge — they're Topics, so
   pass `merges=[...]` for synonymous ones.
-- **Relation consolidation**: for `similar_relations` you judge synonymous, pass
-  `relation_merges=[{labels: ["written_by"], into: "authored_by"}]`. Every user-tier
-  edge with a listed label is relabelled in place (edges aren't versioned).
 - **Judge every relation pair you are shown, including the ones you decline.**
   `relation_verdicts=[{pair: [a, b], kind, verdict: "distinct" | "synonymous",
   because}]` — `distinct` for two different relationships that look alike (a

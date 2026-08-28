@@ -488,17 +488,6 @@ class TestSourceTopicAndRelationHelpers:
         assert got is not None and got.id == t.id
         assert await store.get_node_by_content("missing") is None
 
-    async def test_relabel_edges(self, store):
-        a, b = Topic(content="a"), Topic(content="b")
-        await store.store_node(a)
-        await store.store_node(b)
-        await store.store_edge(NodeEdge(
-            src_id=a.id, dst_id=b.id, type=EdgeType.RELATED,
-            label="written_by", kind="attribution",
-        ))
-        assert await store.relabel_edges("written_by", "authored_by") == 1
-        assert (await store.get_edges_from(a.id))[0].label == "authored_by"
-
     async def test_get_relation_kind(self, store):
         a, b = Topic(content="a"), Topic(content="b")
         await store.store_node(a)

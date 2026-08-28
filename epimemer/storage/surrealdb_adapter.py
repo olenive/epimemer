@@ -1192,15 +1192,6 @@ class SurrealDBStorage:
 
         return results
 
-    async def relabel_edges(self, old_label: str, new_label: str) -> int:
-        """Rewrite the label on user-tier edges (in place; edges are not versioned)."""
-        rows = await self._query(
-            "UPDATE node_edge SET label = $new WHERE type = $related AND label = $old "
-            "RETURN BEFORE",
-            {"new": new_label, "old": old_label, "related": EdgeType.RELATED.value},
-        )
-        return len(rows)
-
     async def get_relation_kind(self, label: str) -> str | None:
         rows = await self._query(
             "SELECT kind FROM node_edge WHERE type = $related AND label = $label LIMIT 1",

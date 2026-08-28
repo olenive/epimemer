@@ -500,19 +500,6 @@ class InMemoryStorage:
                 results.append(node)
         return _copy_all(results)
 
-    async def relabel_edges(self, old_label: str, new_label: str) -> int:
-        """Rewrite the label on all user-tier edges from old_label to new_label.
-
-        Edge-label consolidation: edges are not versioned, so this is an in-place
-        update. Returns the number of edges relabelled.
-        """
-        n = 0
-        for edge in self._g.edges.values():
-            if edge.type == EdgeType.RELATED and edge.label == old_label:
-                edge.label = new_label
-                n += 1
-        return n
-
     async def get_relation_kind(self, label: str) -> str | None:
         for edge in self._g.edges.values():
             if edge.type == EdgeType.RELATED and edge.label == label:
