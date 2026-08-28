@@ -86,10 +86,10 @@ threshold. The tag premise did not survive: a tag *was* the retrieval handle, so
 `billing` and `billings` really were two buckets and a search for one missed the
 other. A relation label is a handle for nothing.
 
-**And there is no frame check** (**the metacontext check**). `merge_facts` refuses cross-frame
+**And there is no frame check.** `merge_facts` refuses cross-frame
 pairs; `sweep_similar_relation_pairs` groups by `kind` alone, so two fictional
 universes in one graph pool their vocabularies and are judged on string
-similarity. **The asymmetry is smaller than it looks**, and the metacontext check has the working:
+similarity. **The asymmetry is smaller than it looks**, and §8 has the working:
 a merged *fact* inherits the union of its sources' frames, which is why that
 refusal exists, and nothing here inherits anything — so the harm is a
 vocabulary that has lost a distinction, not a claim asserted in a world nobody
@@ -836,18 +836,36 @@ it, which is where the coiner-never-the-judger rule needed to be visible.
   plausible next idea and it carries FC3, so whatever proposes it owes the
   answer there: a nudge that cannot show *why* two names differ produces a loop
   with no exit.
-- **It does not settle whether relation merging should exist.** The label record raises the
-  question; stage 4 is where it would be answered.
-- **It does not add the missing frame check** to the nominator (§1.2), now
-  **the metacontext check**, and that entry corrects an overclaim made here first: a frame check
-  would **not** stop the servant/consultant pair being proposed. Both usages sit
-  in the same fictional universe, so their derived frame sets are identical and
-  nothing fires. It catches a different case — two universes, or fiction beside
-  base reality — and the corroboration harm justifying `merge_facts`'
-  cross-frame refusal does not transfer, because nothing corroborates on a
-  label. It is a nomination-quality improvement, not a safety check, and it is
-  no substitute for stage 3: two genuinely distinct labels in one frame recur
-  either way.
+- **It does not merge labels.** That question is settled: merging was removed
+  on 2026-08-28 rather than replaced (§5), so a label is never rewritten.
+- **It does not check frames when nominating a pair**, and that is now a closed
+  question rather than an open one. The check was proposed, argued down twice,
+  and dropped on 2026-08-28 when its last reason went with merging.
+
+  The argument is worth keeping because it corrects an overclaim made here
+  first. A frame check would **not** stop the servant/consultant pair being
+  proposed: both usages sit in the same fictional universe, so their derived
+  frame sets are identical and nothing fires. It catches a different case
+  entirely — two universes, or fiction beside base reality — and the
+  corroboration harm that justifies `merge_facts`' cross-frame refusal does not
+  transfer, because nothing corroborates on a label. So it was only ever a
+  nomination-quality improvement, worth a wasted look rather than a wrong
+  belief, and no substitute for verdicts: two genuinely distinct labels in one
+  frame recur either way. What finally closed it is that its strongest remaining
+  reason was deprecation folding a fiction label under a real one, and
+  deprecation is not being built. The answer to a cross-frame label is its
+  **description** — *"in the Court frame this means X"* — the distinction stated
+  rather than the pair refused.
+
+  **If it is ever built, the bar is disjointness, not equality.** Do not copy
+  `fact_dedup`'s *exactly the same set* rule: that bar is right there because a
+  merge inherits a union, and here nothing inherits, so a label legitimately
+  used in two frames would become unpairable with anything. The right question
+  is `same_frame`'s — **share at least one** — and the check is its negation:
+  do not nominate a pair whose derived frame sets are **disjoint**. A label has
+  no frame of its own; its frames are the union of `frames_for` over the
+  endpoint nodes of every edge carrying it. Those are two different questions
+  and `review.py` already distinguishes them.
 
 ---
 

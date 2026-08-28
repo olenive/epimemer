@@ -146,91 +146,6 @@ catches a class the suite structurally cannot.
 
 ## Open issues
 
-### Relation-label nominations ignore metacontext, and the obvious reason to care is the wrong one
-
-🟡 **Open.** Raised while giving relation labels a record.
-
-> **Still open after label verdicts shipped, and deliberately.** That work edited
-> `find_similar_relation_pairs` — the exact function this entry is about — and
-> added the suppression filter without the frame check. Recorded so the omission
-> reads as a decision rather than a miss: the two are independent, this one is a
-> **nomination-quality** improvement and not a safety check, and folding it into
-> a stage whose whole claim is *a declined pair stays declined* would have made
-> the FC1 regression test answer two questions at once.
-
-`merge_facts` refuses a pair whose facts do not stand in **exactly the same set
-of frames** (`fact_dedup.py`), and `apply_reflection(similarities=…)` refuses a
-cross-frame `one_claim`. `find_similar_relation_pairs` groups by `kind` alone
-and reads no frames at all. Two fictional universes in one graph therefore pool
-their vocabularies, and the whole test is cosine similarity over the two label
-strings.
-
-**The asymmetry is real and is filed so nobody reads it as an oversight.** What
-follows is why the fact-side justification does *not* transfer, and what a check
-here would actually be worth — which is less than it first appears, and not what
-this entry was expected to say.
-
-#### The corroboration harm does not exist here
-
-`merge_facts` refuses cross-frame pairs because a merged node inherits the
-**union** of its sources' frames, so collapsing a base-reality claim into one
-also framed as fiction leaves a node asserting both — *"the single worst outcome
-available"*, in that module's own words, and the same manufactured-agreement
-failure `fact_dedup` exists to prevent.
-
-**Nothing here inherits anything.** Labels do not affect retrieval, so
-nothing corroborates on one: merging a fiction label into a fact label invents
-no support, moves no count, and changes no answer to any query. Under the
-deprecation model it rewrites nothing at all. The harm is that the **vocabulary**
-loses a distinction the frames were carrying — a description problem, not an
-epistemic one.
-
-#### It does not catch the case that motivated it, and the design says it does
-
-The worked example is a servant who *works for* a master in a culture with no
-employment relation, beside a corporation that formally *employs* an on-call
-consultant — **both inside the same fictional universe**. If that universe is
-one metacontext, or both usages are untagged, their frame sets are identical and
-no frame check fires. `RELATION_LABELS.md` §8 claims it "would
-stop the servant/consultant pair being proposed at all"; **that is wrong**, and
-both are corrected alongside this entry.
-
-What a check would catch is a different case: *two universes*, or fiction beside
-base reality, where one label is used only in each. Real, and not the case
-anybody was worried about.
-
-#### If it is built, the bar is disjointness, not equality
-
-A label has no frame of its own. Its frames are derived — the union of
-`frames_for` over the endpoint nodes of every edge carrying it, via
-`frame_resolver`, which exists for exactly this many-pairs shape.
-
-**Do not copy `fact_dedup`'s *exactly the same set* rule.** That bar is right
-there because a merge inherits a union; here nothing inherits, so a label
-legitimately used in two frames would become unmergeable with anything. The
-right question is `same_frame`'s — **share at least one** — and the check is its
-negation: do not nominate a pair whose derived frame sets are **disjoint**. Two
-questions, already distinguished in `review.py`, and this is the second one.
-
-#### Worth what, then
-
-- **A nomination-quality improvement**, not a safety check: a pair used in wholly
-  disjoint frames is unlikely to be a genuine synonym, and nominating it spends
-  the scarcest thing in the loop.
-- **It matters more once deprecation exists** (`RELATION_LABELS.md` stage 4),
-  where `list_relations` would fold a fiction label under a fact one.
-- **The better answer to the cross-frame case is the description** (stage 2),
-  which can say *"in the Court frame this means X"* — the distinction stated
-  rather than the pair refused.
-
-**Not urgent, and less urgent than it looked.** Zero nominations are possible on
-the largest real graph today (one label), and the failure this would prevent
-costs a wasted look rather than a wrong belief. Independent of every stage of
-`RELATION_LABELS.md`; buildable at any point after stage 1 gives labels records
-to hang derived frames off, and arguably not worth building before stage 4.
-
----
-
 ### A suppression has no retraction, so every wrong decline is permanent
 
 🟡 **Open**, waiting on a real case. The dual of the rule that made declines
@@ -420,9 +335,9 @@ at all — but as an addition rather than an escape.
 
 > **Carry-forward: three exchanges of architecture were spent before the premise
 > was checked**, and the check took ten minutes. *Confirm the constraint before
-> designing around it* — the same failure as the metacontext check above, designed
-> for a case it turns out not to catch, and as relation merging, which survived until
-> somebody counted how often it fires.
+> designing around it* — the same failure as the frame check proposed for label
+> nominations, designed for a case it turned out not to catch, and as relation
+> merging, which survived until somebody counted how often it fires.
 
 #### Measured first, 2026-08-25, because the format question has a number
 
