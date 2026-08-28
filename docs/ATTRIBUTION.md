@@ -307,6 +307,22 @@ one call rather than three vocabularies.
 | `by_agent` | one judge's decisions | `agent_id` |
 | `since` | a time window; `until` is exclusive | `since` |
 | `unreviewed` | rows no other record points back at | — |
+| `advisory` | operations that completed carrying an advisory | — |
+
+`advisory` is the one mode that is a selection on **kind**
+(`proceeded_despite_advisory`), and it answers a question none of the others
+can: *what was decided against advice?* Its rows sit beside the decision they
+accompany rather than replacing it — a same-frame contradiction writes both a
+`contradiction` row saying what was asserted and an advisory row saying what the
+asserter was told. The advisory's own text is in `certainty_basis`, so a
+reviewer sees what the decider saw. `certainty` stays blank on these, because
+nobody rated them.
+
+It is deliberately **not** the same question as `unsound_inferences`. That list
+is recomputed from the graph every time and goes correctly silent once somebody
+fixes the wording; this one is a historical fact that stays true. Folding them
+together would make a fixed inference vanish from the audit trail, which is the
+opposite of what an audit trail is for.
 
 `by_agent`'s `agent_id` is a **handle**: a name, a key, or a key the judge used
 to be recorded under. The response's `judge` block says what it resolved to, and

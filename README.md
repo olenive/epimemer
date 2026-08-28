@@ -178,7 +178,7 @@ Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<
 
 - **Core memory**: `segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`, `judge_importance`
 - **Discovery & stats**: `query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `describe_relation`, `graph_stats`
-- **Conflict handling**: `check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`, `reverse_merge`, `configure_merge`
+- **Conflict handling**: `check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`, `merge_inferences`, `reverse_merge`, `configure_merge`, `configure_warnings`
 - **Reflection**: `reflect`, `configure_reflection`, `apply_reflection`
 - **Temporal access**: `graph_as_of`, `query_changes`
 - **Archival**: `archive`, `restore`
@@ -408,5 +408,5 @@ deferred fixes are separate, in [dev-docs/ISSUES.md](dev-docs/ISSUES.md).
 - [dev-docs/REVIEW_MODE.md](dev-docs/REVIEW_MODE.md) — Who judged this and can someone else check it: the agent registry, the decision journal, and the review modes over it (built, steps 0a–7)
 - [dev-docs/LEXICAL_SEARCH.md](dev-docs/LEXICAL_SEARCH.md), [dev-docs/RETRIEVAL_PROVENANCE.md](dev-docs/RETRIEVAL_PROVENANCE.md), [dev-docs/EVENT_LOG.md](dev-docs/EVENT_LOG.md) — Feature designs
 - [dev-docs/RELATION_LABELS.md](dev-docs/RELATION_LABELS.md) — Giving a relationship label a record, a description and a decline it can remember (designed, not built)
-- [dev-docs/WARNINGS_AND_SETTINGS.md](dev-docs/WARNINGS_AND_SETTINGS.md) — Advisories, per-graph warning policy, node notes, inference merge (designed, not built)
+- [dev-docs/WARNINGS_AND_SETTINGS.md](dev-docs/WARNINGS_AND_SETTINGS.md) — Advisories, per-graph warning policy, inference merge — what was decided and why
 - [dev-docs/VISUALISATION.md](dev-docs/VISUALISATION.md), [dev-docs/TIMELINE_VISUALISATION.md](dev-docs/TIMELINE_VISUALISATION.md) — Dashboard design

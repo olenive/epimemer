@@ -57,6 +57,15 @@ from epimemer.core.types import (
     with_description,
 )
 from epimemer.core.temporal import ValidityInterval, ValidityVerdict
+from epimemer.core.advisories import (
+    Advisory,
+    AdvisoryAction,
+    AdvisoryKind,
+    WarningPolicy,
+    notify_user,
+    resolved_action,
+    surfaced,
+)
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.mcp.config import (
     DEFAULT_IMPORTANCE_STEP,
@@ -80,6 +89,7 @@ from epimemer.pipelines.review.difficulty import (
     review_order,
 )
 from epimemer.pipelines.review.modes import (
+    MODE_KINDS,
     REVIEW_MODES,
     mode_refusal,
     passes_ceiling,
@@ -87,9 +97,11 @@ from epimemer.pipelines.review.modes import (
 from epimemer.storage.protocol import (
     MergeOverrides,
     StorageBackend,
+    WarningOverrides,
     resolve_merge_settings,
     resolve_reflect_threshold,
     resolve_require_judge,
+    resolve_warning_policy,
     validate_graph_name,
 )
 
@@ -368,6 +380,70 @@ async def journal(
     return record
 
 
+# --- Advisories (what an operation was told before it made it) ---
+
+
+async def advisory_policy(
+    storage: StorageBackend, default: WarningPolicy
+) -> WarningPolicy:
+    """The policy in force on the active graph: its overrides over the process default.
+
+    Read per call rather than cached, for the reason nothing here is a
+    singleton: the policy is per graph, `use_graph` switches the graph, and a
+    cache would answer *what is the policy here* about somewhere else.
+    """
+    return resolve_warning_policy(await storage.get_warning_overrides(), default)
+
+
+async def carry_advisories(
+    storage: StorageBackend,
+    policy: WarningPolicy,
+    advisories: list[Advisory],
+    subject_ids: Sequence[str],
+    *,
+    judge: JudgeRef | None,
+) -> dict:
+    """Record that an operation completed carrying these, and shape the response.
+
+    **Recording is unconditional; surfacing is the setting.** A graph whose
+    warnings were switched off for a month should still answer *what was decided
+    while nobody was looking*, which is exactly when the question matters most —
+    so `surface` gates the response and never the journal row.
+
+    One row per operation rather than per advisory: the agent made one decision.
+    The kinds and their messages go in `certainty_basis`, which is the row's own
+    prose and is what `review(mode="advisory")` renders — so the reviewer sees
+    what the decider was told without a second store to keep in step.
+
+    `certainty` stays blank, and deliberately: nobody rated this. A row invented
+    at 0.5 would sort above the genuinely unrated ones and read as a judgment
+    the agent never made.
+    """
+    if not advisories:
+        return {}
+    await journal(
+        storage,
+        DecisionKind.PROCEEDED_DESPITE_ADVISORY,
+        list(subject_ids),
+        judge=judge,
+        certainty_basis=" ".join(
+            f"[{advisory.kind.value}] {advisory.message}" for advisory in advisories
+        ),
+    )
+    shown = surfaced(policy, advisories)
+    if not shown:
+        return {"notify_user": False}
+    return {
+        # The user's vocabulary on the wire; only the Python class is `Advisory`.
+        "warnings": [advisory.model_dump(mode="json") for advisory in shown],
+        # The first advisory's message, kept because it is the key the agent
+        # guidance and INTEGRATION.md already document. Breaking it to tidy an
+        # internal representation would cost more than it buys.
+        "warning": shown[0].message,
+        "notify_user": notify_user(policy, shown),
+    }
+
+
 async def prior_decisions(
     storage: StorageBackend,
     kind: DecisionKind,
@@ -595,11 +671,11 @@ def _claim_kind_field(entry: DecompositionEntry, cls: type) -> dict:
     into a field that does not exist is one the agent believes it made, and it
     would be discovered — if ever — as a merge that quietly never happens.
 
-    The message says *no field to gate* rather than *inferences never merge*:
-    inference merge is designed (`dev-docs/WARNINGS_AND_SETTINGS.md` §6) and
-    reads its premises' validity periods rather than a `claim_kind`, so a
-    refusal phrased as a policy about merging would be overturned by a feature
-    that does not change this rule at all.
+    The message says *no field to gate* rather than *inferences never merge*,
+    which is why it survived `merge_inferences` shipping: that merge reads its
+    premises' validity periods rather than a `claim_kind`, so a refusal phrased
+    as a policy about merging would have been overturned by a feature that does
+    not change this rule at all.
     """
     if entry.claim_kind is None:
         return {}
@@ -2501,15 +2577,21 @@ async def record_contradiction(
     storage: StorageBackend,
     *,
     judge: JudgeRef | None = None,
+    warning_policy: WarningPolicy | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Record a genuine contradiction between two facts (both stay active).
 
     Creates a single ``contradiction`` edge (idempotent — one per pair, either
     direction). Both facts remain ACTIVE and retrievable; retrieval flags them
-    contested so nothing downstream trusts a contested fact blindly. Returns a
-    notify_user signal: a same-frame contradiction is epistemically consequential
-    and should be surfaced to the user for resolution (REVIEW_EPISTEMIC.md §7). A
-    cross-frame pair is *not* a real contradiction — record_variant fits better.
+    contested so nothing downstream trusts a contested fact blindly.
+
+    **Both outcomes raise an advisory, and they are opposite ones.** A same-frame
+    pair is a real conflict and is `flag` by default, which is what sets
+    `notify_user` — the trigger `notify_user` has always had, now expressed as a
+    policy a graph can change rather than as a hard-wired condition. A
+    cross-frame pair is *not* a genuine contradiction, and its advisory says so.
+    Either way the call goes through: the graph records what the agent asserted
+    and records that it was told.
     """
     from epimemer.pipelines.reflection.review import same_frame
 
@@ -2529,17 +2611,30 @@ async def record_contradiction(
         judge=judge, created=created,
     )
 
+    advisory = Advisory(
+        kind=(
+            AdvisoryKind.SAME_FRAME_CONTRADICTION if shares_frame
+            else AdvisoryKind.CROSS_FRAME
+        ),
+        message=(
+            "These facts stand in the same frame, so the conflict is real and "
+            "unresolved — put it to the user and ask how to settle it."
+            if shares_frame else
+            "These facts are in different metacontext frames, so this is not a "
+            "genuine contradiction — consider record_variant instead."
+        ),
+        subjects=[a_id, b_id],
+    )
+    policy = await advisory_policy(
+        storage, warning_policy if warning_policy is not None else WarningPolicy()
+    )
     result = {
         "edge_id": edge_id,
         "created": created,
         "same_frame": shares_frame,
-        "notify_user": shares_frame,
-    }
-    if not shares_frame:
-        result["warning"] = (
-            "These facts are in different metacontext frames, so this is not a "
-            "genuine contradiction — consider record_variant instead."
-        )
+    } | await carry_advisories(
+        storage, policy, [advisory], [a_id, b_id], judge=judge
+    )
     meta = ResponseMeta(nodes_returned=2)
     return result, meta
 
@@ -2550,6 +2645,7 @@ async def record_variant(
     storage: StorageBackend,
     *,
     judge: JudgeRef | None = None,
+    warning_policy: WarningPolicy | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Record that two facts are one proposition resolved differently per frame.
 
@@ -2577,12 +2673,27 @@ async def record_variant(
         storage, DecisionKind.VARIANT, a_id, b_id, judge=judge, created=created,
     )
 
-    result = {"edge_id": edge_id, "created": created, "same_frame": shares_frame}
-    if shares_frame:
-        result["warning"] = (
-            "These facts share a metacontext frame; variant_of is meant for "
-            "cross-frame divergence — if they conflict, record_contradiction fits."
+    # Only the same-frame case raises one: a cross-frame variant is the correct
+    # use of the tool, and an advisory on it would be noise on the happy path.
+    advisories = [
+        Advisory(
+            kind=AdvisoryKind.SAME_FRAME_CONTRADICTION,
+            message=(
+                "These facts share a metacontext frame; variant_of is meant for "
+                "cross-frame divergence — if they conflict, record_contradiction "
+                "fits."
+            ),
+            subjects=[a_id, b_id],
         )
+    ] if shares_frame else []
+    policy = await advisory_policy(
+        storage, warning_policy if warning_policy is not None else WarningPolicy()
+    )
+    result = {
+        "edge_id": edge_id, "created": created, "same_frame": shares_frame
+    } | await carry_advisories(
+        storage, policy, advisories, [a_id, b_id], judge=judge
+    )
     meta = ResponseMeta(nodes_returned=2)
     return result, meta
 
@@ -2700,6 +2811,121 @@ async def merge_facts(
     meta = ResponseMeta(
         nodes_returned=1,
         source_types={"facts": 1},
+        retrieved=_declare([merged.id, *source_ids]),
+    )
+    return result, meta
+
+
+async def merge_inferences(
+    source_ids: list[str],
+    content: str,
+    storage: StorageBackend,
+    embedding_provider: EmbeddingProvider,
+    *,
+    similarity_threshold: float = SIMILARITY_NOMINATION_THRESHOLD,
+    judge: JudgeRef | None = None,
+    warning_policy: WarningPolicy | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Collapse inferences that state one conclusion into a single node.
+
+    The sibling of `merge_facts`, and the population it exists for is one that
+    fact merges create: collapsing four near-identical facts onto one survivor
+    migrates the four inferences drawn on them onto that survivor too, each
+    carrying an `evidence_merged` flag naming the wording it lost. Four
+    inferences hanging off one fact is the clearest case for merging them, and
+    it did not exist until facts merged.
+
+    **The survivor rests on the union of the sources' premises**, which is a
+    combination neither original had. Usually that is two pieces of evidence for
+    one conclusion. Where the premises are dated and provably fall clear of each
+    other it is not, and that is reported as an advisory rather than a refusal:
+    the honest answer to *these never held together* is often to narrow the
+    merged wording or its period, which the agent does by writing content — so
+    refusing would block a merge the agent could have fixed. Nomination carries
+    the same advisory, so an agent that reached here from `reflect` has already
+    seen it.
+
+    **No `claim_kind` gate**, unlike facts, and that is a decision: `claim_kind`
+    exists because interval union is mechanically right for a state and
+    fabricating for an event. Whether combining premises is legitimate is not
+    mechanical — the agent answers it in the text it writes, and a field stored
+    at ingest would freeze what the merge itself decides.
+
+    Refusals come back as `merged: false` with a reason, on `merge_facts`'
+    grounds: an agent told no has a real alternative — record `SIMILARITY` and
+    keep both — and refusing out loud is how it gets to choose it.
+    """
+    from epimemer.pipelines.graph_construction.versioning import merge_nodes
+    from epimemer.pipelines.reflection.inference_dedup import (
+        merge_advisories,
+        merge_refusal,
+    )
+
+    sources: list[Inference] = []
+    for source_id in source_ids:
+        node = await storage.get_node(source_id)
+        if node is None:
+            raise ValueError(f"Node '{source_id}' not found")
+        if not isinstance(node, Inference):
+            raise ValueError(
+                f"Node '{source_id}' is a {type(node).__name__.lower()}, and "
+                f"only inferences merge here — facts are `merge_facts`, topics "
+                f"consolidate through reflect."
+            )
+        sources.append(node)
+
+    refusal = await merge_refusal(
+        sources,
+        storage,
+        model_id=embedding_provider.model_id,
+        similarity_threshold=similarity_threshold,
+        cycle_limit=resolve_merge_settings(
+            await storage.get_merge_overrides()
+        ).cycle_limit,
+    )
+    if refusal is not None:
+        return (
+            {"merged": False, "refused": refusal.reason, "source_ids": source_ids},
+            ResponseMeta(
+                nodes_returned=len(sources), retrieved=_declare(source_ids)
+            ),
+        )
+
+    # Computed **before** the merge, because afterwards the sources' premises
+    # have migrated onto the survivor and the two arguments are indistinguishable
+    # from one. This is the same read the nomination made, repeated because a
+    # caller can arrive here without one.
+    advisories = await merge_advisories(sources, storage)
+    policy = await advisory_policy(
+        storage, warning_policy if warning_policy is not None else WarningPolicy()
+    )
+
+    merged = Inference(
+        content=content,
+        source_id=sources[0].source_id,
+        value=merged_value_signal([source.value for source in sources]),
+        extraction_method="agent:merge",
+        judged_by=judge,
+        metadata={"merged_from": source_ids},
+    )
+    await merge_nodes(list(sources), merged, storage, embedding_provider, judge=judge)
+    # The survivor first, so a reversal looking for *the merge that made this
+    # node* finds it by the id it holds.
+    await journal(
+        storage, DecisionKind.MERGE, [merged.id, *source_ids], judge=judge
+    )
+
+    result = {
+        "merged": True,
+        "inference_id": merged.id,
+        "source_ids": source_ids,
+        "sources_retired": len(sources),
+    } | await carry_advisories(
+        storage, policy, advisories, [merged.id, *source_ids], judge=judge
+    )
+    meta = ResponseMeta(
+        nodes_returned=1,
+        source_types={"inferences": 1},
         retrieved=_declare([merged.id, *source_ids]),
     )
     return result, meta
@@ -2834,6 +3060,88 @@ async def configure_merge(
     return result, ResponseMeta()
 
 
+async def configure_warnings(
+    storage: StorageBackend,
+    *,
+    default_warning_policy: WarningPolicy | None = None,
+    surface: bool | None = None,
+    actions: dict[str, str] | None = None,
+    clear: bool = False,
+) -> tuple[dict, ResponseMeta]:
+    """Read or change what this graph does about advisories.
+
+    Called with nothing but the storage it reports what is in force, which is
+    the graph's own answers laid over the process default.
+
+    **`surface` governs surfacing only, never recording.** A graph with it off
+    still journals every advisory an operation carried, so
+    `review(mode="advisory")` keeps answering *what was decided while nobody was
+    looking* — which is exactly when that question is worth asking. Label it for
+    what it does; it is not "turn off warnings".
+
+    **`actions` is merged, not replaced.** A graph with an opinion about one
+    kind has not withdrawn the defaults for the others, and a map override that
+    silently dropped unnamed keys is the same class of bug as a field-by-field
+    rebuild forgetting a field. `clear=True` is how the whole override goes
+    away — back to the process default *at the time*, not today's values frozen
+    in, so a default changed later still reaches a graph that was configured
+    once and then cleared.
+    """
+    default = (
+        default_warning_policy if default_warning_policy is not None
+        else WarningPolicy()
+    )
+    kinds = sorted(kind.value for kind in AdvisoryKind)
+    allowed = sorted(action.value for action in AdvisoryAction)
+
+    parsed: dict[AdvisoryKind, AdvisoryAction] = {}
+    for kind, action in (actions or {}).items():
+        if kind not in kinds:
+            raise ValueError(
+                f"'{kind}' is not an advisory kind. Known kinds: "
+                f"{', '.join(kinds)}."
+            )
+        if action not in allowed:
+            raise ValueError(
+                f"'{action}' is not an action for '{kind}'. Available: "
+                f"{', '.join(allowed)}. 'reject' does not exist — an advisory "
+                f"reaches the agent before it decides, so there is nothing here "
+                f"that refuses on one."
+            )
+        parsed[AdvisoryKind(kind)] = AdvisoryAction(action)
+
+    if clear:
+        await storage.set_warning_overrides(WarningOverrides())
+    elif surface is not None or parsed:
+        current = await storage.get_warning_overrides()
+        await storage.set_warning_overrides(current.model_copy(update={
+            **({"surface": surface} if surface is not None else {}),
+            **({"by_kind": {**current.by_kind, **parsed}} if parsed else {}),
+        }))
+
+    overrides = await storage.get_warning_overrides()
+    policy = resolve_warning_policy(overrides, default)
+    result = {
+        "graph": storage.current_database,
+        "surface": policy.surface,
+        "actions": {
+            kind: resolved_action(policy, AdvisoryKind(kind)).value for kind in kinds
+        },
+        # Which of those answers this graph gave, as opposed to inherited. A
+        # kind set explicitly to the value it would have inherited anyway is not
+        # the same as one that is following the default — the first stays put
+        # when the default changes, the second tracks it.
+        "overridden": {
+            key: value
+            for key, value in overrides.model_dump(
+                mode="json", exclude_none=True
+            ).items()
+            if value != {}
+        },
+    }
+    return result, ResponseMeta()
+
+
 # --- Reflect (analysis — no LLM) ---
 
 
@@ -2846,6 +3154,7 @@ REFLECT_PHASES = (
     "contradiction_detection",
     "recurrence_detection",
     "soundness_check",
+    "inference_merge_nomination",
     "boundary_proposals",
     "pending_review",
     "archival_nomination",
@@ -2904,14 +3213,15 @@ async def reflect(
 
     Reads only. Returns split candidates, similar topic pairs, enrichment
     candidates, contradiction pairs, recurrences, temporally unsound inferences,
-    archival nominations and similar relationship-label pairs for the agent to
-    review and act on via memory.apply_reflection — nothing here changes the
-    graph.
+    inference-merge candidates, archival nominations and similar
+    relationship-label pairs for the agent to review and act on via
+    memory.apply_reflection — nothing here changes the graph.
     """
     from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
     from epimemer.pipelines.reflection.archival import nominate_archival_candidates
     from epimemer.pipelines.reflection.relation_consolidation import sweep_similar_relation_pairs
     from epimemer.pipelines.reflection.boundaries import propose_boundaries
+    from epimemer.pipelines.reflection.inference_dedup import nominate_inference_merges
     from epimemer.pipelines.reflection.soundness import find_unsound_inferences
     from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
     from epimemer.pipelines.reflection.topic_enrichment import gather_associated_material_for, _should_enrich
@@ -3065,6 +3375,22 @@ async def reflect(
             for flagged in await find_unsound_inferences(storage)
         ]
 
+    # 5c-ii. Near-identical active inferences resting on a shared premise, each
+    #     carrying its advisory. **Scoped to shared evidence rather than swept
+    #     globally**: a fact merge collects duplicate inferences onto one
+    #     survivor, which is the population worth reviewing and the only one
+    #     that exists — a global sweep over all inference pairs was measured at
+    #     zero nominations and is quadratic besides. Not in `CAPPED_KEYS`
+    #     because it is not quadratic in the graph: the bound is how many
+    #     inferences rest on any one premise.
+    async def _inference_merges():
+        return [
+            candidate.model_dump(mode="json")
+            for candidate in await nominate_inference_merges(
+                storage, embedding_provider, model_id=model_id
+            )
+        ]
+
     # 5d. Where a succession lets a period close. The other half of
     #     "ingest extracts, reflect proposes": a document cannot know its claim
     #     will ever stop being true, so only something seeing the next document
@@ -3131,6 +3457,9 @@ async def reflect(
         )
         recurrences = await phase("recurrence_detection", _recurrences, tokens=len)
         unsound_inferences = await phase("soundness_check", _unsound, tokens=len)
+        inference_merge_candidates = await phase(
+            "inference_merge_nomination", _inference_merges, tokens=len
+        )
         boundary_proposals = await phase(
             "boundary_proposals", _boundaries, tokens=len
         )
@@ -3149,6 +3478,7 @@ async def reflect(
         "contradictions": contradictions,
         "recurrences": recurrences,
         "unsound_inferences": unsound_inferences,
+        "inference_merge_candidates": inference_merge_candidates,
         "boundary_proposals": boundary_proposals,
         "pending_review": pending_review,
         "archival_candidates": archival_candidates,
@@ -3909,7 +4239,7 @@ async def review(
         else (agent_aliases(judge) if judge is not None else [agent_id.strip()])
     )
     records = await storage.query_decisions(
-        agent_ids=judge_ids, since=since, until=until
+        kinds=MODE_KINDS.get(mode), agent_ids=judge_ids, since=since, until=until
     )
     records = [r for r in records if passes_ceiling(r, certainty_ceiling)]
 

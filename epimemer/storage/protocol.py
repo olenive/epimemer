@@ -9,8 +9,13 @@ import re
 from datetime import datetime
 from typing import Literal, Protocol, Sequence, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from epimemer.core.advisories import (
+    AdvisoryAction,
+    AdvisoryKind,
+    WarningPolicy,
+)
 from epimemer.core.types import (
     DEFAULT_MERGE_CYCLE_LIMIT,
     Agent,
@@ -121,6 +126,49 @@ def resolve_merge_settings(overrides: MergeOverrides | None) -> MergeSettings:
         for field, value in overrides.model_dump().items()
         if value is not None
     })
+
+
+class WarningOverrides(BaseModel):
+    """A graph's own answers about advisories, where it has any.
+
+    `None` on a scalar means *follow the process default* — deliberately not the
+    default's current value, so changing a default later still reaches a graph
+    that was once overridden and then cleared. Same rule as `MergeOverrides`.
+
+    `by_kind` is the one field that does not work that way, because it is a map
+    rather than a scalar. An empty map means *nothing overridden per kind*, and
+    the entries it does carry are **merged over** the default's rather than
+    replacing them: a graph that has an opinion about one kind has not thereby
+    withdrawn the defaults for the others, and a map override that silently
+    drops unnamed keys is the same class of bug as a field-by-field rebuild
+    forgetting a field.
+    """
+
+    surface: bool | None = None
+    default_action: AdvisoryAction | None = None
+    by_kind: dict[AdvisoryKind, AdvisoryAction] = Field(default_factory=dict)
+
+
+def resolve_warning_policy(
+    overrides: WarningOverrides | None, default: WarningPolicy
+) -> WarningPolicy:
+    """The advisory policy in force here: the graph's answers over the process default.
+
+    Pure, and the only place the fallback lives — the tools that raise an
+    advisory and the tool that reports the settings both resolve through this,
+    and a second copy is how a reported policy drifts from the one applied.
+    """
+    if overrides is None:
+        return default.model_copy(deep=True)
+    return WarningPolicy(
+        surface=default.surface if overrides.surface is None else overrides.surface,
+        default_action=(
+            default.default_action
+            if overrides.default_action is None
+            else overrides.default_action
+        ),
+        by_kind={**default.by_kind, **overrides.by_kind},
+    )
 
 
 def drop_none_values(value):
@@ -1008,6 +1056,23 @@ class StorageBackend(Protocol):
         Whole-record rather than per-field, so "clear this one" and "leave this
         one alone" cannot be confused: the caller reads, edits and writes back.
         A `None` field clears that override.
+        """
+        ...
+
+    async def get_warning_overrides(self) -> WarningOverrides:
+        """The active graph's own advisory policy, where it has set any.
+
+        Stored beside the reflect counter and scoped the same way. A graph that
+        has never been configured returns an empty record rather than raising —
+        every field independently answers *follow the process default*.
+        """
+        ...
+
+    async def set_warning_overrides(self, overrides: WarningOverrides) -> None:
+        """Replace the active graph's advisory-policy overrides.
+
+        Whole-record rather than per-field, so *clear this one* and *leave this
+        one alone* cannot be confused: the caller reads, edits and writes back.
         """
         ...
 

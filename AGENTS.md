@@ -143,6 +143,24 @@ Each topic/fact/inference may be an object rather than a bare string, carrying p
   relationship, `describe_relation` on each is what makes the vocabulary
   converge — a described word is the thing that stops the third synonym being
   coined.
+- **`inference_merge_candidates` is the same obligation on a different pair.**
+  Two near-identical active inferences resting on a shared premise — the shape a
+  fact merge produces. `merge_inferences(source_ids, content)` where they are
+  one conclusion, `apply_reflection(similarities=[…])` with `distinct` where
+  they are two. Agreement is not automatically redundancy: two inferences saying
+  the same thing may be independent support, which is what corroboration exists
+  to count.
+
+### Reading a `warnings` list (advisories)
+Some responses carry `warnings`: things the graph knows and you cannot compute,
+handed over **before** you decide rather than after. Nothing refuses on one, so
+the whole value is in reading it while you are still choosing what to write —
+narrow the merged wording, narrow the period, or merge a smaller set. The
+commonest is `disjoint_premises` on an inference merge: no source puts the
+survivor's premises in one period, so a claim drawn over both would be flagged
+unsound and would deserve it. `notify_user: true` means raise it with the user.
+Every call that carried one is recorded whether or not it was shown, and
+`review(mode="advisory")` is how a later agent reads those back.
 
 ### Interpreting _meta
 Every tool response includes a _meta field with:

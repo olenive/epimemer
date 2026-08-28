@@ -49,6 +49,7 @@ from epimemer.storage.bm25 import containment_first
 from epimemer.storage.protocol import (
     EdgeDirection,
     MergeOverrides,
+    WarningOverrides,
     drop_none_values,
     validate_graph_name,
 )
@@ -461,6 +462,28 @@ def _merge_overrides(rows) -> MergeOverrides:
         return MergeOverrides()
     stored = rows[0].get(_MERGE_FIELD)
     return MergeOverrides() if not stored else MergeOverrides.model_validate(stored)
+
+
+_WARNING_FIELD = "warning_overrides"
+
+_WARNING_GET = f"SELECT {_WARNING_FIELD} FROM {_REFLECT_RECORD};"
+_WARNING_SET = (
+    f"UPSERT {_REFLECT_RECORD} SET {_WARNING_FIELD} = $overrides RETURN AFTER;"
+)
+
+
+def _warning_overrides(rows) -> WarningOverrides:
+    """Read the advisory-policy overrides out of a reflect-state row set.
+
+    No row, a null row, or a row without the field all mean *nothing
+    overridden*, which is an empty record rather than an absence.
+    """
+    if not rows or rows[0] is None:
+        return WarningOverrides()
+    stored = rows[0].get(_WARNING_FIELD)
+    return (
+        WarningOverrides() if not stored else WarningOverrides.model_validate(stored)
+    )
 
 
 # The approved-agent ids share the reflect record for the third time and on the
@@ -2199,6 +2222,19 @@ class SurrealDBStorage:
     async def set_merge_overrides(self, overrides: MergeOverrides) -> None:
         await self._query(
             _MERGE_SET, {"overrides": drop_none_values(overrides.model_dump())},
+        )
+
+    async def get_warning_overrides(self) -> WarningOverrides:
+        rows = await self._query(_WARNING_GET)
+        return _warning_overrides(rows)
+
+    async def set_warning_overrides(self, overrides: WarningOverrides) -> None:
+        # `mode="json"` so the enum members store as their string values rather
+        # than as Python objects the driver cannot encode — a map of enums is
+        # the first setting here whose *values* are not scalars.
+        await self._query(
+            _WARNING_SET,
+            {"overrides": drop_none_values(overrides.model_dump(mode="json"))},
         )
 
     # --- Agents ---

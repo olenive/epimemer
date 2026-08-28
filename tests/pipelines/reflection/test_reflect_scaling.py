@@ -464,6 +464,7 @@ class TestAnswersAreUnchanged:
             "contradictions",
             "recurrences",
             "unsound_inferences",
+            "inference_merge_candidates",
             "boundary_proposals",
             "pending_review",
             "archival_candidates",

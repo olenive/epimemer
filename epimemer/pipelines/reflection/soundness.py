@@ -72,7 +72,7 @@ class UnsoundInference(BaseModel):
     disjoint_premises: list[DisjointPremises]
 
 
-async def _premise_ids(
+async def premise_ids_for(
     inference_ids: Sequence[str], storage: StorageBackend
 ) -> dict[str, list[str]]:
     """The facts each inference rests on, by whichever edge records it.
@@ -99,7 +99,7 @@ async def _premise_ids(
     }
 
 
-def _disjoint_pairs(
+def disjoint_pairs(
     premises: Sequence[PremisePeriods],
 ) -> list[DisjointPremises]:
     """Every pair of dated premises whose asserted periods fall clear of each other.
@@ -116,22 +116,64 @@ def _disjoint_pairs(
     ]
 
 
+async def premise_periods_for(
+    premise_ids: Sequence[str], storage: StorageBackend
+) -> dict[str, PremisePeriods]:
+    """The premises among these that somebody dated, keyed by id.
+
+    An undated premise is simply absent, which is the whole reason this returns
+    a map rather than a list: *nobody placed this claim* and *this claim has no
+    periods* are the same row otherwise, and only the first is true.
+
+    **Validity is read before the facts are**, and the ordering is the cost
+    argument rather than the sentence order. Undated premises cannot produce a
+    finding, most of the graph is undated and always will be, and both callers
+    sit inside operations that cross the timeout first — so on a graph with no
+    intervals this fetches no nodes at all. Fetching every premise first and
+    discarding them was measurably worse for exactly the graphs that cannot
+    produce a flag.
+    """
+    if not premise_ids:
+        return {}
+    validity = await validity_for(list(premise_ids), storage)
+    if not validity:
+        return {}
+    facts: dict[str, EpistemicNode] = await storage.get_nodes(list(validity))
+    return {
+        premise_id: PremisePeriods(
+            id=premise_id,
+            content=facts[premise_id].content,
+            # The existential union per premise: what *some* source asserts.
+            # Named in `assertions_are_disjoint`, applied here.
+            periods=[
+                interval
+                for source in sources
+                for interval in source.intervals
+            ],
+        )
+        for premise_id, sources in validity.items()
+        # A `supports` edge into an inference can only come from a fact by
+        # contract, and the check is here rather than trusted because a
+        # hand-written `link` is not bound by the contract.
+        if isinstance(facts.get(premise_id), Fact)
+    }
+
+
 async def find_unsound_inferences(
     storage: StorageBackend,
 ) -> list[UnsoundInference]:
     """Active inferences whose premises no source puts in the same period.
 
     Reads only, in at most four batched queries whatever the graph's size: the
-    inferences, their premise edges both ways, those premises' validity, and —
-    only if anything can still fire — the premise facts themselves.
+    inferences, their premise edges both ways, and then whatever
+    `premise_periods_for` needs — which is where the ordering that keeps an
+    undated graph free of node fetches lives.
 
-    **Validity is read before the facts are**, which is the ordering the cost
-    argues for rather than the one the sentence above reads in. Undated premises
-    cannot fire, most of the graph is undated and always will be, and this phase
-    sits inside the tool that crosses the timeout first — so on a graph
-    with no intervals it fetches no nodes at all, and on one with a few it
-    fetches those few. Fetching every premise first and discarding them was
-    measurably worse for exactly the graphs that cannot produce a flag.
+    **The same disjointness the inference-merge advisory reports**, computed by
+    the same two functions. This one asks it of an inference that exists;
+    nomination asks it of one that would. A finding here is correct rather than
+    manufactured either way: the agent wrote the claim over the combined
+    premises, so premises that never held together make it genuinely unsound.
     """
     inferences = [
         node
@@ -141,59 +183,21 @@ async def find_unsound_inferences(
     if not inferences:
         return []
 
-    premise_ids = await _premise_ids([node.id for node in inferences], storage)
+    premise_ids = await premise_ids_for([node.id for node in inferences], storage)
     wanted = list(dict.fromkeys(
         premise_id for ids in premise_ids.values() for premise_id in ids
     ))
-    if not wanted:
+    dated = await premise_periods_for(wanted, storage)
+    if not dated:
         return []
-
-    validity = await validity_for(wanted, storage)
-    # One dated premise is never a pair, so an inference with fewer than two of
-    # them is out before anything is fetched.
-    dated_premises = {
-        inference.id: [
-            premise_id
-            for premise_id in premise_ids[inference.id]
-            if premise_id in validity
-        ]
-        for inference in inferences
-    }
-    candidates = {
-        inference_id: ids
-        for inference_id, ids in dated_premises.items()
-        if len(ids) > 1
-    }
-    if not candidates:
-        return []
-
-    facts: dict[str, EpistemicNode] = await storage.get_nodes(
-        list(dict.fromkeys(
-            premise_id for ids in candidates.values() for premise_id in ids
-        ))
-    )
 
     flagged: list[UnsoundInference] = []
     for inference in inferences:
-        dated = [
-            PremisePeriods(
-                id=premise_id,
-                content=facts[premise_id].content,
-                # The existential union per premise: what *some* source asserts.
-                # Named in `assertions_are_disjoint`, applied here.
-                periods=[
-                    interval
-                    for source in validity[premise_id]
-                    for interval in source.intervals
-                ],
-            )
-            for premise_id in candidates.get(inference.id, ())
-            # A `supports` edge into an inference can only come from a fact by
-            # contract, and the check is here rather than trusted because a
-            # hand-written `link` is not bound by the contract.
-            if isinstance(facts.get(premise_id), Fact)
-        ]
-        pairs = _disjoint_pairs(dated)
+        pairs = disjoint_pairs([
+            dated[premise_id]
+            for premise_id in premise_ids[inference.id]
+            if premise_id in dated
+        ])
         if pairs:
             flagged.append(UnsoundInference(
                 inference=NodeRef(id=inference.id, content=inference.content),

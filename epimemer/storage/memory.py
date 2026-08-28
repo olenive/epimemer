@@ -47,6 +47,7 @@ from epimemer.storage.bm25 import bm25_scores, containment_first
 from epimemer.storage.protocol import (
     EdgeDirection,
     MergeOverrides,
+    WarningOverrides,
     normalize_for_storage,
     validate_graph_name,
 )
@@ -144,6 +145,7 @@ class _GraphStore:
     stores_since_reflect: int = 0
     reflect_threshold_override: int | None = None
     merge_overrides: MergeOverrides = field(default_factory=MergeOverrides)
+    warning_overrides: WarningOverrides = field(default_factory=WarningOverrides)
 
 
 def _put_embedding(g: _GraphStore, embedding: EmbeddingRecord) -> str:
@@ -1076,6 +1078,12 @@ class InMemoryStorage:
 
     async def set_merge_overrides(self, overrides: MergeOverrides) -> None:
         self._g.merge_overrides = overrides.model_copy()
+
+    async def get_warning_overrides(self) -> WarningOverrides:
+        return self._g.warning_overrides.model_copy(deep=True)
+
+    async def set_warning_overrides(self, overrides: WarningOverrides) -> None:
+        self._g.warning_overrides = overrides.model_copy(deep=True)
 
     # --- Agents ---
 

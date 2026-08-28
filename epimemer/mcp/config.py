@@ -9,6 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, field_validator
 
+from epimemer.core.advisories import WarningPolicy
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.storage.protocol import StorageBackend
 
@@ -82,6 +83,14 @@ class ServerConfig(BaseModel):
     # Asymptotic step applied by the `judge_importance` tool. Nothing lowers
     # importance on a clock — a judgment ages, it does not erode.
     importance_step: float = DEFAULT_IMPORTANCE_STEP
+
+    # The process default for what to do about advisories, which a graph
+    # overrides with `configure_warnings`. **No environment variable**, and that
+    # is a decision rather than an omission: `by_kind` is a map, an env var is
+    # one string, and a hand-rolled parser for it would be a second syntax for a
+    # setting the tool already expresses properly. A deployment that wants a
+    # different default constructs `ServerConfig` with one.
+    warning_policy: WarningPolicy = WarningPolicy()
 
     log_level: str = "INFO"
     log_file: str | None = None

@@ -724,15 +724,15 @@ class TestNoKindGoesUnwritten:
 
     A kind nothing writes is worse here than a dead enum member usually is:
     review *selects* on this, so an unwritten kind is a filter that returns
-    nothing and looks like a clean graph. `WARNINGS_AND_SETTINGS.md` §8.1
-    settled the general rule for `AdvisoryAction` — *"a value nothing can
-    produce is worse than no value at all"* — and this asserts it rather than
+    nothing and looks like a clean graph. `AdvisoryAction` was settled on the
+    same rule — *"a value nothing can produce is worse than no value at all"* —
+    and this asserts it rather than
     keeping a list of forgiven cases, because an exception list written by
     whoever added the member is not a check.
 
-    Two kinds are named in `DecisionKind`'s docstring as deliberately absent
-    (`relation_merge`, `proceeded_despite_advisory`). Prose is where a
-    not-yet belongs; the enum is where a selectable vocabulary belongs.
+    One kind is named in `DecisionKind`'s docstring as deliberately absent
+    (`relation_merge`). Prose is where a not-yet belongs; the enum is where a
+    selectable vocabulary belongs.
     """
 
     def test_every_kind_has_a_writer(self):
@@ -765,11 +765,16 @@ class TestNoKindGoesUnwritten:
 
         assert unwritten == set()
 
-    def test_the_absent_kinds_are_recorded_where_someone_will_read_them(self):
+    def test_the_absent_kind_is_recorded_where_someone_will_read_it(self):
         """Dropping a member must not drop the decision behind it, or the next
-        implementer adds a second notes list because nothing said not to."""
+        implementer re-derives it from scratch because nothing said not to.
+
+        One name is left: label merging, which waits on whether it survives at
+        all. Advisories used to be the second, and are not any more — the kind
+        has a writer, so it is a member rather than a paragraph.
+        """
         assert "relation_merge" in DecisionKind.__doc__
-        assert "proceeded_despite_advisory" in DecisionKind.__doc__
+        assert "proceeded_despite_advisory" not in DecisionKind.__doc__
 
 
 class TestAFailedJournalWriteDoesNotUndoTheDecision:

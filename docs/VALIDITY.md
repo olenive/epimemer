@@ -209,7 +209,7 @@ produce would earn a dead branch in every caller.
 
 ## 7. What reflect does with validity
 
-Two phases read intervals. Both **propose and never write**; see
+Three phases read intervals. All **propose and never write**; see
 [REFLECTION.md](REFLECTION.md).
 
 ### The soundness check
@@ -231,6 +231,23 @@ Two properties make it a check on evidence rather than on ignorance:
 It flags; it never blocks. Ingest cannot do this job — the motivating case spans
 two documents, neither of which is in front of the agent while the other is being
 stored.
+
+### The same check, asked about a merge that has not happened
+
+`merge_inferences` collapses two derivations into one node resting on the
+**union** of their premises. So the same question — do these premises fall clear
+of each other? — can be asked of a survivor that does not exist yet, and it is:
+`inference_merge_candidates` carries the answer as an advisory, and so does the
+merge's own response.
+
+The two are one computation with one implementation, and the reason for going to
+the trouble is that the finding is only recoverable beforehand. Once the merge
+lands, the `derived_from` edges have migrated and nothing distinguishes *these
+premises arrived from two inferences* from *this one was drawn on both*.
+
+It is an advisory rather than a refusal because the honest response is usually to
+narrow the merged claim's wording or period — which the agent does by writing
+content. Refusing would block a merge it could have fixed.
 
 ### Boundary proposals
 

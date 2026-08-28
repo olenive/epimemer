@@ -155,7 +155,7 @@ class TestTheOtherThreeReads:
         assert len(found) == 2
 
     async def test_rows_are_selected_by_subject(self, storage):
-        """*What has been decided about this node* — W&S §9's `node.notes`,
+        """*What has been decided about this node* — the `node.notes` list,
         derived rather than stored on the node (§9)."""
         about = _record(subject_ids=["target", "other"])
         await storage.record_decision(about)

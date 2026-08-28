@@ -11,7 +11,7 @@ reflect-side writer and recorded on the episode, edge, value signal or node the
 decision landed on; and **step 4**, ingest attributed and the per-graph
 require-a-judge setting with its CLI; and **step 5**, the decision journal —
 the `decision` table on both backends, a row at every writer, and
-`WARNINGS_AND_SETTINGS.md` §9's node notes folded into it. Steps 6 and 7 below
+`WARNINGS_AND_SETTINGS.md`'s node notes folded into it. Steps 6 and 7 below
 are design — `review()` and `apply_review`.
 Written
 before any code, at the user's direction; where an unbuilt section says "does",
@@ -68,8 +68,9 @@ This document covers five parts, together because none of them works alone:
 Design history it depends on: The `assessed` edge (the defect), fact dedup (fact merge),
 The single nomination bar, the nomination cap (bounding a response), the confidence prior (unrated is not
 0.5), `REVIEW_EPISTEMIC.md` §3 (the verdict taxonomy), `EVENT_LOG.md` (the
-durable change path this extends), and **`WARNINGS_AND_SETTINGS.md` §5.3 and §9**
-(node notes, folded into this document's journal — see §9).
+durable change path this extends), and **`WARNINGS_AND_SETTINGS.md`**
+(node notes and the contested-decisions worklist, both folded into this
+document's journal — see §9).
 
 ---
 
@@ -715,7 +716,7 @@ list is narrowed further are different questions, and `uncertain` and
 | `by_agent` | `judged_by == …` | *"check everything this judge did"* |
 | `since` / `between` | `decided_at` in range | *"review yesterday's session"* |
 | `unreviewed` | no record `reviews` this one | *"what has nobody looked at"* |
-| `advisory` | `kind` is an advisory override (§9) | W&S §5.3's `contested_decisions` |
+| `advisory` | `kind` is `proceeded_despite_advisory` (§9) | the contested-decisions worklist |
 | `all` | every record | the full audit |
 
 Modes compose — `by_agent` **and** `since` is the ordinary case for *"review
@@ -964,8 +965,8 @@ The journal is a per-graph table like every other, so `review()` answers about
 one graph. The question that exposes it is the one review exists for: *"check
 everything this judge did"* means *"…in this graph"*, and an agent that worked
 in three graphs in one session cannot be reviewed in one question. That is
-`WARNINGS_AND_SETTINGS.md` §5.2's *"the reviewing agent ends up unable to ask
-one question"*, arriving through a door this design did not consider.
+the *"reviewing agent ends up unable to ask one question"* defect, arriving
+through a door this design did not consider.
 
 **Per graph is right, and the reason is the ids.** `subject_ids` holds node
 ids, and a node id resolves only in the graph that holds it. A row filed
@@ -1560,31 +1561,33 @@ either was built.)*
 
 ---
 
-## 9. Node notes are decision records (folding in W&S §9)
+## 9. Node notes are decision records
 
-`WARNINGS_AND_SETTINGS.md` §9 (decided 2026-08-21) gives every node an
-append-only `notes` list, each `NodeNote` carrying `reviewed_at` and a verdict;
-§5.3 makes `contested_decisions` a reflect list scanning for notes without one.
+`WARNINGS_AND_SETTINGS.md`'s node-notes design (decided 2026-08-21) gave every node an
+append-only `notes` list, each `NodeNote` carrying `reviewed_at` and a verdict,
+with a reflect list scanning for notes that had none.
 
 That is a second review-state machine with a second *"what has nobody looked
 at"* scan, and an agent proceeding past an advisory would write into both.
 **Decided 2026-08-22: one machine.**
 
-| W&S §9 | Becomes |
+| The node-note design | Becomes |
 |---|---|
-| `NodeNote` | `DecisionRecord(kind="proceeded_despite_advisory")` — the kind is added when advisories are, not before (§10.5) |
+| `NodeNote` | `DecisionRecord(kind="proceeded_despite_advisory")` — the kind added when advisories were, not before (§10.5) |
 | `node.notes` | a derived view over records whose `subject_ids` contains the node |
 | `NodeNote.reviewed_at` | gone — derived from `reviews`, per §3.4 |
-| §5.3 `contested_decisions` | `review(mode="advisory", unreviewed=True)` |
+| the contested-decisions worklist | `review(mode="advisory")`, with `unreviewed_count` and a per-row `reviewed` |
 
 "I was warned and proceeded anyway" is a judgment with a judge, a date and a
 subject. It was a separate type only because it was designed a day before the
 journal existed.
 
-**W&S §5.2's own argument is why**: two shapes for one question is how *"the
-reviewing agent ends up unable to ask one question"*. `WARNINGS_AND_SETTINGS.md`
-needs a dated amendment pointing here; it is neither built nor started, so this
-costs a paragraph rather than a migration.
+**The warnings document's own argument is why**: two shapes for one question is
+how *"the reviewing agent ends up unable to ask one question"*. Neither had been
+built when this was decided, so the fold cost a paragraph rather than a
+migration — and when advisories shipped on 2026-08-28 they wrote
+`DecisionKind.PROCEEDED_DESPITE_ADVISORY` into this journal, with no second list
+and no `reviewed_at`.
 
 ---
 
@@ -1601,7 +1604,7 @@ Each step is useful alone, and each is a precondition for the next.
 | 2 ✅ | `agent` table, approved-id settings, `claim_agent`, approval over `ctx.elicit` with `epimemer agents confirm` as fallback | Registry with nothing yet pointing at it. Full protocol on both backends, per the standing rule. **Built 2026-08-22**, with one gate split in two and one seeding rule widened; see §10.3's amendment. |
 | 3 ✅ | `judge` threaded through the reflect-side write paths | Smallest surface producing attributed decisions, so step 5 has something to read. **Built 2026-08-23**, with two writers the design's list had missed and one field shape changed; see §10.4's amendment. |
 | 4 ✅ | `judge` threaded through ingest (§3.2), plus the require-a-judge setting (§3.3.1) | The bigger churn, and where the unreviewable priors are. **No cutover** — the setting decides, per graph, and ships default-off, so an upgraded server keeps writing exactly as before. **Built 2026-08-23**; the sessionless escape hatch took a different shape from the one this section proposed, see the amendment below. |
-| 5 ✅ | `DecisionRecord` + journal writes + W&S §9 folded in (§9) | Makes *"what did this agent judge"* one query. **Built 2026-08-23**, with `kind` carrying `because`, one writer deferred and `certainty` left without a tool that supplies it; see §10.5's amendment. |
+| 5 ✅ | `DecisionRecord` + journal writes + node notes folded in (§9) | Makes *"what did this agent judge"* one query. **Built 2026-08-23**, with `kind` carrying `because`, one writer deferred and `certainty` left without a tool that supplies it; see §10.5's amendment. |
 | 6 ✅ | `review(mode="all")`, capped, with tier-2 ordering (§6.2) | Works on the existing corpus and orders it usefully, since derived signals need no attribution. **Built 2026-08-23**, with tier-1 ordering pulled forward and one thing the design did not foresee: the journal is younger than the graph, so there is almost nothing to review yet. See §10.6's amendment. |
 | 7 ✅ | `by_agent`, `since`, `unreviewed`, tier-1 ordering, `certainty_ceiling`; `apply_review`, `rejudge` | Need attributed decisions to exist; useful from the first session after step 4. **Built 2026-08-23**, with `advisory` refused rather than shipped, `reversals` renamed to `dissents` for a reason that changed what it does, and the batch left un-transactional against §10.7; see §10.6's second amendment. |
 
@@ -2083,9 +2086,10 @@ and *"is there a record whose `reviews` is this id"* — the last is what makes
 **Append-only in the strict sense**: no update path exists on this table. A
 reversal, a confirmation and an overturn are all new rows.
 
-**Fold W&S §9 here** (§9): `NodeNote` never ships; `node.notes` becomes a
-derived read over records whose `subject_ids` contains the node, and W&S §5.3's
-`contested_decisions` becomes `review(mode="advisory")`.
+**Fold the node notes here** (§9): `NodeNote` never ships; `node.notes` becomes
+a derived read over records whose `subject_ids` contains the node, and the
+contested-decisions worklist becomes `review(mode="advisory")`. **Both landed on
+2026-08-28** with the advisories that write the kind.
 
 > **Built 2026-08-23.** The table, the five reads, and a row at every writer:
 > ingest, both supersession readings, contradiction, variant, similarity, merge,
@@ -2140,8 +2144,8 @@ derived read over records whose `subject_ids` contains the node, and W&S §5.3's
 >
 > **`DecisionKind` carries no member without a writer**, corrected on review the
 > same day: `relation_merge` and `proceeded_despite_advisory` both shipped
-> unwritten and both were removed. `WARNINGS_AND_SETTINGS.md` §8.1 had already
-> settled the rule for `AdvisoryAction` — *"a value nothing can produce is worse
+> unwritten and both were removed. `AdvisoryAction` had already been settled on
+> the same rule — *"a value nothing can produce is worse
 > than no value at all"* — and it binds harder here, because review **selects**
 > on the kind: an unwritten one is a filter that silently returns nothing and
 > reads as a clean graph. Both absences are named in `DecisionKind`'s docstring,
@@ -2287,9 +2291,10 @@ corpus is tier 2, so the ordering is entirely derived and still useful (§6.2).
 >    exist, so admitting it would return an empty list that reads as *nothing is
 >    contested* — the rule `DecisionKind` states, arriving on a mode. `between`
 >    is `since` with an `until`, and two names for one selection is the *two
->    shapes for one question* defect §6.6 cites from `WARNINGS_AND_SETTINGS.md`
->    §5.2. Both are held as data with the reason in the refusal, so a caller that
->    read §6.1 is told where the selection went.
+>    shapes for one question* defect §6.6 names. Both are held as data with the
+>    reason in the refusal, so a caller that read §6.1 is told where the
+>    selection went. (`advisory` became a real mode on 2026-08-28, when the kind
+>    got a writer — the refusal removed itself, as it said it would.)
 > 4. **§6.1's *"modes compose"* and §10.6's single `mode` string were never
 >    reconciled**, and the resolution is: **a mode names the selection; every
 >    argument narrows whatever it selected.** `agent_id`, `since`, `until` and

@@ -83,11 +83,38 @@ survivor since — a contradiction, a tag, a verdict — because the delete woul
 take those with it. `configure_merge` reads and sets the two settings involved,
 `merge_undo_depth` and `merge_cycle_limit`.
 
+### Inferences merge too, and are warned rather than refused
+
+`merge_inferences(source_ids, content)` is the sibling tool, and the population
+it exists for is one that fact merges create: collapsing four near-identical
+facts lands the four inferences drawn on them onto that one survivor, each
+carrying an `evidence_merged` flag naming the wording it lost.
+
+The gate is the same minus one rung. There is **no `claim_kind`**, and that is a
+decision rather than a gap: `claim_kind` exists because interval union is
+mechanically right for a state and fabricating for an event, whereas whether
+combining premises is legitimate is answered in the text the agent writes. A
+field stored at ingest would freeze what the merge itself decides.
+
+What replaces it is a warning. An inference *is* its derivation, so the survivor
+rests on the **union** of its sources' premises — a combination neither original
+had. Usually that is two pieces of evidence for one conclusion. Where the two
+premises are dated and provably fall clear of each other, it is a claim over
+premises no source puts in one period, and `unsound_inferences` will say so on
+the next reflect. That is not an argument against the merge: the agent writes
+fresh content asserting one claim over both, so if the premises never held
+together the result is *genuinely* unsound rather than falsely flagged. The
+honest response is usually to narrow the merged wording or its period — which is
+something the agent writes — so refusing would block a merge it could have
+fixed. The advisory arrives instead, **with the nomination and in the response,
+before the content is written**, which is the only moment at which it can change
+the answer.
+
 ---
 
 ## 3. What `reflect` returns
 
-Ten phases, ten keys. Each is a worklist, not a verdict:
+Eleven phases, eleven keys. Each is a worklist, not a verdict:
 
 | Key | Nominates | Applied via |
 |---|---|---|
@@ -97,6 +124,7 @@ Ten phases, ten keys. Each is a worklist, not a verdict:
 | `contradictions` | same-frame active fact pairs above 0.80 — the one nomination bar, which `merge_facts` also gates on, so a pair listed here is mergeable | `record_contradiction`, then `supersessions`; or `similarities` where neither fits |
 | `recurrences` | an active claim beside its own `historical` twin | `restore` |
 | `unsound_inferences` | inferences whose premises no source puts in one period | agent judgment |
+| `inference_merge_candidates` | near-identical active inferences resting on a shared premise, each with the advisory computed before you decide | `merge_inferences`, or `similarities` where they are two claims |
 | `boundary_proposals` | where a succession lets a period close or open | `boundaries` |
 | `pending_review` | active nodes already carrying review state | `supersessions`, `record_variant` |
 | `archival_candidates` | nodes worth setting aside | `archivals`, `judgments` |
@@ -109,7 +137,7 @@ is silent and permanent by design, so without the count an empty list on a
 well-judged graph would be indistinguishable from a graph with nothing similar
 in it.
 
-**Four of the ten are built out of pairs** — `similar_pairs`,
+**Four of the eleven are built out of pairs** — `similar_pairs`,
 `contradictions`, `recurrences`, `similar_relations` — and pairs are quadratic
 in the node set where every other list is linear in it. Those four are capped to
 their highest-scoring `max_nominations` (200 by default), and a cut list is
@@ -124,6 +152,18 @@ pairs still exist upstream. That is the scope the measurement asked for: real
 corpora clear the 0.80 threshold at 0.0105%, which projects to ~3 MB at 10,000
 facts, so the response was the thing worth bounding.
 
+`inference_merge_candidates` is built out of pairs too and is deliberately
+**not** among them, because it is not quadratic in the graph. It groups
+inferences by the premises they rest on and compares only within a group, so the
+bound is how many inferences hang off any one fact rather than how many
+inferences exist. That shape is also why it exists at all: a global sweep over
+all inference pairs was measured at **zero** nominations on both real graphs
+(123 inferences, 5,053 pairs, max score 0.66 against a 0.80 bar), and the pairs
+it did score highest shared vocabulary while saying different things. The
+population worth reviewing is the one a **fact** merge creates — collapsing four
+near-identical facts lands their four inferences on one survivor, each flagged
+`evidence_merged`.
+
 Two of them exist to keep a distinction that a single list would destroy:
 
 - **`recurrences` is separate from `contradictions`** because a claim standing
@@ -134,7 +174,10 @@ Two of them exist to keep a distinction that a single list would destroy:
   the misreading metacontexts exist to prevent.
 
 `unsound_inferences` and `boundary_proposals` are covered in
-[VALIDITY.md](VALIDITY.md#7-what-reflect-does-with-validity).
+[VALIDITY.md](VALIDITY.md#7-what-reflect-does-with-validity). The disjointness
+that makes an inference unsound is the same computation that produces an
+`inference_merge_candidate`'s advisory — one asked of an inference that exists,
+the other of one that would.
 
 ### When it runs
 

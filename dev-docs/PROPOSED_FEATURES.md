@@ -163,6 +163,32 @@ ordering, filters, `apply_review` and `rejudge`.
 `correct_interval`: a metacontext assignment that could not be withdrawn, and a
 validity interval that could not be corrected. Both were kept out of `rejudge`,
 on the grounds that the split is about **addressing** rather than naming.
+### Inference merge, advisories and warning settings — built
+
+**Built 2026-08-28.** `WARNINGS_AND_SETTINGS.md` is the record, reduced to what
+the code cannot say for itself.
+
+What shipped: `merge_inferences(source_ids, content)` beside `merge_facts`;
+`reflect`'s eleventh nominee list, `inference_merge_candidates`, scoped to
+inferences sharing a premise; a general `Advisory` facility with a per-graph
+`WarningPolicy` and the `configure_warnings` tool; and
+`DecisionKind.PROCEEDED_DESPITE_ADVISORY` with `review(mode="advisory")` reading
+it back — which is what turned that mode from a refusal into a selection.
+
+**Two things the entry got wrong before it was built, both recorded because they
+changed the design.** The first reading treated a merge's premise union as a
+*fabrication* and concluded inferences must never merge; it is not, because the
+agent writes fresh content over the combined premises, so disjoint premises make
+the result genuinely unsound rather than falsely flagged — which is what made a
+pre-decision warning the right shape instead of a refusal. And the measured
+*"zero pairs at the nomination bar"* was a fact about a corpus with no merges in
+it: the population appeared the same day facts started merging.
+
+**Two pieces are deliberately still unbuilt** and are below: similar-inference
+edges, and getting advisories onto the dashboard.
+
+---
+
 ### The missing notebooks — built
 
 **Built 2026-08-28.** `00_foundation.py` (the three node types, the store,
@@ -309,70 +335,53 @@ diverse corpus is a fixture; a remote SurrealDB is a deployment, not code.
 
 ## Needs a decision before it needs code
 
-### Merge for Inferences
+### Advisories on the dashboard
 
-> **The Facts half was decided and built on 2026-08-21**. It
-> did not extend `apply_reflection(merges=...)`: the `redundant` verdict is
-> judged at ingest, on the `check_conflicts` path, so the action is its own tool
-> — `merge_facts(source_ids, content)` — beside the other resolution actions.
-> `merge_nodes` being type-agnostic paid off exactly as this entry predicted; all
-> the new code is the **gate**, not the merge. What the entry did not anticipate
-> is that facts needed a decision of their own, and a harder one than
-> reachability: interval union dedupes *states* and fabricates history for
-> *events*, so a `claim_kind` judgment is recorded at ingest and an unjudged fact
-> never merges.
+**The state.** Advisories exist, are recorded, and reach the agent. Nothing
+shows them to a person watching the graph.
 
-**The state.** `merge_nodes` is type-agnostic — it embeds, migrates and dedupes
-edges, and retires sources as MERGED with `merged_into` lineage. Topics reach it
-through `apply_reflection(merges=...)`, facts through `merge_facts`. Inferences
-reach it through nothing.
+**The obstacle is one decision, not the work.** The event bus emits at the five
+`_tx` boundaries (`EVENT_LOG.md`), and an advisory is **not** a transaction — it
+is computed before one and may accompany a call that writes nothing. So this
+needs either a new event kind or a deliberate choice to carry the advisory on
+the act that triggered it. The second is cheaper and couples the two; the first
+is honest about what an advisory is.
 
-**The question, which is not a coding one.** Should Inferences merge? They are
-deliberately designed to let competing derivations coexist, so merging them
-risks collapsing a disagreement the graph is supposed to preserve.
+**Also worth deciding at the same time**: the settings panel for
+`configure_warnings`. It is per graph and has to say so on its face — the
+dashboard follows a `use_graph` switch, and a panel that looks global while
+writing per-graph state is a trap. *Inherited* is a fourth visual state beside
+the two actions, because a kind following the process default is not the same as
+one explicitly set to the same value: only the first tracks a changed default,
+and without showing which, clearing an override is impossible through the UI.
+Reuse `SemanticPalette` in `theme.ts` rather than minting colours.
 
-**What would settle it.** A rule for when two derivations are the same claim
-rather than two claims that agree. Until that exists, extending the wired path
-would be guessing.
+**Cost.** Small once the event decision is made.
 
-**Fact dedup did not settle it, and is evidence it is a separate question.** Facts got
-a merge because two documents restating one claim is redundancy worth
-collapsing; the same argument does not carry, because two inferences agreeing is
-not obviously redundancy — it may be independent support, which is the thing
-corroboration exists to count. `claim_kind` does not transfer either: it asks
-whether a claim is a condition or an occurrence, and an inference's
-provisionality is a different axis entirely.
+---
 
-> **Designed 2026-08-21 — `dev-docs/WARNINGS_AND_SETTINGS.md`.** The question is
-> answered and the answer is *yes, on shared evidence, with a pre-decision
-> warning*. What settles it is that the merge's one dangerous outcome —
-> combining premises that never held together — is **computable before the agent
-> decides**, so it belongs in the nomination rather than in a refusal. The
-> earlier reading here, that a merge *fabricates* a derivation, was wrong: the
-> agent writes fresh content asserting one claim over the combined premises, so a
-> disjoint premise pair is a real unsoundness correctly flagged, not an invented
-> one.
->
-> Not built, deliberately: measured on both real graphs the same day, **123
-> active inferences yield 5,053 pairs and zero at the nomination bar** (p99
-> 0.44–0.55, max 0.66 — measured at 0.83 and unchanged by the move to 0.80,
-> The single nomination bar). The duplication this addresses does not exist yet
-> and will not until fact merges start collecting inferences onto one survivor.
-> The design also carries three things that outlived it — a general advisory
-> facility, a per-graph warning policy, and the live defect that **a fact merge
-> does not flag its dependent inferences**.
+### Similar-inference edges
 
-> **Amended 2026-08-21 — the "does not exist yet" is now dated.** The same day,
-> the first `merge_facts` calls on a real corpus collected duplicate inferences
-> onto shared premises, which is precisely the population this
-> entry says will not exist until fact merges start doing so. It is a handful of
-> candidates rather than a backlog, so the entry stays here rather than moving to
-> *Ready to build* — but **the blocker is no longer "there is nothing to
-> merge"**, and whoever picks it up should re-measure against a merged corpus
-> rather than quote the zero above.
+**The state.** `reflect` nominates near-identical inferences that **share a
+premise**. Ones that do not are nominated by nothing, and the proposal is to
+offer `similarity` edges between them. Nothing enforces node types on
+`SIMILARITY` — `link` checks only that both nodes exist — and retrieval already
+traverses it, so the expansion benefit arrives for free.
 
-**Cost once decided.** Small — the machinery is built. This is a gate on
-judgment, not on work.
+**One consequence has to be decided first, and it is a live change to a number
+callers read.** `corroboration` walks `SIMILARITY` neighbours, so
+inference-to-inference edges would make agreeing inferences corroborate each
+other. Defensible as independent support, and not a retrieval nicety.
+
+**The decision is narrower than it looks.** The corroboration walk now treats a
+`SIMILARITY` neighbour three ways — *counted*, *excluded* (contradiction,
+variant, corrected) or *reported without counting* (`adjacent_periods`) — so
+this is a choice among three existing treatments rather than a yes/no. Agreeing
+inferences most likely want the third.
+
+*Files*: a nominee list in `pipelines/reflection/` beside the existing ones,
+capped as the pair-built lists are, and `pipelines/query/corroboration.py` for
+the consequence.
 
 ---
 

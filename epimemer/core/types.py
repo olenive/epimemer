@@ -817,11 +817,10 @@ class Fact(BaseModel):
     #
     # On facts alone. A topic is a theme rather than a claim, so neither answer
     # is about it. Inferences are provisional by design and competing ones are
-    # meant to coexist, so nothing here gates them today — and when inference
-    # merge lands (`dev-docs/WARNINGS_AND_SETTINGS.md` §6) it will not want this
-    # field either: it is nominated on *shared evidence* and warned by
-    # `assertions_are_disjoint` over its premises' periods, which is the same
-    # hazard answered where the dates actually are.
+    # meant to coexist, so nothing here gates them — and `merge_inferences`
+    # does not want this field either: it is nominated on *shared evidence* and
+    # warned by `assertions_are_disjoint` over its premises' periods, which is
+    # the same hazard answered where the dates actually are.
     claim_kind: ClaimKind | None = None
     status: NodeStatus = NodeStatus.ACTIVE
     superseded_at: datetime | None = None
@@ -1569,16 +1568,15 @@ class DecisionKind(str, Enum):
     value at all — a caller writes a branch for it and the branch is dead, and
     here it is worse still, because review *selects* on this: a kind with no
     writer is a filter that silently returns nothing and looks like a clean
-    graph. `WARNINGS_AND_SETTINGS.md` §8.1 settled this for `AdvisoryAction` and
-    the same rule holds here, enforced by a test that reads both lists.
+    graph. `AdvisoryAction` was settled on the same rule — it ships with two
+    members and no reserved third — and it holds here, enforced by a test that
+    reads both lists.
 
-    Two kinds are therefore **not** here yet, and are named so nobody re-derives
-    them: `relation_merge`, whose subjects `RELATION_LABELS.md` settled — they
-    are the two labels' record ids, which nothing could name while a label had
-    no id — and which waits only on whether label merging survives at all
-    (`RELATION_LABELS.md` §5); and `proceeded_despite_advisory`, once advisories
-    exist — that one is `WARNINGS_AND_SETTINGS.md` §9's node note, folded in
-    here so there is one review machine rather than two (REVIEW_MODE.md §9).
+    One kind is therefore **not** here, and is named so nobody re-derives it:
+    `relation_merge`, whose subjects `RELATION_LABELS.md` settled — they are the
+    two labels' record ids, which nothing could name while a label had no id —
+    and which waits only on whether label merging survives at all
+    (`RELATION_LABELS.md` §5).
     """
 
     # Ingest. One row per `store_decomposition` call rather than per fact (§4.1)
@@ -1637,6 +1635,16 @@ class DecisionKind(str, Enum):
     # where that question resolves — the subject finally has an identity to name.
     RELATION_VERDICT = "relation_verdict"
     IMPORTANCE = "importance"
+
+    # An operation that completed while carrying an advisory — the record that
+    # makes proceeding past one cost something. Its own kind rather than a flag
+    # on the decision it accompanies, because review *selects* on kind and
+    # *what was decided against advice* is the question this exists to answer.
+    #
+    # One row per operation rather than per advisory: the agent made one
+    # decision, and splitting it invites acting on it several times. The kinds
+    # it carried are in `certainty_basis`, which is the row's own prose.
+    PROCEEDED_DESPITE_ADVISORY = "proceeded_despite_advisory"
 
     # One declaration sweep: a user stating, through the CLI, which frame the
     # nodes of a graph that predate the requirement were always in. One row per

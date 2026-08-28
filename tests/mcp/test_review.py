@@ -44,6 +44,7 @@ from epimemer.pipelines.review.difficulty import (
     review_order,
 )
 from epimemer.pipelines.review.modes import (
+    MODE_KINDS,
     MODE_REQUIRES,
     REVIEW_MODES,
     UNBUILT_MODES,
@@ -380,7 +381,13 @@ class TestItWorksOnTheCorpusAsItStands:
         result, _ = await tools.review(storage)
 
         kinds = [d["kind"] for d in result["decisions"]]
-        assert set(kinds) == {"ingest", "contradiction"}
+        # Three, not two: a same-frame contradiction carries an advisory saying
+        # the conflict is real and wants a person, and the graph records that it
+        # said so. The contradiction row is what was decided; the advisory row
+        # is what the decider was told.
+        assert set(kinds) == {
+            "ingest", "contradiction", "proceeded_despite_advisory",
+        }
         assert result["unattributed_count"] == len(result["decisions"]), (
             "no judge was claimed, and the review still answers"
         )
@@ -423,13 +430,21 @@ class TestModesSelectAndArgumentsNarrow:
             refusal = mode_refusal(mode, agent_id="a1", since_given=True)
             assert refusal is not None and reason in refusal
 
-    def test_advisory_is_refused_because_nothing_writes_the_kind(self):
+    def test_advisory_selects_a_kind_that_has_a_writer(self):
         """The rule `DecisionKind` states, arriving on a mode: a selection over
         a kind nothing produces returns an empty list that reads as a clean
-        graph."""
-        refusal = mode_refusal("advisory", agent_id=None, since_given=False)
-        assert "advisories are not built" in refusal
-        assert not any("advisor" in kind.value for kind in DecisionKind)
+        graph. The mode was refused on exactly those grounds until advisories
+        were built, so the guard is now the inverse — it is a mode, and the kind
+        it names exists."""
+        assert mode_refusal("advisory", agent_id=None, since_given=False) is None
+        assert MODE_KINDS["advisory"] == [DecisionKind.PROCEEDED_DESPITE_ADVISORY]
+
+    def test_every_mode_that_selects_a_kind_names_one_that_exists(self):
+        """A mode selecting a kind no member matches is the same silent-empty
+        failure one layer down, and it would not be caught by the refusal."""
+        for mode, kinds in MODE_KINDS.items():
+            assert mode in REVIEW_MODES, mode
+            assert all(kind in set(DecisionKind) for kind in kinds), mode
 
     def test_between_points_at_since_rather_than_being_a_second_mode(self):
         refusal = mode_refusal("between", agent_id=None, since_given=False)

@@ -1194,6 +1194,7 @@ async def memory_record_contradiction(
             b_id=b_id,
             storage=deps["storage"],
             judge=judge,
+            warning_policy=deps["config"].warning_policy,
         ),
         ctx,
         f"{a_id}<->{b_id}",
@@ -1235,6 +1236,7 @@ async def memory_record_variant(
             b_id=b_id,
             storage=deps["storage"],
             judge=judge,
+            warning_policy=deps["config"].warning_policy,
         ),
         ctx,
         f"{a_id}<->{b_id}",
@@ -1307,6 +1309,79 @@ async def memory_merge_facts(
         f"sources={len(source_ids)}",
         lambda r, m: (
             f"merged={r['fact_id']} from={r['sources_retired']}"
+            if r["merged"]
+            else f"refused: {r['refused']}"
+        ),
+        expected_graph=expected_graph,
+    )
+
+
+@mcp.tool(name="merge_inferences")
+async def memory_merge_inferences(
+    source_ids: list[str],
+    content: str,
+    ctx: Context,
+    expected_graph: str | None = None,
+) -> str:
+    """Collapse inferences that state one conclusion into a single node.
+
+    The sibling of merge_facts, for the population fact merges create: when four
+    near-identical facts become one, the inferences drawn on them all land on
+    that survivor and each carries an evidence_merged flag naming the wording it
+    lost. Reflect nominates those pairs in inference_merge_candidates.
+
+    **The survivor rests on the union of the sources' premises.** Usually that
+    is two pieces of evidence for one conclusion. Where the premises are dated
+    and provably fall clear of each other, it is a claim over premises no source
+    puts in one period — the response says so in `warnings`, and so does the
+    nomination, *before* you write the content. That is the moment to act on it:
+    narrow the wording or the period, or merge only the inferences whose
+    premises overlap. The merge is not refused for it, because the fix is
+    something you write rather than something the graph can do for you.
+
+    **Merge only what you would defend as one conclusion.** Two inferences
+    agreeing may be independent support rather than redundancy, and independent
+    support is what corroboration exists to count. When unsure, use
+    link(type="similarity") and keep both.
+
+    Merges are refused, with a reason, when: fewer than two distinct nodes are
+    named; any of them is not active; they do not stand in exactly the same
+    frames; a pair falls below the similarity nomination bar; or the sources
+    have already been merged and un-merged up to the graph's cycle limit. A
+    refusal comes back as `merged: false` with `refused` — read it, it says
+    which. There is no claim_kind gate here: whether combining premises is
+    legitimate is answered in the content you write, not by a stored field.
+
+    Args:
+        source_ids: Two or more inference ids to collapse. All are retired as
+            MERGED and linked to the survivor by merged_into, so nothing is lost.
+        content: The conclusion as the surviving inference should state it.
+            Write it over the combined premises rather than copying either
+            source — this is new text and it is what gets embedded.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else — naming it turns a
+            wrong-graph call from silent into refused.
+    """
+    deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx, expected_graph)
+    if refused is not None:
+        return refused
+    return await _run_with_timeout(
+        "epimemer.merge_inferences",
+        lambda: tools.merge_inferences(
+            source_ids=source_ids,
+            content=content,
+            storage=deps["storage"],
+            embedding_provider=deps["embedding_provider"],
+            judge=judge,
+            warning_policy=deps["config"].warning_policy,
+        ),
+        ctx,
+        f"sources={len(source_ids)}",
+        lambda r, m: (
+            f"merged={r['inference_id']} from={r['sources_retired']} "
+            f"warnings={len(r.get('warnings', []))}"
             if r["merged"]
             else f"refused: {r['refused']}"
         ),
@@ -1418,6 +1493,58 @@ async def memory_configure_merge(
             f"undo_depth={r['merge_undo_depth']} "
             f"cycle_limit={r['merge_cycle_limit']}"
         ),
+        expected_graph=expected_graph,
+    )
+
+
+@mcp.tool(name="configure_warnings")
+async def memory_configure_warnings(
+    ctx: Context,
+    surface: bool | None = None,
+    actions: dict[str, str] | None = None,
+    clear: bool = False,
+    expected_graph: str | None = None,
+) -> str:
+    """Read or change what this graph does about advisories.
+
+    Called with no arguments it reports what is in force. Ask the user before
+    changing anything here — it is policy about what the graph tells you, which
+    is not the agent's call to make alone.
+
+    An advisory is what the system knows and you cannot compute: that a merge
+    would rest on premises no source puts in one period, or that a pair you
+    called a contradiction stands in two different frames. It arrives before you
+    decide, and nothing here refuses on one.
+
+    Args:
+        surface: Whether advisories are returned to you at all (default true).
+            **It does not stop them being recorded**: with this off, every
+            advisory an operation carried is still journalled and still shows up
+            in review(mode="advisory"). Turning it off makes the graph quiet,
+            not clean.
+        actions: Per-kind overrides, e.g. {"same_frame_contradiction":
+            "proceed"}. "proceed" surfaces the advisory; "flag" also sets
+            notify_user, meaning you are expected to raise it with the user.
+            Merged over what is already set rather than replacing it.
+        clear: Return every setting to the process default.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else — naming it turns a
+            wrong-graph call from silent into refused.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.configure_warnings",
+        lambda: tools.configure_warnings(
+            storage=deps["storage"],
+            default_warning_policy=deps["config"].warning_policy,
+            surface=surface,
+            actions=actions,
+            clear=clear,
+        ),
+        ctx,
+        f"surface={surface} actions={actions} clear={clear}",
+        lambda r, m: f"surface={r['surface']} actions={r['actions']}",
         expected_graph=expected_graph,
     )
 

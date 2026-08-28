@@ -8,8 +8,9 @@ the first and the third.
 **A mode names the selection; the arguments narrow whatever it selected.** That
 is how §6.1's *"modes compose — `by_agent` and `since` is the ordinary case"*
 survives a single `mode` string: `agent_id`, `since` and `until` are available
-under every mode, and a mode is the thing that cannot be expressed as a field
-filter — plus two that can, which exist to **refuse** rather than to select.
+under every mode. Most modes are the thing that cannot be expressed as a field
+filter; `advisory` is the exception and is a selection on kind, which is data in
+`MODE_KINDS` rather than a branch. One further name exists only to **refuse**.
 
 **`by_agent` and `since` are sugar over a required argument, and the refusal is
 the whole value.** `review(mode="all")` with an `agent_id` the caller forgot to
@@ -18,18 +19,29 @@ pass returns the entire journal, which reads as *"agent-1 decided everything"*
 `REVIEW_MODES` was kept short to avoid at step 6. Naming the mode makes the
 argument mandatory, so the mistake refuses instead of answering wrongly.
 
-**Two designed names are refused rather than admitted.** `advisory` selects on
-a `DecisionKind` that deliberately does not exist — advisories are unbuilt, and
-`DecisionKind`'s own rule is that a member nothing writes is a filter returning
-nothing that reads as a clean graph. `between` is not a second mode: it is
-`since` with an `until`, and two names for one selection is the *"two shapes for
-one question"* defect §6.6 cites from `WARNINGS_AND_SETTINGS.md` §5.2.
+**One designed name is refused rather than admitted.** `between` is not a
+second mode: it is `since` with an `until`, and two names for one selection is
+the *"two shapes for one question"* defect §6.6 names. (`advisory` was
+refused here on the same
+grounds until advisories were built — it selected on a `DecisionKind` nothing
+wrote, so it would have returned an empty list reading as *nothing is
+contested*. The kind has a writer now, so the mode is real.)
 """
 
-from epimemer.core.types import DecisionRecord
+from epimemer.core.types import DecisionKind, DecisionRecord
 
 # The modes that exist, in the order a tool schema should list them.
-REVIEW_MODES: tuple[str, ...] = ("all", "by_agent", "since", "unreviewed")
+REVIEW_MODES: tuple[str, ...] = (
+    "all", "by_agent", "since", "unreviewed", "advisory",
+)
+
+# The modes that are a selection on kind, and which kinds. A mode absent from
+# this map selects every kind. Data rather than a branch in the tool, for the
+# reason `MODE_REQUIRES` is data: adding one is a line, and the tool keeps one
+# path through it.
+MODE_KINDS: dict[str, list[DecisionKind]] = {
+    "advisory": [DecisionKind.PROCEEDED_DESPITE_ADVISORY],
+}
 
 # Which argument each mode cannot answer without. A mode absent from this map
 # requires nothing; a mode present in it refuses when its argument is blank.
@@ -42,12 +54,6 @@ MODE_REQUIRES: dict[str, str] = {
 # Kept as data rather than as an `else` branch so the two cases read the same
 # way as the unknown-mode case, and so adding one is one line.
 UNBUILT_MODES: dict[str, str] = {
-    "advisory": (
-        "advisories are not built — nothing writes the decision kind this "
-        "would select, so it would return an empty list that reads as 'nothing "
-        "is contested'. `WARNINGS_AND_SETTINGS.md` §9 is the design; raise it "
-        "with the user rather than working around it."
-    ),
     "between": (
         "'between' is 'since' with an end: pass mode='since' with both `since` "
         "and `until`. `until` is exclusive, so adjacent windows neither overlap "

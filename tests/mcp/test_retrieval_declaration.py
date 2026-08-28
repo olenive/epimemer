@@ -191,6 +191,12 @@ def _args(tool: str, seeded: dict) -> dict:
         # call worth making the oracle watch: a refusal still names the ids
         # it was handed, so it still has to declare them.
         "merge_facts": {"source_ids": facts[:2], "content": "One claim."},
+        # Refused (the seeded inferences are below the similarity bar), and a
+        # refusal still names the ids it was handed, so it still has to declare
+        # them — the same property `merge_facts` is here for.
+        "merge_inferences": {
+            "source_ids": inferences[:2], "content": "One conclusion.",
+        },
         "reflect": {"similarity_threshold": 0.0},
         "apply_reflection": {"judgments": [
             {"node_id": facts[0], "direction": "up", "reason": "central"}
@@ -243,6 +249,7 @@ def _args(tool: str, seeded: dict) -> dict:
         # id back at the agent, which is the property under test.
         "reverse_merge": {"survivor_id": facts[0]},
         "configure_merge": {},
+        "configure_warnings": {},
         "configure_reflection": {"threshold": 7},
         "list_graphs": {},
         # Refused: no id is approved in the test graph and there is no channel
@@ -266,7 +273,8 @@ def _ids_in(text: str, known: list[str]) -> set[str]:
 ALL_TOOLS = [
     "segment", "store_decomposition", "search", "link", "update", "supersede_by",
     "judge_importance", "check_conflicts", "record_contradiction", "record_variant",
-    "merge_facts", "reverse_merge", "configure_merge",
+    "merge_facts", "merge_inferences", "reverse_merge", "configure_merge",
+    "configure_warnings",
     "reflect", "apply_reflection", "review", "apply_review", "rejudge",
     "reframe", "correct_interval",
     "query_graph", "topic_tree",

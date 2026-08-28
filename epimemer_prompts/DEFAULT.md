@@ -263,6 +263,18 @@ neighbourhood.
   document's own periods — so provenance becomes plural rather than being
   overwritten. Write `content` as the clearest phrasing of the shared claim;
   that is what gets embedded.
+- `merge_inferences(source_ids, content)` — the same move for two readings that
+  state one conclusion. The population it exists for is one that fact merges
+  create: when four near-identical facts become one, the inferences drawn on
+  them all land on that survivor, each flagged `evidence_merged`. `reflect`
+  offers those pairs as `inference_merge_candidates`.
+  **The survivor rests on the union of the sources' premises**, which is a
+  combination neither original had — usually two pieces of evidence for one
+  conclusion. Where those premises are dated and provably fall clear of each
+  other, the response and the nomination both say so in `warnings`, and it is
+  not refused: the fix is something you write. Narrow the merged wording or its
+  period, or merge only the readings whose premises overlap. There is no
+  `claim_kind` rung here; the judgment lives in the text you write.
 - `reverse_merge(survivor_id)` — undo a merge that turned out to collapse two
   different claims. The sources come back active with their own edges and the
   survivor is deleted; this is the **only** tool that deletes a node, and it is
@@ -275,9 +287,20 @@ neighbourhood.
   `evidence_stale`). On `"the_world_changed"` the retired node keeps its own
   sources: it is still true of its period, and its sources are what say so.
 
+**Advisories — what the graph tells you before you decide.**
+Some calls come back with `warnings`: a list of things the system knows and you
+cannot compute, delivered *before* the decision rather than after it. Each has a
+`kind`, a one-sentence `message` and structured `detail`. Nothing here refuses
+on one — an advisory reaches you while you are still choosing what to write,
+which is the only moment at which it can change the answer, so **read it and
+write differently** rather than reading it and proceeding. Every call that
+carries one is recorded, whether or not the graph is set to show it, and a later
+agent reads those back with `review(mode="advisory")`. `configure_warnings` sets
+what a graph does with them — ask the user before changing it.
+
 **Human-in-the-loop.**
-- When `record_contradiction` returns `notify_user: true` (a same-frame
-  contradiction), surface it in conversation and ask the user how to resolve it —
+- When a response returns `notify_user: true`, surface it in conversation and
+  ask the user. On `record_contradiction` that is a same-frame contradiction:
   do **not** silently pick a winner unless recency or source makes the call
   obvious.
 - A cross-frame "conflict" is **not** a conflict. Don't interrupt the user; record
@@ -328,7 +351,8 @@ useful:
 - `reflect` returns consolidation candidates (similar pairs, splits, enrichments —
   similar pairs also surface duplicate source/tag/entity Topics), same-frame
   contradiction candidates, `recurrences`, `boundary_proposals` and
-  `unsound_inferences` (both below), `pending_review` — the worklist of nodes
+  `unsound_inferences` (both below), `inference_merge_candidates`,
+  `pending_review` — the worklist of nodes
   already flagged for resolution —
   `archival_candidates` (see below), and `similar_relations`, likely-synonymous
   user relationship labels.
@@ -360,6 +384,15 @@ useful:
   asserts these were ever both true*, not as *they never were*: it stays silent
   unless both premises carry dates and those dates provably fall clear, so a
   flag is rare and worth reading, and its absence proves nothing.
+- **`inference_merge_candidates`** names two near-identical active inferences
+  resting on at least one common premise — the shape a fact merge produces. Each
+  candidate carries `shared_premises`, a `similarity`, and any `warnings`
+  computed for the merge that would result. Act with
+  `merge_inferences(source_ids, content)` where they are one conclusion, or
+  record `apply_reflection(similarities=[{pair, verdict: "distinct", because}])`
+  where they are two. Two inferences agreeing is **not** automatically
+  redundancy — it may be independent support, which is the thing corroboration
+  exists to count.
 - Apply your decisions with `apply_reflection`. To resolve flagged nodes in batch,
   pass `supersessions=[{old_id, by_id}]`. Resolving a loser automatically clears
   the winner's `contested` / `superseded_candidate` labels. Escalate anything you

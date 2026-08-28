@@ -39,6 +39,7 @@ from epimemer.storage.active_graph import GraphGuard
 from epimemer.storage.protocol import (
     EdgeDirection,
     MergeOverrides,
+    WarningOverrides,
     resolve_reflect_threshold,
 )
 from epimemer.visualization.event_bus import InProcessEventBus
@@ -637,6 +638,13 @@ class InstrumentedStorage:
         # No event: nothing in the strip shows the merge settings, and a badge
         # that never renders is not worth an event type nobody consumes.
         await self._inner.set_merge_overrides(overrides)
+
+    async def get_warning_overrides(self) -> WarningOverrides:
+        return await self._inner.get_warning_overrides()
+
+    async def set_warning_overrides(self, overrides: WarningOverrides) -> None:
+        # No event, for the same reason as the merge settings above.
+        await self._inner.set_warning_overrides(overrides)
 
     # --- Agents (pass-through) ---
     #
