@@ -497,8 +497,8 @@ async def memory_segment(
 async def memory_store_decomposition(
     document_id: str,
     segments: list[dict],
+    metacontext_id: str,
     ctx: Context,
-    metacontext_id: str | None = None,
     tags: list[str] | None = None,
     timeline_id: str | None = None,
     propose_timepoints: bool = True,
@@ -609,14 +609,29 @@ async def memory_store_decomposition(
               timeline_id: omit for real-world dates. Give it for in-universe
               time (a novel's chronology), so fictional and real dates are never
               compared as though they shared a clock.
-        metacontext_id: Optional metacontext ID — all nodes will inherit this.
-            It must already exist **in this graph**: ids are per graph, so one
-            carried over from another names nothing here, and a node framed by
-            nothing is worse off than an untagged one — it shares a frame with
-            no other node, so it is never compared, never merged, and missing
-            from every frame-scoped search including the frame you meant. A
-            wrong id is refused, and the refusal lists the frames that do exist.
-            Omitted, the nodes stand in base reality ("The Real").
+        metacontext_id: **Required** — the frame every claim in this document
+            is asserted in, applied to every node in it. Pass `the-real` for
+            real-world claims: that is the conventional id and the ordinary
+            answer, and it is what you want whenever the claims would hold in
+            every other frame here. Like any frame, it has to exist in this
+            graph first — `create_metacontext` takes a chosen id. Pass a metacontext id for fiction, a
+            named source, or a perspective.
+            It is required because a claim has to say which world it is about.
+            A node with no frame is one nobody spoke for: nothing compares it,
+            nothing merges it, and no scoped search returns it. A stated frame
+            carries your judge and is named on the ingest journal row, so a
+            wrong one is findable with `review` and fixable with `reframe`.
+            Nothing here prevents a wrong frame; it makes one recoverable.
+            **One frame per call, so split a mixed document into two.** A
+            discussion of a novel that also states a fact about its real author
+            is two calls: the in-world claims in the novel's frame, the
+            author's biography in `the-real`.
+            A stated id must already exist **in this graph**: ids are per
+            graph, so one carried over from another names nothing here, and a
+            node framed by an id that resolves nowhere shares a frame with no
+            other node, so it is never compared, never merged, and missing from
+            every frame-scoped search including the frame you meant. A wrong id is refused, and the refusal lists the
+            frames that do exist.
         tags: Optional document-level tag names applied to every node. Each tag
             becomes (or reuses) a Topic linked by a tagged_with edge. Every node
             also gets a sourced_from edge to the document.
@@ -679,8 +694,7 @@ async def memory_search(
     k: int = 10,
     node_types: list[str] | None = None,
     graph_hops: int = 1,
-    metacontext_id: str | None = None,
-    cross_frame: bool = False,
+    metacontexts: list[str] | None = None,
     terms: list[str] | None = None,
     include_historical: bool = True,
     include_corrected: bool = False,
@@ -768,12 +782,15 @@ async def memory_search(
         k: Maximum number of results per retrieval arm.
         node_types: Filter to specific types: "topic", "fact", "inference".
         graph_hops: Number of graph traversal hops from the fused results.
-        metacontext_id: Optional — frame-scope results to this metacontext plus
-            untagged base-reality nodes (other frames are excluded). Must exist
-            in this graph; an id that does not resolve is refused rather than
-            quietly narrowing the search to base reality alone.
-        cross_frame: Set true to ignore frame scoping and search across all
-            metacontexts (opt-in; otherwise frames don't bleed together).
+        metacontexts: Optional — the frames to search, as a list. Results are
+            nodes standing in **any** of them, and no frame inherits another: a
+            question about a novel's world read against real history names both
+            (`["world-of-anarres", "the-real"]`), and one about only what the
+            novel says names one. Omit the list to search every frame, which is
+            a coherent question rather than an unstated assumption — the reason
+            this is optional where the frame on ingest is not. Every id must
+            exist in this graph; one that does not resolve is refused rather
+            than quietly narrowing the search to the frames that do.
         terms: Exact strings that matter — identifiers, names, phrases. Matched
             whole and ORed; each matches only documents containing all of its
             words. Omit and the keyword arm falls back to the query's own words,
@@ -811,8 +828,7 @@ async def memory_search(
             k=k,
             node_types=node_types,
             graph_hops=graph_hops,
-            metacontext_id=metacontext_id,
-            cross_frame=cross_frame,
+            metacontexts=metacontexts,
             terms=terms,
             include_historical=include_historical,
             include_corrected=include_corrected,
@@ -1550,10 +1566,15 @@ async def memory_apply_reflection(
             with a reason — a cross-frame pair wants record_variant instead.
         parents: Consolidate similar topics under a new parent (non-destructive;
             children stay active). Each: {children_ids: [str], content: str}
-            content = your synthesized parent description.
+            content = your synthesized parent description. The parent inherits
+            the frame its children **all** stand in; a group standing in
+            different frames is refused into `parents_refused`, because a
+            parent drawn from a fiction claim and a real one would assert in
+            both worlds. Synthesise within a frame, or `reframe` the odd one out.
         splits: Split a broad topic into subtopics.
             Each: {topic_id: str, subtopics: [str]}
-            subtopics = list of subtopic description strings.
+            subtopics = list of subtopic description strings. Each subtopic
+            inherits the parent's frame — same content, refined.
         enrichments: Improve a topic's description using its associated material.
             Each: {topic_id: str, new_content: str}
         merges: Fuse near-duplicate topics into one combined topic; the sources
@@ -1561,6 +1582,10 @@ async def memory_apply_reflection(
             A merge is applied only if every pair of sources is at least
             merge_similarity_threshold similar, else it is rejected — use this
             only for true duplicates, and `parents` for merely related topics.
+            Sources standing in different frames are refused into
+            `topic_merges_refused`: the survivor inherits every source's edges,
+            frames included, so a cross-frame merge asserts in one world what
+            was only ever claimed in another.
         supersessions: Resolve flagged/contested nodes from reflect's
             pending_review by superseding the losing node with an existing one.
             Each: {old_id: str, by_id: str, because: str}, where `because` is
@@ -1672,6 +1697,14 @@ async def memory_apply_reflection(
                 f" relation_verdicts_refused="
                 f"{len(r['relation_verdicts_refused'])}"
                 if r["relation_verdicts_refused"] else ""
+            )
+            + (
+                f" parents_refused={len(r['parents_refused'])}"
+                if r["parents_refused"] else ""
+            )
+            + (
+                f" topic_merges_refused={len(r['topic_merges_refused'])}"
+                if r["topic_merges_refused"] else ""
             )
         ),
         expected_graph=expected_graph,
@@ -1930,7 +1963,6 @@ async def memory_reframe(
     because: str,
     ctx: Context,
     assign: str | None = None,
-    to_base_reality: bool = False,
     expected_graph: str | None = None,
 ) -> str:
     """Withdraw a frame from a node, optionally putting another in its place.
@@ -1949,14 +1981,12 @@ async def memory_reframe(
         withdraw: The metacontext id to remove. The node must currently hold it.
         because: Why the original framing was wrong. Required.
         assign: A metacontext id to put in its place, applied in the same call.
-            **Prefer this when the claim belongs in another frame** — withdrawing
-            and then linking passes through untagged, where the claim is asserted
-            in every frame, and strands the node there if the second call never
-            happens.
-        to_base_reality: Required when the withdrawal would leave the node in no
-            frame at all. Untagged is not neutral: base-reality knowledge is
-            inherited by every frame, so the claim goes from being asserted in one
-            world to being asserted in all of them. Say it on purpose.
+            **Use this whenever the claim belongs in another frame** —
+            withdrawing and then linking passes through a state where the node
+            states no frame at all, and strands it there if the second call
+            never happens. A withdrawal that would leave no frames is refused
+            outright: a frameless node shares a frame with nothing, so it is
+            never compared, never merged, and returned by no scoped search.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
@@ -1974,7 +2004,6 @@ async def memory_reframe(
             withdraw=withdraw,
             because=because,
             assign=assign,
-            to_base_reality=to_base_reality,
             judge=judge,
         ),
         ctx,
@@ -2664,6 +2693,7 @@ async def memory_create_metacontext(
     content: str,
     ctx: Context,
     description: str = "",
+    metacontext_id: str | None = None,
     expected_graph: str | None = None,
 ) -> str:
     """Create a new metacontext for epistemic framing.
@@ -2675,6 +2705,13 @@ async def memory_create_metacontext(
     Args:
         content: Short name for the metacontext.
         description: Optional longer explanation.
+        metacontext_id: An id to create it under, instead of a minted one. Use
+            `the-real` for the frame holding real-world claims — that is the
+            conventional name every graph should use for it, so that two graphs
+            do not end up with the same frame under two strings. It is an
+            ordinary frame in every other respect, and a graph has to create it
+            once before anything can be ingested into it. Re-creating an
+            existing id replaces its prose.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
@@ -2687,6 +2724,7 @@ async def memory_create_metacontext(
             content=content,
             storage=deps["storage"],
             description=description,
+            metacontext_id=metacontext_id,
         ),
         ctx,
         f"content={content[:50]}",

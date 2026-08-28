@@ -19,6 +19,7 @@ import pytest
 
 from epimemer.core.temporal import IntervalBasis, ValidityInterval
 from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
     EdgeType,
     EmbeddingRecord,
     Fact,
@@ -79,6 +80,12 @@ async def _facts_that_look_alike(storage, provider, count: int):
     for i in range(count):
         fact = Fact(content=f"Claim number {i}", source_id="s1")
         await storage.store_node(fact)
+        # States a frame, as every ingested node has since #76 — absence names
+        # none, so frameless nodes are never paired at all.
+        await storage.store_edge(NodeEdge(
+            src_id=fact.id, dst_id=BASE_METACONTEXT_ID,
+            type=EdgeType.HAS_METACONTEXT,
+        ))
         await storage.store_embedding(
             EmbeddingRecord(item_id=fact.id, model_id=provider.model_id, vector=vector)
         )
@@ -200,6 +207,12 @@ async def _topics_that_look_alike(storage, provider, count: int):
     for i in range(count):
         topic = Topic(content=f"Subject number {i}", source_id="s1")
         await storage.store_node(topic)
+        # States a frame, as every ingested node has since #76 — absence names
+        # none, so frameless nodes are never paired at all.
+        await storage.store_edge(NodeEdge(
+            src_id=topic.id, dst_id=BASE_METACONTEXT_ID,
+            type=EdgeType.HAS_METACONTEXT,
+        ))
         await storage.store_embedding(
             EmbeddingRecord(item_id=topic.id, model_id=provider.model_id, vector=vector)
         )

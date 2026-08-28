@@ -108,9 +108,17 @@ class TestWorldChangeMigrationPolicy:
         for status in (NodeStatus.CORRECTED, NodeStatus.MERGED):
             moved = moved_edge_types(status)
             assert EdgeType.SOURCED_FROM in moved
-            assert EdgeType.HAS_METACONTEXT in moved
             assert EdgeType.SUPERSEDED_BY not in moved
             assert EdgeType.SUPERSESSION_CANDIDATE not in moved
+
+    def test_a_merge_does_not_move_the_frame(self):
+        """A correction's replacement is the same claim, so its frame follows.
+        A merge's survivor is *synthesised*, so no source's framing was made
+        about that wording — the merging agent re-states it under its own judge
+        instead, which is `describe_relation`'s coiner rule one layer up (#76).
+        """
+        assert EdgeType.HAS_METACONTEXT in moved_edge_types(NodeStatus.CORRECTED)
+        assert EdgeType.HAS_METACONTEXT not in moved_edge_types(NodeStatus.MERGED)
 
     def test_legacy_superseded_rows_behave_as_they_always_did(self):
         """Nothing writes `SUPERSEDED` any more, but old graphs still load and

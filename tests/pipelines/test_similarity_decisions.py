@@ -20,6 +20,7 @@ below: **both verdicts suppress; only `one_claim` corroborates.**
 import pytest
 
 from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
     ClaimKind,
     EdgeType,
     EmbeddingRecord,
@@ -89,6 +90,13 @@ async def _fact(
         value=ValueSignal(),
     )
     await storage.store_node(fact)
+    # Every fact states a frame, as every ingested one has since #76 — absence
+    # names no frame, so two frameless facts share none and nothing here would
+    # be nominated at all.
+    await storage.store_edge(NodeEdge(
+        src_id=fact.id, dst_id=BASE_METACONTEXT_ID,
+        type=EdgeType.HAS_METACONTEXT,
+    ))
     await storage.store_embedding(EmbeddingRecord(
         item_id=fact.id,
         model_id=embedding_provider.model_id,
@@ -109,8 +117,18 @@ async def _fact(
 
 
 async def _framed(storage, fact: Fact, label: str) -> str:
+    """Move a fact into its own frame, replacing the one `_fact` gave it.
+
+    Replacing rather than adding, because these tests are about a pair standing
+    in *disjoint* frames: leaving the base frame on both would give them an
+    overlap, and `same_frame` asks about overlap.
+    """
     frame = Metacontext(content=label)
     await storage.store_metacontext(frame)
+    for edge in await storage.get_edges_from(
+        fact.id, edge_type=EdgeType.HAS_METACONTEXT
+    ):
+        await storage.delete_edge(edge.id)
     await storage.store_edge(NodeEdge(
         src_id=fact.id, dst_id=frame.id, type=EdgeType.HAS_METACONTEXT,
     ))

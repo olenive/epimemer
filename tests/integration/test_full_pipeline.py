@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
     EdgeType,
     Metacontext,
     NodeStatus,
@@ -56,7 +57,7 @@ async def _two_step_ingest(
     embedding_provider: MockEmbeddingProvider,
     config: ServerConfig,
     *,
-    metacontext_id: str | None = None,
+    metacontext_id: str = BASE_METACONTEXT_ID,
 ) -> tuple[dict, dict]:
     """Run the two-step ingest flow with dummy extraction."""
     seg_result, _ = await segment_text(
@@ -204,7 +205,7 @@ class TestFullPipeline:
             "Neural",
             storage, embedding_provider,
             k=10, graph_hops=0,
-            metacontext_id=mc_real["metacontext_id"],
+            metacontexts=[mc_real["metacontext_id"]],
         )
 
         for node in real_results["nodes"]:

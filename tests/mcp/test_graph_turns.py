@@ -23,13 +23,29 @@ from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.server import MOVES_THE_GRAPH, _graph_turn
 from epimemer.mcp.server import mcp as epimemer_mcp
+from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.storage.memory import InMemoryStorage
+
+def _graph_with_the_real() -> InMemoryStorage:
+    """An in-memory graph somebody has set up.
+
+    Since #76 a frame is required at ingest and `the-real` is an ordinary
+    metacontext, created once like any other. A server fixture without it would
+    make every test here start by creating a frame, which tests the fixture.
+    """
+    store = InMemoryStorage()
+    store._graphs[store._database].metacontexts[BASE_METACONTEXT_ID] = Metacontext(
+        id=BASE_METACONTEXT_ID,
+        content="The Real",
+        description="Claims about the real world.",
+    )
+    return store
 
 
 @pytest.fixture
 def deps():
     return {
-        "storage": InMemoryStorage(),
+        "storage": _graph_with_the_real(),
         "config": ServerConfig(storage_backend="memory", embedding_provider="mock"),
     }
 
@@ -152,7 +168,7 @@ async def _lifespan_with(storage: InMemoryStorage) -> AsyncIterator[dict]:
 
 @pytest.fixture
 async def server_on() -> AsyncIterator[tuple[FastMCP, InMemoryStorage]]:
-    storage = InMemoryStorage()
+    storage = _graph_with_the_real()
     original = epimemer_mcp._lifespan
     epimemer_mcp._lifespan = lambda s: _lifespan_with(storage)
     async with _lifespan_with(storage) as ctx:
@@ -190,6 +206,7 @@ class TestABatchedSwitchDoesNotSplitAnIngest:
 
         ingest, switch = await asyncio.gather(
             server.call_tool("store_decomposition", {"expected_graph": "default", 
+        "metacontext_id": "the-real",
                 "document_id": seg["document_id"],
                 "segments": decomposition,
             }),

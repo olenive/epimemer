@@ -9,7 +9,6 @@ from collections.abc import Awaitable, Callable, Sequence
 from pydantic import BaseModel
 
 from epimemer.core.types import (
-    BASE_METACONTEXT_ID,
     EdgeType,
     EpistemicNode,
     Inference,
@@ -218,23 +217,50 @@ async def review_labels(
 async def frames_for(
     node_ids: Sequence[str], storage: StorageBackend
 ) -> dict[str, set[str]]:
-    """`frames_of` for many nodes at once, keyed by node id."""
+    """`frames_of` for many nodes at once, keyed by node id.
+
+    **This got materially more expensive when frames became explicit** (#76),
+    and the number is worth stating rather than assuming: before, almost no node
+    carried a `has_metacontext` edge and the read came back nearly empty at any
+    graph size; now every ingested node carries exactly one. Measured
+    2026-08-28 — 684 nodes: 0.18 ms → 13.6 ms on SurrealDB, 0.28 ms → 4.6 ms
+    in-memory; 5,000 nodes: 1.0 ms → 105 ms and 2.1 ms → 34 ms. About 21 µs and
+    7 µs per framed node.
+
+    It is bounded by where it is called rather than by the graph: `reflect`
+    seeds `frame_resolver` once over the nodes in nominated pairs, and search
+    scoping runs over a result set. Neither walks the whole graph. A caller that
+    did would want a storage-level frame filter instead.
+    """
     tagged = await storage.get_edges_for(
         node_ids, direction="from", edge_type=EdgeType.HAS_METACONTEXT
     )
     return {
-        node_id: {edge.dst_id for edge in edges} or {BASE_METACONTEXT_ID}
+        node_id: {edge.dst_id for edge in edges}
         for node_id, edges in tagged.items()
     }
 
 
 async def frames_of(node_id: str, storage: StorageBackend) -> set[str]:
-    """Metacontext ids a node belongs to, treating untagged as base reality.
+    """The metacontext ids a node states, and nothing more.
 
-    A node with no ``has_metacontext`` edges is implicitly in "The Real"
-    (``BASE_METACONTEXT_ID``); a node explicitly tagged with the base id reduces
-    to the same single-frame set. Used to decide whether two nodes share a frame
-    (and so whether an apparent conflict is genuine — see REVIEW_EPISTEMIC.md §4.3).
+    **Absence names no frame.** A node with no ``has_metacontext`` edge is a
+    node nobody said anything about, which is what absence means everywhere
+    else here — an omitted ``confidence`` is unrated, an absent ``judged_by``
+    is unknown, an omitted ``claim_kind`` is unjudged. This used to be the one
+    exception, answering the base frame for an untagged node and so turning
+    silence into an assertion about the real world; requiring the frame at
+    ingest made that exception unnecessary, and #76 removed it.
+
+    The consequence is deliberate and worth stating: a frameless node shares a
+    frame with **nothing**, so it is never nominated as contradicting anything,
+    never merged, and never returned by a scoped search. That is the honest
+    reading of *nobody said*, and it is reachable only on a graph written
+    before the requirement — ``epimemer frames declare`` is how such a graph
+    stops holding any, and ``graph_stats.nodes_without_frame`` is the check.
+
+    Used to decide whether two nodes share a frame, and so whether an apparent
+    conflict is genuine (REVIEW_EPISTEMIC.md §4.3).
     """
     return (await frames_for([node_id], storage))[node_id]
 
@@ -277,12 +303,20 @@ async def same_frame(
     *,
     resolve: "FrameResolver | None" = None,
 ) -> bool:
-    """Whether two nodes share at least one metacontext frame.
+    """Whether two nodes share at least one stated metacontext frame.
 
-    Untagged nodes are both in the base frame, so two untagged nodes share a
-    frame (a genuine same-frame relationship); nodes in disjoint frames (e.g. a
-    fiction frame vs. base reality) do not. A frame overlap means an apparent
-    contradiction is real; disjoint frames mean the two simply coexist.
+    Nodes in disjoint frames — a fiction frame and the real-world one — do not.
+    A frame overlap means an apparent contradiction is real; disjoint frames
+    mean the two simply coexist.
+
+    **Two frameless nodes do not share a frame**, since neither states one.
+    That diverges from the equality test `merge_facts` and topic merge use,
+    where two empty sets *are* equal and the merge is allowed — the two
+    questions differ, and only for a graph that has not been declared. Overlap
+    asks *is this conflict real*, and nothing said cannot make it real; equality
+    asks *would merging assert something new*, and merging two claims nobody
+    framed asserts nothing new. Both are right; the divergence is visible only
+    in the mid-migration state, which `epimemer frames declare` removes.
 
     Pass `resolve` (from `frame_resolver`) when checking many pairs, so repeated
     nodes are not re-read once per pair.

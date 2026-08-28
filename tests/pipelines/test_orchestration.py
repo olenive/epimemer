@@ -4,6 +4,7 @@ import pytest
 
 from petritype.core.executable_graph_components import ExecutableGraphOperations
 
+from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.tools import segment_text, store_decomposition
@@ -38,10 +39,18 @@ def config() -> ServerConfig:
 
 
 async def _prepare_store_payload(storage, embedding_provider, config, content="Test content about AI."):
-    """Segment content and build a store_decomposition payload."""
+    """Segment content and build a store_decomposition payload.
+
+    The graph names its frames before writing into them: since #76 every ingest
+    states one, and `the-real` is an ordinary metacontext created like any other.
+    """
+    await storage.store_metacontext(Metacontext(
+        id=BASE_METACONTEXT_ID, content="The Real",
+    ))
     seg_result, _ = await segment_text(content, storage, embedding_provider, config)
     return {
         "document_id": seg_result["document_id"],
+        "metacontext_id": BASE_METACONTEXT_ID,
         "segments": [
             {
                 "segment_id": s["segment_id"],
@@ -100,6 +109,7 @@ class TestOrchestrationRouting:
             segments=payload["segments"],
             storage=storage,
             embedding_provider=embedding_provider,
+            metacontext_id=BASE_METACONTEXT_ID,
         )
 
         search_req = MemoryRequest(

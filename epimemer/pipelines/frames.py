@@ -1,4 +1,13 @@
-"""Withdrawing and moving a node's epistemic frame (`ISSUES.md` #66, part 1).
+"""A node's epistemic frame: withdrawing one, moving one, inheriting one,
+declaring one.
+
+Withdrawal and reassignment are `ISSUES.md` #66 part 1. The rest is #76, which
+ended in a rule worth stating once here: **absence names no frame.** A node with
+no `has_metacontext` edge is not in base reality — it is a node nobody said
+anything about, and it shares a frame with nothing. Every function below exists
+because of that: `shared_frame_set` and `frame_edges` so reflect re-states a
+frame instead of minting a node without one, and `declare_frames` so a graph
+written before the rule can stop holding any.
 
 A metacontext assignment used to be **one-way**: `link` writes a
 `has_metacontext` edge and nothing removed one, so a fact wrongly framed as
@@ -35,11 +44,12 @@ from typing import Sequence
 from pydantic import BaseModel
 
 from epimemer.core.types import (
-    BASE_METACONTEXT_ID,
+    DecisionKind,
     EdgeType,
     JudgeRef,
     NodeEdge,
 )
+from epimemer.pipelines.reflection.review import frames_for
 from epimemer.storage.protocol import StorageBackend
 
 
@@ -58,19 +68,18 @@ class Reframed(BaseModel):
     """One frame revision, and what it moved.
 
     `frames_now` is the node's frame set after the change, so a caller can see
-    the promotion in the response rather than having to ask again. An empty list
-    means untagged, which is base reality.
+    where the claim landed rather than having to ask again. It is never empty:
+    a revision that would leave a node stating no frame at all is refused.
     """
 
     node_id: str
     withdrew: str
     assigned: str | None = None
     frames_now: list[str] = []
-    to_base_reality: bool = False
 
 
-def _promotes(remaining: Sequence[str], assign: str | None) -> bool:
-    """True when this revision would leave the node in no frame at all."""
+def _strands(remaining: Sequence[str], assign: str | None) -> bool:
+    """True when this revision would leave the node stating no frame at all."""
     return not remaining and assign is None
 
 
@@ -81,7 +90,6 @@ async def reframe_node(
     withdraw: str,
     because: str,
     assign: str | None = None,
-    to_base_reality: bool = False,
     judge: JudgeRef | None = None,
 ) -> ReframeRefused | Reframed:
     """Withdraw one frame from a node, optionally putting another in its place.
@@ -93,15 +101,13 @@ async def reframe_node(
     permanently if the second call never happens. Moving in one call never
     reaches that state, and never reaches the last-frame question either.
 
-    **Leaving a node with no frames is a promotion, and has to be said out
-    loud.** Untagged is not neutral: base-reality knowledge is inherited by every
-    frame, so a fact that was claimed inside one novel becomes a fact claimed in
-    all of them. Where the withdrawal would leave nothing, `to_base_reality=True`
-    is required — and it is required rather than inferred for `expected_graph`'s
-    reason: the check is worth something only because the agent's intent is
-    stated independently of the state. Passing it where it does not apply is
-    refused too, because a flag that lies about what it authorised is worse than
-    no flag.
+    **Leaving a node stating no frame at all is refused outright.** It used to
+    be allowed behind a flag, back when absence meant base reality and the
+    withdrawal was a *promotion* worth authorising deliberately. Absence means
+    nothing now (#76): a frameless node shares a frame with nothing, so it is
+    never compared, never merged, and returned by no scoped search. There is no
+    longer any reason to want one, so the flag is gone rather than renamed —
+    a claim goes somewhere, or it stays where it is.
 
     Nothing here moves a status or a lineage, and the node keeps its
     `judged_by` — that field records who wrote the wording, which is unchanged.
@@ -133,9 +139,9 @@ async def reframe_node(
             node_id=node_id,
             reason=(
                 f"{node_id} is not framed by '{withdraw}'. It holds "
-                f"{sorted(held) or 'no frames at all, which is base reality'}. "
-                f"An untagged node needs nothing withdrawn — it is already in "
-                f"base reality."
+                f"{sorted(held) or 'no frames at all'}. A node stating no frame "
+                f"has nothing to withdraw; `link` it into the frame it belongs "
+                f"in, or declare the graph."
             ),
         )
 
@@ -148,9 +154,7 @@ async def reframe_node(
                     f"is nothing to revise."
                 ),
             )
-        if assign != BASE_METACONTEXT_ID and await storage.get_metacontext(
-            assign
-        ) is None:
+        if await storage.get_metacontext(assign) is None:
             return ReframeRefused(
                 node_id=node_id,
                 reason=(
@@ -162,29 +166,17 @@ async def reframe_node(
             )
 
     remaining = sorted(held - {withdraw})
-    promotes = _promotes(remaining, assign)
-    if promotes and not to_base_reality:
+    if _strands(remaining, assign):
         return ReframeRefused(
             node_id=node_id,
             reason=(
-                f"withdrawing '{withdraw}' would leave {node_id} in no frame at "
-                f"all, and untagged is not neutral: base-reality knowledge is "
-                f"inherited by every frame, so this claim would go from being "
-                f"asserted in one world to being asserted in all of them. If "
-                f"that is what you mean, pass to_base_reality=True. If it "
-                f"belongs in a different frame, pass assign=<metacontext_id> "
-                f"instead and the move happens in one step, never passing "
-                f"through base reality."
-            ),
-        )
-    if to_base_reality and not promotes:
-        landing = assign if assign is not None else ", ".join(remaining)
-        return ReframeRefused(
-            node_id=node_id,
-            reason=(
-                f"to_base_reality=True says this withdrawal promotes the claim "
-                f"to base reality, and it does not — {node_id} would still be "
-                f"framed by {landing}. Drop the flag."
+                f"withdrawing '{withdraw}' would leave {node_id} stating no "
+                f"frame at all, and a frameless node shares a frame with "
+                f"nothing: never compared, never merged, and returned by no "
+                f"scoped search. Pass assign=<metacontext_id> to say where the "
+                f"claim belongs instead — the move happens in one step. If it "
+                f"belongs in the real world, that frame has an id like any "
+                f"other."
             ),
         )
 
@@ -215,7 +207,6 @@ async def reframe_node(
                 "because": because,
                 "withdrew": withdraw,
                 "assigned": assign,
-                "to_base_reality": promotes,
                 "judged_by": judge.model_dump(mode="json") if judge else None,
             },
         ],
@@ -228,8 +219,144 @@ async def reframe_node(
         withdrew=withdraw,
         assigned=assign,
         frames_now=frames_now,
-        to_base_reality=promotes,
     )
 
 
-__all__ = ["Reframed", "ReframeRefused", "reframe_node"]
+async def shared_frame_set(
+    node_ids: Sequence[str], storage: StorageBackend
+) -> set[str] | None:
+    """The one frame set all of these nodes stand in, or `None` if they differ.
+
+    **Exact set equality, not overlap**, and `fact_dedup` states the reason for
+    the fact layer: a node derived from several sources inherits the *union* of
+    their frames, so deriving one node from a base-reality claim and a fiction
+    one leaves it asserting both — the worst outcome available. `same_frame`
+    asks whether two nodes share *at least one* frame, which is the right
+    question for a contradiction and the wrong one here.
+
+    A node stating no frame has an empty set, which is equal only to another
+    empty one. So two undeclared nodes may still be combined — neither says
+    anything a merge could contradict — while an undeclared node and a declared
+    one are refused, because combining them would put a claim nobody framed into
+    a frame somebody named. `epimemer frames declare` is what ends that state;
+    `same_frame` answers the *overlap* question differently for the same pair,
+    and says why.
+    """
+    frames = await frames_for(list(node_ids), storage)
+    distinct = {frozenset(frames[node_id]) for node_id in node_ids}
+    return set(next(iter(distinct))) if len(distinct) == 1 else None
+
+
+def frame_edges(
+    node_id: str, frames: Sequence[str] | set[str], *, judge: JudgeRef | None = None
+) -> list[NodeEdge]:
+    """`has_metacontext` edges putting one node in each of `frames`.
+
+    `the-real` is written like any other id: it is a conventional name for the
+    frame holding real-world claims, not a mechanism, and nothing reads it
+    specially since absence stopped meaning it (#76).
+    """
+    return [
+        NodeEdge(
+            src_id=node_id,
+            dst_id=frame,
+            type=EdgeType.HAS_METACONTEXT,
+            judged_by=judge,
+        )
+        for frame in sorted(frames)
+    ]
+
+
+class FrameDeclaration(BaseModel):
+    """What one declaration sweep found and what it stamped.
+
+    `already_framed` is reported beside `declared` because the two together are
+    the migration's completeness check: a graph is done when `unframed` reaches
+    zero, and a rerun that declares nothing is how you find that out.
+    """
+
+    frame: str
+    declared: int
+    already_framed: int
+    node_ids: list[str] = []
+
+
+async def declare_frames(
+    storage: StorageBackend,
+    *,
+    frame: str,
+    judge: JudgeRef | None = None,
+) -> FrameDeclaration:
+    """Stamp `frame` on every active node that carries no frame at all.
+
+    **A user's declaration, not a migration.** Nothing derives this from the
+    content: somebody is stating that the claims in this graph were always about
+    one world, and taking responsibility for having said so. That is why it
+    lives behind the CLI — the same reasoning that keeps judge approval out of
+    agent reach — and why the edges carry a judge.
+
+    **Idempotent, and it never touches a node that already has a frame.** A node
+    framed as fiction must not acquire a second frame from a sweep aimed at the
+    ones nobody spoke for; a node already declared must not be declared twice.
+    So the predicate is *no frames at all*, which is also the state that stops
+    existing as the sweep runs.
+
+    One journal row for the whole sweep, naming the nodes it stamped — the
+    granularity an archival sweep uses, and for the same reason: this is one act
+    of judgment applied to whatever it found, not one verdict per node.
+
+    **The frame has to exist first, and this refuses rather than creating it.**
+    A sweep that minted the frame it was about to stamp would be the one thing
+    every other path here refuses — an edge pointing at a metacontext nobody
+    described — done in bulk, on the nodes least able to survive it. Creating it
+    is the caller's separate act, which is what makes it a declaration rather
+    than a side effect.
+    """
+    from epimemer.mcp.tools import journal
+
+    if await storage.get_metacontext(frame) is None:
+        raise ValueError(
+            f"no metacontext '{frame}' in graph "
+            f"'{storage.current_database}'. Frames are per graph, and a "
+            f"declaration cannot point at one that does not exist — the nodes "
+            f"would end up in a frame they share with nothing, which is worse "
+            f"than the state this is fixing. Create it first."
+        )
+
+    nodes = await storage.query_nodes()
+    node_ids = [node.id for node in nodes]
+    if not node_ids:
+        return FrameDeclaration(frame=frame, declared=0, already_framed=0)
+
+    framed = await storage.get_edges_for(
+        node_ids, direction="from", edge_type=EdgeType.HAS_METACONTEXT
+    )
+    unframed = [node_id for node_id in node_ids if not framed[node_id]]
+
+    for node_id in unframed:
+        for edge in frame_edges(node_id, [frame], judge=judge):
+            await storage.store_edge(edge)
+
+    if unframed:
+        await journal(
+            storage, DecisionKind.FRAME_DECLARATION, unframed,
+            judge=judge, frame=frame,
+        )
+
+    return FrameDeclaration(
+        frame=frame,
+        declared=len(unframed),
+        already_framed=len(node_ids) - len(unframed),
+        node_ids=unframed,
+    )
+
+
+__all__ = [
+    "FrameDeclaration",
+    "Reframed",
+    "ReframeRefused",
+    "declare_frames",
+    "frame_edges",
+    "reframe_node",
+    "shared_frame_set",
+]

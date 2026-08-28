@@ -48,7 +48,14 @@ import sys
 import time
 from datetime import datetime, timezone
 
-from epimemer.core.types import EdgeType, NodeEdge, NodeType, Topic
+from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
+    EdgeType,
+    Metacontext,
+    NodeEdge,
+    NodeType,
+    Topic,
+)
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.tools import (
@@ -132,6 +139,13 @@ async def _seed(
     2026-08-20 was taken over. Attribution is what corroboration counts, so a
     run measuring it needs some.
     """
+    # Every ingest names its frame, so the graph needs one. A real graph gets
+    # this once from `create_metacontext`; a benchmark builds its own world.
+    await storage.store_metacontext(Metacontext(
+        id=BASE_METACONTEXT_ID,
+        content="The Real",
+        description="Claims about the real world.",
+    ))
     entities: dict[str, Topic] = {}
     start = time.perf_counter()
     for i in range(docs):
@@ -157,6 +171,7 @@ async def _seed(
             _decomposition(rng, [s["segment_id"] for s in seg_result["segments"]]),
             storage,
             provider,
+            metacontext_id=BASE_METACONTEXT_ID,
         )
     return time.perf_counter() - start
 

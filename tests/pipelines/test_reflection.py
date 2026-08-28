@@ -575,14 +575,18 @@ async def test_archive_nodes_exports_correctly(storage_with_archival_candidates)
 # --- Frame helpers (metacontext-relative judgment) ---
 
 
-async def test_frames_of_untagged_is_base():
-    """A node with no metacontext edges is implicitly in base reality."""
+async def test_frames_of_untagged_names_nothing():
+    """A node with no metacontext edges states no frame, and that is all it
+    means. It used to resolve to base reality — the one place in this system
+    where absence became a positive claim, which #76 removed once the frame was
+    required at ingest. The consequence is deliberate: such a node shares a
+    frame with nothing and is reachable only by an unscoped search."""
     from epimemer.pipelines.reflection.review import frames_of
 
     storage = InMemoryStorage()
     f = Fact(content="untagged", source_id="s1")
     await storage.store_node(f)
-    assert await frames_of(f.id, storage) == {BASE_METACONTEXT_ID}
+    assert await frames_of(f.id, storage) == set()
 
 
 async def test_frames_of_returns_tagged_frames():
@@ -600,8 +604,14 @@ async def test_frames_of_returns_tagged_frames():
     assert await frames_of(f.id, storage) == {mc.id}
 
 
-async def test_same_frame_two_untagged_share_base():
-    """Two untagged nodes are both in base reality → same frame (genuine)."""
+async def test_same_frame_two_untagged_share_nothing():
+    """Nothing said cannot make a conflict real.
+
+    `same_frame` asks about *overlap*, and two nodes stating no frame overlap
+    nowhere. That diverges from the equality test a merge uses, where two empty
+    sets are equal — the questions differ, and both answers are right. The
+    divergence is visible only on a graph that has not been declared.
+    """
     from epimemer.pipelines.reflection.review import same_frame
 
     storage = InMemoryStorage()
@@ -609,7 +619,7 @@ async def test_same_frame_two_untagged_share_base():
     b = Fact(content="b", source_id="s1")
     await storage.store_node(a)
     await storage.store_node(b)
-    assert await same_frame(a.id, b.id, storage) is True
+    assert await same_frame(a.id, b.id, storage) is False
 
 
 async def test_same_frame_disjoint_frames_not_same():
@@ -718,6 +728,11 @@ async def test_review_labels_contested_same_frame():
     b = Fact(content="X false", source_id="s1")
     await storage.store_node(a)
     await storage.store_node(b)
+    for node in (a, b):
+        await storage.store_edge(NodeEdge(
+            src_id=node.id, dst_id=BASE_METACONTEXT_ID,
+            type=EdgeType.HAS_METACONTEXT,
+        ))
     await storage.store_edge(
         NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.CONTRADICTION)
     )

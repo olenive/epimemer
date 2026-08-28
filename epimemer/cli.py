@@ -22,6 +22,9 @@ import sys
 from datetime import datetime, timezone
 
 from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
+    JudgeRef,
+    QUARANTINE_METACONTEXT_ID,
     RelationLabel,
     agent_name,
     current_description,
@@ -76,6 +79,18 @@ def _embedded_advice(reason: str, agent_id: str | None, action: str) -> str:
             f"record, so this graph's vocabulary fills in as it is used. This "
             f"command only exists to do it in one go on a long-lived graph, "
             f"and it is never a precondition for anything."
+        )
+    if action == "declare":
+        # An embedded graph cannot be declared from out here, and it does not
+        # need to be: it lives and dies with the server process, so it is
+        # rebuilt rather than migrated. Saying that is the whole message —
+        # otherwise this reads as a graph stuck in a state nothing can fix.
+        return (
+            f"{reason}\n\n"
+            f"An embedded graph is rebuilt rather than declared: it lives "
+            f"inside the server process, so start again with a fresh one and "
+            f"every node will name its frame at ingest. This command is for "
+            f"long-lived graphs on a served store."
         )
     if action == "require":
         return (
@@ -303,6 +318,80 @@ async def _backfill_relations(storage: StorageBackend) -> str:
     )
 
 
+async def _declare_frames(
+    storage: StorageBackend, frame: str, handle: str | None, assume_yes: bool
+) -> str:
+    """Stamp `frame` on every node in this graph that carries no frame at all.
+
+    **The user's act, which is why it is here and not a tool.** Nothing derives
+    the answer from the content: somebody is stating that the claims in a graph
+    written before frames were required were always about one world, and owning
+    having said so. An agent asserting that about its own past writes would be
+    marking its own homework, which is the reasoning that keeps judge approval
+    on this side of the wall too.
+
+    It asks before writing, because the sweep is not reversible in one step: a
+    wrong frame comes off one node at a time with `reframe`, and the count is
+    the only thing that tells the user how big the claim they are about to make
+    actually is.
+    """
+    from epimemer.mcp.tools import create_metacontext
+    from epimemer.pipelines.frames import declare_frames
+
+    unframed = await storage.count_nodes_without_frame()
+    graph = storage.current_database
+    if unframed == 0:
+        return (
+            f"Graph '{graph}': every node already names a frame. Nothing to "
+            f"declare."
+        )
+
+    judge = None
+    if handle is not None:
+        agent = resolve_agent(await storage.list_agents(), handle)
+        judge = JudgeRef(
+            agent_id=agent.id if agent is not None else handle.strip(),
+            digest=(
+                version.digest
+                if agent is not None and (version := current_description(agent))
+                else ""
+            ),
+        )
+
+    if not assume_yes:
+        answer = input(
+            f"Declare {unframed} unframed node(s) in graph '{graph}' as "
+            f"'{frame}'? This states that they were always claims in that "
+            f"frame. [y/N] "
+        )
+        if answer.strip().lower() not in ("y", "yes"):
+            return f"Nothing declared in graph '{graph}'."
+
+    # The frame is created here when it is missing, and only here. The sweep
+    # itself refuses a frame that does not exist — a bulk stamp pointing at
+    # nothing is the isolation failure this is meant to end — but a person
+    # declaring *this graph is about the real world* is also entitled to say
+    # that frame exists. No agent reaches this path.
+    created = ""
+    if await storage.get_metacontext(frame) is None:
+        await create_metacontext(
+            frame.replace("-", " ").title(), storage, metacontext_id=frame,
+            description=f"Declared for graph '{graph}'.",
+        )
+        created = f"Created metacontext '{frame}', which this graph did not have.\n"
+
+    result = await declare_frames(storage, frame=frame, judge=judge)
+    by = f" by '{handle}'" if handle else " with no judge recorded"
+    return (
+        created
+        + f"Graph '{graph}': declared {result.declared} node(s) as "
+        f"'{result.frame}'{by}; {result.already_framed} already named a frame "
+        f"and were left alone.\n"
+        f"One journal row records the sweep. Check completeness with "
+        f"graph_stats: nodes_without_frame should now be 0."
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="epimemer", description="Epimemer administration."
@@ -363,6 +452,40 @@ def build_parser() -> argparse.ArgumentParser:
     backfill.add_argument(
         "--graph", help="Graph to write in (default: the configured one)."
     )
+
+    frames = sub.add_parser(
+        "frames", help="Epistemic frames — which world a claim is about."
+    )
+    frames_sub = frames.add_subparsers(dest="action", required=True)
+    declare = frames_sub.add_parser(
+        "declare",
+        help=(
+            "State which frame this graph's unframed nodes were always in. "
+            "Idempotent; skips any node that already names a frame."
+        ),
+    )
+    declare.add_argument(
+        "--frame",
+        default=BASE_METACONTEXT_ID,
+        help=(
+            f"Frame to declare (default: {BASE_METACONTEXT_ID}). Use "
+            f"'{QUARANTINE_METACONTEXT_ID}' for a graph nobody can vouch for — "
+            f"no agent may write that one."
+        ),
+    )
+    declare.add_argument(
+        "--judge",
+        help=(
+            "Judge to record as having declared it. Omitted, the edges carry "
+            "no judge, which reads as nobody having said so."
+        ),
+    )
+    declare.add_argument(
+        "--yes", action="store_true", help="Skip the confirmation prompt."
+    )
+    declare.add_argument(
+        "--graph", help="Graph to write in (default: the configured one)."
+    )
     return parser
 
 
@@ -370,7 +493,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config()
 
-    if args.action in ("confirm", "require", "rename", "backfill"):
+    if args.action in ("confirm", "require", "rename", "backfill", "declare"):
         unreachable = unreachable_store(config)
         if unreachable is not None:
             print(
@@ -386,6 +509,8 @@ def main(argv: list[str] | None = None) -> int:
             run = lambda s: _rename(s, args.agent_id, args.name, args.same_judge)
         elif args.action == "backfill":
             run = _backfill_relations
+        elif args.action == "declare":
+            run = lambda s: _declare_frames(s, args.frame, args.judge, args.yes)
         else:
             run = lambda s: _require(s, args.setting, config.require_judge)
         print(asyncio.run(_with_storage(config, args.graph, run)))

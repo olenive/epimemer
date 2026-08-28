@@ -67,7 +67,19 @@ You have access to an epistemic memory system via MCP tools. Use it to:
 ### When to ingest (segment + store_decomposition)
 - After learning new information from the user or external sources
 - When the user shares documents, articles, or knowledge you should remember
-- Include a metacontext_id when the information has a specific framing (fiction, source, perspective)
+- **`metacontext_id` is required on `store_decomposition`.** Name the frame these
+  claims are asserted in: `the-real` for real-world claims — the conventional id,
+  and the ordinary answer — or another metacontext for fiction, a named source,
+  or a perspective. The frame has to exist here first (`create_metacontext` takes
+  a chosen id, which is how a graph gets `the-real`). It is required
+  because a claim has to say which world it is about: a node with no frame is one
+  nobody spoke for, so nothing compares it, merges it, or returns it from a scoped
+  search. A stated frame carries your judge and is named on the ingest journal
+  row, so a wrong one is findable with `review` and fixable with `reframe`.
+  Nothing prevents a wrong frame; this makes one recoverable.
+- **One frame per call, so split a mixed document into two.** A discussion of a
+  novel that also states a fact about its real author is two calls: the in-world
+  claims in the novel's frame, the author's biography in `the-real`.
 
 ### Value priors at ingest (importance, confidence)
 Each topic/fact/inference may be an object rather than a bare string, carrying priors only you can supply — you have read the material and nothing downstream will read it again.
@@ -93,7 +105,10 @@ Each topic/fact/inference may be an object rather than a bare string, carrying p
 ### When to search (search)
 - Before answering questions that might benefit from prior context
 - When the user asks "do you remember..." or references past conversations
-- Use metacontext_id to filter results when the context is clear (e.g., discussing a specific fictional universe)
+- Use `metacontexts` — a **list** — to scope results when the context is clear
+  (e.g. discussing a specific fictional universe). Results are nodes in any of
+  the frames named, so a novel's world read against real history is
+  `["<the-novel>", "the-real"]`. Leave it out to search every frame.
 - With `include_corroboration=True`, read `adjacent_periods` as well as the count. It names similar claims whose source dates put them in a *different* period, which therefore do not corroborate — they are the neighbouring truth, not a rejection, and often the more useful half of the answer.
 
 ### When to reflect (reflect)
@@ -182,11 +197,10 @@ Surface this information naturally: "Found 5 relevant nodes (2 topics, 2 facts, 
 - **A wrong frame is `reframe`, not a supersession.** `reframe(node_id,
   withdraw=…, because=…)` takes a metacontext off a node. **Prefer
   `assign=<other_frame>`** when the claim belongs somewhere else: withdrawing
-  and then linking passes through *untagged*, where the claim is asserted in
-  **every** frame, and strands it there if the second call never happens.
-  Withdrawing a node's **last** frame is that same promotion, so it needs
-  `to_base_reality=True` said on purpose — and is refused where it does not
-  apply. A wrong frame is not cosmetic: it makes a fact permanently unmergeable
+  and then linking passes through a state where the node states no frame at all,
+  and strands it there if the second call never happens. Withdrawing a node's
+  **last** frame is refused outright: a frameless node shares a frame with
+  nothing, so there is nothing to authorise — name where the claim goes. A wrong frame is not cosmetic: it makes a fact permanently unmergeable
   with its own twin, stops it corroborating, and hides it from the frame it
   belongs to.
 - **A wrong period is `correct_interval`, not a supersession.**
@@ -213,31 +227,45 @@ Surface this information naturally: "Found 5 relevant nodes (2 topics, 2 facts, 
 - All backends support multiple named graphs (default graph is "default")
 - With SurrealDB, each graph is a separate database within the namespace
 
-### Metacontext awareness
-- Always check the metacontexts field on returned nodes
-- Never mix fictional and factual information without explicitly noting the distinction
-- When creating new metacontexts, use clear, descriptive names
+### Metacontext awareness (epistemic frames)
+- **Absence names no frame.** A node with no frame is one nobody said anything
+  about — never compared, never merged, returned by no scoped search. It does
+  **not** mean base reality; it used to, and that was the one place in this
+  system where silence became a claim. Only a graph written before frames were
+  required holds any; `graph_stats.nodes_without_frame` counts them, and the
+  `epimemer frames declare` CLI command is how a person ends that state.
+- **`the-real` is a convention, not a mechanism.** It is the id every graph
+  should use for the frame holding real-world claims, so two graphs do not end
+  up with one frame under two strings. Nothing reads it specially, and it must
+  exist here like any other — `create_metacontext` takes a chosen id, and a
+  graph needs it created once before anything can be ingested into it.
 - **A metacontext id must exist in the graph you are in.** Ids are per graph, so
   one carried over from another names nothing here and is refused — by
-  `store_decomposition` and by `search` alike. That is deliberate: unchecked, the
-  framing edge would point at nothing, and a node framed by nothing shares a
-  frame with *no other node* — never compared, never merged, and missing from
-  every frame-scoped search including the frame you meant. Worse than untagged,
-  which at least lands somewhere real. The refusal lists the frames that do
-  exist, and it is the only place they are listed: no tool enumerates them.
-  `the-real` is the exception and is always accepted.
+  `store_decomposition` and by `search` alike, and by `search` for **every** id
+  in the list, not just the first. Unchecked, the framing edge would point at
+  nothing, and a node framed by nothing shares a frame with *no other node*. The
+  refusal lists the frames that do exist, and it is the only place they are
+  listed: no tool enumerates them.
 - **Frames are not only fiction.** *"What Milanese people knew by 1860"* and
   *"what Londoners knew by 1860"* are two frames, both about the real past.
   Fiction, a named source, and a perspective are all the same mechanism.
-- **Do not add "The Real" to a perspective frame.** Base-frame knowledge is the
-  shared background that every frame inherits — a frame-scoped `search` returns
-  that frame **plus** base reality, and excludes sibling frames. So a claim in
-  the base frame is asserted in *every* frame, which is the opposite of what a
-  perspective frame is for. Tag the perspective alone.
-- **The test: would this claim hold in every other frame in this graph?** Yes →
-  base reality — tag nothing, or name `the-real`, which is a real record any
-  graph you have ingested into holds. No → the perspective frame, by itself. *"Milan is in Lombardy"* is shared
-  background; *"Milanese merchants believed the pass was closed"* is not.
+- **No frame inherits another.** `search` names the frames it wants as a list
+  and gets the union: a question about a novel's world read against real history
+  names both, one about only what the novel says names one, and leaving the list
+  out searches every frame. There is no base-reality background a frame is read
+  against — if you want it, say it.
+- **The test: which world is this claim about?** Would it hold in every other
+  frame in this graph → the real-world frame, `the-real`. Otherwise → the frame
+  it belongs to, by itself. *"Milan is in Lombardy"* is one answer; *"Milanese
+  merchants believed the pass was closed"* is the other.
+- **A reflect that would invent a frame refuses instead.** Splits inherit what
+  their parent states and a synthesised parent inherits the set its children
+  share; a `parents` or topic `merges` group standing in *different* frames comes
+  back in `parents_refused` / `topic_merges_refused` and nothing is written. A
+  merge **re-states** the survivor's frame under your judge rather than
+  inheriting an edge somebody else wrote — the survivor's wording is synthesised,
+  so nobody had yet said which world it was about. The union is never taken: one
+  node asserted in two worlds is the worst outcome available.
 - **Two perspectives disagreeing about one world will not be nominated as a
   contradiction**, because they share no frame and the sweep skips pairs that
   do not. That is usually right — two epistemic positions coexist, neither

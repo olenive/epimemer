@@ -330,6 +330,7 @@ async def merge_nodes(
 
     # The merged node inherits its sources' sources/tags/relationships via edge
     # migration below (sourced_from / tagged_with / user edges are migrated).
+    # Its **frame** is the exception and is re-stated rather than migrated.
     vectors = await embedding_provider.embed([merged_node.content])
     merged_embedding = EmbeddingRecord(
         item_id=merged_node.id,
@@ -340,6 +341,25 @@ async def merge_nodes(
         NodeEdge(src_id=source.id, dst_id=merged_node.id, type=EdgeType.MERGED_INTO)
         for source in source_nodes
     ]
+
+    # The survivor's frame is **re-stated**, not inherited (#76). Its content is
+    # synthesised, so no source's framing was ever made about this wording, and
+    # a migrated edge would answer *which world is this about* on the merging
+    # agent's behalf while crediting somebody else. `migration_disposition`
+    # keeps `has_metacontext` on the sources for the same reason; these are the
+    # replacement. The set is well-defined because every merge path refuses
+    # sources that do not stand in exactly the same frames, so the union is that
+    # one set — and an empty one (an undeclared graph) re-states nothing, which
+    # is right: nobody has said anything to restate.
+    from epimemer.pipelines.frames import frame_edges
+    from epimemer.pipelines.reflection.review import frames_for
+
+    source_frames = await frames_for([source.id for source in source_nodes], storage)
+    restated = frame_edges(
+        merged_node.id,
+        {frame for frames in source_frames.values() for frame in frames},
+        judge=judge,
+    )
 
     # Planned per source, so each flag names the wording that went away rather
     # than the survivor that replaced it. An inference resting on two of the
@@ -365,7 +385,8 @@ async def merge_nodes(
     )
 
     await storage.merge_nodes_tx(
-        source_nodes, merged_node, merged_embedding, lineage_edges, merged_at=now,
+        source_nodes, merged_node, merged_embedding,
+        [*lineage_edges, *restated], merged_at=now,
         evidence_edges=evidence_edges, judge=judge,
     )
 
@@ -392,6 +413,13 @@ class ReverseRefused(BaseModel):
 
 def _repointed(edge_id: str, source_ids: set[str], survivor_id: str) -> str:
     return survivor_id if edge_id in source_ids else edge_id
+
+
+async def _frames_for_reversal(node_ids, storage):
+    """The sources' stated frames, imported late to avoid an import cycle."""
+    from epimemer.pipelines.reflection.review import frames_for
+
+    return await frames_for(node_ids, storage)
 
 
 async def reversal_refusal(
@@ -446,6 +474,19 @@ async def reversal_refusal(
     } | {
         (source_id, survivor.id, EdgeType.MERGED_INTO.value)
         for source_id in source_ids
+    } | {
+        # The frame the merge **re-stated** on the survivor (#76). It is not in
+        # the captured partition, because a merge no longer migrates
+        # `has_metacontext` — the sources kept theirs, and these are new edges
+        # the merge itself wrote. Left out, every merge became irreversible the
+        # moment re-statement shipped: the guard would see the survivor's own
+        # frame as something added since. Derived the same way `merge_nodes`
+        # derived it, from the sources, so the two cannot drift.
+        (survivor.id, frame, EdgeType.HAS_METACONTEXT.value)
+        for frames in (
+            await _frames_for_reversal(list(source_ids), storage)
+        ).values()
+        for frame in frames
     }
 
     incident = {edge.id: edge for edge in await storage.get_edges_from(survivor.id)}

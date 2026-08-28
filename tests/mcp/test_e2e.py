@@ -17,14 +17,30 @@ from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.server import mcp as epimemer_mcp
+from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.storage.memory import InMemoryStorage
+
+def _graph_with_the_real() -> InMemoryStorage:
+    """An in-memory graph somebody has set up.
+
+    Since #76 a frame is required at ingest and `the-real` is an ordinary
+    metacontext, created once like any other. A server fixture without it would
+    make every test here start by creating a frame, which tests the fixture.
+    """
+    store = InMemoryStorage()
+    store._graphs[store._database].metacontexts[BASE_METACONTEXT_ID] = Metacontext(
+        id=BASE_METACONTEXT_ID,
+        content="The Real",
+        description="Claims about the real world.",
+    )
+    return store
 
 
 @asynccontextmanager
 async def _test_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     """Test lifespan using in-memory storage and mock providers."""
     yield {
-        "storage": InMemoryStorage(),
+        "storage": _graph_with_the_real(),
         "embedding_provider": MockEmbeddingProvider(model_id="mock-embed", dimension=8),
         "config": ServerConfig(
             storage_backend="memory",
@@ -59,7 +75,7 @@ def _parse_response(result) -> dict:
 
 
 async def _segment_and_store(
-    server: FastMCP, content: str, metacontext_id: str | None = None,
+    server: FastMCP, content: str, metacontext_id: str = "the-real",
     graph: str = "default",
 ) -> dict:
     """Helper: run the two-step ingest flow (segment + store_decomposition).
@@ -89,9 +105,8 @@ async def _segment_and_store(
     store_args: dict = {
         "document_id": doc_id,
         "segments": decomposition,
+        "metacontext_id": metacontext_id,
     }
-    if metacontext_id:
-        store_args["metacontext_id"] = metacontext_id
 
     store_result = await server.call_tool(
         "store_decomposition",

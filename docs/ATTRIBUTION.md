@@ -403,17 +403,14 @@ does not. All three fail silently.
 
 **`assign` makes the common repair atomic, and that is the point.** A claim
 mis-filed under frame A that belongs in frame B could be moved by withdrawing then
-linking — but that path passes through *untagged*, where the claim is asserted in
-**every** frame, and it strands the node there permanently if the second call
-never happens.
+linking — but that path passes through a state where the node states no frame at
+all, and it strands the node there permanently if the second call never happens.
 
-**A withdrawal that leaves no frames is a promotion**, and has to be said out
-loud. Untagged is not neutral: base-reality knowledge is inherited by every frame,
-so a claim made inside one novel becomes a claim made in all of them.
-`to_base_reality=True` is required there — required rather than inferred for
-`expected_graph`'s reason, that the check is worth something only because the
-agent's intent is stated independently of the state. It is refused where it does
-not apply, because a flag that lies about what it authorised is worse than none.
+**A withdrawal that would leave no frames is refused.** A node stating no frame
+shares a frame with nothing: never compared, never merged, returned by no scoped
+search. So a claim goes somewhere or it stays where it is — the paradigm case
+this tool was built for, a real-world fact filed inside a novel's frame, is
+`assign` to the frame holding real-world claims.
 
 **The withdrawal deletes the edge rather than marking it**, and #68's
 carry-forward is why: *before designing a mechanism for undo-without-delete, check

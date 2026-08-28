@@ -3880,30 +3880,28 @@ Not urgent. Review works, and says what it covers.
 > fact-pair version: of eighteen pairs nominated on `memory`, five merged and
 > **thirteen were declined and vanished**.
 >
-> **Four departures from the design, all in `RELATION_LABELS.md` §7.3**, and one
-> is worth repeating here because it is this entry's own lesson missed a layer
-> up. §4.3 claimed the label ids meant *"`review()` dereferences them like any
-> other row"* — and it did not: `review` resolved subjects with `get_nodes`
-> alone, so both ids came back with a null preview, which its own comment defines
-> as *the node is not in this graph*. Every `relation_description` row shipped in
-> stage 2 already read that way, unnoticed. Subjects now carry `subject_kind`
-> (`node` / `relation_label` / null) and the extra read happens only where
-> something failed to resolve as a node. **An id nobody dereferences is not an
-> identity**, which is precisely what this entry says about labels.
+> The build departed from the design in four places; the rules as they stand
+> are all in `RELATION_LABELS.md` §4. One lesson is worth keeping here because
+> it is this entry's own thesis missed a layer up: §4.3 claimed `review()`
+> dereferenced the label ids and it did not — `get_nodes` alone rendered them
+> as *not in this graph*, unnoticed through every stage-2 row. **An id nobody
+> dereferences is not an identity.**
 >
-> The other three: a third protocol method (`relation_verdicts_for`) because a
-> set of pairs cannot tell a retry from a confirmation; a second judge
-> *disagreeing* is recorded rather than refused, since resolving that would have
-> built #80 by accident; and two unnamed judges compare equal, so an anonymous
-> repeat is refused as a retry rather than manufacturing agreement out of nobody.
+> **Review found the same shape again one commit later, and the read surface
+> was built 2026-08-28**: `verdict` and `because` were required of every writer
+> and readable by nothing — #64's tell inverted, a field with writers and no
+> reader. Now each `list_relations` row carries its label's standing verdicts,
+> `reflect` reports `relation_pairs_suppressed` (a silent permanent suppression
+> must be countable, or *settled* reads as *unexamined*), a missing `kind` is
+> refused instead of defaulted, and `query_relation_verdicts` is the fourth
+> protocol read. The FC1 regression was **shown to fail** without the filter —
+> 18 tests go red when the suppression line is removed. Suite green at 3129.
 >
-> 72 tests over both backends, and the FC1 regression was **shown to fail**
-> without the filter — 18 of the 72 go red when the suppression line is removed.
-> Suite green at 3113. **Stage 4 is untouched and undecided** (§5): whether label
-> merging survives at all is with the user and a reviewer, and the ordering
-> constraint this stage was blocking on is now discharged — verdicts inherit the
-> nominations, so `relation_merges` can be removed without leaving
-> `similar_relations` feeding nothing.
+> **Stage 4 is untouched and undecided** (§5): whether label merging survives
+> at all is with the user and a reviewer, and the ordering constraint this
+> stage was blocking on is now discharged — verdicts inherit the nominations,
+> so `relation_merges` can be removed without leaving `similar_relations`
+> feeding nothing.
 
 
 **A user-tier relationship label exists nowhere.** `list_relations` *derives* the
@@ -4217,7 +4215,127 @@ to hang derived frames off, and arguably not worth building before stage 4.
 
 ---
 
-### Issue 76 — the base metacontext has no row, and absence is silently promoted to an assertion — 🟡 DECIDED 2026-08-27, BUILD PENDING (raised 2026-08-24, two of three built 2026-08-25)
+### Issue 76 — absence was promoted to an assertion — 🟢 RESOLVED 2026-08-28 by removing the promotion (raised 2026-08-24; the row and the id check 2026-08-25, the requirement 2026-08-28)
+
+> **The promotion rule is gone — 2026-08-28, the user's decision, and it
+> supersedes the shape below.** A missing frame no longer means base reality. It
+> means what absence means everywhere else here: **no information**. `frames_for`
+> returns the stated edges and nothing more.
+>
+> **This is the entry's own observation carried to its conclusion.** The
+> complaint was never that a default existed — it was that this is *"the one
+> place in the system where absence is promoted to a positive claim"*, against a
+> rule stated and enforced everywhere else (`confidence` omitted is unrated,
+> `judged_by` absent is unknown, `claim_kind` omitted is unjudged). The
+> promotion was load-bearing only while absence was *producible*: something had
+> to be assumed, because a contradiction detector cannot skip an unknown frame
+> the way a ranker skips an unrated confidence. Requiring the frame at ingest
+> removed the thing it was compensating for, and the exception could go.
+>
+> **What went with it**, each of which existed only to serve the promotion:
+>
+> - **`the-real`'s special cases.** It was accepted with no row (it named
+>   something in every graph, because untagged resolved to it) and created
+>   behind the scenes on every ingest. It is now an ordinary metacontext that
+>   must exist like any other — `create_metacontext` gained a chosen `id`, which
+>   is what makes a *convention* implementable without a mechanism. Keeping the
+>   constant is what stops two graphs holding one frame under two strings.
+> - **`FRAME_REQUIRED_SINCE` and the dated base-frame description.** With no
+>   promotion there is no before-and-after to date: absence means nothing in
+>   every graph, of every node, whenever it was written. The boundary was an
+>   artefact of the rule it was recording.
+> - **`search`'s hardcoded frame-plus-base union, and `cross_frame`.**
+>   `metacontext_id: str` became `metacontexts: list[str]`, a union the caller
+>   states. The inheritance could express exactly one combination and hid that it
+>   was choosing; an omitted list now searches everything, which is what the flag
+>   meant.
+> - **`reframe`'s `to_base_reality`.** Withdrawing a last frame was a promotion
+>   worth authorising; it is now a way to strand a node, and is refused.
+> - **The frame migrating on a merge.** The survivor's wording is synthesised, so
+>   no source's framing was made about it: `migration_disposition` keeps
+>   `has_metacontext` on the sources and the merging agent **re-states** it under
+>   its own judge. *Merging is not coining*, one layer up from #81's version of
+>   the same rule.
+>
+> **And one thing arrived rather than left**: the INGEST journal row names its
+> frame. The argument for requiring a frame was that a wrong one stays findable;
+> until the row carried it, finding meant walking from an agent's ingest rows out
+> to the edges of every node they named. One frame per call is one value per row.
+>
+> **The migration is a declaration, not a compatibility mode.** `epimemer frames
+> declare <graph> --frame the-real` stamps a frame on every node carrying none —
+> idempotent, confirmed at the prompt, one journal row per sweep
+> (`DecisionKind.FRAME_DECLARATION`), edges carrying the declaring judge. It is
+> a CLI command for the reason judge approval is: *the user* is stating that the
+> claims in this graph were always about one world, and an agent asserting that
+> about its own past writes would be marking its own homework. A reserved
+> `unvouched` frame covers a graph nobody can vouch for, and
+> `store_decomposition` refuses it by name — a frame an agent could write into
+> would stop meaning *nobody vouched for this*. There is no deprecation
+> machinery: the command is naturally dead once `graph_stats.nodes_without_frame`
+> reads zero, and embedded dev graphs are rebuilt rather than migrated.
+>
+> **The sequencing was binding and was followed**: the command shipped first
+> (`f2997d5`), because once the promotion goes an undeclared node shares a frame
+> with nothing — this entry's own isolation failure, arriving at every graph at
+> once.
+>
+> **The cost, measured rather than assumed.** An explicit frame edge per node
+> makes `frames_for` materially more expensive: at 684 nodes, 0.18 ms → 13.6 ms
+> on SurrealDB and 0.28 ms → 4.6 ms in-memory; at 5,000, 1.0 ms → 105 ms and
+> 2.1 ms → 34 ms. Review expected noise and it is not. It is bounded by where
+> the read is called — `reflect` seeds it once over nominated pairs, search
+> scoping runs over a result set — and neither walks the whole graph. A caller
+> that did would want a storage-level frame filter.
+>
+> **One divergence, recorded so it is not read as a bug later.** Two frameless
+> nodes have *equal* frame sets but no *overlap*, so a merge will combine them
+> while contradiction detection skips them. Both are right — equality asks
+> *would merging assert something new*, overlap asks *is this conflict real* —
+> and the difference is visible only on a graph nobody has declared.
+>
+> **Suite green at 3208.**
+
+> **Built 2026-08-28, all seven steps in one change, and the declared per-graph
+> default is now dropped for good rather than deferred.** `metacontext_id` is
+> required on `store_decomposition` and on the routed `StoreDecompositionInput`;
+> `require_metacontext` refuses a blank one and stopped advising *"or omit
+> metacontext_id"*, which had become advice to do the impossible. `search` stays
+> optional, and the asymmetry is now written down in three places rather than
+> assumed.
+>
+> **A stated `the-real` is written as a real edge, and that decision is what
+> makes the requirement pay.** Without it, stating the base frame and saying
+> nothing would be byte-identical in the graph — the requirement would be pure
+> ceremony, which is exactly what review question 2 asked about. `frames_of`
+> already reduced *tagged with the base id* and *untagged* to the same
+> single-frame set, so nothing downstream reads them differently; the difference
+> exists for a reviewer, and the edge carries the judge who wrote it.
+>
+> **The leak closed in the same commit**, as step 7 of the decision required:
+> splits inherit the parent's frame, synthesis inherits the set its children all
+> stand in and refuses into `parents_refused` when they differ, and topic merge
+> got the frame-set-equality gate facts have had since #52 (`topic_merges_refused`).
+> Comparison is on **resolved** frames, not stated edges, so a legacy untagged
+> node and one written since the rule count as agreeing — comparing raw edges
+> would have made the 684 unframed nodes unmergeable with everything after them.
+>
+> **No backfill, and the date is queryable**: `BASE_METACONTEXT_DESCRIPTION`
+> names `FRAME_REQUIRED_SINCE` on the base metacontext's own row, which
+> `ensure_base_metacontext` keeps current — safe to rewrite because
+> `create_metacontext` mints its own ids, so that row is system-owned and no
+> agent can be holding it.
+>
+> 38 tests over both backends in `tests/mcp/test_frame_required.py`; 18 of them
+> go red when the four changes are stubbed out. Suite green at 3167. Twenty-three
+> ingest call sites across nine test modules had to name a frame, which is the
+> honest measure of how breaking the change is.
+>
+> **Carry-forward: the granularity limit is now load-bearing rather than
+> theoretical.** One frame per call means a mixed document is two calls, and that
+> instruction now sits in four agent-facing places. The per-node override belongs
+> beside `importance` and `confidence` in the `DecompositionEntry` object when a
+> real mixed-batch case turns up.
 
 > **Decided 2026-08-27 by the user, after two review rounds: require the frame
 > at ingest, and drop the declared default outright. The remaining build is
@@ -5202,6 +5320,57 @@ finishing that test matters beyond its own assertion.
 
 ---
 
+### Issue 82 — a malformed `apply_reflection` entry aborts a batch that is already half-written — 🟡 OPEN (raised 2026-08-28, from the #74 stage-3 read-surface review)
+
+**Found while absorbing the read-surface commit**, which made a
+`relation_verdicts` entry omitting `kind` **refuse per entry** rather than
+default. That was right, and it made the surrounding convention visible: every
+other required field in `apply_reflection` is read with `spec["…"]` and raises.
+So one loop now has three behaviours for three required fields — `pair` raises,
+`kind` refuses at the call site, `verdict` and `because` refuse downstream in
+`apply_relation_verdict`.
+
+The inconsistency is cosmetic. What it exposes is not: **`apply_reflection`
+applies in nine steps with no transaction across them**, so a raise part-way
+through leaves everything before it committed, and `_run_with_timeout` catches
+the exception and returns `_error_response(str(e))` — a response that says the
+call failed and cannot say what landed. Measured on the in-memory store:
+
+```
+apply_reflection(similarities=[<valid distinct verdict>],
+                 relation_verdicts=[{"verdict": "distinct", "because": "x"}])  # no `pair`
+raised KeyError: 'pair'
+SIMILARITY rows committed before the abort: 1
+```
+
+The agent sees `"'pair'"`. It cannot tell that its similarity verdict was
+recorded, and a similarity verdict is **permanently suppressing** — so the
+plausible next move, fixing the malformed entry and retrying the whole batch, is
+also the move that meets a refusal it has no reason to expect.
+
+**Why this is not just "validate the input".** The step order is load-bearing
+(#65's anchoring rule: judgments first, because later steps retire the nodes
+they name), so the fix is not a transaction — it is that **a batch is validated
+before any of it is applied**, which is a different shape from the per-entry
+refusals that exist today. Per-entry refusal is right for a judgment the server
+can evaluate and reject; a structurally malformed entry is not a judgment at
+all, and should stop the call before step 1 writes.
+
+**Not urgent.** Every entry shape is documented, and a well-formed batch never
+reaches this. It is a robustness gap that shows up under a client bug or a
+truncated tool call, and its cost is a silently partial write reported as a
+total failure.
+
+**Also found in the same read, and too small for its own number:**
+`find_similar_relation_pairs` now has **no production caller** —
+`reflect` takes `sweep_similar_relation_pairs` for the `suppressed` count, and
+the thin wrapper survives only in two test modules. Either fold the tests onto
+the sweep or keep it deliberately; it is documented as being "for callers with
+no report to file", and there are none.
+
+---
+
+
 ## Older carry-overs (open, low priority)
 
 From the original live-graph walkthrough (issues 1–5, otherwise resolved or kept
@@ -5371,9 +5540,10 @@ What to pick up, and what has to be true first:
 | ✅ | ~~76, two of three (the base metacontext has no row; nothing validates `metacontext_id`)~~ | **Built 2026-08-25.** `store_decomposition` creates The Real before it writes, so the first ingest into a graph gives the default frame a record — at ingest rather than at graph creation, because an empty graph asserts nothing about any world and a graph created earlier would otherwise never get one. And `require_metacontext` refuses an id that resolves nowhere here, on `store_decomposition` **and `search`**. **The read was the half that mattered**: a write with a dangling id is at least visible, while a search on one silently narrows to base reality and answers as though that were the frame. The refusal **lists the frames that do exist**, because no MCP tool enumerates metacontexts — the refusal is the only listing there is. Three judgments: `the-real` passes with no row (reserved, and what an untagged node resolves to, so refusing it would refuse the one id that cannot be wrong); `cross_frame=True` does **not** excuse a bad id, since the flag makes it inert for filtering and that is exactly why a wrong one would go unnoticed; and the check runs before the document is built, so a bad id leaves no partial decomposition behind. **The precedent was one function above the defect** — `_extraction_timeline` has refused an unknown timeline since it was written, for the same reason. Cleared a residue on the way: a dangling first line of a comment left by #71's move of the wrong-graph gate to the MCP boundary |
 | ✅ | ~~78 (judge identity conflates the key, the name and the claim)~~ | **Fixed 2026-08-26 in two stages.** Stage 1 (2026-08-25) replaced the free-text prompt with a **picker** over the judges this graph already knows and moved the gate from *minting* an id to **assuming** one; stage 2 split the field into three — an opaque key, a freely renamable name resolved at read time, and the existing per-decision pinned description. **The picker was the precondition, not an alternative**: it is what makes an opaque key safe, because a human resolves name to identity on every bind rather than a machine guessing, and it is why #77's rejection of an opaque id did not survive. **The migration the design planned turned out to be unnecessary** — an opaque key is opaque whatever it looks like, so a legacy string id simply *is* the key and reads as its own name; only new judges get a UUID and nothing is rewritten. What was left was the one migration that needed a person: two records that should be one, which now arrives through **renaming** rather than as its own concept — renaming to a taken name asks *are these the same judge*, so the repair appears exactly where the duplication is visible. Consolidating deletes nothing: the absorbed record is kept, `live_agents` derives that it is no longer a judge, and both description histories merge, because a decision records `(key, digest)` and dropping the absorbed history would leave its own old rows unreadable. `query_decisions` takes `agent_ids` now — after a consolidation a judge **is** a set of keys — and `judge_aliases` sits beside the protocol rather than at the MCP boundary because `apply_review`'s duplicate check needs it too. Each stage turned up a defect **in itself**: stage 1's *ask on every bind* broke elicitation-less clients, because *declined* and *nobody to ask* were one value; stage 2's picker minted a UUID beside a bare approved id the user had seeded, orphaning the only approval they had given |
 | ✅ | ~~66 (two ingest-time judgments have no way to be revised)~~ | **Built 2026-08-27** as `reframe` and `correct_interval`, five days after it was filed. The entry's conclusion — keep them out of `rejudge` — was right; its reason was not the strongest available. **The ground is addressing**: `rejudge` names a node and promises no edge moves, while a frame revision moves an edge and changes what retrieval does, and an interval belongs to a (node, source) pair — so folding it in grows a `source_id` read for one field out of five, which is this file's own *a parameter that needs "only applies when"* tell. **Review caught a trap before it was built**: the proposed flat refusal on withdrawing a node's last frame would have left the tool unable to fix the paradigm case it exists for, since a real fact mis-filed under a novel's frame belongs in base reality. Withdrawal-to-untagged is a **promotion** — base-reality knowledge is inherited by every frame — so it takes an acknowledgment (`to_base_reality=True`) rather than a guard, refused where it does not apply. **`assign` makes the A→B move atomic**, so the repair never passes through untagged and never strands a node asserted in every frame. The withdrawal **deletes** the edge on #68's carry-forward — the honouring read does not exist, so a marker would fail open where deleting fails closed — and the withdrawn frame survives in the node's trail and the journal row, which is what bounds which past search and corroboration answers were wrong. Carry-forward: **a refusal that blocks the motivating example is a design error, not a safety feature** |
-| **next, with 74** | 76 | **Decided 2026-08-27 after two review rounds, build pending — seven steps that ship together.** The frame becomes **required** on `store_decomposition`; the declared per-graph default is **dropped, not deferred**, because *deferred until mixed content exists* invites building it on the day it is most dangerous. Two arguments killed the default: it makes fiction-or-fact depend on **which graph the write landed in**, which is the ambient state **71** exists because it cannot be trusted; and it is **retroactive by construction**, since `frames_for` resolves absence at read time, so flipping the override would reclassify every untagged node at once with no per-node record — a bulk epistemic move dressed as a config edit, and the `AGENTS.md` counter-case exactly. **The habituation objection is dead, and not for the reason first offered**: the implementer credited `reframe` shipping the same morning, which was convenient and not load-bearing; the real answer is that absence is already promoted to The Real before any consumer sees it, so there is no signal for a reflexive `the-real` to degrade — and `expected_graph` is the precedent, required everywhere and answered reflexively. **Review found the claim that made the case for it false as stated**: *untagged stops being producible* is not true, because `apply_reflection` mints untagged nodes at parent synthesis and at splits, so reflect converts framed knowledge into unframed assertions; topic merge is a softer second instance, with no frame gate where facts have one. That fix must ship **in the same change**, or the legacy date boundary is false the day it is written. **No backfill** of the 684 legacy nodes: writing `the-real` onto them manufactures 684 judge-less deliberate-looking assertions, which is the ambiguity the rule exists to end. Carry-forward: **the requirement buys detectability and recoverability, never prevention** — a templated `the-real` on a fiction ingest is exactly as wrong as silence was |
+| ✅ | ~~76 (absence was promoted to an assertion)~~ | **Resolved 2026-08-28 by removing the promotion.** A missing frame no longer means base reality — it means what absence means everywhere else here, *no information*. That became possible once the frame was **required** on `store_decomposition`, which removed the thing the promotion was compensating for. With it went `the-real`'s special cases (an ordinary metacontext now, created like any other), the dated boundary, `search`'s hardcoded frame-plus-base union and `cross_frame` (a caller-stated `metacontexts` list instead), `reframe`'s `to_base_reality`, and the frame migrating on a merge — a survivor's frame is **re-stated** by the merger, since its wording is synthesised. The INGEST row now names its frame, which is what makes a wrong one findable. Migration is `epimemer frames declare`, a user's statement rather than a compatibility mode; `graph_stats.nodes_without_frame` is the completeness check |
 | **next** | 74 | Carried a **live defect** — relation-label nominations had no suppression, so a rejected pair was re-offered on every reflect for ever — **closed 2026-08-27 by stage 3**. It was the treadmill **64** closed for fact pairs with the `assessed` edge, unbuildable for labels while the subject was a label pair rather than a node pair, which is what stage 1's records fixed. **74** (a relation label is a string with no record) **supersedes 69** — raised 2026-08-24 after measuring the feature 69 was about: relation merges fire approximately never, labels do not affect retrieval, and the consolidation is a port of tag consolidation whose premise did not survive. Give a label a record and a description, and deprecation replaces merging without rewriting an edge. **69** stays open but blocked on it. **FC2–FC4 are settled 2026-08-24**: none is reachable — they need deprecation, steering and renaming respectively, and none exists — so each is recorded as a precondition on the feature that would create it rather than as work outstanding. **Stage 1 built 2026-08-26** — the record, three protocol methods on both backends, `link` create-or-fetch and a CLI backfill; identity now exists, which is what every later stage needed first. **Stage 2 built 2026-08-27** — `description` on `list_relations`, on `link`'s response when it reuses a label, a `describe_relation` tool journalling its own `RELATION_DESCRIPTION` kind, and `viz_list_relation_labels`. This is the half that pays, because it moves the intervention from repair to prevention: an agent picking from a described vocabulary never coins the fourth synonym. Two calls the design had not made: the kind is resolved by `get_relation_kind`, which reads **every** edge while `list_relations` reads only edges on active nodes — so a label whose users have all retired stays describable, which is the right way round; and a blank description leaves prose alone, so the response reports what was **stored** rather than echoing an argument that cleared nothing. **Stage 3 built 2026-08-27 and FC1 is closed** — `relation_verdicts` on `apply_reflection`, a `RelationVerdict` suppression table, and a `RELATION_VERDICT` journal row naming both label records, **which is where 69 resolves**: not by choosing one of its four shapes but by the subject acquiring an identity, so 69 is now closed too. Four departures, of which one repeats this entry's own lesson a layer up — §4.3 claimed `review()` would dereference the label ids and it did not, resolving subjects with `get_nodes` alone, so every stage-2 `relation_description` row had been reading as *node not in this graph*; subjects now carry `subject_kind`. **An id nobody dereferences is not an identity.** 72 tests, and the regression was shown to fail without the filter. **Whether merging survives at all was put to the user 2026-08-27 and is with a reviewer**: the recommendation is to remove `relation_merges` (a lossy irreversible bulk rewrite in an otherwise append-only system) and defer stage 4; the user's instinct is that removal is right and deprecation is still worth having. Undecided. **The ordering constraint is discharged**: stage 3 had to land before or with any removal, because `reflect`'s `similar_relations` nominations exist to feed `relation_merges` and would otherwise feed nothing. It has, so removal is now unblocked whichever way the decision goes. `RELATION_LABELS.md` §5 has the arguments. **76** is **decided 2026-08-27 and pending a build** — the row and the existence check shipped 2026-08-25; the declared default is **dropped outright** and the frame becomes required at ingest instead. See its own row. **75** (relation-label nominations ignore metacontext) was filed 2026-08-24 and came out **smaller than expected**: the corroboration harm behind `merge_facts`' cross-frame refusal does not transfer, since nothing corroborates on a label, and the check does not catch the example that motivated it. **66** is **built 2026-08-27** as `reframe` and `correct_interval` — see its own row. **78 supersedes 77** the same day it was filed. **77** described the defects and proposed the wrong remedy: it rejected an opaque judge id on two objections that were both premised on a free-text prompt, and the user pushed back. **78** is the whole area in one entry — ten defects, of which three are a gate that guards *minting* an id and never *assuming* one, so an approved id binds with no user involvement and the refusal helpfully lists the ids that will. The remedy is a **picker**, which `ctx.elicit` already supports and which is the precondition for everything else: it is what lets a judge id be opaque, since the user picks a rendered identity rather than typing a string, and a human resolves name to identity on every bind rather than a machine guessing. Then three layers — an immutable UUID, a freely renamable name resolved at read time, and the existing per-decision pinned description — because one field is doing three jobs with three different rules. **Migration absorbs the aliasing feature 77 asked for**: former ids on the agent record are the migration path, the repair for the `Opus 5 Judge` / `Opus 5` split, and the resolver for pre-change rows, with nothing rewritten. **Stage 1 built 2026-08-25** — picker, cadence and the new-judge flag, closing eight of the ten; the identity split and the three-layer model remain. Building it turned up a defect in itself: asking on every bind broke elicitation-less clients entirely, because *declined* and *nobody to ask* were one value, and an existing test's docstring had described the distinction years before anything needed it. Cadence decided by the user the same day: the picker appears once per session, per graph, **per identity** — keyed on the identity rather than the session, since *confirmed at all* would let an agent be approved as one judge and then bind silently as another. **Stage 2 built 2026-08-26 and 78 is closed** — see its own row |
 | ✅ | ~~81 (a relation merge strands the label record it merged away)~~ | **Found and fixed 2026-08-27**, in that order and the same day, by trying to finish #74 stage 1's deferred test 9 — *every record a label can acquire is reachable without the CLI*. `RELATION_LABELS.md` §2.3 enumerates three write paths that name a label; **there are four**, because `apply_reflection(relation_merges=…)` exists today and the design was written as if stage 4 had already replaced it. Before the fix, consolidating into an uncoined label left the edges pointing at a word with no record, the survivor undescribed, and the loser's prose sitting in the store unreachable through any agent surface — while `list_relations` and `query_relation_labels` quietly disagreed about whether the abandoned word existed. The survivor now gets a judge-less record (merging is not coining) and the loser's prose comes back in `relation_descriptions_orphaned` rather than being folded in: settling two definitions into one is the agent's judgment, not the system's, which is `reflect`'s nominate-don't-decide split applied one layer over. **The residue is deliberate**: removing the stranded record needs a hard delete this system deliberately has only one of, or the `status` that is stage 4 and undecided — so this is now *measured* evidence for §5 rather than a predicted cost. Carry-forward: **an enumeration of write paths in a design is a claim that ages**, and the guard that catches it is exactly the deferred test |
+| low, robustness | 82 | **A malformed `apply_reflection` entry aborts a batch that is already half-written**, and the error response cannot say what landed. Found by the read-surface review: refusing a missing `kind` per entry made the surrounding convention visible — every other required field raises. The fix is **validate the whole batch before step 1 writes**, not a transaction, because the step order is #65's anchoring rule and must stay. Costs nothing on a well-formed call |
 | when a case turns up | 80 | **A suppression has no retraction, so every wrong decline is permanent by construction** — the dual of #64's rule, and the thing #64's own fix creates. Filed 2026-08-27 because the reasoning already existed in three places and had no number: `RELATION_LABELS.md` §4.2, #74's FC section, and `similarity_decisions.py` — and #74's entry is scheduled to be pruned when its stages finish, which would take the argument with it. **Not #68**, which was the affirmative half and was fixed 2026-08-23 with a deliberately one-way retraction; that fix left suppression untouched on purpose. **And the two layers may legitimately need different fixes**, which is the part most at risk of being lost: #68's asymmetry is entirely a property of corroboration, nothing corroborates on a label, so a symmetric retraction is a live option there and would be wrong for facts. **Stage 3 shipped 2026-08-27, so the second instance now exists** — the deadline this entry was filed to beat. Still quiet rather than urgent, and for the reason the entry already gave: one label in the largest real graph means no pair can be nominated and none can be wrongly suppressed. That is the corpus arguing, not the design. Stage 3's repeat-verdict refusal names this entry, so an agent wanting a verdict revisited is told where the question lives. Build it from a real case: a suppression somebody actually wants undone, argued from the instance rather than guessed at |
 | designed | inference merge, advisories, node notes | Not on this board — `dev-docs/WARNINGS_AND_SETTINGS.md`, designed 2026-08-21 and deliberately unbuilt. The duplication it addresses does not exist yet: 123 active inferences across both real graphs yield 5,053 pairs and **zero** at the nomination bar. It becomes real once fact merges start collecting inferences onto one survivor |
 | deprioritised | 79 | **Premise corrected 2026-08-26.** Filed on two reasons — a local store that cannot persist, and SurrealDB's BSL — and the second did not survive checking. **BSD and BSL are unrelated**, and an inventory of 186 installed distributions found **zero** source-available packages: 178 permissive, `surrealdb` itself Apache-2.0. The BSL governs the **server binary**, which is not a Python package and is never shipped; embedded `surrealkv://` needs no server at all and reopens a store in **25 ms**. What is left is a convenience for a command-line tool, worth having and not worth displacing designed work. Two findings outlast the entry: floats as JSON are unviable (951 MB and 10.6 s at 100k nodes, against 379 MB and 0.9 s as base64 float32), and **`torch` is 385 MB against `surrealdb`'s 9.8 MB**, so dependency weight for an embeddable Epimemer is an embedding problem, not a storage one. Carry-forward: *confirm the constraint before designing around it* |

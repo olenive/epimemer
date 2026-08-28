@@ -27,6 +27,7 @@ import pytest
 
 from epimemer.core.temporal import IntervalBasis, PreciseInstant, ValidityInterval
 from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
     ClaimKind,
     EdgeType,
     EmbeddingRecord,
@@ -932,6 +933,7 @@ class TestTheJudgmentIsRecordedAtIngest:
             }],
             storage=storage,
             embedding_provider=embedding_provider,
+            metacontext_id=BASE_METACONTEXT_ID,
         )
 
         facts = await storage.query_nodes(node_type=tools.NodeType.FACT)
@@ -953,6 +955,7 @@ class TestTheJudgmentIsRecordedAtIngest:
             }],
             storage=storage,
             embedding_provider=embedding_provider,
+            metacontext_id=BASE_METACONTEXT_ID,
         )
 
         facts = await storage.query_nodes(node_type=tools.NodeType.FACT)
@@ -979,6 +982,7 @@ class TestTheJudgmentIsRecordedAtIngest:
                 }],
                 storage=storage,
                 embedding_provider=embedding_provider,
+                metacontext_id=BASE_METACONTEXT_ID,
             )
 
     async def test_a_kind_outside_the_vocabulary_is_rejected(
@@ -999,6 +1003,7 @@ class TestTheJudgmentIsRecordedAtIngest:
                 }],
                 storage=storage,
                 embedding_provider=embedding_provider,
+                metacontext_id=BASE_METACONTEXT_ID,
             )
 
     async def test_the_kind_survives_a_round_trip_through_the_backend(

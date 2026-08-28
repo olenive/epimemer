@@ -11,9 +11,13 @@ the history linked. Your job is to write fast and organize deliberately.
   call `store_decomposition`.
 - **Say which graph you mean, on every call.** See *Which graph* below — it
   applies to reads as much as to ingest.
-- Pass a `metacontext_id` when the information has a specific framing (fiction, a
-  particular source, a perspective). Untagged knowledge is treated as base reality
-  — "The Real" (see Metacontexts below).
+- **`metacontext_id` is required.** Name the frame these claims are asserted in:
+  `the-real` for real-world claims — the conventional id, and the ordinary
+  answer — or another metacontext for fiction, a particular source, or a
+  perspective (see Metacontexts below). The frame must already exist here.
+  Required because a claim has to say which world it is about: a node with no
+  frame is one nobody spoke for, and nothing compares, merges or returns it. One
+  frame per call, so split a mixed document into two.
 - An entry may carry an `importance` prior (`{"content": ..., "importance": 0.8}`)
   when you already know it is unusually consequential or unusually disposable.
   Usually leave it alone: importance is properly judged at reflect time, when the
@@ -128,8 +132,13 @@ Discovery & lookup:
   anything was extracted from them. *Where did I read that?* is a different
   question from *what do I believe?*, and if you paraphrased an identifier out of
   a fact when you stored it, the segment is the only thing that still holds it.
-- `search` is frame-scoped: passing `metacontext_id` returns that frame **plus**
-  untagged base-reality nodes; set `cross_frame=true` to search across all frames.
+- `search` is frame-scoped by a **list**: `metacontexts` returns nodes standing
+  in any of the frames named, and no frame inherits another — a novel's world
+  read against real history is `["<the-novel>", "the-real"]`. Leave the list out
+  to search every frame. It is **optional here and required on ingest**,
+  deliberately: leaving it out asks a coherent question — *anything about this,
+  wherever it was claimed* — while leaving it out on a write said nothing about
+  which world the claim was in.
 - Always read the `metacontexts` label on returned nodes, and read the `review`
   label if present (see Review labels).
 - **`include_corroboration=true` when independence is the question** — *is this
@@ -439,27 +448,36 @@ graph learned it.
   timestamp clears it.
 
 ### Metacontexts (epistemic frames)
-- Untagged knowledge is implicitly "The Real" — base physical reality. It is a
-  real record (`the-real`), created on the first ingest into a graph, so you can
-  see the frame you have been writing into rather than infer it.
+- **Absence names no frame.** A node with no frame is one nobody said anything
+  about — never compared, never merged, returned by no scoped search. It does
+  **not** mean base reality; it used to, and that was the one place here where
+  silence became a claim. Only a graph written before frames were required holds
+  any; `graph_stats.nodes_without_frame` counts them, and a person ends that
+  state with the `epimemer frames declare` CLI command.
+- **`the-real` is a convention, not a mechanism.** The id every graph should use
+  for the frame holding real-world claims, so two graphs do not end up with one
+  frame under two strings. Nothing reads it specially, and it must exist here
+  like any other — `create_metacontext` takes a chosen id.
+- **Every ingest names its frame**, and one frame per call: a discussion of a
+  novel that also states a fact about its real author is two calls.
 - **A metacontext id must resolve in the graph you are in**, and is refused if it
-  does not — on `store_decomposition` and on `search`. Ids are per graph, so one
-  remembered from another graph names nothing here; unchecked it would leave the
-  node in a frame it shares with nothing, never compared and never returned by a
-  search for the frame you meant. The refusal lists the frames that do exist,
-  which is the only listing there is.
-- Tag framed knowledge (a fiction setting, a specific source/perspective) with a
-  metacontext so it never bleeds into base reality. A fact that is true *within* a
-  fiction is not a contradiction of real history — it is a different frame.
+  does not — on `store_decomposition` and on `search`, and on every id in a
+  search's list. Ids are per graph, so one remembered from another names nothing
+  here; unchecked it would leave the node in a frame it shares with nothing. The
+  refusal lists the frames that do exist, which is the only listing there is.
 - **A frame need not be fictional.** *"What Milanese people knew by 1860"* and
   *"what Londoners knew by 1860"* are two frames over the same real past.
-- **Never add "The Real" alongside a perspective frame.** Base-frame knowledge
-  applies *everywhere* — a frame-scoped search returns that frame plus base
-  reality, and excludes sibling frames — so a perspective claim tagged into the
-  base frame is asserted in every frame at once. Tag the perspective alone.
-- **Ask: would this hold in every other frame here?** Yes → base reality. No →
-  the perspective frame by itself. *"Milan is in Lombardy"* is shared
-  background; *"Milanese merchants believed the pass was closed"* is not.
+- **No frame inherits another.** Ask for the combination you want by naming it.
+  *"Milan is in Lombardy"* belongs in the real-world frame; *"Milanese merchants
+  believed the pass was closed"* belongs in the perspective frame — and a reader
+  who wants both names both.
+- **A reflect that would invent a frame refuses instead.** Splits inherit what
+  their parent states and a synthesised parent inherits the set its children
+  share; a `parents` or topic `merges` group standing in different frames comes
+  back in `parents_refused` / `topic_merges_refused` with nothing written. A
+  merge re-states the survivor's frame under your judge — its wording is
+  synthesised, so nobody had yet said which world it was about. The union is
+  never taken.
 - **Two perspectives disagreeing about one world are not nominated as a
   contradiction** — they share no frame, and the sweep skips such pairs. Usually
   right: they coexist, neither claiming the other is wrong. Where the
@@ -581,11 +599,11 @@ graph learned it.
 - **A wrong frame is `reframe`, not a supersession.** `reframe(node_id,
   withdraw=…, because=…)` takes a metacontext off a node. **Prefer
   `assign=<other_frame>`** when the claim belongs somewhere else: withdrawing
-  and then linking passes through *untagged*, where the claim is asserted in
-  **every** frame, and strands it there if the second call never happens.
-  Withdrawing a node's **last** frame is that same promotion, so it needs
-  `to_base_reality=True` said on purpose — and is refused where it does not
-  apply. A wrong frame is not cosmetic: it makes a fact permanently unmergeable
+  and then linking passes through a state where the node states no frame at all,
+  and strands it there if the second call never happens.
+  Withdrawing a node's **last** frame is refused outright: a frameless node
+  shares a frame with nothing, so there is nothing to authorise — name where the
+  claim goes. A wrong frame is not cosmetic: it makes a fact permanently unmergeable
   with its own twin, stops it corroborating, and hides it from the frame it
   belongs to.
 - **A wrong period is `correct_interval`, not a supersession.**

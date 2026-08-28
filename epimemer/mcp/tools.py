@@ -33,6 +33,7 @@ from epimemer.core.types import (
     reachable_statuses,
     superseded_status_for,
     NodeType,
+    QUARANTINE_METACONTEXT_ID,
     RawDocument,
     RelationLabel,
     Segment,
@@ -312,6 +313,7 @@ async def journal(
     supersedes: str | None = None,
     certainty: float | None = None,
     certainty_basis: str | None = None,
+    frame: str | None = None,
 ) -> DecisionRecord | None:
     """Append one judgment to the journal. Returns the row, or None if it failed.
 
@@ -349,6 +351,7 @@ async def journal(
         # §5's ladder is stated there instead of on twelve tool schemas.
         certainty=certainty,
         certainty_basis=certainty_basis,
+        frame=frame,
     )
     try:
         await storage.record_decision(record)
@@ -648,7 +651,9 @@ async def _extraction_timeline(
 _FRAME_LISTING_LIMIT = 10
 
 
-async def require_metacontext(metacontext_id: str, storage: StorageBackend) -> None:
+async def require_metacontext(
+    metacontext_id: str, storage: StorageBackend, *, writing: bool = False
+) -> None:
     """Raise unless `metacontext_id` names a metacontext in the active graph.
 
     Metacontext ids are **per graph**, so an id carried over from another graph
@@ -660,18 +665,48 @@ async def require_metacontext(metacontext_id: str, storage: StorageBackend) -> N
     including a search for the frame the agent meant. It sits in the graph,
     unreachable by every mechanism that would have questioned it (#76).
 
-    **The base frame is valid with or without a row.** `BASE_METACONTEXT_ID` is
-    reserved, and it is what `frames_for` answers for an untagged node, so it
-    names a real frame in every graph — including one nothing has been written
-    to yet, where `ensure_base_metacontext` has not run. Checking it against
-    storage would refuse the one id that cannot be wrong.
+    **`the-real` is not special.** It is a convention — the string every graph
+    should use for the frame holding real-world claims — and it must exist here
+    like any other id, created once with `create_metacontext`. It used to be
+    accepted with no row, back when an untagged node resolved to it and it
+    therefore named something in every graph. Nothing resolves to it now, so
+    accepting it rowless would admit an id pointing at nothing: the isolation
+    failure this function exists to prevent, waved through by name.
 
     **The refusal lists what does exist**, because nothing else does: no MCP
     tool enumerates metacontexts, so for an agent holding a stale id this
     message is the only place the right one appears.
+
+    **An empty id is refused here too**, so that the one home for frame
+    validation is also the one place the requirement is explained. `search`
+    never reaches it — an omitted filter there is a coherent question, not an
+    unstated assumption, and searching every frame is the answer to it (#76).
+
+    **`writing=True` additionally refuses the quarantine frame**, which is the
+    one rule that differs between reading and writing. Searching *for* what
+    nobody has vouched for is a reasonable question; asserting into it is not,
+    because a frame an agent can write is a frame that stops meaning *nobody has
+    vouched for this*. Only `epimemer frames declare` puts it on anything.
     """
-    if metacontext_id == BASE_METACONTEXT_ID:
-        return
+    if not metacontext_id.strip():
+        raise ValueError(
+            "metacontext_id is required: name the frame this document's claims "
+            "are made in. Use 'the-real' for real-world claims — the "
+            "conventional id, and the ordinary answer — or another metacontext "
+            "from create_metacontext for fiction, a named source, or a "
+            "perspective. It is required because a claim has to say which world "
+            "it is about: a node with no frame is one nobody spoke for, and "
+            "nothing compares it, merges it, or returns it from a scoped "
+            "search (#76)."
+        )
+    if writing and metacontext_id == QUARANTINE_METACONTEXT_ID:
+        raise ValueError(
+            f"'{QUARANTINE_METACONTEXT_ID}' is not a frame anything may be "
+            f"written into. It marks nodes nobody has vouched for, stamped by "
+            f"`epimemer frames declare` on a graph whose provenance is unknown "
+            f"— an agent asserting into it would make it mean nothing. Name "
+            f"the frame these claims actually belong to."
+        )
     if await storage.get_metacontext(metacontext_id) is not None:
         return
 
@@ -689,8 +724,10 @@ async def require_metacontext(metacontext_id: str, storage: StorageBackend) -> N
         f"Metacontext '{metacontext_id}' does not exist in graph "
         f"'{storage.current_database}'. Metacontext ids are per graph, so an id "
         f"from another graph names nothing here. {have} Create one with "
-        f"create_metacontext, or omit metacontext_id to store in base reality "
-        f"(The Real)."
+        f"create_metacontext — including '{BASE_METACONTEXT_ID}', the "
+        f"conventional id for real-world claims, which is an ordinary frame "
+        f"and has to exist here like any other. On `search`, leaving the list "
+        f"out searches every frame."
     )
 
 
@@ -700,7 +737,7 @@ async def store_decomposition(
     storage: StorageBackend,
     embedding_provider: EmbeddingProvider,
     *,
-    metacontext_id: str | None = None,
+    metacontext_id: str,
     tags: list[str] | None = None,
     timeline_id: str | None = None,
     propose_timepoints: bool = True,
@@ -722,10 +759,31 @@ async def store_decomposition(
             tool docstring, which is what an agent actually reads before
             ingesting.
 
-    Every node gets a `sourced_from` edge to the originating document. `tags`
-    (document-level) and per-node tags are resolved-or-created (by exact name) as
-    Topics linked by `tagged_with` edges, so a repeated tag reuses one Topic.
-    Everything is persisted in one atomic write.
+    `metacontext_id` is **required** — the frame every claim in this document
+    is asserted in, and it must already exist here. `the-real` is the
+    conventional id for real-world claims and the ordinary answer; another
+    metacontext names fiction, a source, or a perspective. It is required
+    because a claim has to say which world it is about: a node with no frame is
+    one nobody spoke for, so nothing compares it, merges it, or returns it from
+    a scoped search. On 684 real nodes no agent had ever said which world it
+    meant (#76). The requirement does not prevent a wrong frame — a reflexive
+    `the-real` on a fiction ingest is exactly as wrong as silence was. What it
+    buys is that the error is **findable** (the frame is on the ingest journal
+    row) and **fixable** (`reframe`), where silence left nothing to find.
+
+    **One frame per call, so a mixed document is two calls.** The id applies to
+    every node in the decomposition, so a discussion of a novel that also states
+    a fact about its real author is split: the in-world claims in the novel's
+    frame, the author's biography in `the-real`. A per-node override belongs in
+    the `DecompositionEntry` object beside `importance` and `confidence`, for
+    the same reason those are per node — not built, and deliberately not
+    foreclosed.
+
+    Every node gets a `sourced_from` edge to the originating document, and a
+    `has_metacontext` edge to the frame. `tags` (document-level) and per-node
+    tags are resolved-or-created (by exact name) as Topics linked by
+    `tagged_with` edges, so a repeated tag reuses one Topic. Everything is
+    persisted in one atomic write.
 
     Temporal expressions in node content become timepoints on a timeline
     (`timeline_id`, or the shared extracted one), linked by `TIMELINK`. Only
@@ -738,19 +796,11 @@ async def store_decomposition(
     # shadow the function of the same name.
     from epimemer.pipelines.timeline import functions as timeline_functions
 
-    # The frame this document's nodes land in, given a row before anything is
-    # written. Here rather than at graph creation because this is where the
-    # claim is actually made: `frames_for` answers "the-real" for a node with no
-    # `has_metacontext` edges, and until the row exists that answer names
-    # nothing an agent can look up or read a description of (#76). Idempotent —
-    # one keyed read per ingest, which after the first document is all it is.
-    await ensure_base_metacontext(storage)
     # A stated frame must resolve *here*, for the same reason a named timeline
     # must already exist: an edge pointing at nothing isolates the node it was
     # meant to frame. Checked before any of the document is built, so a bad id
     # costs nothing and leaves nothing behind.
-    if metacontext_id:
-        await require_metacontext(metacontext_id, storage)
+    await require_metacontext(metacontext_id, storage, writing=True)
 
     # Accumulate the whole document's writes, then persist them atomically so a
     # mid-document failure cannot leave a partial graph.
@@ -865,12 +915,17 @@ async def store_decomposition(
                 batch_edges.append(NodeEdge(
                     src_id=node.id, dst_id=topic.id, type=EdgeType.TAGGED_WITH,
                 ))
-        # Optional metacontext framing.
-        if metacontext_id:
-            for node in seg_nodes:
-                batch_edges.append(NodeEdge(
-                    src_id=node.id, dst_id=metacontext_id, type=EdgeType.HAS_METACONTEXT,
-                ))
+        # The frame, written explicitly — including for `the-real`, which is
+        # what makes requiring it worth anything. A node carrying no edge is
+        # read as base reality anyway, so an unwritten `the-real` would be
+        # indistinguishable from an agent that never considered the question,
+        # which is the whole defect (#76). `frames_of` reduces both to the same
+        # single-frame set, so no consumer sees a difference; a reviewer does.
+        for node in seg_nodes:
+            batch_edges.append(NodeEdge(
+                src_id=node.id, dst_id=metacontext_id,
+                type=EdgeType.HAS_METACONTEXT, judged_by=judge,
+            ))
 
         total_topics += len(topics)
         total_facts += len(facts)
@@ -922,6 +977,10 @@ async def store_decomposition(
             DecisionKind.INGEST,
             [node.id for node in batch_nodes],
             judge=judge,
+            # One frame per call, so one value on the row. This is what makes
+            # *which claims did this agent file into the real world* a query
+            # rather than a walk out to every node's edges (#76).
+            frame=metacontext_id,
         )
 
     nodes_created = {
@@ -1012,11 +1071,22 @@ async def _run_retrieval(
 
 
 async def _in_frame_nodes(
-    nodes: list[EpistemicNode], metacontext_id: str, storage: StorageBackend
+    nodes: list[EpistemicNode], metacontexts: Sequence[str], storage: StorageBackend
 ) -> list[EpistemicNode]:
-    """Nodes in `metacontext_id` or in untagged base reality (The Real).
+    """Nodes standing in any of `metacontexts` — a set union, nothing more.
 
-    Knowledge in the base frame applies everywhere; sibling frames are excluded.
+    **No frame inherits another.** This used to return the named frame *plus*
+    untagged base reality, on the reasoning that real-world knowledge is the
+    shared background every frame is read against. That inheritance was
+    hardcoded and invisible: a caller could not see it, turn it off, or ask for
+    any other combination. It is now the caller's sentence — a query wanting a
+    novel's world read against real history asks for both by name, and one
+    wanting only what the novel says asks for one.
+
+    A node stating none of the listed frames does not match, and a node stating
+    no frame at all matches nothing scoped — it is only reachable by leaving the
+    list out, which is what makes it findable at all while a graph waits to be
+    declared (#76).
 
     One query for the whole set. This was previously an `asyncio.gather` over a
     round-trip per node, which bought concurrency at the cost of issuing
@@ -1027,19 +1097,15 @@ async def _in_frame_nodes(
     from epimemer.pipelines.reflection.review import frames_for
 
     frames_by_node = await frames_for([node.id for node in nodes], storage)
-    return [
-        node
-        for node in nodes
-        if metacontext_id in frames_by_node[node.id]
-        or BASE_METACONTEXT_ID in frames_by_node[node.id]
-    ]
+    wanted = set(metacontexts)
+    return [node for node in nodes if frames_by_node[node.id] & wanted]
 
 
 async def _retrieve_frame_scoped(
     request,
     embedding_provider: EmbeddingProvider,
     storage: StorageBackend,
-    metacontext_id: str,
+    metacontexts: Sequence[str],
     event_bus: InProcessEventBus | None,
 ) -> tuple[list[EpistemicNode], object]:
     """Retrieve in-frame nodes without being capped by the vector top-k.
@@ -1054,7 +1120,7 @@ async def _retrieve_frame_scoped(
     while True:
         widened = request.model_copy(update={"k": fetch_k})
         result = await _run_retrieval(widened, embedding_provider, storage, event_bus)
-        in_frame = await _in_frame_nodes(result.nodes, metacontext_id, storage)
+        in_frame = await _in_frame_nodes(result.nodes, metacontexts, storage)
 
         exhausted = result.metadata.nodes_searched < fetch_k
         if len(in_frame) >= k or exhausted or fetch_k >= _FRAME_SCOPE_MAX_K:
@@ -1252,8 +1318,7 @@ async def search(
     k: int = 10,
     node_types: list[str] | None = None,
     graph_hops: int = 1,
-    metacontext_id: str | None = None,
-    cross_frame: bool = False,
+    metacontexts: list[str] | None = None,
     terms: list[str] | None = None,
     include_historical: bool = True,
     include_corrected: bool = False,
@@ -1289,10 +1354,13 @@ async def search(
     extracted from them, since *where did I read that?* is a different question
     from *what do I believe?*
 
-    If metacontext_id is provided, results are frame-scoped to that metacontext
-    plus untagged base-reality nodes (set cross_frame=True to ignore frames).
-    Frame-scoping over-fetches so an in-frame node ranked below the vector top-k
-    is still found (see `_retrieve_frame_scoped`). Metacontext labels and computed
+    `metacontexts` scopes results to nodes standing in **any** of the frames
+    listed — a union the caller states, with no frame inheriting another. A
+    question about a novel's world read against real history names both;
+    omitting the list searches every frame, which is a coherent question rather
+    than an unstated assumption, and is why this side is optional where ingest
+    is not (#76). Frame-scoping over-fetches so an in-frame node ranked below
+    the vector top-k is still found (see `_retrieve_frame_scoped`). Metacontext labels and computed
     review labels (superseded_candidate / evidence_stale / evidence_merged /
     contested) are always included on returned nodes. Returned Topics that sit in a split hierarchy also
     carry `parents` / `subtopics` as id + preview, so the caller can drill via
@@ -1339,14 +1407,14 @@ async def search(
     from epimemer.pipelines.query.validity import validity_for, verdict_for
     from epimemer.pipelines.reflection.review import review_labels_for
 
-    # A frame that does not resolve here would silently narrow to base reality
-    # alone and answer as though that were the frame — the wrong-graph failure
+    # A frame that does not resolve here would narrow the search to nothing and
+    # answer as though the graph held nothing about it — the wrong-graph failure
     # one layer in, and on the read side, where there is no artifact left
-    # anywhere afterwards. Checked whatever `cross_frame` says: naming a frame
-    # that does not exist is a mistake in either mode, and one rule beats a
-    # rule with an exception.
-    if metacontext_id:
-        await require_metacontext(metacontext_id, storage)
+    # anywhere afterwards. Every named frame is checked, not just the first: a
+    # union with one dead id answers a narrower question than the caller asked,
+    # silently.
+    for frame in (metacontexts or []):
+        await require_metacontext(frame, storage)
 
     # Map string node types to enums
     nt_enums = None
@@ -1368,9 +1436,9 @@ async def search(
         timeline_id=timeline_id,
     )
 
-    if metacontext_id and not cross_frame:
+    if metacontexts:
         nodes, query_result = await _retrieve_frame_scoped(
-            request, embedding_provider, storage, metacontext_id, event_bus
+            request, embedding_provider, storage, metacontexts, event_bus
         )
     else:
         query_result = await _run_retrieval(
@@ -3241,6 +3309,7 @@ async def apply_reflection(
         supersede_by_existing,
         supersede_node,
     )
+    from epimemer.pipelines.frames import frame_edges, shared_frame_set
     from epimemer.pipelines.reflection.boundaries import apply_boundary
     from epimemer.pipelines.reflection.relation_verdicts import (
         RelationVerdictRefused,
@@ -3250,9 +3319,15 @@ async def apply_reflection(
         SimilarityRefused,
         apply_similarity_decision,
     )
+    from epimemer.pipelines.reflection.review import frames_of
     from epimemer.pipelines.reflection.topic_consolidation import all_pairs_above_threshold
 
     parents_created = 0
+    # Refusals rather than counts, because a frame mismatch is something the
+    # agent has to act on — `reframe` the odd one out, or synthesise within a
+    # frame — and a bare number says neither which group nor why.
+    parents_refused: list[dict] = []
+    topic_merges_refused: list[dict] = []
     topics_split = 0
     topics_enriched = 0
     topics_merged = 0
@@ -3374,6 +3449,28 @@ async def apply_reflection(
         if len(children) < 2:
             continue
 
+        # The synthesised parent is a **new assertion**, so it has to say which
+        # world it is about like any other write — and the only frame it can
+        # honestly claim is the one its children already agree on. Inheriting a
+        # union instead would let a topic drawn from a fiction claim and a real
+        # one assert in both, which `fact_dedup` calls the worst outcome
+        # available; refusing is that gate, one tier up (#76).
+        inherited = await shared_frame_set(
+            [child.id for child in children], storage
+        )
+        if inherited is None:
+            parents_refused.append({
+                "children_ids": children_ids,
+                "reason": (
+                    "these topics do not stand in exactly the same set of "
+                    "frames, and a parent synthesised from them would assert "
+                    "in one world what was only ever claimed in another. "
+                    "Synthesise within a frame, or `reframe` the odd one out "
+                    "if its framing is what is wrong."
+                ),
+            })
+            continue
+
         parent_topic = Topic(
             content=content,
             source_id=children[0].source_id,
@@ -3381,7 +3478,10 @@ async def apply_reflection(
             judged_by=judge,
             metadata={"synthesized_from": children_ids},
         )
-        edges = await plan_subtopic_edges(children, parent_topic.id, storage)
+        edges = [
+            *await plan_subtopic_edges(children, parent_topic.id, storage),
+            *frame_edges(parent_topic.id, inherited, judge=judge),
+        ]
         vectors = await embedding_provider.embed([parent_topic.content])
         await storage.write_batch_tx(
             nodes=[parent_topic],
@@ -3412,7 +3512,19 @@ async def apply_reflection(
             )
             for sc in subtopic_contents
         ]
-        edges = await plan_subtopic_edges(subtopics, parent.id, storage)
+        # Same content, refined — so a subtopic stands exactly where its parent
+        # did. A parent that states nothing passes on nothing: inventing a frame
+        # here would put words in a nobody's mouth, which is the declaration
+        # sweep's job and a person's call (#76).
+        inherited = await frames_of(parent.id, storage)
+        edges = [
+            *await plan_subtopic_edges(subtopics, parent.id, storage),
+            *[
+                edge
+                for st in subtopics
+                for edge in frame_edges(st.id, inherited, judge=judge)
+            ],
+        ]
         vectors = await embedding_provider.embed([st.content for st in subtopics])
         embeddings = [
             EmbeddingRecord(item_id=st.id, model_id=model_id, vector=vec)
@@ -3476,6 +3588,23 @@ async def apply_reflection(
             sources, storage, model_id, merge_similarity_threshold
         ):
             merges_rejected += 1
+            continue
+
+        # The gate facts have had since #52, arriving late here because topic
+        # merge grew its own path: `merge_nodes` migrates every source's edges
+        # onto the survivor, `has_metacontext` among them, so merging across
+        # frames leaves one topic asserted in both worlds. Exact set equality,
+        # not overlap — `shared_frame_set` carries the reasoning.
+        if await shared_frame_set(source_ids, storage) is None:
+            topic_merges_refused.append({
+                "source_ids": source_ids,
+                "reason": (
+                    "these topics do not stand in exactly the same set of "
+                    "frames, and the survivor would inherit the union of them "
+                    "— asserting in one world what was only ever claimed in "
+                    "another. Merge within a frame."
+                ),
+            })
             continue
 
         # Combined in one shared place: a field-by-field rebuild here silently
@@ -3656,10 +3785,12 @@ async def apply_reflection(
         "similarities_retracted": similarities_retracted,
         "similarities_refused": similarities_refused,
         "parents_created": parents_created,
+        "parents_refused": parents_refused,
         "topics_split": topics_split,
         "topics_enriched": topics_enriched,
         "topics_merged": topics_merged,
         "merges_rejected": merges_rejected,
+        "topic_merges_refused": topic_merges_refused,
         "supersessions_applied": supersessions_applied,
         "nodes_archived": len(to_archive),
         "archive_data": archive_data,
@@ -3868,6 +3999,10 @@ async def review(
             "reviewed": item.record.id in reviewed,
             "reviews": item.record.reviews,
             "supersedes": item.record.supersedes,
+            # Null on every kind that does not apply one, which is most of
+            # them. Present on ingest and on a declaration sweep, where it is
+            # the answer to *which world did this agent say these were about*.
+            "frame": item.record.frame,
         }
         for item in page
     ]
@@ -4151,7 +4286,6 @@ async def reframe(
     withdraw: str,
     because: str,
     assign: str | None = None,
-    to_base_reality: bool = False,
     judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Withdraw a frame from a node, optionally putting another in its place.
@@ -4162,14 +4296,14 @@ async def reframe(
     copy, and a frame-scoped search misses it where it belongs while returning
     it where it does not. All three fail silently.
 
-    **Prefer `assign` over a bare withdrawal when the claim belongs in another
-    frame.** Withdrawing and then linking passes through *untagged*, where the
-    claim is asserted in every frame, and it strands the node there if the
-    second call never happens.
+    **Use `assign` whenever the claim belongs in another frame.** Withdrawing
+    and then linking passes through a state where the node states no frame at
+    all, and strands it there if the second call never happens.
 
-    **A withdrawal that leaves no frames is a promotion** — base-reality
-    knowledge is inherited by every frame — and requires `to_base_reality=True`
-    to say so on purpose.
+    **A withdrawal that would leave no frames is refused.** A frameless node
+    shares a frame with nothing — never compared, never merged, returned by no
+    scoped search — so there is nothing to authorise and no flag to pass. Name
+    where the claim goes instead.
 
     Not a supersession: the claim is unchanged and the world has not moved, so
     nothing is retired and no lineage moves. `ISSUES.md` #66.
@@ -4182,7 +4316,6 @@ async def reframe(
         withdraw=withdraw,
         because=because,
         assign=assign,
-        to_base_reality=to_base_reality,
         judge=judge,
     )
     if isinstance(outcome, ReframeRefused):
@@ -4199,9 +4332,8 @@ async def reframe(
         "node_id": node_id,
         "withdrew": outcome.withdrew,
         "assigned": outcome.assigned,
-        # Empty means untagged, which is base reality.
+        # Never empty: a revision that would strand the node is refused.
         "frames_now": outcome.frames_now,
-        "to_base_reality": outcome.to_base_reality,
         "decision_id": record.id if record else None,
     }
     return result, ResponseMeta(nodes_returned=1, retrieved=_declare([node_id]))
@@ -4829,32 +4961,27 @@ async def create_metacontext(
     storage: StorageBackend,
     *,
     description: str = "",
+    metacontext_id: str | None = None,
 ) -> tuple[dict, ResponseMeta]:
-    """Create a new metacontext."""
+    """Create a new metacontext, optionally under an id you choose.
+
+    **A chosen id is what makes `the-real` an ordinary frame.** It is the
+    conventional name for the frame holding real-world claims, and nothing reads
+    it specially — so it has to be creatable, like any other, by whoever first
+    needs it. Left out, an id is minted, which is what every frame with no
+    convention behind it wants.
+
+    Re-creating an id that exists overwrites its prose. That is the same
+    behaviour `store_metacontext` has always had, and it is why a graph's frames
+    are worth naming deliberately rather than typing twice.
+    """
     mc = Metacontext(content=content, description=description)
+    if metacontext_id:
+        mc = mc.model_copy(update={"id": metacontext_id})
     await storage.store_metacontext(mc)
     result = {"metacontext_id": mc.id, "content": mc.content}
     meta = ResponseMeta(nodes_returned=1)
     return result, meta
-
-
-async def ensure_base_metacontext(storage: StorageBackend) -> Metacontext:
-    """Return the reserved base-reality frame ("The Real"), creating it if absent.
-
-    Identified by a fixed reserved id (BASE_METACONTEXT_ID), never by content, so
-    it is never confused with a user metacontext whose text happens to mention
-    reality. Untagged knowledge is treated as belonging to this frame.
-    """
-    existing = await storage.get_metacontext(BASE_METACONTEXT_ID)
-    if existing is not None:
-        return existing
-    mc = Metacontext(
-        id=BASE_METACONTEXT_ID,
-        content="The Real",
-        description="Base reality — the default frame for untagged knowledge.",
-    )
-    await storage.store_metacontext(mc)
-    return mc
 
 
 async def get_metacontexts_for_node(
@@ -4952,6 +5079,11 @@ async def graph_stats(
 
     Aggregate-only — does not materialize node or edge bodies.
 
+    Also reports `nodes_without_frame`, which is a migration readout rather than
+    an ordinary statistic: it can only be non-zero on a graph written before
+    `metacontext_id` was required, and it is how a user checks that
+    `epimemer frames declare` has finished its work.
+
     Also reports reflection pressure: the graph's store counter, the threshold in
     force, whether that threshold is a per-graph override, and whether a reflect
     is due. The counter and any override are stored per graph; the default is
@@ -4961,6 +5093,7 @@ async def graph_stats(
     """
     node_counts = await storage.count_nodes_by_type()
     edge_counts = await storage.count_edges_by_type()
+    unframed = await storage.count_nodes_without_frame()
     metacontexts = await storage.query_metacontexts()
     timelines = await storage.query_timelines()
     stores_since_reflect = await storage.get_reflect_counter()
@@ -4983,6 +5116,12 @@ async def graph_stats(
         # response readable; the full zero-filled map is available above logic.
         "edges_by_type": {k: v for k, v in edges_by_type.items() if v > 0},
         "metacontexts": len(metacontexts),
+        # A node carrying no frame at all is a node nothing compares, merges or
+        # returns from a scoped search — absence names no frame, so it shares
+        # one with nothing. Only a graph written before the frame was required
+        # can hold any, which makes this the completeness check for
+        # `epimemer frames declare`: zero is the answer.
+        "nodes_without_frame": unframed,
         "timelines": len(timelines),
         "empty": total_nodes == 0 and total_edges == 0,
         "stores_since_reflect": stores_since_reflect,

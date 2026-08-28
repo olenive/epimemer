@@ -313,15 +313,29 @@ wrong manufactures support rather than merely withholding it.
 
 ### Frame scoping
 
-Passing `metacontext_id` scopes results to that frame plus untagged base-reality
-nodes; `cross_frame=True` ignores frames entirely. **The id must resolve in the
-active graph** — metacontext ids are per graph, and one that names nothing here
-is refused rather than silently narrowing the search to base reality alone and
-answering as though that were the frame. `the-real` is always accepted, with or
-without a stored row. The check runs whatever `cross_frame` says: the flag makes
-a wrong id inert, which is exactly why it would go unnoticed. Frame-scoped retrieval
-**over-fetches**, so an in-frame node ranked below the raw vector top-k is still
-found rather than lost to a filter applied after the cut.
+`metacontexts` is a list of frame ids, and results are the nodes standing in
+**any** of them — a set union the caller states per query. **No frame inherits
+another**, and there is no base-reality background a frame is read against: a
+question about a novel's world read against real history names both
+(`["world-of-anarres", "the-real"]`), and one about only what the novel says
+names one. An inheritance rule fixed in the code could express exactly one of
+those and hide that it was choosing.
+
+Omitting the list searches every frame. **It is optional here and required on
+ingest, and the asymmetry is deliberate**: an omitted filter on the read side is
+a coherent question — *anything about this, wherever it was claimed* — while an
+omitted frame on the write side said nothing about which world the claim was
+in.
+
+**Every id must resolve in the active graph**, not just the first — metacontext
+ids are per graph, and one that names nothing here is refused rather than
+silently narrowing the search to the frames that do exist and answering as
+though that were the question. A node stating no frame at all matches nothing
+scoped and appears only in an unscoped search; that state is reachable only on a
+graph written before frames were required, and `epimemer frames declare` ends
+it. Frame-scoped retrieval **over-fetches**, so an in-frame node ranked below
+the raw vector top-k is still found rather than lost to a filter applied after
+the cut.
 
 ---
 

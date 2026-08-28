@@ -102,7 +102,6 @@ class TestMovingAFrameIsOneCall:
             because="mis-filed",
         )
 
-        assert result["to_base_reality"] is False
 
     async def test_assigning_a_frame_this_graph_does_not_have_is_refused(
         self, storage
@@ -132,15 +131,18 @@ class TestMovingAFrameIsOneCall:
         )
 
         assert result["frames_now"] == [history.id]
-        assert result["to_base_reality"] is False
 
 
-class TestWithdrawingTheLastFrameIsAPromotion:
-    async def test_it_is_refused_without_the_acknowledgment(self, storage):
-        """**Not a guard.** The paradigm case #66 exists for *is* a last-frame
-        withdrawal — the Le Guin fact belongs in base reality — so a flat refusal
-        would leave the tool unable to fix what it was built for. What is being
-        insisted on is that the promotion is stated, not that it is forbidden."""
+class TestWithdrawingTheLastFrameIsRefused:
+    """It used to be allowed behind `to_base_reality=True`, because absence
+    meant base reality and the withdrawal was a *promotion* worth stating on
+    purpose. Absence means nothing now (#76): a frameless node shares a frame
+    with nothing, so it is never compared, never merged, and returned by no
+    scoped search. There is nothing left to authorise, so the flag is gone
+    rather than renamed — the paradigm case #66 was built for is `assign`.
+    """
+
+    async def test_a_bare_last_withdrawal_is_refused(self, storage):
         node = await _fact(storage)
         novel = await _frame(storage)
         await _framed(storage, node, novel)
@@ -150,64 +152,43 @@ class TestWithdrawingTheLastFrameIsAPromotion:
         )
 
         assert result["reframed"] is False
-        assert "to_base_reality=True" in result["refused"]
+        assert "shares a frame with nothing" in result["refused"]
         assert await _frames_of(storage, node.id) == {novel.id}
 
-    async def test_the_refusal_offers_the_move_as_the_alternative(self, storage):
+    async def test_the_refusal_names_the_move_that_works(self, storage):
+        """The Le Guin case is still fixable in one call — it just has to say
+        where the claim goes, which is the frame holding real-world claims."""
         node = await _fact(storage)
         novel = await _frame(storage)
         await _framed(storage, node, novel)
 
-        result, _ = await tools.reframe(
-            node.id, storage, withdraw=novel.id, because="mis-filed",
+        refusal, _ = await tools.reframe(
+            node.id, storage, withdraw=novel.id, because="a fact about the author",
         )
+        assert "assign=" in refusal["refused"]
 
-        assert "assign=" in result["refused"]
-
-    async def test_acknowledged_it_goes_through_and_reads_as_base_reality(
-        self, storage
-    ):
-        node = await _fact(storage)
-        novel = await _frame(storage)
-        await _framed(storage, node, novel)
-
+        real = await _frame(storage, "The Real")
         result, _ = await tools.reframe(
-            node.id, storage, withdraw=novel.id, to_base_reality=True,
+            node.id, storage, withdraw=novel.id, assign=real.id,
             because="a fact about the author, not about Anarres",
         )
 
         assert result["reframed"] is True
-        assert result["frames_now"] == []
-        assert result["to_base_reality"] is True
-        # `frames_of` reads untagged as base reality, which is the promotion.
-        assert await _frames_of(storage, node.id) == {BASE_METACONTEXT_ID}
+        assert result["frames_now"] == [real.id]
+        assert await _frames_of(storage, node.id) == {real.id}
 
-    async def test_the_flag_is_refused_where_it_does_not_apply(self, storage):
-        """A flag that lies about what it authorised is worse than no flag."""
+    async def test_withdrawing_one_of_several_is_untouched(self, storage):
+        """The refusal is about stranding a node, not about withdrawal."""
         node = await _fact(storage)
         novel, history = await _frame(storage), await _frame(storage, "History")
         await _framed(storage, node, novel, history)
 
         result, _ = await tools.reframe(
-            node.id, storage, withdraw=novel.id, to_base_reality=True,
-            because="mis-filed",
+            node.id, storage, withdraw=novel.id, because="only ever real history",
         )
 
-        assert result["reframed"] is False
-        assert "Drop the flag" in result["refused"]
-        assert await _frames_of(storage, node.id) == {novel.id, history.id}
-
-    async def test_the_flag_is_refused_alongside_a_replacement(self, storage):
-        node = await _fact(storage)
-        novel, history = await _frame(storage), await _frame(storage, "History")
-        await _framed(storage, node, novel)
-
-        result, _ = await tools.reframe(
-            node.id, storage, withdraw=novel.id, assign=history.id,
-            to_base_reality=True, because="mis-filed",
-        )
-
-        assert result["reframed"] is False
+        assert result["reframed"] is True
+        assert result["frames_now"] == [history.id]
 
 
 class TestWhatReframingRefuses:
@@ -218,7 +199,6 @@ class TestWhatReframingRefuses:
 
         result, _ = await tools.reframe(
             node.id, storage, withdraw=novel.id, because="   ",
-            to_base_reality=True,
         )
 
         assert result["reframed"] is False
@@ -235,7 +215,9 @@ class TestWhatReframingRefuses:
 
         assert result["reframed"] is False
 
-    async def test_an_untagged_node_needs_nothing_withdrawn(self, storage):
+    async def test_a_node_stating_no_frame_has_nothing_to_withdraw(self, storage):
+        """It is not in base reality either — it is a node nobody has spoken
+        for, and `epimemer frames declare` is what ends that."""
         node = await _fact(storage)
 
         result, _ = await tools.reframe(
@@ -243,7 +225,7 @@ class TestWhatReframingRefuses:
         )
 
         assert result["reframed"] is False
-        assert "already in base reality" in result["refused"]
+        assert "no frames at all" in result["refused"]
 
     async def test_no_such_node(self, storage):
         result, _ = await tools.reframe(
@@ -298,8 +280,9 @@ class TestTheWithdrawnFrameSurvives:
         novel = await _frame(storage)
         await _framed(storage, node, novel)
 
+        history = await _frame(storage, "History")
         result, _ = await tools.reframe(
-            node.id, storage, withdraw=novel.id, to_base_reality=True,
+            node.id, storage, withdraw=novel.id, assign=history.id,
             because="a real publication fact", judge=EDITOR,
         )
 
@@ -314,8 +297,9 @@ class TestTheWithdrawnFrameSurvives:
         await _framed(storage, node, novel)
         before = await storage.get_node(node.id)
 
+        history = await _frame(storage, "History")
         await tools.reframe(node.id, storage, withdraw=novel.id,
-                            to_base_reality=True, because="mis-filed")
+                            assign=history.id, because="mis-filed")
 
         after = await storage.get_node(node.id)
         assert after.status == before.status

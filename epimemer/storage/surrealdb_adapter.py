@@ -1222,6 +1222,26 @@ class SurrealDBStorage:
             counts[node_type] = rows[0]["c"] if rows else 0
         return counts
 
+    async def count_nodes_without_frame(
+        self,
+        *,
+        status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> int:
+        framed = await self._query(
+            "SELECT VALUE src_id FROM node_edge WHERE type = $type",
+            {"type": EdgeType.HAS_METACONTEXT.value},
+        )
+        framed_ids = list({row for row in framed if row})
+        total = 0
+        for table in _NODE_TYPE_TO_TABLE.values():
+            rows = await self._query(
+                f"SELECT count() AS c FROM {table} "
+                f"WHERE status = $status AND uid NOT IN $framed GROUP ALL",
+                {"status": status.value, "framed": framed_ids},
+            )
+            total += rows[0]["c"] if rows else 0
+        return total
+
     # --- Edges ---
 
     async def store_edge(self, edge: NodeEdge) -> str:

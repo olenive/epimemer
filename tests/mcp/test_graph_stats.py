@@ -25,7 +25,22 @@ from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.mcp.tools import graph_stats
+from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.storage.memory import InMemoryStorage
+
+def _graph_with_the_real() -> InMemoryStorage:
+    """An in-memory graph somebody has set up.
+
+    Since #76 a frame is required at ingest and `the-real` is an ordinary
+    metacontext, created once like any other frame.
+    """
+    store = InMemoryStorage()
+    store._graphs[store._database].metacontexts[BASE_METACONTEXT_ID] = Metacontext(
+        id=BASE_METACONTEXT_ID,
+        content="The Real",
+        description="Claims about the real world.",
+    )
+    return store
 
 
 class TestReflectCounterInStats:
@@ -126,12 +141,13 @@ def config() -> ServerConfig:
 
 
 async def test_tool_reports_the_configured_threshold(config):
-    storage = InMemoryStorage()
+    storage = _graph_with_the_real()
     config = config.model_copy(update={"reflect_threshold": 3})
 
     async with _session(storage, config) as server:
         seg = _result(await server.call_tool("segment", {"expected_graph": "default", "content": "Cats are mammals."}))
         await server.call_tool("store_decomposition", {"expected_graph": "default", 
+        "metacontext_id": "the-real",
             "document_id": seg["document_id"],
             "segments": [
                 {"segment_id": s["segment_id"], "topics": ["Cats"]}

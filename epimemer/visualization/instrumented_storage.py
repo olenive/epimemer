@@ -192,6 +192,13 @@ class InstrumentedStorage:
     ) -> dict[NodeType, int]:
         return await self._inner.count_nodes_by_type(status=status)
 
+    async def count_nodes_without_frame(
+        self,
+        *,
+        status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> int:
+        return await self._inner.count_nodes_without_frame(status=status)
+
     # --- Edges (write) ---
 
     async def store_edge(self, edge: NodeEdge) -> str:

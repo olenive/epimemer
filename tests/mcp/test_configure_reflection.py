@@ -24,7 +24,22 @@ from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.mcp.tools import configure_reflection, effective_reflect_threshold, graph_stats
+from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.storage.memory import InMemoryStorage
+
+def _graph_with_the_real() -> InMemoryStorage:
+    """An in-memory graph somebody has set up.
+
+    Since #76 a frame is required at ingest and `the-real` is an ordinary
+    metacontext, created once like any other frame.
+    """
+    store = InMemoryStorage()
+    store._graphs[store._database].metacontexts[BASE_METACONTEXT_ID] = Metacontext(
+        id=BASE_METACONTEXT_ID,
+        content="The Real",
+        description="Claims about the real world.",
+    )
+    return store
 
 
 class TestOverrideStorage:
@@ -217,6 +232,7 @@ def _result(tool_result) -> dict:
 async def _ingest(server: FastMCP, content: str) -> dict:
     seg = _result(await server.call_tool("segment", {"expected_graph": "default", "content": content}))
     return _result(await server.call_tool("store_decomposition", {"expected_graph": "default", 
+        "metacontext_id": "the-real",
         "document_id": seg["document_id"],
         "segments": [
             {"segment_id": s["segment_id"], "topics": [f"Topic {s['segment_id']}"]}
@@ -232,7 +248,7 @@ def config() -> ServerConfig:
 
 async def test_configure_reflection_persists_override(config):
     """The override outlives the process that set it — the point of storing it."""
-    storage = InMemoryStorage()
+    storage = _graph_with_the_real()
 
     async with _session(storage, config) as server:
         set_result = _result(
@@ -250,7 +266,7 @@ async def test_configure_reflection_persists_override(config):
 async def test_store_decomposition_honours_the_override(config):
     """The suggestion an agent actually acts on comes from the ingest response,
     so the override has to reach it and not just graph_stats."""
-    storage = InMemoryStorage()
+    storage = _graph_with_the_real()
 
     async with _session(storage, config) as server:
         await server.call_tool("configure_reflection", {"expected_graph": "default", "threshold": 2})
@@ -264,7 +280,7 @@ async def test_store_decomposition_honours_the_override(config):
 
 
 async def test_clearing_returns_to_the_configured_default(config):
-    storage = InMemoryStorage()
+    storage = _graph_with_the_real()
     config = config.model_copy(update={"reflect_threshold": 7})
 
     async with _session(storage, config) as server:

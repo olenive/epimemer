@@ -23,11 +23,26 @@ from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log, records_of
 from epimemer.mcp.server import mcp as epimemer_mcp
+from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization.event_bus import create_event_bus
 from epimemer.visualization.hub import create_hub_app
 from epimemer.visualization.hub_client import start_hub_client
 from epimemer.visualization.protocol import SessionInfo
+
+def _graph_with_the_real() -> InMemoryStorage:
+    """An in-memory graph somebody has set up.
+
+    Since #76 a frame is required at ingest and `the-real` is an ordinary
+    metacontext, created once like any other frame.
+    """
+    store = InMemoryStorage()
+    store._graphs[store._database].metacontexts[BASE_METACONTEXT_ID] = Metacontext(
+        id=BASE_METACONTEXT_ID,
+        content="The Real",
+        description="Claims about the real world.",
+    )
+    return store
 
 SESSION_ID = "session-under-test"
 
@@ -73,7 +88,7 @@ async def _wired() -> AsyncIterator[SimpleNamespace]:
     assert server.started, "hub did not start"
 
     bus = create_event_bus()
-    storage = InMemoryStorage()
+    storage = _graph_with_the_real()
     log = new_record_log()
     stop_client = await start_hub_client(
         bus,
@@ -143,6 +158,7 @@ async def _seed(server: FastMCP) -> list[str]:
         ),
     }))["result"]
     await server.call_tool("store_decomposition", {"expected_graph": "default", 
+        "metacontext_id": "the-real",
         "document_id": seg["document_id"],
         "segments": [{
             "segment_id": seg["segments"][0]["segment_id"],

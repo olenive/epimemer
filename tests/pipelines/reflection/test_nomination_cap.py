@@ -23,7 +23,15 @@ import math
 
 import pytest
 
-from epimemer.core.types import EmbeddingRecord, Fact, NodeStatus, Topic
+from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
+    EdgeType,
+    EmbeddingRecord,
+    Fact,
+    NodeEdge,
+    NodeStatus,
+    Topic,
+)
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.tools import CAPPED_KEYS, MAX_NOMINATIONS, reflect
 
@@ -56,6 +64,13 @@ async def _fanned_facts(storage, provider, count: int) -> list[Fact]:
     for i in range(count):
         fact = Fact(content=f"Claim number {i}", source_id="s1")
         await storage.store_node(fact)
+        # Every node states a frame, as every ingested one has since #76:
+        # absence names none, so two frameless nodes share none and the
+        # contradiction sweep would skip every pair here.
+        await storage.store_edge(NodeEdge(
+            src_id=fact.id, dst_id=BASE_METACONTEXT_ID,
+            type=EdgeType.HAS_METACONTEXT,
+        ))
         await storage.store_embedding(EmbeddingRecord(
             item_id=fact.id, model_id=provider.model_id, vector=_fanned_vector(i),
         ))
@@ -70,6 +85,13 @@ async def _identical_topics(storage, provider, count: int) -> list[Topic]:
     for i in range(count):
         topic = Topic(content=f"Subject number {i}", source_id="s1")
         await storage.store_node(topic)
+        # Every node states a frame, as every ingested one has since #76:
+        # absence names none, so two frameless nodes share none and the
+        # contradiction sweep would skip every pair here.
+        await storage.store_edge(NodeEdge(
+            src_id=topic.id, dst_id=BASE_METACONTEXT_ID,
+            type=EdgeType.HAS_METACONTEXT,
+        ))
         await storage.store_embedding(EmbeddingRecord(
             item_id=topic.id, model_id=provider.model_id, vector=vector,
         ))

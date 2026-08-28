@@ -18,16 +18,35 @@ construct their own store rather than take this fixture.
 
 import pytest
 
+from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
+
+
+async def _set_up(store):
+    """A graph somebody has set up, which is the only kind worth testing against.
+
+    Since #76 a frame is required at ingest and `the-real` is an ordinary
+    metacontext — a convention, not a mechanism — so it exists because somebody
+    created it, once, like any other frame. A fixture that omitted it would make
+    every ingest test start by creating it, which tests the fixture rather than
+    the behaviour. The tests that are *about* the requirement name frames that
+    do not exist, and are unaffected by this one existing.
+    """
+    await store.store_metacontext(Metacontext(
+        id=BASE_METACONTEXT_ID,
+        content="The Real",
+        description="Claims about the real world.",
+    ))
+    return store
 
 
 @pytest.fixture(params=["memory", "surrealdb"])
 async def storage(request):
     if request.param == "memory":
-        yield InMemoryStorage()
+        yield await _set_up(InMemoryStorage())
     else:
         store = SurrealDBStorage(url="mem://")
         await store.connect()
-        yield store
+        yield await _set_up(store)
         await store.close()

@@ -20,6 +20,7 @@ an edge or a lineage, and the value it replaces is kept.
 import pytest
 
 from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
     ClaimKind,
     DecisionKind,
     DecisionRecord,
@@ -550,6 +551,7 @@ class TestRejudgePointsAtTheDecisionItRevises:
                 "facts": [{"content": "A claim", "claim_kind": "state"}],
             }],
             storage=storage, embedding_provider=embedder,
+            metacontext_id=BASE_METACONTEXT_ID,
         )
         ingest = (await storage.query_decisions(kinds=[DecisionKind.INGEST]))[0]
         fact = next(

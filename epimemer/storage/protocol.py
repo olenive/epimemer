@@ -353,6 +353,26 @@ class StorageBackend(Protocol):
         """
         ...
 
+    async def count_nodes_without_frame(
+        self,
+        *,
+        status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> int:
+        """How many nodes carry no `has_metacontext` edge at all.
+
+        **The migration's completeness check.** A frame is required at ingest
+        and absence means nothing, so a node with no frame is a node nothing
+        will ever compare, merge or return from a scoped search — reachable
+        only by a graph written before the requirement. Zero here is the
+        answer, and `epimemer frames declare` is how a graph gets there.
+
+        Ids rather than bodies, but not a single aggregate: the answer is a set
+        difference, and a correlated subquery per node would cost more than the
+        one id list this needs. Bounded by graph size, and read from
+        `graph_stats`, which nothing calls in a loop.
+        """
+        ...
+
     # --- Edges ---
 
     async def store_edge(self, edge: NodeEdge) -> str:

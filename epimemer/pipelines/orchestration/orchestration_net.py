@@ -61,7 +61,10 @@ class StoreDecompositionInput(BaseModel):
     """Routed input for storing agent-provided decomposition (step 2 of ingest)."""
     document_id: str
     segments: list[dict] = Field(default_factory=list)
-    metacontext_id: str | None = None
+    # Required, like the tool it routes to (#76). Optional here it would default
+    # a frame the caller never named, and this path bypasses the tool signature
+    # that is otherwise the enforcement — `the-real` for base reality.
+    metacontext_id: str
 
 
 class SearchInput(BaseModel):
@@ -70,7 +73,7 @@ class SearchInput(BaseModel):
     k: int = 10
     node_types: list[str] | None = None
     graph_hops: int = 1
-    metacontext_id: str | None = None
+    metacontexts: list[str] | None = None
     # Identifiers, names and exact phrases the caller declares load-bearing.
     # Routed through rather than dropped: a search reached this way would
     # otherwise silently lose the lever the tool description teaches.
@@ -192,7 +195,7 @@ async def run_search(
         k=input.k,
         node_types=input.node_types,
         graph_hops=input.graph_hops,
-        metacontext_id=input.metacontext_id,
+        metacontexts=input.metacontexts,
         terms=input.terms,
     )
     return MemoryResult(

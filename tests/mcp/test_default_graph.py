@@ -17,7 +17,12 @@ project's graph, having reconnected mid-session.
 
 import pytest
 
-from epimemer.core.types import EmbeddingRecord, Fact, NodeStatus
+from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
+    EmbeddingRecord,
+    Fact,
+    NodeStatus,
+)
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig, create_storage
@@ -116,6 +121,7 @@ class TestIngestSaysWhereItLanded:
             }],
             storage=storage,
             embedding_provider=embedder,
+            metacontext_id=BASE_METACONTEXT_ID,
         )
 
         assert result["active_graph"] == storage.current_database

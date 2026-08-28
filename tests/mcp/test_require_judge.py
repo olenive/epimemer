@@ -14,7 +14,12 @@ blank means unknown, and for many graphs it does not matter who judged.
 
 import pytest
 
-from epimemer.core.types import EdgeType, JudgeRef, NodeType
+from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
+    EdgeType,
+    JudgeRef,
+    NodeType,
+)
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
@@ -55,6 +60,7 @@ async def _ingest(storage, embedder, config, *, judge=None, **kwargs):
         storage=storage,
         embedding_provider=embedder,
         judge=judge,
+        metacontext_id=BASE_METACONTEXT_ID,
     )
     return seg, store
 

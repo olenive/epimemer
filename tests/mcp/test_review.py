@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
     ClaimKind,
     DecisionKind,
     DecisionRecord,
@@ -369,6 +370,7 @@ class TestItWorksOnTheCorpusAsItStands:
             } for s, outcome in zip(seg["segments"], ("failed", "succeeded"))],
             storage=storage,
             embedding_provider=embedder,
+            metacontext_id=BASE_METACONTEXT_ID,
         )
         facts = await storage.query_nodes(node_type=None)
         pair = [n.id for n in facts if n.content.startswith("The deploy")]

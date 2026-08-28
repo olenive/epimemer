@@ -440,6 +440,15 @@ def migration_disposition(edge_type: EdgeType, status: NodeStatus) -> EdgeDispos
 
     Frames and tags are the exception, and copy: see
     `WORLD_CHANGE_COPIED_EDGE_TYPES`.
+
+    **A merge does not move the frame** (#76). Every other edge on a survivor is
+    something its sources genuinely brought with them, but a frame is a claim
+    about which world this is — and the survivor's content is *synthesised*, so
+    nobody has yet said which world the synthesised wording is about. Moving the
+    edge would answer for them, attributed to whoever framed a source. The
+    merging agent re-states it instead, under its own judge: merging is not
+    coining, one layer up from `describe_relation`'s version of the same rule.
+    A correction still moves it — there the replacement is the same claim.
     """
     if edge_type in NON_KNOWLEDGE_EDGE_TYPES:
         return "keep"  # anchored to a specific node version
@@ -447,6 +456,8 @@ def migration_disposition(edge_type: EdgeType, status: NodeStatus) -> EdgeDispos
         return "keep"  # anchored to the wording that was judged (#65)
     if status is NodeStatus.HISTORICAL:
         return "copy" if edge_type in WORLD_CHANGE_COPIED_EDGE_TYPES else "keep"
+    if status is NodeStatus.MERGED and edge_type is EdgeType.HAS_METACONTEXT:
+        return "keep"  # re-stated by the merger, never inherited (#76)
     return "move"
 
 
@@ -460,10 +471,20 @@ def moved_edge_types(status: NodeStatus) -> frozenset[EdgeType]:
         t for t in EdgeType if migration_disposition(t, status) == "move"
     )
 
-# Reserved id for the canonical base-reality frame ("The Real"). Matched by id,
-# never by content, so a fiction frame that internally mentions "reality" is
-# never confused with it. Untagged nodes are implicitly in this frame.
+# The conventional id for the frame holding claims about the real world. A
+# **convention, not a mechanism**: it is an ordinary metacontext that must exist
+# like any other, and nothing in the system reads it specially. Named here so
+# that every graph uses the same string for the same frame rather than half of
+# them saying "reality" and half "real-world", which would leave two frames
+# nothing ever compares.
 BASE_METACONTEXT_ID = "the-real"
+
+# The frame a declaration sweep stamps on a graph nobody is prepared to vouch
+# for. **No agent may write it**: `store_decomposition` refuses it by name, and
+# only `epimemer frames declare` puts it on anything. That asymmetry is the
+# whole point — a frame an agent could assert into is a frame that stops meaning
+# *nobody has vouched for this*, and becomes untagged again under a new name.
+QUARANTINE_METACONTEXT_ID = "unvouched"
 
 
 # --- Who decided (REVIEW_MODE.md §3) ---
@@ -1615,6 +1636,13 @@ class DecisionKind(str, Enum):
     RELATION_VERDICT = "relation_verdict"
     IMPORTANCE = "importance"
 
+    # One declaration sweep: a user stating, through the CLI, which frame the
+    # nodes of a graph that predate the requirement were always in. One row per
+    # sweep rather than per node — the archival-sweep granularity rule, and for
+    # the same reason: it is one act of judgment applied to whatever it found,
+    # not N independent verdicts. Its subjects are the nodes it stamped.
+    FRAME_DECLARATION = "frame_declaration"
+
     # Review of a decision already in the journal (§6.4, step 7). All three
     # carry a `reviews` pointer, and none of them is a graph change: the point
     # of review is that somebody looked, and looking is worth recording even
@@ -1686,6 +1714,13 @@ class DecisionRecord(BaseModel):
     # breaks a derived-only scheme, since a confirmation supersedes nothing.
     reviews: str | None = None
     supersedes: str | None = None
+    # The frame this decision was made in, where the decision names one. Ingest
+    # and a declaration sweep both apply exactly one frame to everything they
+    # touch, so one value per row is the whole of it — and it is what turns the
+    # recoverability argument for requiring a frame into a supported read: *what
+    # did this agent file into the real world* is one query here rather than a
+    # walk from ingest rows out to the edges of the nodes they name (#76).
+    frame: str | None = None
 
 
 SUPERSESSION_KINDS: dict[NodeStatus, DecisionKind] = {

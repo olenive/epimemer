@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 import pytest
 
 from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
     ClaimKind,
     DecisionKind,
     EdgeType,
@@ -54,6 +55,12 @@ def config():
 
 async def _node(storage, embedder, node):
     await storage.store_node(node)
+    # States a frame, as every ingested node has since #76: absence names none,
+    # so two frameless nodes share none and a `one_claim` verdict is refused.
+    await storage.store_edge(NodeEdge(
+        src_id=node.id, dst_id=BASE_METACONTEXT_ID,
+        type=EdgeType.HAS_METACONTEXT,
+    ))
     vectors = await embedder.embed([node.content])
     await storage.store_embedding(EmbeddingRecord(
         item_id=node.id, model_id=embedder.model_id, vector=vectors[0]
@@ -103,6 +110,7 @@ class TestIngest:
             storage=storage,
             embedding_provider=embedder,
             judge=CRITIC,
+            metacontext_id=BASE_METACONTEXT_ID,
         )
 
         record = await _only(storage, DecisionKind.INGEST)
@@ -128,6 +136,7 @@ class TestIngest:
             storage=storage,
             embedding_provider=embedder,
             judge=CRITIC,
+            metacontext_id=BASE_METACONTEXT_ID,
         )
 
         record = await _only(storage, DecisionKind.INGEST)
@@ -160,6 +169,7 @@ class TestIngest:
             storage=storage,
             embedding_provider=embedder,
             judge=CRITIC,
+            metacontext_id=BASE_METACONTEXT_ID,
         )
 
         assert await storage.query_decisions(kinds=[DecisionKind.INGEST]) == []
@@ -178,6 +188,7 @@ class TestIngest:
             }],
             storage=storage,
             embedding_provider=embedder,
+            metacontext_id=BASE_METACONTEXT_ID,
         )
 
         assert (await _only(storage, DecisionKind.INGEST)).judged_by is None
@@ -832,6 +843,7 @@ class TestAFailedJournalWriteDoesNotUndoTheDecision:
             storage=storage,
             embedding_provider=embedder,
             judge=CRITIC,
+            metacontext_id=BASE_METACONTEXT_ID,
         )
 
         assert result["nodes_created"] == {"topics": 1, "facts": 1, "inferences": 0}

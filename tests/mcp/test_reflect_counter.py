@@ -62,8 +62,15 @@ async def _ingest(server: FastMCP, content: str, graph: str = "default") -> dict
     it means on every call (#71) — the parameter is not a formality that can be
     defaulted once at the top.
     """
+    # Frames are per graph, so a graph this test switches into names its own.
+    # `create_metacontext` under a chosen id is how any graph gets `the-real`.
+    await server.call_tool("create_metacontext", {
+        "expected_graph": graph, "content": "The Real",
+        "metacontext_id": "the-real",
+    })
     seg = _result(await server.call_tool("segment", {"expected_graph": graph, "content": content}))
     return _result(await server.call_tool("store_decomposition", {"expected_graph": graph,
+        "metacontext_id": "the-real",
         "document_id": seg["document_id"],
         "segments": [
             {"segment_id": s["segment_id"], "topics": [f"Topic {s['segment_id']}"]}

@@ -27,13 +27,29 @@ from epimemer.mcp import server as server_mod
 from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.mcp.types import ResponseMeta
+from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.storage.memory import InMemoryStorage
+
+def _graph_with_the_real() -> InMemoryStorage:
+    """An in-memory graph somebody has set up.
+
+    Since #76 a frame is required at ingest and `the-real` is an ordinary
+    metacontext, created once like any other. A server fixture without it would
+    make every test here start by creating a frame, which tests the fixture.
+    """
+    store = InMemoryStorage()
+    store._graphs[store._database].metacontexts[BASE_METACONTEXT_ID] = Metacontext(
+        id=BASE_METACONTEXT_ID,
+        content="The Real",
+        description="Claims about the real world.",
+    )
+    return store
 
 
 @asynccontextmanager
 async def _test_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     yield {
-        "storage": InMemoryStorage(),
+        "storage": _graph_with_the_real(),
         "embedding_provider": MockEmbeddingProvider(model_id="mock-embed", dimension=8),
         "config": ServerConfig(storage_backend="memory", embedding_provider="mock"),
         "event_bus": None,
@@ -91,6 +107,7 @@ async def _seed(server: FastMCP) -> dict:
     segment_ids = [s["segment_id"] for s in seg["segments"]]
 
     stored = _parse(await server.call_tool("store_decomposition", {"expected_graph": "default", 
+        "metacontext_id": "the-real",
         "document_id": document_id,
         "segments": [
             {
@@ -146,6 +163,7 @@ def _args(tool: str, seeded: dict) -> dict:
     return {
         "segment": {"content": "A second document about rollbacks."},
         "store_decomposition": {
+            "metacontext_id": "the-real",
             "document_id": seeded["document_id"],
             "segments": [{
                 "segment_id": seeded["segment_ids"][0],

@@ -531,6 +531,22 @@ class InMemoryStorage:
             counts[_CLASS_TO_NODE_TYPE[type(node)]] += 1
         return counts
 
+    async def count_nodes_without_frame(
+        self,
+        *,
+        status: NodeStatus = NodeStatus.ACTIVE,
+    ) -> int:
+        framed = {
+            edge.src_id
+            for edge in self._g.edges.values()
+            if edge.type == EdgeType.HAS_METACONTEXT
+        }
+        return sum(
+            1
+            for node in self._g.nodes.values()
+            if node.status == status and node.id not in framed
+        )
+
     # --- Edges ---
 
     async def store_edge(self, edge: NodeEdge) -> str:

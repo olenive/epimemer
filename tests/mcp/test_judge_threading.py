@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 import pytest
 
 from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
     ClaimKind,
     EdgeType,
     Fact,
@@ -49,6 +50,12 @@ def embedder():
 async def _fact(storage, embedder, content: str, *, claim_kind=None, source="doc1"):
     node = Fact(content=content, source_id="seg1", claim_kind=claim_kind)
     await storage.store_node(node)
+    # States a frame, as every ingested node has since #76: absence names none,
+    # so two frameless nodes share none and a `one_claim` verdict is refused.
+    await storage.store_edge(NodeEdge(
+        src_id=node.id, dst_id=BASE_METACONTEXT_ID,
+        type=EdgeType.HAS_METACONTEXT,
+    ))
     vectors = await embedder.embed([content])
     from epimemer.core.types import EmbeddingRecord
 
@@ -461,7 +468,10 @@ class TestBothBackendsKeepIt:
 
         await storage.store_edge(edge)
 
-        assert (await storage.get_edges_from(a.id))[0].judged_by == CRITIC
+        # By type: `_fact` also writes the node's frame edge, which carries no
+        # judge because nothing here claimed to have framed it.
+        stored = await storage.get_edges_from(a.id, edge_type=EdgeType.SIMILARITY)
+        assert [e.judged_by for e in stored] == [CRITIC]
 
     async def test_a_node_round_trips_its_judge(self, storage, embedder):
         node = Inference(content="a derivation", source_id="seg1", judged_by=CRITIC)

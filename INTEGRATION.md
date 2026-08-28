@@ -75,7 +75,7 @@ restate the count.
 | Tool | Purpose |
 |------|---------|
 | `segment` | Split text into chunks (step 1 of ingest) |
-| `store_decomposition` | Store agent-extracted topics/facts/inferences (step 2 of ingest) |
+| `store_decomposition` | Store agent-extracted topics/facts/inferences (step 2 of ingest). `metacontext_id` is required — `the-real` for base reality |
 | `search` | Hybrid retrieval — embedding similarity **and** keyword matching, fused, then graph expansion. Pass exact identifiers as `terms`; `include_corroboration=True` adds how many independent publishers back each result. See [docs/RETRIEVAL.md](docs/RETRIEVAL.md) |
 | `link` | Create typed edges between nodes |
 | `update` | Create a new node version (immutable history). `because` is required — `"it_was_wrong"` or `"the_world_changed"` |

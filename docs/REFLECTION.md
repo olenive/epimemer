@@ -102,8 +102,12 @@ Ten phases, ten keys. Each is a worklist, not a verdict:
 | `archival_candidates` | nodes worth setting aside | `archivals`, `judgments` |
 | `similar_relations` | likely-synonymous user relationship labels | `relation_merges`, or `relation_verdicts` where you are not merging |
 
-An eleventh key, `truncated`, is not a worklist: it names any of the lists that
-hit `max_nominations` and were cut.
+Two more keys are not worklists: `truncated` names any of the lists that hit
+`max_nominations` and were cut, and `relation_pairs_suppressed` counts the
+label pairs standing verdicts kept out of `similar_relations` — the suppression
+is silent and permanent by design, so without the count an empty list on a
+well-judged graph would be indistinguishable from a graph with nothing similar
+in it.
 
 **Four of the ten are built out of pairs** — `similar_pairs`,
 `contradictions`, `recurrences`, `similar_relations` — and pairs are quadratic
@@ -225,6 +229,28 @@ clears `merge_similarity_threshold` (0.92), and otherwise it is rejected and
 reported. For topics that are merely related rather than duplicates, use
 `parents`.
 
+**Three of these carry a frame, and none of them may invent one.** A split's
+subtopics inherit what the parent states; a synthesised parent inherits the one
+set its children all stand in, and is refused into `parents_refused` when they
+differ; a topic merge is refused into `topic_merges_refused` unless every source
+stands in exactly the same set. Union is never the answer: one node asserted in
+two worlds is the worst outcome available, which is the rule `merge_facts` has
+applied since #52.
+
+**A merge re-states the survivor's frame rather than migrating one.** Every
+other edge on a survivor is something its sources genuinely brought with them,
+but a frame is a claim about which world this is — and the survivor's content is
+*synthesised*, so nobody has yet said which world the synthesised wording is
+about. Migrating the edge would answer for them and credit whoever framed a
+source; the merging agent states it under its own judge instead. Merging is not
+coining, one layer up from `describe_relation`'s version of the same rule. A
+correction still moves the frame, where the replacement is the same claim.
+
+Where the sources state no frame, nothing is re-stated — there is nothing to
+restate, and inventing one would put words in a nobody's mouth. Splits behave
+the same way. A node with no `has_metacontext` edge is one nobody spoke for, and
+`epimemer frames declare` is how a person ends that state.
+
 Merging rebuilds the node's value signal through one shared function
 (`merged_value_signal`) rather than field by field. A field-by-field rebuild
 silently resets whatever it forgets to name — and the specific thing it forgot was
@@ -284,6 +310,17 @@ adjacent — a cross-frame pair wants `record_variant`.
 Similarities are applied **first** in the call, before any argument that can
 retire a node. A judgment is about the wording it was made against, so a
 supersession later in the same batch must not turn it into a skip.
+
+**`relation_verdicts` is the same machinery one tier down**, for label pairs
+from `similar_relations`: `{pair: [label_a, label_b], kind, verdict:
+"distinct" | "synonymous", because}`, with `kind` copied from the nomination
+and `because` required. Both verdicts suppress the pair from every future
+nomination, permanently — so judge the pair rather than clearing the list.
+What was decided is read back on `list_relations`, where each label carries
+its standing verdicts, and `reflect` counts what suppression held back in
+`relation_pairs_suppressed`. Refusals come back in
+`relation_verdicts_refused`, applied at step 1b for the same anchoring reason
+as `similarities`.
 
 ---
 

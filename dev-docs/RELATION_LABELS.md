@@ -318,10 +318,11 @@ stage 4 lands it can act on standing verdicts rather than re-asking.
 the pair judged, so the next agent skips it without knowing whether it was
 examined or waved through.
 
-Refused, per entry, in the shape `similarities_refused` already uses: a label
-no edge in this graph carries, a pair whose two sides differ in `kind`, and a
-pair already carrying **this agent's** identical verdict — a retry is not a
-second opinion.
+Refused, per entry, in the shape `similarities_refused` already uses: a missing
+`kind` (copy it from the nomination — defaulting it would make the stale-kind
+refusal blame the agent for a value the call invented), a label no edge in this
+graph carries, a pair whose two sides differ in `kind`, and a pair already
+carrying **this agent's** identical verdict — a retry is not a second opinion.
 
 **A label with no record is not refused; it gets one.** The verdict creates it,
 judge-less, per §2.3. Refusing here and pointing at the CLI would leave the
@@ -334,6 +335,22 @@ confirmed, not decided**, and takes the established shape rather than a new one:
 oldest decision for that pair. That is what stops a third agent doing the work a
 fourth time — §1's defect one layer up, and the same reason it exists for node
 pairs.
+
+**A different judge disagreeing is recorded, not refused.** It is neither a
+retry nor a confirmation; both rows survive with their judges and their
+reasons, and since both verdicts suppress, the disagreement changes nothing
+operationally — it is made visible rather than resolved. Resolving it is #80's
+question, and answering it here would be building #80 by accident. One
+structural consequence: a row is only written when no agreeing row stands, so
+the table holds at most one row per (pair, verdict) — two rows per pair, ever.
+
+**Two unnamed judges compare equal, so an anonymous repeat is refused as a
+retry.** Where a graph does not require a judge, a replayed batch and a genuine
+second reader are indistinguishable, and they want opposite treatments.
+Refusing costs an unnamed agent the ability to confirm — which the journal's
+first row already records — while accepting would let a retried call
+manufacture agreement out of nobody. #52's direction, applied to attribution
+rather than to corroboration.
 
 ### 4.2 The suppression read
 
@@ -352,23 +369,42 @@ class RelationVerdict(BaseModel):
 
 ```python
 async def record_relation_verdict(self, verdict: RelationVerdict) -> str: ...
-async def judged_relation_pairs(self) -> set[tuple[str, str]]: ...
+async def judged_relation_pairs(self) -> set[tuple[str, str]]: ...      # the sweep's read
+async def relation_verdicts_for(self, label_ids) -> Sequence[...]: ...  # the writer's read
+async def query_relation_verdicts(self) -> Sequence[...]: ...           # the reader's read
 ```
+
+Three reads because three questions: the sweep asks *has this pair been
+judged* (a cheap set); the write path asks *by whom, and to what* — a retry
+and a confirmation are told apart by the verdict matching while the judge does
+not, and a `DecisionRecord` carries the subjects and the judge but **not the
+verdict**, so the journal cannot answer it; and the whole-table read serves the
+agent, below.
 
 Storing the pair **on the label record** was rejected: it is mutable state held
 twice, once on each side, free to disagree — #54, #55 and #56 for the fifth
 time.
 
-`find_similar_relation_pairs` gains the filter. It resolves each label name to a
-record, drops any pair whose two ids are already judged, and **suppresses
-nothing for a pair either of whose sides has no record** — fail-safe, as §2.3
-requires.
+The sweep gains the filter. It resolves each label name to a record, drops any
+pair whose two ids are already judged, and **suppresses nothing for a pair
+either of whose sides has no record** — fail-safe, as §2.3 requires.
+
+**What was written must be readable where the next agent looks, and it is read
+back in two places.** `because` is required on the grounds of what the next
+agent needs, which is a promise about a *read*: each `list_relations` row
+carries the standing verdicts naming its label — the other label, the verdict,
+the reason, the judge and the date, newest first, both rows of a disagreement.
+And `reflect` reports `relation_pairs_suppressed`, counted where the skip
+happens, because the suppression is silent by design and without the count an
+empty nomination list on a well-judged graph is indistinguishable from a graph
+with nothing similar in it — *settled* and *unexamined* must never read the
+same.
 
 This is a **denormalised suppression index and is legitimate as one** for
 exactly `similarity_decisions.py`'s stated reason: it is immutable and
 append-only, so it cannot drift from the journal row that also records it. The
-journal is the audit record; this is what the sweep reads without a journal
-query.
+journal is the audit record; the sweep and the row reads above are what the
+runtime consults without a journal query.
 
 **Suppression is permanent, and that is inherited deliberately rather than by
 accident.** The fact-pair layer decided it in as many words — *"the `assessed`
@@ -405,8 +441,14 @@ now lives for both layers.
 `DecisionKind.RELATION_VERDICT`, with `subject_ids = [label_a.id, label_b.id]`.
 
 **This is where #69 resolves.** The subjects are ids of records that exist in
-this graph, so `review()` dereferences them like any other row, `node.notes`
-surfaces nothing spurious, and no field acquires a second namespace.
+this graph, and `review()` dereferences them — through `subject_kind` (`node`,
+`relation_label`, or null), because a decision's subject is not always a claim
+and `get_nodes` alone rendered a label id as *not in this graph*. The label
+read happens only where an id failed to resolve as a node, so an ordinary page
+pays nothing; a label is never declared in `retrieved`, which drives focus in a
+**node** viewer. `node.notes` surfaces nothing spurious, and no field acquires
+a second namespace. *Giving the subject an identity is worth nothing until the
+reader dereferences it* — the same lesson #74 is built on, one layer up.
 
 Its own kind rather than `SIMILARITY`: review *selects* on kind, and a reviewer
 auditing judgments about claims does not want judgments about vocabulary.
@@ -638,51 +680,31 @@ stage may depend on it.
 
 ### 7.2 Stage 2
 
-> **Built 2026-08-27.** As designed, with three departures worth recording.
->
-> **The kind is resolved from the edges by `get_relation_kind`**, not by
-> re-scanning `related_edges_of_active_nodes`. One read answers both of §7.2's
-> refusals at once — *does any edge carry this label* and *under which kind* —
-> and it is the method `link` already trusts to settle a reused label's kind, so
-> the two agree by construction rather than by two scans happening to match.
-> **The consequence is deliberate and is the reason this is recorded**: that
-> method reads every edge, while `list_relations` is scoped to edges on *active*
-> nodes (#14 step 2). So a label whose only remaining edges hang off retired
-> nodes is describable but not listed. That is the right way round — the
-> vocabulary outlives the claims that used it, and the alternative would make a
-> word undescribable exactly when the graph had begun to forget what it meant.
->
-> **Stage 1's deferred test 9 grew a path while it was being finished.** §7.1
-> scoped it to coining, because describing and judging did not yet exist; the
-> describe path joins it here, in `tests/mcp/test_relation_labels.py`, on the
-> in-memory store that is exactly where the CLI refuses. Trying to close it is
-> what found the fourth write path §2.3 had missed — `relation_merges`, which
-> now creates the survivor's record too (`ISSUES.md` #81). So the claim is
-> three paths of four, and the verdict path completes it in stage 3. **The test
-> was worth deferring rather than dropping**: it is the only guard over an
-> enumeration that ages.
->
-> **The response reports what was stored, not what was asked for.** A blank
-> `description` leaves existing prose alone — that is `recorded_relation_label`'s
-> rule from stage 1, not a new one — so echoing the argument back would tell an
-> agent it had cleared a description it had not. The merge is therefore computed
-> in the tool as well as inside the backend, and the stored text is what comes
-> back. The design did not consider the blank case at all.
->
-> **`link` omits the key rather than sending an empty one.** A
-> `relation_description` of `""` reads as *this graph means nothing by the word*;
-> absence reads as *nobody has said*, which is the true state and the one §3.1
-> insists on keeping distinct. Same reason `list_relations` does the opposite
-> and always carries the field: there the row exists either way, so an absent
-> key would be a missing column rather than an unstated meaning.
->
-> **The frontend got the data path and the type, and nothing renders them yet.**
-> `assemble_snapshot` carries `relation_labels`, `RelationLabelView` exists on
-> both sides of the wire, and `EDGE_MEANINGS` is untouched as §7.2 required —
-> this adds no `EdgeType`, which is what #55 keeps catching. There is no edge
-> inspector in the drawer to hang a description off (its tabs are node and
-> response), and building one is a UI feature rather than a row. **The agent-side
-> surfaces are the ones that pay**, and all three of those ship here.
+Built 2026-08-27. The rules that decide behaviour:
+
+**The kind is resolved from the edges by `get_relation_kind`** — the method
+`link` already trusts for a reused label, so the two agree by construction. It
+reads every edge while `list_relations` is scoped to *active* nodes (#14 step
+2), so a label whose only remaining edges hang off retired nodes is describable
+but not listed. Right way round: the vocabulary outlives the claims that used
+it, and the alternative would make a word undescribable exactly when the graph
+had begun to forget what it meant.
+
+**Every write path creates a missing record** (§2.3's enumeration, guarded by
+one test that ages with it): coining via `link`, describing, judging, and
+`relation_merges` for a survivor (`ISSUES.md` #81).
+
+**The response reports what was stored, not what was asked for.** A blank
+`description` leaves existing prose alone (`recorded_relation_label`'s rule),
+so the stored text is what comes back — echoing the argument would tell an
+agent it had cleared a description it had not.
+
+**`link` omits the key rather than sending an empty one**: `""` reads as *this
+graph means nothing by the word*, absence as *nobody has said* — §3.1's
+distinction. `list_relations` does the opposite and always carries the field,
+because there the row exists either way and an absent key would be a missing
+column rather than an unstated meaning.
+
 
 **Call sites** — `tools.list_relations` joins each derived `(label, kind)` to
 its record and returns `description` (empty when absent). Counts stay derived
@@ -702,8 +724,11 @@ The first draft wrote `ENRICHMENT` on the grounds that enriching is *what it
 is*, which was the right verb and the wrong side of the line. The member ships
 in the same commit as this writer, per `DecisionKind`'s drift guard.
 
-**Frontend** — a `relation_label` row, and `EDGE_MEANINGS` untouched: this adds
-no `EdgeType`, which is what #55 keeps catching.
+**Frontend** — `assemble_snapshot` carries `relation_labels` and
+`RelationLabelView` exists on both sides of the wire; nothing renders them
+until an edge inspector exists, which is a UI feature rather than a row.
+`EDGE_MEANINGS` untouched: this adds no `EdgeType`, which is what #55 keeps
+catching.
 
 **Tests:**
 
@@ -722,69 +747,26 @@ no `EdgeType`, which is what #55 keeps catching.
 
 ### 7.3 Stage 3
 
-> **Built 2026-08-27.** As designed, with four departures worth recording.
->
-> **A third protocol method, `relation_verdicts_for(label_ids)`.** The design
-> named two, and two are not enough: `judged_relation_pairs` answers *has this
-> pair been judged*, and the write path has to answer *by whom, and to what*.
-> A retry and a confirmation are told apart by the verdict matching while the
-> judge does not, and neither question can be answered from a set of pairs. The
-> alternative — reading it back off the journal — fails on the field: a
-> `DecisionRecord` carries the subjects and the judge but not the verdict, so
-> `distinct` and `synonymous` are indistinguishable there. The split is the
-> right one anyway and matches §4.2's own line: the sweep reads the cheap set,
-> the writer reads the rows.
->
-> **A second verdict from a second judge, disagreeing, is recorded rather than
-> refused.** §4.1 enumerated the refusals and this case fell between them — it
-> is neither a retry (the verdict differs) nor a confirmation (likewise). It is
-> allowed, and the table keeps both rows with their judges and their reasons.
-> Nothing is withdrawn and nothing wins: both verdicts suppress, so the
-> disagreement changes nothing operationally, and it is **made visible rather
-> than resolved**. Resolving it is #80's question, and answering it here would
-> have been building #80 by accident.
->
-> **Two unnamed judges compare equal, so an anonymous repeat is refused as a
-> retry.** The design did not say, because it assumed the judge. Where a graph
-> does not require one, a replayed batch and a genuine second reader are
-> indistinguishable, and they want opposite treatments. Refusing costs an
-> unnamed agent the ability to confirm — which the journal's first row already
-> records — while accepting would let a retried call manufacture agreement out
-> of nobody. #52's direction, applied to attribution rather than to
-> corroboration.
->
-> **`review` now resolves a label subject, and §4.3 was optimistic without
-> it.** The claim was that the subjects are ids of records that exist in this
-> graph *"so `review()` dereferences them like any other row"* — and it did not:
-> `review` resolved subjects with `get_nodes` alone, so both ids came back with
-> a null preview, which its own comment defines as *the node is not in this
-> graph*. Every `relation_description` row shipped in stage 2 already read that
-> way. Subjects now carry `subject_kind` (`node`, `relation_label`, or null) and
-> a label resolves to its name and kind; the extra read happens only where
-> something failed to resolve as a node, and a label is still never declared in
-> `retrieved`, which drives focus in a **node** viewer. *Giving the subject an
-> identity is worth nothing until the reader dereferences it* — the same lesson
-> #74 is built on, missed one layer up.
->
-> Two smaller notes. The verdict block is applied at **step 1b**, immediately
-> after `similarities` rather than merely somewhere before step 9's merges: both
-> are judgments about pairs as the agent saw them, and #65's anchoring rule
-> covers them jointly. And `apply_relation_verdict` takes a `judge` it
-> deliberately does not write onto a label record it creates — the argument is
-> accepted and dropped at the one call site most likely to reach for it, which
-> is where the coiner-never-the-judger rule needed to be visible.
+Built 2026-08-27; the read surface (verdicts on `list_relations`,
+`relation_pairs_suppressed` on `reflect`) followed one commit later, out of
+review — the rules all live in §4 now.
 
 **Types** — `RelationVerdict`; `DecisionKind.RELATION_VERDICT`, which the
 drift guard in `tests/mcp/test_decision_journal.py` requires to have a writer in
 the same commit.
 
-**Protocol** — `record_relation_verdict`, `judged_relation_pairs`. (Built with a
-third, `relation_verdicts_for` — see the departures above.)
+**Protocol** — the four methods in §4.2: `record_relation_verdict`,
+`judged_relation_pairs`, `relation_verdicts_for`, `query_relation_verdicts`.
 
-**Call sites** — `apply_reflection` gains `relation_verdicts`, applied **before**
-`relation_merges`, mirroring §10.2's ordering rule: a verdict is about the
-vocabulary as the agent saw it, and a merge earlier in the same batch would make
-one side vanish. `find_similar_relation_pairs` gains the suppression filter.
+**Call sites** — `apply_reflection` gains `relation_verdicts`, applied at
+**step 1b**, immediately after `similarities`: both are judgments about pairs
+as the agent saw them, and #65's anchoring rule covers them jointly — a merge
+earlier in the same batch would make one side of a pair vanish. The sweep
+gains the suppression filter and the `suppressed` count; `list_relations`
+carries each label's standing verdicts (§4.2). `apply_relation_verdict` takes
+a `judge` it deliberately does not write onto a label record it creates — the
+argument is accepted and dropped at the one call site most likely to reach for
+it, which is where the coiner-never-the-judger rule needed to be visible.
 
 **Tests:**
 
@@ -810,6 +792,13 @@ one side vanish. `find_similar_relation_pairs` gains the suppression filter.
     nominated again, including after either label is described or re-used.
     **Permanent by design** (§4.2), and the test says so rather than leaving a
     later reader to decide it is a bug.
+11. `list_relations` carries the verdict, its direction, its `because` and its
+    judge — mirrored onto both labels of the pair, disagreements as two rows,
+    an unattributed judge as null.
+12. `reflect` reports `relation_pairs_suppressed`, distinguishing a settled
+    graph from an unexamined one.
+13. An entry omitting `kind` is refused per entry, names the missing field,
+    and suppresses nothing.
 
 ---
 
