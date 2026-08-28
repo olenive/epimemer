@@ -20,7 +20,7 @@ moves to `ISSUES.md`; an item that gets picked up grows a design document and is
 reduced here to a pointer.
 
 **Entries are written to be picked up cold** (2026-08-21). The six things an
-actionable entry carries are listed in `ISSUES.md` → *Workflow*, and they apply
+actionable entry carries are listed in `ISSUES.md` → *Working an issue*, and they apply
 here too, with **Blockers** standing in for that list's *decision* row. The
 difference in kind: an issue must say what breaks, and an entry here must say
 what does not exist — an entry that can only be justified as "this is currently
@@ -139,6 +139,30 @@ tiers today and four once lexical exists; designing it as a boolean first
 means rebuilding it after.
 
 **Blockers.** None.
+### Review mode and agent attribution — built
+
+**Built 2026-08-22 and 2026-08-23**, every step. `REVIEW_MODE.md` is the design
+and the record; §10's build order is ✅ throughout and §12.1 states that no
+design question remains open.
+
+**What.** An agent registry, a judge recorded on every decision the system
+makes, a decision journal, and a `review()` loop whose modes run from *the
+uncertain ones* to *all of them*. The use case is a second agent auditing a
+first agent's work — and it is what makes *"a different agent reviewed this"*
+something a graph can show rather than something an agent asserts.
+
+**What shipped, in one line each:** merge reversal with its pre-merge partition
+capture and cycle limit; `apply_reflection(similarities=…)` and the `assessed`
+edge, which stopped the re-nomination treadmill; the agent registry with
+approval reaching a person rather than the agent; the judge threaded through
+every reflect-side and ingest write path, with a per-graph requirement setting
+that ships default-off; the decision journal; and `review()` with its modes,
+ordering, filters, `apply_review` and `rejudge`.
+
+**Two things were scoped out here and built later** as `reframe` and
+`correct_interval`: a metacontext assignment that could not be withdrawn, and a
+validity interval that could not be corrected. Both were kept out of `rejudge`,
+on the grounds that the split is about **addressing** rather than naming.
 
 ---
 
@@ -269,54 +293,6 @@ not a hidden failure.
 diverse corpus is a fixture; a remote SurrealDB is a deployment, not code.
 
 **Blockers.** None.
-
----
-
-### Review mode and agent attribution — designed, not built
-
-**What.** An `agent` registry, a judge recorded on every decision the system
-makes, a decision journal, and a `review()` loop whose modes run from *the
-uncertain ones* to *all of them*. The use case is a second agent auditing a
-first agent's work.
-
-**Fully designed already** — `dev-docs/REVIEW_MODE.md`, 2026-08-22, including
-the build order, what absence of a judge means, and why the judge never weights
-anything. Read that rather than this paragraph.
-
-**Step 1 was `apply_reflection(similarities=[…])`**, which is the `assessed` edge's
-fix and was independent of everything above it: it stops declined pairs being
-re-nominated for ever, and gives corroboration the first real input its
-neighbourhood walk has ever had. **Built 2026-08-22**, along with steps 0a–0c
-(merge reversal, §7). What remains is steps 2–7: the registry, attribution
-threaded through every write path, the journal, and `review()`.
-
-**Cost.** Step 1 was small, as expected. Steps 3–4 are signature churn across
-every write path rather than architecture, since `storage` is already threaded
-explicitly and the judge rides beside it. Step 5 (the journal) is the largest
-single piece.
-
-**Blockers.** None. **the anchoring rule blocked step 1** — a correction re-pointed
-judgment edges onto wording nobody judged, latent only while nothing writes
-`similarity` edges, and step 1 is what starts — and was **built 2026-08-22**,
-before the step it blocked. Nothing else blocks:
-§12.1 sorts what remains into filed work, resolved questions and two gaps
-scoped out (now revisable ingest judgments), and §12.2 indexes every decision with its
-reasoning. Two review rounds are recorded in §11 and §11.1. The design was reviewed and revised on 2026-08-22 — §11 records what
-moved, including `NodeNote` folding into the decision journal (which supersedes
-`WARNINGS_AND_SETTINGS.md` §9) and merge reversal, which added a **step 0**: the
-edge partition an undo needs is destroyed at merge time, so every merge taken
-before it is captured is permanently irreversible.
-
-**Progress. The whole of §7 — merge reversal — is built (2026-08-22),** across
-steps 0a, 0b and 0c: the pre-merge partition is captured on the survivor with
-chain eviction past `merge_undo_depth`, a fact that has oscillated
-`merge_cycle_limit` times is refused, and `reverse_merge` restores the sources
-and destroys the survivor. The five merges taken on 2026-08-21 predate the
-capture and stay irreversible. Two tools are new — `reverse_merge` and
-`configure_merge` — and two pieces wait on later steps by design: the reversal
-`DecisionRecord` (step 5, needs the journal) and the `judge` argument (steps
-2–4, needs the registry). **Next is step 1**, `apply_reflection(similarities=…)`
-and the `ASSESSED` edge, whose precondition is already fixed.
 
 ---
 
