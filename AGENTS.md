@@ -10,6 +10,19 @@ When using Marimo notebooks remember to not re-define variables in different cel
 
 Our goal is to build a robust and secure system, not simply a prototype. We don't want to trade speed for technical debt.
 
+**Name the thing, never the issue number.** Do not write `#63` in code, a
+comment, a docstring or a document. A number costs every reader a lookup, and it
+goes stale the moment the entry is deleted — which is the normal end of an
+entry, since `ISSUES.md` holds live issues only and resolved ones are removed.
+Write what it was instead: *the nomination bar that was two numbers*, *the
+verdict that had no writer*, *the frame requirement*. The reference then
+survives the entry and needs no lookup at all.
+
+The same goes for a comment whose only content is a citation. If a comment says
+nothing but *this fixes issue 5*, delete it; if it explains something, keep the
+explanation and drop the number. Assume every numbered entry will be deleted,
+and do not write anything that depends on one still existing.
+
 Never design a singleton. No module-level mutable global, no `get_settings()`
 accessor, no import-time construction — pass configuration as an explicit value,
 the way `ServerConfig` travels through `deps["config"]`. Tests parameterise over
