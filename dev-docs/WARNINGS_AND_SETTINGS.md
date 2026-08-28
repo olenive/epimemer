@@ -22,7 +22,7 @@ nomination, `epimemer/storage/protocol.py` for how a per-graph setting resolves.
 | Per-graph overrides and `resolve_warning_policy` | `storage/protocol.py`, both backends |
 | `configure_warnings` | `mcp/tools.py`, `mcp/server.py` |
 | `merge_inferences(source_ids, content)` | `mcp/tools.py` |
-| `inference_merge_candidates` | `reflect`'s eleventh phase |
+| `inference_merge_candidates` | a `reflect` phase, in `REFLECT_PHASES` |
 | `DecisionKind.PROCEEDED_DESPITE_ADVISORY` | `core/types.py` |
 | `review(mode="advisory")` | `pipelines/review/modes.py` |
 

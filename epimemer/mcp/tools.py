@@ -190,12 +190,13 @@ _NESTED_ID_KEYS = ("id", "node_id", "topic_id")
 def _ids_within(value: object) -> Iterator[str]:
     """Every node id nested anywhere in a result structure this tool just built.
 
-    Used by `reflect` alone, whose ten nominee lists have ten shapes — seven
-    when this was written, which is the argument making itself. Reading them off
-    a hand-written list of key paths is how the eleventh would go undeclared, and
-    §2.1's objection does not apply here: it is about the *choke point* guessing
-    across tools it knows nothing about, where this is a tool reading the
-    structure it wrote three lines earlier.
+    Used by `reflect` alone, whose nominee lists each have their own shape and
+    have outnumbered the seven that existed when this was written — which is the
+    argument making itself. Reading them off a hand-written list of key paths is
+    how the next one would go undeclared, and §2.1's objection does not apply
+    here: it is about the *choke point* guessing across tools it knows nothing
+    about, where this is a tool reading the structure it wrote three lines
+    earlier.
 
     `truncated` rides along harmlessly: it is a list of bare key names, and a
     string outside a mapping matches no id key.

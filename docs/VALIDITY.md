@@ -209,7 +209,7 @@ produce would earn a dead branch in every caller.
 
 ## 7. What reflect does with validity
 
-Three phases read intervals. All **propose and never write**; see
+The phases that read intervals all **propose and never write**; see
 [REFLECTION.md](REFLECTION.md).
 
 ### The soundness check

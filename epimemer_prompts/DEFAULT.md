@@ -363,9 +363,8 @@ useful:
   already flagged for resolution —
   `archival_candidates` (see below), and `similar_relations`, likely-synonymous
   user relationship labels.
-- **Check `truncated`.** Five of the lists are built out of *pairs* —
-  `similar_pairs`, `contradictions`, `recurrences`, `similar_relations`,
-  `inference_merge_candidates` — and
+- **Check `truncated`.** The lists built out of *pairs* grow faster than the
+  ones built out of nodes, and
   pairs grow quadratically where every other list grows with the node count. Each
   is capped to its highest-scoring `max_nominations` (200 by default), and any
   that was cut is named in `truncated`. An empty `truncated` means you saw

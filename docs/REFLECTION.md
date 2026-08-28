@@ -122,7 +122,8 @@ to proceed against.
 
 ## 3. What `reflect` returns
 
-Eleven phases, eleven keys. Each is a worklist, not a verdict:
+One key per phase, and `REFLECT_PHASES` names them in execution order. Each
+is a worklist, not a verdict:
 
 | Key | Nominates | Applied via |
 |---|---|---|
@@ -145,13 +146,11 @@ is silent and permanent by design, so without the count an empty list on a
 well-judged graph would be indistinguishable from a graph with nothing similar
 in it.
 
-**Five of the eleven are built out of pairs** — `similar_pairs`,
-`contradictions`, `recurrences`, `similar_relations`,
-`inference_merge_candidates` — and pairs grow faster than the node set where
-every other list is linear in it. Those five are capped to their
-highest-scoring `max_nominations` (200 by default), and a cut list is named in
-`truncated` rather than silently shortened, because a caller otherwise cannot
-tell an exhausted graph from a trimmed answer. **When a list is named
+**The lists built out of pairs are capped**, and `CAPPED_KEYS` is which — pairs
+grow faster than the node set where every other list is linear in it. Each is
+cut to its highest-scoring `max_nominations` (200 by default), and a cut list is
+named in `truncated` rather than silently shortened, because a caller otherwise
+cannot tell an exhausted graph from a trimmed answer. **When a list is named
 there, the move is to act on what came back and reflect again**, not to raise the
 number: the remainder is the weakest end of the ranking, and a graph that dense
 wants a different operation than a longer list.
@@ -177,7 +176,7 @@ shared vocabulary while saying different things. The population worth reviewing
 is the one a **fact** merge creates — collapsing four near-identical facts lands
 their four inferences on one survivor, each flagged `evidence_merged`.
 
-Two of them exist to keep a distinction that a single list would destroy:
+Two of the lists exist to keep a distinction that a single one would destroy:
 
 - **`recurrences` is separate from `contradictions`** because a claim standing
   beside its own successor is not in conflict with it. Only *mixed* pairs
@@ -263,7 +262,7 @@ deleted, and `restore` reverses it.
 
 ## 6. What `apply_reflection` writes
 
-Ten kinds of decision, all optional, applied in one call:
+Every kind of decision is optional and they are applied in one call:
 
 | Argument | Effect |
 |---|---|
@@ -317,7 +316,7 @@ come back in `boundaries_refused` with a reason.
 
 ### A batch applies, or it never existed
 
-The ten steps share no transaction, and cannot: their order is load-bearing, so
+The steps share no transaction, and cannot: their order is load-bearing, so
 judgments are recorded before the steps that retire the nodes those judgments
 name. The guarantee comes from the other end instead — **every entry is checked
 before the first step writes**, and a batch containing one that cannot be

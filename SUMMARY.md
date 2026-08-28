@@ -545,10 +545,11 @@ and a poor judge.** Similarity nominates *these two facts are about the same
 thing*; only an agent can answer *do they contradict, supersede, or coexist?* So
 `reflect` returns pairs with their scores rather than verdicts.
 
-Eleven phases, each a worklist: topic consolidation, split detection, enrichment,
-contradiction detection, recurrence detection, the temporal soundness check,
-inference-merge nomination, boundary proposals, the pending-review worklist,
-archival nomination, and relation consolidation.
+One phase per worklist, and `REFLECT_PHASES` in `mcp/tools.py` names them in
+execution order: topic consolidation, split detection, enrichment, contradiction
+detection, recurrence detection, the temporal soundness check, inference-merge
+nomination, boundary proposals, the pending-review worklist, archival nomination
+and relation consolidation.
 
 Two separations in that list are load-bearing. **Recurrences are reported apart
 from contradictions** — a claim standing beside its own successor is not in
@@ -556,7 +557,7 @@ conflict with it. And **cross-frame pairs are dropped rather than reported**: hi
 similarity across disjoint metacontexts is coexistence, and calling it a
 contradiction is the misreading metacontexts exist to prevent.
 
-`apply_reflection` writes ten kinds of decision. `merges` is the only
+`apply_reflection` writes every kind of reflect decision. `merges` is the only
 *consolidation* among them that retires nodes from the active graph, so its bar
 is deliberately high — every pair of sources must clear the threshold or the
 merge is rejected and reported. It is **Topics only**: facts collapse through
@@ -669,7 +670,7 @@ These limits are **measured** rather than estimated — see [dev-docs/BENCHMARKS
 
 So: `reflect` is the limiting operation on both backends, and everything else has been pushed past any size worth quoting. Ingest is flat and not a concern. Don't point a large persistent graph at this unwarned.
 
-**Those are time limits only.** `reflect` also allocates ~580 bytes per *surviving* candidate pair, and the pair lists are quadratic in the node set. **Measured on real prose 2026-08-20: 0.0105% of fact pairs clear the 0.80 threshold, which projects to ~3 MB at 10,000 facts** — not the gigabytes an earlier estimate predicted from a rate measured on templated text. That moved the argument from memory to the *response*, and **the response is now capped (2026-08-21)**: each of the five pair-built lists returns its highest-scoring `max_nominations` (200 by default) and any list that was cut is named in the response's `truncated` key. The peak allocation is deliberately not bounded by that — it would mean capping inside the scorer, which is a large change against a 3 MB problem. What the measurement does not cover is a corpus of genuine near-duplicates, which nothing here has ingested. Measurements and the corrected projection: `dev-docs/BENCHMARKS.md`.
+**Those are time limits only.** `reflect` also allocates ~580 bytes per *surviving* candidate pair, and the pair lists are quadratic in the node set. **Measured on real prose 2026-08-20: 0.0105% of fact pairs clear the 0.80 threshold, which projects to ~3 MB at 10,000 facts** — not the gigabytes an earlier estimate predicted from a rate measured on templated text. That moved the argument from memory to the *response*, and **the response is now capped (2026-08-21)**: each of the pair-built lists named in `CAPPED_KEYS` returns its highest-scoring `max_nominations` (200 by default) and any list that was cut is named in the response's `truncated` key. The peak allocation is deliberately not bounded by that — it would mean capping inside the scorer, which is a large change against a 3 MB problem. What the measurement does not cover is a corpus of genuine near-duplicates, which nothing here has ingested. Measurements and the corrected projection: `dev-docs/BENCHMARKS.md`.
 
 These figures depend on two optimisations worth knowing about, because the naive form of each is what a reader would otherwise expect: in-memory edge lookups go through endpoint indexes (`by_src` / `by_dst` in `storage/memory.py`) rather than scanning the edge set, and SurrealDB's `vector_search` ranks before filtering by status rather than filtering inside the ranking query — SurrealDB re-runs such a subquery per row, which cost `search` two orders of magnitude. What remains under `search` on SurrealDB is ~120 ms of per-result enrichment round-trips, the N+1 pattern that batching removed elsewhere.
 

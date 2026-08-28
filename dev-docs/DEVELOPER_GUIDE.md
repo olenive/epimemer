@@ -31,6 +31,40 @@ uv run python -m pytest tests/mcp/test_tools.py::TestIngest -v
 uv run python -m pytest tests/pipelines/test_orchestration.py -v -s
 ```
 
+### Before asking for a review: `scripts/prose_drift.py`
+
+```bash
+uv run python scripts/prose_drift.py
+```
+
+Finds prose carrying a **live count of something the code enumerates** — the
+size of `CAPPED_KEYS`, the number of reflect phases, the kinds
+`apply_reflection` accepts. Every one of those is a sentence that was true when
+written and rots the moment somebody adds to the list, and reviews here keep
+catching them.
+
+**It is not in the suite, and that is the point.** A test pinning those numbers
+would detect the drift while institutionalising the duplication that causes it:
+every legitimate change to a list would fail a doc test whose fix is bumping a
+number, which trains exactly the update-without-rereading habit that lets the
+argument around the number go stale while the number stays fresh. The fix is to
+stop writing the counts — *"the pair-built lists (`CAPPED_KEYS`)"* rather than
+*"the five pair-built lists"* — and this only finds the ones already written.
+
+So run it by hand, at the moment the prose and the code are both in your head.
+A lint then is worth more than a suite member firing months later at whoever
+happens to touch the list.
+
+Two things it deliberately ignores. **A dated measurement is not a live count**
+— *0.0105% of fact pairs clear the bar*, *5,053 pairs, zero nominations* — those
+are evidence, and evidence ages rather than drifting, which is what the date is
+for. And **`dev-docs/` is out of scope** for the same reason: those documents
+record what was decided on a date, so their numbers describe the state then.
+
+It errs at missing things rather than at reporting them, because two looser
+versions of it reported thirty findings with two real ones — and a tool at that
+hit rate is one nobody runs twice.
+
 ### Against a real SurrealDB (opt-in, needs Docker)
 
 The default suite is embedded and sequential. Two properties it cannot reach —

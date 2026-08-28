@@ -1,15 +1,18 @@
 """Batched pairwise cosine scoring, shared by the phases that need it.
 
-Two `reflect` phases ask the same question of different node types — which
-pairs in this set are similar enough to be worth acting on — and both are
-quadratic in the set. Neither has redundancy left to remove: the comparisons
-are genuine work, so the answer is to do that work in bulk rather than less of
-it, one matrix product per block instead of one Python call per pair.
+Several `reflect` phases ask the same question of different node types — which
+pairs in this set are similar enough to be worth acting on — and each is
+quadratic in the set it is handed. None has redundancy left to remove: the
+comparisons are genuine work, so the answer is to do that work in bulk rather
+than less of it, one matrix product per block instead of one Python call per
+pair.
 
 This lives on its own because it was written twice: once for facts and
 once, by copying, for topics. The second time is what makes it shared —
 the zero-vector rule below is subtle enough that two copies would eventually
-disagree, and a disagreement here is silent.
+disagree, and a disagreement here is silent. Inference-merge nomination is the
+third caller and took `stack_uniform_width` alone, which is the shape a shared
+module wants: a caller that needs one piece takes one piece.
 
 The exponent is unchanged by any of this. A constant factor moves a quadratic
 crossing by roughly its square root, which is why the guards against regression

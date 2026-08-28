@@ -129,7 +129,7 @@ Each topic/fact/inference may be an object rather than a bare string, carrying p
 - After ingesting several documents (the system auto-suggests reflection once a configured threshold of ingestions is reached — it flags the suggestion, it does not reflect on its own)
 - When explicitly asked to consolidate or organize knowledge
 - Periodically during long sessions
-- Check `truncated` in the response. The five pair-built lists (`similar_pairs`, `contradictions`, `recurrences`, `similar_relations`, `inference_merge_candidates`) are capped at `max_nominations` (200), and any that was cut is named there. Empty means you saw everything; named means act on what came back and reflect again, rather than raising the number.
+- Check `truncated` in the response. Reflect's pair-built lists are capped at `max_nominations` (200), and any that was cut is named there — so the response tells you which, and you do not have to know the set in advance. Empty means you saw everything; named means act on what came back and reflect again, rather than raising the number.
 - **Every nominated pair needs a recorded verdict, and `similar_relations` is
   where that is easiest to forget.** Nothing rewrites a label — relation
   merging was removed, so a `synonymous` answer changes no edge and neither
