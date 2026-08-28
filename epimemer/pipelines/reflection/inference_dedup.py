@@ -350,7 +350,14 @@ async def nominate_inference_merges(
     if not shared:
         return []
 
-    judged = await _already_judged(list(by_id), storage)
+    # Asked only about the inferences that formed a pair, not about every active
+    # one. The grouping has already cut the set — often to a handful out of
+    # hundreds — and this is eight edge queries, so widening it to the whole
+    # population would undo the saving the grouping is here for.
+    grouped = list(dict.fromkeys(
+        node_id for pair in shared for node_id in sorted(pair)
+    ))
+    judged = await _already_judged(grouped, storage)
     pairs = [pair for pair in shared if pair not in judged]
     if not pairs:
         return []

@@ -172,6 +172,42 @@ class TestTwoReadingsBecomeOne:
         )
         assert [edge.dst_id for edge in frames] == [BASE_METACONTEXT_ID]
 
+    async def test_the_confidence_basis_travels_with_the_confidence(
+        self, storage, embedding_provider
+    ):
+        """`merged_value_signal` keeps the highest confidence of the sources. A
+        rebuild that took the number and not the prose behind it would leave a
+        prior nobody can review — the exact state the guidance exists to prevent,
+        reached by a path nobody chose."""
+        one = await _inference(storage, embedding_provider, "A reading")
+        other = await _inference(storage, embedding_provider, "The same reading")
+        one.value.confidence = 0.3
+        one.metadata["confidence_basis"] = "one source, hedged"
+        other.value.confidence = 0.9
+        other.metadata["confidence_basis"] = "the spec, about its own behaviour"
+        for node in (one, other):
+            await storage.store_node(node)
+
+        result, _ = await _merge(storage, embedding_provider, [one, other])
+
+        survivor = await storage.get_node(result["inference_id"])
+        assert survivor.value.confidence == pytest.approx(0.9)
+        assert survivor.metadata["confidence_basis"] == (
+            "the spec, about its own behaviour"
+        )
+
+    async def test_unrated_sources_owe_no_reason(
+        self, storage, embedding_provider
+    ):
+        one = await _inference(storage, embedding_provider, "A reading")
+        other = await _inference(storage, embedding_provider, "The same reading")
+
+        result, _ = await _merge(storage, embedding_provider, [one, other])
+
+        survivor = await storage.get_node(result["inference_id"])
+        assert survivor.value.confidence is None
+        assert "confidence_basis" not in survivor.metadata
+
     async def test_the_merge_is_journalled_survivor_first(
         self, storage, embedding_provider
     ):

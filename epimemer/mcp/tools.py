@@ -2856,6 +2856,7 @@ async def merge_inferences(
     keep both — and refusing out loud is how it gets to choose it.
     """
     from epimemer.pipelines.graph_construction.versioning import merge_nodes
+    from epimemer.pipelines.reflection.fact_dedup import merged_confidence_basis
     from epimemer.pipelines.reflection.inference_dedup import (
         merge_advisories,
         merge_refusal,
@@ -2900,13 +2901,21 @@ async def merge_inferences(
         storage, warning_policy if warning_policy is not None else WarningPolicy()
     )
 
+    # The basis travels with the confidence it explains. `merged_value_signal`
+    # keeps the highest of the sources', and a rebuild that took the number
+    # without its prose would leave a prior nobody can review — which is what
+    # `merged_confidence_basis` exists to stop, on this path as on the fact one.
+    basis = merged_confidence_basis(sources)
     merged = Inference(
         content=content,
         source_id=sources[0].source_id,
         value=merged_value_signal([source.value for source in sources]),
         extraction_method="agent:merge",
         judged_by=judge,
-        metadata={"merged_from": source_ids},
+        metadata=(
+            {"merged_from": source_ids}
+            | ({"confidence_basis": basis} if basis else {})
+        ),
     )
     await merge_nodes(list(sources), merged, storage, embedding_provider, judge=judge)
     # The survivor first, so a reversal looking for *the merge that made this

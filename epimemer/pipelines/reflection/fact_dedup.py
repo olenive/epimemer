@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from epimemer.core.types import (
     DEFAULT_MERGE_CYCLE_LIMIT,
     ClaimKind,
+    EpistemicNode,
     Fact,
     NodeStatus,
     completed_merge_cycles,
@@ -199,7 +200,7 @@ async def merge_refusal(
     return None
 
 
-def merged_confidence_basis(sources: Sequence[Fact]) -> str | None:
+def merged_confidence_basis(sources: Sequence[EpistemicNode]) -> str | None:
     """The recorded reason belonging to the confidence a merge keeps.
 
     `merged_value_signal` takes the highest confidence of its sources, and the
@@ -213,10 +214,17 @@ def merged_confidence_basis(sources: Sequence[Fact]) -> str | None:
     merge of unrated facts stays unrated and so owes no reason. Ties keep the
     first, which is arbitrary but deterministic — and by then two sources have
     said the same thing about the same claim.
+
+    **Any node with a value signal, not only a fact.** It lives here because
+    facts merged first, and it read `Sequence[Fact]` until `merge_inferences`
+    shipped without it — which reproduced the exact stripped-prior state above
+    by the exact path the paragraph warns about. Ingest writes
+    `confidence_basis` for all three node types, so every merge path owes this
+    call.
     """
-    rated = [fact for fact in sources if fact.value.confidence is not None]
+    rated = [node for node in sources if node.value.confidence is not None]
     if not rated:
         return None
-    return max(rated, key=lambda fact: fact.value.confidence).metadata.get(
+    return max(rated, key=lambda node: node.value.confidence).metadata.get(
         "confidence_basis"
     )
