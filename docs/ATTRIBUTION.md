@@ -312,11 +312,16 @@ one call rather than three vocabularies.
 `advisory` is the one mode that is a selection on **kind**
 (`proceeded_despite_advisory`), and it answers a question none of the others
 can: *what was decided against advice?* Its rows sit beside the decision they
-accompany rather than replacing it — a same-frame contradiction writes both a
-`contradiction` row saying what was asserted and an advisory row saying what the
-asserter was told. The advisory's own text is in `certainty_basis`, so a
-reviewer sees what the decider saw. `certainty` stays blank on these, because
-nobody rated them.
+accompany rather than replacing it, and the advisory's own text is in
+`certainty_basis`, so a reviewer sees what the decider saw. `certainty` stays
+blank on these, because nobody rated them.
+
+**Only an advisory that *objects* writes a row.** *Despite* means something only
+where there was something to proceed against, so a same-frame contradiction —
+where the tool was right and the advisory is escalating the finding — sets
+`notify_user` and journals nothing. Writing a row for every advisory doubled the
+journal on the commonest path there is, which degrades exactly the review this
+mode exists for.
 
 It is deliberately **not** the same question as `unsound_inferences`. That list
 is recomputed from the graph every time and goes correctly silent once somebody

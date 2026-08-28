@@ -293,10 +293,17 @@ cannot compute, delivered *before* the decision rather than after it. Each has a
 `kind`, a one-sentence `message` and structured `detail`. Nothing here refuses
 on one — an advisory reaches you while you are still choosing what to write,
 which is the only moment at which it can change the answer, so **read it and
-write differently** rather than reading it and proceeding. Every call that
-carries one is recorded, whether or not the graph is set to show it, and a later
-agent reads those back with `review(mode="advisory")`. `configure_warnings` sets
-what a graph does with them — ask the user before changing it.
+write differently** rather than reading it and proceeding.
+
+**Read the `kind`, because two of them say opposite things.**
+`disjoint_premises`, `cross_frame` and `same_frame_variant` say *this may be the
+wrong call*; proceeding past one is journalled, whether or not the graph was set
+to show it to you, and a later agent reads those back with
+`review(mode="advisory")`. `same_frame_contradiction` says the reverse — the
+tool was right, and the conflict it found wants a person — so nothing is
+recorded against it. `notify_user: true` means raise it with the user either
+way. `configure_warnings` sets what a graph does with them; ask the user before
+changing it.
 
 **Human-in-the-loop.**
 - When a response returns `notify_user: true`, surface it in conversation and
@@ -356,8 +363,9 @@ useful:
   already flagged for resolution —
   `archival_candidates` (see below), and `similar_relations`, likely-synonymous
   user relationship labels.
-- **Check `truncated`.** Four of the lists are built out of *pairs* —
-  `similar_pairs`, `contradictions`, `recurrences`, `similar_relations` — and
+- **Check `truncated`.** Five of the lists are built out of *pairs* —
+  `similar_pairs`, `contradictions`, `recurrences`, `similar_relations`,
+  `inference_merge_candidates` — and
   pairs grow quadratically where every other list grows with the node count. Each
   is capped to its highest-scoring `max_nominations` (200 by default), and any
   that was cut is named in `truncated`. An empty `truncated` means you saw

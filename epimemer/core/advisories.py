@@ -42,12 +42,54 @@ class AdvisoryKind(str, Enum):
     # puts in one period. Produced by inference-merge nomination and by
     # `merge_inferences` itself.
     DISJOINT_PREMISES = "disjoint_premises"
-    # A judgment recorded across frames that only means something within one.
+    # A contradiction recorded across frames. Two claims about different worlds
+    # do not conflict, so the tool reached for was the wrong one.
     CROSS_FRAME = "cross_frame"
-    # Two nodes standing in the same frame, where the operation asked for was
-    # the cross-frame one. The conflict is real rather than a divergence of
-    # worlds, which is what makes it worth raising with a person.
+    # A variant recorded within one frame. `variant_of` is for a proposition one
+    # world resolves differently from another, so same-frame is again the wrong
+    # tool — and what is being described is probably a contradiction.
+    SAME_FRAME_VARIANT = "same_frame_variant"
+    # A contradiction recorded within one frame. **The only kind here that says
+    # the call was right**: the conflict is real rather than a divergence of
+    # worlds, which is exactly what makes it worth putting to a person.
     SAME_FRAME_CONTRADICTION = "same_frame_contradiction"
+
+
+class AdvisoryStance(str, Enum):
+    """Whether an advisory argues with the operation or reports on it.
+
+    **Two situations wore one kind until 2026-08-29, and they gave opposite
+    advice.** `SAME_FRAME_CONTRADICTION` was raised both by
+    `record_contradiction` — where it means *you are right, and a person should
+    see this* — and by `record_variant`, where it means *this is the wrong
+    tool*. One field needing "or" to describe it is the tell this codebase has
+    caught several times; the fix was a fourth kind, and this is what the split
+    bought.
+
+    The distinction is not cosmetic: it decides whether a
+    `proceeded_despite_advisory` row is written. *Despite* is meaningful only
+    where there was something to proceed against, and a row for every correct
+    call degrades the review the kind exists for.
+    """
+
+    # The operation may be the wrong one. Proceeding is worth recording.
+    OBJECTS = "objects"
+    # The operation was right; the finding it turned up wants a person. Nothing
+    # was proceeded against, so nothing is journalled.
+    ESCALATES = "escalates"
+
+
+# Every kind, classified. A **total** map rather than a set of objecting kinds,
+# because a set makes absence mean *escalates* — and silence quietly becoming a
+# claim is the failure the frame requirement exists to prevent. A test asserts
+# both directions, so a kind added without a stance fails rather than defaulting
+# to the safer-sounding half.
+ADVISORY_STANCE: dict["AdvisoryKind", AdvisoryStance] = {
+    AdvisoryKind.DISJOINT_PREMISES: AdvisoryStance.OBJECTS,
+    AdvisoryKind.CROSS_FRAME: AdvisoryStance.OBJECTS,
+    AdvisoryKind.SAME_FRAME_VARIANT: AdvisoryStance.OBJECTS,
+    AdvisoryKind.SAME_FRAME_CONTRADICTION: AdvisoryStance.ESCALATES,
+}
 
 
 class AdvisoryAction(str, Enum):
@@ -81,14 +123,16 @@ class Advisory(BaseModel):
     detail: dict = Field(default_factory=dict)
 
 
-# What happens to a kind nobody named, and the one kind named by default.
+# The one kind named by default, and it is a compatibility requirement rather
+# than a preference: `record_contradiction` has always returned `notify_user`
+# for a same-frame pair, and a policy defaulting it to `proceed` would keep the
+# key while quietly changing its trigger. Turning the notification off stays
+# available — it just has to be somebody's decision rather than a side effect.
 #
-# `SAME_FRAME_CONTRADICTION` ships as `FLAG` rather than following the default,
-# and that is a compatibility requirement rather than a preference:
-# `record_contradiction` has always returned `notify_user` for a same-frame
-# pair, and a policy defaulting it to `proceed` would keep the key while
-# quietly changing its trigger. Turning the notification off stays available —
-# it just has to be somebody's decision rather than a side effect.
+# `SAME_FRAME_VARIANT` is deliberately **not** here. `record_variant` returned a
+# quiet note for a same-frame pair and still does; making it escalate would have
+# been an unasked-for change to a tool nobody was reviewing. A graph that wants
+# it louder names it.
 DEFAULT_BY_KIND: dict[AdvisoryKind, AdvisoryAction] = {
     AdvisoryKind.SAME_FRAME_CONTRADICTION: AdvisoryAction.FLAG,
 }
@@ -117,7 +161,9 @@ def notify_user(policy: WarningPolicy, advisories: list[Advisory]) -> bool:
     """Whether any of these is escalated to the person.
 
     Read by the tools that already return a `notify_user` key, so the key keeps
-    its name and gains a policy behind it.
+    its name and gains a policy behind it. Callers pass the **surfaced** set: an
+    advisory the agent was never shown cannot be relayed, and `notify_user: true`
+    with no text to relay is an instruction nobody can follow.
     """
     return any(
         resolved_action(policy, advisory.kind) is AdvisoryAction.FLAG
@@ -126,10 +172,36 @@ def notify_user(policy: WarningPolicy, advisories: list[Advisory]) -> bool:
 
 
 def surfaced(policy: WarningPolicy, advisories: list[Advisory]) -> list[Advisory]:
-    """The advisories this graph shows the agent — all of them, or none.
+    """The advisories this graph shows the agent.
 
-    `surface` is one switch over the whole set rather than a per-kind mute,
-    because per-kind is what `by_kind` is for. A graph that wants one kind quiet
-    sets it to `proceed`; a graph that wants silence sets this.
+    `surface` is the global mute, and **an explicitly named `flag` outranks
+    it**. That is the same specific-beats-general rule the `resolve_*` functions
+    keep everywhere else: naming a kind in `by_kind` is a stronger statement
+    than a switch that names none, so muting the graph does not withdraw an
+    escalation somebody asked for by name. A kind following `default_action`
+    is not named and is silenced, which is what makes the exception narrow.
+
+    To quieten a named kind, set it to `proceed` — the escalation then stops
+    being somebody's standing instruction, which is the only honest way to
+    withdraw one.
     """
-    return list(advisories) if policy.surface else []
+    if policy.surface:
+        return list(advisories)
+    return [
+        advisory for advisory in advisories
+        if policy.by_kind.get(advisory.kind) is AdvisoryAction.FLAG
+    ]
+
+
+def objects_to_the_call(advisories: list[Advisory]) -> bool:
+    """Whether any of these argues the operation may be wrong.
+
+    What decides a `proceeded_despite_advisory` row. Read over **every**
+    advisory rather than the surfaced ones, because recording is unconditional:
+    a graph with warnings muted should still answer *what was decided while
+    nobody was looking*.
+    """
+    return any(
+        ADVISORY_STANCE[advisory.kind] is AdvisoryStance.OBJECTS
+        for advisory in advisories
+    )

@@ -381,13 +381,12 @@ class TestItWorksOnTheCorpusAsItStands:
         result, _ = await tools.review(storage)
 
         kinds = [d["kind"] for d in result["decisions"]]
-        # Three, not two: a same-frame contradiction carries an advisory saying
-        # the conflict is real and wants a person, and the graph records that it
-        # said so. The contradiction row is what was decided; the advisory row
-        # is what the decider was told.
-        assert set(kinds) == {
-            "ingest", "contradiction", "proceeded_despite_advisory",
-        }
+        # Two. A same-frame contradiction carries an advisory, but one that says
+        # the call was *right* and a person should see the finding — there was
+        # nothing to proceed despite, so no second row. This briefly read three
+        # while every advisory journalled, which doubled the journal on the
+        # commonest path.
+        assert set(kinds) == {"ingest", "contradiction"}
         assert result["unattributed_count"] == len(result["decisions"]), (
             "no judge was claimed, and the review still answers"
         )

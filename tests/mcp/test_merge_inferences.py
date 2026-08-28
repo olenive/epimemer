@@ -423,8 +423,140 @@ class TestReflectOffersTheCandidatesAndDeclaresThem:
         declared = {record.node_id for record in meta.retrieved}
         assert {one.id, other.id, premise.id} <= declared
 
-    async def test_it_is_not_among_the_capped_lists(self):
-        """Not quadratic in the graph: it groups by premise and compares within
-        a group, so the bound is how many inferences rest on one fact."""
-        assert "inference_merge_candidates" not in tools.CAPPED_KEYS
+    async def test_it_is_capped_like_every_other_pair_built_list(self):
+        """Grouping bounds it by inferences-per-premise rather than by the
+        graph, which is a real and much lower bound — but *every pair list is
+        capped* is a simpler invariant to hold than *capped except where a
+        grouping argument says otherwise*, and the bound grows in exactly the
+        heavily merged graphs this feature targets."""
+        assert "inference_merge_candidates" in tools.CAPPED_KEYS
         assert "inference_merge_nomination" in tools.REFLECT_PHASES
+
+    async def test_the_cap_keeps_the_highest_scoring_and_says_it_cut(
+        self, storage, embedding_provider
+    ):
+        premise = await _premise(storage, "The deploy failed")
+        exact = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        near = [0.98, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        for index in range(4):
+            node = await _inference(
+                storage, embedding_provider, f"reading {index}",
+                vector=exact if index < 2 else near,
+            )
+            await _rests_on(storage, node, premise)
+
+        result, _ = await tools.reflect(
+            storage, embedding_provider, max_nominations=2
+        )
+
+        candidates = result["inference_merge_candidates"]
+        assert len(candidates) == 2
+        assert "inference_merge_candidates" in result["truncated"]
+        assert candidates[0]["similarity"] >= candidates[1]["similarity"]
+
+
+class TestReversingAnInferenceMerge:
+    """`merge_nodes` and `reverse_merge` are type-agnostic by construction, and
+    that was the whole argument for expecting this to work. An argument is not a
+    run: this is the deepest interaction the inference merge takes part in, and
+    it went unexercised until a reviewer ran it by hand."""
+
+    async def test_two_readings_come_back_with_their_premises(
+        self, storage, embedding_provider
+    ):
+        first = await _premise(storage, "The deploy failed")
+        second = await _premise(storage, "The queue backed up")
+        one = await _inference(storage, embedding_provider, "The release is unsafe")
+        other = await _inference(
+            storage, embedding_provider, "The release cannot be trusted"
+        )
+        await _rests_on(storage, one, first)
+        await _rests_on(storage, other, second)
+        merged, _ = await _merge(storage, embedding_provider, [one, other])
+
+        outcome, _ = await tools.reverse_merge(merged["inference_id"], storage)
+
+        assert outcome["reversed"] is True
+        assert set(outcome["restored_ids"]) == {one.id, other.id}
+        assert await storage.get_node(merged["inference_id"]) is None
+        for source, premise in ((one, first), (other, second)):
+            assert (await storage.get_node(source.id)).status is NodeStatus.ACTIVE
+            edges = await storage.get_edges_from(
+                source.id, edge_type=EdgeType.DERIVED_FROM
+            )
+            assert [edge.dst_id for edge in edges] == [premise.id]
+
+    async def test_three_readings_reverse_as_cleanly_as_two(
+        self, storage, embedding_provider
+    ):
+        """Everything else here is pairs; the tool takes a list."""
+        premise = await _premise(storage, "The deploy failed")
+        sources = []
+        for index in range(3):
+            node = await _inference(
+                storage, embedding_provider, f"the release is unsafe ({index})"
+            )
+            await _rests_on(storage, node, premise)
+            sources.append(node)
+
+        merged, _ = await _merge(storage, embedding_provider, sources)
+        assert merged["sources_retired"] == 3
+
+        outcome, _ = await tools.reverse_merge(merged["inference_id"], storage)
+
+        assert outcome["reversed"] is True
+        assert set(outcome["restored_ids"]) == {node.id for node in sources}
+        for node in sources:
+            assert (await storage.get_node(node.id)).status is NodeStatus.ACTIVE
+
+    async def test_a_three_way_merge_carries_every_premise(
+        self, storage, embedding_provider
+    ):
+        premises = [await _premise(storage, f"premise {i}") for i in range(3)]
+        sources = []
+        for index, premise in enumerate(premises):
+            node = await _inference(
+                storage, embedding_provider, f"the release is unsafe ({index})"
+            )
+            await _rests_on(storage, node, premise)
+            sources.append(node)
+
+        merged, _ = await _merge(storage, embedding_provider, sources)
+
+        carried = {
+            edge.dst_id for edge in await storage.get_edges_from(
+                merged["inference_id"], edge_type=EdgeType.DERIVED_FROM
+            )
+        }
+        assert carried == {premise.id for premise in premises}
+
+
+class TestARequiredJudgeReachesEveryWriter:
+    """A merge writes through `merge_nodes` and through `journal`, and both
+    carry the judge. Worth a run rather than an inspection: the two write in
+    different transactions."""
+
+    async def test_the_judge_lands_on_the_survivor_and_the_rows(
+        self, storage, embedding_provider
+    ):
+        premise = await _premise(storage, "The deploy failed")
+        one = await _inference(storage, embedding_provider, "A reading")
+        other = await _inference(storage, embedding_provider, "The same reading")
+        for inference in (one, other):
+            await _rests_on(storage, inference, premise)
+        await storage.set_require_judge(True)
+
+        result, _ = await _merge(
+            storage, embedding_provider, [one, other], judge=CRITIC
+        )
+
+        survivor = await storage.get_node(result["inference_id"])
+        assert survivor.judged_by.agent_id == "a-critic"
+        rows = await storage.query_decisions(kinds=[DecisionKind.MERGE])
+        assert [row.judged_by.agent_id for row in rows] == ["a-critic"]
+        # The frame the merge re-states is written under the merging judge too,
+        # rather than inheriting an edge somebody else wrote.
+        frames = await storage.get_edges_from(
+            survivor.id, edge_type=EdgeType.HAS_METACONTEXT
+        )
+        assert [edge.judged_by.agent_id for edge in frames] == ["a-critic"]

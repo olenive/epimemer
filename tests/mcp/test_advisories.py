@@ -12,13 +12,17 @@ that question is worth asking.
 """
 
 import pytest
+from pydantic import ValidationError
 
 from epimemer.core.advisories import (
+    ADVISORY_STANCE,
     Advisory,
     AdvisoryAction,
     AdvisoryKind,
+    AdvisoryStance,
     WarningPolicy,
     notify_user,
+    objects_to_the_call,
     resolved_action,
     surfaced,
 )
@@ -124,24 +128,86 @@ class TestThePolicyResolvesWithoutASingleton:
 
         assert AdvisoryKind.CROSS_FRAME not in second.warning_policy.by_kind
 
-    def test_surfacing_is_all_or_nothing_and_per_kind_is_by_kind(self):
+    def test_an_explicitly_named_flag_outranks_the_global_mute(self):
+        """Specific beats general, the rule every `resolve_*` here keeps.
+
+        Naming a kind in `by_kind` is a stronger statement than a switch that
+        names none, so muting the graph does not withdraw an escalation somebody
+        asked for by name — and `notify_user: true` with no text to relay would
+        be an instruction nobody can follow.
+        """
         advisories = [
             Advisory(kind=AdvisoryKind.CROSS_FRAME, message="x"),
             Advisory(kind=AdvisoryKind.SAME_FRAME_CONTRADICTION, message="y"),
         ]
 
         assert len(surfaced(WarningPolicy(), advisories)) == 2
-        assert surfaced(WarningPolicy(surface=False), advisories) == []
+        muted = surfaced(WarningPolicy(surface=False), advisories)
+        assert [a.kind for a in muted] == [AdvisoryKind.SAME_FRAME_CONTRADICTION]
         assert notify_user(WarningPolicy(), advisories) is True
-        assert notify_user(
-            WarningPolicy(default_action=AdvisoryAction.PROCEED, by_kind={}),
-            advisories,
-        ) is False
+
+    def test_a_kind_following_the_default_action_is_silenced_by_the_mute(self):
+        """The exception is narrow on purpose: a kind nobody named is general,
+        however the general default is set."""
+        advisories = [Advisory(kind=AdvisoryKind.CROSS_FRAME, message="x")]
+        loud = WarningPolicy(
+            surface=False, default_action=AdvisoryAction.FLAG, by_kind={}
+        )
+
+        assert surfaced(loud, advisories) == []
+
+    def test_setting_a_named_kind_to_proceed_is_how_an_escalation_is_withdrawn(
+        self,
+    ):
+        advisories = [
+            Advisory(kind=AdvisoryKind.SAME_FRAME_CONTRADICTION, message="y")
+        ]
+        quiet = WarningPolicy(surface=False, by_kind={
+            AdvisoryKind.SAME_FRAME_CONTRADICTION: AdvisoryAction.PROCEED
+        })
+
+        assert surfaced(quiet, advisories) == []
+        assert notify_user(quiet, advisories) is False
 
     def test_reject_is_absent_rather_than_reserved(self):
         """A value nothing can produce is worse than no value at all: a caller
         writes a branch for it and the branch is dead."""
         assert {action.value for action in AdvisoryAction} == {"proceed", "flag"}
+
+
+class TestEachKindGivesExactlyOneKindOfAdvice:
+    """The defect the fourth kind fixed: `SAME_FRAME_CONTRADICTION` was raised
+    both where the tool was right and where it was wrong, so one kind carried
+    opposite advice — the *field that needs "or" to describe it* tell.
+
+    The classification decides whether a `proceeded_despite_advisory` row is
+    written, so a kind added without one would silently take the safer-sounding
+    half of a question nobody asked.
+    """
+
+    def test_every_kind_is_classified_and_nothing_else_is(self):
+        assert set(ADVISORY_STANCE) == set(AdvisoryKind)
+
+    def test_only_the_same_frame_contradiction_endorses_the_call(self):
+        endorsing = {
+            kind for kind, stance in ADVISORY_STANCE.items()
+            if stance is AdvisoryStance.ESCALATES
+        }
+        assert endorsing == {AdvisoryKind.SAME_FRAME_CONTRADICTION}
+
+    def test_an_escalating_advisory_has_nothing_to_proceed_despite(self):
+        assert objects_to_the_call([
+            Advisory(kind=AdvisoryKind.SAME_FRAME_CONTRADICTION, message="y")
+        ]) is False
+        assert objects_to_the_call([
+            Advisory(kind=AdvisoryKind.SAME_FRAME_VARIANT, message="y")
+        ]) is True
+
+    def test_a_mixed_set_objects_if_anything_in_it_does(self):
+        assert objects_to_the_call([
+            Advisory(kind=AdvisoryKind.SAME_FRAME_CONTRADICTION, message="y"),
+            Advisory(kind=AdvisoryKind.DISJOINT_PREMISES, message="x"),
+        ]) is True
 
 
 class TestConfigureWarnings:
@@ -257,14 +323,53 @@ class TestTheTwoExistingWarningsBecameAdvisories:
         assert result["same_frame"] is False
         assert "warning" not in result and "warnings" not in result
 
-    async def test_a_same_frame_variant_is_advised_against(self, storage):
+    async def test_a_same_frame_variant_is_advised_against_and_stays_quiet(
+        self, storage
+    ):
+        """It keeps the whisper it always had — but as a policy rather than a
+        hard-coding, so a graph that wants it louder can name it."""
         a = await _fact(storage, "a")
         b = await _fact(storage, "b")
 
         result, _ = await tools.record_variant(a.id, b.id, storage)
 
         assert "record_contradiction" in result["warning"]
-        assert result["warnings"][0]["kind"] == "same_frame_contradiction"
+        assert result["warnings"][0]["kind"] == "same_frame_variant"
+        assert result["notify_user"] is False
+
+    async def test_a_same_frame_variant_can_be_escalated_by_a_graph(self, storage):
+        await tools.configure_warnings(
+            storage, actions={"same_frame_variant": "flag"}
+        )
+        a = await _fact(storage, "a")
+        b = await _fact(storage, "b")
+
+        result, _ = await tools.record_variant(a.id, b.id, storage)
+
+        assert result["notify_user"] is True
+
+    async def test_the_wrong_tool_is_recorded_and_the_right_one_is_not(
+        self, storage
+    ):
+        """The whole of the stance split, at the two call sites that motivated
+        it. A same-frame variant used the wrong tool and the graph says so; a
+        same-frame contradiction used the right one and had nothing to proceed
+        against."""
+        a = await _fact(storage, "a")
+        b = await _fact(storage, "b")
+        await tools.record_variant(a.id, b.id, storage)
+        objections = await storage.query_decisions(
+            kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY]
+        )
+        assert len(objections) == 1
+
+        c = await _fact(storage, "X is true")
+        d = await _fact(storage, "X is false")
+        await tools.record_contradiction(c.id, d.id, storage)
+
+        assert len(await storage.query_decisions(
+            kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY]
+        )) == 1
 
     async def test_a_graph_can_turn_the_notification_off_as_a_decision(
         self, storage
@@ -282,15 +387,30 @@ class TestTheTwoExistingWarningsBecameAdvisories:
         assert result["notify_user"] is False
         assert result["warnings"][0]["kind"] == "same_frame_contradiction"
 
-    async def test_surfacing_off_hides_the_message_and_keeps_the_row(self, storage):
+    async def test_a_mute_does_not_withdraw_the_contradiction_escalation(
+        self, storage
+    ):
+        """It is named `flag` by default, and a switch that names no kind is the
+        more general statement. Setting it to `proceed` is how it goes quiet."""
         await tools.configure_warnings(storage, surface=False)
         a = await _fact(storage, "X is true")
         b = await _fact(storage, "X is false")
 
         result, _ = await tools.record_contradiction(a.id, b.id, storage)
 
+        assert result["notify_user"] is True
+        assert result["warnings"][0]["kind"] == "same_frame_contradiction"
+
+    async def test_a_mute_does_hide_a_kind_that_only_objects(self, storage):
+        await tools.configure_warnings(storage, surface=False)
+        a = await _fact(storage, "a")
+        b = await _fact(storage, "b")
+
+        result, _ = await tools.record_variant(a.id, b.id, storage)
+
         assert "warning" not in result and "warnings" not in result
         assert result["notify_user"] is False
+        # Muted, and recorded anyway: that separation is the load-bearing part.
         assert len(await storage.query_decisions(
             kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY]
         )) == 1
@@ -302,8 +422,9 @@ class TestTheRecordIsReadBackByReview:
     agent proceeding past an advisory would have written into as well."""
 
     async def test_the_mode_selects_only_advisory_rows(self, storage):
-        a = await _fact(storage, "X is true")
-        b = await _fact(storage, "X is false")
+        a = await _fact(storage, "real")
+        b = await _fact(storage, "fictional", frame=None)
+        await _elsewhere(storage, b, "Fiction")
         await tools.record_contradiction(a.id, b.id, storage, judge=CRITIC)
 
         every, _ = await tools.review(storage)
@@ -315,6 +436,20 @@ class TestTheRecordIsReadBackByReview:
         assert {d["kind"] for d in only["decisions"]} == {
             "proceeded_despite_advisory"
         }
+
+    async def test_the_commonest_path_does_not_double_the_journal(self, storage):
+        """A same-frame contradiction is the ordinary, correct use of the tool.
+        A row for every one of them would swamp the review this mode exists for
+        — the selectivity argument that keeps `DecisionKind` fine-grained,
+        turned on the kind itself."""
+        a = await _fact(storage, "X is true")
+        b = await _fact(storage, "X is false")
+
+        await tools.record_contradiction(a.id, b.id, storage, judge=CRITIC)
+
+        every, _ = await tools.review(storage)
+        assert {d["kind"] for d in every["decisions"]} == {"contradiction"}
+        assert (await tools.review(storage, mode="advisory"))[0]["decisions"] == []
 
     async def test_the_row_carries_what_the_decider_was_told(self, storage):
         a = await _fact(storage, "real")
@@ -341,3 +476,47 @@ class TestTheRecordIsReadBackByReview:
 
         assert result["decisions"] == []
         assert "refused" not in result
+
+
+class TestAStoredOverrideFromANewerBuild:
+    """A graph written by a build that knows a kind this one does not.
+
+    Failing loudly is right — silently dropping a policy somebody set is worse
+    than an error — but the blast radius is worth pinning rather than
+    discovering: `get_warning_overrides` sits on the path of every tool that can
+    raise an advisory, so an unreadable override does not merely fail to apply.
+    It takes `record_contradiction`, `record_variant` and `merge_inferences`
+    down with it.
+    """
+
+    def test_an_unknown_kind_raises_rather_than_being_dropped(self):
+        with pytest.raises(ValidationError):
+            WarningOverrides.model_validate(
+                {"by_kind": {"a_kind_from_the_future": "flag"}}
+            )
+
+    def test_an_unknown_action_raises_too(self):
+        with pytest.raises(ValidationError):
+            WarningOverrides.model_validate(
+                {"by_kind": {"cross_frame": "reject"}}
+            )
+
+    async def test_the_failure_reaches_the_tools_that_read_the_policy(
+        self, storage
+    ):
+        """Not a defect to fix here — a consequence to know about. Recovering
+        would mean either dropping the unreadable entry, which loses a setting
+        silently, or refusing the write that made it, which no older build can
+        do. Loud on read is the honest remaining option."""
+        a = await _fact(storage, "X is true")
+        b = await _fact(storage, "X is false")
+
+        async def unreadable() -> WarningOverrides:
+            return WarningOverrides.model_validate(
+                {"by_kind": {"a_kind_from_the_future": "flag"}}
+            )
+
+        storage.get_warning_overrides = unreadable
+
+        with pytest.raises(ValidationError):
+            await tools.record_contradiction(a.id, b.id, storage)

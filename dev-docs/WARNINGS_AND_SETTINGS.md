@@ -33,10 +33,10 @@ Three existing behaviours changed rather than being added to:
   first advisory's message and `notify_user` is *any advisory resolved to
   `flag`* — because both are documented in the agent guidance and in
   `INTEGRATION.md`.
-- `record_variant` gains `notify_user`, which it did not have. A same-frame
-  variant is a modelling error worth raising, and a key that means one thing on
-  one tool and something else on another is worse than a key one tool did not
-  have.
+- `record_variant` gains `notify_user`, which it did not have — but it reads
+  `false` by default, so the tool keeps the quiet note it always had. What
+  changed is that the quiet is now a policy a graph can override rather than a
+  hard-coding.
 - `review`'s `advisory` mode was **refused by name** until now, on the grounds
   that it selected a kind nothing wrote. The refusal removed itself, exactly as
   it said it would.
@@ -126,11 +126,19 @@ another record points back at it. What the note section decided still stands —
 three states rather than a boolean, append-only, a feature rather than a flag —
 only the type it lives on changed.
 
-**One journal row per operation, not per advisory.** The agent made one
-decision; splitting it invites acting on it several times. The kinds and their
-messages go in `certainty_basis`, which review already renders, so the reviewer
-sees what the decider was told without a second store to keep in step.
-`certainty` stays blank, because nobody rated it.
+**One journal row per operation, not per advisory** — and only where an
+advisory **objects**. The agent made one decision; splitting it invites acting
+on it several times. The kinds and their messages go in `certainty_basis`, which
+review already renders, so the reviewer sees what the decider was told without a
+second store to keep in step. `certainty` stays blank, because nobody rated it.
+
+**An explicitly named `flag` outranks the global mute.** `surface` is the
+general statement and `by_kind` is the specific one, which is the same
+precedence every `resolve_*` here keeps — so muting a graph does not withdraw an
+escalation somebody asked for by name. A kind following `default_action` is not
+named, and is silenced. Withdrawing a named escalation means setting that kind
+to `proceed`, which is the only honest way to do it. Without this,
+`notify_user: true` could arrive with no text to relay.
 
 **No `claim_kind` analogue on the inference gate.** `claim_kind` exists because
 interval union is mechanically right for a state and fabricating for an event,
@@ -145,7 +153,38 @@ The three reasons are in `inference_dedup.py`'s header with the measurements.
 
 ---
 
-## 4. The two measurements that dated
+## 4. The kind that was two kinds
+
+**Found on review, 2026-08-29.** `SAME_FRAME_CONTRADICTION` was raised in two
+situations that give opposite advice:
+
+- on `record_contradiction`, it means *the tool was right, and this conflict
+  wants a person*;
+- on `record_variant`, it means *this is the wrong tool for two facts in one
+  frame*.
+
+One field needing "or" to describe it is a tell this codebase has caught several
+times, and here it propagated: `proceeded_despite_advisory` inherited the
+confusion, because *despite* is meaningful only where something argued against
+the call — and a correct same-frame contradiction had nothing to proceed
+against. Every one of them wrote a row, doubling the journal on the commonest
+path and degrading exactly the review the kind exists for.
+
+**The fix is a classification, not an exception.** `SAME_FRAME_VARIANT` is a
+fourth kind, defaulting to `proceed`; `ADVISORY_STANCE` maps every kind to
+`objects` or `escalates`; and the journal row follows the stance. Each kind now
+has exactly one recorded consequence, which is the property the verdict taxonomy
+is built on, and the two questions this had raised — *should the row be written
+here?* and *should `record_variant` escalate?* — both fall out of the split with
+no special case in either tool.
+
+The map is **total** rather than a set of objecting kinds: a set makes absence
+mean *escalates*, and silence quietly becoming a claim is what the frame
+requirement exists to prevent. A test asserts both directions.
+
+---
+
+## 5. The two measurements that dated
 
 **The live defect** this document opened with — a fact merge not flagging its
 dependent inferences — was built the same day it was written, as its own edge
@@ -162,7 +201,7 @@ describes the *global* sweep correctly, which is why that sweep was not built.
 
 ---
 
-## 5. Still unbuilt
+## 6. Still unbuilt
 
 Both are in `PROPOSED_FEATURES.md` with their open decisions: **advisories on
 the dashboard** (the event bus emits at transaction boundaries and an advisory
@@ -177,7 +216,7 @@ explicitly set to the same value.
 
 ---
 
-## 6. One question left open
+## 7. One question left open
 
 **Should a fact merge against an advisory be possible at all?** `merge_facts`
 refuses rather than warns in every case, and nothing about it produces an

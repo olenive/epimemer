@@ -137,12 +137,13 @@ is silent and permanent by design, so without the count an empty list on a
 well-judged graph would be indistinguishable from a graph with nothing similar
 in it.
 
-**Four of the eleven are built out of pairs** — `similar_pairs`,
-`contradictions`, `recurrences`, `similar_relations` — and pairs are quadratic
-in the node set where every other list is linear in it. Those four are capped to
-their highest-scoring `max_nominations` (200 by default), and a cut list is
-named in `truncated` rather than silently shortened, because a caller otherwise
-cannot tell an exhausted graph from a trimmed answer. **When a list is named
+**Five of the eleven are built out of pairs** — `similar_pairs`,
+`contradictions`, `recurrences`, `similar_relations`,
+`inference_merge_candidates` — and pairs grow faster than the node set where
+every other list is linear in it. Those five are capped to their
+highest-scoring `max_nominations` (200 by default), and a cut list is named in
+`truncated` rather than silently shortened, because a caller otherwise cannot
+tell an exhausted graph from a trimmed answer. **When a list is named
 there, the move is to act on what came back and reflect again**, not to raise the
 number: the remainder is the weakest end of the ranking, and a graph that dense
 wants a different operation than a longer list.
@@ -152,17 +153,21 @@ pairs still exist upstream. That is the scope the measurement asked for: real
 corpora clear the 0.80 threshold at 0.0105%, which projects to ~3 MB at 10,000
 facts, so the response was the thing worth bounding.
 
-`inference_merge_candidates` is built out of pairs too and is deliberately
-**not** among them, because it is not quadratic in the graph. It groups
-inferences by the premises they rest on and compares only within a group, so the
-bound is how many inferences hang off any one fact rather than how many
-inferences exist. That shape is also why it exists at all: a global sweep over
-all inference pairs was measured at **zero** nominations on both real graphs
-(123 inferences, 5,053 pairs, max score 0.66 against a 0.80 bar), and the pairs
-it did score highest shared vocabulary while saying different things. The
-population worth reviewing is the one a **fact** merge creates — collapsing four
-near-identical facts lands their four inferences on one survivor, each flagged
-`evidence_merged`.
+`inference_merge_candidates` is the one whose bound is not the node set. It
+groups inferences by the premises they rest on and compares only within a group,
+so what bounds it is how many inferences hang off any one fact — a real and much
+lower ceiling. It is capped anyway: *every pair-built list is capped* is a
+simpler invariant to hold than *capped except where a grouping argument says
+otherwise*, and the ceiling rises in exactly the graphs this list is for, since
+a heavily merged graph is one that concentrates inferences onto surviving
+premises.
+
+The grouping is why the list exists at all. A global sweep over all inference
+pairs was measured at **zero** nominations on both real graphs (123 inferences,
+5,053 pairs, max score 0.66 against a 0.80 bar), and the pairs it scored highest
+shared vocabulary while saying different things. The population worth reviewing
+is the one a **fact** merge creates — collapsing four near-identical facts lands
+their four inferences on one survivor, each flagged `evidence_merged`.
 
 Two of them exist to keep a distinction that a single list would destroy:
 

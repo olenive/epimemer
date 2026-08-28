@@ -63,6 +63,7 @@ from epimemer.core.advisories import (
     AdvisoryKind,
     WarningPolicy,
     notify_user,
+    objects_to_the_call,
     resolved_action,
     surfaced,
 )
@@ -405,6 +406,14 @@ async def carry_advisories(
 ) -> dict:
     """Record that an operation completed carrying these, and shape the response.
 
+    **Only an advisory that *objects* writes a row.** *Despite* is meaningful
+    only where there was something to proceed against, so an advisory that
+    merely escalates a correct call — a same-frame contradiction is the one that
+    does — keeps its `notify_user` and journals nothing. The first version wrote
+    a row for every advisory, which doubled the journal on the commonest path
+    and degraded exactly the review the kind exists for. The classification is
+    per kind in `ADVISORY_STANCE`, so there is no special case here.
+
     **Recording is unconditional; surfacing is the setting.** A graph whose
     warnings were switched off for a month should still answer *what was decided
     while nobody was looking*, which is exactly when the question matters most —
@@ -418,18 +427,25 @@ async def carry_advisories(
     `certainty` stays blank, and deliberately: nobody rated this. A row invented
     at 0.5 would sort above the genuinely unrated ones and read as a judgment
     the agent never made.
+
+    **`notify_user` is always present and always a boolean**, on every response
+    that could carry an advisory at all. Omitting it where nothing escalates
+    would leak which branch ran, and a key documented in `INTEGRATION.md` that
+    is sometimes absent is worse to read than one that is sometimes false.
     """
     if not advisories:
         return {}
-    await journal(
-        storage,
-        DecisionKind.PROCEEDED_DESPITE_ADVISORY,
-        list(subject_ids),
-        judge=judge,
-        certainty_basis=" ".join(
-            f"[{advisory.kind.value}] {advisory.message}" for advisory in advisories
-        ),
-    )
+    if objects_to_the_call(advisories):
+        await journal(
+            storage,
+            DecisionKind.PROCEEDED_DESPITE_ADVISORY,
+            list(subject_ids),
+            judge=judge,
+            certainty_basis=" ".join(
+                f"[{advisory.kind.value}] {advisory.message}"
+                for advisory in advisories
+            ),
+        )
     shown = surfaced(policy, advisories)
     if not shown:
         return {"notify_user": False}
@@ -2675,9 +2691,12 @@ async def record_variant(
 
     # Only the same-frame case raises one: a cross-frame variant is the correct
     # use of the tool, and an advisory on it would be noise on the happy path.
+    # Its own kind rather than the contradiction one, which it shared until the
+    # two were found to give opposite advice: here the tool was the wrong one,
+    # there the tool was right and the finding wants a person.
     advisories = [
         Advisory(
-            kind=AdvisoryKind.SAME_FRAME_CONTRADICTION,
+            kind=AdvisoryKind.SAME_FRAME_VARIANT,
             message=(
                 "These facts share a metacontext frame; variant_of is meant for "
                 "cross-frame divergence — if they conflict, record_contradiction "
@@ -3171,17 +3190,29 @@ REFLECT_PHASES = (
 )
 
 
-# The four nominee lists built out of *pairs*. Pairs are quadratic in the node
-# set while every other list reflect returns is linear in it, so these are the
-# only ones that can run away — and nothing bounded them: no limit parameter, no
-# top-k, no size check anywhere on the path. Named here for the same
-# reason as the phases above: a fifth pair list added without this line would be
-# unbounded again and nothing would say so.
+# Every nominee list built out of *pairs*. Pairs grow faster than the node set
+# while every other list reflect returns is linear in it, so these are the only
+# ones that can run away — and nothing bounded them: no limit parameter, no
+# top-k, no size check anywhere on the path. Named here for the same reason as
+# the phases above: a pair list added without this line would be unbounded again
+# and nothing would say so.
+#
+# **`inference_merge_candidates` is here despite not being quadratic in the
+# graph.** Its grouping bounds it by inferences resting on one premise rather
+# than by inferences in total, which is a real and much lower bound — but the
+# invariant *every pair-built list is capped* is simpler to hold than *capped
+# except where a grouping argument says otherwise*, and the uncapped case grows
+# in exactly the graphs this feature targets: a heavily merged graph is one that
+# concentrates inferences onto surviving premises, and twenty-one on one premise
+# already clears this cap. Capping fails benignly — the weakest candidates wait
+# a pass — where not capping fails as the unbounded response the cap was
+# measured for.
 CAPPED_KEYS = (
     "similar_pairs",
     "contradictions",
     "recurrences",
     "similar_relations",
+    "inference_merge_candidates",
 )
 
 # The most nominees any one of them returns.

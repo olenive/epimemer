@@ -129,7 +129,7 @@ Each topic/fact/inference may be an object rather than a bare string, carrying p
 - After ingesting several documents (the system auto-suggests reflection once a configured threshold of ingestions is reached — it flags the suggestion, it does not reflect on its own)
 - When explicitly asked to consolidate or organize knowledge
 - Periodically during long sessions
-- Check `truncated` in the response. The four pair-built lists (`similar_pairs`, `contradictions`, `recurrences`, `similar_relations`) are capped at `max_nominations` (200), and any that was cut is named there. Empty means you saw everything; named means act on what came back and reflect again, rather than raising the number.
+- Check `truncated` in the response. The five pair-built lists (`similar_pairs`, `contradictions`, `recurrences`, `similar_relations`, `inference_merge_candidates`) are capped at `max_nominations` (200), and any that was cut is named there. Empty means you saw everything; named means act on what came back and reflect again, rather than raising the number.
 - **Every nominated pair needs a recorded verdict, and `similar_relations` is
   where that is easiest to forget.** Nothing rewrites a label — relation
   merging was removed, so a `synonymous` answer changes no edge and neither
@@ -155,12 +155,16 @@ Each topic/fact/inference may be an object rather than a bare string, carrying p
 Some responses carry `warnings`: things the graph knows and you cannot compute,
 handed over **before** you decide rather than after. Nothing refuses on one, so
 the whole value is in reading it while you are still choosing what to write —
-narrow the merged wording, narrow the period, or merge a smaller set. The
-commonest is `disjoint_premises` on an inference merge: no source puts the
-survivor's premises in one period, so a claim drawn over both would be flagged
-unsound and would deserve it. `notify_user: true` means raise it with the user.
-Every call that carried one is recorded whether or not it was shown, and
-`review(mode="advisory")` is how a later agent reads those back.
+narrow the merged wording, narrow the period, or merge a smaller set.
+
+**Two of them say opposite things, so read the `kind`.** `disjoint_premises`,
+`cross_frame` and `same_frame_variant` all say *this may be the wrong call*, and
+proceeding past one is recorded against you in the journal. `same_frame_contradiction`
+says the opposite — you used the right tool, and the conflict it found wants a
+person; nothing is recorded, because there was nothing to proceed against.
+`notify_user: true` means raise it with the user either way, and
+`review(mode="advisory")` is how a later agent reads back the ones that objected
+— whether or not the graph was set to show them at the time.
 
 ### Interpreting _meta
 Every tool response includes a _meta field with:
