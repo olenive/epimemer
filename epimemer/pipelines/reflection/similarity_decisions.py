@@ -63,6 +63,8 @@ Similarity nominates; the agent judges.
 
 from pydantic import BaseModel
 
+from collections.abc import Sequence
+
 from epimemer.core.types import (
     EdgeType,
     JudgeRef,
@@ -71,6 +73,54 @@ from epimemer.core.types import (
 )
 from epimemer.pipelines.reflection.review import same_frame
 from epimemer.storage.protocol import StorageBackend
+
+# An edge of any of these between two nodes means the pair has been put in front
+# of somebody and decided. Nominating it again would be asking a question that
+# has an answer. Deliberately wider than the edges corroboration reads: this set
+# is about *suppression*, and `assessed` and `variant_of` suppress without
+# supporting.
+ALREADY_JUDGED_EDGE_TYPES: tuple[EdgeType, ...] = (
+    EdgeType.SIMILARITY,
+    EdgeType.CONTRADICTION,
+    EdgeType.VARIANT_OF,
+    EdgeType.ASSESSED,
+)
+
+
+async def already_judged_pairs(
+    node_ids: Sequence[str], storage: StorageBackend
+) -> set[frozenset[str]]:
+    """Every pair among these that somebody has already decided about.
+
+    **One reader for the suppression this module writes.** Each sweep used to
+    carry its own copy, and the copies were the defect: the fact sweep read it,
+    the inference sweep read it, and the topic sweep never had — so a topic
+    verdict wrote its `assessed` edge, reported success, and the pair came back
+    on the next reflect anyway. A verdict with a writer and no reader is
+    indistinguishable from one nobody recorded, except that it also says it
+    worked.
+
+    Taking the node ids rather than a node type is what makes it one function:
+    the suppression is a property of the pair, not of what the pair is made of.
+
+    Two queries per edge type, both directions, for the whole set — the edge
+    type is part of the query rather than a filter over every edge each node
+    has. If that ever costs more than it saves, the lever is one untyped
+    `get_edges_for` per direction, and that is a trade to make on a measurement.
+    """
+    judged: set[frozenset[str]] = set()
+    ids = list(node_ids)
+    if not ids:
+        return judged
+    for edge_type in ALREADY_JUDGED_EDGE_TYPES:
+        for direction in ("from", "to"):
+            found = await storage.get_edges_for(
+                ids, direction=direction, edge_type=edge_type
+            )
+            for edges in found.values():
+                for edge in edges:
+                    judged.add(frozenset({edge.src_id, edge.dst_id}))
+    return judged
 
 # The verdict is rejected rather than defaulted when it is not one of these. A
 # default would pick one of two writes that differ in exactly the way this

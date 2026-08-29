@@ -218,8 +218,17 @@ async def knowledge_in_degree_for(
 
 async def evidence_gone_for(
     inferences: Sequence[Inference], storage: StorageBackend
-) -> dict[str, bool]:
-    """Which of these inferences have had their *entire* evidence set archived.
+) -> dict[str, list[str]]:
+    """The archived evidence of inferences that have lost *all* of it.
+
+    **Returns the ids rather than a flag**, and the difference is load-bearing
+    rather than cosmetic: a keep verdict anchors to the reasons it covers, so a
+    nomination that names none can only be confirmed permanently. Archival is
+    the designed-reversible act — `restore` undoes it — so the cycle that bites
+    is restore, then re-archive: the inference re-enters this set carrying a
+    self-anchor from a verdict that never saw the second archival, and stays
+    wrongly silent. Naming the facts makes the second archival a reason nothing
+    covers.
 
     The follow-on to archiving a fact: what was derived from it is now floating.
     It is deliberately all-or-nothing — an inference with one surviving support
@@ -245,15 +254,17 @@ async def evidence_gone_for(
         edge.dst_id for edges in derived_from.values() for edge in edges
     ])
 
-    gone: dict[str, bool] = {}
+    gone: dict[str, list[str]] = {}
     for inference in inferences:
         edges = derived_from[inference.id]
-        gone[inference.id] = bool(edges)
+        archived: list[str] = []
         for edge in edges:
             evidence = evidence_by_id.get(edge.dst_id)
             if evidence is None or evidence.status is NodeStatus.ACTIVE:
-                gone[inference.id] = False
+                archived = []
                 break
+            archived.append(edge.dst_id)
+        gone[inference.id] = archived
     return gone
 
 
@@ -291,6 +302,11 @@ async def nominate_archival_candidates(
     un-judged node is not a node judged worth keeping, and nomination is a
     proposal, not a verdict.
     """
+    from epimemer.pipelines.reflection.retention import (
+        confirmed_reasons_for,
+        outstanding_reasons,
+        retention_covers,
+    )
     from epimemer.pipelines.reflection.review import review_labels_for
 
     judgment_cutoff = datetime.now(timezone.utc) - timedelta(days=judgment_max_age_days)
@@ -320,10 +336,22 @@ async def nominate_archival_candidates(
     ]
     in_degree = await knowledge_in_degree_for([n.id for n in unretrieved], storage)
 
+    # What somebody has already re-read and kept. Read for both classes at once
+    # rather than per class: it is one query, and the two differ only in what
+    # they hand `retention_covers` as the reasons to check against.
+    retained = await confirmed_reasons_for(
+        [node.id for node in inferences] + [node.id for node in unretrieved], storage
+    )
+
     for node in active:
         if isinstance(node, Inference):
-            if "evidence_stale" in labels_by_node.get(node.id, {}) or gone_by_node[node.id]:
-                candidates["evidence_stale"].append(_candidate(node, "evidence_stale"))
+            reasons = outstanding_reasons(
+                labels_by_node.get(node.id, {}), gone_by_node[node.id]
+            )
+            if reasons and not retention_covers(node.id, reasons, retained):
+                candidates["evidence_stale"].append(
+                    _candidate(node, "evidence_stale")
+                )
             continue
         if node.value.importance > importance_ceiling:
             if judgment_is_stale(node, judgment_cutoff):
@@ -331,7 +359,7 @@ async def nominate_archival_candidates(
             continue
         if not never_retrieved(node):
             continue
-        if in_degree[node.id] == 0:
+        if in_degree[node.id] == 0 and not retention_covers(node.id, (), retained):
             candidates["never_retrieved"].append(_candidate(node, "never_retrieved"))
 
     ordered = [c for reason in _REASON_ORDER for c in candidates[reason]]

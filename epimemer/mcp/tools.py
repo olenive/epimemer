@@ -3592,6 +3592,7 @@ async def apply_reflection(
     merges: list[dict] | None = None,
     supersessions: list[dict] | None = None,
     archivals: list[str] | None = None,
+    retained: list[dict] | None = None,
     judgments: list[dict] | None = None,
     relation_verdicts: list[dict] | None = None,
     boundaries: list[dict] | None = None,
@@ -3638,6 +3639,42 @@ async def apply_reflection(
         flips them to ARCHIVED, which removes them from every active-status
         query. Nothing is deleted, and ``restore`` reverses it. Unknown or
         already-retired ids are skipped, as supersessions are.
+    retained: [{node_id: str, because: str, covers: [str] | None}] —
+        *reviewed, and it stands*. The verdict opposite to `archivals`, and the
+        one that had no writer: a nominator recomputed from current state
+        re-offers what was already kept and cannot know it. Records that
+        somebody looked; moves no value, retires nothing.
+        **`covers` must be exactly the node's outstanding reasons** — not merely
+        enough of them. One edge is written per id, so a *further* change is a
+        reason no confirmation covers and the node is nominated again. Missing
+        ids are refused, and **surplus ids are refused too**, because an anchor
+        on a reason nobody named would pre-cover a change nobody has seen, which
+        is the one thing anchoring exists to prevent. Naming every premise to be
+        safe is the failure mode, not the safe option. The ids are the ones
+        `reflect` shows beside the node in `pending_review` under
+        `evidence_stale` — `archival_candidates` carries the nomination but not
+        the ids, so take them from there.
+        **Omit `covers` only where the nomination names no reason** — a node
+        nothing links to and nothing has retrieved (`never_retrieved`). Then the
+        node is its own anchor, which is sound because nothing about that
+        nomination can change without removing it from the set anyway. The
+        self-anchor is implied and never spelled: passing any id for such a node
+        is refused, since the reader will only ever ask about the node itself.
+        Omitting `covers` on a node that *does* carry reasons is refused the
+        other way, naming them: a self-anchor there covers nothing, so the node
+        returns on the next reflect while this call reported success. The ids are
+        not filled in for you, deliberately — that would record you as having
+        re-read a supersession you may never have seen.
+        **Not `judgments`.** Use that where the *importance* was wrong. Use this
+        where the importance is right and the node has simply been re-read —
+        raising importance to stop a nomination is how one field comes to carry
+        two meanings, *how consequential this is* and *do not nominate this*.
+        `because` is required: a keep with no reason marks the node reviewed, so
+        the next reviewer skips it. Nothing here refuses the batch; every entry
+        not recorded comes back in `retained_skipped` with the reason, which is
+        also where a node named in both `archivals` and `retained` is reported —
+        archival wins, and the collision is said rather than resolved in
+        silence.
     judgments: [{node_id: str, direction: "up"|"down", reason: str,
         related_id: str | None}] — re-judge a node's importance, typically a
         `stale_judgment` nominee from reflect's archival_candidates. The verdict
@@ -3723,6 +3760,7 @@ async def apply_reflection(
         "merges": merges,
         "supersessions": supersessions,
         "archivals": archivals,
+        "retained": retained,
         "judgments": judgments,
         "boundaries": boundaries,
     })
@@ -4083,6 +4121,117 @@ async def apply_reflection(
             [node.id for node in to_archive], judge=judge,
         )
 
+    # 7b. Record the keep verdicts. After archiving rather than before, so a
+    #     batch naming the same node in both is resolved the destructive way —
+    #     a caller who asked to archive a node and to keep it has contradicted
+    #     itself, and the archive is reversible while a silent keep is not
+    #     visible at all.
+    from epimemer.pipelines.reflection.archival import evidence_gone_for
+    from epimemer.pipelines.reflection.retention import (
+        UnknownAnchors,
+        outstanding_reasons,
+        record_retention,
+    )
+    from epimemer.pipelines.reflection.review import review_labels_for
+
+    retentions_recorded = 0
+    retained_skipped: list[dict] = []
+
+    def _skip(node_id: str, why: str) -> None:
+        retained_skipped.append({"node_id": node_id, "why": why})
+
+    archived_ids = {node.id for node in to_archive}
+    # Both reads batched over the whole batch rather than per entry: this is the
+    # per-node round-trip pattern already measured and removed from
+    # `gather_pending_review`, and re-adding it one loop at a time is how it got
+    # there the first time.
+    wanted = [
+        (entry.get("node_id") or "").strip() for entry in (retained or [])
+    ]
+    by_id = await storage.get_nodes([node_id for node_id in wanted if node_id])
+    live = [node for node in by_id.values() if node.status is NodeStatus.ACTIVE]
+    labels_for_retained = await review_labels_for(live, storage)
+    gone_for_retained = await evidence_gone_for(
+        [node for node in live if isinstance(node, Inference)], storage
+    )
+
+    for entry in (retained or []):
+        node_id = (entry.get("node_id") or "").strip()
+        because = (entry.get("because") or "").strip()
+        if not node_id:
+            _skip("", "no node_id")
+            continue
+        if not because:
+            _skip(node_id, "`because` is required: a keep with no reason marks "
+                           "the node reviewed, so the next reviewer skips it")
+            continue
+        if node_id in archived_ids:
+            _skip(node_id, "also named in `archivals`, which won — a batch "
+                           "cannot both keep and retire one node")
+            continue
+        node = by_id.get(node_id)
+        if node is None or node.status is not NodeStatus.ACTIVE:
+            _skip(node_id, "unknown here, or not active")
+            continue
+
+        # `covers` must be **exactly** the reasons the node carries, read the way
+        # the nominator reads them. Both directions are refusals, and each closes
+        # a way of reporting success while suppressing nothing or too much:
+        #
+        # - missing ids write a verdict that does not cover the nomination, so
+        #   the node returns on the next reflect having been reported kept;
+        # - surplus ids **pre-cover a change nobody has seen**, which is the one
+        #   thing anchoring exists to prevent. Naming every premise to be safe is
+        #   exactly what a hurried caller does, so the rule refuses it rather
+        #   than rewarding it.
+        #
+        # A node with no reasons therefore takes no `covers` at all: the
+        # self-anchor is implied and never spelled, which is what keeps a
+        # `never_retrieved` verdict from anchoring to some real id that
+        # `retention_covers` will never ask about.
+        #
+        # It also settles the race. A premise restored between `reflect` and
+        # this call shrinks `reasons`, the caller's stale `covers` exceeds it,
+        # and the verdict is refused — right, because an anchor written on the
+        # restored fact is the restore-then-re-archive hole with a head start.
+        covers = list(entry.get("covers") or [])
+        reasons = outstanding_reasons(
+            labels_for_retained.get(node_id, {}),
+            gone_for_retained.get(node_id, []),
+        )
+        if set(covers) != set(reasons):
+            missing = sorted(set(reasons) - set(covers))
+            surplus = sorted(set(covers) - set(reasons))
+            said = []
+            if missing:
+                said.append(
+                    f"does not cover {', '.join(missing)} — re-read it and name it"
+                )
+            if surplus:
+                said.append(
+                    f"covers {', '.join(surplus)}, which this node is not "
+                    f"nominated on: a verdict cannot answer a question nobody "
+                    f"has asked yet"
+                )
+            _skip(node_id, "; ".join(said))
+            continue
+
+        try:
+            anchors = await record_retention(
+                storage, node_id=node_id, reasons=covers, judge=judge,
+            )
+        except UnknownAnchors as refused:
+            _skip(node_id, str(refused))
+            continue
+        # One row per node rather than one for the batch, unlike archival: a
+        # keep is a judgment about this node's own reasons, and the anchors are
+        # what a later reviewer needs to see the verdict's scope.
+        await journal(
+            storage, DecisionKind.RETENTION, [node_id], judge=judge,
+            certainty_basis=f"{because} [covers: {', '.join(anchors)}]",
+        )
+        retentions_recorded += 1
+
     # 8. Re-judge importance. Separate from archivals on purpose: archiving is a
     #    status verdict wanting human approval, while a change of degree is
     #    something the agent may conclude on its own. `judge_importance` writes
@@ -4146,6 +4295,8 @@ async def apply_reflection(
         "topic_merges_refused": topic_merges_refused,
         "supersessions_applied": supersessions_applied,
         "nodes_archived": len(to_archive),
+        "retentions_recorded": retentions_recorded,
+        "retained_skipped": retained_skipped,
         "archive_data": archive_data,
         "judgments_applied": judgments_applied,
         "relation_verdicts_recorded": relation_verdicts_recorded,

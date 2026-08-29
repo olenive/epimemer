@@ -191,9 +191,21 @@ constraint with no justification at this layer.
 > rediscovered: ship an irreversible deprecation and this argument needs
 > re-deriving from scratch.
 
+**A third instance shipped 2026-08-29**, and naming it here is the point of
+this paragraph: the keep verdict's *unanchored* branch. A node nominated
+`never_retrieved` is confirmed against itself, and nothing can invalidate a
+self-anchor, so a wrong keep there is permanent exactly as a wrong `distinct`
+is. It is the **mildest** of the three and does not move this entry's priority:
+a wrong decline at the pair layer withholds a merge that should have happened,
+while a wrong keep here costs one idle node lingering in storage — permanence in
+the safe direction. There is a residual case on the anchored branch too, noted
+rather than built: the same facts archived, restored and re-archived still match
+their old anchors. A retraction primitive would answer all three layers at once,
+which is the argument for building it in one place rather than three.
+
 **Cost of leaving it.** On the fact side it is live but quiet: a wrong `distinct`
-is invisible precisely because suppression works. **The label side is now the
-second instance** — label verdicts shipped 2026-08-27, so the system holds two
+is invisible precisely because suppression works. **The label side was the
+second instance** — label verdicts shipped 2026-08-27, so the system holds three
 instances of an acknowledged defect, which is the deadline this entry was filed
 to beat. It is *quiet* rather than urgent for the reason the entry already gave:
 the largest real graph holds one label, so no pair can be nominated and none can

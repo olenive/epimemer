@@ -27,12 +27,11 @@ what does not exist — an entry that can only be justified as "this is currentl
 wrong" belongs in `ISSUES.md` instead.
 
 **Running two of these in parallel.** The ready-to-build set below touches
-mostly disjoint trees, which is what makes it parallelisable — *Colour
-customisation* is `epimemer/visualization/frontend/`, *Benchmark coverage* is
-`scripts/bench.py` plus fixtures, and *Specialized timelines* is
-`epimemer/core/` and both storage backends. The last one is the only member that
-collides with ordinary backend work, and it is also the only one asked to settle
-a modelling question first.
+disjoint trees, which is what makes it parallelisable — *Colour customisation*
+is `epimemer/visualization/frontend/` and *Specialized timelines* is
+`epimemer/core/` and both storage backends. The second is the one that collides
+with ordinary backend work, and it is also the one asked to settle a modelling
+question first.
 Claim an entry by name in your commit message.
 
 ---
@@ -220,6 +219,44 @@ all. Not filed as work here until somebody wants it.
 
 ---
 
+### Benchmark coverage — built
+
+**Built 2026-08-29.** `BENCHMARKS.md` is the record; what follows is only what
+the measurements changed about the entry that asked for them.
+
+What shipped, all on `scripts/bench.py`: a `diverse` corpus with planted
+restatement clusters (`--corpus`, `--duplicate-groups`, `--duplicate-size`), a
+dating pass (`--dated-share`) and a premises-per-inference dial
+(`--facts-per-segment`), embedding throughput measured on its own, a per-phase
+breakdown of `reflect` (`--reflect-phases`), and a `corpus` record emitted on
+every run so a cost figure never again stands without the corpus it was taken
+over.
+
+**The entry asked for a diverse corpus and the obvious build would have been
+wrong.** Widening the vocabulary does not reach real prose: survival steps from
+1.13% to 0.0% between a 17-word bag and a 200-word one with nothing in between,
+because what survives a pair scorer is shared phrasing and a random generator
+never restates anything. Duplicates have to be **planted**, which makes the
+surviving-pair population an input rather than a property of the generator that
+nobody chose — and that is what let the near-duplicate worst case named in
+`BENCHMARKS.md` finally be measured. It moves `reflect` by 5%.
+
+**Two of the gaps turned out to be answered by the measurement rather than
+confirmed by it.** The soundness phase's share was expected not to survive the
+move to a networked backend; it falls from 8.3% to 6.6%, because everything
+around it pays round-trips too, and `contradiction_detection` is what grows.
+And the soundness check's quadratic part, flagged as unmeasured with a warning
+that *"small in every case described" is how a ceiling gets missed*, buys 1.7×
+the cost for 39× the comparisons — the per-premise fetch dominates it until an
+inference rests on a couple of hundred dated premises.
+
+**One gap is left and it is a deployment, not code**: a remote, non-loopback
+SurrealDB. Two others were *added* by the work — a claim-duplicate corpus that
+was ingested rather than planted, and whether the surviving-pair rate moves with
+graph size — both in `BENCHMARKS.md` → *Not yet measured*.
+
+---
+
 ## Ready to build
 
 ### Colour customisation — designed, not built
@@ -286,50 +323,6 @@ One constraint already decided ahead of it (2026-08-17, recorded in
 annually" — are `CyclicalTimeline`'s case and **never route through
 supersession or restore**; they never stop being true, so they have no
 lifecycle, and their occurrences are separate event facts.
-
----
-
-### Benchmark coverage
-
-**What.** The gaps are listed in `dev-docs/BENCHMARKS.md` → *Not yet measured*
-and are not repeated here: a remote (non-loopback) SurrealDB, a diverse corpus,
-real embeddings end to end, and embedding throughput separated from ingest.
-
-**Why.** Every current number is a floor measured against mocked embeddings on
-loopback. The diverse-corpus gap is the one that most affects conclusions, and
-**it has now been measured twice, each time smaller than the last**:
-
-| corpus scored | pairs clearing 0.80 |
-|---|---|
-| bench text, mock at 384 (what the bench runs) | 0.05% |
-| bench text, real `all-MiniLM-L6-v2`, fact length | 1.11% |
-| real facts, `memory` graph | **0.0105%** |
-
-So the mock understates the *bench's own* corpus by about 20×, and **overstates
-the real one by about 5×**. Both readings are in `BENCHMARKS.md`; the tables
-there are the record.
-
-> **Corrected 2026-08-21.** This entry read "~19% for real embeddings …
-> understated by about three orders of magnitude … which is exactly why the
-> quadratic memory growth in the nomination cap was invisible here". Every clause
-> of that is now withdrawn elsewhere in the repo and was left standing here:
-> `BENCHMARKS.md` records that the 19% was taken at a narrower mock width and
-> "no longer describes this configuration", and this file's own *Tracked
-> elsewhere* bullet says the nomination cap's memory projection was measured and withdrawn with
-> "no successor concern". **A retraction has to be carried to every entry that
-> was resting on the retracted number** — a backlog entry keeping a motivation
-> the rest of the repo has dropped will send somebody to do work for a reason
-> that no longer exists.
-
-**The case survives the correction, and is narrower.** A diverse corpus is still
-worth having, because every pair-scaled figure here is measured on text whose
-survival rate matches nothing real in either direction — but it buys accuracy,
-not a hidden failure.
-
-**Cost.** Small per item. Embedding throughput is a `scripts/bench.py` flag; a
-diverse corpus is a fixture; a remote SurrealDB is a deployment, not code.
-
-**Blockers.** None.
 
 ---
 

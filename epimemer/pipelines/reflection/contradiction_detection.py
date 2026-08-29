@@ -19,6 +19,7 @@ from epimemer.core.types import (
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
+from epimemer.pipelines.reflection.similarity_decisions import already_judged_pairs
 from epimemer.pipelines.reflection.pair_scoring import (
     SCORE_BLOCK,
     similar_pairs,
@@ -27,24 +28,11 @@ from epimemer.pipelines.reflection.pair_scoring import (
 from epimemer.storage.protocol import StorageBackend
 
 __all__ = [
-    "ALREADY_JUDGED_EDGE_TYPES",
     "SCORE_BLOCK",
     "detect_contradictions",
     "similar_pairs",
 ]
 
-
-# An edge of any of these between two facts means the pair has been put in front
-# of somebody and decided. Nominating it again would be asking a question that
-# has an answer. Deliberately wider than the edges corroboration reads: this set
-# is about *suppression*, and `assessed` and `variant_of` suppress without
-# supporting.
-ALREADY_JUDGED_EDGE_TYPES: tuple[EdgeType, ...] = (
-    EdgeType.SIMILARITY,
-    EdgeType.CONTRADICTION,
-    EdgeType.VARIANT_OF,
-    EdgeType.ASSESSED,
-)
 
 
 async def detect_contradictions(
@@ -107,21 +95,9 @@ async def detect_contradictions(
     # for the *compatible* verdict, so a declined pair was recorded nowhere and
     # came back on every pass — thirteen of eighteen, on the graph that
     # motivated the verdict record. The other three are the pairs that got an action.
-    #
-    # Eight queries for the whole fact set: the edge type is part of the query
-    # rather than a filter over every edge each fact has. If that ever costs
-    # more than it saves, the lever is one untyped `get_edges_for` per direction
-    # — a trade to make on a measurement, not in advance.
-    already_linked: set[frozenset[str]] = set()
-    fact_ids = [fact.id for fact in facts]
-    for edge_type in ALREADY_JUDGED_EDGE_TYPES:
-        for direction in ("from", "to"):
-            found = await storage.get_edges_for(
-                fact_ids, direction=direction, edge_type=edge_type
-            )
-            for edges in found.values():
-                for edge in edges:
-                    already_linked.add(frozenset({edge.src_id, edge.dst_id}))
+    already_linked = await already_judged_pairs(
+        [fact.id for fact in facts], storage
+    )
 
     # Score every pair at once, over the facts whose vectors can form a matrix.
     by_id = {fact.id: fact for fact in facts}

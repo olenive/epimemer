@@ -335,12 +335,38 @@ async def gather_pending_review(
     resolve them (supersede the loser, re-derive a stale inference, or escalate a
     contested pair to the human). Reads only; resolution is a separate, explicit
     act.
+
+    **A node whose stale evidence somebody has already re-read and kept is not
+    listed**, on the same terms as the archival nominator: the worklist is what
+    is *outstanding*, and re-offering a resolved item to an agent who cannot see
+    it was resolved is the treadmill the retention verdict exists to end. The
+    label itself stays — `review_labels_for` reports what is true of the node,
+    and it remains true that this inference rests on evidence that changed.
+    Being true and being outstanding are different questions, and only the
+    second is a worklist.
     """
+    from epimemer.pipelines.reflection.retention import (
+        confirmed_reasons_for,
+        retention_covers,
+    )
+
     nodes = list(await storage.query_nodes())
     # No resolver passed: `review_labels_for` warms one from the contradiction
     # partners it finds, which is the set that actually gets frame-checked.
     labels_by_node = await review_labels_for(nodes, storage)
-    return [(node, labels_by_node[node.id]) for node in nodes if node.id in labels_by_node]
+    flagged = [node for node in nodes if node.id in labels_by_node]
+    retained = await confirmed_reasons_for([node.id for node in flagged], storage)
+
+    outstanding = []
+    for node in flagged:
+        labels = dict(labels_by_node[node.id])
+        if "evidence_stale" in labels and retention_covers(
+            node.id, labels["evidence_stale"], retained
+        ):
+            del labels["evidence_stale"]
+        if labels:
+            outstanding.append((node, labels))
+    return outstanding
 
 
 async def dependent_inference_ids(

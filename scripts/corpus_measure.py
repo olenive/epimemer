@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 """Measure a real graph's text against the two things nobody had numbers for.
 
-`bench.py` measures cost against a *synthetic* corpus — random words from a
-17-word vocabulary — which is the right corpus for timing graph operations and
-the wrong one for two open questions that depend on what real text looks like:
+`bench.py` measures cost against a *synthetic* corpus — by default random words
+from a 17-word vocabulary, its `templated` corpus — which is the right corpus
+for timing graph operations and the wrong one for two open questions that depend
+on what real text looks like:
 
 - **the embedding-window measurement** — `all-MiniLM-L6-v2` truncates at 256 word-pieces and
   nothing guards it. The entry says to take the token-length distribution over
@@ -314,6 +315,11 @@ def _synthetic_control(threshold: float, *, count: int, seed: int = 1) -> dict:
     drawn from a 17-word vocabulary, so a high rate there may say more about
     the generator than about the model. Measuring both corpora through one
     model at one threshold is the only way to tell which.
+
+    Scores `bench.py`'s **templated** corpus, which is the one its default runs
+    use and the one every figure predating its `diverse` corpus was taken over.
+    The diverse corpus was built because of what this measurement found, and
+    scoring it here would be scoring the repair rather than the thing repaired.
 
     Imports the generator from `bench.py` rather than reimplementing it, so
     "the bench corpus" means the corpus the bench actually uses.

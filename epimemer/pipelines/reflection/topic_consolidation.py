@@ -20,6 +20,7 @@ from epimemer.pipelines.reflection.pair_scoring import (
     similar_pairs,
     stack_uniform_width,
 )
+from epimemer.pipelines.reflection.similarity_decisions import already_judged_pairs
 from epimemer.storage.protocol import StorageBackend
 
 
@@ -82,6 +83,14 @@ async def find_similar_topic_pairs(
     and computes pairwise cosine similarity. Returns pairs above the threshold,
     sorted by score descending.
 
+    **Pairs somebody has already judged are dropped**, on the same terms as the
+    fact and inference sweeps and through the same read. This sweep was the one
+    that never did it: `apply_reflection` accepted a verdict on a topic pair,
+    wrote the `assessed` edge and reported it recorded, and the pair came back
+    on the next reflect regardless — for ever, to an agent who could not see it
+    had been answered. Found 2026-08-29 by judging three topic pairs and
+    watching all three return.
+
     Args:
         storage: The storage backend.
         embedding_provider: Used to determine the model_id for embeddings.
@@ -123,9 +132,11 @@ async def find_similar_topic_pairs(
         return []
     topic_list = [by_id[topic_id] for topic_id in kept_ids]
 
+    judged = await already_judged_pairs(kept_ids, storage)
     pairs = [
         (topic_list[i], topic_list[j], similarity)
         for i, j, similarity in similar_pairs(vectors, similarity_threshold)
+        if frozenset({topic_list[i].id, topic_list[j].id}) not in judged
     ]
 
     # Sort by similarity descending. Stable, so pairs that tie stay in index

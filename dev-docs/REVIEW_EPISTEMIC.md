@@ -215,10 +215,35 @@ can hop to it.
 | `variant_of` | fact ↔ fact (across frames) | "same proposition, resolved differently per frame" — makes divergence queryable |
 | `temporally_followed_by` | older fact → newer fact | "both true, over different periods" — order, **not** replacement, so it survives recurrence (the edge split; designed, not built) |
 | `based_on` / `associated_with` | metacontext → metacontext | frames relate (association, **not** inheritance) |
+| `review_confirmed` | the reason → the node it covers | *"somebody re-read this and it stands"* (built 2026-08-29). The single-node counterpart of `assessed`. **The src is the reason the verdict covers**, so a further change is a reason nothing covers and the node is nominated again |
 
-`supersession_candidate`, `evidence_superseded`, `contradiction`, and the history
-edges are all excluded from default graph traversal and from edge migration
-(treated like history/metadata, not knowledge).
+`supersession_candidate`, `evidence_superseded`, `review_confirmed`,
+`contradiction`, and the history edges are all excluded from default graph
+traversal and from edge migration (treated like history/metadata, not
+knowledge). For `review_confirmed` the exclusion is load-bearing rather than
+tidy: `never_retrieved` nominates on having no dependants, so counting a keep
+verdict as one would make the act of keeping a node change the reason it was
+nominated.
+
+**The keep verdict is anchored, and that is the difference from the pair case.**
+A judged pair's wording is fixed at the moment of judgment, so `assessed`
+suppresses it permanently. A node's *neighbourhood* keeps moving: the premise
+superseded last week may be superseded again next month by something new, and a
+keep that silenced the second change as well as the first would be a worse
+defect than the treadmill it replaced. So a confirmation carries the reasons it
+covers — one edge each, the changed facts named in the `evidence_stale` label —
+and a nomination survives it when the node's *current* reasons are not all
+covered. Where the nomination names no reason (`never_retrieved`: nothing links
+to this and nothing has retrieved it) the node is its own anchor, which is the
+degenerate case rather than a second mechanism: nothing about that nomination
+can change without removing the node from the set anyway.
+
+**Why it is not a `judgments` entry.** Before this verdict existed, the only way
+to keep a `never_retrieved` node was to raise its `importance` above the
+nomination ceiling — writing *do not nominate this* into a field meaning *how
+consequential this is*, where every later reader sees a signal the judge never
+held. Use `judgments` where the importance was wrong; use `retained` where the
+importance is right and the node has simply been re-read.
 
 ### 4.3 Metacontext model
 

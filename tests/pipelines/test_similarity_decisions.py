@@ -42,6 +42,7 @@ from epimemer.pipelines.reflection.similarity_decisions import (
     SimilarityRefused,
     apply_similarity_decision,
 )
+from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
 
 
 @pytest.fixture
@@ -659,3 +660,158 @@ class TestTheToolSurface:
         # And the judgment stays on the wording that was judged, rather than
         # arriving on a winner nobody assessed against b.
         assert await _edge_types_between(storage, winner, b) == set()
+
+
+async def _topic(storage, embedding_provider, content: str,
+                 *, vector: list[float] | None = None) -> Topic:
+    """One stored, embedded topic. Vector supplied for the reason `_fact` gives."""
+    topic = Topic(content=content, source_id="seg-1", value=ValueSignal())
+    await storage.store_node(topic)
+    await storage.store_edge(NodeEdge(
+        src_id=topic.id, dst_id=BASE_METACONTEXT_ID, type=EdgeType.HAS_METACONTEXT,
+    ))
+    await storage.store_embedding(EmbeddingRecord(
+        item_id=topic.id, model_id=embedding_provider.model_id,
+        vector=vector or _TWIN,
+    ))
+    return topic
+
+
+class TestATopicPairStopsComingBackToo:
+    """The same defect, one sweep along, and it survived the original fix.
+
+    `apply_reflection(similarities=…)` has always accepted a topic pair, written
+    the `assessed` edge and reported it recorded. The topic sweep never read it,
+    so the pair returned on every reflect regardless — for ever, to an agent who
+    could not see it had already been answered.
+
+    **Worse than the fact-pair case it mirrors**, because the call reported
+    success: a verdict recorded nowhere and a verdict recorded where nothing
+    reads are indistinguishable from the caller, except that the second one
+    says it worked. Found 2026-08-29 by judging three topic pairs on `memory`
+    and watching all three come back on the next pass.
+    """
+
+    async def _nominations(self, storage, embedding_provider):
+        return await find_similar_topic_pairs(
+            storage, embedding_provider, model_id=embedding_provider.model_id,
+            similarity_threshold=0.85,
+        )
+
+    async def test_an_unjudged_topic_pair_is_nominated(
+        self, storage, embedding_provider
+    ):
+        """The control, for the reason the fact-pair control exists."""
+        await _topic(storage, embedding_provider, "design-decisions")
+        await _topic(storage, embedding_provider, "design decisions")
+
+        assert len(await self._nominations(storage, embedding_provider)) == 1
+
+    @pytest.mark.parametrize("verdict", ["one_claim", "distinct"])
+    async def test_a_judged_topic_pair_is_not(
+        self, storage, embedding_provider, verdict
+    ):
+        a = await _topic(storage, embedding_provider, "design-decisions")
+        b = await _topic(storage, embedding_provider, "design decisions")
+
+        await apply_similarity_decision(
+            storage, a_id=a.id, b_id=b.id, verdict=verdict, because="judged"
+        )
+
+        assert await self._nominations(storage, embedding_provider) == []
+
+    async def test_a_third_unjudged_topic_is_still_nominated(
+        self, storage, embedding_provider
+    ):
+        """Suppression is per pair here as well. A tag judged against one
+        spelling must not go quiet about every other topic it resembles."""
+        a = await _topic(storage, embedding_provider, "design-decisions")
+        b = await _topic(storage, embedding_provider, "design decisions")
+        c = await _topic(storage, embedding_provider, "design notes")
+
+        await apply_similarity_decision(
+            storage, a_id=a.id, b_id=b.id, verdict="distinct", because="judged"
+        )
+
+        pairs = await self._nominations(storage, embedding_provider)
+        assert {frozenset({x.id, y.id}) for x, y, _ in pairs} == {
+            frozenset({a.id, c.id}), frozenset({b.id, c.id})
+        }
+
+
+def _reflection_sources() -> dict[str, str]:
+    """Every module in the reflection package, by name."""
+    from pathlib import Path
+
+    import epimemer.pipelines.reflection as package
+
+    return {
+        path.stem: path.read_text()
+        for path in Path(package.__file__).parent.glob("*.py")
+        if path.stem != "__init__"
+    }
+
+
+def _pair_nominating_sweeps() -> dict[str, str]:
+    """The sweeps that score pairs, **derived rather than listed**.
+
+    A sweep asks `pair_scoring` for every pair over a bar; that is what makes it
+    a sweep, and it is the one thing a new one cannot avoid doing — the module
+    exists because several reflect phases ask the same question. Deriving the
+    set is the whole value of the guard below: a hand-kept tuple of the three
+    that exist today would never contain the fourth, so the test would pass by
+    never looking at it.
+
+    That is not hypothetical. This guard was first written with exactly such a
+    tuple, and a reviewer pointed out that its stated purpose — catching a
+    sweep written later — was the one thing it could not do.
+    """
+    return {
+        name: source for name, source in _reflection_sources().items()
+        if "pair_scoring" in source
+    }
+
+
+class TestEverySweepReadsTheOneSuppression:
+    """The guard on the omission rather than on this instance of it.
+
+    Three sweeps nominate pairs and each used to decide for itself what counted
+    as judged. Two of the three read the suppression; the third had never been
+    given it, and nothing said so — which is how it went unnoticed through the
+    change that added the second reader.
+
+    **The behavioural tests above are the real guard**; this one is a tripwire
+    for a sweep nobody has written yet, which is the case no behavioural test
+    can cover because there is nothing to call.
+    """
+
+    def test_the_derivation_finds_the_sweeps_that_exist(self):
+        """The control. A derivation that matched nothing would make every
+        assertion below vacuously true — which is the failure mode of deriving
+        rather than listing, and the reason it is checked."""
+        assert set(_pair_nominating_sweeps()) == {
+            "contradiction_detection", "inference_dedup", "topic_consolidation"
+        }
+
+    def test_every_one_of_them_calls_the_shared_read(self):
+        missing = [
+            name for name, source in _pair_nominating_sweeps().items()
+            if "already_judged_pairs" not in source
+        ]
+        assert missing == [], (
+            f"{', '.join(missing)} nominates pairs without reading the "
+            f"suppression every verdict writes, so a judged pair comes back on "
+            f"the next reflect — for ever, to an agent who cannot see it was "
+            f"already answered"
+        )
+
+    def test_the_edge_list_has_one_home(self):
+        """A second list of what counts as judged would drift, and the drift
+        would be silent — the reason the read was extracted rather than copied
+        a third time. Scans the whole package, not the sweeps: a copy is just as
+        harmful wherever it is put."""
+        defining = sorted(
+            name for name, source in _reflection_sources().items()
+            if "ALREADY_JUDGED_EDGE_TYPES: tuple" in source
+        )
+        assert defining == ["similarity_decisions"]

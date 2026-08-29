@@ -62,11 +62,9 @@ from epimemer.core.types import (
     completed_merge_cycles,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
-from epimemer.pipelines.reflection.contradiction_detection import (
-    ALREADY_JUDGED_EDGE_TYPES,
-)
 from epimemer.pipelines.reflection.fact_dedup import MergeRefused
 from epimemer.pipelines.reflection.pair_scoring import stack_uniform_width
+from epimemer.pipelines.reflection.similarity_decisions import already_judged_pairs
 from epimemer.pipelines.reflection.review import (
     SIMILARITY_NOMINATION_THRESHOLD,
     NodeRef,
@@ -265,27 +263,6 @@ async def merge_refusal(
     return None
 
 
-async def _already_judged(node_ids: Sequence[str], storage: StorageBackend):
-    """Every pair among these somebody has already decided about, either way.
-
-    The same suppression `detect_contradictions` runs, over the same edge set:
-    an `assessed` edge means the pair was put in front of somebody and answered,
-    and offering it again asks a question that has an answer. Shared rather than
-    re-derived, because a second list of "what counts as judged" would drift and
-    the drift would be silent.
-    """
-    judged: set[frozenset[str]] = set()
-    for edge_type in ALREADY_JUDGED_EDGE_TYPES:
-        for direction in ("from", "to"):
-            found = await storage.get_edges_for(
-                list(node_ids), direction=direction, edge_type=edge_type
-            )
-            for edges in found.values():
-                for edge in edges:
-                    judged.add(frozenset({edge.src_id, edge.dst_id}))
-    return judged
-
-
 def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
     """Cosine similarity of two stored vectors, zero-safe.
 
@@ -362,7 +339,7 @@ async def nominate_inference_merges(
     grouped = list(dict.fromkeys(
         node_id for pair in shared for node_id in sorted(pair)
     ))
-    judged = await _already_judged(grouped, storage)
+    judged = await already_judged_pairs(grouped, storage)
     pairs = [pair for pair in shared if pair not in judged]
     if not pairs:
         return []

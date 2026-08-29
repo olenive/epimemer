@@ -257,6 +257,24 @@ class EdgeType(str, Enum):
     # one under-counts. Under-counting is the direction fact dedup already chose when
     # it left the pre-`claim_kind` corpus unmergeable.
     RETRACTED_SIMILARITY = "retracted_similarity"
+    # anchor → node: *somebody re-read this node and it stands*. The single-node
+    # counterpart of `assessed`, and it exists for the same reason: a nominator
+    # recomputed from current state that records no *keep* verdict re-offers
+    # what was already kept, and cannot know it.
+    #
+    # **The `src` is the reason the verdict covers, and that is the whole
+    # design.** An inference flagged on superseded evidence is confirmed against
+    # the facts that changed, one edge each, so a *further* supersession is a
+    # reason no confirmation covers and the node is nominated again. Anchoring
+    # rather than a flag, because a node's neighbourhood keeps moving while a
+    # judged pair's wording does not: a permanent keep would silence the next
+    # change as well as this one.
+    #
+    # Where the nomination names no reason — a node nothing links to and nothing
+    # has retrieved — the node is its own anchor. Nothing about that nomination
+    # can change without removing it from the set anyway, so a self-anchored
+    # edge is the honest degenerate case rather than a second mechanism.
+    REVIEW_CONFIRMED = "review_confirmed"
     VARIANT_OF = "variant_of"                          # fact ↔ fact, across frames
     BASED_ON = "based_on"                              # metacontext → metacontext (association)
 
@@ -322,6 +340,7 @@ REVIEW_EDGE_TYPES: frozenset[EdgeType] = frozenset(
         EdgeType.EVIDENCE_SUPERSEDED,
         EdgeType.EVIDENCE_MERGED,
         EdgeType.ASSESSED,
+        EdgeType.REVIEW_CONFIRMED,
         # Here rather than in `JUDGMENT_EDGE_TYPES` for `assessed`'s reason: it
         # needs the same anchoring *and* exclusion from traversal, being a
         # record about a judgment rather than a claim about the world.
@@ -1607,6 +1626,11 @@ class DecisionKind(str, Enum):
     SPLIT = "split"
     ENRICHMENT = "enrichment"
     ARCHIVAL = "archival"
+    # The verdict opposite to archival, and the one that had nowhere to go: the
+    # node was re-read and it stands. Its own kind rather than a judgment,
+    # because a judgment moves `importance` — which is how *do not nominate
+    # this* got written into a field meaning *how consequential this is*.
+    RETENTION = "retention"
     REACTIVATION = "reactivation"
     BOUNDARY = "boundary"
 

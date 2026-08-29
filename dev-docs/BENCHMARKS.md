@@ -21,7 +21,9 @@ trustworthy; a cross-run comparison is not.
 - **Embeddings are mocked** (`mock-384`, genuinely 384-wide). Model inference is
   a constant per text that would dominate and hide the graph costs this exists to
   expose. Every number here is therefore a **floor** — real ingest is slower by
-  the embedding time, real search by roughly one query embedding.
+  the embedding time, real search by roughly one query embedding. That constant
+  is now measured rather than gestured at: **ingest is 7.8× slower** under
+  `all-MiniLM-L6-v2`, and nothing after write time moves.
 - **The synthetic corpus produces almost no candidate pairs, which is the
   opposite of what this note used to say.** It read: *unrealistically
   self-similar … 19% of unrelated pairs clear 0.80 under the mock … anything
@@ -520,16 +522,210 @@ magnitude**, and the difference between an urgent fix and cheap insurance.
 **Three things this does not establish**, because the temptation is to read it
 as an all-clear:
 
-- **A near-duplicate corpus is untested and was the nomination cap's actual worst case.** The
-  same news story from fifty outlets is claim-duplicate; dev notes are
-  subject-similar, which is a much weaker thing. No claim-duplicate corpus
-  exists here to measure, so the honest scope is *the alarm does not fire on any
-  corpus that has actually been ingested*.
+- **A near-duplicate corpus was untested and was the nomination cap's actual
+  worst case.** The same news story from fifty outlets is claim-duplicate; dev
+  notes are subject-similar, which is a much weaker thing. One can now be built
+  rather than waited for — see *what a near-duplicate corpus actually costs*
+  below, where a thousandfold rise in surviving pairs moves `reflect` by 5%.
 - **The rate's behaviour with size is unmeasured.** Subsets at n = 50/100/200
   produced 0, 0 and 1 survivors — too few to fit a trend. If mutual similarity
   rises as a graph fills in one domain, the projection above is a floor.
 - **Nothing here caps anything.** The bound the nomination cap proposes is still absent; the
   measurement changes its priority, not its correctness.
+
+---
+
+## The corpus became an input (2026-08-29)
+
+Everything above was taken over one corpus: sentences of words drawn at random
+from a 17-word vocabulary. That corpus is wrong in the one dimension most of
+these figures scale with, and the section above measures how wrong. This section
+is what replaced it, and what the replacement then measured.
+
+### Widening the vocabulary does not work, and was tried first
+
+The obvious repair is a bigger word bag. It does not reach real prose — it steps
+straight over it. 400 sentences, the real model, the fact threshold:
+
+| corpus | survivors / 79,800 | rate | median pair |
+|---|---|---|---|
+| 17-word bag, 8 words per sentence | 903 | 1.13% | 0.495 |
+| 17-word bag, 12 words per sentence | 2,761 | 3.46% | 0.603 |
+| 200-word bag | 0 | **0.0%** | 0.316 |
+| 2,000-word bag | 0 | 0.0% | 0.306 |
+| 20,000-word bag | 0 | 0.0% | 0.303 |
+| this repository's own `dev-docs` prose | 1 / 46,056 | 0.0022% | 0.130 |
+
+There is nothing between 1.13% and zero, and real prose sits at ~0.01%. **What
+survives a pair scorer is shared phrasing, and a random generator never restates
+anything** — the 17-word bag survives because every sentence is a near-copy of
+every other, and a wide bag survives at nothing because no sentence is a copy of
+any. Real prose survives for a third reason: mostly unrelated claims, plus a few
+genuine restatements. A vocabulary dial cannot produce that, whatever its size.
+
+The same defect appears one level up. A first attempt at a diverse corpus drew
+from six domains of subject/verb/qualifier phrases and still survived at 0.48%,
+because two sentences sharing a subject and a verb differ only by a qualifier.
+Any generator with a small combinatorial space produces shared phrasing.
+
+### The diverse corpus, and planting
+
+`--corpus diverse` frames sentences over slots wide enough that two draws rarely
+share phrasing, and `--duplicate-groups` / `--duplicate-size` plant restatement
+clusters — one claim as several sources would put it. 1,200 facts, real
+embeddings:
+
+| corpus | surviving pairs / 719,400 | rate | planted |
+|---|---|---|---|
+| templated | 8,413 | 1.17% | — |
+| diverse | 9 | **0.0013%** | 0 |
+| diverse, 60 clusters of 10 | 2,712 | 0.377% | 2,700 |
+
+Real facts in the `memory` graph sit at 0.0105%, so the diverse base is now on
+the right side of real prose rather than two orders wrong.
+
+**The planting is exact, and that is its point.** 2,700 planted → 2,712
+survivors; 80 planted → 81; one clique of 50 (1,225 planted) → 1,226. The
+generator contributes a residue in the single digits and everything else is an
+input. A corpus whose survivor count is chosen before the run can be varied
+deliberately; one that emerges from a vocabulary size can only be discovered
+afterwards, which is how the 49% got borrowed in the first place.
+
+`--corpus diverse` means nothing without `--real-embeddings`, and says so on
+stderr when it does not get them: the mock hashes text rather than reading it,
+so a restatement is simply a different string.
+
+### What a near-duplicate corpus actually costs
+
+The section above named this as untested and as the nomination cap's actual
+worst case — *the same news story from fifty outlets*. Planting is what makes it
+testable. 1,200 facts, in-memory, real embeddings, median of three seeds:
+
+| corpus | surviving pairs | `reflect` |
+|---|---|---|
+| diverse | 3–11 | 333 ms |
+| diverse, 2,700 planted | 2,706–2,796 | 349 ms |
+
+**A thousandfold more surviving pairs costs 5%.** The extra lands in
+`contradiction_detection` (57 → 68 ms); `boundary_proposals` and
+`inference_merge_nomination` get *cheaper*, because planting replaces facts
+rather than adding them and a planted corpus therefore holds fewer distinct
+claims at the same node count. The alarm does not fire on the corpus it was
+raised about, and the nomination cap is why: 8,413 survivors are truncated to
+`max_nominations` before anything downstream sees them.
+
+**This comparison was measured wrongly first.** Planting consumes randomness, so
+on one shared stream every topic, inference and document body after the first
+cluster differed too, and the two runs were two corpora rather than one corpus
+with and without duplicates. Facts now draw from their own stream, guarded by a
+test.
+
+### Real embeddings end to end, and embedding on its own
+
+2,400 nodes, in-memory:
+
+| provider | ingest | vs mock |
+|---|---|---|
+| `mock-384` | 0.52 s | — |
+| `all-MiniLM-L6-v2` | 4.06 s | **7.8×** |
+
+So every ingest figure above is a floor by roughly a factor of eight, and every
+`reflect` and `search` figure is unaffected — the model is paid at write time.
+
+Embedding on its own, which is what says whether a slow ingest is a slow model
+or a slow graph — texts per second, 12-word sentences:
+
+| provider | batch 1 | batch 32 | batch 256 |
+|---|---|---|---|
+| `mock-384` | 37,400 | 38,500 | 38,200 |
+| `all-MiniLM-L6-v2` | **174** | 2,300–5,800 | 2,300–5,800 |
+
+**Batching is worth 14× to 34×, and it is all won by 32.** Batch 32 and batch
+256 are not separable at this noise level; the cliff is entirely between one
+text and a full batch. The mock is flat, as a hash should be, which is what
+makes it the right baseline: the gap between the two rows is the model, and
+nothing else.
+
+### Where `reflect`'s time goes, and what a networked backend changes
+
+`--reflect-phases` runs a second, watched `reflect` and reports each phase's
+share. 2,400 nodes, templated, mock embeddings:
+
+| phase | in-memory | SurrealDB |
+|---|---|---|
+| topic_consolidation | 7.7% | 11.8% |
+| split_detection | 14.8% | 15.6% |
+| contradiction_detection | 19.4% | **30.7%** |
+| soundness_check | 8.3% | 6.6% |
+| inference_merge_nomination | 4.9% | 4.0% |
+| boundary_proposals | 7.8% | 3.8% |
+| pending_review | 9.6% | 6.5% |
+| archival_nomination | 14.8% | 16.7% |
+| relation_consolidation | 11.4% | 4.1% |
+| **total** | 308 ms | 1,466 ms |
+
+Whole-operation ratios at this size: ingest 6.0×, `reflect` 4.8×, and reading
+the fact vectors 12.8× (26 ms → 334 ms).
+
+**The soundness share transfers, against the expectation recorded for it.** The
+prediction was that its three batched reads become three round-trips and the
+~10% share would not survive the move; measured, it goes 8.3% → 6.6% — it falls,
+because everything around it pays round-trips too. What actually grows over a
+network is `contradiction_detection`, and what shrinks is every CPU-bound phase.
+The number to take from a phase table is which phases *move*, not what any one
+of them costs.
+
+### Reading a phase share: what a single watched run can charge to the wrong phase
+
+A single run charged **58 ms** to `soundness_check` on a near-duplicate corpus,
+against 25 ms on the same corpus undated — reproducible across three seeds, and
+it looked exactly like a phase reacting to duplicates. Timed on its own,
+`find_unsound_inferences` costs **22.8 ms on the plain corpus and 23.0 ms on the
+duplicate one**: no corpus sensitivity at all. Disabling the collector takes
+~18% off `reflect`'s total, and where that lands depends on what the process has
+already allocated — the bench runs `reflect` twice, and the artefact appears only
+in the second.
+
+**A phase share is evidence about the shape of a run, not about a function.**
+Where one is surprising, time the function on its own before believing it. That
+is what separated this reading from the real one below.
+
+### A corpus that carries intervals, and what the soundness check really costs
+
+`--dated-share` gives documents a period and their facts the same one, on the
+`sourced_from` edge where a period lives. Every `reflect` figure recorded before
+this existed was over an undated corpus, where the check returns at its first
+test: with nothing dated there is nothing to compare, and its whole measured
+cost was the reads that discover that.
+
+`find_unsound_inferences` on its own, 1,200 facts and 600 inferences:
+
+| corpus | soundness |
+|---|---|
+| undated | 22.5 ms |
+| dated — 1,200 dated premises, two per inference | **46.4 ms** |
+
+**The early-out is worth half the phase**, which is what it was written for: an
+undated graph fetches no premise nodes at all, and most of every graph is
+undated and always will be.
+
+The quadratic part is the one the note called *small in every case anyone has
+described*. Holding the dated fact count at 1,200 and varying only how many of
+them one inference rests on:
+
+| dated premises per inference | comparisons | overhead over undated |
+|---|---|---|
+| 2 | 600 | 24.7 ms |
+| 5 | 2,400 | 25.8 ms |
+| 10 | 5,400 | 26.9 ms |
+| 20 | 11,400 | 32.2 ms |
+| 40 | 23,400 | 42.8 ms |
+
+**39× the comparisons buys 1.7× the overhead.** A premise pair costs ~0.8 µs
+against a ~20 µs per-premise fetch, so the fetch dominates until an inference
+carries a couple of hundred dated premises. "Small in every case described" is
+now measured rather than assumed, and the constant is the thing to watch, not
+the exponent.
 
 ---
 
@@ -643,22 +839,18 @@ index, which would leave `text_search` silently returning nothing.
 ## Not yet measured
 
 - **A remote (non-loopback) SurrealDB.** Every network number here is localhost.
-- **A diverse corpus.** The 17-word synthetic vocabulary inflates anything
-  scaling with surviving candidate pairs.
-- **Real embeddings.** `--real-embeddings` adds the constant this deliberately
-  omits, for an end-to-end figure.
-- **Embedding throughput on its own**, separated from ingest.
-- **The soundness phase on SurrealDB.** Measured in-memory only (above), where
-  its cost is three batched reads and no round-trips. On a networked backend
-  those three are round-trips rather than arithmetic, which is the axis that
-  actually binds `reflect` there — so the ~10% share does not transfer, and the
-  number to take is the query count (three, flat) rather than the milliseconds.
-- **A graph that actually carries intervals.** Every `reflect` figure here is
-  over an undated corpus, so the soundness phase pays its floor and compares
-  nothing. The pairwise part is quadratic in a single inference's *dated*
-  premises, which is a small number in every case anyone has described — but it
-  is unmeasured, and "small in every case described" is how a ceiling gets
-  missed.
+  The only remaining gap that is a deployment rather than a flag, and the one
+  the loopback figures are least able to stand in for: a round-trip over a real
+  link is not a round-trip over a socket, and `contradiction_detection`'s share
+  is what would move.
+- **A claim-duplicate corpus that was *ingested* rather than planted.** Planting
+  makes the shape measurable, and it remains synthetic — the clusters are as
+  similar as the substitution table makes them, which is a choice made here and
+  observed nowhere. What real duplicate reporting scores at is still unknown.
+- **Whether the surviving-pair rate moves with graph size.** Still open, and
+  narrowed rather than answered: the diverse corpus's accidental survivors grow
+  sub-linearly in pairs (2 → 9 as pairs went 79,800 → 719,400), but a generator
+  with no topical fill-in cannot speak to a real graph filling in one domain.
 - **`query_changes` after counterpart ids (2026-08-17).** The window predicate now adds two
   array-filter scans per row (lifecycle episodes) on top of the existing full
   scan, on SurrealDB. Correct, unindexed, unmeasured — flagged at resolution
@@ -685,6 +877,60 @@ should not put scratch ones beside them. `--namespace` overrides it.
 
 `--skip-reflect` drops the slowest step when only `search` and `list_sources`
 are of interest. `BENCH_N=10000` is about two minutes, dominated by `reflect`.
+
+### The corpus dials
+
+Every one defaults to what the historical figures were taken at, so a plain run
+stays comparable with everything above.
+
+```bash
+# a corpus that survives the pair scorer like prose rather than like a bag of
+# 17 words, with a known population of near-duplicates planted in it
+uv run python scripts/bench.py --n 2400 --corpus diverse --real-embeddings     --duplicate-groups 60 --duplicate-size 10
+
+# where reflect's time goes, on whichever backend is configured
+uv run python scripts/bench.py --n 2400 --reflect-phases
+
+# the soundness check with something to compare, and its quadratic part
+uv run python scripts/bench.py --n 2400 --dated-share 1.0
+uv run python scripts/bench.py --n 2400 --dated-share 1.0 --facts-per-segment 20
+```
+
+**`diverse` is the default from 2026-08-29**, and every figure above it in this
+file was taken over `templated` — pass `--corpus templated` to reproduce one.
+The default held at `templated` for a day, on the grounds that the recorded
+figures should stay comparable; that is the wrong side of the trade. A benchmark
+should default to measuring the thing it exists to measure, and comparability
+belongs in a labelled row rather than in a default nobody re-reads. Every emitted
+record now names its corpus and its provider, which is what makes that true.
+
+**The flip changes nothing under the mock, and that bounds what it is for.** The
+corpus reaches a score only through the provider, and the mock hashes text rather
+than reading it, so its vectors sit in a band the corpus cannot move. Measured at
+1,200 facts, 2026-08-29:
+
+| corpus | provider | survivors / 719,400 | rate |
+|---|---|---|---|
+| templated | `mock-384` | 412 | 0.0573% |
+| diverse | `mock-384` | 340 | 0.0473% |
+| templated | `all-MiniLM-L6-v2` | 8,413 | **1.17%** |
+| diverse | `all-MiniLM-L6-v2` | 9 | **0.0013%** |
+
+The same number twice under the mock, and both a fact about the hash. So the
+corpus choice is inert without `--real-embeddings`, and the warning fires on
+*planting* without them rather than on the corpus: a note on every default run is
+one nobody reads, while a planted run that cannot plant is a caller asking for
+something specific that will not happen. `--reflect-phases` costs a second `reflect`, and its output
+is evidence about a run rather than about a function — see the caveat above
+before attributing a surprising share to the phase it is charged to.
+
+Every run now emits a `corpus` record: the survival rate at the fact threshold,
+the planted pair count, the dated fact count, and what the soundness check
+finds. **A cost figure is only comparable with a later one if the corpus it was
+taken over is recorded beside it**, and that is what went wrong with the
+17-word corpus for as long as it did.
+
+Guarded by `tests/test_bench_smoke.py`.
 
 To measure a change against its own baseline, stash the changed file rather than
 checking out an older commit — the test suite may reference symbols the benchmark

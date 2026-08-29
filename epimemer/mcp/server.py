@@ -1668,6 +1668,7 @@ async def memory_apply_reflection(
     merges: list[dict] | None = None,
     supersessions: list[dict] | None = None,
     archivals: list[str] | None = None,
+    retained: list[dict] | None = None,
     judgments: list[dict] | None = None,
     relation_verdicts: list[dict] | None = None,
     boundaries: list[dict] | None = None,
@@ -1733,6 +1734,28 @@ async def memory_apply_reflection(
             archive_data export, and `restore` puts a node back. Never archive
             an inference on its own initiative; a flagged one means its evidence
             changed, which is a reason to re-derive it.
+        retained: *Reviewed, and it stands* — the verdict opposite to
+            `archivals`, for a nominee you looked at and decided to keep. Each:
+            {node_id: str, because: str, covers: [str] | None}.
+            **`covers` must be exactly the node's outstanding reasons.** One
+            edge is written per id, so a later change is a reason no
+            confirmation covers and the node is nominated again. Missing ids
+            are refused, and surplus ids are refused too: an anchor on a reason
+            nobody named would pre-cover a change nobody has seen, which is the
+            one thing anchoring exists to prevent. The ids are the ones
+            `reflect` shows beside the node in `pending_review` under
+            `evidence_stale`.
+            **Omit `covers` where the nomination names no reason** — a node
+            nothing links to and nothing has retrieved. The node is then its own
+            anchor, implied and never spelled: passing any id for such a node is
+            refused.
+            **Not `judgments`.** Use that where the importance was wrong; use
+            this where the importance is right and the node has simply been
+            re-read. Raising importance to stop a nomination is how one field
+            comes to mean both *how consequential this is* and *do not nominate
+            this*. Nothing here refuses the batch: every entry not recorded
+            comes back in `retained_skipped` with the reason, including a node
+            named in both `archivals` and `retained`, where archival wins.
         judgments: Re-judge importance, typically for `stale_judgment` nominees
             from reflect's archival_candidates. Each: {node_id: str, direction:
             "up"|"down", reason: str, related_id: str | None}. Unlike archivals
@@ -1805,6 +1828,7 @@ async def memory_apply_reflection(
             merges=merges,
             supersessions=supersessions,
             archivals=archivals,
+            retained=retained,
             judgments=judgments,
             relation_verdicts=relation_verdicts,
             boundaries=boundaries,
@@ -1816,6 +1840,7 @@ async def memory_apply_reflection(
         f"parents={len(parents or [])} splits={len(splits or [])} "
         f"enrichments={len(enrichments or [])} merges={len(merges or [])} "
         f"supersessions={len(supersessions or [])} archivals={len(archivals or [])} "
+        f"retained={len(retained or [])} "
         f"judgments={len(judgments or [])} "
         f"relation_verdicts={len(relation_verdicts or [])} "
         f"boundaries={len(boundaries or [])} "
