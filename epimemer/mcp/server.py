@@ -1673,7 +1673,6 @@ async def memory_apply_reflection(
     relation_verdicts: list[dict] | None = None,
     boundaries: list[dict] | None = None,
     similarities: list[dict] | None = None,
-    merge_similarity_threshold: float = 0.92,
     expected_graph: str | None = None,
 ) -> str:
     """Apply your reflection decisions to the memory graph.
@@ -1800,8 +1799,6 @@ async def memory_apply_reflection(
             passed here. Requests that no longer name exactly one open period
             come back under `boundaries_refused` with a reason rather than being
             applied to something adjacent.
-        merge_similarity_threshold: Minimum pairwise cosine similarity required
-            to allow a merge (default 0.92, deliberately high).
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
@@ -1833,7 +1830,6 @@ async def memory_apply_reflection(
             relation_verdicts=relation_verdicts,
             boundaries=boundaries,
             similarities=similarities,
-            merge_similarity_threshold=merge_similarity_threshold,
             judge=judge,
         ),
         ctx,

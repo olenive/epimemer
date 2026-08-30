@@ -279,8 +279,10 @@ Every kind of decision is optional and they are applied in one call:
 
 **`merges` is the one consolidation that retires nodes from the active graph**, so
 the bar is deliberately high: a merge is applied only if *every* pair of sources
-clears `merge_similarity_threshold` (0.92), and otherwise it is rejected and
-reported. For topics that are merely related rather than duplicates, use
+clears 0.92, and otherwise it is rejected and reported. **The bar is not a
+parameter of the call** — it was, until 2026-08-30, and a caller passing 0.0
+could have retired arbitrary topics. A caller does not choose the bar its own
+merge is checked against, here or in `merge_facts`. For topics that are merely related rather than duplicates, use
 `parents`.
 
 **Three of these carry a frame, and none of them may invent one.** A split's
