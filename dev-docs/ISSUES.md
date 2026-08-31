@@ -212,7 +212,7 @@ the largest real graph holds one label, so no pair can be nominated and none can
 be wrongly suppressed. **That is the corpus arguing, not the design.**
 
 Stage 3 makes one thing here concrete rather than hypothetical: its refusal for a
-repeated verdict now points at this entry by number, so an agent that wants a
+repeated verdict now points at this entry by name, so an agent that wants a
 verdict revisited is told where the question lives instead of being told only
 *no*.
 
@@ -387,9 +387,6 @@ and nothing outside the standard library and numpy is needed.
 
 ---
 
-
----
-
 ## Older carry-overs (open, low priority)
 
 - **No retroactive repair of old graphs.** Fixes apply to new operations;
@@ -404,9 +401,6 @@ and nothing outside the standard library and numpy is needed.
   source, because support levels live on the node rather than on the
   `sourced_from` edge. Accepted and recorded rather than built; the provenance
   edge is where it would go. Also stated in `SUMMARY.md`.
-
-- **Merge is Topic-only on the wired path.** A scope question rather than a bug;
-  it lives in README → *Not yet built*.
 
 **Guidance produces a `confidence_basis` without being enforced.** Measured
 2026-08-21 over both real graphs: 163 of 163 rated non-default nodes carry one,

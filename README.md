@@ -3,7 +3,7 @@
 ## Motivation
 LLMs store general knowledge in their weights and specific or episodic
 facts, inferences or background information in their context. However,
-as specific details accumulate over time they eventually exchaust the
+as specific details accumulate over time, they eventually exhaust the
 available context window.
 Epimemer is a tool for context engineering with the goal of providing
 necessary information without flooding the context window with details

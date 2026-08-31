@@ -64,10 +64,9 @@ its dependents are flagged **`evidence_merged`** instead: the claim under them
 did not change, only the wording that states it and the documents behind it, so
 what is wanted is a re-read rather than a re-derivation.
 
-`redundant` routes into `merge_facts(source_ids, content)` (built 2026-08-21,
-): one node keeping a `sourced_from` edge per
-contributing document, so provenance becomes plural rather than being
-overwritten. It refuses — with a reason — an **event** rather than a state, a
+`redundant` routes into `merge_facts(source_ids, content)` (built 2026-08-21): one node
+keeping a `sourced_from` edge per contributing document, so provenance
+becomes plural rather than being overwritten. It refuses — with a reason — an **event** rather than a state, a
 fact ingested without a `claim_kind`, a retired twin (that is `recurs`, and
 `restore`), a pair not standing in exactly the same frames (that is
 `record_variant`), a fact that has already been merged and un-merged
