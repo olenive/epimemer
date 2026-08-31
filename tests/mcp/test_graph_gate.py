@@ -301,7 +301,9 @@ class TestTheReconnectThatCausedThis:
         # the agent's belief does not.
         await deps["storage"].switch_database("default")
 
-        result = await _call(srv, "segment", content="A project report.", expected_graph="field-notes")
+        result = await _call(
+            srv, "segment", content="A project report.", expected_graph="field-notes"
+        )
 
         assert "refused" in result
         assert result["active_graph"] == "default"
