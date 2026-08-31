@@ -23,6 +23,12 @@ jobs:
       # dependency change that forgot to re-lock fails here rather than
       # resolving to something different on every machine.
       - run: uv sync --locked --extra dev --extra notebooks
+      # The notebook suite renders Petri nets, and the `graphviz` extra is the
+      # Python binding only — rendering needs the `dot` binary, which no extra
+      # can supply. Without it five notebooks fail on a RuntimeError from the
+      # first cell that renders, and the cells below them on the stub that
+      # stands in for the value that cell never returned.
+      - run: sudo apt-get update && sudo apt-get install -y graphviz
       - run: uv run --no-sync python -m pytest tests/ -q
 
   lint:
