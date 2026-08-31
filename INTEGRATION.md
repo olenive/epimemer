@@ -234,9 +234,11 @@ To print the path:
 python -c "import importlib.resources as r; print(r.files('epimemer_prompts') / 'DEFAULT.md')"
 ```
 
-Version 0.1.0 was built without it, and is yanked on PyPI: install 0.1.1 or
-later. Serving the guide over MCP itself, so that nothing needs copying, is on
-the backlog in `dev-docs/PROPOSED_FEATURES.md`.
+Version 0.1.0 was built without it and has been removed from PyPI, so 0.1.1 is
+the earliest release you can install.
+
+Serving the guide over MCP itself, so that nothing needs copying, is on the
+backlog in `dev-docs/PROPOSED_FEATURES.md`.
 
 ## Response Format
 

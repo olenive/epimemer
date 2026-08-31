@@ -15,7 +15,9 @@ All notable changes to this project are recorded here. The format follows
 
 ## [0.1.0] — 2026-08-31
 
-First public release.
+First public release. **Removed from PyPI**: the wheel was built without
+`epimemer_prompts/DEFAULT.md`, which the documentation tells readers to open.
+Use 0.1.1.
 
 - An MCP server holding an agent's knowledge as a typed graph of topics, facts
   and inferences, with provenance edges to every source.
