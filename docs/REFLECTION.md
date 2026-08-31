@@ -64,7 +64,7 @@ its dependents are flagged **`evidence_merged`** instead: the claim under them
 did not change, only the wording that states it and the documents behind it, so
 what is wanted is a re-read rather than a re-derivation.
 
-`redundant` routes into `merge_facts(source_ids, content)` (built 2026-08-21): one node
+`redundant` routes into `merge_facts(source_ids, content)`: one node
 keeping a `sourced_from` edge per contributing document, so provenance
 becomes plural rather than being overwritten. It refuses — with a reason — an **event** rather than a state, a
 fact ingested without a `claim_kind`, a retired twin (that is `recurs`, and
@@ -279,10 +279,9 @@ Every kind of decision is optional and they are applied in one call:
 **`merges` is the one consolidation that retires nodes from the active graph**, so
 the bar is deliberately high: a merge is applied only if *every* pair of sources
 clears 0.92, and otherwise it is rejected and reported. **The bar is not a
-parameter of the call** — it was, until 2026-08-30, and a caller passing 0.0
-could have retired arbitrary topics. A caller does not choose the bar its own
-merge is checked against, here or in `merge_facts`. For topics that are merely related rather than duplicates, use
-`parents`.
+parameter of the call**: a caller does not choose the bar its own merge is
+checked against, here or in `merge_facts`. For topics that are merely related
+rather than duplicates, use `parents`.
 
 **Three of these carry a frame, and none of them may invent one.** A split's
 subtopics inherit what the parent states; a synthesised parent inherits the one
@@ -339,13 +338,12 @@ was — an unknown id is skipped, and a judgment the graph can evaluate and reje
 comes back in its own `*_refused` list. One already-judged pair never costs a
 batch.
 
-### `similarities` — the verdict that used to have no writer
+### `similarities` — recording a verdict on a nominated pair
 
-Six of `reflect`'s seven verdicts always had an action. The seventh —
-*compatible*, these merely look alike — had none, so a decline was recorded
-nowhere and the same pair was nominated again on every pass. Measured
-2026-08-21: of eighteen pairs nominated on one real graph, five merged and
-**thirteen were declined and came straight back.**
+Declining a pair needs a record as much as acting on one does: without it,
+nothing shows the pair was ever looked at, and the same pair is nominated
+again on every pass (on one real graph, thirteen of eighteen nominated pairs
+were declined and all came straight back).
 
 Each entry is `{pair: [a_id, b_id], verdict, because}`, and the verdict picks
 what is written:

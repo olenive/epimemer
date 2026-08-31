@@ -73,11 +73,11 @@ API without the page until you build it. Rebuild after any change under
 uv run python scripts/prose_drift.py
 ```
 
-It finds prose that states how many of something the code enumerates — how
-many reflect phases there are, how many lists are capped — which is the one
-kind of documentation drift that has recurred here. Its own docstring says why it is a
-lint you run and not a test: pinning the numbers would institutionalise the
-duplication that causes them to go stale.
+It finds prose that states how many of something the code enumerates (how
+many reflect phases there are, how many lists are capped), the one kind of
+documentation drift that keeps recurring here. It is a lint you run rather
+than a test: pinning the numbers in the suite would lock in the duplication
+that causes them to go stale.
 
 ## Conventions
 

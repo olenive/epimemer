@@ -1,13 +1,12 @@
 # Attribution — who judged this
 
-**Built: the registry, the judge on every write, the setting that can require
-one, the journal, and the review loop over it.** An agent can be given an
-identity, the user assigns it, a session is bound to it, every decision that
-session makes — during review and at ingest — carries it, every decision is also
-appended to a journal, so *what did this agent judge* is one query. `review`
-reads that journal back shakiest-first, `apply_review` records that somebody
-checked a decision, and `rejudge` revises a judgment made at ingest without
-touching the claim. The design is `dev-docs/REVIEW_MODE.md`.
+An agent can be given an identity. The user assigns it, a session is bound
+to it, and every decision that session makes — during review and at ingest —
+carries it. Every decision is also appended to a journal, so *what did this
+agent judge* is one query. `review` reads that journal back shakiest-first,
+`apply_review` records that somebody checked a decision, and `rejudge`
+revises a judgment made at ingest without touching the claim. The design
+history is `dev-docs/REVIEW_MODE.md`.
 
 ## The problem it exists for
 
@@ -195,23 +194,14 @@ than a claim about it — *who pasted this text* is a different question from *w
 judged what it says*. And reusing an existing entity or tag topic does not
 restamp it: mentioning a name again is not introducing it.
 
-**The one decision that was never attributed no longer exists.** Merging
-relation labels wrote no journal row, and the obstacle had already gone — labels
-have had records with ids since the vocabulary gained an identity, so a row
-naming them would resolve like any other. What remained was that no writer had
-been built, and the question was settled by removing the operation instead
-(2026-08-28). Nothing
-rewrites a label now, so there is nothing left here to attribute.
-
-Describing a label **is** attributed, under its own `relation_description` kind,
-and so is **judging one label against another** — `relation_verdict`, whose
-subjects are the two label records. That row is where the question this section
-used to call unanswerable actually got its answer: the subject of a decision
-about vocabulary is the vocabulary entry, and it needed the entry to exist.
-
-Accepting a boundary proposal, the other gap this section used to name, is
-closed: it edits an existing edge rather than adding one, which is exactly the
-case the journal is for, and both of its subjects are nodes.
+Nothing rewrites a relation label (the merge operation was removed rather
+than attributed), so there is no label rewrite to record. Describing a label
+**is** attributed, under its own `relation_description` kind, and so is
+judging one label against another — `relation_verdict`, whose subjects are
+the two label records: the subject of a decision about vocabulary is the
+vocabulary entry. Accepting a boundary proposal edits an existing edge rather
+than adding one, which is exactly the case the journal is for, and both of
+its subjects are nodes.
 
 ## The journal — what did this agent judge
 

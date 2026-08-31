@@ -1,21 +1,13 @@
 # Epimemer
 
-## Motivation
-LLMs store general knowledge in their weights and specific or episodic
-facts, inferences or background information in their context. However,
-as specific details accumulate over time, they eventually exhaust the
-available context window.
-Epimemer is a tool for context engineering with the goal of providing
-necessary information without flooding the context window with details
-that are irrelevant to the task at hand.
-
-## Outline
-An epistemic memory server for AI agents, communicating over the
-[Model Context Protocol](https://modelcontextprotocol.io). An agent hands
-Epimemer what it has read; Epimemer keeps it as a typed graph of **topics**,
-**facts** and **inferences** that remembers where each claim came from, which
-world it is about, when it held, what contradicts it, and who decided what —
-and then nominates the graph's own weak points for the agent to review.
+An epistemic memory server for AI agents, speaking the
+[Model Context Protocol](https://modelcontextprotocol.io). An agent
+accumulates specific facts and episodic detail faster than its context window
+can hold them; Epimemer is where it puts them. The agent hands over what it
+has read, and Epimemer keeps it as a typed graph of **topics**, **facts** and
+**inferences** that remembers where each claim came from, which world it is
+about, when it held, what contradicts it, and who decided what. It then
+nominates the graph's own weak points for the agent to review.
 
 Epimemer performs no extraction of its own. Reading a document and deciding
 what it claims is the calling agent's job; Epimemer's job is to hold those
@@ -127,7 +119,7 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_RECORD_RETRIEVAL` | `true` | Whether `search` stamps `retrieved_at` on what it returns. `false` disables it, at the cost of making `never_retrieved` blind; ranking is never affected either way |
 | `EPIMEMER_IMPORTANCE_STEP` | `0.25` | How much of the gap to its bound one `judge_importance` call closes, up or down. Nothing automatic moves it |
 | `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
-| `EPIMEMER_APPROVED_AGENTS` | (empty) | Comma-separated agent ids the user admits as judges in every graph this server opens. Read when the backend connects and when the server lands on a graph. The approval channel for clients that cannot elicit, and the only one that reaches an embedded store — see [ATTRIBUTION.md](https://github.com/olenive/epimemer/blob/main/docs/ATTRIBUTION.md) |
+| `EPIMEMER_APPROVED_AGENTS` | (empty) | Comma-separated agent ids the user admits as judges in every graph this server opens. Read when the backend connects and when the server lands on a graph. The approval channel for clients with no approval prompt of their own, and the only one that reaches an embedded store — see [ATTRIBUTION.md](https://github.com/olenive/epimemer/blob/main/docs/ATTRIBUTION.md) |
 | `EPIMEMER_REQUIRE_JUDGE` | `false` | Refuse any write that names no judge, on every graph this server opens. Off by default: a blank judge means *unknown*, and many graphs have no reason to care. Overridable per graph with `epimemer agents require`, and deliberately not settable by any MCP tool |
 | `EPIMEMER_VIZ_ENABLED` | `true` | Publish visualization events to the hub |
 | `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Visualization hub host |
@@ -205,18 +197,18 @@ one, and what each has said about itself. `epimemer agents confirm <name>`
 admits one, `epimemer agents rename <handle> <name>` renames one (add
 `--same-judge` to consolidate two that are really one), and `epimemer agents
 require on|off|default` decides whether writes to that graph must name one.
-These are acts no MCP tool may perform — a tool the agent calls cannot
-establish that the *user* called it, and a gate the agent can open is
-decoration.
+No MCP tool can perform these acts: they are deliberately reserved for a
+person, because a tool the agent calls cannot prove that the user asked for
+it.
 
 `epimemer relations backfill` gives every relationship label already in use a
 record, in one go. It is idempotent and never touches a label that has one.
 
-All of these work only against a **served** SurrealDB: an embedded store lives
-inside the server process, so writing there would land in a store the running
-server never reads. Use `EPIMEMER_APPROVED_AGENTS` and `EPIMEMER_REQUIRE_JUDGE`
-instead for the two settings; the command says which one rather than appearing
-to succeed.
+All of these work only against a **served** SurrealDB. An embedded store
+lives inside the server process, so a CLI writing to it would write to a
+separate copy the running server never reads. For the two settings, use
+`EPIMEMER_APPROVED_AGENTS` and `EPIMEMER_REQUIRE_JUDGE` instead; the command
+refuses and names the right variable rather than appearing to succeed.
 
 ## Architecture
 

@@ -289,20 +289,14 @@ of every other annotation here, and its price rises with the density of
 `dev-docs/BENCHMARKS.md` has the table, measured against edges assigned at a
 fixed degree.
 
-**One thing to know before reading a count on an older graph.** Until
-2026-08-22 nothing in the system wrote a `similarity` edge: the neighbourhood
-bullet above described a walk whose input no tool produced, and both real graphs
-carried zero of them. Any count taken before then is
-the identity reading — the distinct publishers behind *that node's own*
-documents, with no restatement folded in. Honest, and cheaper than the table
-suggests, but not the cross-restatement count this section describes.
-
-`apply_reflection(similarities=[…])` is what writes them now, and only on an
-agent's explicit `one_claim` verdict about a pair `reflect` nominated. The
-companion `assessed` edge, written for **both** verdicts, is deliberately not
-read here: it records that somebody judged a pair, which is not a claim that
-they agreed — see [REFLECTION.md](REFLECTION.md) §6. So the number rises as
-judgments accumulate, and only ever on pairs somebody said were one claim.
+`apply_reflection(similarities=[…])` is what writes `similarity` edges, and
+only on an agent's explicit `one_claim` verdict about a pair `reflect`
+nominated. The companion `assessed` edge, written for **both** verdicts, is
+deliberately not read here: it records that somebody judged a pair, which is
+not a claim that they agreed — see [REFLECTION.md](REFLECTION.md) §6. So the
+number rises as judgments accumulate, and only ever on pairs somebody said
+were one claim. On a graph nobody has judged yet, the count is simply the
+distinct publishers behind that node's own documents.
 
 **And it can come back down.** An agent that withdraws a `one_claim` verdict
 leaves the `similarity` edge in place — nothing here deletes — and a
