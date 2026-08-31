@@ -7,8 +7,14 @@ Prefer uv over pip.
 Use the Petritype library (the `petritype` package on PyPI) for complex processes and data pipelines.
 Epimemer depends on released Petritype only. A change that needs new Petritype code is a Petritype release first, then a bump of the `petritype>=` pin here. For local iteration, `uv pip install -e ../petritype` into the venv — never a committed path source.
 When using Marimo notebooks remember to not re-define variables in different cells, that cells correspond to functions and these funcitons need to return values.
+When writing documentation, prefer commas, colons, or a second sentence over em-dashes.
+Say what is true rather than what is not. Open with a negation only when correcting a misreading the reader would otherwise make.
 
 Our goal is to build a robust and secure system, not simply a prototype. We don't want to trade speed for technical debt.
+
+When writing documentation, avoid using em-dashes. Avoid starting an explanation with a negation, instead say what is true rather than pointing out what something is not.
+
+When talking to the user use plain English where possible. Do not shy away from technical terms but too much jargon can be hard to parse. Treat the user as an expert in the field but not someone who enjoy cryptic langauge.
 
 **Name the thing, never the issue number.** Do not write `#63` in code, a
 comment, a docstring or a document. A number costs every reader a lookup, and it
