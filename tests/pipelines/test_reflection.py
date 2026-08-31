@@ -11,7 +11,7 @@ Covers:
 - Archival: active nodes never included
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -28,6 +28,7 @@ from epimemer.core.types import (
     ValueSignal,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
+from epimemer.mcp.tools import judge_importance
 from epimemer.pipelines.reflection.archival import (
     archive_nodes,
     find_archival_candidates,
@@ -39,9 +40,7 @@ from epimemer.pipelines.reflection.topic_consolidation import (
     find_similar_topic_pairs,
     merge_similar_topics,
 )
-from epimemer.mcp.tools import judge_importance
 from epimemer.storage.memory import InMemoryStorage
-
 
 # --- Fixtures ---
 
@@ -160,7 +159,7 @@ async def storage_with_archival_candidates(embedding_provider: MockEmbeddingProv
     - active_topic: ACTIVE (never archived)
     """
     storage = InMemoryStorage()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     old_superseded = Fact(
         id="fact-old-superseded",
@@ -204,8 +203,14 @@ async def storage_with_archival_candidates(embedding_provider: MockEmbeddingProv
         source_id="seg-3",
     )
 
-    for node in [old_superseded, recent_superseded, old_merged, active_topic,
-                 replacement_fact, merged_topic]:
+    for node in [
+        old_superseded,
+        recent_superseded,
+        old_merged,
+        active_topic,
+        replacement_fact,
+        merged_topic,
+    ]:
         await storage.store_node(node)
 
     # History edges
@@ -236,9 +241,7 @@ async def test_find_similar_topic_pairs_above_threshold(
     """Topics with identical content are found as similar pairs."""
     storage = storage_with_similar_topics
 
-    pairs = await find_similar_topic_pairs(
-        storage, embedding_provider, similarity_threshold=0.85
-    )
+    pairs = await find_similar_topic_pairs(storage, embedding_provider, similarity_threshold=0.85)
 
     assert len(pairs) >= 1
     # topic-a and topic-b have identical embeddings (similarity = 1.0)
@@ -251,18 +254,14 @@ async def test_find_similar_topic_pairs_above_threshold(
             assert score == pytest.approx(1.0)
 
 
-async def test_dissimilar_topics_not_paired(
-    storage_with_similar_topics, embedding_provider
-):
+async def test_dissimilar_topics_not_paired(storage_with_similar_topics, embedding_provider):
     """Topics with very different content are not paired at the default threshold."""
     storage = storage_with_similar_topics
 
-    pairs = await find_similar_topic_pairs(
-        storage, embedding_provider, similarity_threshold=0.99
-    )
+    pairs = await find_similar_topic_pairs(storage, embedding_provider, similarity_threshold=0.99)
 
     # At threshold 0.99, only truly identical embeddings should pair
-    for a, b, score in pairs:
+    for a, b, _score in pairs:
         pair_ids = {a.id, b.id}
         # topic-c should not be paired with topic-a or topic-b
         assert "topic-c" not in pair_ids
@@ -277,12 +276,14 @@ async def test_merge_carries_the_higher_importance(embedding_provider):
     """
     storage = InMemoryStorage()
     for node_id, importance in (("topic-i", 0.9), ("topic-j", 0.4)):
-        await storage.store_node(Topic(
-            id=node_id,
-            content="Machine learning algorithms",
-            source_id="seg-1",
-            value=ValueSignal(importance=importance),
-        ))
+        await storage.store_node(
+            Topic(
+                id=node_id,
+                content="Machine learning algorithms",
+                source_id="seg-1",
+                value=ValueSignal(importance=importance),
+            )
+        )
 
     merged = await merge_similar_topics(
         await storage.get_node("topic-i"),
@@ -308,15 +309,17 @@ class TestMergeConfidencePairing:
             ("topic-i", "gradient descent converges", confidence_i),
             ("topic-j", "gradient descent diverges", confidence_j),
         ):
-            await storage.store_node(Topic(
-                id=node_id, content=content, source_id="seg-1",
-                value=ValueSignal(confidence=confidence),
-            ))
+            await storage.store_node(
+                Topic(
+                    id=node_id,
+                    content=content,
+                    source_id="seg-1",
+                    value=ValueSignal(confidence=confidence),
+                )
+            )
         return await storage.get_node("topic-i"), await storage.get_node("topic-j")
 
-    async def test_the_winning_confidence_belongs_to_the_primary_content(
-        self, embedding_provider
-    ):
+    async def test_the_winning_confidence_belongs_to_the_primary_content(self, embedding_provider):
         storage = InMemoryStorage()
         weak, strong = await self._pair(storage, 0.3, 0.9)
 
@@ -325,9 +328,7 @@ class TestMergeConfidencePairing:
         assert merged.value.confidence == pytest.approx(0.9)
         assert merged.content.startswith(strong.content)
 
-    async def test_an_unrated_pair_still_resolves_to_the_first_argument(
-        self, embedding_provider
-    ):
+    async def test_an_unrated_pair_still_resolves_to_the_first_argument(self, embedding_provider):
         """The honest remainder of the confidence prior's fix, not a regression.
 
         Two nodes nobody rated tie at the default and the `>=` takes the first
@@ -359,25 +360,30 @@ class TestMergeCarriesTheValueClocks:
 
     async def _pair(self, storage, judged_days_ago=None, retrieved_days_ago=None):
         """One touched topic and one untouched one, ready to merge."""
-        def ago(days):
-            return None if days is None else datetime.now(timezone.utc) - timedelta(days=days)
 
-        await storage.store_node(Topic(
-            id="topic-touched",
-            content="Machine learning algorithms",
-            source_id="seg-1",
-            value=ValueSignal(
-                importance=0.9,
-                importance_judged_at=ago(judged_days_ago),
-                retrieved_at=ago(retrieved_days_ago),
-            ),
-        ))
-        await storage.store_node(Topic(
-            id="topic-untouched",
-            content="Machine learning algorithms",
-            source_id="seg-1",
-            value=ValueSignal(),
-        ))
+        def ago(days):
+            return None if days is None else datetime.now(UTC) - timedelta(days=days)
+
+        await storage.store_node(
+            Topic(
+                id="topic-touched",
+                content="Machine learning algorithms",
+                source_id="seg-1",
+                value=ValueSignal(
+                    importance=0.9,
+                    importance_judged_at=ago(judged_days_ago),
+                    retrieved_at=ago(retrieved_days_ago),
+                ),
+            )
+        )
+        await storage.store_node(
+            Topic(
+                id="topic-untouched",
+                content="Machine learning algorithms",
+                source_id="seg-1",
+                value=ValueSignal(),
+            )
+        )
         return (
             await storage.get_node("topic-touched"),
             await storage.get_node("topic-untouched"),
@@ -388,9 +394,7 @@ class TestMergeCarriesTheValueClocks:
         storage = InMemoryStorage()
         touched, untouched = await self._pair(storage, judged_days_ago=200)
 
-        merged = await merge_similar_topics(
-            touched, untouched, storage, embedding_provider
-        )
+        merged = await merge_similar_topics(touched, untouched, storage, embedding_provider)
 
         assert merged.value.importance == pytest.approx(0.9)
         assert merged.value.importance_judged_at == touched.value.importance_judged_at
@@ -400,41 +404,27 @@ class TestMergeCarriesTheValueClocks:
         storage = InMemoryStorage()
         touched, untouched = await self._pair(storage, retrieved_days_ago=3)
 
-        merged = await merge_similar_topics(
-            touched, untouched, storage, embedding_provider
-        )
+        merged = await merge_similar_topics(touched, untouched, storage, embedding_provider)
 
         assert merged.value.retrieved_at == touched.value.retrieved_at
         assert not never_retrieved(merged)
 
-    async def test_a_merged_node_with_a_stale_judgment_is_still_nominated(
-        self, embedding_provider
-    ):
+    async def test_a_merged_node_with_a_stale_judgment_is_still_nominated(self, embedding_provider):
         """The consequence, end to end: the safety net has to reach merges."""
         storage = InMemoryStorage()
         touched, untouched = await self._pair(storage, judged_days_ago=400)
-        merged = await merge_similar_topics(
-            touched, untouched, storage, embedding_provider
-        )
+        merged = await merge_similar_topics(touched, untouched, storage, embedding_provider)
 
-        candidates = await nominate_archival_candidates(
-            storage, judgment_max_age_days=180
-        )
+        candidates = await nominate_archival_candidates(storage, judgment_max_age_days=180)
 
-        assert [(c.node_id, c.reason) for c in candidates] == [
-            (merged.id, "stale_judgment")
-        ]
+        assert [(c.node_id, c.reason) for c in candidates] == [(merged.id, "stale_judgment")]
 
-    async def test_a_merge_of_untouched_topics_leaves_both_clocks_unset(
-        self, embedding_provider
-    ):
+    async def test_a_merge_of_untouched_topics_leaves_both_clocks_unset(self, embedding_provider):
         """`None` means never, and a merge invents no history that did not happen."""
         storage = InMemoryStorage()
         touched, untouched = await self._pair(storage)
 
-        merged = await merge_similar_topics(
-            touched, untouched, storage, embedding_provider
-        )
+        merged = await merge_similar_topics(touched, untouched, storage, embedding_provider)
 
         assert merged.value.importance_judged_at is None
         assert merged.value.retrieved_at is None
@@ -490,9 +480,7 @@ async def test_detect_contradictions_finds_similar_pairs(
     """Facts with identical content are detected as potential contradiction candidates."""
     storage = storage_with_similar_facts
 
-    pairs = await detect_contradictions(
-        storage, embedding_provider, similarity_threshold=0.80
-    )
+    pairs = await detect_contradictions(storage, embedding_provider, similarity_threshold=0.80)
 
     # fact_a and fact_b have identical embeddings and are not already linked
     pair_id_sets = [{a.id, b.id} for a, b, _s in pairs]
@@ -505,9 +493,7 @@ async def test_detect_contradictions_excludes_already_linked(
     """Fact pairs already linked by SIMILARITY edges are excluded."""
     storage = storage_with_similar_facts
 
-    pairs = await detect_contradictions(
-        storage, embedding_provider, similarity_threshold=0.80
-    )
+    pairs = await detect_contradictions(storage, embedding_provider, similarity_threshold=0.80)
 
     # fact_d and fact_e have identical embeddings but are already linked
     pair_id_sets = [{a.id, b.id} for a, b, _s in pairs]
@@ -571,7 +557,6 @@ async def test_archive_nodes_exports_correctly(storage_with_archival_candidates)
         assert "status" in node_dict
 
 
-
 # --- Frame helpers (metacontext-relative judgment) ---
 
 
@@ -598,9 +583,7 @@ async def test_frames_of_returns_tagged_frames():
     await storage.store_metacontext(mc)
     f = Fact(content="tagged", source_id="s1")
     await storage.store_node(f)
-    await storage.store_edge(
-        NodeEdge(src_id=f.id, dst_id=mc.id, type=EdgeType.HAS_METACONTEXT)
-    )
+    await storage.store_edge(NodeEdge(src_id=f.id, dst_id=mc.id, type=EdgeType.HAS_METACONTEXT))
     assert await frames_of(f.id, storage) == {mc.id}
 
 
@@ -633,9 +616,7 @@ async def test_same_frame_disjoint_frames_not_same():
     fic = Fact(content="fictional", source_id="s1")
     await storage.store_node(real)
     await storage.store_node(fic)
-    await storage.store_edge(
-        NodeEdge(src_id=fic.id, dst_id=mc.id, type=EdgeType.HAS_METACONTEXT)
-    )
+    await storage.store_edge(NodeEdge(src_id=fic.id, dst_id=mc.id, type=EdgeType.HAS_METACONTEXT))
     assert await same_frame(real.id, fic.id, storage) is False
 
 
@@ -693,9 +674,7 @@ async def test_review_labels_evidence_merged_is_not_evidence_stale():
     inf = Inference(content="conclusion", source_id="s1")
     await storage.store_node(fact)
     await storage.store_node(inf)
-    await storage.store_edge(
-        NodeEdge(src_id=fact.id, dst_id=inf.id, type=EdgeType.EVIDENCE_MERGED)
-    )
+    await storage.store_edge(NodeEdge(src_id=fact.id, dst_id=inf.id, type=EdgeType.EVIDENCE_MERGED))
 
     labels = await review_labels(inf, storage)
     assert labels["evidence_merged"] == [fact.id]
@@ -711,9 +690,7 @@ async def test_review_labels_evidence_stale_via_superseded_evidence():
     inf = Inference(content="conclusion", source_id="s1")
     await storage.store_node(fact)
     await storage.store_node(inf)
-    await storage.store_edge(
-        NodeEdge(src_id=inf.id, dst_id=fact.id, type=EdgeType.DERIVED_FROM)
-    )
+    await storage.store_edge(NodeEdge(src_id=inf.id, dst_id=fact.id, type=EdgeType.DERIVED_FROM))
 
     labels = await review_labels(inf, storage)
     assert labels["evidence_stale"] == [fact.id]
@@ -729,13 +706,14 @@ async def test_review_labels_contested_same_frame():
     await storage.store_node(a)
     await storage.store_node(b)
     for node in (a, b):
-        await storage.store_edge(NodeEdge(
-            src_id=node.id, dst_id=BASE_METACONTEXT_ID,
-            type=EdgeType.HAS_METACONTEXT,
-        ))
-    await storage.store_edge(
-        NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.CONTRADICTION)
-    )
+        await storage.store_edge(
+            NodeEdge(
+                src_id=node.id,
+                dst_id=BASE_METACONTEXT_ID,
+                type=EdgeType.HAS_METACONTEXT,
+            )
+        )
+    await storage.store_edge(NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.CONTRADICTION))
 
     assert (await review_labels(a, storage))["contested"] == [b.id]
     # Symmetric: the partner is contested too (edge followed either direction).
@@ -751,9 +729,7 @@ async def test_review_labels_contested_cleared_when_partner_retired():
     b = Fact(content="b", source_id="s1", status=NodeStatus.SUPERSEDED)
     await storage.store_node(a)
     await storage.store_node(b)
-    await storage.store_edge(
-        NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.CONTRADICTION)
-    )
+    await storage.store_edge(NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.CONTRADICTION))
 
     assert "contested" not in await review_labels(a, storage)
 
@@ -769,12 +745,8 @@ async def test_review_labels_contested_excludes_cross_frame():
     b = Fact(content="b", source_id="s1")
     await storage.store_node(a)
     await storage.store_node(b)
-    await storage.store_edge(
-        NodeEdge(src_id=b.id, dst_id=mc.id, type=EdgeType.HAS_METACONTEXT)
-    )
-    await storage.store_edge(
-        NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.CONTRADICTION)
-    )
+    await storage.store_edge(NodeEdge(src_id=b.id, dst_id=mc.id, type=EdgeType.HAS_METACONTEXT))
+    await storage.store_edge(NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.CONTRADICTION))
 
     assert "contested" not in await review_labels(a, storage)
 
@@ -828,7 +800,7 @@ async def storage_for_nomination():
       - fact-important: judged important
     """
     storage = InMemoryStorage()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     born = now - timedelta(days=200)
 
     def untouched(importance: float) -> ValueSignal:
@@ -837,71 +809,117 @@ async def storage_for_nomination():
         return ValueSignal(importance=importance)
 
     retired = Fact(
-        id="fact-retired", content="retired and unimportant", source_id="seg-1",
-        status=NodeStatus.SUPERSEDED, superseded_at=now - timedelta(days=120),
-        created_at=born, value=untouched(0.2),
+        id="fact-retired",
+        content="retired and unimportant",
+        source_id="seg-1",
+        status=NodeStatus.SUPERSEDED,
+        superseded_at=now - timedelta(days=120),
+        created_at=born,
+        value=untouched(0.2),
     )
     superseded_evidence = Fact(
-        id="fact-evidence", content="evidence that was superseded", source_id="seg-1",
-        status=NodeStatus.SUPERSEDED, superseded_at=now - timedelta(days=5),
-        created_at=born, value=untouched(0.5),
+        id="fact-evidence",
+        content="evidence that was superseded",
+        source_id="seg-1",
+        status=NodeStatus.SUPERSEDED,
+        superseded_at=now - timedelta(days=5),
+        created_at=born,
+        value=untouched(0.5),
     )
     stale = Inference(
-        id="inference-stale", content="rests on superseded evidence", source_id="seg-1",
-        created_at=born, value=untouched(0.3),
+        id="inference-stale",
+        content="rests on superseded evidence",
+        source_id="seg-1",
+        created_at=born,
+        value=untouched(0.3),
     )
     trivial = Fact(
-        id="fact-trivial", content="never used, never judged", source_id="seg-1",
-        created_at=born, value=untouched(0.3),
+        id="fact-trivial",
+        content="never used, never judged",
+        source_id="seg-1",
+        created_at=born,
+        value=untouched(0.3),
     )
     reinforced = Fact(
-        id="fact-reinforced", content="used since creation", source_id="seg-1",
+        id="fact-reinforced",
+        content="used since creation",
+        source_id="seg-1",
         created_at=born,
         value=ValueSignal(importance=0.3, retrieved_at=now - timedelta(days=1)),
     )
     supported = Fact(
-        id="fact-supported", content="something depends on this", source_id="seg-1",
-        created_at=born, value=untouched(0.3),
+        id="fact-supported",
+        content="something depends on this",
+        source_id="seg-1",
+        created_at=born,
+        value=untouched(0.3),
     )
     important = Fact(
-        id="fact-important", content="judged to matter", source_id="seg-1",
-        created_at=born, value=untouched(0.9),
+        id="fact-important",
+        content="judged to matter",
+        source_id="seg-1",
+        created_at=born,
+        value=untouched(0.9),
     )
     dependent = Inference(
-        id="inference-dependent", content="derived from the supported fact",
-        source_id="seg-1", created_at=born,
+        id="inference-dependent",
+        content="derived from the supported fact",
+        source_id="seg-1",
+        created_at=born,
     )
 
-    for node in (retired, superseded_evidence, stale, trivial, reinforced,
-                 supported, important, dependent):
+    for node in (
+        retired,
+        superseded_evidence,
+        stale,
+        trivial,
+        reinforced,
+        supported,
+        important,
+        dependent,
+    ):
         await storage.store_node(node)
 
-    await storage.store_edge(NodeEdge(
-        src_id=stale.id, dst_id=superseded_evidence.id, type=EdgeType.DERIVED_FROM,
-    ))
-    await storage.store_edge(NodeEdge(
-        src_id=dependent.id, dst_id=supported.id, type=EdgeType.DERIVED_FROM,
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=stale.id,
+            dst_id=superseded_evidence.id,
+            type=EdgeType.DERIVED_FROM,
+        )
+    )
+    await storage.store_edge(
+        NodeEdge(
+            src_id=dependent.id,
+            dst_id=supported.id,
+            type=EdgeType.DERIVED_FROM,
+        )
+    )
     # Every extracted node carries a segment anchor; it must not read as support.
     for node in (trivial, reinforced, supported, important):
-        await storage.store_edge(NodeEdge(
-            src_id="seg-1", dst_id=node.id, type=EdgeType.CONTAINS,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id="seg-1",
+                dst_id=node.id,
+                type=EdgeType.CONTAINS,
+            )
+        )
 
     return storage
 
 
 async def test_archival_nomination_ordering(storage_for_nomination):
     """Nominees come back worst-first, and the three spared classes are absent."""
-    candidates = await nominate_archival_candidates(
-        storage_for_nomination, max_age_days=90
-    )
+    candidates = await nominate_archival_candidates(storage_for_nomination, max_age_days=90)
 
     assert [c.node_id for c in candidates] == [
-        "fact-retired", "inference-stale", "fact-trivial",
+        "fact-retired",
+        "inference-stale",
+        "fact-trivial",
     ]
     assert [c.reason for c in candidates] == [
-        "retired", "evidence_stale", "never_retrieved",
+        "retired",
+        "evidence_stale",
+        "never_retrieved",
     ]
 
 
@@ -910,9 +928,7 @@ async def test_archival_nomination_spares_used_and_supported_nodes(
 ):
     nominated = {
         c.node_id
-        for c in await nominate_archival_candidates(
-            storage_for_nomination, max_age_days=90
-        )
+        for c in await nominate_archival_candidates(storage_for_nomination, max_age_days=90)
     }
     assert "fact-reinforced" not in nominated
     assert "fact-supported" not in nominated
@@ -928,7 +944,7 @@ async def test_archival_nomination_respects_the_limit(storage_for_nomination):
 
 
 async def test_a_node_no_search_has_returned_is_nominated():
-    """"Never retrieved" is now a state, not an inference from two timestamps.
+    """ "Never retrieved" is now a state, not an inference from two timestamps.
 
     This used to need a one-second tolerance window: `retrieved_at` defaulted to
     creation time, so "never touched" had to be read as "these two clock reads
@@ -961,11 +977,12 @@ class TestJudgmentStaleness:
     async def _judged(self, importance: float, judged_days_ago: int | None):
         storage = InMemoryStorage()
         at = (
-            None if judged_days_ago is None
-            else datetime.now(timezone.utc) - timedelta(days=judged_days_ago)
+            None if judged_days_ago is None else datetime.now(UTC) - timedelta(days=judged_days_ago)
         )
         node = Fact(
-            id="fact-judged", content="judged important once", source_id="seg-1",
+            id="fact-judged",
+            content="judged important once",
+            source_id="seg-1",
             value=ValueSignal(importance=importance, importance_judged_at=at),
         )
         await storage.store_node(node)
@@ -979,13 +996,9 @@ class TestJudgmentStaleness:
         """The assertion this issue is about."""
         storage = await self._judged(0.9, judged_days_ago=400)
 
-        candidates = await nominate_archival_candidates(
-            storage, judgment_max_age_days=180
-        )
+        candidates = await nominate_archival_candidates(storage, judgment_max_age_days=180)
 
-        assert [(c.node_id, c.reason) for c in candidates] == [
-            ("fact-judged", "stale_judgment")
-        ]
+        assert [(c.node_id, c.reason) for c in candidates] == [("fact-judged", "stale_judgment")]
 
     async def test_a_downward_judgment_returns_a_node_to_the_cheap_tier(self):
         """The other route back, and the one an agent drives directly."""
@@ -995,8 +1008,11 @@ class TestJudgmentStaleness:
 
         for _ in range(3):
             await judge_importance(
-                node.id, direction="down", reason="the bug was fixed",
-                storage=storage, importance_step=0.25,
+                node.id,
+                direction="down",
+                reason="the bug was fixed",
+                storage=storage,
+                importance_step=0.25,
             )
 
         candidates = await nominate_archival_candidates(storage)
@@ -1015,7 +1031,7 @@ async def test_a_retrieved_node_is_spared_however_recently_it_was_created():
     used = Fact(
         content="returned by a search",
         source_id="seg-1",
-        value=ValueSignal(retrieved_at=datetime.now(timezone.utc)),
+        value=ValueSignal(retrieved_at=datetime.now(UTC)),
     )
     await storage.store_node(used)
 
@@ -1031,25 +1047,29 @@ async def test_archived_evidence_strands_its_inference():
     recreate, so it goes through review on its own.
     """
     storage = InMemoryStorage()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     evidence = Fact(id="fact-swept", content="trivial detail", source_id="seg-1")
     inference = Inference(
-        id="inference-stranded", content="rests on the swept fact", source_id="seg-1",
+        id="inference-stranded",
+        content="rests on the swept fact",
+        source_id="seg-1",
         value=ValueSignal(importance=0.9),  # high, so only the follow-on can nominate it
     )
     await storage.store_node(evidence)
     await storage.store_node(inference)
-    await storage.store_edge(NodeEdge(
-        src_id=inference.id, dst_id=evidence.id, type=EdgeType.DERIVED_FROM,
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=inference.id,
+            dst_id=evidence.id,
+            type=EdgeType.DERIVED_FROM,
+        )
+    )
 
     before = {c.node_id for c in await nominate_archival_candidates(storage)}
     assert "inference-stranded" not in before
 
-    await storage.set_node_status_tx(
-        [evidence], status=NodeStatus.ARCHIVED, at=now
-    )
+    await storage.set_node_status_tx([evidence], status=NodeStatus.ARCHIVED, at=now)
 
     after = await nominate_archival_candidates(storage)
     stranded = [c for c in after if c.node_id == "inference-stranded"]
@@ -1069,24 +1089,38 @@ async def test_a_merged_premise_does_not_nominate_its_inference_for_archival():
     """
     storage = InMemoryStorage()
     absorbed = Fact(
-        id="fact-absorbed", content="the deploy failed", source_id="seg-1",
+        id="fact-absorbed",
+        content="the deploy failed",
+        source_id="seg-1",
         status=NodeStatus.MERGED,
     )
     survivor = Fact(
-        id="fact-survivor", content="deployments have been failing", source_id="seg-1",
+        id="fact-survivor",
+        content="deployments have been failing",
+        source_id="seg-1",
     )
     inference = Inference(
-        id="inference-dependent", content="the pipeline is unreliable", source_id="seg-1",
+        id="inference-dependent",
+        content="the pipeline is unreliable",
+        source_id="seg-1",
         value=ValueSignal(importance=0.9),
     )
     for node in (absorbed, survivor, inference):
         await storage.store_node(node)
-    await storage.store_edge(NodeEdge(
-        src_id=inference.id, dst_id=survivor.id, type=EdgeType.DERIVED_FROM,
-    ))
-    await storage.store_edge(NodeEdge(
-        src_id=absorbed.id, dst_id=inference.id, type=EdgeType.EVIDENCE_MERGED,
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=inference.id,
+            dst_id=survivor.id,
+            type=EdgeType.DERIVED_FROM,
+        )
+    )
+    await storage.store_edge(
+        NodeEdge(
+            src_id=absorbed.id,
+            dst_id=inference.id,
+            type=EdgeType.EVIDENCE_MERGED,
+        )
+    )
 
     candidates = await nominate_archival_candidates(storage)
 
@@ -1099,19 +1133,23 @@ async def test_partly_archived_evidence_does_not_strand_an_inference():
     kept = Fact(id="fact-kept", content="still good", source_id="seg-1")
     swept = Fact(id="fact-gone", content="trivial", source_id="seg-1")
     inference = Inference(
-        id="inference-ok", content="two supports", source_id="seg-1",
+        id="inference-ok",
+        content="two supports",
+        source_id="seg-1",
         value=ValueSignal(importance=0.9),
     )
     for node in (kept, swept, inference):
         await storage.store_node(node)
     for dst in (kept.id, swept.id):
-        await storage.store_edge(NodeEdge(
-            src_id=inference.id, dst_id=dst, type=EdgeType.DERIVED_FROM,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=inference.id,
+                dst_id=dst,
+                type=EdgeType.DERIVED_FROM,
+            )
+        )
 
-    await storage.set_node_status_tx(
-        [swept], status=NodeStatus.ARCHIVED, at=datetime.now(timezone.utc)
-    )
+    await storage.set_node_status_tx([swept], status=NodeStatus.ARCHIVED, at=datetime.now(UTC))
 
     nominated = {c.node_id for c in await nominate_archival_candidates(storage)}
     assert "inference-ok" not in nominated

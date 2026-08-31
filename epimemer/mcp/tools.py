@@ -6,57 +6,14 @@ calls these and wraps the results.
 """
 
 import logging
-from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
-from typing import Iterable, Iterator, Literal, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from datetime import UTC, datetime
+from typing import Literal
 
+from petritype.core.executable_graph_components import ExecutableGraph
+from petritype.runtime import RunContext, Runner
 from pydantic import BaseModel, Field, ValidationError
 
-from epimemer.core.types import (
-    Agent,
-    AgentDescription,
-    BASE_METACONTEXT_ID,
-    ClaimKind,
-    DecisionKind,
-    DecisionRecord,
-    EdgeType,
-    EmbeddingRecord,
-    EpistemicNode,
-    Fact,
-    Inference,
-    Metacontext,
-    NodeChangeEvent,
-    NodeEdge,
-    NodeStatus,
-    NOMINATED_STATUSES,
-    RESTORABLE_STATUSES,
-    reachable_statuses,
-    superseded_status_for,
-    NodeType,
-    QUARANTINE_METACONTEXT_ID,
-    RawDocument,
-    RelationLabel,
-    Segment,
-    Timeline,
-    Topic,
-    ValueSignal,
-    JudgeRef,
-    absorbing,
-    agent_aliases,
-    agent_name,
-    current_description,
-    description_digest,
-    live_agents,
-    name_holder,
-    new_agent_id,
-    recorded_relation_label,
-    renamed,
-    resolve_agent,
-    merged_value_signal,
-    supersession_kind,
-    with_description,
-)
-from epimemer.core.temporal import ValidityInterval, ValidityVerdict
 from epimemer.core.advisories import (
     Advisory,
     AdvisoryAction,
@@ -66,6 +23,51 @@ from epimemer.core.advisories import (
     objects_to_the_call,
     resolved_action,
     surfaced,
+)
+from epimemer.core.temporal import ValidityInterval, ValidityVerdict
+from epimemer.core.types import (
+    BASE_METACONTEXT_ID,
+    NOMINATED_STATUSES,
+    QUARANTINE_METACONTEXT_ID,
+    RESTORABLE_STATUSES,
+    Agent,
+    AgentDescription,
+    ClaimKind,
+    DecisionKind,
+    DecisionRecord,
+    EdgeType,
+    EmbeddingRecord,
+    EpistemicNode,
+    Fact,
+    Inference,
+    JudgeRef,
+    Metacontext,
+    NodeChangeEvent,
+    NodeEdge,
+    NodeStatus,
+    NodeType,
+    RawDocument,
+    RelationLabel,
+    Segment,
+    Timeline,
+    Topic,
+    ValueSignal,
+    absorbing,
+    agent_aliases,
+    agent_name,
+    current_description,
+    description_digest,
+    live_agents,
+    merged_value_signal,
+    name_holder,
+    new_agent_id,
+    reachable_statuses,
+    recorded_relation_label,
+    renamed,
+    resolve_agent,
+    superseded_status_for,
+    supersession_kind,
+    with_description,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.mcp.config import (
@@ -105,10 +107,6 @@ from epimemer.storage.protocol import (
     resolve_warning_policy,
     validate_graph_name,
 )
-
-from petritype.core.executable_graph_components import ExecutableGraph
-from petritype.runtime import RunContext, Runner
-
 from epimemer.visualization.event_bus import InProcessEventBus
 
 
@@ -135,6 +133,7 @@ async def _run_net(
     """
     if event_bus is not None:
         from epimemer.visualization.instrumented_executor import execute_with_events
+
         return await execute_with_events(graph, event_bus, pipeline_name)
 
     steps_before = graph.step_count
@@ -385,9 +384,7 @@ async def journal(
 # --- Advisories (what an operation was told before it made it) ---
 
 
-async def advisory_policy(
-    storage: StorageBackend, default: WarningPolicy
-) -> WarningPolicy:
+async def advisory_policy(storage: StorageBackend, default: WarningPolicy) -> WarningPolicy:
     """The policy in force on the active graph: its overrides over the process default.
 
     Read per call rather than cached, for the reason nothing here is a
@@ -446,8 +443,7 @@ async def carry_advisories(
             list(subject_ids),
             judge=judge,
             certainty_basis=" ".join(
-                f"[{advisory.kind.value}] {advisory.message}"
-                for advisory in advisories
+                f"[{advisory.kind.value}] {advisory.message}" for advisory in advisories
             ),
         )
     shown = surfaced(policy, advisories)
@@ -481,9 +477,7 @@ async def prior_decisions(
     """
     if not subject_ids:
         return []
-    candidates = await storage.query_decisions(
-        kinds=[kind], subject_id=subject_ids[0]
-    )
+    candidates = await storage.query_decisions(kinds=[kind], subject_id=subject_ids[0])
     wanted = set(subject_ids)
     return [r for r in candidates if wanted <= set(r.subject_ids)]
 
@@ -506,7 +500,8 @@ async def segment_text(
     event_bus: InProcessEventBus | None = None,
     judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
-    """Segment text and store the document and segments. Returns segments for the agent to decompose.
+    """Segment text and store the document and segments. Returns segments for
+    the agent to decompose.
 
     This is step 1 of the two-step agent-driven ingest flow. The agent
     receives the segments, extracts topics/facts/inferences itself, then
@@ -520,13 +515,18 @@ async def segment_text(
     absent rather than falling back to the ingest time.
     """
     from epimemer.pipelines.segmentation.paragraph_split import paragraph_split_segmentation_net
-    from epimemer.pipelines.segmentation.semantic_similarity import semantic_similarity_segmentation_net
+    from epimemer.pipelines.segmentation.semantic_similarity import (
+        semantic_similarity_segmentation_net,
+    )
 
     strategy = segmentation_strategy or config.segmentation_strategy
 
     doc = RawDocument(
-        content=content, source=source, source_type=source_type,
-        published_at=published_at, metadata=metadata or {},
+        content=content,
+        source=source,
+        source_type=source_type,
+        published_at=published_at,
+        metadata=metadata or {},
     )
     await storage.store_document(doc)
 
@@ -541,13 +541,17 @@ async def segment_text(
         # this document is `store_decomposition`, and that is where the `ingest`
         # row goes (§4.1). Splitting text into paragraphs is not a verdict
         # anybody would review.
-        entity = await _upsert_entity_topic(
-            published_by, storage, embedding_provider, judge=judge
+        entity = await _upsert_entity_topic(published_by, storage, embedding_provider, judge=judge)
+        await storage.store_edge(
+            NodeEdge(
+                src_id=doc.id,
+                dst_id=entity.id,
+                type=EdgeType.RELATED,
+                label="published_by",
+                kind="attribution",
+                judged_by=judge,
+            )
         )
-        await storage.store_edge(NodeEdge(
-            src_id=doc.id, dst_id=entity.id, type=EdgeType.RELATED,
-            label="published_by", kind="attribution", judged_by=judge,
-        ))
 
     if strategy == "semantic":
         seg_graph = semantic_similarity_segmentation_net(doc, embedding_provider)
@@ -571,10 +575,7 @@ async def segment_text(
         # notice before it decomposes anything; said only by `list_graphs`, it is
         # noticed after the nodes are written.
         "active_graph": storage.current_database,
-        "segments": [
-            {"segment_id": s.id, "char_count": len(s.text)}
-            for s in segments
-        ],
+        "segments": [{"segment_id": s.id, "char_count": len(s.text)} for s in segments],
     }
     meta = ResponseMeta(nodes_returned=len(segments))
     return result, meta
@@ -603,14 +604,20 @@ async def _upsert_entity_topic(
     # second creation, and restamping it would credit whoever mentioned the name
     # last with a node somebody else introduced.
     topic = Topic(
-        content=name, source_id=None, extraction_method=extraction_method,
+        content=name,
+        source_id=None,
+        extraction_method=extraction_method,
         judged_by=judge,
     )
     await storage.store_node(topic)
     vec = (await embedding_provider.embed([name]))[0]
-    await storage.store_embedding(EmbeddingRecord(
-        item_id=topic.id, model_id=embedding_provider.model_id, vector=vec,
-    ))
+    await storage.store_embedding(
+        EmbeddingRecord(
+            item_id=topic.id,
+            model_id=embedding_provider.model_id,
+            vector=vec,
+        )
+    )
     return topic
 
 
@@ -629,6 +636,7 @@ class DecompositionEntry(BaseModel):
     No bounds here: `ValueSignal` already holds them, and restating a range in
     two places is how the two come to disagree.
     """
+
     content: str
     tags: list[str] = Field(default_factory=list)
     importance: float | None = None
@@ -713,9 +721,7 @@ def _claim_kind_field(entry: DecompositionEntry, cls: type) -> dict:
 EXTRACTED_TIMELINE_NAME = "Extracted"
 
 
-async def _extraction_timeline(
-    storage: StorageBackend, timeline_id: str | None
-) -> Timeline:
+async def _extraction_timeline(storage: StorageBackend, timeline_id: str | None) -> Timeline:
     """The timeline extraction should propose onto.
 
     One shared timeline per graph rather than one per document. The panel shows
@@ -808,9 +814,7 @@ async def require_metacontext(
 
     known = list(await storage.query_metacontexts())
     if known:
-        shown = ", ".join(
-            f"'{mc.id}' ({mc.content})" for mc in known[:_FRAME_LISTING_LIMIT]
-        )
+        shown = ", ".join(f"'{mc.id}' ({mc.content})" for mc in known[:_FRAME_LISTING_LIMIT])
         if len(known) > _FRAME_LISTING_LIMIT:
             shown += f", and {len(known) - _FRAME_LISTING_LIMIT} more"
         have = f"This graph has: {shown}."
@@ -887,7 +891,10 @@ async def store_decomposition(
     rather than being guessed into a date. Pass `propose_timepoints=False` to
     skip it entirely.
     """
-    from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment, edge_creation_net
+    from epimemer.pipelines.graph_construction.edge_creation import (
+        edge_creation_net,
+    )
+
     # Imported as a module: the `propose_timepoints` flag above would otherwise
     # shadow the function of the same name.
     from epimemer.pipelines.timeline import functions as timeline_functions
@@ -924,15 +931,21 @@ async def store_decomposition(
             tag_cache[name] = existing
             return existing
         topic = Topic(
-            content=name, source_id=None, extraction_method="agent:tag",
+            content=name,
+            source_id=None,
+            extraction_method="agent:tag",
             judged_by=judge,
         )
         tag_cache[name] = topic
         batch_nodes.append(topic)
         vec = (await embedding_provider.embed([name]))[0]
-        batch_embeddings.append(EmbeddingRecord(
-            item_id=topic.id, model_id=embedding_provider.model_id, vector=vec,
-        ))
+        batch_embeddings.append(
+            EmbeddingRecord(
+                item_id=topic.id,
+                model_id=embedding_provider.model_id,
+                vector=vec,
+            )
+        )
         return topic
 
     for seg_data in segments:
@@ -954,8 +967,10 @@ async def store_decomposition(
             for entry in entries:
                 parsed = _decomposition_entry(entry)
                 node = cls(
-                    content=parsed.content, source_id=segment_id,
-                    value=_entry_value_signal(parsed), extraction_method="agent",
+                    content=parsed.content,
+                    source_id=segment_id,
+                    value=_entry_value_signal(parsed),
+                    extraction_method="agent",
                     # This is the read of the material, and the priors on it —
                     # `claim_kind`, `confidence`, `importance` — are judgments
                     # nothing downstream will re-make, which is why §3.1 calls
@@ -966,7 +981,8 @@ async def store_decomposition(
                     # `ValueSignal` is the numbers every ranker reads.
                     metadata=(
                         {"confidence_basis": parsed.confidence_basis}
-                        if parsed.confidence_basis else {}
+                        if parsed.confidence_basis
+                        else {}
                     ),
                     **_claim_kind_field(parsed, cls),
                 )
@@ -978,7 +994,10 @@ async def store_decomposition(
                     tag_assignments.append((node, names))
 
         decomposed = DecomposedSegment(
-            segment=segment, topics=topics, facts=facts, inferences=inferences,
+            segment=segment,
+            topics=topics,
+            facts=facts,
+            inferences=inferences,
         )
         edge_graph = edge_creation_net(decomposed)
         edge_graph, _ = await _run_net(edge_graph, "edge_creation", event_bus)
@@ -991,26 +1010,38 @@ async def store_decomposition(
 
         if seg_nodes:
             vectors = await embedding_provider.embed([n.content for n in seg_nodes])
-            for node, vector in zip(seg_nodes, vectors):
-                batch_embeddings.append(EmbeddingRecord(
-                    item_id=node.id, model_id=embedding_provider.model_id, vector=vector,
-                ))
+            for node, vector in zip(seg_nodes, vectors, strict=True):
+                batch_embeddings.append(
+                    EmbeddingRecord(
+                        item_id=node.id,
+                        model_id=embedding_provider.model_id,
+                        vector=vector,
+                    )
+                )
 
         # Provenance: every node is sourced_from the originating document, and
         # the periods this document asserts the claim held ride on that edge —
         # the only place they are attributable to the source that made them.
         for node in seg_nodes:
-            batch_edges.append(NodeEdge(
-                src_id=node.id, dst_id=document_id, type=EdgeType.SOURCED_FROM,
-                validity=validity_by_node.get(node.id, []),
-            ))
+            batch_edges.append(
+                NodeEdge(
+                    src_id=node.id,
+                    dst_id=document_id,
+                    type=EdgeType.SOURCED_FROM,
+                    validity=validity_by_node.get(node.id, []),
+                )
+            )
         # Tags: each becomes (or reuses) a Topic linked by tagged_with.
         for node, names in tag_assignments:
             for name in names:
                 topic = await _tag_topic(name)
-                batch_edges.append(NodeEdge(
-                    src_id=node.id, dst_id=topic.id, type=EdgeType.TAGGED_WITH,
-                ))
+                batch_edges.append(
+                    NodeEdge(
+                        src_id=node.id,
+                        dst_id=topic.id,
+                        type=EdgeType.TAGGED_WITH,
+                    )
+                )
         # The frame, written explicitly — including for `the-real`, which is
         # what makes requiring it worth anything. A node carrying no edge is
         # read as base reality anyway, so an unwritten `the-real` would be
@@ -1018,10 +1049,14 @@ async def store_decomposition(
         # which is the whole defect. `frames_of` reduces both to the same
         # single-frame set, so no consumer sees a difference; a reviewer does.
         for node in seg_nodes:
-            batch_edges.append(NodeEdge(
-                src_id=node.id, dst_id=metacontext_id,
-                type=EdgeType.HAS_METACONTEXT, judged_by=judge,
-            ))
+            batch_edges.append(
+                NodeEdge(
+                    src_id=node.id,
+                    dst_id=metacontext_id,
+                    type=EdgeType.HAS_METACONTEXT,
+                    judged_by=judge,
+                )
+            )
 
         total_topics += len(topics)
         total_facts += len(facts)
@@ -1048,9 +1083,7 @@ async def store_decomposition(
     # which are inside a Petritype net that would have to grow an argument to
     # carry it. A single stamp also cannot miss one.
     if judge is not None:
-        batch_edges = [
-            edge.model_copy(update={"judged_by": judge}) for edge in batch_edges
-        ]
+        batch_edges = [edge.model_copy(update={"judged_by": judge}) for edge in batch_edges]
 
     # One atomic write for the entire document.
     await storage.write_batch_tx(
@@ -1125,16 +1158,19 @@ async def _historical_twins(nodes: Sequence[EpistemicNode], storage) -> list[dic
         if not isinstance(node, Fact):
             continue
         twin = await storage.get_node_by_content(
-            node.content, node_type=NodeType.FACT, status=NodeStatus.HISTORICAL,
+            node.content,
+            node_type=NodeType.FACT,
+            status=NodeStatus.HISTORICAL,
         )
         if twin is not None:
-            twins.append({
-                "fact_id": node.id,
-                "content": node.content,
-                "historical_id": twin.id,
-            })
+            twins.append(
+                {
+                    "fact_id": node.id,
+                    "content": node.content,
+                    "historical_id": twin.id,
+                }
+            )
     return twins
-
 
 
 # --- Search ---
@@ -1398,7 +1434,7 @@ async def _record_retrieval(
     """
     if not enabled:
         return
-    at = datetime.now(timezone.utc)
+    at = datetime.now(UTC)
     for node in nodes:
         node.value = retrieved_signal(node.value, at)
         # No backend shares object identity with its callers, so the mutation
@@ -1458,8 +1494,9 @@ async def search(
     is not. Frame-scoping over-fetches so an in-frame node ranked below
     the vector top-k is still found (see `_retrieve_frame_scoped`). Metacontext labels and computed
     review labels (superseded_candidate / evidence_stale / evidence_merged /
-    contested) are always included on returned nodes. Returned Topics that sit in a split hierarchy also
-    carry `parents` / `subtopics` as id + preview, so the caller can drill via
+    contested) are always included on returned nodes. Returned Topics that sit
+    in a split hierarchy also carry `parents` / `subtopics` as id + preview, so
+    the caller can drill via
     `topic_tree` instead of being handed the whole subtree.
 
     **Knowledge that is not current is still knowledge**, so a claim retired
@@ -1509,7 +1546,7 @@ async def search(
     # anywhere afterwards. Every named frame is checked, not just the first: a
     # union with one dead id answers a narrower question than the caller asked,
     # silently.
-    for frame in (metacontexts or []):
+    for frame in metacontexts or []:
         await require_metacontext(frame, storage)
 
     # Map string node types to enums
@@ -1537,9 +1574,7 @@ async def search(
             request, embedding_provider, storage, metacontexts, event_bus
         )
     else:
-        query_result = await _run_retrieval(
-            request, embedding_provider, storage, event_bus
-        )
+        query_result = await _run_retrieval(request, embedding_provider, storage, event_bus)
         nodes = query_result.nodes
 
     edges_data = [e.model_dump(mode="json") for e in query_result.edges]
@@ -1563,9 +1598,7 @@ async def search(
     # node's similarity neighbourhood, so its cost follows an edge density
     # nothing bounds.
     corroboration_by_node = (
-        await corroboration_for([n.id for n in nodes], storage)
-        if include_corroboration
-        else {}
+        await corroboration_for([n.id for n in nodes], storage) if include_corroboration else {}
     )
     verdicts = (
         {
@@ -1595,13 +1628,10 @@ async def search(
             node_dict["review"] = review_by_node[node.id]
         if node.id in validity_by_node:
             node_dict["validity"] = [
-                source.model_dump(mode="json")
-                for source in validity_by_node[node.id]
+                source.model_dump(mode="json") for source in validity_by_node[node.id]
             ]
         if node.id in corroboration_by_node:
-            node_dict["corroboration"] = corroboration_by_node[node.id].model_dump(
-                mode="json"
-            )
+            node_dict["corroboration"] = corroboration_by_node[node.id].model_dump(mode="json")
         if node.id in verdicts:
             node_dict["valid_at"] = verdicts[node.id]
         if node.id in query_result.lineage:
@@ -1652,7 +1682,9 @@ async def search(
 
 
 def events_in_window(
-    node: EpistemicNode, start: datetime, end: datetime,
+    node: EpistemicNode,
+    start: datetime,
+    end: datetime,
 ) -> list[NodeChangeEvent]:
     """Lifecycle events on a node that fall in the half-open window [start, end).
 
@@ -1672,11 +1704,13 @@ def events_in_window(
 
     for episode in node.lifecycle:
         if start <= episode.retired_at < end:
-            events.append(NodeChangeEvent(
-                kind=episode.because.value,
-                at=episode.retired_at,
-                counterpart=episode.counterpart,
-            ))
+            events.append(
+                NodeChangeEvent(
+                    kind=episode.because.value,
+                    at=episode.retired_at,
+                    counterpart=episode.counterpart,
+                )
+            )
         if episode.restored_at is not None and start <= episode.restored_at < end:
             events.append(NodeChangeEvent(kind="restored", at=episode.restored_at))
 
@@ -1689,9 +1723,7 @@ def events_in_window(
         and all(ep.retired_at != node.superseded_at for ep in node.lifecycle)
         and start <= node.superseded_at < end
     ):
-        events.append(
-            NodeChangeEvent(kind=node.status.value, at=node.superseded_at)
-        )
+        events.append(NodeChangeEvent(kind=node.status.value, at=node.superseded_at))
 
     return sorted(events, key=lambda event: event.at)
 
@@ -1791,11 +1823,13 @@ async def query_changes(
             source_types[key] = source_types.get(key, 0) + 1
             total += 1
 
-        windows_data.append({
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-            "changes": changes,
-        })
+        windows_data.append(
+            {
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "changes": changes,
+            }
+        )
 
     result = {"windows": windows_data}
     meta = ResponseMeta(
@@ -1888,9 +1922,7 @@ async def list_sources(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
     sourced_from = await storage.get_edges_for(
         node_ids, direction="from", edge_type=EdgeType.SOURCED_FROM
     )
-    attributed = await storage.get_edges_for(
-        node_ids, direction="to", edge_type=EdgeType.RELATED
-    )
+    attributed = await storage.get_edges_for(node_ids, direction="to", edge_type=EdgeType.RELATED)
 
     counts: dict[str, int] = {}
     for node_id in node_ids:
@@ -1904,9 +1936,7 @@ async def list_sources(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
     for dst_id, count in sorted(counts.items(), key=lambda kv: -kv[1]):
         doc = await storage.get_document(dst_id)
         node = await storage.get_node(dst_id)
-        name = (doc.source if doc and doc.source else None) or (
-            node.content if node else dst_id
-        )
+        name = (doc.source if doc and doc.source else None) or (node.content if node else dst_id)
         kind = "document" if doc else ("entity" if node else "unknown")
         sources.append({"id": dst_id, "name": name, "kind": kind, "node_count": count})
 
@@ -1976,17 +2006,19 @@ async def list_relations(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
         if len(v.label_ids) != 2:
             continue
         for this_id, other_id in (v.label_ids, list(reversed(v.label_ids))):
-            verdicts_by_label.setdefault(this_id, []).append({
-                "with": names_by_id.get(other_id, other_id),
-                "verdict": v.verdict,
-                "because": v.because,
-                "judged_by": (
-                    judge_names.get(v.judged_by.agent_id, v.judged_by.agent_id)
-                    if v.judged_by
-                    else None
-                ),
-                "decided_at": v.decided_at.isoformat(),
-            })
+            verdicts_by_label.setdefault(this_id, []).append(
+                {
+                    "with": names_by_id.get(other_id, other_id),
+                    "verdict": v.verdict,
+                    "because": v.because,
+                    "judged_by": (
+                        judge_names.get(v.judged_by.agent_id, v.judged_by.agent_id)
+                        if v.judged_by
+                        else None
+                    ),
+                    "decided_at": v.decided_at.isoformat(),
+                }
+            )
 
     relations = [
         {
@@ -1994,9 +2026,7 @@ async def list_relations(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
             "kind": kind,
             "count": c,
             "description": described.get((label, kind), ""),
-            "verdicts": verdicts_by_label.get(
-                ids_by_name.get((label, kind), ""), []
-            ),
+            "verdicts": verdicts_by_label.get(ids_by_name.get((label, kind), ""), []),
         }
         for (label, kind), c in sorted(counts.items(), key=lambda kv: -kv[1])
     ]
@@ -2086,9 +2116,7 @@ async def describe_relation(
         existing, RelationLabel(name=name, kind=in_force, description=description)
     )
     label_id = await storage.store_relation_label(stored)
-    await journal(
-        storage, DecisionKind.RELATION_DESCRIPTION, [label_id], judge=judge
-    )
+    await journal(storage, DecisionKind.RELATION_DESCRIPTION, [label_id], judge=judge)
 
     result = {
         "described": True,
@@ -2152,7 +2180,7 @@ async def link(
             et = EdgeType(edge_type)
         except ValueError:
             valid = [e.value for e in EdgeType]
-            raise ValueError(f"Invalid edge_type '{edge_type}'. Valid types: {valid}")
+            raise ValueError(f"Invalid edge_type '{edge_type}'. Valid types: {valid}") from None
         resolved_kind = "relationship"
         label = None
     else:
@@ -2240,51 +2268,58 @@ async def update(
     carried_method = old_node.extraction_method
     if isinstance(old_node, Topic):
         new_node: EpistemicNode = Topic(
-            content=new_content, source_id=old_node.source_id,
-            value=carried_value, extraction_method=carried_method, judged_by=judge,
+            content=new_content,
+            source_id=old_node.source_id,
+            value=carried_value,
+            extraction_method=carried_method,
+            judged_by=judge,
         )
     elif isinstance(old_node, Fact):
         new_node = Fact(
-            content=new_content, source_id=old_node.source_id,
-            value=carried_value, extraction_method=carried_method, judged_by=judge,
+            content=new_content,
+            source_id=old_node.source_id,
+            value=carried_value,
+            extraction_method=carried_method,
+            judged_by=judge,
         )
     elif isinstance(old_node, Inference):
         new_node = Inference(
-            content=new_content, source_id=old_node.source_id,
-            value=carried_value, extraction_method=carried_method, judged_by=judge,
+            content=new_content,
+            source_id=old_node.source_id,
+            value=carried_value,
+            extraction_method=carried_method,
+            judged_by=judge,
         )
     else:
         raise ValueError(f"Unknown node type for node '{node_id}'")
 
     status = superseded_status_for(because)
     edge = await supersede_node(
-        old_node, new_node, storage, embedding_provider,
-        status=status, judge=judge,
+        old_node,
+        new_node,
+        storage,
+        embedding_provider,
+        status=status,
+        judge=judge,
     )
     # The kind carries `because`, rather than a second field repeating it: a
     # correction and a world-change are opposite claims about what happened
-    #, and a reviewer asking for one does not want the other.
-    await journal(
-        storage, supersession_kind(status), [old_node.id, new_node.id], judge=judge
-    )
+    # , and a reviewer asking for one does not want the other.
+    await journal(storage, supersession_kind(status), [old_node.id, new_node.id], judge=judge)
 
     result = {
         "old_node_id": old_node.id,
         "new_node_id": new_node.id,
         "edge_id": edge.id,
     }
-    meta = ResponseMeta(
-        nodes_returned=2, retrieved=_declare([new_node.id, old_node.id])
-    )
+    meta = ResponseMeta(nodes_returned=2, retrieved=_declare([new_node.id, old_node.id]))
     return result, meta
 
 
 JudgmentDirection = Literal["up", "down"]
 
 
-def judged_importance(
-    importance: float, direction: JudgmentDirection, step: float
-) -> float:
+def judged_importance(importance: float, direction: JudgmentDirection, step: float) -> float:
     """`importance` after one judgment in `direction`.
 
     ::
@@ -2372,18 +2407,20 @@ async def judge_importance(
     # was rather than half-judged.
     importance = judged_importance(node.value.importance, direction, importance_step)
 
-    at = datetime.now(timezone.utc)
-    node.value = node.value.model_copy(update={
-        "importance": importance,
-        # The judgment clock, and only that one. `retrieved_at` belongs to
-        # retrieval: an assessment is not traffic, and archival nomination
-        # reads the two for different reasons.
-        "importance_judged_at": at,
-        # Written with the clock, and overwritten with it: this pair is the
-        # *latest* judgment, not the history. The history is the
-        # `reinforcements` trail below, which each entry now names its judge in.
-        "importance_judged_by": judge,
-    })
+    at = datetime.now(UTC)
+    node.value = node.value.model_copy(
+        update={
+            "importance": importance,
+            # The judgment clock, and only that one. `retrieved_at` belongs to
+            # retrieval: an assessment is not traffic, and archival nomination
+            # reads the two for different reasons.
+            "importance_judged_at": at,
+            # Written with the clock, and overwritten with it: this pair is the
+            # *latest* judgment, not the history. The history is the
+            # `reinforcements` trail below, which each entry now names its judge in.
+            "importance_judged_by": judge,
+        }
+    )
     node.metadata = {
         **node.metadata,
         "reinforcements": [
@@ -2444,13 +2481,15 @@ async def supersede_by(
 
     status = superseded_status_for(because)
     edge = await supersede_by_existing(
-        old, existing_id, storage, status=status, judge=judge,
+        old,
+        existing_id,
+        storage,
+        status=status,
+        judge=judge,
     )
     await journal(storage, supersession_kind(status), [old_id, existing_id], judge=judge)
     result = {"superseded_id": old_id, "by_id": existing_id, "edge_id": edge.id}
-    meta = ResponseMeta(
-        nodes_returned=2, retrieved=_declare([existing_id, old_id])
-    )
+    meta = ResponseMeta(nodes_returned=2, retrieved=_declare([existing_id, old_id]))
     return result, meta
 
 
@@ -2504,7 +2543,10 @@ async def check_conflicts(
             continue
         # k + 1 because the fact is its own nearest neighbour; trim back to k.
         hits = await storage.vector_search(
-            embeddings[0].vector, model_id, k=k + 1, node_type=NodeType.FACT,
+            embeddings[0].vector,
+            model_id,
+            k=k + 1,
+            node_type=NodeType.FACT,
             statuses=NOMINATED_STATUSES,
         )
         candidates: list[dict] = []
@@ -2514,21 +2556,25 @@ async def check_conflicts(
             cand = await storage.get_node(item_id)
             if not isinstance(cand, Fact):
                 continue
-            candidates.append({
-                "id": cand.id,
-                "content": cand.content,
-                "score": round(score, 4),
-                "status": cand.status.value,
-                "metacontexts": await _metacontext_labels(cand.id, storage),
-                "same_frame": await same_frame(fact_id, cand.id, storage),
-            })
+            candidates.append(
+                {
+                    "id": cand.id,
+                    "content": cand.content,
+                    "score": round(score, 4),
+                    "status": cand.status.value,
+                    "metacontexts": await _metacontext_labels(cand.id, storage),
+                    "same_frame": await same_frame(fact_id, cand.id, storage),
+                }
+            )
             if len(candidates) >= k:
                 break
         if candidates:
-            conflicts.append({
-                "fact": {"id": source.id, "content": source.content},
-                "candidates": candidates,
-            })
+            conflicts.append(
+                {
+                    "fact": {"id": source.id, "content": source.content},
+                    "candidates": candidates,
+                }
+            )
             candidate_count += len(candidates)
 
     result = {"conflicts": conflicts, "threshold": threshold}
@@ -2544,15 +2590,9 @@ async def check_conflicts(
                 *(cand["id"] for c in conflicts for cand in c["candidates"]),
             ],
             provenance={
-                cand["id"]: SeedProvenance.VECTOR
-                for c in conflicts
-                for cand in c["candidates"]
+                cand["id"]: SeedProvenance.VECTOR for c in conflicts for cand in c["candidates"]
             },
-            scores={
-                cand["id"]: cand["score"]
-                for c in conflicts
-                for cand in c["candidates"]
-            },
+            scores={cand["id"]: cand["score"] for c in conflicts for cand in c["candidates"]},
         ),
     )
     return result, meta
@@ -2585,10 +2625,7 @@ async def _journal_pair_judgment(
         # confirmation, and a confirmation of a confirmation buries the original.
         prior = await prior_decisions(storage, kind, [a_id, b_id])
         reviews = prior[-1].id if prior else None
-    return await journal(
-        storage, kind, [a_id, b_id], judge=judge, reviews=reviews
-    )
-
+    return await journal(storage, kind, [a_id, b_id], judge=judge, reviews=reviews)
 
 
 async def record_contradiction(
@@ -2627,20 +2664,21 @@ async def record_contradiction(
         a_id, b_id, EdgeType.CONTRADICTION, storage, judge=judge
     )
     await _journal_pair_judgment(
-        storage, DecisionKind.CONTRADICTION, a_id, b_id,
-        judge=judge, created=created,
+        storage,
+        DecisionKind.CONTRADICTION,
+        a_id,
+        b_id,
+        judge=judge,
+        created=created,
     )
 
     advisory = Advisory(
-        kind=(
-            AdvisoryKind.SAME_FRAME_CONTRADICTION if shares_frame
-            else AdvisoryKind.CROSS_FRAME
-        ),
+        kind=(AdvisoryKind.SAME_FRAME_CONTRADICTION if shares_frame else AdvisoryKind.CROSS_FRAME),
         message=(
             "These facts stand in the same frame, so the conflict is real and "
             "unresolved — put it to the user and ask how to settle it."
-            if shares_frame else
-            "These facts are in different metacontext frames, so this is not a "
+            if shares_frame
+            else "These facts are in different metacontext frames, so this is not a "
             "genuine contradiction — consider record_variant instead."
         ),
         subjects=[a_id, b_id],
@@ -2652,9 +2690,7 @@ async def record_contradiction(
         "edge_id": edge_id,
         "created": created,
         "same_frame": shares_frame,
-    } | await carry_advisories(
-        storage, policy, [advisory], [a_id, b_id], judge=judge
-    )
+    } | await carry_advisories(storage, policy, [advisory], [a_id, b_id], judge=judge)
     meta = ResponseMeta(nodes_returned=2)
     return result, meta
 
@@ -2690,7 +2726,12 @@ async def record_variant(
         a_id, b_id, EdgeType.VARIANT_OF, storage, judge=judge
     )
     await _journal_pair_judgment(
-        storage, DecisionKind.VARIANT, a_id, b_id, judge=judge, created=created,
+        storage,
+        DecisionKind.VARIANT,
+        a_id,
+        b_id,
+        judge=judge,
+        created=created,
     )
 
     # Only the same-frame case raises one: a cross-frame variant is the correct
@@ -2698,25 +2739,29 @@ async def record_variant(
     # Its own kind rather than the contradiction one, which it shared until the
     # two were found to give opposite advice: here the tool was the wrong one,
     # there the tool was right and the finding wants a person.
-    advisories = [
-        Advisory(
-            kind=AdvisoryKind.SAME_FRAME_VARIANT,
-            message=(
-                "These facts share a metacontext frame; variant_of is meant for "
-                "cross-frame divergence — if they conflict, record_contradiction "
-                "fits."
-            ),
-            subjects=[a_id, b_id],
-        )
-    ] if shares_frame else []
+    advisories = (
+        [
+            Advisory(
+                kind=AdvisoryKind.SAME_FRAME_VARIANT,
+                message=(
+                    "These facts share a metacontext frame; variant_of is meant for "
+                    "cross-frame divergence — if they conflict, record_contradiction "
+                    "fits."
+                ),
+                subjects=[a_id, b_id],
+            )
+        ]
+        if shares_frame
+        else []
+    )
     policy = await advisory_policy(
         storage, warning_policy if warning_policy is not None else WarningPolicy()
     )
     result = {
-        "edge_id": edge_id, "created": created, "same_frame": shares_frame
-    } | await carry_advisories(
-        storage, policy, advisories, [a_id, b_id], judge=judge
-    )
+        "edge_id": edge_id,
+        "created": created,
+        "same_frame": shares_frame,
+    } | await carry_advisories(storage, policy, advisories, [a_id, b_id], judge=judge)
     meta = ResponseMeta(nodes_returned=2)
     return result, meta
 
@@ -2787,9 +2832,7 @@ async def merge_facts(
         storage,
         model_id=embedding_provider.model_id,
         similarity_threshold=similarity_threshold,
-        cycle_limit=resolve_merge_settings(
-            await storage.get_merge_overrides()
-        ).cycle_limit,
+        cycle_limit=resolve_merge_settings(await storage.get_merge_overrides()).cycle_limit,
     )
     if refusal is not None:
         return (
@@ -2797,9 +2840,7 @@ async def merge_facts(
             # Declared even on a refusal: the ids are readable in the response,
             # and the rule is about what the agent can see rather than about
             # whether the call changed anything (RETRIEVAL_PROVENANCE §2).
-            ResponseMeta(
-                nodes_returned=len(sources), retrieved=_declare(source_ids)
-            ),
+            ResponseMeta(nodes_returned=len(sources), retrieved=_declare(source_ids)),
         )
 
     basis = merged_confidence_basis(sources)
@@ -2813,17 +2854,12 @@ async def merge_facts(
         value=merged_value_signal([source.value for source in sources]),
         extraction_method="agent:merge",
         judged_by=judge,
-        metadata=(
-            {"merged_from": source_ids}
-            | ({"confidence_basis": basis} if basis else {})
-        ),
+        metadata=({"merged_from": source_ids} | ({"confidence_basis": basis} if basis else {})),
     )
     await merge_nodes(list(sources), merged, storage, embedding_provider, judge=judge)
     # The survivor first, so a reversal looking for *the merge that made this
     # node* finds it by the id it holds.
-    await journal(
-        storage, DecisionKind.MERGE, [merged.id, *source_ids], judge=judge
-    )
+    await journal(storage, DecisionKind.MERGE, [merged.id, *source_ids], judge=judge)
 
     result = {
         "merged": True,
@@ -2903,16 +2939,12 @@ async def merge_inferences(
         storage,
         model_id=embedding_provider.model_id,
         similarity_threshold=similarity_threshold,
-        cycle_limit=resolve_merge_settings(
-            await storage.get_merge_overrides()
-        ).cycle_limit,
+        cycle_limit=resolve_merge_settings(await storage.get_merge_overrides()).cycle_limit,
     )
     if refusal is not None:
         return (
             {"merged": False, "refused": refusal.reason, "source_ids": source_ids},
-            ResponseMeta(
-                nodes_returned=len(sources), retrieved=_declare(source_ids)
-            ),
+            ResponseMeta(nodes_returned=len(sources), retrieved=_declare(source_ids)),
         )
 
     # Computed **before** the merge, because afterwards the sources' premises
@@ -2935,26 +2967,19 @@ async def merge_inferences(
         value=merged_value_signal([source.value for source in sources]),
         extraction_method="agent:merge",
         judged_by=judge,
-        metadata=(
-            {"merged_from": source_ids}
-            | ({"confidence_basis": basis} if basis else {})
-        ),
+        metadata=({"merged_from": source_ids} | ({"confidence_basis": basis} if basis else {})),
     )
     await merge_nodes(list(sources), merged, storage, embedding_provider, judge=judge)
     # The survivor first, so a reversal looking for *the merge that made this
     # node* finds it by the id it holds.
-    await journal(
-        storage, DecisionKind.MERGE, [merged.id, *source_ids], judge=judge
-    )
+    await journal(storage, DecisionKind.MERGE, [merged.id, *source_ids], judge=judge)
 
     result = {
         "merged": True,
         "inference_id": merged.id,
         "source_ids": source_ids,
         "sources_retired": len(sources),
-    } | await carry_advisories(
-        storage, policy, advisories, [merged.id, *source_ids], judge=judge
-    )
+    } | await carry_advisories(storage, policy, advisories, [merged.id, *source_ids], judge=judge)
     meta = ResponseMeta(
         nodes_returned=1,
         source_types={"inferences": 1},
@@ -3002,6 +3027,8 @@ async def reverse_merge(
     """
     from epimemer.pipelines.graph_construction.versioning import (
         ReverseRefused,
+    )
+    from epimemer.pipelines.graph_construction.versioning import (
         reverse_merge as _reverse_merge,
     )
 
@@ -3073,13 +3100,18 @@ async def configure_merge(
         await storage.set_merge_overrides(MergeOverrides())
     elif undo_depth is not None or cycle_limit is not None:
         current = await storage.get_merge_overrides()
-        await storage.set_merge_overrides(current.model_copy(update={
-            field: value
-            for field, value in (
-                ("undo_depth", undo_depth), ("cycle_limit", cycle_limit),
+        await storage.set_merge_overrides(
+            current.model_copy(
+                update={
+                    field: value
+                    for field, value in (
+                        ("undo_depth", undo_depth),
+                        ("cycle_limit", cycle_limit),
+                    )
+                    if value is not None
+                }
             )
-            if value is not None
-        }))
+        )
 
     overrides = await storage.get_merge_overrides()
     settings = resolve_merge_settings(overrides)
@@ -3125,20 +3157,14 @@ async def configure_warnings(
     in, so a default changed later still reaches a graph that was configured
     once and then cleared.
     """
-    default = (
-        default_warning_policy if default_warning_policy is not None
-        else WarningPolicy()
-    )
+    default = default_warning_policy if default_warning_policy is not None else WarningPolicy()
     kinds = sorted(kind.value for kind in AdvisoryKind)
     allowed = sorted(action.value for action in AdvisoryAction)
 
     parsed: dict[AdvisoryKind, AdvisoryAction] = {}
     for kind, action in (actions or {}).items():
         if kind not in kinds:
-            raise ValueError(
-                f"'{kind}' is not an advisory kind. Known kinds: "
-                f"{', '.join(kinds)}."
-            )
+            raise ValueError(f"'{kind}' is not an advisory kind. Known kinds: {', '.join(kinds)}.")
         if action not in allowed:
             raise ValueError(
                 f"'{action}' is not an action for '{kind}'. Available: "
@@ -3152,28 +3178,28 @@ async def configure_warnings(
         await storage.set_warning_overrides(WarningOverrides())
     elif surface is not None or parsed:
         current = await storage.get_warning_overrides()
-        await storage.set_warning_overrides(current.model_copy(update={
-            **({"surface": surface} if surface is not None else {}),
-            **({"by_kind": {**current.by_kind, **parsed}} if parsed else {}),
-        }))
+        await storage.set_warning_overrides(
+            current.model_copy(
+                update={
+                    **({"surface": surface} if surface is not None else {}),
+                    **({"by_kind": {**current.by_kind, **parsed}} if parsed else {}),
+                }
+            )
+        )
 
     overrides = await storage.get_warning_overrides()
     policy = resolve_warning_policy(overrides, default)
     result = {
         "graph": storage.current_database,
         "surface": policy.surface,
-        "actions": {
-            kind: resolved_action(policy, AdvisoryKind(kind)).value for kind in kinds
-        },
+        "actions": {kind: resolved_action(policy, AdvisoryKind(kind)).value for kind in kinds},
         # Which of those answers this graph gave, as opposed to inherited. A
         # kind set explicitly to the value it would have inherited anyway is not
         # the same as one that is following the default — the first stays put
         # when the default changes, the second tracks it.
         "overridden": {
             key: value
-            for key, value in overrides.model_dump(
-                mode="json", exclude_none=True
-            ).items()
+            for key, value in overrides.model_dump(mode="json", exclude_none=True).items()
             if value != {}
         },
     }
@@ -3267,21 +3293,24 @@ async def reflect(
     relationship-label pairs for the agent to review and act on via
     memory.apply_reflection — nothing here changes the graph.
     """
-    from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
     from epimemer.pipelines.reflection.archival import nominate_archival_candidates
-    from epimemer.pipelines.reflection.relation_consolidation import sweep_similar_relation_pairs
     from epimemer.pipelines.reflection.boundaries import propose_boundaries
+    from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
     from epimemer.pipelines.reflection.inference_dedup import nominate_inference_merges
-    from epimemer.pipelines.reflection.soundness import find_unsound_inferences
-    from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
-    from epimemer.pipelines.reflection.topic_enrichment import gather_associated_material_for, _should_enrich
-    from epimemer.pipelines.reflection.topic_splitting import should_split
+    from epimemer.pipelines.reflection.relation_consolidation import sweep_similar_relation_pairs
     from epimemer.pipelines.reflection.review import (
         frame_resolver,
         frames_for,
         gather_pending_review,
         same_frame,
     )
+    from epimemer.pipelines.reflection.soundness import find_unsound_inferences
+    from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
+    from epimemer.pipelines.reflection.topic_enrichment import (
+        _should_enrich,
+        gather_associated_material_for,
+    )
+    from epimemer.pipelines.reflection.topic_splitting import should_split
     from epimemer.visualization.phase_events import phase_pipeline
 
     model_id = embedding_provider.model_id
@@ -3289,7 +3318,8 @@ async def reflect(
     # 2. Find similar topic pairs for consolidation
     async def _consolidation():
         pairs = await find_similar_topic_pairs(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             similarity_threshold=similarity_threshold,
             model_id=model_id,
         )
@@ -3311,11 +3341,13 @@ async def reflect(
                 continue
             material_vectors = await embedding_provider.embed(material)
             if should_split(material_vectors):
-                candidates.append({
-                    "topic_id": topic.id,
-                    "topic_content": topic.content,
-                    "material": material,
-                })
+                candidates.append(
+                    {
+                        "topic_id": topic.id,
+                        "topic_content": topic.content,
+                        "material": material,
+                    }
+                )
         return candidates
 
     # 4. Find enrichment candidates (thin descriptions with rich material)
@@ -3324,11 +3356,13 @@ async def reflect(
         for topic in await _active_topics():
             material = await _material_for(topic)
             if _should_enrich(topic, material, material_ratio=3.0):
-                candidates.append({
-                    "topic_id": topic.id,
-                    "current_content": topic.content,
-                    "associated_material": material,
-                })
+                candidates.append(
+                    {
+                        "topic_id": topic.id,
+                        "current_content": topic.content,
+                        "associated_material": material,
+                    }
+                )
         return candidates
 
     # Split detection and the enrichment scan walk the same topic set. Fetched
@@ -3374,11 +3408,13 @@ async def reflect(
         for a, b, score in raw:
             if not await same_frame(a.id, b.id, storage, resolve=resolve_frames):
                 continue
-            found.append({
-                "fact_a": {"id": a.id, "content": a.content, "status": a.status.value},
-                "fact_b": {"id": b.id, "content": b.content, "status": b.status.value},
-                "similarity": round(score, 4),
-            })
+            found.append(
+                {
+                    "fact_a": {"id": a.id, "content": a.content, "status": a.status.value},
+                    "fact_b": {"id": b.id, "content": b.content, "status": b.status.value},
+                    "similarity": round(score, 4),
+                }
+            )
         return found
 
     # Scored once over the nominated set and partitioned twice. This phase is
@@ -3388,17 +3424,22 @@ async def reflect(
     nominated_pairs: list = []
 
     async def _contradictions():
-        nominated_pairs.extend(await detect_contradictions(
-            storage, embedding_provider,
-            similarity_threshold=SIMILARITY_NOMINATION_THRESHOLD,
-            model_id=model_id,
-            statuses=NOMINATED_STATUSES,
-        ))
-        return await _same_frame_pairs([
-            pair for pair in nominated_pairs
-            if pair[0].status is NodeStatus.ACTIVE
-            and pair[1].status is NodeStatus.ACTIVE
-        ])
+        nominated_pairs.extend(
+            await detect_contradictions(
+                storage,
+                embedding_provider,
+                similarity_threshold=SIMILARITY_NOMINATION_THRESHOLD,
+                model_id=model_id,
+                statuses=NOMINATED_STATUSES,
+            )
+        )
+        return await _same_frame_pairs(
+            [
+                pair
+                for pair in nominated_pairs
+                if pair[0].status is NodeStatus.ACTIVE and pair[1].status is NodeStatus.ACTIVE
+            ]
+        )
 
     # 5b. Recurrence, the safety net's other half: a live claim that says what a
     #     retired-because-the-world-moved-on one said. Reported apart
@@ -3407,11 +3448,13 @@ async def reflect(
     #     `recurs` exists to prevent. Only mixed pairs qualify: two active facts
     #     are redundancy, two historical ones are both past.
     async def _recurrences():
-        return await _same_frame_pairs([
-            pair for pair in nominated_pairs
-            if {pair[0].status, pair[1].status}
-            == {NodeStatus.ACTIVE, NodeStatus.HISTORICAL}
-        ])
+        return await _same_frame_pairs(
+            [
+                pair
+                for pair in nominated_pairs
+                if {pair[0].status, pair[1].status} == {NodeStatus.ACTIVE, NodeStatus.HISTORICAL}
+            ]
+        )
 
     # 5c. The temporal soundness check: an inference whose premises
     #     no source puts in the same period. The graph stores inferences it did
@@ -3421,8 +3464,7 @@ async def reflect(
     #     is being stored. Flags, never blocks; never fires on unknown.
     async def _unsound():
         return [
-            flagged.model_dump(mode="json")
-            for flagged in await find_unsound_inferences(storage)
+            flagged.model_dump(mode="json") for flagged in await find_unsound_inferences(storage)
         ]
 
     # 5c-ii. Near-identical active inferences resting on a shared premise, each
@@ -3448,10 +3490,7 @@ async def reflect(
     #     can close the first interval. Proposes, never writes — the boundary is
     #     `inferred`, and `apply_reflection(boundaries=[...])` is what applies it.
     async def _boundaries():
-        return [
-            proposal.model_dump(mode="json")
-            for proposal in await propose_boundaries(storage)
-        ]
+        return [proposal.model_dump(mode="json") for proposal in await propose_boundaries(storage)]
 
     # 6. Surface the pending-review worklist: active nodes already carrying review
     #    state (a candidate to supersede, stale evidence, or an unresolved
@@ -3471,16 +3510,13 @@ async def reflect(
     #    embeddings. The agent judges, the human approves, and
     #    apply_reflection(archivals=[...]) applies.
     async def _archival():
-        return [
-            c.model_dump(mode="json")
-            for c in await nominate_archival_candidates(storage)
-        ]
+        return [c.model_dump(mode="json") for c in await nominate_archival_candidates(storage)]
 
     # 8. Find likely-synonymous user relationship labels (open vocabulary captured
     #    fast, organized slow). Judged via apply_reflection relation_verdicts,
     #    which is the whole destination now that `relation_merges` is gone: a
     #    nomination is answered `distinct` or `synonymous` and stops coming back
-    #, and nothing rewrites an edge. The sweep also counts what
+    # , and nothing rewrites an edge. The sweep also counts what
     #    standing verdicts held back, because suppression is silent: without the
     #    count, an empty list on a well-judged graph reads as *nothing similar
     #    here* rather than *already judged*.
@@ -3489,7 +3525,8 @@ async def reflect(
     async def _relations():
         nonlocal relation_pairs_suppressed
         sweep = await sweep_similar_relation_pairs(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             similarity_threshold=relation_similarity_threshold,
         )
         relation_pairs_suppressed = sweep.suppressed
@@ -3503,24 +3540,16 @@ async def reflect(
         similar_pairs = await phase("topic_consolidation", _consolidation, tokens=len)
         split_candidates = await phase("split_detection", _splits, tokens=len)
         enrichment_candidates = await phase("enrichment_scan", _enrichment, tokens=len)
-        contradictions = await phase(
-            "contradiction_detection", _contradictions, tokens=len
-        )
+        contradictions = await phase("contradiction_detection", _contradictions, tokens=len)
         recurrences = await phase("recurrence_detection", _recurrences, tokens=len)
         unsound_inferences = await phase("soundness_check", _unsound, tokens=len)
         inference_merge_candidates = await phase(
             "inference_merge_nomination", _inference_merges, tokens=len
         )
-        boundary_proposals = await phase(
-            "boundary_proposals", _boundaries, tokens=len
-        )
+        boundary_proposals = await phase("boundary_proposals", _boundaries, tokens=len)
         pending_review = await phase("pending_review", _pending_review, tokens=len)
-        archival_candidates = await phase(
-            "archival_nomination", _archival, tokens=len
-        )
-        similar_relations = await phase(
-            "relation_consolidation", _relations, tokens=len
-        )
+        archival_candidates = await phase("archival_nomination", _archival, tokens=len)
+        similar_relations = await phase("relation_consolidation", _relations, tokens=len)
 
     result = {
         "similar_pairs": similar_pairs,
@@ -3721,13 +3750,13 @@ async def apply_reflection(
     graph can evaluate is still refused on its own, into the matching
     ``*_refused`` list, so one already-judged pair never costs a batch.
     """
+    from epimemer.pipelines.frames import frame_edges, shared_frame_set
     from epimemer.pipelines.graph_construction.versioning import (
         merge_nodes,
         plan_subtopic_edges,
         supersede_by_existing,
         supersede_node,
     )
-    from epimemer.pipelines.frames import frame_edges, shared_frame_set
     from epimemer.pipelines.reflection.batch_validation import (
         malformed_entries,
         refusal_message,
@@ -3737,11 +3766,11 @@ async def apply_reflection(
         RelationVerdictRefused,
         apply_relation_verdict,
     )
+    from epimemer.pipelines.reflection.review import frames_of
     from epimemer.pipelines.reflection.similarity_decisions import (
         SimilarityRefused,
         apply_similarity_decision,
     )
-    from epimemer.pipelines.reflection.review import frames_of
     from epimemer.pipelines.reflection.topic_consolidation import all_pairs_above_threshold
 
     # 0. Nothing is applied until the whole batch is known to be applicable.
@@ -3751,19 +3780,21 @@ async def apply_reflection(
     #    verdict, being permanently suppressing, then refuses the retry.
     #    Structural only: judgments the graph can evaluate are still refused one
     #    at a time, into the `*_refused` lists.
-    malformed = malformed_entries({
-        "similarities": similarities,
-        "relation_verdicts": relation_verdicts,
-        "parents": parents,
-        "splits": splits,
-        "enrichments": enrichments,
-        "merges": merges,
-        "supersessions": supersessions,
-        "archivals": archivals,
-        "retained": retained,
-        "judgments": judgments,
-        "boundaries": boundaries,
-    })
+    malformed = malformed_entries(
+        {
+            "similarities": similarities,
+            "relation_verdicts": relation_verdicts,
+            "parents": parents,
+            "splits": splits,
+            "enrichments": enrichments,
+            "merges": merges,
+            "supersessions": supersessions,
+            "archivals": archivals,
+            "retained": retained,
+            "judgments": judgments,
+            "boundaries": boundaries,
+        }
+    )
     if malformed:
         raise ValueError(refusal_message(malformed))
 
@@ -3789,7 +3820,7 @@ async def apply_reflection(
     similarity_edges_written = 0
     similarities_retracted = 0
     similarities_refused: list[dict] = []
-    for spec in (similarities or []):
+    for spec in similarities or []:
         pair = spec["pair"]
         outcome = await apply_similarity_decision(
             storage,
@@ -3811,18 +3842,18 @@ async def apply_reflection(
                 # `supersedes` says it no longer stands. Where the original
                 # predates the journal there is nothing to cite, and the row
                 # goes in unlinked rather than pointing at an invented target.
-                prior = await prior_decisions(
-                    storage, DecisionKind.SIMILARITY, [pair[0], pair[1]]
-                )
+                prior = await prior_decisions(storage, DecisionKind.SIMILARITY, [pair[0], pair[1]])
                 original = prior[-1].id if prior else None
                 await journal(
-                    storage, DecisionKind.RETRACTION, [pair[0], pair[1]],
-                    judge=judge, reviews=original, supersedes=original,
+                    storage,
+                    DecisionKind.RETRACTION,
+                    [pair[0], pair[1]],
+                    judge=judge,
+                    reviews=original,
+                    supersedes=original,
                 )
             else:
-                await journal(
-                    storage, DecisionKind.SIMILARITY, [pair[0], pair[1]], judge=judge
-                )
+                await journal(storage, DecisionKind.SIMILARITY, [pair[0], pair[1]], judge=judge)
 
     # 1b. Record what was decided about nominated **label** pairs, and before
     #     step 9 relabels any of them. A verdict is about the vocabulary as the
@@ -3832,7 +3863,7 @@ async def apply_reflection(
     relation_verdicts_recorded = 0
     relation_verdicts_confirmed = 0
     relation_verdicts_refused: list[dict] = []
-    for verdict_spec in (relation_verdicts or []):
+    for verdict_spec in relation_verdicts or []:
         verdict_pair = verdict_spec["pair"]
         # Absent `kind` refuses, where absent `because` already did. A default
         # would state 'relationship' on behalf of an agent who stated nothing,
@@ -3840,15 +3871,17 @@ async def apply_reflection(
         # claim this call invented — an attribution pair refused for naming a
         # kind the agent never named.
         if "kind" not in verdict_spec:
-            relation_verdicts_refused.append(RelationVerdictRefused(
-                pair=list(verdict_pair),
-                reason=(
-                    "`kind` is required: copy it from the nomination. There is "
-                    "no default — a kind filled in here would be judged on "
-                    "behalf of an agent who stated none, and an attribution "
-                    "pair would be refused as stale for a claim it never made."
-                ),
-            ).model_dump(mode="json"))
+            relation_verdicts_refused.append(
+                RelationVerdictRefused(
+                    pair=list(verdict_pair),
+                    reason=(
+                        "`kind` is required: copy it from the nomination. There is "
+                        "no default — a kind filled in here would be judged on "
+                        "behalf of an agent who stated none, and an attribution "
+                        "pair would be refused as stale for a claim it never made."
+                    ),
+                ).model_dump(mode="json")
+            )
             continue
         verdict_outcome = await apply_relation_verdict(
             storage,
@@ -3881,7 +3914,7 @@ async def apply_reflection(
         )
 
     # 2. Create parent topics for similar groups
-    for parent_spec in (parents or []):
+    for parent_spec in parents or []:
         children_ids: list[str] = parent_spec["children_ids"]
         content: str = parent_spec["content"]
 
@@ -3900,20 +3933,20 @@ async def apply_reflection(
         # union instead would let a topic drawn from a fiction claim and a real
         # one assert in both, which `fact_dedup` calls the worst outcome
         # available; refusing is that gate, one tier up.
-        inherited = await shared_frame_set(
-            [child.id for child in children], storage
-        )
+        inherited = await shared_frame_set([child.id for child in children], storage)
         if inherited is None:
-            parents_refused.append({
-                "children_ids": children_ids,
-                "reason": (
-                    "these topics do not stand in exactly the same set of "
-                    "frames, and a parent synthesised from them would assert "
-                    "in one world what was only ever claimed in another. "
-                    "Synthesise within a frame, or `reframe` the odd one out "
-                    "if its framing is what is wrong."
-                ),
-            })
+            parents_refused.append(
+                {
+                    "children_ids": children_ids,
+                    "reason": (
+                        "these topics do not stand in exactly the same set of "
+                        "frames, and a parent synthesised from them would assert "
+                        "in one world what was only ever claimed in another. "
+                        "Synthesise within a frame, or `reframe` the odd one out "
+                        "if its framing is what is wrong."
+                    ),
+                }
+            )
             continue
 
         parent_topic = Topic(
@@ -3931,18 +3964,20 @@ async def apply_reflection(
         await storage.write_batch_tx(
             nodes=[parent_topic],
             edges=edges,
-            embeddings=[EmbeddingRecord(
-                item_id=parent_topic.id, model_id=model_id, vector=vectors[0]
-            )],
+            embeddings=[
+                EmbeddingRecord(item_id=parent_topic.id, model_id=model_id, vector=vectors[0])
+            ],
         )
         await journal(
-            storage, DecisionKind.SYNTHESIS,
-            [parent_topic.id, *children_ids], judge=judge,
+            storage,
+            DecisionKind.SYNTHESIS,
+            [parent_topic.id, *children_ids],
+            judge=judge,
         )
         parents_created += 1
 
     # 3. Split broad topics into subtopics
-    for split_spec in (splits or []):
+    for split_spec in splits or []:
         topic_id: str = split_spec["topic_id"]
         subtopic_contents: list[str] = split_spec["subtopics"]
 
@@ -3952,8 +3987,11 @@ async def apply_reflection(
 
         subtopics = [
             Topic(
-                content=sc, source_id=parent.source_id, extraction_method="agent:split",
-                judged_by=judge, metadata={"split_from": topic_id},
+                content=sc,
+                source_id=parent.source_id,
+                extraction_method="agent:split",
+                judged_by=judge,
+                metadata={"split_from": topic_id},
             )
             for sc in subtopic_contents
         ]
@@ -3964,28 +4002,28 @@ async def apply_reflection(
         inherited = await frames_of(parent.id, storage)
         edges = [
             *await plan_subtopic_edges(subtopics, parent.id, storage),
-            *[
-                edge
-                for st in subtopics
-                for edge in frame_edges(st.id, inherited, judge=judge)
-            ],
+            *[edge for st in subtopics for edge in frame_edges(st.id, inherited, judge=judge)],
         ]
         vectors = await embedding_provider.embed([st.content for st in subtopics])
         embeddings = [
             EmbeddingRecord(item_id=st.id, model_id=model_id, vector=vec)
-            for st, vec in zip(subtopics, vectors)
+            for st, vec in zip(subtopics, vectors, strict=True)
         ]
         await storage.write_batch_tx(
-            nodes=subtopics, edges=edges, embeddings=embeddings,
+            nodes=subtopics,
+            edges=edges,
+            embeddings=embeddings,
         )
         await journal(
-            storage, DecisionKind.SPLIT,
-            [topic_id, *(st.id for st in subtopics)], judge=judge,
+            storage,
+            DecisionKind.SPLIT,
+            [topic_id, *(st.id for st in subtopics)],
+            judge=judge,
         )
         topics_split += 1
 
     # 4. Enrich topic descriptions
-    for enrich_spec in (enrichments or []):
+    for enrich_spec in enrichments or []:
         topic_id = enrich_spec["topic_id"]
         new_content: str = enrich_spec["new_content"]
 
@@ -4005,16 +4043,18 @@ async def apply_reflection(
         # Enrichment rewrites a topic's own description; the earlier wording
         # was never true-of-a-period, so this is a correction.
         await supersede_node(
-            old_topic, enriched, storage, embedding_provider,
-            status=NodeStatus.CORRECTED, judge=judge,
+            old_topic,
+            enriched,
+            storage,
+            embedding_provider,
+            status=NodeStatus.CORRECTED,
+            judge=judge,
         )
-        await journal(
-            storage, DecisionKind.ENRICHMENT, [topic_id, enriched.id], judge=judge
-        )
+        await journal(storage, DecisionKind.ENRICHMENT, [topic_id, enriched.id], judge=judge)
         topics_enriched += 1
 
     # 5. Merge near-duplicate topics into one (guarded by a high similarity bar)
-    for merge_spec in (merges or []):
+    for merge_spec in merges or []:
         source_ids: list[str] = merge_spec["source_ids"]
         content = merge_spec["content"]
 
@@ -4041,15 +4081,17 @@ async def apply_reflection(
         # frames leaves one topic asserted in both worlds. Exact set equality,
         # not overlap — `shared_frame_set` carries the reasoning.
         if await shared_frame_set(source_ids, storage) is None:
-            topic_merges_refused.append({
-                "source_ids": source_ids,
-                "reason": (
-                    "these topics do not stand in exactly the same set of "
-                    "frames, and the survivor would inherit the union of them "
-                    "— asserting in one world what was only ever claimed in "
-                    "another. Merge within a frame."
-                ),
-            })
+            topic_merges_refused.append(
+                {
+                    "source_ids": source_ids,
+                    "reason": (
+                        "these topics do not stand in exactly the same set of "
+                        "frames, and the survivor would inherit the union of them "
+                        "— asserting in one world what was only ever claimed in "
+                        "another. Merge within a frame."
+                    ),
+                }
+            )
             continue
 
         # Combined in one shared place: a field-by-field rebuild here silently
@@ -4064,19 +4106,19 @@ async def apply_reflection(
             judged_by=judge,
             metadata={"merged_from": source_ids},
         )
-        await merge_nodes(
-            sources, merged_topic, storage, embedding_provider, judge=judge
-        )
+        await merge_nodes(sources, merged_topic, storage, embedding_provider, judge=judge)
         await journal(
-            storage, DecisionKind.MERGE,
-            [merged_topic.id, *source_ids], judge=judge,
+            storage,
+            DecisionKind.MERGE,
+            [merged_topic.id, *source_ids],
+            judge=judge,
         )
         topics_merged += 1
 
     # 6. Resolve flagged/contested nodes by superseding the loser with an existing
     #    winner (the resolution action of the review loop). Missing or self-pairs
     #    are skipped rather than raised so a batch partially applies cleanly.
-    for supersede_spec in (supersessions or []):
+    for supersede_spec in supersessions or []:
         old_id = supersede_spec["old_id"]
         by_id = supersede_spec["by_id"]
         if old_id == by_id:
@@ -4086,18 +4128,20 @@ async def apply_reflection(
             continue
         status = superseded_status_for(supersede_spec["because"])
         await supersede_by_existing(
-            old_node, by_id, storage, status=status, judge=judge,
+            old_node,
+            by_id,
+            storage,
+            status=status,
+            judge=judge,
         )
-        await journal(
-            storage, supersession_kind(status), [old_id, by_id], judge=judge
-        )
+        await journal(storage, supersession_kind(status), [old_id, by_id], judge=judge)
         supersessions_applied += 1
 
     # 7. Archive the approved trivial nodes: export first, then one atomic flip.
     #    Ordering matters — the export is the archive, so it must be taken
     #    before anything about the nodes changes.
     to_archive: list[EpistemicNode] = []
-    for node_id in (archivals or []):
+    for node_id in archivals or []:
         node = await storage.get_node(node_id)
         if node is None or node.status is not NodeStatus.ACTIVE:
             continue
@@ -4111,14 +4155,16 @@ async def apply_reflection(
         await storage.set_node_status_tx(
             to_archive,
             status=NodeStatus.ARCHIVED,
-            at=datetime.now(timezone.utc),
+            at=datetime.now(UTC),
             judge=judge,
         )
         # One row for the sweep. Approving a batch of trivial nodes is a single
         # pass over a single nomination list, not twelve independent verdicts.
         await journal(
-            storage, DecisionKind.ARCHIVAL,
-            [node.id for node in to_archive], judge=judge,
+            storage,
+            DecisionKind.ARCHIVAL,
+            [node.id for node in to_archive],
+            judge=judge,
         )
 
     # 7b. Record the keep verdicts. After archiving rather than before, so a
@@ -4145,9 +4191,7 @@ async def apply_reflection(
     # per-node round-trip pattern already measured and removed from
     # `gather_pending_review`, and re-adding it one loop at a time is how it got
     # there the first time.
-    wanted = [
-        (entry.get("node_id") or "").strip() for entry in (retained or [])
-    ]
+    wanted = [(entry.get("node_id") or "").strip() for entry in (retained or [])]
     by_id = await storage.get_nodes([node_id for node_id in wanted if node_id])
     live = [node for node in by_id.values() if node.status is NodeStatus.ACTIVE]
     labels_for_retained = await review_labels_for(live, storage)
@@ -4155,19 +4199,25 @@ async def apply_reflection(
         [node for node in live if isinstance(node, Inference)], storage
     )
 
-    for entry in (retained or []):
+    for entry in retained or []:
         node_id = (entry.get("node_id") or "").strip()
         because = (entry.get("because") or "").strip()
         if not node_id:
             _skip("", "no node_id")
             continue
         if not because:
-            _skip(node_id, "`because` is required: a keep with no reason marks "
-                           "the node reviewed, so the next reviewer skips it")
+            _skip(
+                node_id,
+                "`because` is required: a keep with no reason marks "
+                "the node reviewed, so the next reviewer skips it",
+            )
             continue
         if node_id in archived_ids:
-            _skip(node_id, "also named in `archivals`, which won — a batch "
-                           "cannot both keep and retire one node")
+            _skip(
+                node_id,
+                "also named in `archivals`, which won — a batch "
+                "cannot both keep and retire one node",
+            )
             continue
         node = by_id.get(node_id)
         if node is None or node.status is not NodeStatus.ACTIVE:
@@ -4204,9 +4254,7 @@ async def apply_reflection(
             surplus = sorted(set(covers) - set(reasons))
             said = []
             if missing:
-                said.append(
-                    f"does not cover {', '.join(missing)} — re-read it and name it"
-                )
+                said.append(f"does not cover {', '.join(missing)} — re-read it and name it")
             if surplus:
                 said.append(
                     f"covers {', '.join(surplus)}, which this node is not "
@@ -4218,7 +4266,10 @@ async def apply_reflection(
 
         try:
             anchors = await record_retention(
-                storage, node_id=node_id, reasons=covers, judge=judge,
+                storage,
+                node_id=node_id,
+                reasons=covers,
+                judge=judge,
             )
         except UnknownAnchors as refused:
             _skip(node_id, str(refused))
@@ -4227,7 +4278,10 @@ async def apply_reflection(
         # keep is a judgment about this node's own reasons, and the anchors are
         # what a later reviewer needs to see the verdict's scope.
         await journal(
-            storage, DecisionKind.RETENTION, [node_id], judge=judge,
+            storage,
+            DecisionKind.RETENTION,
+            [node_id],
+            judge=judge,
             certainty_basis=f"{because} [covers: {', '.join(anchors)}]",
         )
         retentions_recorded += 1
@@ -4238,7 +4292,7 @@ async def apply_reflection(
     #    its own journal row, so there is none here — one act, one row, whether
     #    it was reached through this batch or called directly.
     judgments_applied = 0
-    for spec in (judgments or []):
+    for spec in judgments or []:
         try:
             await judge_importance(
                 spec["node_id"],
@@ -4249,7 +4303,7 @@ async def apply_reflection(
                 judge=judge,
             )
         except ValueError:
-            continue        # unknown node or related id — skipped, as above
+            continue  # unknown node or related id — skipped, as above
         judgments_applied += 1
 
     # 9. Accept boundaries reflect proposed. Last because it is the only step
@@ -4257,13 +4311,14 @@ async def apply_reflection(
     #    that moves a node's status above has already happened.
     boundaries_applied = 0
     boundaries_refused: list[dict] = []
-    for spec in (boundaries or []):
+    for spec in boundaries or []:
         refusal = await apply_boundary(
             storage,
             node_id=spec["node_id"],
             source_id=spec["source_id"],
             endpoint=spec["endpoint"],
-            at=spec["at"] if isinstance(spec["at"], datetime)
+            at=spec["at"]
+            if isinstance(spec["at"], datetime)
             else datetime.fromisoformat(spec["at"]),
             timeline_id=spec.get("timeline_id"),
         )
@@ -4275,8 +4330,10 @@ async def apply_reflection(
             # about someone else's row belongs, and both of its subjects are
             # nodes — the claim, and the source whose period was closed.
             await journal(
-                storage, DecisionKind.BOUNDARY,
-                [spec["node_id"], spec["source_id"]], judge=judge,
+                storage,
+                DecisionKind.BOUNDARY,
+                [spec["node_id"], spec["source_id"]],
+                judge=judge,
             )
         else:
             boundaries_refused.append(refusal.model_dump(mode="json"))
@@ -4307,9 +4364,15 @@ async def apply_reflection(
     }
     meta = ResponseMeta(
         nodes_returned=(
-            similarities_recorded + parents_created + topics_split + topics_enriched
-            + topics_merged + supersessions_applied + len(to_archive)
-            + judgments_applied + boundaries_applied
+            similarities_recorded
+            + parents_created
+            + topics_split
+            + topics_enriched
+            + topics_merged
+            + supersessions_applied
+            + len(to_archive)
+            + judgments_applied
+            + boundaries_applied
             + relation_verdicts_recorded
         ),
     )
@@ -4432,12 +4495,10 @@ async def review(
     # record answers under both, and nothing was rewritten to make that so.
     # `judge` is None where no judge was named, which is every mode but
     # `by_agent`.
-    judge = (
-        resolve_agent(await storage.list_agents(), agent_id)
-        if agent_id is not None else None
-    )
+    judge = resolve_agent(await storage.list_agents(), agent_id) if agent_id is not None else None
     judge_ids = (
-        None if agent_id is None
+        None
+        if agent_id is None
         else (agent_aliases(judge) if judge is not None else [agent_id.strip()])
     )
     records = await storage.query_decisions(
@@ -4449,9 +4510,7 @@ async def review(
     if mode == "unreviewed":
         records = [r for r in records if r.id not in reviewed]
 
-    subject_ids = list(dict.fromkeys(
-        sid for record in records for sid in record.subject_ids
-    ))
+    subject_ids = list(dict.fromkeys(sid for record in records for sid in record.subject_ids))
     subjects = await storage.get_nodes(subject_ids) if subject_ids else {}
     # A vocabulary row's subjects are **label records**, not nodes —
     # which is the whole of what giving labels ids bought, and it is worth
@@ -4465,7 +4524,8 @@ async def review(
             for record in await storage.query_relation_labels()
             if record.id in set(unresolved)
         }
-        if unresolved else {}
+        if unresolved
+        else {}
     )
 
     scored = [
@@ -4480,9 +4540,7 @@ async def review(
             "decision_id": item.record.id,
             "kind": item.record.kind.value,
             "decided_at": item.record.decided_at.isoformat(),
-            "judged_by": (
-                item.record.judged_by.agent_id if item.record.judged_by else None
-            ),
+            "judged_by": (item.record.judged_by.agent_id if item.record.judged_by else None),
             "certainty": item.record.certainty,
             "certainty_basis": item.record.certainty_basis,
             "difficulty_signals": [s.value for s in item.signals],
@@ -4492,10 +4550,7 @@ async def review(
             # so the id stays either way — but *gone* and *not a node in the
             # first place* are different answers, and before labels had ids
             # they were indistinguishable.
-            "subjects": [
-                _review_subject(sid, subjects, labels)
-                for sid in item.record.subject_ids
-            ],
+            "subjects": [_review_subject(sid, subjects, labels) for sid in item.record.subject_ids],
             # Derived from a row pointing back, never stored (§3.4), which is
             # what makes `unreviewed` a mode rather than a flag on the row.
             "reviewed": item.record.id in reviewed,
@@ -4518,7 +4573,8 @@ async def review(
         await storage.count_decisions_by_graph(
             others, agent_ids=judge_ids, since=since, until=until
         )
-        if others else {}
+        if others
+        else {}
     )
 
     result = {
@@ -4543,8 +4599,7 @@ async def review(
             # Every other graph, zeros included: *nothing there* is an answer a
             # reviewer can act on, and omitting it would read as *not checked*.
             "graphs": [
-                {"graph": name, "decisions": counts[name]}
-                for name in others if name in counts
+                {"graph": name, "decisions": counts[name]} for name in others if name in counts
             ],
             "total": sum(counts.values()),
             # What the counts were narrowed by — and by implication what they
@@ -4581,11 +4636,11 @@ async def review(
             "name": agent_name(judge) if judge else None,
             "also_recorded_as": list(judge.former_ids) if judge else [],
         } | (
-            {} if judge is not None else {
+            {}
+            if judge is not None
+            else {
                 "unknown_here": True,
-                "judges_here": [
-                    agent_name(a) for a in live_agents(await storage.list_agents())
-                ],
+                "judges_here": [agent_name(a) for a in live_agents(await storage.list_agents())],
             }
         )
 
@@ -4675,9 +4730,7 @@ async def apply_review(
     # attention the same way it follows a search.
     return result, ResponseMeta(
         nodes_returned=len(recorded),
-        retrieved=_declare(
-            sid for entry in recorded for sid in entry["subjects"]
-        ),
+        retrieved=_declare(sid for entry in recorded for sid in entry["subjects"]),
     )
 
 
@@ -4739,9 +4792,9 @@ async def rejudge(
                     f"that holds over a period, or something that happened on "
                     f"an occasion."
                 ),
-            # A refusal still names the id back at the agent, so it still has to
-            # declare it — otherwise focus mode greys a node the response just
-            # showed. The same rule `merge_facts`' refusal follows.
+                # A refusal still names the id back at the agent, so it still has to
+                # declare it — otherwise focus mode greys a node the response just
+                # showed. The same rule `merge_facts`' refusal follows.
             }, ResponseMeta(retrieved=_declare([node_id]))
 
     outcome = await rejudge_node(
@@ -4827,9 +4880,7 @@ async def reframe(
             ResponseMeta(retrieved=_declare([node_id])),
         )
 
-    record = await journal(
-        storage, DecisionKind.REFRAME, [node_id], judge=judge
-    )
+    record = await journal(storage, DecisionKind.REFRAME, [node_id], judge=judge)
     result = {
         "reframed": True,
         "node_id": node_id,
@@ -4870,6 +4921,8 @@ async def correct_interval(
     """
     from epimemer.pipelines.reflection.boundaries import (
         IntervalCorrectionRefused,
+    )
+    from epimemer.pipelines.reflection.boundaries import (
         correct_interval as correct_interval_edge,
     )
 
@@ -4910,9 +4963,7 @@ async def correct_interval(
             ResponseMeta(retrieved=_declare([node_id])),
         )
 
-    record = await journal(
-        storage, DecisionKind.INTERVAL_CORRECTION, [node_id], judge=judge
-    )
+    record = await journal(storage, DecisionKind.INTERVAL_CORRECTION, [node_id], judge=judge)
     result = {
         "corrected": True,
         "node_id": node_id,
@@ -4980,11 +5031,7 @@ async def query_graph(
         retrieved=_declare(
             (n.id for n in nodes),
             provenance={
-                n.id: (
-                    SeedProvenance.DIRECT
-                    if n.id == seed_node.id
-                    else SeedProvenance.EXPANDED
-                )
+                n.id: (SeedProvenance.DIRECT if n.id == seed_node.id else SeedProvenance.EXPANDED)
                 for n in nodes
             },
         ),
@@ -5081,16 +5128,18 @@ async def restore(
     # edge between two nodes still in the graph was never removed.
     missing_ids = {node.id for node in missing}
     missing_edges = [
-        edge for edge in edges
-        if edge.src_id in missing_ids or edge.dst_id in missing_ids
+        edge for edge in edges if edge.src_id in missing_ids or edge.dst_id in missing_ids
     ]
 
     await storage.write_batch_tx(nodes=missing, edges=missing_edges)
     coming_back = archived + reactivated
     if coming_back:
         await storage.set_node_status_tx(
-            coming_back, status=NodeStatus.ACTIVE,
-            at=datetime.now(timezone.utc), edges=new_edges, judge=judge,
+            coming_back,
+            status=NodeStatus.ACTIVE,
+            at=datetime.now(UTC),
+            edges=new_edges,
+            judge=judge,
         )
 
     # One row for the call, ingest's granularity for ingest's reason: bringing
@@ -5099,9 +5148,7 @@ async def restore(
     # *this belongs in the active graph*, made about different rows.
     brought_back = [node.id for node in missing] + [node.id for node in coming_back]
     if brought_back:
-        await journal(
-            storage, DecisionKind.REACTIVATION, brought_back, judge=judge
-        )
+        await journal(storage, DecisionKind.REACTIVATION, brought_back, judge=judge)
 
     result = {
         "nodes_restored": len(missing),
@@ -5162,8 +5209,11 @@ async def _reactivation(
     intervals = [ValidityInterval.model_validate(v) for v in (validity or [])]
     edges = [
         NodeEdge(
-            src_id=node.id, dst_id=sourced_from, type=EdgeType.SOURCED_FROM,
-            validity=intervals, judged_by=judge,
+            src_id=node.id,
+            dst_id=sourced_from,
+            type=EdgeType.SOURCED_FROM,
+            validity=intervals,
+            judged_by=judge,
         )
         for node in nodes
         if sourced_from is not None
@@ -5295,10 +5345,7 @@ async def _ensure_symmetric_edge(
 
 def _reference_time_iso(timeline: Timeline) -> str | None:
     """A timeline's reference time as ISO, or None when it follows the clock."""
-    return (
-        None if timeline.reference_time is None
-        else timeline.reference_time.isoformat()
-    )
+    return None if timeline.reference_time is None else timeline.reference_time.isoformat()
 
 
 async def create_timeline(
@@ -5439,6 +5486,7 @@ async def create_timelink(
         raise ValueError(f"Timeline '{timeline_id}' not found")
 
     from epimemer.pipelines.timeline.functions import get_timepoint
+
     tp = get_timepoint(tl, timepoint_id)
     if tp is None:
         raise ValueError(f"Timepoint '{timepoint_id}' not found on timeline '{timeline_id}'")
@@ -5506,9 +5554,7 @@ async def get_metacontexts_for_node(
             metacontexts.append(mc.model_dump(mode="json"))
 
     result = {"node_id": node_id, "metacontexts": metacontexts}
-    meta = ResponseMeta(
-        nodes_returned=len(metacontexts), retrieved=_declare([node_id])
-    )
+    meta = ResponseMeta(nodes_returned=len(metacontexts), retrieved=_declare([node_id]))
     return result, meta
 
 
@@ -5528,18 +5574,14 @@ def _similar_names(target: str, candidates: list[str], max_results: int = 3) -> 
     return [name for name, score in scored[:max_results] if score > 0.4]
 
 
-async def effective_reflect_threshold(
-    storage: StorageBackend, default: int
-) -> int:
+async def effective_reflect_threshold(storage: StorageBackend, default: int) -> int:
     """The threshold in force for the active graph: its override, else `default`.
 
     For callers that need only the number. `graph_stats` reads the override
     itself — it reports whether one is set — and resolves it with
     `resolve_reflect_threshold` rather than fetching twice.
     """
-    return resolve_reflect_threshold(
-        await storage.get_reflect_threshold_override(), default
-    )
+    return resolve_reflect_threshold(await storage.get_reflect_threshold_override(), default)
 
 
 async def configure_reflection(
@@ -5601,9 +5643,7 @@ async def graph_stats(
     timelines = await storage.query_timelines()
     stores_since_reflect = await storage.get_reflect_counter()
     threshold_override = await storage.get_reflect_threshold_override()
-    reflect_threshold = resolve_reflect_threshold(
-        threshold_override, default_reflect_threshold
-    )
+    reflect_threshold = resolve_reflect_threshold(threshold_override, default_reflect_threshold)
 
     nodes_by_type = {nt.value: node_counts.get(nt, 0) for nt in NodeType}
     edges_by_type = {et.value: edge_counts.get(et, 0) for et in EdgeType}
@@ -5639,6 +5679,7 @@ async def graph_stats(
 
 
 # --- Agents (REVIEW_MODE.md §2) ---
+
 
 class ApprovalOutcome(BaseModel):
     """What came back from asking the user which judge this agent is.
@@ -5678,9 +5719,7 @@ ApproveId = Callable[[str, str], Awaitable[ApprovalOutcome]]
 ConfirmDescription = Callable[[str, str], Awaitable[bool]]
 
 
-async def approve_agent_ids(
-    storage: StorageBackend, ids: Sequence[str]
-) -> list[str]:
+async def approve_agent_ids(storage: StorageBackend, ids: Sequence[str]) -> list[str]:
     """Admit ids to the active graph's approved list. Returns the whole list.
 
     A **union**, never a replacement. Three writers reach this — the elicitation
@@ -5698,9 +5737,7 @@ async def approve_agent_ids(
     return updated
 
 
-async def seed_approved_judges(
-    storage: StorageBackend, handles: Sequence[str]
-) -> list[str]:
+async def seed_approved_judges(storage: StorageBackend, handles: Sequence[str]) -> list[str]:
     """Admit judges named the way a **person** would name them.
 
     `EPIMEMER_APPROVED_AGENTS` and `epimemer agents confirm` take text a user
@@ -5712,10 +5749,13 @@ async def seed_approved_judges(
     a judge that does not exist yet: its first claim adopts the key.
     """
     agents = await storage.list_agents()
-    return await approve_agent_ids(storage, [
-        agent.id if (agent := resolve_agent(agents, handle)) is not None else handle
-        for handle in handles
-    ])
+    return await approve_agent_ids(
+        storage,
+        [
+            agent.id if (agent := resolve_agent(agents, handle)) is not None else handle
+            for handle in handles
+        ],
+    )
 
 
 async def judge_is_approved(storage: StorageBackend, judge: JudgeRef) -> bool:
@@ -5729,9 +5769,7 @@ async def judge_is_approved(storage: StorageBackend, judge: JudgeRef) -> bool:
     return judge.agent_id in await storage.get_approved_agent_ids()
 
 
-async def judge_required(
-    storage: StorageBackend, *, process_default: bool
-) -> bool:
+async def judge_required(storage: StorageBackend, *, process_default: bool) -> bool:
     """Whether this graph refuses a write that names no judge (§3.3.1).
 
     The graph's own answer wins, `None` follows the process default. One
@@ -5739,9 +5777,7 @@ async def judge_required(
     refused on its own account would be a second place for the policy to differ,
     and the two could differ silently.
     """
-    return resolve_require_judge(
-        await storage.get_require_judge(), process_default
-    )
+    return resolve_require_judge(await storage.get_require_judge(), process_default)
 
 
 def judge_required_reason(approved: Sequence[str]) -> str:
@@ -5806,8 +5842,7 @@ def _roster_title(name: str, agent: Agent | None) -> str:
     if agent is None:
         return f"{name} · approved, never claimed"
     used = (
-        f"last used {agent.last_seen_at.date().isoformat()}"
-        if agent.last_seen_at else "never used"
+        f"last used {agent.last_seen_at.date().isoformat()}" if agent.last_seen_at else "never used"
     )
     head = f"{name} · {used}"
     current = current_description(agent)
@@ -5844,8 +5879,7 @@ async def judge_roster(storage: StorageBackend) -> list[JudgeChoice]:
     live = live_agents(stored)
     known = {alias for agent in stored for alias in agent_aliases(agent)}
     bare = [
-        agent_id for agent_id in await storage.get_approved_agent_ids()
-        if agent_id not in known
+        agent_id for agent_id in await storage.get_approved_agent_ids() if agent_id not in known
     ]
 
     used = [a for a in live if a.last_seen_at]
@@ -5881,13 +5915,11 @@ async def judge_roster(storage: StorageBackend) -> list[JudgeChoice]:
 def selected_judge_id(key: str) -> str | None:
     """The agent id a picker key selects, or None for *mint a new one*."""
     if key.startswith(JUDGE_CHOICE_PREFIX):
-        return key[len(JUDGE_CHOICE_PREFIX):]
+        return key[len(JUDGE_CHOICE_PREFIX) :]
     return None
 
 
-def approved_labels(
-    approved: Sequence[str], agents: Sequence[Agent]
-) -> list[str]:
+def approved_labels(approved: Sequence[str], agents: Sequence[Agent]) -> list[str]:
     """The approved ids as the user would recognise them — names where known.
 
     Every refusal that lists what this graph approves goes through here, because
@@ -5896,13 +5928,9 @@ def approved_labels(
     record is shown as itself, which is what it is.
     """
     by_alias = {
-        alias: agent_name(agent)
-        for agent in live_agents(agents)
-        for alias in agent_aliases(agent)
+        alias: agent_name(agent) for agent in live_agents(agents) for alias in agent_aliases(agent)
     }
-    return list(dict.fromkeys(
-        by_alias.get(agent_id, agent_id) for agent_id in approved
-    ))
+    return list(dict.fromkeys(by_alias.get(agent_id, agent_id) for agent_id in approved))
 
 
 def _unapproved_reason(handle: str, labels: Sequence[str]) -> str:
@@ -6081,7 +6109,7 @@ async def claim_agent(
     Nothing here verifies the description. It is self-reported prose, exactly
     like a fact the agent ingests, and it must never be read as a credential.
     """
-    at = now or datetime.now(timezone.utc)
+    at = now or datetime.now(UTC)
     handle = agent_id.strip()
     description = description.strip()
 
@@ -6108,17 +6136,14 @@ async def claim_agent(
     key = existing.id if existing is not None else handle
 
     confirmed_now = False
-    memo_holds = (
-        confirmed_identity is not None
-        and key == confirmed_identity
-        and key in approved
-    )
+    memo_holds = confirmed_identity is not None and key == confirmed_identity and key in approved
     if memo_holds:
         # Asked and answered, this session, for this graph, for this identity.
         pass
     else:
         outcome = (
-            await approve_id(handle, description) if approve_id is not None
+            await approve_id(handle, description)
+            if approve_id is not None
             else ApprovalOutcome(channel_available=False)
         )
         if outcome.chosen:
@@ -6149,34 +6174,32 @@ async def claim_agent(
                 "agent_id": handle,
                 "approved_agent_ids": approved,
                 "approved_judges": approved_labels(approved, agents),
-                "reason": _unapproved_reason(
-                    handle, approved_labels(approved, agents)
-                ),
+                "reason": _unapproved_reason(handle, approved_labels(approved, agents)),
             }, ResponseMeta()
 
-    agent = existing or Agent(
-        id=key, name=handle, authorised_at=at, first_seen_at=at
-    )
+    agent = existing or Agent(id=key, name=handle, authorised_at=at, first_seen_at=at)
     current = current_description(agent)
     is_new_text = current is None or current.digest != description_digest(description)
 
     if is_new_text and not confirmed_now and confirm_description is not None:
         confirmed_now = await confirm_description(agent_name(agent), description)
 
-    updated = agent.model_copy(update={
-        # A record written before the split carries no name and reads as its own
-        # id; naming it on the next claim makes that explicit rather than
-        # leaving every reader to derive it.
-        "name": agent_name(agent),
-        "descriptions": with_description(
-            agent.descriptions,
-            text=description,
-            at=at,
-            confirmed_at=at if confirmed_now else None,
-        ),
-        "first_seen_at": agent.first_seen_at or at,
-        "last_seen_at": at,
-    })
+    updated = agent.model_copy(
+        update={
+            # A record written before the split carries no name and reads as its own
+            # id; naming it on the next claim makes that explicit rather than
+            # leaving every reader to derive it.
+            "name": agent_name(agent),
+            "descriptions": with_description(
+                agent.descriptions,
+                text=description,
+                at=at,
+                confirmed_at=at if confirmed_now else None,
+            ),
+            "first_seen_at": agent.first_seen_at or at,
+            "last_seen_at": at,
+        }
+    )
     await storage.upsert_agent(updated)
 
     version: AgentDescription = updated.descriptions[-1]
@@ -6190,7 +6213,7 @@ async def claim_agent(
         "also_recorded_as": list(updated.former_ids),
         "digest": version.digest,
         # Stated rather than left to be inferred from `description_versions: 1`
-        #. *This judge has no history* is what tells an agent it has just
+        # . *This judge has no history* is what tells an agent it has just
         # created one instead of joining one, and an implication nobody reads
         # is not a signal.
         "new_agent": existing is None,
@@ -6202,7 +6225,8 @@ async def claim_agent(
             f"Judging as '{name}'"
             + (
                 " — a new judge, with no decisions before this session."
-                if existing is None else "."
+                if existing is None
+                else "."
             )
             + (
                 " The user confirmed this description."
@@ -6268,8 +6292,11 @@ async def use_graph(
     if name in existing:
         await storage.switch_database(name)
         return await _switched(
-            storage, name, status="switched",
-            message=f"Switched to graph '{name}'.", judge=judge,
+            storage,
+            name,
+            status="switched",
+            message=f"Switched to graph '{name}'.",
+            judge=judge,
             seed_agent_ids=seed_agent_ids,
         )
 
@@ -6290,8 +6317,11 @@ async def use_graph(
     # Create by switching (SurrealDB creates databases on use)
     await storage.switch_database(name)
     return await _switched(
-        storage, name, status="created",
-        message=f"Created and switched to new graph '{name}'.", judge=judge,
+        storage,
+        name,
+        status="created",
+        message=f"Created and switched to new graph '{name}'.",
+        judge=judge,
         seed_agent_ids=seed_agent_ids,
     )
 
@@ -6360,7 +6390,9 @@ async def delete_graph(
     if name == storage.current_database:
         return {
             "status": "refused",
-            "message": f"Cannot delete the active graph '{name}'. Switch to a different graph first.",
+            "message": (
+                f"Cannot delete the active graph '{name}'. Switch to a different graph first."
+            ),
             "active_graph": name,
         }, ResponseMeta()
 

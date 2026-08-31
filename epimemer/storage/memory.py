@@ -8,10 +8,10 @@ corpus on every call (`storage/bm25.py`) rather than maintaining an index.
 
 import copy
 import math
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal, Sequence, TypeVar
+from typing import Literal, TypeVar
 
 from pydantic import BaseModel
 
@@ -21,11 +21,11 @@ from epimemer.core.types import (
     DecisionKind,
     DecisionRecord,
     EdgeType,
-    JudgeRef,
     EmbeddingRecord,
     EpistemicNode,
     Fact,
     Inference,
+    JudgeRef,
     Metacontext,
     NodeEdge,
     NodeStatus,
@@ -33,12 +33,12 @@ from epimemer.core.types import (
     RawDocument,
     RelationLabel,
     RelationVerdict,
-    recorded_relation_label,
-    relation_pair_key,
     Segment,
     Timeline,
     Topic,
     migration_disposition,
+    recorded_relation_label,
+    relation_pair_key,
     with_retirement,
     with_return,
 )
@@ -55,7 +55,7 @@ from epimemer.storage.protocol import (
 _M = TypeVar("_M", bound=BaseModel)
 
 
-def _copy(model: _M) -> _M:
+def _copy[M: BaseModel](model: _M) -> _M:
     """Deep-copy a record crossing the storage boundary.
 
     The store must not share object identity with its callers in either
@@ -67,7 +67,7 @@ def _copy(model: _M) -> _M:
     return model.model_copy(deep=True)
 
 
-def _store(model: _M) -> _M:
+def _store[M: BaseModel](model: _M) -> _M:
     """Prepare a record for the store: normalized, then detached from the caller.
 
     Writes go through here rather than `_copy` so this backend applies the same
@@ -79,12 +79,12 @@ def _store(model: _M) -> _M:
     return _copy(normalize_for_storage(model))
 
 
-def _copy_all(models: Iterable[_M]) -> list[_M]:
+def _copy_all[M: BaseModel](models: Iterable[_M]) -> list[_M]:
     return [m.model_copy(deep=True) for m in models]
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(x * x for x in b))
     if norm_a == 0 or norm_b == 0:
@@ -104,6 +104,7 @@ _CLASS_TO_NODE_TYPE: dict[type, NodeType] = {v: k for k, v in _NODE_TYPE_TO_CLAS
 @dataclass
 class _GraphStore:
     """All per-graph data bundled together."""
+
     documents: dict[str, RawDocument] = field(default_factory=dict)
     segments: dict[str, Segment] = field(default_factory=dict)
     nodes: dict[str, EpistemicNode] = field(default_factory=dict)
@@ -124,9 +125,7 @@ class _GraphStore:
     # vocabulary is not knowledge, and a node here would enter search, reflect
     # and merging, which would have the graph answering questions about its own
     # words.
-    relation_labels: dict[tuple[str, str], RelationLabel] = field(
-        default_factory=dict
-    )
+    relation_labels: dict[tuple[str, str], RelationLabel] = field(default_factory=dict)
     # Verdicts about label pairs, append-only and never keyed: two
     # rows for one pair is a second agent disagreeing, which both survive.
     relation_verdicts: list[RelationVerdict] = field(default_factory=list)
@@ -267,9 +266,10 @@ def _decision_matches(
     agreement structural rather than a thing to remember.
     """
     return (
-        (agent_ids is None
-         or (record.judged_by is not None
-             and record.judged_by.agent_id in agent_ids))
+        (
+            agent_ids is None
+            or (record.judged_by is not None and record.judged_by.agent_id in agent_ids)
+        )
         and (kinds is None or record.kind in kinds)
         and (subject_id is None or subject_id in record.subject_ids)
         and (reviews is None or record.reviews == reviews)
@@ -297,9 +297,7 @@ def _edges_at(
     )
 
 
-def _embeddings_at(
-    g: _GraphStore, item_id: str, model_id: str | None
-) -> list[EmbeddingRecord]:
+def _embeddings_at(g: _GraphStore, item_id: str, model_id: str | None) -> list[EmbeddingRecord]:
     """One item's embeddings, from the index rather than a scan.
 
     Model is filtered after the lookup, for the same reason the edge type is:
@@ -395,9 +393,7 @@ class InMemoryStorage:
         return segment.id
 
     async def get_segments_for_document(self, doc_id: str) -> Sequence[Segment]:
-        return _copy_all(
-            s for s in self._g.segments.values() if s.source_id == doc_id
-        )
+        return _copy_all(s for s in self._g.segments.values() if s.source_id == doc_id)
 
     async def get_segments(self, segment_ids: Sequence[str]) -> dict[str, Segment]:
         found = {}
@@ -465,9 +461,7 @@ class InMemoryStorage:
         for node in self._g.nodes.values():
             if node.status != status or node.content != content:
                 continue
-            if node_type is not None and not isinstance(
-                node, _NODE_TYPE_TO_CLASS[node_type]
-            ):
+            if node_type is not None and not isinstance(node, _NODE_TYPE_TO_CLASS[node_type]):
                 continue
             return _copy(node)
         return None
@@ -487,10 +481,7 @@ class InMemoryStorage:
                     continue
 
             born = start <= node.created_at < end
-            retired = (
-                node.superseded_at is not None
-                and start <= node.superseded_at < end
-            )
+            retired = node.superseded_at is not None and start <= node.superseded_at < end
             # An earlier episode's retirement, or a return, is not visible in
             # the scalar pair — see the protocol docstring.
             in_episode = any(
@@ -526,14 +517,10 @@ class InMemoryStorage:
         status: NodeStatus = NodeStatus.ACTIVE,
     ) -> int:
         framed = {
-            edge.src_id
-            for edge in self._g.edges.values()
-            if edge.type == EdgeType.HAS_METACONTEXT
+            edge.src_id for edge in self._g.edges.values() if edge.type == EdgeType.HAS_METACONTEXT
         }
         return sum(
-            1
-            for node in self._g.nodes.values()
-            if node.status == status and node.id not in framed
+            1 for node in self._g.nodes.values() if node.status == status and node.id not in framed
         )
 
     # --- Edges ---
@@ -575,9 +562,7 @@ class InMemoryStorage:
 
     # --- Atomic compound operations ---
 
-    def _migrate_edges_inplace(
-        self, old_ids: set[str], new_id: str, *, status: NodeStatus
-    ) -> None:
+    def _migrate_edges_inplace(self, old_ids: set[str], new_id: str, *, status: NodeStatus) -> None:
         """Carry edges touching old_ids onto new_id, per `migration_disposition`.
 
         `status` is why the old node is being retired, and it decides each
@@ -619,10 +604,14 @@ class InMemoryStorage:
                 # Rebuilt rather than `model_copy`d so `id` and `created_at`
                 # come from their factories: this is a new edge made now, and
                 # inheriting the original's identity would overwrite it.
-                copied = _store(NodeEdge(
-                    **(edge.model_dump(exclude={"id", "created_at"})
-                       | {"src_id": new_src, "dst_id": new_dst}),
-                ))
+                copied = _store(
+                    NodeEdge(
+                        **(
+                            edge.model_dump(exclude={"id", "created_at"})
+                            | {"src_id": new_src, "dst_id": new_dst}
+                        ),
+                    )
+                )
                 _put_edge(self._g, copied)
                 survivors[signature] = copied
                 continue
@@ -655,8 +644,11 @@ class InMemoryStorage:
             node.status = status
             node.superseded_at = superseded_at
             node.lifecycle = with_retirement(
-                node.lifecycle, at=superseded_at, because=status,
-                counterpart=new_node.id, judge=judge,
+                node.lifecycle,
+                at=superseded_at,
+                because=status,
+                counterpart=new_node.id,
+                judge=judge,
             )
             self._g.nodes[new_node.id] = _store(new_node)
             _put_embedding(self._g, _store(new_embedding))
@@ -690,8 +682,11 @@ class InMemoryStorage:
             node.status = status
             node.superseded_at = superseded_at
             node.lifecycle = with_retirement(
-                node.lifecycle, at=superseded_at, because=status,
-                counterpart=existing_id, judge=judge,
+                node.lifecycle,
+                at=superseded_at,
+                because=status,
+                counterpart=existing_id,
+                judge=judge,
             )
             # No new node, no embedding, no migration — the existing node stands.
             _put_edge(self._g, _store(lineage_edge))
@@ -722,10 +717,9 @@ class InMemoryStorage:
                 stored.status = status
                 stored.superseded_at = None if returning else at
                 stored.lifecycle = (
-                    with_return(stored.lifecycle, at=at, judge=judge) if returning
-                    else with_retirement(
-                        stored.lifecycle, at=at, because=status, judge=judge
-                    )
+                    with_return(stored.lifecycle, at=at, judge=judge)
+                    if returning
+                    else with_retirement(stored.lifecycle, at=at, because=status, judge=judge)
                 )
             for edge in edges:
                 _put_edge(self._g, _store(edge))
@@ -750,7 +744,8 @@ class InMemoryStorage:
             _put_embedding(self._g, _store(merged_embedding))
             # Migrate before writing lineage edges so they are not re-pointed.
             self._migrate_edges_inplace(
-                {s.id for s in source_nodes}, merged_node.id,
+                {s.id for s in source_nodes},
+                merged_node.id,
                 status=NodeStatus.MERGED,
             )
             for source in source_nodes:
@@ -760,8 +755,11 @@ class InMemoryStorage:
                 node.status = NodeStatus.MERGED
                 node.superseded_at = merged_at
                 node.lifecycle = with_retirement(
-                    node.lifecycle, at=merged_at, because=NodeStatus.MERGED,
-                    counterpart=merged_node.id, judge=judge,
+                    node.lifecycle,
+                    at=merged_at,
+                    because=NodeStatus.MERGED,
+                    counterpart=merged_node.id,
+                    judge=judge,
                 )
             for edge in lineage_edges:
                 _put_edge(self._g, _store(edge))
@@ -803,9 +801,7 @@ class InMemoryStorage:
                 # `lifecycle`, which is what makes N cycles cost N episodes and
                 # no flags (§7.6).
                 node.superseded_at = None
-                node.lifecycle = with_return(
-                    node.lifecycle, at=restored_at, judge=judge
-                )
+                node.lifecycle = with_return(node.lifecycle, at=restored_at, judge=judge)
             _destroy_node(self._g, survivor.id)
         except Exception:
             self._graphs[self._database] = snapshot
@@ -943,9 +939,7 @@ class InMemoryStorage:
                 )
             expected_class = _NODE_TYPE_TO_CLASS[node_type]
             partition = [
-                node
-                for node in self._g.nodes.values()
-                if isinstance(node, expected_class)
+                node for node in self._g.nodes.values() if isinstance(node, expected_class)
             ]
             documents = {node.id: node.content for node in partition}
             eligible = {node.id for node in partition if node.status in statuses}
@@ -1006,9 +1000,7 @@ class InMemoryStorage:
         *,
         status: NodeStatus = NodeStatus.ACTIVE,
     ) -> Sequence[Metacontext]:
-        return _copy_all(
-            mc for mc in self._g.metacontexts.values() if mc.status == status
-        )
+        return _copy_all(mc for mc in self._g.metacontexts.values() if mc.status == status)
 
     # --- Relation labels ---
 
@@ -1018,9 +1010,7 @@ class InMemoryStorage:
         self._g.relation_labels[key] = _store(stored)
         return stored.id
 
-    async def get_relation_label(
-        self, name: str, kind: str
-    ) -> RelationLabel | None:
+    async def get_relation_label(self, name: str, kind: str) -> RelationLabel | None:
         label = self._g.relation_labels.get((name, kind))
         return None if label is None else _copy(label)
 
@@ -1040,14 +1030,10 @@ class InMemoryStorage:
             if len(v.label_ids) == 2
         }
 
-    async def relation_verdicts_for(
-        self, label_ids: Sequence[str]
-    ) -> Sequence[RelationVerdict]:
+    async def relation_verdicts_for(self, label_ids: Sequence[str]) -> Sequence[RelationVerdict]:
         wanted = set(label_ids)
         return _copy_all(
-            v
-            for v in reversed(self._g.relation_verdicts)
-            if set(v.label_ids) == wanted
+            v for v in reversed(self._g.relation_verdicts) if set(v.label_ids) == wanted
         )
 
     async def query_relation_verdicts(self) -> Sequence[RelationVerdict]:
@@ -1133,7 +1119,8 @@ class InMemoryStorage:
         wanted = set(kinds) if kinds is not None else None
         judges = None if agent_ids is None else set(agent_ids)
         matches = [
-            record for record in self._g.decisions.values()
+            record
+            for record in self._g.decisions.values()
             if _decision_matches(
                 record,
                 agent_ids=judges,
@@ -1154,7 +1141,8 @@ class InMemoryStorage:
     async def reviewed_decision_ids(self, decision_ids: Sequence[str]) -> set[str]:
         targets = set(decision_ids)
         return {
-            record.reviews for record in self._g.decisions.values()
+            record.reviews
+            for record in self._g.decisions.values()
             if record.reviews is not None and record.reviews in targets
         }
 
@@ -1179,7 +1167,8 @@ class InMemoryStorage:
             if graph is None:
                 continue
             counts[database] = sum(
-                1 for record in graph.decisions.values()
+                1
+                for record in graph.decisions.values()
                 if _decision_matches(
                     record,
                     agent_ids=judges,
@@ -1267,9 +1256,7 @@ class InMemoryStorage:
         graph = self._graphs.get(database)
         if graph is None:
             return []
-        return _copy_all(
-            mc for mc in graph.metacontexts.values() if mc.status == NodeStatus.ACTIVE
-        )
+        return _copy_all(mc for mc in graph.metacontexts.values() if mc.status == NodeStatus.ACTIVE)
 
     async def viz_list_relation_labels(
         self,

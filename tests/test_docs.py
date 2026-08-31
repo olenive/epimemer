@@ -90,8 +90,7 @@ async def test_the_documented_tool_count_matches_the_registry():
     )
     registered = len(await _registered_tool_names())
     assert int(stated.group(1)) == registered, (
-        f"INTEGRATION.md says {stated.group(1)} tools; {registered} are "
-        "registered in server.py"
+        f"INTEGRATION.md says {stated.group(1)} tools; {registered} are registered in server.py"
     )
 
 
@@ -106,12 +105,10 @@ async def test_the_canonical_tool_table_lists_exactly_the_registered_tools():
     registered = await _registered_tool_names()
 
     assert not registered - documented, (
-        f"registered but absent from INTEGRATION.md's tables: "
-        f"{sorted(registered - documented)}"
+        f"registered but absent from INTEGRATION.md's tables: {sorted(registered - documented)}"
     )
     assert not documented - registered, (
-        f"listed in INTEGRATION.md but not registered: "
-        f"{sorted(documented - registered)}"
+        f"listed in INTEGRATION.md but not registered: {sorted(documented - registered)}"
     )
 
 
@@ -131,6 +128,5 @@ async def test_every_registered_tool_is_named_where_the_docs_list_tools():
         text = path.read_text()
         missing = sorted(name for name in registered if f"`{name}`" not in text)
         assert not missing, (
-            f"{path.name} never mentions {missing} — registered tools it has "
-            "no record of"
+            f"{path.name} never mentions {missing} — registered tools it has no record of"
         )

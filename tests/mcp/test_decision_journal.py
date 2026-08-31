@@ -15,10 +15,11 @@ document. And **re-recording a verdict is a review, not a decision**: the row
 points back rather than overwriting somebody else's name.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
+from epimemer.core.temporal import IntervalBasis, ValidityInterval
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
     ClaimKind,
@@ -33,11 +34,9 @@ from epimemer.core.types import (
     Topic,
     ValueSignal,
 )
-from epimemer.core.temporal import IntervalBasis, ValidityInterval
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
-
 
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
 EDITOR = JudgeRef(agent_id="editor", digest="d2")
@@ -57,20 +56,24 @@ async def _node(storage, embedder, node):
     await storage.store_node(node)
     # States a frame, as every ingested node has since the frame requirement: absence names none,
     # so two frameless nodes share none and a `one_claim` verdict is refused.
-    await storage.store_edge(NodeEdge(
-        src_id=node.id, dst_id=BASE_METACONTEXT_ID,
-        type=EdgeType.HAS_METACONTEXT,
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=node.id,
+            dst_id=BASE_METACONTEXT_ID,
+            type=EdgeType.HAS_METACONTEXT,
+        )
+    )
     vectors = await embedder.embed([node.content])
-    await storage.store_embedding(EmbeddingRecord(
-        item_id=node.id, model_id=embedder.model_id, vector=vectors[0]
-    ))
+    await storage.store_embedding(
+        EmbeddingRecord(item_id=node.id, model_id=embedder.model_id, vector=vectors[0])
+    )
     return node
 
 
 async def _fact(storage, embedder, content, *, claim_kind=None):
     return await _node(
-        storage, embedder,
+        storage,
+        embedder,
         Fact(content=content, source_id="seg1", claim_kind=claim_kind),
     )
 
@@ -87,26 +90,30 @@ async def _only(storage, kind: DecisionKind):
 
 
 class TestIngest:
-    async def test_one_row_for_the_call_and_not_one_per_fact(
-        self, storage, embedder, config
-    ):
+    async def test_one_row_for_the_call_and_not_one_per_fact(self, storage, embedder, config):
         """Forty-four facts out of one document is one reading of one document,
         and a row each would make ingest the journal's dominant writer by orders
         of magnitude while still describing a single act (§4.1)."""
         seg, _ = await tools.segment_text(
-            "Three things happened.", storage, embedder, config, judge=CRITIC,
+            "Three things happened.",
+            storage,
+            embedder,
+            config,
+            judge=CRITIC,
         )
         await tools.store_decomposition(
             document_id=seg["document_id"],
-            segments=[{
-                "segment_id": seg["segments"][0]["segment_id"],
-                "topics": ["a topic"],
-                "facts": [
-                    {"content": "the first thing", "claim_kind": "event"},
-                    {"content": "the second thing", "claim_kind": "event"},
-                ],
-                "inferences": ["something follows"],
-            }],
+            segments=[
+                {
+                    "segment_id": seg["segments"][0]["segment_id"],
+                    "topics": ["a topic"],
+                    "facts": [
+                        {"content": "the first thing", "claim_kind": "event"},
+                        {"content": "the second thing", "claim_kind": "event"},
+                    ],
+                    "inferences": ["something follows"],
+                }
+            ],
             storage=storage,
             embedding_provider=embedder,
             judge=CRITIC,
@@ -116,23 +123,27 @@ class TestIngest:
         record = await _only(storage, DecisionKind.INGEST)
         assert record.judged_by == CRITIC
 
-    async def test_the_row_names_every_node_the_call_created(
-        self, storage, embedder, config
-    ):
+    async def test_the_row_names_every_node_the_call_created(self, storage, embedder, config):
         """The per-node judgments ride inside it — `claim_kind`, the two priors
         — and a reviewer opens them from `subject_ids`. That is the honest
         granularity, and it only works if the ids are all there."""
         seg, _ = await tools.segment_text(
-            "A report.", storage, embedder, config, judge=CRITIC,
+            "A report.",
+            storage,
+            embedder,
+            config,
+            judge=CRITIC,
         )
         await tools.store_decomposition(
             document_id=seg["document_id"],
-            segments=[{
-                "segment_id": seg["segments"][0]["segment_id"],
-                "topics": ["a topic"],
-                "facts": [{"content": "a fact", "claim_kind": "state"}],
-                "inferences": [],
-            }],
+            segments=[
+                {
+                    "segment_id": seg["segments"][0]["segment_id"],
+                    "topics": ["a topic"],
+                    "facts": [{"content": "a fact", "claim_kind": "state"}],
+                    "inferences": [],
+                }
+            ],
             storage=storage,
             embedding_provider=embedder,
             judge=CRITIC,
@@ -147,25 +158,34 @@ class TestIngest:
         """Splitting text into paragraphs is not a verdict anybody would
         review. The judgment pass over this document is the second step."""
         await tools.segment_text(
-            "A report.", storage, embedder, config,
-            published_by="The Gazette", judge=CRITIC,
+            "A report.",
+            storage,
+            embedder,
+            config,
+            published_by="The Gazette",
+            judge=CRITIC,
         )
 
         assert await storage.query_decisions() == []
 
-    async def test_a_call_that_stored_nothing_journals_nothing(
-        self, storage, embedder, config
-    ):
+    async def test_a_call_that_stored_nothing_journals_nothing(self, storage, embedder, config):
         """A row with no subjects is a decision about nothing."""
         seg, _ = await tools.segment_text(
-            "A report.", storage, embedder, config,
+            "A report.",
+            storage,
+            embedder,
+            config,
         )
         await tools.store_decomposition(
             document_id=seg["document_id"],
-            segments=[{
-                "segment_id": seg["segments"][0]["segment_id"],
-                "topics": [], "facts": [], "inferences": [],
-            }],
+            segments=[
+                {
+                    "segment_id": seg["segments"][0]["segment_id"],
+                    "topics": [],
+                    "facts": [],
+                    "inferences": [],
+                }
+            ],
             storage=storage,
             embedding_provider=embedder,
             judge=CRITIC,
@@ -174,18 +194,20 @@ class TestIngest:
 
         assert await storage.query_decisions(kinds=[DecisionKind.INGEST]) == []
 
-    async def test_an_unattributed_ingest_still_journals(
-        self, storage, embedder, config
-    ):
+    async def test_an_unattributed_ingest_still_journals(self, storage, embedder, config):
         """A graph that requires nobody still wants to know when this was
         decided and whether anyone has checked it (§3.3.1)."""
         seg, _ = await tools.segment_text("A report.", storage, embedder, config)
         await tools.store_decomposition(
             document_id=seg["document_id"],
-            segments=[{
-                "segment_id": seg["segments"][0]["segment_id"],
-                "topics": ["a topic"], "facts": [], "inferences": [],
-            }],
+            segments=[
+                {
+                    "segment_id": seg["segments"][0]["segment_id"],
+                    "topics": ["a topic"],
+                    "facts": [],
+                    "inferences": [],
+                }
+            ],
             storage=storage,
             embedding_provider=embedder,
             metacontext_id=BASE_METACONTEXT_ID,
@@ -203,8 +225,12 @@ class TestSupersession:
         node = await _fact(storage, embedder, "the office is in Leeds")
 
         await tools.update(
-            node.id, "the office is in Manchester", storage, embedder,
-            because="it_was_wrong", judge=CRITIC,
+            node.id,
+            "the office is in Manchester",
+            storage,
+            embedder,
+            because="it_was_wrong",
+            judge=CRITIC,
         )
 
         record = await _only(storage, DecisionKind.CORRECTION)
@@ -215,8 +241,12 @@ class TestSupersession:
         node = await _fact(storage, embedder, "Labour is in opposition")
 
         await tools.update(
-            node.id, "Labour is in government", storage, embedder,
-            because="the_world_changed", judge=CRITIC,
+            node.id,
+            "Labour is in government",
+            storage,
+            embedder,
+            because="the_world_changed",
+            judge=CRITIC,
         )
 
         await _only(storage, DecisionKind.WORLD_CHANGE)
@@ -228,8 +258,12 @@ class TestSupersession:
         node = await _fact(storage, embedder, "the figure is 500,000")
 
         result, _ = await tools.update(
-            node.id, "the figure is 5,000,000", storage, embedder,
-            because="it_was_wrong", judge=CRITIC,
+            node.id,
+            "the figure is 5,000,000",
+            storage,
+            embedder,
+            because="it_was_wrong",
+            judge=CRITIC,
         )
 
         record = await _only(storage, DecisionKind.CORRECTION)
@@ -240,7 +274,11 @@ class TestSupersession:
         winner = await _fact(storage, embedder, "the figure is 5,000,000")
 
         await tools.supersede_by(
-            loser.id, winner.id, storage, because="the_world_changed", judge=CRITIC,
+            loser.id,
+            winner.id,
+            storage,
+            because="the_world_changed",
+            judge=CRITIC,
         )
 
         record = await _only(storage, DecisionKind.WORLD_CHANGE)
@@ -249,12 +287,17 @@ class TestSupersession:
 
 class TestMergeAndItsUndo:
     async def _merged(self, storage, embedder, *, judge=CRITIC):
-        a = await _fact(storage, embedder, "the treaty was signed in Vienna",
-                        claim_kind=ClaimKind.STATE)
-        b = await _fact(storage, embedder, "the treaty was signed in Vienna",
-                        claim_kind=ClaimKind.STATE)
+        a = await _fact(
+            storage, embedder, "the treaty was signed in Vienna", claim_kind=ClaimKind.STATE
+        )
+        b = await _fact(
+            storage, embedder, "the treaty was signed in Vienna", claim_kind=ClaimKind.STATE
+        )
         result, _ = await tools.merge_facts(
-            [a.id, b.id], "the treaty was signed in Vienna", storage, embedder,
+            [a.id, b.id],
+            "the treaty was signed in Vienna",
+            storage,
+            embedder,
             judge=judge,
         )
         assert result["merged"] is True
@@ -269,9 +312,7 @@ class TestMergeAndItsUndo:
         assert record.subject_ids[0] == survivor
         assert set(record.subject_ids) == {survivor, *sources}
 
-    async def test_a_reversal_both_reviews_and_supersedes_the_merge(
-        self, storage, embedder
-    ):
+    async def test_a_reversal_both_reviews_and_supersedes_the_merge(self, storage, embedder):
         """The one case where the two fields are set together (§4): agent 2
         overturning agent 1's merge has checked it *and* replaced it."""
         survivor, _ = await self._merged(storage, embedder)
@@ -296,20 +337,22 @@ class TestMergeAndItsUndo:
         assert survivor in (await _only(storage, DecisionKind.REVERSAL)).subject_ids
         assert await storage.get_node(survivor) is None
 
-    async def test_reversing_a_merge_older_than_the_journal_cites_nothing(
-        self, storage, embedder
-    ):
+    async def test_reversing_a_merge_older_than_the_journal_cites_nothing(self, storage, embedder):
         """The journal cannot point at a row that does not exist, and inventing
         a target would be worse than the blank."""
         from epimemer.pipelines.graph_construction.versioning import merge_nodes
 
-        a = await _fact(storage, embedder, "the treaty was signed in Vienna",
-                        claim_kind=ClaimKind.STATE)
-        b = await _fact(storage, embedder, "the treaty was signed in Vienna",
-                        claim_kind=ClaimKind.STATE)
+        a = await _fact(
+            storage, embedder, "the treaty was signed in Vienna", claim_kind=ClaimKind.STATE
+        )
+        b = await _fact(
+            storage, embedder, "the treaty was signed in Vienna", claim_kind=ClaimKind.STATE
+        )
         survivor = Fact(
-            content="the treaty was signed in Vienna", source_id="seg1",
-            claim_kind=ClaimKind.STATE, extraction_method="agent:merge",
+            content="the treaty was signed in Vienna",
+            source_id="seg1",
+            claim_kind=ClaimKind.STATE,
+            extraction_method="agent:merge",
             metadata={"merged_from": [a.id, b.id]},
         )
         await merge_nodes([a, b], survivor, storage, embedder)
@@ -356,9 +399,7 @@ class TestRecordingAPairVerdictTwiceIsAReview:
         await tools.record_contradiction(a.id, b.id, storage, judge=CRITIC)
         original = await _only(storage, DecisionKind.CONTRADICTION)
 
-        result, _ = await tools.record_contradiction(
-            a.id, b.id, storage, judge=EDITOR
-        )
+        result, _ = await tools.record_contradiction(a.id, b.id, storage, judge=EDITOR)
 
         assert result["created"] is False, "the edge is untouched"
         rows = await storage.query_decisions(kinds=[DecisionKind.CONTRADICTION])
@@ -379,9 +420,7 @@ class TestRecordingAPairVerdictTwiceIsAReview:
         [confirmation] = [r for r in rows if r.id != original.id]
         assert confirmation.reviews == original.id
 
-    async def test_a_third_agent_confirms_the_original_and_not_the_second(
-        self, storage, embedder
-    ):
+    async def test_a_third_agent_confirms_the_original_and_not_the_second(self, storage, embedder):
         """A confirmation of a confirmation buries the decision it was about."""
         a, b = await self._pair(storage, embedder)
         await tools.record_contradiction(a.id, b.id, storage, judge=CRITIC)
@@ -393,17 +432,11 @@ class TestRecordingAPairVerdictTwiceIsAReview:
         )
 
         rows = await storage.query_decisions(kinds=[DecisionKind.CONTRADICTION])
-        assert [r.reviews for r in rows if r.judged_by.agent_id == "third"] == [
-            original.id
-        ]
+        assert [r.reviews for r in rows if r.judged_by.agent_id == "third"] == [original.id]
 
-    async def test_an_edge_older_than_the_journal_leaves_the_pointer_blank(
-        self, storage, embedder
-    ):
+    async def test_an_edge_older_than_the_journal_leaves_the_pointer_blank(self, storage, embedder):
         a, b = await self._pair(storage, embedder)
-        await tools._ensure_symmetric_edge(
-            a.id, b.id, EdgeType.CONTRADICTION, storage
-        )
+        await tools._ensure_symmetric_edge(a.id, b.id, EdgeType.CONTRADICTION, storage)
 
         await tools.record_contradiction(a.id, b.id, storage, judge=EDITOR)
 
@@ -434,22 +467,20 @@ class TestTheSmallerWriters:
     async def test_judging_importance_journals_once(self, storage, embedder):
         node = await _fact(storage, embedder, "a claim worth keeping")
 
-        await tools.judge_importance(
-            node.id, "up", "cited again", storage, judge=CRITIC
-        )
+        await tools.judge_importance(node.id, "up", "cited again", storage, judge=CRITIC)
 
         record = await _only(storage, DecisionKind.IMPORTANCE)
         assert record.subject_ids == [node.id]
 
     async def test_restoring_journals_a_reactivation(self, storage, embedder):
         node = await _fact(storage, embedder, "a trivial aside")
-        await tools.apply_reflection(
-            storage, embedder, archivals=[node.id], judge=CRITIC
-        )
+        await tools.apply_reflection(storage, embedder, archivals=[node.id], judge=CRITIC)
 
         await tools.restore(
-            storage, archive_data={"nodes": [], "edges": []},
-            node_ids=None, judge=EDITOR,
+            storage,
+            archive_data={"nodes": [], "edges": []},
+            node_ids=None,
+            judge=EDITOR,
         )
         # Nothing came back, so nothing was decided.
         assert await storage.query_decisions(kinds=[DecisionKind.REACTIVATION]) == []
@@ -478,11 +509,15 @@ class TestReflectionAppliesManyDecisionsAndJournalsEachOne:
         b = await _fact(storage, embedder, "the treaty was signed at Vienna")
 
         result, _ = await tools.apply_reflection(
-            storage, embedder,
-            similarities=[{
-                "pair": [a.id, b.id], "verdict": "distinct",
-                "because": "different treaties",
-            }],
+            storage,
+            embedder,
+            similarities=[
+                {
+                    "pair": [a.id, b.id],
+                    "verdict": "distinct",
+                    "because": "different treaties",
+                }
+            ],
             judge=CRITIC,
         )
 
@@ -490,29 +525,36 @@ class TestReflectionAppliesManyDecisionsAndJournalsEachOne:
         record = await _only(storage, DecisionKind.SIMILARITY)
         assert set(record.subject_ids) == {a.id, b.id}
 
-    async def test_a_withdrawn_similarity_journals_a_retraction(
-        self, storage, embedder
-    ):
+    async def test_a_withdrawn_similarity_journals_a_retraction(self, storage, embedder):
         """Its own kind, not `REVERSAL`: a merge reversal deletes the survivor,
         and a reviewer selecting `REVERSAL` to audit that must not get rows
         where nothing was destroyed."""
         a = await _fact(storage, embedder, "the treaty was signed in Vienna")
         b = await _fact(storage, embedder, "the treaty was signed at Vienna")
         await tools.apply_reflection(
-            storage, embedder,
-            similarities=[{
-                "pair": [a.id, b.id], "verdict": "one_claim", "because": "one claim",
-            }],
+            storage,
+            embedder,
+            similarities=[
+                {
+                    "pair": [a.id, b.id],
+                    "verdict": "one_claim",
+                    "because": "one claim",
+                }
+            ],
             judge=CRITIC,
         )
         original = await _only(storage, DecisionKind.SIMILARITY)
 
         result, _ = await tools.apply_reflection(
-            storage, embedder,
-            similarities=[{
-                "pair": [a.id, b.id], "verdict": "distinct",
-                "because": "on reflection, different treaties",
-            }],
+            storage,
+            embedder,
+            similarities=[
+                {
+                    "pair": [a.id, b.id],
+                    "verdict": "distinct",
+                    "because": "on reflection, different treaties",
+                }
+            ],
             judge=CRITIC,
         )
 
@@ -522,32 +564,34 @@ class TestReflectionAppliesManyDecisionsAndJournalsEachOne:
         assert record.reviews == original.id, "a withdrawal checked what it undid"
         assert record.supersedes == original.id, "and says it no longer stands"
 
-    async def test_a_repeated_withdrawal_journals_one_retraction(
-        self, storage, embedder
-    ):
+    async def test_a_repeated_withdrawal_journals_one_retraction(self, storage, embedder):
         """A retried batch must not read as two agents disowning the pair on
         two occasions."""
         a = await _fact(storage, embedder, "the treaty was signed in Vienna")
         b = await _fact(storage, embedder, "the treaty was signed at Vienna")
         for verdict in ("one_claim", "distinct", "distinct"):
             await tools.apply_reflection(
-                storage, embedder,
-                similarities=[{
-                    "pair": [a.id, b.id], "verdict": verdict, "because": "judged",
-                }],
+                storage,
+                embedder,
+                similarities=[
+                    {
+                        "pair": [a.id, b.id],
+                        "verdict": verdict,
+                        "because": "judged",
+                    }
+                ],
                 judge=CRITIC,
             )
 
-        assert len(await storage.query_decisions(
-            kinds=[DecisionKind.RETRACTION]
-        )) == 1
+        assert len(await storage.query_decisions(kinds=[DecisionKind.RETRACTION])) == 1
 
     async def test_a_refused_similarity_journals_nothing(self, storage, embedder):
         a = await _fact(storage, embedder, "the treaty was signed in Vienna")
         b = await _fact(storage, embedder, "the treaty was signed at Vienna")
 
         result, _ = await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             similarities=[{"pair": [a.id, b.id], "verdict": "distinct", "because": ""}],
             judge=CRITIC,
         )
@@ -560,7 +604,8 @@ class TestReflectionAppliesManyDecisionsAndJournalsEachOne:
         b = await _topic(storage, embedder, "Salzburg")
 
         await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             parents=[{"children_ids": [a.id, b.id], "content": "Austrian cities"}],
             judge=CRITIC,
         )
@@ -572,7 +617,8 @@ class TestReflectionAppliesManyDecisionsAndJournalsEachOne:
         parent = await _topic(storage, embedder, "European history")
 
         await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             splits=[{"topic_id": parent.id, "subtopics": ["the Congress", "the wars"]}],
             judge=CRITIC,
         )
@@ -585,7 +631,8 @@ class TestReflectionAppliesManyDecisionsAndJournalsEachOne:
         topic = await _topic(storage, embedder, "Vienna")
 
         await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             enrichments=[{"topic_id": topic.id, "new_content": "Vienna, in Austria"}],
             judge=CRITIC,
         )
@@ -596,48 +643,52 @@ class TestReflectionAppliesManyDecisionsAndJournalsEachOne:
     async def test_an_archival_sweep_is_one_row(self, storage, embedder):
         """Approving a batch of trivial nodes is a single pass over a single
         nomination list, not twelve independent verdicts."""
-        nodes = [
-            await _fact(storage, embedder, f"a trivial aside {n}") for n in range(3)
-        ]
+        nodes = [await _fact(storage, embedder, f"a trivial aside {n}") for n in range(3)]
 
         await tools.apply_reflection(
-            storage, embedder, archivals=[n.id for n in nodes], judge=CRITIC,
+            storage,
+            embedder,
+            archivals=[n.id for n in nodes],
+            judge=CRITIC,
         )
 
         record = await _only(storage, DecisionKind.ARCHIVAL)
         assert set(record.subject_ids) == {n.id for n in nodes}
 
-    async def test_a_reflection_supersession_journals_its_reason(
-        self, storage, embedder
-    ):
+    async def test_a_reflection_supersession_journals_its_reason(self, storage, embedder):
         loser = await _fact(storage, embedder, "the figure is 500,000")
         winner = await _fact(storage, embedder, "the figure is 5,000,000")
 
         await tools.apply_reflection(
-            storage, embedder,
-            supersessions=[{
-                "old_id": loser.id, "by_id": winner.id, "because": "it_was_wrong",
-            }],
+            storage,
+            embedder,
+            supersessions=[
+                {
+                    "old_id": loser.id,
+                    "by_id": winner.id,
+                    "because": "it_was_wrong",
+                }
+            ],
             judge=CRITIC,
         )
 
         record = await _only(storage, DecisionKind.CORRECTION)
         assert set(record.subject_ids) == {loser.id, winner.id}
 
-    async def test_an_importance_judgment_journals_once_not_twice(
-        self, storage, embedder
-    ):
+    async def test_an_importance_judgment_journals_once_not_twice(self, storage, embedder):
         """It is reached through `judge_importance`, which writes its own row.
         One act, one row, whichever way it was called."""
         node = await _fact(storage, embedder, "a claim worth keeping")
 
         await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             judgments=[{"node_id": node.id, "direction": "down", "reason": "minor"}],
             judge=CRITIC,
         )
 
         await _only(storage, DecisionKind.IMPORTANCE)
+
 
 class TestAcceptedBoundaries:
     """The other gap `ATTRIBUTION.md` named. Accepting a boundary edits an
@@ -655,46 +706,59 @@ class TestAcceptedBoundaries:
             return ValidityInterval(
                 start={
                     "instant_kind": "precise",
-                    "at": datetime(start, 1, 1, tzinfo=timezone.utc).isoformat(),
+                    "at": datetime(start, 1, 1, tzinfo=UTC).isoformat(),
                 },
                 end={"instant_kind": "unknown"},
                 basis=IntervalBasis.STATED,
             )
 
-        leningrad = Fact(content="the city is called Leningrad",
-                         source_id="s1", value=ValueSignal())
-        petersburg = Fact(content="the city is called Saint Petersburg",
-                          source_id="s1", value=ValueSignal())
+        leningrad = Fact(
+            content="the city is called Leningrad", source_id="s1", value=ValueSignal()
+        )
+        petersburg = Fact(
+            content="the city is called Saint Petersburg", source_id="s1", value=ValueSignal()
+        )
         for node, document, span in (
             (leningrad, older, period(1924)),
             (petersburg, newer, period(1991)),
         ):
             await storage.store_node(node)
-            await storage.store_edge(NodeEdge(
-                src_id=node.id, dst_id=document.id,
-                type=EdgeType.SOURCED_FROM, validity=[span],
-            ))
+            await storage.store_edge(
+                NodeEdge(
+                    src_id=node.id,
+                    dst_id=document.id,
+                    type=EdgeType.SOURCED_FROM,
+                    validity=[span],
+                )
+            )
         await storage.set_node_status_tx(
-            [leningrad], status=NodeStatus.HISTORICAL,
-            at=datetime.now(timezone.utc),
+            [leningrad],
+            status=NodeStatus.HISTORICAL,
+            at=datetime.now(UTC),
         )
-        await storage.store_edge(NodeEdge(
-            src_id=leningrad.id, dst_id=petersburg.id,
-            type=EdgeType.TEMPORALLY_FOLLOWED_BY,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=leningrad.id,
+                dst_id=petersburg.id,
+                type=EdgeType.TEMPORALLY_FOLLOWED_BY,
+            )
+        )
         return leningrad, older
 
-    async def test_accepting_one_journals_the_claim_and_the_source(
-        self, storage, embedder
-    ):
+    async def test_accepting_one_journals_the_claim_and_the_source(self, storage, embedder):
         leningrad, older = await self._renaming(storage)
 
         result, _ = await tools.apply_reflection(
-            storage, embedder,
-            boundaries=[{
-                "node_id": leningrad.id, "source_id": older.id,
-                "endpoint": "end", "at": "1991-01-01T00:00:00+00:00",
-            }],
+            storage,
+            embedder,
+            boundaries=[
+                {
+                    "node_id": leningrad.id,
+                    "source_id": older.id,
+                    "endpoint": "end",
+                    "at": "1991-01-01T00:00:00+00:00",
+                }
+            ],
             judge=CRITIC,
         )
 
@@ -707,11 +771,16 @@ class TestAcceptedBoundaries:
         leningrad, older = await self._renaming(storage)
 
         result, _ = await tools.apply_reflection(
-            storage, embedder,
-            boundaries=[{
-                "node_id": leningrad.id, "source_id": older.id,
-                "endpoint": "end", "at": "1900-01-01T00:00:00+00:00",
-            }],
+            storage,
+            embedder,
+            boundaries=[
+                {
+                    "node_id": leningrad.id,
+                    "source_id": older.id,
+                    "endpoint": "end",
+                    "at": "1900-01-01T00:00:00+00:00",
+                }
+            ],
             judge=CRITIC,
         )
 
@@ -749,8 +818,7 @@ class TestNoKindGoesUnwritten:
         import epimemer
 
         source = "\n".join(
-            path.read_text()
-            for path in pathlib.Path(epimemer.__file__).parent.rglob("*.py")
+            path.read_text() for path in pathlib.Path(epimemer.__file__).parent.rglob("*.py")
         )
         # `supersession_kind` maps a status to one of the two supersession
         # kinds, so those are written by name in `types.py` rather than at a
@@ -758,10 +826,7 @@ class TestNoKindGoesUnwritten:
         # exception at all. Kept as an assertion of *where*, which is the part
         # a reader would otherwise have to go looking for.
         assert "SUPERSESSION_KINDS" in source
-        unwritten = {
-            kind for kind in DecisionKind
-            if f"DecisionKind.{kind.name}" not in source
-        }
+        unwritten = {kind for kind in DecisionKind if f"DecisionKind.{kind.name}" not in source}
 
         assert unwritten == set()
 
@@ -801,9 +866,7 @@ class TestAFailedJournalWriteDoesNotUndoTheDecision:
         b = await _topic(storage, embedder, "Austria")
         self._breaks_the_journal(storage)
 
-        result, _ = await tools.link(
-            a.id, b.id, storage, relation="capital_of", judge=CRITIC
-        )
+        result, _ = await tools.link(a.id, b.id, storage, relation="capital_of", judge=CRITIC)
 
         assert result["edge_id"]
         assert await storage.get_edges_from(a.id), "the decision itself landed"
@@ -816,12 +879,14 @@ class TestAFailedJournalWriteDoesNotUndoTheDecision:
 
         result, _ = await tools.store_decomposition(
             document_id=seg["document_id"],
-            segments=[{
-                "segment_id": seg["segments"][0]["segment_id"],
-                "topics": ["a topic"],
-                "facts": [{"content": "a fact", "claim_kind": "state"}],
-                "inferences": [],
-            }],
+            segments=[
+                {
+                    "segment_id": seg["segments"][0]["segment_id"],
+                    "topics": ["a topic"],
+                    "facts": [{"content": "a fact", "claim_kind": "state"}],
+                    "inferences": [],
+                }
+            ],
             storage=storage,
             embedding_provider=embedder,
             judge=CRITIC,
@@ -842,9 +907,7 @@ class TestAFailedJournalWriteDoesNotUndoTheDecision:
         self._breaks_the_journal(storage)
 
         with caplog.at_level("WARNING", logger="epimemer.mcp.tools"):
-            await tools.judge_importance(
-                node.id, "up", "cited again", storage, judge=CRITIC
-            )
+            await tools.judge_importance(node.id, "up", "cited again", storage, judge=CRITIC)
 
         [record] = [r for r in caplog.records if "journal" in r.getMessage()]
         assert "importance" in record.getMessage()
@@ -856,6 +919,4 @@ class TestAFailedJournalWriteDoesNotUndoTheDecision:
         can ask — `_journal_pair_judgment` is the one that does."""
         self._breaks_the_journal(storage)
 
-        assert await tools.journal(
-            storage, DecisionKind.MERGE, ["a", "b"], judge=None
-        ) is None
+        assert await tools.journal(storage, DecisionKind.MERGE, ["a", "b"], judge=None) is None

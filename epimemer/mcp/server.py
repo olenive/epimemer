@@ -11,7 +11,7 @@ import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, nullcontext
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from fastmcp import Context, FastMCP
@@ -19,7 +19,6 @@ from fastmcp.server.elicitation import AcceptedElicitation
 
 from epimemer.core.types import JudgeRef
 from epimemer.logging.structured import ToolInvocationLog, log_tool_call, setup_logging
-from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
 from epimemer.mcp import tools
 from epimemer.mcp.config import (
     create_embedding_provider,
@@ -35,6 +34,7 @@ from epimemer.mcp.retrieval_records import (
     structural_only,
 )
 from epimemer.mcp.types import ResponseMeta, ToolResponse
+from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
 from epimemer.visualization.events import RetrievalRecorded
 
 
@@ -47,8 +47,8 @@ def _parse_utc(value: str) -> datetime:
     """
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _resolve_windows(
@@ -126,9 +126,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         logger = logging.getLogger(__name__)
         event_bus = create_event_bus()
         raw_storage = storage  # pre-instrumentation, for viz snapshot reads
-        storage = instrument_storage(
-            storage, event_bus, default_threshold=config.reflect_threshold
-        )
+        storage = instrument_storage(storage, event_bus, default_threshold=config.reflect_threshold)
 
         viz_session = SessionInfo(
             session_id=uuid4().hex,
@@ -156,8 +154,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             ingest_url,
             default_reflect_threshold=config.reflect_threshold,
             records=lambda: [
-                json.loads(record.model_dump_json())
-                for record in records_of(retrievals)
+                json.loads(record.model_dump_json()) for record in records_of(retrievals)
             ],
         )
         logger.info(
@@ -208,15 +205,17 @@ def _log(
     error: str | None = None,
 ) -> None:
     """Emit a structured log entry for a tool call."""
-    log_tool_call(ToolInvocationLog(
-        tool_name=tool_name,
-        timestamp=datetime.now(timezone.utc),
-        input_summary=input_summary,
-        output_summary=output_summary,
-        latency_ms=meta.latency_ms,
-        nodes_touched=meta.nodes_returned,
-        error=error,
-    ))
+    log_tool_call(
+        ToolInvocationLog(
+            tool_name=tool_name,
+            timestamp=datetime.now(UTC),
+            input_summary=input_summary,
+            output_summary=output_summary,
+            latency_ms=meta.latency_ms,
+            nodes_touched=meta.nodes_returned,
+            error=error,
+        )
+    )
 
 
 def _error_response(error: str) -> str:
@@ -265,10 +264,12 @@ async def _record_response(
     # structural metadata only, and the payload stays here behind the
     # `retrievals` RPC for as long as this process lives.
     exposed = record if deps["config"].viz_host in _LOOPBACK_HOSTS else structural_only(record)
-    await bus.publish(RetrievalRecorded(
-        graph=record.graph,
-        record=json.loads(exposed.model_dump_json()),
-    ))
+    await bus.publish(
+        RetrievalRecorded(
+            graph=record.graph,
+            record=json.loads(exposed.model_dump_json()),
+        )
+    )
 
 
 # The tools that move the active graph, and so take the guard's mover turn
@@ -294,12 +295,14 @@ MOVES_THE_GRAPH = frozenset({"epimemer.use_graph", "epimemer.review"})
 # server-level. Every other tool must name the graph it means, and a tool absent
 # from both this list and the parameter is a hole — `tests/mcp/test_graph_gate.py`
 # reads this set and asserts the complement.
-NAMES_ITS_OWN_GRAPH = frozenset({
-    "epimemer.list_graphs",
-    "epimemer.use_graph",
-    "epimemer.delete_graph",
-    "epimemer.viz_status",
-})
+NAMES_ITS_OWN_GRAPH = frozenset(
+    {
+        "epimemer.list_graphs",
+        "epimemer.use_graph",
+        "epimemer.delete_graph",
+        "epimemer.viz_status",
+    }
+)
 
 
 def _graph_turn(deps: dict, tool_name: str, waits_for_user: bool):
@@ -326,10 +329,7 @@ def _wrong_graph_summary(result: dict, meta: ResponseMeta) -> str:
     to each know about a refusal none of them produces — which is how the
     refusal message got swallowed before the gate moved to the boundary.
     """
-    return (
-        f"refused: expected graph {result['expected_graph']} "
-        f"but on {result['active_graph']}"
-    )
+    return f"refused: expected graph {result['expected_graph']} but on {result['active_graph']}"
 
 
 async def _run_with_timeout(
@@ -377,7 +377,8 @@ async def _run_with_timeout(
     try:
         async with _graph_turn(deps, tool_name, waits_for_user):
             mismatch = (
-                None if tool_name in NAMES_ITS_OWN_GRAPH
+                None
+                if tool_name in NAMES_ITS_OWN_GRAPH
                 else tools.wrong_graph(deps["storage"], expected_graph)
             )
             if mismatch is not None:
@@ -393,15 +394,14 @@ async def _run_with_timeout(
                 summarise = _wrong_graph_summary
             else:
                 result, meta = await (
-                    coro() if timeout is None
-                    else asyncio.wait_for(coro(), timeout=timeout)
+                    coro() if timeout is None else asyncio.wait_for(coro(), timeout=timeout)
                 )
         latency = (time.monotonic() - start) * 1000
         _log(tool_name, input_summary, summarise(result, meta), meta)
         response_text = _build_response(result, meta, latency)
         await _record_response(deps, tool_name, input_summary, response_text, meta)
         return response_text
-    except asyncio.TimeoutError:
+    except TimeoutError:
         latency = (time.monotonic() - start) * 1000
         error_msg = f"{tool_name} timed out after {timeout}s"
         _tool_logger.error(error_msg)
@@ -614,8 +614,8 @@ async def memory_store_decomposition(
             real-world claims: that is the conventional id and the ordinary
             answer, and it is what you want whenever the claims would hold in
             every other frame here. Like any frame, it has to exist in this
-            graph first — `create_metacontext` takes a chosen id. Pass a metacontext id for fiction, a
-            named source, or a perspective.
+            graph first — `create_metacontext` takes a chosen id. Pass a
+            metacontext id for fiction, a named source, or a perspective.
             It is required because a claim has to say which world it is about.
             A node with no frame is one nobody spoke for: nothing compares it,
             nothing merges it, and no scoped search returns it. A stated frame
@@ -630,8 +630,8 @@ async def memory_store_decomposition(
             graph, so one carried over from another names nothing here, and a
             node framed by an id that resolves nowhere shares a frame with no
             other node, so it is never compared, never merged, and missing from
-            every frame-scoped search including the frame you meant. A wrong id is refused, and the refusal lists the
-            frames that do exist.
+            every frame-scoped search including the frame you meant. A wrong id
+            is refused, and the refusal lists the frames that do exist.
         tags: Optional document-level tag names applied to every node. Each tag
             becomes (or reuses) a Topic linked by a tagged_with edge. Every node
             also gets a sourced_from edge to the document.
@@ -681,10 +681,13 @@ async def memory_store_decomposition(
         _do,
         ctx,
         f"doc={document_id} segments={len(segments)}",
-        lambda r, m: f"graph={r['active_graph']} nodes={m.nodes_returned} edges={r['edges_created']} timepoints={r['timepoints_proposed']} reflect={r['stores_since_reflect']}/{r['reflect_threshold']}",
+        lambda r, m: (
+            f"graph={r['active_graph']} nodes={m.nodes_returned} "
+            f"edges={r['edges_created']} timepoints={r['timepoints_proposed']} "
+            f"reflect={r['stores_since_reflect']}/{r['reflect_threshold']}"
+        ),
         expected_graph=expected_graph,
     )
-
 
 
 @mcp.tool(name="search")
@@ -1491,10 +1494,7 @@ async def memory_configure_merge(
         ),
         ctx,
         f"undo_depth={undo_depth} cycle_limit={cycle_limit} clear={clear}",
-        lambda r, m: (
-            f"undo_depth={r['merge_undo_depth']} "
-            f"cycle_limit={r['merge_cycle_limit']}"
-        ),
+        lambda r, m: f"undo_depth={r['merge_undo_depth']} cycle_limit={r['merge_cycle_limit']}",
         expected_graph=expected_graph,
     )
 
@@ -1847,20 +1847,19 @@ async def memory_apply_reflection(
             f"applied={m.nodes_returned}"
             + (
                 f" similarities_refused={len(r['similarities_refused'])}"
-                if r["similarities_refused"] else ""
+                if r["similarities_refused"]
+                else ""
             )
             + (
-                f" relation_verdicts_refused="
-                f"{len(r['relation_verdicts_refused'])}"
-                if r["relation_verdicts_refused"] else ""
+                f" relation_verdicts_refused={len(r['relation_verdicts_refused'])}"
+                if r["relation_verdicts_refused"]
+                else ""
             )
-            + (
-                f" parents_refused={len(r['parents_refused'])}"
-                if r["parents_refused"] else ""
-            )
+            + (f" parents_refused={len(r['parents_refused'])}" if r["parents_refused"] else "")
             + (
                 f" topic_merges_refused={len(r['topic_merges_refused'])}"
-                if r["topic_merges_refused"] else ""
+                if r["topic_merges_refused"]
+                else ""
             )
         ),
         expected_graph=expected_graph,
@@ -1953,12 +1952,12 @@ async def epimemer_review(
         ctx,
         f"mode={mode} agent_id={agent_id} max_results={max_results}",
         lambda r, m: (
-            f"refused mode={mode}" if "refused" in r else
-            f"decisions={m.nodes_returned}/{r['decisions_scanned']} "
+            f"refused mode={mode}"
+            if "refused" in r
+            else f"decisions={m.nodes_returned}/{r['decisions_scanned']} "
             f"graph={r['graph']} unrated={r['unrated_count']} "
             f"unreviewed={r['unreviewed_count']} "
-            f"elsewhere={r['elsewhere']['total']}"
-            + (" truncated" if r["truncated"] else "")
+            f"elsewhere={r['elsewhere']['total']}" + (" truncated" if r["truncated"] else "")
         ),
         expected_graph=expected_graph,
     )
@@ -2104,9 +2103,9 @@ async def epimemer_rejudge(
         ctx,
         f"node_id={node_id}",
         lambda r, m: (
-            f"refused node={node_id}" if not r["rejudged"] else
-            f"rejudged={node_id} changed={','.join(r['changed'])} "
-            f"reviews={r['reviews']}"
+            f"refused node={node_id}"
+            if not r["rejudged"]
+            else f"rejudged={node_id} changed={','.join(r['changed'])} reviews={r['reviews']}"
         ),
         expected_graph=expected_graph,
     )
@@ -2165,9 +2164,9 @@ async def memory_reframe(
         ctx,
         f"node_id={node_id}",
         lambda r, m: (
-            f"refused node={node_id}" if not r["reframed"] else
-            f"reframed={node_id} withdrew={r['withdrew']} "
-            f"frames_now={len(r['frames_now'])}"
+            f"refused node={node_id}"
+            if not r["reframed"]
+            else f"reframed={node_id} withdrew={r['withdrew']} frames_now={len(r['frames_now'])}"
         ),
         expected_graph=expected_graph,
     )
@@ -2227,8 +2226,9 @@ async def memory_correct_interval(
         ctx,
         f"node_id={node_id} source_id={source_id}",
         lambda r, m: (
-            f"refused node={node_id}" if not r["corrected"] else
-            f"corrected={node_id} periods={len(r['now'])}"
+            f"refused node={node_id}"
+            if not r["corrected"]
+            else f"corrected={node_id} periods={len(r['now'])}"
         ),
         expected_graph=expected_graph,
     )
@@ -2303,9 +2303,7 @@ async def memory_topic_tree(
         ),
         ctx,
         f"topic={topic_id} depth={depth}",
-        lambda r, m: (
-            f"ancestors={len(r['ancestors'])} subtopics={len(r['subtopics'])}"
-        ),
+        lambda r, m: f"ancestors={len(r['ancestors'])} subtopics={len(r['subtopics'])}",
         expected_graph=expected_graph,
     )
 
@@ -2384,7 +2382,7 @@ async def memory_query_changes(
     """
     deps = ctx.lifespan_context
     resolved = _resolve_windows(
-        datetime.now(timezone.utc),
+        datetime.now(UTC),
         last_hours=last_hours,
         last_days=last_days,
         windows=windows,
@@ -2539,7 +2537,7 @@ async def memory_describe_relation(
         ),
         ctx,
         f"name={name[:50]}",
-        lambda r, m: ("described" if r.get("described") else "refused"),
+        lambda r, m: "described" if r.get("described") else "refused",
         expected_graph=expected_graph,
     )
 
@@ -2630,8 +2628,7 @@ async def memory_restore(
             judge=judge,
         ),
         ctx,
-        f"nodes={len((archive_data or {}).get('nodes', []))} "
-        f"reactivate={len(node_ids or [])}",
+        f"nodes={len((archive_data or {}).get('nodes', []))} reactivate={len(node_ids or [])}",
         lambda r, m: f"restored={r['nodes_restored']}",
         expected_graph=expected_graph,
     )
@@ -2990,8 +2987,7 @@ async def epimemer_configure_reflection(
         ctx,
         f"threshold={threshold}",
         lambda r, m: (
-            f"graph={r['graph']} threshold={r['reflect_threshold']} "
-            f"overridden={r['overridden']}"
+            f"graph={r['graph']} threshold={r['reflect_threshold']} overridden={r['overridden']}"
         ),
         expected_graph=expected_graph,
     )
@@ -3184,9 +3180,7 @@ async def _judge_for_write(
     storage = deps["storage"]
     approved = await storage.get_approved_agent_ids()
     return None, _error_response(
-        tools.judge_required_reason(
-            tools.approved_labels(approved, await storage.list_agents())
-        )
+        tools.judge_required_reason(tools.approved_labels(approved, await storage.list_agents()))
     )
 
 
@@ -3221,9 +3215,7 @@ async def _elicit_new_judge_name(
             response_type=str,
         )
     except Exception:
-        _tool_logger.info(
-            "claim_agent: no elicitation channel to the user for '%s'", proposed
-        )
+        _tool_logger.info("claim_agent: no elicitation channel to the user for '%s'", proposed)
         return _NO_CHANNEL
     if isinstance(answer, AcceptedElicitation):
         # An accepted-but-empty answer is agreement with the prompt, which named
@@ -3282,9 +3274,7 @@ async def _elicit_rename(ctx: Context, roster: list[tools.JudgeChoice]) -> str |
         return result["reason"]
     if not isinstance(same, AcceptedElicitation):
         return "Left both judges as they were."
-    merged = await tools.rename_judge(
-        storage, handle=handle, name=name, same_judge=True
-    )
+    merged = await tools.rename_judge(storage, handle=handle, name=name, same_judge=True)
     return merged.get("message") or merged.get("reason")
 
 
@@ -3295,9 +3285,7 @@ async def _elicit_rename(ctx: Context, roster: list[tools.JudgeChoice]) -> str |
 _PICKER_ROUNDS = 3
 
 
-async def _elicit_agent_id(
-    ctx: Context, proposed: str, description: str
-) -> tools.ApprovalOutcome:
+async def _elicit_agent_id(ctx: Context, proposed: str, description: str) -> tools.ApprovalOutcome:
     """Ask the **user** which judge this agent may be, in this graph (§2.3).
 
     `ctx.elicit` inverts the direction of an MCP call — the server asks, and the
@@ -3339,9 +3327,7 @@ async def _elicit_agent_id(
         choices: dict[str, dict[str, str]] = {
             choice.key: {"title": choice.title} for choice in roster
         }
-        choices[tools.NEW_JUDGE_CHOICE] = {
-            "title": f"A new judge — proposed: {proposed}"
-        }
+        choices[tools.NEW_JUDGE_CHOICE] = {"title": f"A new judge — proposed: {proposed}"}
         choices[tools.RENAME_JUDGE_CHOICE] = {
             "title": "Rename a judge — decisions follow the new name"
         }
@@ -3356,8 +3342,7 @@ async def _elicit_agent_id(
             answer = await ctx.elicit(message, response_type=choices)
         except Exception:
             _tool_logger.info(
-                "claim_agent: could not offer a judge picker; falling back to "
-                "free text"
+                "claim_agent: could not offer a judge picker; falling back to free text"
             )
             return await _elicit_new_judge_name(ctx, proposed, description)
         if not isinstance(answer, AcceptedElicitation):
@@ -3376,9 +3361,7 @@ async def _elicit_agent_id(
     return _DECLINED
 
 
-async def _elicit_description_confirmation(
-    ctx: Context, agent_id: str, description: str
-) -> bool:
+async def _elicit_description_confirmation(ctx: Context, agent_id: str, description: str) -> bool:
     """Ask the user to vouch for a *new* self-description under a known id.
 
     Softer than the id question by design: declining costs the confirmation, not
@@ -3458,8 +3441,8 @@ async def memory_claim_agent(
             agent_id=agent_id,
             description=description,
             approve_id=lambda proposed, text: _elicit_agent_id(ctx, proposed, text),
-            confirm_description=lambda claimed_id, text: (
-                _elicit_description_confirmation(ctx, claimed_id, text)
+            confirm_description=lambda claimed_id, text: _elicit_description_confirmation(
+                ctx, claimed_id, text
             ),
             confirmed_identity=await _confirmed_judge_here(ctx),
         )
@@ -3482,10 +3465,7 @@ async def memory_claim_agent(
         f"agent_id={agent_id}",
         lambda r, m: (
             f"status={r['status']}"
-            + (
-                f" name={r['name']} digest={r['digest']}"
-                if r["status"] == "claimed" else ""
-            )
+            + (f" name={r['name']} digest={r['digest']}" if r["status"] == "claimed" else "")
         ),
         # This call can be waiting on a person to read a prompt.
         waits_for_user=True,

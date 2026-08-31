@@ -1,6 +1,6 @@
 """Tests for in-memory storage backend."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -28,7 +28,6 @@ def store():
 
 
 class TestLifecycleNoOps:
-
     async def test_inmemory_connect_close_are_noops(self, store):
         # InMemoryStorage implements the full protocol, so connect/close exist
         # and do nothing — callers invoke them unconditionally (no hasattr).
@@ -47,7 +46,6 @@ class TestLifecycleNoOps:
 
 
 class TestDocumentStorage:
-
     async def test_store_and_retrieve(self, store):
         doc = RawDocument(content="Hello world")
         await store.store_document(doc)
@@ -61,7 +59,6 @@ class TestDocumentStorage:
 
 
 class TestSegmentStorage:
-
     async def test_store_and_retrieve(self, store):
         doc = RawDocument(content="Hello world")
         await store.store_document(doc)
@@ -82,7 +79,6 @@ class TestSegmentStorage:
 
 
 class TestNodeStorage:
-
     async def test_store_and_retrieve_topic(self, store):
         t = Topic(content="ML topic", source_id="s1")
         await store.store_node(t)
@@ -119,9 +115,7 @@ class TestNodeStorage:
     async def test_query_by_status(self, store):
         t = Topic(content="topic", source_id="s1")
         await store.store_node(t)
-        await store.set_node_status_tx(
-            [t], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
-        )
+        await store.set_node_status_tx([t], status=NodeStatus.SUPERSEDED, at=datetime.now(UTC))
         active = await store.query_nodes(status=NodeStatus.ACTIVE)
         superseded = await store.query_nodes(status=NodeStatus.SUPERSEDED)
         assert len(active) == 0
@@ -131,12 +125,11 @@ class TestNodeStorage:
         absent = Topic(content="never stored", source_id="s1")
         with pytest.raises(KeyError):
             await store.set_node_status_tx(
-                [absent], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+                [absent], status=NodeStatus.SUPERSEDED, at=datetime.now(UTC)
             )
 
 
 class TestEdgeStorage:
-
     async def test_store_and_retrieve_edges(self, store):
         e = NodeEdge(src_id="a", dst_id="b", type=EdgeType.SUPPORTS)
         await store.store_edge(e)
@@ -163,7 +156,6 @@ class TestEdgeStorage:
 
 
 class TestCounts:
-
     async def test_count_nodes_empty(self, store):
         counts = await store.count_nodes_by_type()
         assert counts == {NodeType.TOPIC: 0, NodeType.FACT: 0, NodeType.INFERENCE: 0}
@@ -181,9 +173,7 @@ class TestCounts:
     async def test_count_nodes_respects_status(self, store):
         topic = Topic(content="t", source_id="s1")
         await store.store_node(topic)
-        await store.set_node_status_tx(
-            [topic], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
-        )
+        await store.set_node_status_tx([topic], status=NodeStatus.SUPERSEDED, at=datetime.now(UTC))
         active = await store.count_nodes_by_type(status=NodeStatus.ACTIVE)
         superseded = await store.count_nodes_by_type(status=NodeStatus.SUPERSEDED)
         assert active[NodeType.TOPIC] == 0
@@ -192,9 +182,7 @@ class TestCounts:
     async def test_count_edges_by_type(self, store):
         await store.store_edge(NodeEdge(src_id="a", dst_id="b", type=EdgeType.SUPPORTS))
         await store.store_edge(NodeEdge(src_id="c", dst_id="b", type=EdgeType.SUPPORTS))
-        await store.store_edge(
-            NodeEdge(src_id="d", dst_id="a", type=EdgeType.DERIVED_FROM)
-        )
+        await store.store_edge(NodeEdge(src_id="d", dst_id="a", type=EdgeType.DERIVED_FROM))
         counts = await store.count_edges_by_type()
         assert counts[EdgeType.SUPPORTS] == 2
         assert counts[EdgeType.DERIVED_FROM] == 1
@@ -202,7 +190,6 @@ class TestCounts:
 
 
 class TestEmbeddingStorage:
-
     async def test_store_and_retrieve(self, store):
         emb = EmbeddingRecord(item_id="n1", model_id="model-a", vector=[0.1, 0.2])
         await store.store_embedding(emb)
@@ -252,7 +239,6 @@ class TestEmbeddingStorage:
 
 
 class TestTimelineStorage:
-
     async def test_store_and_retrieve(self, store):
         tl = Timeline(name="AI History", description="Key AI events")
         await store.store_timeline(tl)
@@ -282,7 +268,6 @@ class TestTimelineStorage:
 
 
 class TestMetacontextStorage:
-
     async def test_store_and_retrieve(self, store):
         mc = Metacontext(content="Real historical events")
         await store.store_metacontext(mc)
@@ -309,7 +294,6 @@ class TestMetacontextStorage:
 
 
 class TestMultiGraphContract:
-
     async def test_current_database_is_default(self, store):
         assert store.current_database == "default"
 
@@ -364,16 +348,18 @@ class TestAtomicOperations:
         fact = Fact(content="supporting fact", source_id="s1")
         await store.store_node(old)
         await store.store_node(fact)
-        await store.store_edge(
-            NodeEdge(src_id=fact.id, dst_id=old.id, type=EdgeType.SUPPORTS)
-        )
+        await store.store_edge(NodeEdge(src_id=fact.id, dst_id=old.id, type=EdgeType.SUPPORTS))
 
         new = Topic(content="new topic", source_id="s1")
         new_emb = EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.0, 1.0, 0.0])
         lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
         await store.supersede_node_tx(
-            old, new, new_emb, lineage,             status=NodeStatus.CORRECTED,
-            superseded_at=datetime.now(timezone.utc),
+            old,
+            new,
+            new_emb,
+            lineage,
+            status=NodeStatus.CORRECTED,
+            superseded_at=datetime.now(UTC),
         )
 
         assert (await store.get_node(old.id)).status == NodeStatus.CORRECTED
@@ -403,8 +389,12 @@ class TestAtomicOperations:
 
         with pytest.raises(RuntimeError, match="injected failure"):
             await store.supersede_node_tx(
-                old, new, new_emb, lineage,                 status=NodeStatus.CORRECTED,
-                superseded_at=datetime.now(timezone.utc),
+                old,
+                new,
+                new_emb,
+                lineage,
+                status=NodeStatus.CORRECTED,
+                superseded_at=datetime.now(UTC),
             )
 
         # Nothing applied: old still active, new node/embedding/edge absent.
@@ -436,9 +426,7 @@ class TestAtomicOperations:
             raise RuntimeError("injected failure")
 
         with pytest.raises(RuntimeError, match="injected failure"):
-            await store.write_batch_tx(
-                nodes=[t], edges=[edge], embeddings=boom_embeddings()
-            )
+            await store.write_batch_tx(nodes=[t], edges=[edge], embeddings=boom_embeddings())
 
         # The node, edge, and embedding added before the failure are all undone.
         assert await store.get_node(t.id) is None
@@ -456,36 +444,37 @@ class TestAtomicOperations:
         await store.store_edge(
             NodeEdge(src_id=newer.id, dst_id=old.id, type=EdgeType.SUPERSESSION_CANDIDATE)
         )
-        await store.store_edge(
-            NodeEdge(src_id=support.id, dst_id=old.id, type=EdgeType.SUPPORTS)
-        )
+        await store.store_edge(NodeEdge(src_id=support.id, dst_id=old.id, type=EdgeType.SUPPORTS))
 
         new = Topic(content="new", source_id="s1")
         new_emb = EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.0, 1.0])
         lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
         await store.supersede_node_tx(
-            old, new, new_emb, lineage,             status=NodeStatus.CORRECTED,
-            superseded_at=datetime.now(timezone.utc),
+            old,
+            new,
+            new_emb,
+            lineage,
+            status=NodeStatus.CORRECTED,
+            superseded_at=datetime.now(UTC),
         )
 
         # Knowledge edge migrated; review edge did not.
         assert len(await store.get_edges_to(new.id, edge_type=EdgeType.SUPPORTS)) == 1
         assert await store.get_edges_to(new.id, edge_type=EdgeType.SUPERSESSION_CANDIDATE) == []
         # The review edge still points at the old (now superseded) node.
-        assert len(
-            await store.get_edges_to(old.id, edge_type=EdgeType.SUPERSESSION_CANDIDATE)
-        ) == 1
+        assert len(await store.get_edges_to(old.id, edge_type=EdgeType.SUPERSESSION_CANDIDATE)) == 1
 
 
 class TestQueryChanges:
     # Fixed half-open window [W_START, W_END) with deterministic timestamps.
-    W_START = datetime(2026, 6, 10, tzinfo=timezone.utc)
-    W_END = datetime(2026, 6, 20, tzinfo=timezone.utc)
+    W_START = datetime(2026, 6, 10, tzinfo=UTC)
+    W_END = datetime(2026, 6, 20, tzinfo=UTC)
 
     async def test_returns_node_born_in_window(self, store):
         f = Fact(
-            content="born inside", source_id="s1",
-            created_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+            content="born inside",
+            source_id="s1",
+            created_at=datetime(2026, 6, 15, tzinfo=UTC),
         )
         await store.store_node(f)
         changed = await store.query_changes(start=self.W_START, end=self.W_END)
@@ -494,10 +483,11 @@ class TestQueryChanges:
     async def test_returns_node_retired_in_window(self, store):
         # Born before the window, retired inside it.
         t = Topic(
-            content="retired inside", source_id="s1",
-            created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+            content="retired inside",
+            source_id="s1",
+            created_at=datetime(2026, 6, 1, tzinfo=UTC),
             status=NodeStatus.SUPERSEDED,
-            superseded_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+            superseded_at=datetime(2026, 6, 15, tzinfo=UTC),
         )
         await store.store_node(t)
         changed = await store.query_changes(start=self.W_START, end=self.W_END)
@@ -505,12 +495,14 @@ class TestQueryChanges:
 
     async def test_excludes_node_fully_outside(self, store):
         before = Topic(
-            content="before", source_id="s1",
-            created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+            content="before",
+            source_id="s1",
+            created_at=datetime(2026, 6, 1, tzinfo=UTC),
         )
         after = Inference(
-            content="after", source_id="s1",
-            created_at=datetime(2026, 6, 25, tzinfo=timezone.utc),
+            content="after",
+            source_id="s1",
+            created_at=datetime(2026, 6, 25, tzinfo=UTC),
         )
         await store.store_node(before)
         await store.store_node(after)
@@ -519,12 +511,14 @@ class TestQueryChanges:
 
     async def test_respects_node_type_filter(self, store):
         f = Fact(
-            content="fact in", source_id="s1",
-            created_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+            content="fact in",
+            source_id="s1",
+            created_at=datetime(2026, 6, 15, tzinfo=UTC),
         )
         t = Topic(
-            content="topic in", source_id="s1",
-            created_at=datetime(2026, 6, 16, tzinfo=timezone.utc),
+            content="topic in",
+            source_id="s1",
+            created_at=datetime(2026, 6, 16, tzinfo=UTC),
         )
         await store.store_node(f)
         await store.store_node(t)
@@ -544,7 +538,6 @@ class TestQueryChanges:
 
 
 class TestSourceTopicAndRelationHelpers:
-
     async def test_get_node_by_content(self, store):
         t = Topic(content="BBC")
         await store.store_node(t)
@@ -556,10 +549,15 @@ class TestSourceTopicAndRelationHelpers:
         a, b = Topic(content="a"), Topic(content="b")
         await store.store_node(a)
         await store.store_node(b)
-        await store.store_edge(NodeEdge(
-            src_id=a.id, dst_id=b.id, type=EdgeType.RELATED,
-            label="funded_by", kind="attribution",
-        ))
+        await store.store_edge(
+            NodeEdge(
+                src_id=a.id,
+                dst_id=b.id,
+                type=EdgeType.RELATED,
+                label="funded_by",
+                kind="attribution",
+            )
+        )
         assert await store.get_relation_kind("funded_by") == "attribution"
         assert await store.get_relation_kind("unknown") is None
 
@@ -652,12 +650,10 @@ class TestStoreIsolation:
     async def test_write_batch_tx_does_not_alias_caller_objects(self, store):
         node = Topic(content="original", source_id="s1")
         edge_target = Topic(content="target", source_id="s1")
-        edge = NodeEdge(src_id=node.id, dst_id=edge_target.id, type=EdgeType.RELATED,
-                        label="cites")
+        edge = NodeEdge(src_id=node.id, dst_id=edge_target.id, type=EdgeType.RELATED, label="cites")
         emb = EmbeddingRecord(item_id=node.id, model_id="m", vector=[0.1])
 
-        await store.write_batch_tx(nodes=[node, edge_target], edges=[edge],
-                                   embeddings=[emb])
+        await store.write_batch_tx(nodes=[node, edge_target], edges=[edge], embeddings=[emb])
 
         node.content = "mutated"
         edge.label = "mutated"
@@ -680,9 +676,9 @@ class TestStoreIsolation:
             new_node=new,
             new_embedding=new_emb,
             lineage_edge=lineage,
-            superseded_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
-        status=NodeStatus.CORRECTED,
-    )
+            superseded_at=datetime(2024, 1, 1, tzinfo=UTC),
+            status=NodeStatus.CORRECTED,
+        )
 
         new.content = "mutated"
         lineage.label = "mutated"

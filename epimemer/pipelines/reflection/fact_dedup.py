@@ -134,10 +134,7 @@ async def merge_refusal(
             )
         )
 
-    oscillating = [
-        fact for fact in sources
-        if completed_merge_cycles(fact) >= cycle_limit
-    ]
+    oscillating = [fact for fact in sources if completed_merge_cycles(fact) >= cycle_limit]
     if oscillating:
         # Merged, reversed, merged again is an agent burning tokens on an
         # oscillation nobody wants. Not expected — but hard to catch after the
@@ -155,9 +152,7 @@ async def merge_refusal(
         # source set. Recorded rather than closed — the simple version is worth
         # having, and detecting deliberate evasion here would be solving a
         # problem nobody has.
-        counts = ", ".join(
-            str(completed_merge_cycles(fact)) for fact in oscillating
-        )
+        counts = ", ".join(str(completed_merge_cycles(fact)) for fact in oscillating)
         return MergeRefused(
             reason=(
                 f"{len(oscillating)} of these facts have already been merged and "
@@ -169,9 +164,7 @@ async def merge_refusal(
             )
         )
 
-    if not await all_pairs_above_threshold(
-        list(sources), storage, model_id, similarity_threshold
-    ):
+    if not await all_pairs_above_threshold(list(sources), storage, model_id, similarity_threshold):
         # The floor is the *nomination* bar rather than a second, higher one, and
         # it is not a second opinion on the agent's judgment. It says only: a
         # merge may collapse facts that could have been offered to each other as
@@ -225,6 +218,4 @@ def merged_confidence_basis(sources: Sequence[EpistemicNode]) -> str | None:
     rated = [node for node in sources if node.value.confidence is not None]
     if not rated:
         return None
-    return max(rated, key=lambda node: node.value.confidence).metadata.get(
-        "confidence_basis"
-    )
+    return max(rated, key=lambda node: node.value.confidence).metadata.get("confidence_basis")

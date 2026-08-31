@@ -61,14 +61,14 @@ assertions nobody made, and suppress its own future nominations while doing it.
 Similarity nominates; the agent judges.
 """
 
-from pydantic import BaseModel
-
 from collections.abc import Sequence
 
+from pydantic import BaseModel
+
 from epimemer.core.types import (
+    NOMINATED_STATUSES,
     EdgeType,
     JudgeRef,
-    NOMINATED_STATUSES,
     NodeEdge,
 )
 from epimemer.pipelines.reflection.review import same_frame
@@ -114,13 +114,12 @@ async def already_judged_pairs(
         return judged
     for edge_type in ALREADY_JUDGED_EDGE_TYPES:
         for direction in ("from", "to"):
-            found = await storage.get_edges_for(
-                ids, direction=direction, edge_type=edge_type
-            )
+            found = await storage.get_edges_for(ids, direction=direction, edge_type=edge_type)
             for edges in found.values():
                 for edge in edges:
                     judged.add(frozenset({edge.src_id, edge.dst_id}))
     return judged
+
 
 # The verdict is rejected rather than defaulted when it is not one of these. A
 # default would pick one of two writes that differ in exactly the way this
@@ -228,9 +227,7 @@ async def apply_similarity_decision(
     b = await storage.get_node(b_id)
     missing = [node_id for node_id, node in ((a_id, a), (b_id, b)) if node is None]
     if missing:
-        return SimilarityRefused(
-            pair=pair, reason=f"no such node: {', '.join(missing)}."
-        )
+        return SimilarityRefused(pair=pair, reason=f"no such node: {', '.join(missing)}.")
 
     # The sweep only ever nominates ACTIVE and HISTORICAL (`NOMINATED_STATUSES`),
     # so an `assessed` edge touching anything else suppresses nothing that could
@@ -254,9 +251,7 @@ async def apply_similarity_decision(
             ),
         )
 
-    standing_similarity = await symmetric_edge_between(
-        a_id, b_id, EdgeType.SIMILARITY, storage
-    )
+    standing_similarity = await symmetric_edge_between(a_id, b_id, EdgeType.SIMILARITY, storage)
     standing_retraction = await symmetric_edge_between(
         a_id, b_id, EdgeType.RETRACTED_SIMILARITY, storage
     )
@@ -333,6 +328,9 @@ async def apply_similarity_decision(
         edges_created += 1
 
     return SimilarityRecorded(
-        pair=pair, verdict=verdict, edge_ids=edge_ids, edges_created=edges_created,
+        pair=pair,
+        verdict=verdict,
+        edge_ids=edge_ids,
+        edges_created=edges_created,
         retracted=retracting,
     )

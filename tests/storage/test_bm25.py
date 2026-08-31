@@ -29,7 +29,15 @@ class TestAnalyze:
         a token nothing else in the graph contains is what BM25 can rank on.
         """
         assert analyze("Ticket JIRA-4417 E_TIMEOUT_503") == [
-            "ticket", "jira", "-", "4417", "e", "_", "timeout", "_", "503",
+            "ticket",
+            "jira",
+            "-",
+            "4417",
+            "e",
+            "_",
+            "timeout",
+            "_",
+            "503",
         ]
 
     def test_analyze_groups_runs_of_one_character_class(self):

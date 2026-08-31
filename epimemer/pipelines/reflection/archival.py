@@ -5,8 +5,9 @@ and exports them with their history edges into a serializable format
 suitable for cold storage.
 """
 
-from datetime import datetime, timedelta, timezone
-from typing import Literal, Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -41,7 +42,7 @@ async def find_archival_candidates(
     Returns:
         A list of nodes eligible for archival.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
 
     candidates: list[EpistemicNode] = []
 
@@ -112,9 +113,7 @@ async def archive_nodes(
 # approved by a human before `apply_reflection` acts on it.
 
 
-ArchivalReason = Literal[
-    "retired", "evidence_stale", "never_retrieved", "stale_judgment"
-]
+ArchivalReason = Literal["retired", "evidence_stale", "never_retrieved", "stale_judgment"]
 
 # Priority order, worst first. A retired node has already been replaced; a stale
 # inference has lost its basis; an unused fact is merely unloved. A stale
@@ -122,7 +121,10 @@ ArchivalReason = Literal[
 # agent to re-confirm or lower an assessment nobody has revisited, which may
 # well end in judging the node back up.
 _REASON_ORDER: tuple[ArchivalReason, ...] = (
-    "retired", "evidence_stale", "never_retrieved", "stale_judgment",
+    "retired",
+    "evidence_stale",
+    "never_retrieved",
+    "stale_judgment",
 )
 
 DEFAULT_NOMINATION_LIMIT = 20
@@ -141,6 +143,7 @@ class ArchivalCandidate(BaseModel):
     these with graph context, and a bare id would make it re-derive why the
     node was proposed at all.
     """
+
     node_id: str
     node_type: str
     preview: str
@@ -208,7 +211,8 @@ async def knowledge_in_degree_for(
     incoming = await storage.get_edges_for(node_ids, direction="to")
     return {
         node_id: sum(
-            1 for edge in edges
+            1
+            for edge in edges
             if edge.type not in NON_KNOWLEDGE_EDGE_TYPES
             and edge.type not in SEGMENT_ANCHOR_EDGE_TYPES
         )
@@ -250,9 +254,9 @@ async def evidence_gone_for(
         direction="from",
         edge_type=EdgeType.DERIVED_FROM,
     )
-    evidence_by_id = await storage.get_nodes([
-        edge.dst_id for edges in derived_from.values() for edge in edges
-    ])
+    evidence_by_id = await storage.get_nodes(
+        [edge.dst_id for edges in derived_from.values() for edge in edges]
+    )
 
     gone: dict[str, list[str]] = {}
     for inference in inferences:
@@ -309,7 +313,7 @@ async def nominate_archival_candidates(
     )
     from epimemer.pipelines.reflection.review import review_labels_for
 
-    judgment_cutoff = datetime.now(timezone.utc) - timedelta(days=judgment_max_age_days)
+    judgment_cutoff = datetime.now(UTC) - timedelta(days=judgment_max_age_days)
 
     candidates: dict[ArchivalReason, list[ArchivalCandidate]] = {
         reason: [] for reason in _REASON_ORDER
@@ -329,7 +333,8 @@ async def nominate_archival_candidates(
     gone_by_node = await evidence_gone_for(inferences, storage)
 
     unretrieved = [
-        node for node in active
+        node
+        for node in active
         if not isinstance(node, Inference)
         and node.value.importance <= importance_ceiling
         and never_retrieved(node)
@@ -345,13 +350,9 @@ async def nominate_archival_candidates(
 
     for node in active:
         if isinstance(node, Inference):
-            reasons = outstanding_reasons(
-                labels_by_node.get(node.id, {}), gone_by_node[node.id]
-            )
+            reasons = outstanding_reasons(labels_by_node.get(node.id, {}), gone_by_node[node.id])
             if reasons and not retention_covers(node.id, reasons, retained):
-                candidates["evidence_stale"].append(
-                    _candidate(node, "evidence_stale")
-                )
+                candidates["evidence_stale"].append(_candidate(node, "evidence_stale"))
             continue
         if node.value.importance > importance_ceiling:
             if judgment_is_stale(node, judgment_cutoff):
@@ -364,4 +365,3 @@ async def nominate_archival_candidates(
 
     ordered = [c for reason in _REASON_ORDER for c in candidates[reason]]
     return ordered[:limit]
-

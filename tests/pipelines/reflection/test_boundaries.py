@@ -11,7 +11,7 @@ actually gives plus a succession the agent has already judged. Guessing either
 is how the graph starts inventing history.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -39,7 +39,7 @@ from epimemer.pipelines.reflection.boundaries import (
 
 
 def _at(year: int) -> PreciseInstant:
-    return PreciseInstant(at=datetime(year, 1, 1, tzinfo=timezone.utc))
+    return PreciseInstant(at=datetime(year, 1, 1, tzinfo=UTC))
 
 
 def _period(start=None, end=None, **kwargs) -> ValidityInterval:
@@ -64,12 +64,14 @@ async def _claim(storage, document, content, *periods, node=None) -> Fact:
     fact = node or Fact(content=content, source_id="seg-1", value=ValueSignal())
     if node is None:
         await storage.store_node(fact)
-    await storage.store_edge(NodeEdge(
-        src_id=fact.id,
-        dst_id=document.id,
-        type=EdgeType.SOURCED_FROM,
-        validity=list(periods),
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=fact.id,
+            dst_id=document.id,
+            type=EdgeType.SOURCED_FROM,
+            validity=list(periods),
+        )
+    )
     return fact
 
 
@@ -77,12 +79,15 @@ async def _succeeds(storage, earlier, later, *, retire=True) -> None:
     """The agent's recorded verdict that the world moved from one to the other."""
     if retire:
         await storage.set_node_status_tx(
-            [earlier], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
+            [earlier], status=NodeStatus.HISTORICAL, at=datetime.now(UTC)
         )
-    await storage.store_edge(NodeEdge(
-        src_id=earlier.id, dst_id=later.id,
-        type=EdgeType.TEMPORALLY_FOLLOWED_BY,
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=earlier.id,
+            dst_id=later.id,
+            type=EdgeType.TEMPORALLY_FOLLOWED_BY,
+        )
+    )
 
 
 @pytest.fixture
@@ -93,7 +98,9 @@ async def renaming(storage, documents):
         storage, older, "the city is called Leningrad", _period(start=_at(1924))
     )
     petersburg = await _claim(
-        storage, newer, "the city is called Saint Petersburg",
+        storage,
+        newer,
+        "the city is called Saint Petersburg",
         _period(start=_at(1991)),
     )
     await _succeeds(storage, leningrad, petersburg)
@@ -101,9 +108,7 @@ async def renaming(storage, documents):
 
 
 class TestWhatItProposes:
-    async def test_the_successors_start_closes_the_earlier_period(
-        self, storage, renaming
-    ):
+    async def test_the_successors_start_closes_the_earlier_period(self, storage, renaming):
         leningrad, petersburg, older, newer = renaming
 
         [proposal] = await propose_boundaries(storage)
@@ -127,18 +132,16 @@ class TestWhatItProposes:
         # The other endpoint is untouched: only the open one is filled in.
         assert proposal.proposed.start.at.year == 1924
 
-    async def test_it_reads_the_relation_from_the_other_end_too(
-        self, storage, documents
-    ):
+    async def test_it_reads_the_relation_from_the_other_end_too(self, storage, documents):
         """A dated predecessor opens an undated successor. Same relation."""
         older, newer = documents
         leningrad = await _claim(
-            storage, older, "the city is called Leningrad",
+            storage,
+            older,
+            "the city is called Leningrad",
             _period(start=_at(1924), end=_at(1991)),
         )
-        petersburg = await _claim(
-            storage, newer, "the city is called Saint Petersburg", _period()
-        )
+        petersburg = await _claim(storage, newer, "the city is called Saint Petersburg", _period())
         await _succeeds(storage, leningrad, petersburg)
 
         [proposal] = await propose_boundaries(storage)
@@ -147,16 +150,14 @@ class TestWhatItProposes:
         assert proposal.endpoint == "start"
         assert proposal.at.year == 1991
 
-    async def test_the_boundary_nearest_the_handover_is_the_one_proposed(
-        self, storage, documents
-    ):
+    async def test_the_boundary_nearest_the_handover_is_the_one_proposed(self, storage, documents):
         """A successor with two episodes closes the predecessor at the first."""
         older, newer = documents
-        earlier = await _claim(
-            storage, older, "one claim", _period(start=_at(1900))
-        )
+        earlier = await _claim(storage, older, "one claim", _period(start=_at(1900)))
         later = await _claim(
-            storage, newer, "another claim",
+            storage,
+            newer,
+            "another claim",
             _period(start=_at(1991), end=_at(1996)),
             _period(start=_at(2000), end=_at(2010)),
         )
@@ -174,9 +175,7 @@ class TestWhatItProposes:
 
         [edge] = [
             edge
-            for edge in await storage.get_edges_from(
-                leningrad.id, edge_type=EdgeType.SOURCED_FROM
-            )
+            for edge in await storage.get_edges_from(leningrad.id, edge_type=EdgeType.SOURCED_FROM)
             if edge.dst_id == older.id
         ]
         assert isinstance(edge.validity[0].end, UnknownInstant)
@@ -189,40 +188,32 @@ class TestWhatItRefusesToPropose:
         wrong = await _claim(
             storage, older, "the release shipped in March", _period(start=_at(2020))
         )
-        right = await _claim(
-            storage, newer, "the release shipped in May", _period(start=_at(2021))
+        right = await _claim(storage, newer, "the release shipped in May", _period(start=_at(2021)))
+        await storage.set_node_status_tx([wrong], status=NodeStatus.CORRECTED, at=datetime.now(UTC))
+        await storage.store_edge(
+            NodeEdge(src_id=wrong.id, dst_id=right.id, type=EdgeType.SUPERSEDED_BY)
         )
-        await storage.set_node_status_tx(
-            [wrong], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
-        )
-        await storage.store_edge(NodeEdge(
-            src_id=wrong.id, dst_id=right.id, type=EdgeType.SUPERSEDED_BY
-        ))
 
         assert await propose_boundaries(storage) == []
 
-    async def test_two_similar_claims_with_no_succession_between_them(
-        self, storage, documents
-    ):
+    async def test_two_similar_claims_with_no_succession_between_them(self, storage, documents):
         """Guessing that two facts are successive is the agent's judgment (§3).
 
         Without the edge there is no verdict to draw a consequence from, and
         reflect would be inventing the succession as well as the date.
         """
         older, newer = documents
+        await _claim(storage, older, "the city is called Leningrad", _period(start=_at(1924)))
         await _claim(
-            storage, older, "the city is called Leningrad", _period(start=_at(1924))
-        )
-        await _claim(
-            storage, newer, "the city is called Saint Petersburg",
+            storage,
+            newer,
+            "the city is called Saint Petersburg",
             _period(start=_at(1991)),
         )
 
         assert await propose_boundaries(storage) == []
 
-    async def test_a_succession_where_neither_document_gives_a_date(
-        self, storage, documents
-    ):
+    async def test_a_succession_where_neither_document_gives_a_date(self, storage, documents):
         """§9's own worked example, and the honest outcome is nothing.
 
         Publication dates bound when a claim was *asserted*, never when the
@@ -230,12 +221,8 @@ class TestWhatItRefusesToPropose:
         date would have the graph assert the city was called Leningrad in 1995.
         """
         older, newer = documents
-        leningrad = await _claim(
-            storage, older, "the city is called Leningrad", _period()
-        )
-        petersburg = await _claim(
-            storage, newer, "the city is called Saint Petersburg", _period()
-        )
+        leningrad = await _claim(storage, older, "the city is called Leningrad", _period())
+        petersburg = await _claim(storage, newer, "the city is called Saint Petersburg", _period())
         await _succeeds(storage, leningrad, petersburg)
 
         assert await propose_boundaries(storage) == []
@@ -244,28 +231,26 @@ class TestWhatItRefusesToPropose:
         """Resolving a label into a date is an explicit act (§4), not a sweep."""
         older, newer = documents
         earlier = await _claim(
-            storage, older, "one claim",
+            storage,
+            older,
+            "one claim",
             _period(start=_at(1900), end=NamedInstant(label="the war years")),
         )
-        later = await _claim(
-            storage, newer, "another claim", _period(start=_at(1991))
-        )
+        later = await _claim(storage, newer, "another claim", _period(start=_at(1991)))
         await _succeeds(storage, earlier, later)
 
         assert await propose_boundaries(storage) == []
 
-    async def test_an_endpoint_a_source_said_does_not_exist(
-        self, storage, documents
-    ):
+    async def test_an_endpoint_a_source_said_does_not_exist(self, storage, documents):
         """`unbounded` is a source saying there is no boundary to close."""
         older, newer = documents
         earlier = await _claim(
-            storage, older, "one claim",
+            storage,
+            older,
+            "one claim",
             _period(start=_at(1900), end=UnboundedInstant()),
         )
-        later = await _claim(
-            storage, newer, "another claim", _period(start=_at(1991))
-        )
+        later = await _claim(storage, newer, "another claim", _period(start=_at(1991)))
         await _succeeds(storage, earlier, later)
 
         assert await propose_boundaries(storage) == []
@@ -278,12 +263,12 @@ class TestWhatItRefusesToPropose:
         """
         older, newer = documents
         earlier = await _claim(
-            storage, older, "one claim",
+            storage,
+            older,
+            "one claim",
             _period(start=_at(1900), witnessed_at=_at(1995)),
         )
-        later = await _claim(
-            storage, newer, "another claim", _period(start=_at(1991))
-        )
+        later = await _claim(storage, newer, "another claim", _period(start=_at(1991)))
         await _succeeds(storage, earlier, later)
 
         assert await propose_boundaries(storage) == []
@@ -291,11 +276,11 @@ class TestWhatItRefusesToPropose:
     async def test_periods_measured_on_different_clocks(self, storage, documents):
         """No conversion exists between an in-universe date and a real one."""
         older, newer = documents
-        earlier = await _claim(
-            storage, older, "one claim", _period(start=_at(1900))
-        )
+        earlier = await _claim(storage, older, "one claim", _period(start=_at(1900)))
         later = await _claim(
-            storage, newer, "another claim",
+            storage,
+            newer,
+            "another claim",
             _period(start=_at(1991), timeline_id="third-age"),
         )
         await _succeeds(storage, earlier, later)
@@ -304,20 +289,14 @@ class TestWhatItRefusesToPropose:
 
     async def test_a_period_that_is_already_closed(self, storage, documents):
         older, newer = documents
-        earlier = await _claim(
-            storage, older, "one claim", _period(start=_at(1900), end=_at(1950))
-        )
-        later = await _claim(
-            storage, newer, "another claim", _period(start=_at(1991))
-        )
+        earlier = await _claim(storage, older, "one claim", _period(start=_at(1900), end=_at(1950)))
+        later = await _claim(storage, newer, "another claim", _period(start=_at(1991)))
         await _succeeds(storage, earlier, later)
 
         # The successor's start is already located too, so neither side is open.
         assert await propose_boundaries(storage) == []
 
-    async def test_topics_have_no_periods_to_propose_over(
-        self, storage, documents
-    ):
+    async def test_topics_have_no_periods_to_propose_over(self, storage, documents):
         """A topic is a subject, not an assertion — nothing there to be true (§1)."""
         older, newer = documents
         earlier = Topic(content="the city", source_id="seg-1", value=ValueSignal())
@@ -345,16 +324,12 @@ class TestAcceptingOne:
     async def _periods(self, storage, node_id, source_id):
         [edge] = [
             edge
-            for edge in await storage.get_edges_from(
-                node_id, edge_type=EdgeType.SOURCED_FROM
-            )
+            for edge in await storage.get_edges_from(node_id, edge_type=EdgeType.SOURCED_FROM)
             if edge.dst_id == source_id
         ]
         return edge.validity
 
-    async def test_the_period_closes_and_says_it_was_inferred(
-        self, storage, renaming
-    ):
+    async def test_the_period_closes_and_says_it_was_inferred(self, storage, renaming):
         leningrad, _, older, _ = renaming
         [proposal] = await propose_boundaries(storage)
 
@@ -365,9 +340,7 @@ class TestAcceptingOne:
         assert period.basis is IntervalBasis.INFERRED
         assert period.start.at.year == 1924
 
-    async def test_the_claim_now_falls_clear_of_its_successor(
-        self, storage, renaming
-    ):
+    async def test_the_claim_now_falls_clear_of_its_successor(self, storage, renaming):
         """What closing the period is *for*: the soundness check can see it.
 
         While the period was open nothing could be concluded about the two
@@ -383,9 +356,7 @@ class TestAcceptingOne:
         after = await self._periods(storage, leningrad.id, older.id)
         assert assertions_are_disjoint(after, before) is True
 
-    async def test_the_same_proposal_twice_is_refused_the_second_time(
-        self, storage, renaming
-    ):
+    async def test_the_same_proposal_twice_is_refused_the_second_time(self, storage, renaming):
         [proposal] = await propose_boundaries(storage)
         await self._boundary(storage, proposal)
 
@@ -396,9 +367,7 @@ class TestAcceptingOne:
         # And it is gone from the proposals, having been answered.
         assert await propose_boundaries(storage) == []
 
-    async def test_an_ambiguous_request_is_refused_rather_than_guessed(
-        self, storage, documents
-    ):
+    async def test_an_ambiguous_request_is_refused_rather_than_guessed(self, storage, documents):
         """Two open periods from one source on one clock name no single target.
 
         The thing being overwritten is what a source is recorded as asserting,
@@ -406,17 +375,21 @@ class TestAcceptingOne:
         """
         older, newer = documents
         earlier = await _claim(
-            storage, older, "one claim",
-            _period(start=_at(1900)), _period(start=_at(1950)),
+            storage,
+            older,
+            "one claim",
+            _period(start=_at(1900)),
+            _period(start=_at(1950)),
         )
-        later = await _claim(
-            storage, newer, "another claim", _period(start=_at(1991))
-        )
+        later = await _claim(storage, newer, "another claim", _period(start=_at(1991)))
         await _succeeds(storage, earlier, later)
 
         refusal = await apply_boundary(
-            storage, node_id=earlier.id, source_id=older.id,
-            endpoint="end", at=datetime(1991, 1, 1, tzinfo=timezone.utc),
+            storage,
+            node_id=earlier.id,
+            source_id=older.id,
+            endpoint="end",
+            at=datetime(1991, 1, 1, tzinfo=UTC),
         )
 
         assert refusal is not None and "2 periods" in refusal.reason
@@ -429,8 +402,11 @@ class TestAcceptingOne:
         leningrad, _, _, newer = renaming
 
         refusal = await apply_boundary(
-            storage, node_id=leningrad.id, source_id=newer.id,
-            endpoint="end", at=datetime(1991, 1, 1, tzinfo=timezone.utc),
+            storage,
+            node_id=leningrad.id,
+            source_id=newer.id,
+            endpoint="end",
+            at=datetime(1991, 1, 1, tzinfo=UTC),
         )
 
         assert refusal is not None and "0 provenance edges" in refusal.reason
@@ -440,8 +416,11 @@ class TestAcceptingOne:
         leningrad, _, older, _ = renaming
 
         refusal = await apply_boundary(
-            storage, node_id=leningrad.id, source_id=older.id,
-            endpoint="end", at=datetime(1900, 1, 1, tzinfo=timezone.utc),
+            storage,
+            node_id=leningrad.id,
+            source_id=older.id,
+            endpoint="end",
+            at=datetime(1900, 1, 1, tzinfo=UTC),
         )
 
         assert refusal is not None and "must start before it ends" in refusal.reason
@@ -449,12 +428,15 @@ class TestAcceptingOne:
     async def test_a_claim_retired_as_wrong(self, storage, renaming):
         leningrad, _, older, _ = renaming
         await storage.set_node_status_tx(
-            [leningrad], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
+            [leningrad], status=NodeStatus.CORRECTED, at=datetime.now(UTC)
         )
 
         refusal = await apply_boundary(
-            storage, node_id=leningrad.id, source_id=older.id,
-            endpoint="end", at=datetime(1991, 1, 1, tzinfo=timezone.utc),
+            storage,
+            node_id=leningrad.id,
+            source_id=older.id,
+            endpoint="end",
+            at=datetime(1991, 1, 1, tzinfo=UTC),
         )
 
         assert refusal is not None
@@ -463,8 +445,11 @@ class TestAcceptingOne:
         leningrad, _, older, _ = renaming
 
         refusal = await apply_boundary(
-            storage, node_id=leningrad.id, source_id=older.id,
-            endpoint="middle", at=datetime(1991, 1, 1, tzinfo=timezone.utc),
+            storage,
+            node_id=leningrad.id,
+            source_id=older.id,
+            endpoint="middle",
+            at=datetime(1991, 1, 1, tzinfo=UTC),
         )
 
         assert refusal is not None and "not an endpoint" in refusal.reason

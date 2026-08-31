@@ -32,11 +32,12 @@ class SeedProvenance(StrEnum):
     reached a node — and it carries no score, because showing a blank is honest
     where showing 1.0 would be a lie (§9).
     """
-    LEXICAL = "lexical"    # BM25 on node content
-    SEGMENT = "segment"    # BM25 on a segment, bridged via source_id
-    VECTOR = "vector"      # embedding similarity
+
+    LEXICAL = "lexical"  # BM25 on node content
+    SEGMENT = "segment"  # BM25 on a segment, bridged via source_id
+    VECTOR = "vector"  # embedding similarity
     EXPANDED = "expanded"  # pulled in by graph expansion from a seed
-    DIRECT = "direct"      # returned unranked: find_nodes, graph_as_of, topic_tree, …
+    DIRECT = "direct"  # returned unranked: find_nodes, graph_as_of, topic_tree, …
 
 
 class SegmentHit(BaseModel):
@@ -47,6 +48,7 @@ class SegmentHit(BaseModel):
     believe?* — and it is the half of lexical search that survives an agent
     paraphrasing the identifier out of the fact it wrote.
     """
+
     segment_id: str
     text: str
     document_id: str
@@ -62,6 +64,7 @@ class QueryRequest(BaseModel):
     default reading of "as of 1980" is *what was true in 1980* — which is the
     valid-time axis. So transaction time is marked too.
     """
+
     query_text: str
     k: int = 10
     node_types: list[NodeType] | None = None  # filter by type, None = all
@@ -93,6 +96,7 @@ class QueryRequest(BaseModel):
 
 class QueryMetadata(BaseModel):
     """Metadata about the query execution for logging/feedback."""
+
     # How deep the *vector* scan reached, not how many nodes either arm looked
     # at. Deliberately unchanged by the lexical arm: frame-scoped search grows
     # its fetch until this number stops rising, which is a statement about the
@@ -109,6 +113,7 @@ class QueryMetadata(BaseModel):
 
 class QueryResult(BaseModel):
     """Output from the query pipeline."""
+
     nodes: list[EpistemicNode]
     edges: list[NodeEdge]  # edges between returned nodes
     metadata: QueryMetadata

@@ -11,18 +11,18 @@ import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-import pytest
 from fastmcp import FastMCP
 
+from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log, records_of
 from epimemer.mcp.server import mcp as epimemer_mcp
-from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization.event_bus import create_event_bus
 from epimemer.visualization.events import RetrievalRecorded
 from epimemer.visualization.ring import RETRIEVAL_RING_CAPACITY
+
 
 def _graph_with_the_real() -> InMemoryStorage:
     """An in-memory graph somebody has set up.
@@ -48,9 +48,7 @@ def _lifespan_for(*, viz_host: str = "127.0.0.1"):
     async def _test_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         yield {
             "storage": _graph_with_the_real(),
-            "embedding_provider": MockEmbeddingProvider(
-                model_id="mock-embed", dimension=8
-            ),
+            "embedding_provider": MockEmbeddingProvider(model_id="mock-embed", dimension=8),
             "config": ServerConfig(
                 storage_backend="memory",
                 embedding_provider="mock",
@@ -86,32 +84,45 @@ def _parse(result) -> dict:
 
 
 async def _seed(server: FastMCP) -> list[str]:
-    seg = _parse(await server.call_tool(
-        "segment", {"expected_graph": "default", "content": "The deployment rollback failed on Tuesday."}
-    ))["result"]
-    await server.call_tool("store_decomposition", {"expected_graph": "default", 
-        "metacontext_id": "the-real",
-        "document_id": seg["document_id"],
-        "segments": [{
-            "segment_id": seg["segments"][0]["segment_id"],
-            "facts": ["The deployment rollback failed on Tuesday"],
-            "topics": ["Deployment"],
-        }],
-    })
-    found = _parse(await server.call_tool(
-        "find_nodes", {"expected_graph": "default", "sourced_from": seg["document_id"], "limit": 50}
-    ))["result"]
+    seg = _parse(
+        await server.call_tool(
+            "segment",
+            {"expected_graph": "default", "content": "The deployment rollback failed on Tuesday."},
+        )
+    )["result"]
+    await server.call_tool(
+        "store_decomposition",
+        {
+            "expected_graph": "default",
+            "metacontext_id": "the-real",
+            "document_id": seg["document_id"],
+            "segments": [
+                {
+                    "segment_id": seg["segments"][0]["segment_id"],
+                    "facts": ["The deployment rollback failed on Tuesday"],
+                    "topics": ["Deployment"],
+                }
+            ],
+        },
+    )
+    found = _parse(
+        await server.call_tool(
+            "find_nodes",
+            {"expected_graph": "default", "sourced_from": seg["document_id"], "limit": 50},
+        )
+    )["result"]
     return [n["id"] for n in found["nodes"]]
 
 
 class TestOneInsertionCoversEveryTool:
-
     async def test_a_search_is_recorded_with_what_it_returned(self):
         async with _running() as (server, log, _):
             node_ids = await _seed(server)
             before = len(records_of(log))
 
-            result = await server.call_tool("search", {"expected_graph": "default", "query": "deployment", "k": 5})
+            result = await server.call_tool(
+                "search", {"expected_graph": "default", "query": "deployment", "k": 5}
+            )
 
             records = records_of(log)
             assert len(records) == before + 1
@@ -138,7 +149,9 @@ class TestOneInsertionCoversEveryTool:
         async with _running() as (server, log, _):
             await _seed(server)
 
-            await server.call_tool("search", {"expected_graph": "default", "query": "rollback", "k": 3})
+            await server.call_tool(
+                "search", {"expected_graph": "default", "query": "rollback", "k": 3}
+            )
 
             assert "rollback" in records_of(log)[-1].query
 
@@ -149,7 +162,9 @@ class TestOneInsertionCoversEveryTool:
             await _seed(server)
             before = len(records_of(log))
 
-            await server.call_tool("query_graph", {"expected_graph": "default", "node_id": "not-a-node"})
+            await server.call_tool(
+                "query_graph", {"expected_graph": "default", "node_id": "not-a-node"}
+            )
 
             assert len(records_of(log)) == before
 
@@ -171,7 +186,9 @@ class TestMirroring:
             await _seed(server)
             published.clear()
 
-            await server.call_tool("search", {"expected_graph": "default", "query": "deployment", "k": 5})
+            await server.call_tool(
+                "search", {"expected_graph": "default", "query": "deployment", "k": 5}
+            )
 
             assert len(published) == 1
             assert published[0].record["tool"] == "epimemer.search"
@@ -187,7 +204,9 @@ class TestMirroring:
             await _seed(server)
             published.clear()
 
-            await server.call_tool("search", {"expected_graph": "default", "query": "deployment", "k": 5})
+            await server.call_tool(
+                "search", {"expected_graph": "default", "query": "deployment", "k": 5}
+            )
 
             mirrored = published[0].record
             assert mirrored["query"] == ""

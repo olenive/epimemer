@@ -5,7 +5,7 @@ richer than their current description, and gathers that material so the
 calling agent can re-synthesize the description through `apply_reflection`.
 """
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from epimemer.core.types import (
     EdgeType,
@@ -31,9 +31,7 @@ async def gather_associated_material_for(
     """
     topic_ids = [topic.id for topic in topics]
     by_edge_type = {
-        edge_type: await storage.get_edges_for(
-            topic_ids, direction="to", edge_type=edge_type
-        )
+        edge_type: await storage.get_edges_for(topic_ids, direction="to", edge_type=edge_type)
         for edge_type in (EdgeType.SUPPORTS, EdgeType.ABSTRACTS)
     }
 
@@ -41,12 +39,14 @@ async def gather_associated_material_for(
     # largest remaining N+1 in `reflect`: 900 fetches at 1,200 nodes, and on
     # SurrealDB each cost 1-3 round-trips, because a node's table is not known
     # from its id and `get_node` probes all three.
-    linked = await storage.get_nodes([
-        edge.src_id
-        for by_topic in by_edge_type.values()
-        for edges in by_topic.values()
-        for edge in edges
-    ])
+    linked = await storage.get_nodes(
+        [
+            edge.src_id
+            for by_topic in by_edge_type.values()
+            for edges in by_topic.values()
+            for edge in edges
+        ]
+    )
 
     material: dict[str, list[str]] = {}
     for topic_id in topic_ids:
@@ -70,5 +70,3 @@ def _should_enrich(topic: Topic, material: list[str], material_ratio: float) -> 
         return False
     total_material_len = sum(len(m) for m in material)
     return total_material_len >= len(topic.content) * material_ratio
-
-

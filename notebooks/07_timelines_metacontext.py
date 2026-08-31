@@ -35,7 +35,10 @@ def _(mo):
 
 @app.cell
 def _():
+    from datetime import datetime, timezone
+
     import marimo as mo
+
     from epimemer.core.temporal import (
         PreciseInstant,
         UnboundedInstant,
@@ -53,7 +56,6 @@ def _():
     )
     from epimemer.pipelines.frames import frames_for, shared_frame_set
     from epimemer.storage.memory import InMemoryStorage
-    from datetime import datetime, timezone
 
     return (
         ClaimKind,
@@ -86,27 +88,42 @@ def _(mo):
 async def _(ClaimKind, EdgeType, Fact, InMemoryStorage, Metacontext, NodeEdge, mo):
     store = InMemoryStorage()
 
-    _the_real = Metacontext(id="the-real", content="The Real",
-                            description="Claims about the real world.")
-    _the_novel = Metacontext(id="petersburg-novel", content="Bely's *Petersburg*",
-                             description="What is true inside the novel.")
+    _the_real = Metacontext(
+        id="the-real", content="The Real", description="Claims about the real world."
+    )
+    _the_novel = Metacontext(
+        id="petersburg-novel",
+        content="Bely's *Petersburg*",
+        description="What is true inside the novel.",
+    )
     for _frame in (_the_real, _the_novel):
         await store.store_metacontext(_frame)
 
-    real_fact = Fact(content="Saint Petersburg is a city in Russia.",
-                     source_id="gazetteer", claim_kind=ClaimKind.STATE)
-    novel_fact = Fact(content="Petersburg is a shadow cast by a bureaucratic mind.",
-                      source_id="bely-1913", claim_kind=ClaimKind.STATE)
-    unframed_fact = Fact(content="Petersburg has canals.",
-                         source_id="unknown", claim_kind=ClaimKind.STATE)
+    real_fact = Fact(
+        content="Saint Petersburg is a city in Russia.",
+        source_id="gazetteer",
+        claim_kind=ClaimKind.STATE,
+    )
+    novel_fact = Fact(
+        content="Petersburg is a shadow cast by a bureaucratic mind.",
+        source_id="bely-1913",
+        claim_kind=ClaimKind.STATE,
+    )
+    unframed_fact = Fact(
+        content="Petersburg has canals.", source_id="unknown", claim_kind=ClaimKind.STATE
+    )
 
     for _fact in (real_fact, novel_fact, unframed_fact):
         await store.store_node(_fact)
     # The third node is deliberately left with no frame edge.
     for _fact, _frame_id in ((real_fact, "the-real"), (novel_fact, "petersburg-novel")):
-        await store.store_edge(NodeEdge(
-            src_id=_fact.id, dst_id=_frame_id, type=EdgeType.HAS_METACONTEXT,
-        ))
+        await store.store_edge(
+            NodeEdge(
+                src_id=_fact.id,
+                dst_id=_frame_id,
+                type=EdgeType.HAS_METACONTEXT,
+            )
+        )
 
     mo.md(
         "Three facts stored: one framed `the-real`, one framed as the novel's "
@@ -136,9 +153,9 @@ async def _(frames_for, mo, novel_fact, real_fact, shared_frame_set, store, unfr
     _pair_unframed = await shared_frame_set([real_fact.id, unframed_fact.id], store)
 
     mo.md(
-        "\n".join(_lines)
-        + "\n\n### What that decides\n\n"
-        f"- Merging the real and in-novel facts: **{'allowed' if _pair_real_novel else 'refused'}** "
+        "\n".join(_lines) + "\n\n### What that decides\n\n"
+        "- Merging the real and in-novel facts: "
+        f"**{'allowed' if _pair_real_novel else 'refused'}** "
         "— they do not stand in the same set of frames, and a merged node would "
         "assert in one world what was only ever claimed in another.\n"
         f"- Merging the real and unframed facts: **{'allowed' if _pair_unframed else 'refused'}** "
@@ -203,21 +220,31 @@ def _(
     def _at(year):
         return PreciseInstant(at=datetime(year, 1, 1, tzinfo=timezone.utc))
 
-    _open_end = (
-        UnknownInstant() if endpoint.value.startswith("unknown") else UnboundedInstant()
-    )
+    _open_end = UnknownInstant() if endpoint.value.startswith("unknown") else UnboundedInstant()
 
     petersburg = ValidityInterval(
-        start=_at(1703), end=_at(1914), timeline_id=gregorian.id, basis="stated",
+        start=_at(1703),
+        end=_at(1914),
+        timeline_id=gregorian.id,
+        basis="stated",
     )
     petrograd = ValidityInterval(
-        start=_at(1914), end=_at(1924), timeline_id=gregorian.id, basis="stated",
+        start=_at(1914),
+        end=_at(1924),
+        timeline_id=gregorian.id,
+        basis="stated",
     )
     leningrad = ValidityInterval(
-        start=_at(1924), end=_at(1991), timeline_id=gregorian.id, basis="stated",
+        start=_at(1924),
+        end=_at(1991),
+        timeline_id=gregorian.id,
+        basis="stated",
     )
     petersburg_again = ValidityInterval(
-        start=_at(1991), end=_open_end, timeline_id=gregorian.id, basis="stated",
+        start=_at(1991),
+        end=_open_end,
+        timeline_id=gregorian.id,
+        basis="stated",
     )
 
     intervals = [
@@ -256,7 +283,8 @@ def _(
     _future = ValidityInterval(
         start=PreciseInstant(at=datetime(2050, 1, 1, tzinfo=timezone.utc)),
         end=PreciseInstant(at=datetime(2060, 1, 1, tzinfo=timezone.utc)),
-        timeline_id="gregorian", basis="stated",
+        timeline_id="gregorian",
+        basis="stated",
     )
     _open_vs_future = compare_intervals(petersburg_again, _future)
 

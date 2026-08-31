@@ -6,8 +6,9 @@ in-memory, or anything else can implement it.
 """
 
 import re
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Literal, Protocol, Sequence, TypeVar
+from typing import Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -18,14 +19,14 @@ from epimemer.core.advisories import (
 )
 from epimemer.core.types import (
     DEFAULT_MERGE_CYCLE_LIMIT,
+    DEFAULT_MERGE_UNDO_DEPTH,
     Agent,
     DecisionKind,
     DecisionRecord,
-    JudgeRef,
-    DEFAULT_MERGE_UNDO_DEPTH,
     EdgeType,
     EmbeddingRecord,
     EpistemicNode,
+    JudgeRef,
     Metacontext,
     NodeEdge,
     NodeStatus,
@@ -121,11 +122,9 @@ def resolve_merge_settings(overrides: MergeOverrides | None) -> MergeSettings:
     """
     if overrides is None:
         return MergeSettings()
-    return MergeSettings(**{
-        field: value
-        for field, value in overrides.model_dump().items()
-        if value is not None
-    })
+    return MergeSettings(
+        **{field: value for field, value in overrides.model_dump().items() if value is not None}
+    )
 
 
 class WarningOverrides(BaseModel):
@@ -163,9 +162,7 @@ def resolve_warning_policy(
     return WarningPolicy(
         surface=default.surface if overrides.surface is None else overrides.surface,
         default_action=(
-            default.default_action
-            if overrides.default_action is None
-            else overrides.default_action
+            default.default_action if overrides.default_action is None else overrides.default_action
         ),
         by_kind={**default.by_kind, **overrides.by_kind},
     )
@@ -200,7 +197,7 @@ def drop_none_values(value):
     return value
 
 
-def normalize_for_storage(model: _M) -> _M:
+def normalize_for_storage[M: BaseModel](model: _M) -> _M:
     """Return a copy of `model` with None-valued keys dropped from dict fields.
 
     Every backend applies this on the way in, so a record round-trips
@@ -810,8 +807,9 @@ class StorageBackend(Protocol):
         a hit, whose score is reported as measured and may be zero or, on an
         engine that does not clamp its IDF, negative. Otherwise a match whose
         BM25 score is `0.0` — the IDF floor, which a term more common than half
-        the corpus falls to — is not a result. Both backends enforce this; it is part of the contract,
-        not an optimisation. The floor zeroes the *score*, not the *match*, and
+        the corpus falls to — is not a result. Both backends enforce this; it is
+        part of the contract, not an optimisation. The floor zeroes the *score*,
+        not the *match*, and
         a zero-scored row surviving into rank fusion would arrive at an
         arbitrary tie rank and fuse almost as strongly as the best real hit
         (§10, R1). One backend scores below the floor negatively rather than
@@ -875,7 +873,6 @@ class StorageBackend(Protocol):
         """
         ...
 
-
     # --- Timelines ---
 
     async def store_timeline(self, timeline: Timeline) -> str:
@@ -925,9 +922,7 @@ class StorageBackend(Protocol):
         """
         ...
 
-    async def get_relation_label(
-        self, name: str, kind: str
-    ) -> RelationLabel | None:
+    async def get_relation_label(self, name: str, kind: str) -> RelationLabel | None:
         """The record for one label, or None if it has none.
 
         **`None` is the ordinary answer on any graph that predates this**, and
@@ -970,9 +965,7 @@ class StorageBackend(Protocol):
         """
         ...
 
-    async def relation_verdicts_for(
-        self, label_ids: Sequence[str]
-    ) -> Sequence[RelationVerdict]:
+    async def relation_verdicts_for(self, label_ids: Sequence[str]) -> Sequence[RelationVerdict]:
         """Every verdict covering exactly this pair of label ids, newest first.
 
         The write path's read, and separate from `judged_relation_pairs`

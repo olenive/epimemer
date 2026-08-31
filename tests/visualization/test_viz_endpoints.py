@@ -6,15 +6,15 @@ assembly that used to live in the embedded server's `/api/snapshot` and
 here directly, against storage.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from epimemer.core.types import (
+    EdgeType,
     Fact,
     Inference,
     NodeEdge,
-    EdgeType,
     NodeStatus,
     RelationLabel,
     Timeline,
@@ -23,7 +23,7 @@ from epimemer.core.types import (
 )
 from epimemer.pipelines.timeline.functions import add_timepoint
 from epimemer.storage.memory import InMemoryStorage
-from epimemer.visualization.events import node_to_view, edge_to_view
+from epimemer.visualization.events import edge_to_view, node_to_view
 from epimemer.visualization.snapshot import assemble_snapshot, list_graphs_result
 
 
@@ -36,7 +36,6 @@ def storage():
 
 
 class TestVizStorageMethods:
-
     async def test_viz_list_nodes_returns_active_by_default(self, storage):
         t1 = Topic(content="Active topic", source_id="s1")
         t2 = Topic(content="Superseded topic", source_id="s1", status=NodeStatus.SUPERSEDED)
@@ -96,7 +95,6 @@ class TestVizStorageMethods:
 
 
 class TestSnapshotAssembly:
-
     async def test_list_graphs_result_includes_backend(self, storage):
         result = await list_graphs_result(storage)
         assert result["graphs"] == ["default"]
@@ -149,7 +147,7 @@ class TestSnapshotAssembly:
     async def test_assemble_snapshot_includes_timelines_with_timepoints(self, storage):
         timeline, _ = add_timepoint(
             Timeline(name="History"),
-            start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            start=datetime(2024, 1, 1, tzinfo=UTC),
             label="the beginning",
         )
         await storage.store_timeline(timeline)
@@ -210,7 +208,6 @@ class TestSnapshotAssembly:
 
 
 class TestViewConversion:
-
     def test_node_to_view_topic(self):
         t = Topic(content="A topic", source_id="s1")
         view = node_to_view(t, "my-graph")
@@ -221,7 +218,7 @@ class TestViewConversion:
         assert view.graph == "my-graph"
         assert view.source_id == "s1"
         assert view.extraction_method == "unspecified"
-        assert view.confidence is None      # nothing has rated it
+        assert view.confidence is None  # nothing has rated it
 
     def test_the_view_does_not_carry_novelty(self):
         """The frontend contract drops it with the field.
@@ -251,7 +248,9 @@ class TestViewConversion:
 
     def test_a_rated_node_still_reaches_the_frontend_as_its_number(self):
         node = Topic(
-            content="A topic", source_id="s1", value=ValueSignal(confidence=0.9),
+            content="A topic",
+            source_id="s1",
+            value=ValueSignal(confidence=0.9),
         )
 
         assert node_to_view(node, "g").confidence == pytest.approx(0.9)

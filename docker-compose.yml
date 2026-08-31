@@ -1,27 +1,23 @@
 services:
   surrealdb:
     image: surrealdb/surrealdb:latest
-    command: start --user root --pass root --bind 0.0.0.0:8000 file:/data/epimemer.db
+    command: start --user root --pass root --bind 0.0.0.0:8000 rocksdb:/data/epimemer.db
     ports:
       - "8000:8000"
     volumes:
       - surrealdb_data:/data
 
   epimemer:
-    build:
-      context: ..
-      dockerfile: epimemer/Dockerfile
+    build: .
     depends_on:
       - surrealdb
     environment:
       EPIMEMER_STORAGE_BACKEND: surrealdb
       EPIMEMER_SURREALDB_URL: ws://surrealdb:8000/rpc
       EPIMEMER_SURREALDB_NAMESPACE: epimemer
-      EPIMEMER_SURREALDB_DATABASE: memory
+      EPIMEMER_GRAPH: default
       EPIMEMER_EMBEDDING_PROVIDER: sentence-transformers
       EPIMEMER_EMBEDDING_MODEL_ID: all-MiniLM-L6-v2
-      EPIMEMER_DECOMPOSITION_PROVIDER: pydantic-ai
-      EPIMEMER_DECOMPOSITION_MODEL: claude-sonnet-4-20250514
       EPIMEMER_LOG_LEVEL: INFO
     # stdio transport — attach to this container's stdin/stdout
     stdin_open: true

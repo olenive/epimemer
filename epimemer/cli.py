@@ -19,12 +19,12 @@ and names `EPIMEMER_APPROVED_AGENTS`, which the server reads at connect.
 import argparse
 import asyncio
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
-    JudgeRef,
     QUARANTINE_METACONTEXT_ID,
+    JudgeRef,
     RelationLabel,
     agent_name,
     current_description,
@@ -154,13 +154,10 @@ async def _confirm(storage: StorageBackend, handle: str) -> str:
     version = current_description(agent)
     if version is None or version.confirmed_at is not None:
         return (
-            f"Approved '{name}' in graph '{storage.current_database}'.\n"
-            f"Approved judges: {labels}"
+            f"Approved '{name}' in graph '{storage.current_database}'.\nApproved judges: {labels}"
         )
 
-    confirmed = version.model_copy(
-        update={"confirmed_at": datetime.now(timezone.utc)}
-    )
+    confirmed = version.model_copy(update={"confirmed_at": datetime.now(UTC)})
     await storage.upsert_agent(
         agent.model_copy(update={"descriptions": [*agent.descriptions[:-1], confirmed]})
     )
@@ -181,13 +178,10 @@ async def _rename(storage: StorageBackend, handle: str, name: str, same: bool) -
     because a command has nowhere to ask it — the elicitation prompt does ask,
     and that is the other channel this reaches from.
     """
-    result = await rename_judge(
-        storage, handle=handle, name=name, same_judge=same
-    )
+    result = await rename_judge(storage, handle=handle, name=name, same_judge=same)
     if result["status"] == "same_judge_needed":
         return (
-            f"{result['reason']}\n\nIf they are the same judge, run this again "
-            f"with --same-judge."
+            f"{result['reason']}\n\nIf they are the same judge, run this again with --same-judge."
         )
     return result.get("message") or result.get("reason", result["status"])
 
@@ -235,11 +229,10 @@ async def _list(storage: StorageBackend) -> str:
     override = await storage.get_require_judge()
     lines = [
         f"graph: {storage.current_database}",
-        f"approved judges: "
+        "approved judges: "
         + (", ".join(approved_labels(approved, stored)) if approved else "(none)"),
-        f"requires a judge: "
-        + ("follows the server setting" if override is None
-           else ("yes" if override else "no")),
+        "requires a judge: "
+        + ("follows the server setting" if override is None else ("yes" if override else "no")),
         "",
     ]
     if not agents:
@@ -248,17 +241,14 @@ async def _list(storage: StorageBackend) -> str:
         version = current_description(agent)
         seen = agent.last_seen_at.isoformat() if agent.last_seen_at else "never"
         lines.append(
-            f"{agent_name(agent)}  "
-            f"(last seen {seen}, {len(agent.descriptions)} version(s))"
+            f"{agent_name(agent)}  (last seen {seen}, {len(agent.descriptions)} version(s))"
         )
         # The key and the ids consolidated into it, on their own line: not for
         # reading, but this is the only place they can be seen at all, and a
         # reviewer chasing a `judged_by` out of an old row needs them.
         lines.append(f"    key {agent.id}")
         if agent.former_ids:
-            lines.append(
-                f"    also recorded as {', '.join(agent.former_ids)}"
-            )
+            lines.append(f"    also recorded as {', '.join(agent.former_ids)}")
         if version is not None:
             # Said plainly on every listing: the description is the agent's own
             # assertion, and the only part carrying human weight is whether a
@@ -341,10 +331,7 @@ async def _declare_frames(
     unframed = await storage.count_nodes_without_frame()
     graph = storage.current_database
     if unframed == 0:
-        return (
-            f"Graph '{graph}': every node already names a frame. Nothing to "
-            f"declare."
-        )
+        return f"Graph '{graph}': every node already names a frame. Nothing to declare."
 
     judge = None
     if handle is not None:
@@ -375,7 +362,9 @@ async def _declare_frames(
     created = ""
     if await storage.get_metacontext(frame) is None:
         await create_metacontext(
-            frame.replace("-", " ").title(), storage, metacontext_id=frame,
+            frame.replace("-", " ").title(),
+            storage,
+            metacontext_id=frame,
             description=f"Declared for graph '{graph}'.",
         )
         created = f"Created metacontext '{frame}', which this graph did not have.\n"
@@ -383,8 +372,7 @@ async def _declare_frames(
     result = await declare_frames(storage, frame=frame, judge=judge)
     by = f" by '{handle}'" if handle else " with no judge recorded"
     return (
-        created
-        + f"Graph '{graph}': declared {result.declared} node(s) as "
+        created + f"Graph '{graph}': declared {result.declared} node(s) as "
         f"'{result.frame}'{by}; {result.already_framed} already named a frame "
         f"and were left alone.\n"
         f"One journal row records the sweep. Check completeness with "
@@ -393,21 +381,20 @@ async def _declare_frames(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="epimemer", description="Epimemer administration."
-    )
+    parser = argparse.ArgumentParser(prog="epimemer", description="Epimemer administration.")
     sub = parser.add_subparsers(dest="group", required=True)
+
+    sub.add_parser(
+        "serve",
+        help="Run the MCP server on stdio. The command an MCP client is given.",
+    )
 
     agents = sub.add_parser("agents", help="Judges, and which ids may judge.")
     agents_sub = agents.add_subparsers(dest="action", required=True)
 
-    confirm = agents_sub.add_parser(
-        "confirm", help="Admit an agent id to a graph, as the user."
-    )
+    confirm = agents_sub.add_parser("confirm", help="Admit an agent id to a graph, as the user.")
     confirm.add_argument("agent_id")
-    confirm.add_argument(
-        "--graph", help="Graph to approve in (default: the configured one)."
-    )
+    confirm.add_argument("--graph", help="Graph to approve in (default: the configured one).")
 
     rename = agents_sub.add_parser(
         "rename", help="Rename a judge, or consolidate two that are one."
@@ -415,47 +402,35 @@ def build_parser() -> argparse.ArgumentParser:
     rename.add_argument("agent_id", help="The judge: its name, key, or a former key.")
     rename.add_argument("name", help="What it should be called from now on.")
     rename.add_argument(
-        "--same-judge", action="store_true",
+        "--same-judge",
+        action="store_true",
         help=(
             "If the new name already belongs to another judge, consolidate the "
             "two: nothing is deleted and no decision is rewritten."
         ),
     )
-    rename.add_argument(
-        "--graph", help="Graph to write in (default: the configured one)."
-    )
+    rename.add_argument("--graph", help="Graph to write in (default: the configured one).")
 
     listing = agents_sub.add_parser("list", help="Judges and approvals in a graph.")
-    listing.add_argument(
-        "--graph", help="Graph to read (default: the configured one)."
-    )
+    listing.add_argument("--graph", help="Graph to read (default: the configured one).")
 
-    require = agents_sub.add_parser(
-        "require", help="Whether writes to a graph must name a judge."
-    )
+    require = agents_sub.add_parser("require", help="Whether writes to a graph must name a judge.")
     require.add_argument(
-        "setting", choices=("on", "off", "default"),
+        "setting",
+        choices=("on", "off", "default"),
         help="'default' clears the graph's own answer and follows the server.",
     )
-    require.add_argument(
-        "--graph", help="Graph to set (default: the configured one)."
-    )
+    require.add_argument("--graph", help="Graph to set (default: the configured one).")
 
-    relations = sub.add_parser(
-        "relations", help="The user-tier relationship vocabulary."
-    )
+    relations = sub.add_parser("relations", help="The user-tier relationship vocabulary.")
     relations_sub = relations.add_subparsers(dest="action", required=True)
     backfill = relations_sub.add_parser(
         "backfill",
         help="Give every label already in use a record. Idempotent.",
     )
-    backfill.add_argument(
-        "--graph", help="Graph to write in (default: the configured one)."
-    )
+    backfill.add_argument("--graph", help="Graph to write in (default: the configured one).")
 
-    frames = sub.add_parser(
-        "frames", help="Epistemic frames — which world a claim is about."
-    )
+    frames = sub.add_parser("frames", help="Epistemic frames — which world a claim is about.")
     frames_sub = frames.add_subparsers(dest="action", required=True)
     declare = frames_sub.add_parser(
         "declare",
@@ -480,26 +455,30 @@ def build_parser() -> argparse.ArgumentParser:
             "no judge, which reads as nobody having said so."
         ),
     )
-    declare.add_argument(
-        "--yes", action="store_true", help="Skip the confirmation prompt."
-    )
-    declare.add_argument(
-        "--graph", help="Graph to write in (default: the configured one)."
-    )
+    declare.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
+    declare.add_argument("--graph", help="Graph to write in (default: the configured one).")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    # Serving is not administration: it opens no store of its own and goes
+    # nowhere near the reachability check below. Imported here so that the
+    # administration commands do not pay for the server's dependencies.
+    if args.group == "serve":
+        from epimemer.mcp.server import mcp
+
+        mcp.run()
+        return 0
+
     config = load_config()
 
     if args.action in ("confirm", "require", "rename", "backfill", "declare"):
         unreachable = unreachable_store(config)
         if unreachable is not None:
             print(
-                _embedded_advice(
-                    unreachable, getattr(args, "agent_id", None), args.action
-                ),
+                _embedded_advice(unreachable, getattr(args, "agent_id", None), args.action),
                 file=sys.stderr,
             )
             return 2

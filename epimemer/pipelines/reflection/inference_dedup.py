@@ -55,7 +55,6 @@ from pydantic import BaseModel, Field
 from epimemer.core.advisories import Advisory, AdvisoryKind
 from epimemer.core.types import (
     DEFAULT_MERGE_CYCLE_LIMIT,
-    EdgeType,
     Inference,
     NodeStatus,
     NodeType,
@@ -64,12 +63,12 @@ from epimemer.core.types import (
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.pipelines.reflection.fact_dedup import MergeRefused
 from epimemer.pipelines.reflection.pair_scoring import stack_uniform_width
-from epimemer.pipelines.reflection.similarity_decisions import already_judged_pairs
 from epimemer.pipelines.reflection.review import (
     SIMILARITY_NOMINATION_THRESHOLD,
     NodeRef,
     frames_for,
 )
+from epimemer.pipelines.reflection.similarity_decisions import already_judged_pairs
 from epimemer.pipelines.reflection.soundness import (
     DisjointPremises,
     PremisePeriods,
@@ -113,7 +112,7 @@ def _disjoint_advisory(pair: DisjointPremises, subjects: Sequence[str]) -> Advis
         kind=AdvisoryKind.DISJOINT_PREMISES,
         message=(
             f"No source asserts these premises held at a common moment: "
-            f"\"{pair.a.content}\" and \"{pair.b.content}\". A claim drawn over "
+            f'"{pair.a.content}" and "{pair.b.content}". A claim drawn over '
             f"both would be flagged unsound — narrow the wording or the period, "
             f"or merge only the inferences that share a premise set."
         ),
@@ -139,15 +138,13 @@ def disjoint_advisories(
     """
     return [
         _disjoint_advisory(pair, source_ids)
-        for pair in disjoint_pairs([
-            dated[premise_id] for premise_id in premise_ids if premise_id in dated
-        ])
+        for pair in disjoint_pairs(
+            [dated[premise_id] for premise_id in premise_ids if premise_id in dated]
+        )
     ]
 
 
-async def merge_advisories(
-    sources: Sequence[Inference], storage: StorageBackend
-) -> list[Advisory]:
+async def merge_advisories(sources: Sequence[Inference], storage: StorageBackend) -> list[Advisory]:
     """What is worth knowing about collapsing these into one, before it happens.
 
     Reads the union of the sources' premises, because the union is what the
@@ -155,9 +152,7 @@ async def merge_advisories(
     calls `disjoint_advisories` directly.
     """
     premises = await premise_ids_for([node.id for node in sources], storage)
-    combined = list(dict.fromkeys(
-        premise_id for ids in premises.values() for premise_id in ids
-    ))
+    combined = list(dict.fromkeys(premise_id for ids in premises.values() for premise_id in ids))
     return disjoint_advisories(
         [node.id for node in sources],
         combined,
@@ -228,14 +223,9 @@ async def merge_refusal(
             )
         )
 
-    oscillating = [
-        node for node in sources
-        if completed_merge_cycles(node) >= cycle_limit
-    ]
+    oscillating = [node for node in sources if completed_merge_cycles(node) >= cycle_limit]
     if oscillating:
-        counts = ", ".join(
-            str(completed_merge_cycles(node)) for node in oscillating
-        )
+        counts = ", ".join(str(completed_merge_cycles(node)) for node in oscillating)
         return MergeRefused(
             reason=(
                 f"{len(oscillating)} of these inferences have already been "
@@ -247,9 +237,7 @@ async def merge_refusal(
             )
         )
 
-    if not await all_pairs_above_threshold(
-        list(sources), storage, model_id, similarity_threshold
-    ):
+    if not await all_pairs_above_threshold(list(sources), storage, model_id, similarity_threshold):
         return MergeRefused(
             reason=(
                 f"not every pair reaches the {similarity_threshold} similarity "
@@ -336,25 +324,15 @@ async def nominate_inference_merges(
     # one. The grouping has already cut the set — often to a handful out of
     # hundreds — and this is eight edge queries, so widening it to the whole
     # population would undo the saving the grouping is here for.
-    grouped = list(dict.fromkeys(
-        node_id for pair in shared for node_id in sorted(pair)
-    ))
+    grouped = list(dict.fromkeys(node_id for pair in shared for node_id in sorted(pair)))
     judged = await already_judged_pairs(grouped, storage)
     pairs = [pair for pair in shared if pair not in judged]
     if not pairs:
         return []
 
-    involved = list(dict.fromkeys(
-        node_id for pair in pairs for node_id in sorted(pair)
-    ))
-    stored = await storage.get_embeddings_for_items(
-        involved, model_id=effective_model_id
-    )
-    vectors = {
-        node_id: stored[node_id][0].vector
-        for node_id in involved
-        if stored[node_id]
-    }
+    involved = list(dict.fromkeys(node_id for pair in pairs for node_id in sorted(pair)))
+    stored = await storage.get_embeddings_for_items(involved, model_id=effective_model_id)
+    vectors = {node_id: stored[node_id][0].vector for node_id in involved if stored[node_id]}
     # Uniform width for the same reason the batched scorer needs it: a stored
     # vector from a different model has a different length, and comparing across
     # them produces a number that means nothing.
@@ -375,9 +353,7 @@ async def nominate_inference_merges(
     # Frames are read once for everything still standing, and a cross-frame pair
     # is dropped here rather than offered: `merge_refusal` would refuse it, and
     # nominating what the tool refuses is a worklist that cannot be worked.
-    surviving = list(dict.fromkeys(
-        node_id for pair, _ in scored for node_id in sorted(pair)
-    ))
+    surviving = list(dict.fromkeys(node_id for pair, _ in scored for node_id in sorted(pair)))
     frames = await frames_for(surviving, storage)
     same_frames = [
         (pair, score)
@@ -387,27 +363,28 @@ async def nominate_inference_merges(
     if not same_frames:
         return []
 
-    premise_nodes = await storage.get_nodes(list(dict.fromkeys(
-        premise_id for pair, _ in same_frames for premise_id in shared[pair]
-    )))
+    premise_nodes = await storage.get_nodes(
+        list(dict.fromkeys(premise_id for pair, _ in same_frames for premise_id in shared[pair]))
+    )
     # Every premise any surviving candidate would rest on — the union, not the
     # intersection, because the union is what the survivor inherits. Read once
     # for the whole sweep, which is what keeps the advisory free per pair.
     dated = await premise_periods_for(
-        list(dict.fromkeys(
-            premise_id
-            for pair, _ in same_frames
-            for node_id in pair
-            for premise_id in premises[node_id]
-        )),
+        list(
+            dict.fromkeys(
+                premise_id
+                for pair, _ in same_frames
+                for node_id in pair
+                for premise_id in premises[node_id]
+            )
+        ),
         storage,
     )
 
     candidates = [
         InferenceMergeCandidate(
             inferences=[
-                NodeRef(id=node_id, content=by_id[node_id].content)
-                for node_id in sorted(pair)
+                NodeRef(id=node_id, content=by_id[node_id].content) for node_id in sorted(pair)
             ],
             shared_premises=[
                 NodeRef(id=premise_id, content=premise_nodes[premise_id].content)
@@ -417,11 +394,11 @@ async def nominate_inference_merges(
             similarity=round(score, 4),
             warnings=disjoint_advisories(
                 sorted(pair),
-                list(dict.fromkeys(
-                    premise_id
-                    for node_id in sorted(pair)
-                    for premise_id in premises[node_id]
-                )),
+                list(
+                    dict.fromkeys(
+                        premise_id for node_id in sorted(pair) for premise_id in premises[node_id]
+                    )
+                ),
                 dated,
             ),
         )

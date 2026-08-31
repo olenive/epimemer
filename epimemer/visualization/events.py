@@ -10,7 +10,7 @@ The event schema is the contract between producers (storage, pipeline) and consu
 (any visualization frontend). Renderers are decoupled — they only depend on these types.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Literal
 
@@ -30,7 +30,7 @@ from epimemer.core.types import (
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 # --- Shared view models ---
@@ -40,8 +40,9 @@ def _now() -> datetime:
 
 class NodeView(BaseModel):
     """Unified node representation for events and snapshots."""
+
     node_id: str
-    node_type: str            # "topic" | "fact" | "inference"
+    node_type: str  # "topic" | "fact" | "inference"
     content: str
     # "active" | "corrected" | "historical" | "merged" | "archived", plus the
     # legacy "superseded" on graphs written before the supersession split.
@@ -53,7 +54,7 @@ class NodeView(BaseModel):
     # statement about the graph, and the cheaper honest answer is for the panel
     # to render a dash.
     confidence: float | None
-    retrieved_at: datetime | None      # None until a search has returned it
+    retrieved_at: datetime | None  # None until a search has returned it
     created_at: datetime
     graph: str
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -61,6 +62,7 @@ class NodeView(BaseModel):
 
 class EdgeView(BaseModel):
     """Unified edge representation for events and snapshots."""
+
     edge_id: str
     src_id: str
     dst_id: str
@@ -77,6 +79,7 @@ class TimepointView(BaseModel):
     `start` is absent for a vague timepoint ("during the Renaissance"), which
     the frontend must place off the metric axis rather than guess a date for.
     """
+
     timepoint_id: str
     start: datetime | None = None
     end: datetime | None = None
@@ -86,6 +89,7 @@ class TimepointView(BaseModel):
 
 class MetacontextView(BaseModel):
     """An epistemic frame, so the dashboard can name one rather than show a uuid."""
+
     metacontext_id: str
     content: str
     description: str = ""
@@ -99,6 +103,7 @@ class RelationLabelView(BaseModel):
     can show what a relation is called and nothing about what this graph means
     by it — which is the label record restated for the viewer.
     """
+
     relation_label_id: str
     name: str
     kind: str
@@ -112,6 +117,7 @@ class TimelineView(BaseModel):
     Timepoints travel embedded, matching how they are stored — a timeline is
     one record, and its points are not graph nodes.
     """
+
     timeline_id: str
     name: str
     description: str = ""
@@ -226,6 +232,7 @@ class EventCategory(str, Enum):
 
 class Event(BaseModel):
     """Base event. All events carry a timestamp, category, and graph for routing."""
+
     timestamp: datetime = Field(default_factory=_now)
     category: EventCategory
     graph: str = ""
@@ -237,6 +244,7 @@ class Event(BaseModel):
 
 class NodeStored(Event):
     """A node was created or updated in storage."""
+
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
     event_type: Literal["node_stored"] = "node_stored"
     node: NodeView
@@ -249,9 +257,11 @@ class NodeStatusChanged(Event):
     is carried here rather than left to the lineage edge that arrives as its own
     `EdgeStored` a moment later, because joining those two by their adjacency in
     the stream breaks as soon as anything interleaves — and "123 superseded by
-    124" is the one thing a reader of this event wants to know. `None` where nothing superseded the node: archival retires a node for
-    triviality, and there is no counterpart to name.
+    124" is the one thing a reader of this event wants to know. `None` where
+    nothing superseded the node: archival retires a node for triviality, and
+    there is no counterpart to name.
     """
+
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
     event_type: Literal["node_status_changed"] = "node_status_changed"
     node_id: str
@@ -285,6 +295,7 @@ class ActionVerb(str, Enum):
     `counts` — recorded so nobody mints a `recurs` verb later and splits the
     vocabulary again.
     """
+
     STORED = "stored"
     CORRECTED = "corrected"
     WORLD_CHANGED = "world_changed"
@@ -314,12 +325,13 @@ class GraphActionRecorded(Event):
     from parts is a second place where the vocabulary of the system gets
     decided, and it would drift from the tool responses that use the same words.
     """
+
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
     event_type: Literal["graph_action_recorded"] = "graph_action_recorded"
     action_id: str
     verb: ActionVerb
-    subjects: list[str]          # node ids, primary first
-    counts: dict[str, int]       # {"edges": 3, "nodes": 1} — what it swept up
+    subjects: list[str]  # node ids, primary first
+    counts: dict[str, int]  # {"edges": 3, "nodes": 1} — what it swept up
     summary: str
 
 
@@ -336,6 +348,7 @@ class RetrievalRecorded(Event):
     text and response payloads never leave the process by this route
     (`RETRIEVAL_PROVENANCE.md` §3.2).
     """
+
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
     event_type: Literal["retrieval_recorded"] = "retrieval_recorded"
     record: dict
@@ -343,6 +356,7 @@ class RetrievalRecorded(Event):
 
 class EdgeStored(Event):
     """An edge was created between two nodes."""
+
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
     event_type: Literal["edge_stored"] = "edge_stored"
     edge: EdgeView
@@ -358,6 +372,7 @@ class TimelineStored(Event):
     itself. Timelines are small; sending the current state is cheaper and cannot
     drift from storage.
     """
+
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
     event_type: Literal["timeline_stored"] = "timeline_stored"
     timeline: TimelineView
@@ -365,29 +380,32 @@ class TimelineStored(Event):
 
 class EmbeddingStored(Event):
     """An embedding was stored (we don't send the vector, just the association)."""
+
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
     event_type: Literal["embedding_stored"] = "embedding_stored"
     item_id: str
     model_id: str
-    dimensions: int         # len(vector) — useful for UI without sending the full vector
+    dimensions: int  # len(vector) — useful for UI without sending the full vector
 
 
 class DocumentStored(Event):
     """A raw document was ingested."""
+
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
     event_type: Literal["document_stored"] = "document_stored"
     document_id: str
-    content_preview: str    # first ~200 chars
+    content_preview: str  # first ~200 chars
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class SegmentStored(Event):
     """A segment was created from a document."""
+
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
     event_type: Literal["segment_stored"] = "segment_stored"
     segment_id: str
-    source_id: str          # document id
-    text_preview: str       # first ~200 chars
+    source_id: str  # document id
+    text_preview: str  # first ~200 chars
     span_start: int
     span_end: int
 
@@ -398,23 +416,26 @@ class SegmentStored(Event):
 
 class PipelineTopologyEdge(BaseModel):
     """An edge in the Petri net topology (place→transition or transition→place)."""
-    source: str             # place or transition name
-    target: str             # place or transition name
+
+    source: str  # place or transition name
+    target: str  # place or transition name
     label: str | None = None  # argument name for input edges
 
 
 class PipelineStarted(Event):
     """A pipeline execution has begun, including full topology for rendering."""
+
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
     event_type: Literal["pipeline_started"] = "pipeline_started"
     pipeline_name: str
-    place_names: list[str]          # all places in the net
-    transition_names: list[str]     # all transitions in the net
+    place_names: list[str]  # all places in the net
+    transition_names: list[str]  # all transitions in the net
     edges: list[PipelineTopologyEdge] = Field(default_factory=list)
 
 
 class TransitionEnabled(Event):
     """A transition has become enabled (has sufficient input tokens)."""
+
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
     event_type: Literal["transition_enabled"] = "transition_enabled"
     pipeline_name: str
@@ -423,25 +444,28 @@ class TransitionEnabled(Event):
 
 class TransitionFired(Event):
     """A transition has started executing."""
+
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
     event_type: Literal["transition_fired"] = "transition_fired"
     pipeline_name: str
     transition_name: str
-    input_places: list[str]         # places that provided tokens
+    input_places: list[str]  # places that provided tokens
 
 
 class TransitionCompleted(Event):
     """A transition has finished executing and produced output."""
+
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
     event_type: Literal["transition_completed"] = "transition_completed"
     pipeline_name: str
     transition_name: str
-    output_places: list[str]        # places that received tokens
-    duration_ms: float              # execution time
+    output_places: list[str]  # places that received tokens
+    duration_ms: float  # execution time
 
 
 class TokensUpdated(Event):
     """Token counts changed in one or more places (batch update)."""
+
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
     event_type: Literal["tokens_updated"] = "tokens_updated"
     pipeline_name: str
@@ -450,6 +474,7 @@ class TokensUpdated(Event):
 
 class PipelineCompleted(Event):
     """A pipeline execution has finished successfully."""
+
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
     event_type: Literal["pipeline_completed"] = "pipeline_completed"
     pipeline_name: str
@@ -465,6 +490,7 @@ class PipelineFailed(Event):
     `transitions_fired` counts the transitions that fired before the raising one
     (which did not fire).
     """
+
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
     event_type: Literal["pipeline_failed"] = "pipeline_failed"
     pipeline_name: str
@@ -479,6 +505,7 @@ class PipelineFailed(Event):
 
 class GraphSwitched(Event):
     """The MCP active graph was changed."""
+
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
     event_type: Literal["graph_switched"] = "graph_switched"
     previous_graph: str
@@ -492,6 +519,7 @@ class ReflectCounterUpdated(Event):
     boundary rule (inclusive) lives in one place and a badge cannot disagree
     with what `store_decomposition` tells the agent.
     """
+
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
     event_type: Literal["reflect_counter_updated"] = "reflect_counter_updated"
     count: int
@@ -501,7 +529,27 @@ class ReflectCounterUpdated(Event):
 
 # --- Union of all concrete event types ---
 
-GraphEvent = NodeStored | NodeStatusChanged | GraphActionRecorded | RetrievalRecorded | EdgeStored | TimelineStored | EmbeddingStored | DocumentStored | SegmentStored | GraphSwitched | ReflectCounterUpdated
-PipelineEvent = PipelineStarted | TransitionEnabled | TransitionFired | TransitionCompleted | TokensUpdated | PipelineCompleted | PipelineFailed
+GraphEvent = (
+    NodeStored
+    | NodeStatusChanged
+    | GraphActionRecorded
+    | RetrievalRecorded
+    | EdgeStored
+    | TimelineStored
+    | EmbeddingStored
+    | DocumentStored
+    | SegmentStored
+    | GraphSwitched
+    | ReflectCounterUpdated
+)
+PipelineEvent = (
+    PipelineStarted
+    | TransitionEnabled
+    | TransitionFired
+    | TransitionCompleted
+    | TokensUpdated
+    | PipelineCompleted
+    | PipelineFailed
+)
 
 AnyEvent = GraphEvent | PipelineEvent

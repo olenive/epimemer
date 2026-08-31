@@ -7,18 +7,18 @@ server wiring including lifespan, Context injection, and JSON serialization.
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-
 from fastmcp import FastMCP
 
-from epimemer.embeddings.mock import MockEmbeddingProvider
-from epimemer.mcp.retrieval_records import new_record_log
-from epimemer.mcp.config import ServerConfig
-from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
+from epimemer.embeddings.mock import MockEmbeddingProvider
+from epimemer.mcp.config import ServerConfig
+from epimemer.mcp.retrieval_records import new_record_log
+from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.storage.memory import InMemoryStorage
+
 
 def _graph_with_the_real() -> InMemoryStorage:
     """An in-memory graph somebody has set up.
@@ -75,7 +75,9 @@ def _parse_response(result) -> dict:
 
 
 async def _segment_and_store(
-    server: FastMCP, content: str, metacontext_id: str = "the-real",
+    server: FastMCP,
+    content: str,
+    metacontext_id: str = "the-real",
     graph: str = "default",
 ) -> dict:
     """Helper: run the two-step ingest flow (segment + store_decomposition).
@@ -116,7 +118,6 @@ async def _segment_and_store(
 
 
 class TestMCPProtocol:
-
     async def test_segment_returns_valid_json(self, server):
         result = await server.call_tool(
             "segment",
@@ -166,7 +167,8 @@ class TestMCPProtocol:
         if len(nodes) >= 2:
             link_result = await server.call_tool(
                 "link",
-                {"expected_graph": "default", 
+                {
+                    "expected_graph": "default",
                     "src_id": nodes[0]["id"],
                     "dst_id": nodes[1]["id"],
                     "edge_type": "supports",
@@ -196,8 +198,10 @@ class TestMCPProtocol:
     async def test_error_returns_structured_json(self, server):
         result = await server.call_tool(
             "update",
-            {"expected_graph": "default", 
-                "node_id": "nonexistent", "new_content": "test",
+            {
+                "expected_graph": "default",
+                "node_id": "nonexistent",
+                "new_content": "test",
                 "because": "it_was_wrong",
             },
         )
@@ -245,23 +249,29 @@ class TestMCPProtocol:
         every timestamp the storage layer then compares lexicographically.
         """
         created = _parse_response(
-            await server.call_tool("create_timeline", {"expected_graph": "default", "name": "Offsets"})
+            await server.call_tool(
+                "create_timeline", {"expected_graph": "default", "name": "Offsets"}
+            )
         )
         timeline_id = created["result"]["timeline_id"]
 
         await server.call_tool(
             "add_timepoint",
-            {"expected_graph": "default", "timeline_id": timeline_id, "start": "2024-01-01T12:00:00+02:00"},
+            {
+                "expected_graph": "default",
+                "timeline_id": timeline_id,
+                "start": "2024-01-01T12:00:00+02:00",
+            },
         )
 
         queried = _parse_response(
-            await server.call_tool("query_timeline", {"expected_graph": "default", "timeline_id": timeline_id})
+            await server.call_tool(
+                "query_timeline", {"expected_graph": "default", "timeline_id": timeline_id}
+            )
         )
         starts = [tp["start"] for tp in queried["result"]["timepoints"]]
         assert len(starts) == 1
-        assert datetime.fromisoformat(starts[0]) == datetime(
-            2024, 1, 1, 10, 0, tzinfo=timezone.utc
-        )
+        assert datetime.fromisoformat(starts[0]) == datetime(2024, 1, 1, 10, 0, tzinfo=UTC)
 
     async def test_query_timeline_range_converts_offset_to_utc(self, server):
         """Range bounds are parsed on the same broken path as `start`.
@@ -272,13 +282,19 @@ class TestMCPProtocol:
         would cancel.
         """
         created = _parse_response(
-            await server.call_tool("create_timeline", {"expected_graph": "default", "name": "Ranges"})
+            await server.call_tool(
+                "create_timeline", {"expected_graph": "default", "name": "Ranges"}
+            )
         )
         timeline_id = created["result"]["timeline_id"]
 
         await server.call_tool(
             "add_timepoint",
-            {"expected_graph": "default", "timeline_id": timeline_id, "start": "2024-01-01T10:00:00+00:00"},
+            {
+                "expected_graph": "default",
+                "timeline_id": timeline_id,
+                "start": "2024-01-01T10:00:00+00:00",
+            },
         )
 
         # 11:00+02:00 == 09:00Z .. 13:00+02:00 == 11:00Z — brackets 10:00Z.
@@ -286,7 +302,8 @@ class TestMCPProtocol:
         inside = _parse_response(
             await server.call_tool(
                 "query_timeline",
-                {"expected_graph": "default", 
+                {
+                    "expected_graph": "default",
                     "timeline_id": timeline_id,
                     "range_start": "2024-01-01T11:00:00+02:00",
                     "range_end": "2024-01-01T13:00:00+02:00",
@@ -299,7 +316,8 @@ class TestMCPProtocol:
         outside = _parse_response(
             await server.call_tool(
                 "query_timeline",
-                {"expected_graph": "default", 
+                {
+                    "expected_graph": "default",
                     "timeline_id": timeline_id,
                     "range_start": "2024-01-01T13:00:00+02:00",
                     "range_end": "2024-01-01T15:00:00+02:00",
@@ -375,9 +393,7 @@ class TestClaimAgentThroughTheServer:
     happens where FastMCP has no session to bind to.
     """
 
-    async def test_an_unapproved_id_is_refused_and_the_refusal_carries_advice(
-        self, server
-    ):
+    async def test_an_unapproved_id_is_refused_and_the_refusal_carries_advice(self, server):
         result = await server.call_tool(
             "claim_agent",
             {"expected_graph": "default", "agent_id": "self-appointed", "description": "a critic"},
@@ -395,8 +411,7 @@ class TestClaimAgentThroughTheServer:
 
         result = await server.call_tool(
             "claim_agent",
-            {"expected_graph": "default", "agent_id": "critic",
-             "description": "a critic"},
+            {"expected_graph": "default", "agent_id": "critic", "description": "a critic"},
         )
 
         data = _parse_response(result)["result"]
@@ -415,8 +430,7 @@ class TestClaimAgentThroughTheServer:
 
         result = await server.call_tool(
             "claim_agent",
-            {"expected_graph": "default", "agent_id": "critic",
-             "description": "a critic"},
+            {"expected_graph": "default", "agent_id": "critic", "description": "a critic"},
         )
 
         data = _parse_response(result)["result"]
@@ -430,15 +444,12 @@ class TestClaimAgentThroughTheServer:
         unable to admit a judge to the new graph at all.
         """
         deps = epimemer_mcp._lifespan_result
-        deps["config"] = deps["config"].model_copy(
-            update={"approved_agents": ["critic"]}
-        )
+        deps["config"] = deps["config"].model_copy(update={"approved_agents": ["critic"]})
 
         await server.call_tool("use_graph", {"name": "elsewhere", "confirm": True})
         result = await server.call_tool(
             "claim_agent",
-            {"expected_graph": "elsewhere", "agent_id": "critic",
-             "description": "a critic"},
+            {"expected_graph": "elsewhere", "agent_id": "critic", "description": "a critic"},
         )
 
         assert _parse_response(result)["result"]["status"] == "claimed"

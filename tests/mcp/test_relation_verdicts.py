@@ -38,7 +38,6 @@ from epimemer.pipelines.reflection.relation_consolidation import (
     sweep_similar_relation_pairs,
 )
 
-
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
 EDITOR = JudgeRef(agent_id="editor", digest="d2")
 
@@ -57,11 +56,13 @@ class _FixedEmbed:
 
 # `works_for` and `employed_by` collide; `funded_by` is the control that must
 # never be nominated with either.
-TWINS = _FixedEmbed({
-    "works_for": [1.0, 0.0],
-    "employed_by": [1.0, 0.0],
-    "funded_by": [0.0, 1.0],
-})
+TWINS = _FixedEmbed(
+    {
+        "works_for": [1.0, 0.0],
+        "employed_by": [1.0, 0.0],
+        "funded_by": [0.0, 1.0],
+    }
+)
 
 
 async def _node(storage, content):
@@ -88,8 +89,11 @@ async def _bare_edge(storage, label, *, kind="relationship"):
     dst = await _node(storage, f"{label}-dst")
     await storage.store_edge(
         NodeEdge(
-            src_id=src.id, dst_id=dst.id, type=EdgeType.RELATED,
-            label=label, kind=kind,
+            src_id=src.id,
+            dst_id=dst.id,
+            type=EdgeType.RELATED,
+            label=label,
+            kind=kind,
         )
     )
     return src, dst
@@ -108,8 +112,13 @@ async def _nominated(storage):
 
 
 async def _judge_pair(
-    storage, verdict="distinct", *, because="Different relationships.",
-    judge=CRITIC, kind="relationship", pair=("works_for", "employed_by"),
+    storage,
+    verdict="distinct",
+    *,
+    because="Different relationships.",
+    judge=CRITIC,
+    kind="relationship",
+    pair=("works_for", "employed_by"),
 ):
     result, _ = await tools.apply_reflection(
         storage,
@@ -158,12 +167,14 @@ class TestTheTreadmillStops:
         """Suppression is per pair, not per sweep."""
         await _twin_labels(storage)
         await _edge(storage, "retained_by")
-        embed = _FixedEmbed({
-            "works_for": [1.0, 0.0],
-            "employed_by": [1.0, 0.0],
-            "retained_by": [0.99, 0.14],
-            "funded_by": [0.0, 1.0],
-        })
+        embed = _FixedEmbed(
+            {
+                "works_for": [1.0, 0.0],
+                "employed_by": [1.0, 0.0],
+                "retained_by": [0.99, 0.14],
+                "funded_by": [0.0, 1.0],
+            }
+        )
 
         await _judge_pair(storage, "distinct")
 
@@ -276,21 +287,31 @@ class TestBecauseIsRequired:
         One malformed entry must not cost the graph the judgments beside it."""
         await _twin_labels(storage)
         await _edge(storage, "paid_by")
-        embed = _FixedEmbed({
-            "works_for": [1.0, 0.0],
-            "employed_by": [1.0, 0.0],
-            "funded_by": [0.0, 1.0],
-            "paid_by": [0.0, 1.0],
-        })
+        embed = _FixedEmbed(
+            {
+                "works_for": [1.0, 0.0],
+                "employed_by": [1.0, 0.0],
+                "funded_by": [0.0, 1.0],
+                "paid_by": [0.0, 1.0],
+            }
+        )
 
         result, _ = await tools.apply_reflection(
             storage,
             embed,
             relation_verdicts=[
-                {"pair": ["works_for", "employed_by"], "kind": "relationship",
-                 "verdict": "distinct", "because": ""},
-                {"pair": ["funded_by", "paid_by"], "kind": "relationship",
-                 "verdict": "distinct", "because": "Grant, not salary."},
+                {
+                    "pair": ["works_for", "employed_by"],
+                    "kind": "relationship",
+                    "verdict": "distinct",
+                    "because": "",
+                },
+                {
+                    "pair": ["funded_by", "paid_by"],
+                    "kind": "relationship",
+                    "verdict": "distinct",
+                    "because": "Grant, not salary.",
+                },
             ],
             judge=CRITIC,
         )
@@ -309,9 +330,7 @@ class TestOtherRefusals:
         result = await _judge_pair(storage, pair=("works_for", "never_used"))
 
         assert result["relation_verdicts_recorded"] == 0
-        assert "no edge in this graph carries" in (
-            result["relation_verdicts_refused"][0]["reason"]
-        )
+        assert "no edge in this graph carries" in (result["relation_verdicts_refused"][0]["reason"])
 
     async def test_a_cross_kind_pair_is_refused(self, storage):
         """The kind decides whether retrieval follows the edge, so two labels of
@@ -323,21 +342,17 @@ class TestOtherRefusals:
         result = await _judge_pair(storage, pair=("works_for", "cited_in"))
 
         assert result["relation_verdicts_recorded"] == 0
-        assert "never one relationship" in (
-            result["relation_verdicts_refused"][0]["reason"]
-        )
+        assert "never one relationship" in (result["relation_verdicts_refused"][0]["reason"])
 
     async def test_a_stale_kind_on_the_nomination_is_refused(self, storage):
         await _edge(storage, "cited_in", kind="attribution")
         await _edge(storage, "quoted_in", kind="attribution")
 
-        result = await _judge_pair(
-            storage, pair=("cited_in", "quoted_in"), kind="relationship"
-        )
+        result = await _judge_pair(storage, pair=("cited_in", "quoted_in"), kind="relationship")
 
         assert result["relation_verdicts_recorded"] == 0
-        assert "is 'attribution' in this graph" in (
-            result["relation_verdicts_refused"][0]["reason"]
+        assert (
+            "is 'attribution' in this graph" in (result["relation_verdicts_refused"][0]["reason"])
         )
 
     async def test_a_label_paired_with_itself_is_refused(self, storage):
@@ -356,8 +371,8 @@ class TestOtherRefusals:
         result = await _judge_pair(storage, verdict="compatible")
 
         assert result["relation_verdicts_recorded"] == 0
-        assert "not a verdict about a label pair" in (
-            result["relation_verdicts_refused"][0]["reason"]
+        assert (
+            "not a verdict about a label pair" in (result["relation_verdicts_refused"][0]["reason"])
         )
 
 
@@ -370,8 +385,8 @@ class TestARetryIsNotASecondOpinion:
 
         assert result["relation_verdicts_recorded"] == 0
         assert result["relation_verdicts_confirmed"] == 0
-        assert "a retry is not a second opinion" in (
-            result["relation_verdicts_refused"][0]["reason"]
+        assert (
+            "a retry is not a second opinion" in (result["relation_verdicts_refused"][0]["reason"])
         )
 
     async def test_a_retry_writes_no_second_row(self, storage):
@@ -441,9 +456,7 @@ class TestASecondJudgeConfirms:
         await _twin_labels(storage)
         await _judge_pair(storage, "distinct", judge=CRITIC)
 
-        result = await _judge_pair(
-            storage, "synonymous", because="One relationship.", judge=EDITOR
-        )
+        result = await _judge_pair(storage, "synonymous", because="One relationship.", judge=EDITOR)
 
         assert result["relation_verdicts_recorded"] == 1
         ids = list(await storage.judged_relation_pairs())[0]
@@ -461,9 +474,7 @@ class TestTheJournalRow:
 
         await _judge_pair(storage, judge=CRITIC)
 
-        row = (await storage.query_decisions(
-            kinds=[DecisionKind.RELATION_VERDICT]
-        ))[0]
+        row = (await storage.query_decisions(kinds=[DecisionKind.RELATION_VERDICT]))[0]
         a = await storage.get_relation_label("works_for", "relationship")
         b = await storage.get_relation_label("employed_by", "relationship")
         assert row.subject_ids == list(relation_pair_key(a.id, b.id))
@@ -475,14 +486,11 @@ class TestTheJournalRow:
 
         result, _ = await tools.review(storage)
         row = next(
-            d for d in result["decisions"]
-            if d["kind"] == DecisionKind.RELATION_VERDICT.value
+            d for d in result["decisions"] if d["kind"] == DecisionKind.RELATION_VERDICT.value
         )
 
         previews = {s["content_preview"] for s in row["subjects"]}
-        assert previews == {
-            "works_for (relationship)", "employed_by (relationship)"
-        }
+        assert previews == {"works_for (relationship)", "employed_by (relationship)"}
         assert {s["subject_kind"] for s in row["subjects"]} == {"relation_label"}
 
     async def test_a_label_subject_is_not_declared_as_a_retrieved_node(self, storage):
@@ -504,9 +512,7 @@ class TestTheJournalRow:
         await _judge_pair(storage)
 
         assert await storage.query_decisions(kinds=[DecisionKind.SIMILARITY]) == []
-        assert len(
-            await storage.query_decisions(kinds=[DecisionKind.RELATION_VERDICT])
-        ) == 1
+        assert len(await storage.query_decisions(kinds=[DecisionKind.RELATION_VERDICT])) == 1
 
     async def test_the_row_names_no_node(self, storage):
         """The subjects are label records, so nothing surfaces against a node
@@ -516,9 +522,7 @@ class TestTheJournalRow:
         await _twin_labels(storage)
         await _judge_pair(storage)
 
-        row = (await storage.query_decisions(
-            kinds=[DecisionKind.RELATION_VERDICT]
-        ))[0]
+        row = (await storage.query_decisions(kinds=[DecisionKind.RELATION_VERDICT]))[0]
         every_node = {node.id for node in await storage.query_nodes()}
         assert set(row.subject_ids) & every_node == set()
         assert await storage.get_nodes(row.subject_ids) == {}
@@ -587,16 +591,15 @@ class TestAVerdictIsReadableWhereTheVocabularyIs:
         rather than resolved, so both verdicts are shown with their reasons."""
         await _twin_labels(storage)
         await _judge_pair(storage, "distinct", judge=CRITIC)
-        await _judge_pair(
-            storage, "synonymous", because="One relationship.", judge=EDITOR
-        )
+        await _judge_pair(storage, "synonymous", because="One relationship.", judge=EDITOR)
 
         result, _ = await tools.list_relations(storage)
         by_label = {r["label"]: r for r in result["relations"]}
 
-        assert {
-            v["verdict"] for v in by_label["works_for"]["verdicts"]
-        } == {"distinct", "synonymous"}
+        assert {v["verdict"] for v in by_label["works_for"]["verdicts"]} == {
+            "distinct",
+            "synonymous",
+        }
 
     async def test_an_unattributed_verdict_names_no_judge(self, storage):
         await _twin_labels(storage)
@@ -640,18 +643,18 @@ class TestKindIsCopiedNotDefaulted:
         result, _ = await tools.apply_reflection(
             storage,
             TWINS,
-            relation_verdicts=[{
-                "pair": ["cited_in", "quoted_in"],
-                "verdict": "distinct",
-                "because": "Citation is not quotation.",
-            }],
+            relation_verdicts=[
+                {
+                    "pair": ["cited_in", "quoted_in"],
+                    "verdict": "distinct",
+                    "because": "Citation is not quotation.",
+                }
+            ],
             judge=CRITIC,
         )
 
         assert result["relation_verdicts_recorded"] == 0
-        assert "`kind` is required" in (
-            result["relation_verdicts_refused"][0]["reason"]
-        )
+        assert "`kind` is required" in (result["relation_verdicts_refused"][0]["reason"])
 
     async def test_a_kind_less_entry_does_not_suppress(self, storage):
         await _twin_labels(storage)
@@ -659,11 +662,13 @@ class TestKindIsCopiedNotDefaulted:
         await tools.apply_reflection(
             storage,
             TWINS,
-            relation_verdicts=[{
-                "pair": ["works_for", "employed_by"],
-                "verdict": "distinct",
-                "because": "Different relationships.",
-            }],
+            relation_verdicts=[
+                {
+                    "pair": ["works_for", "employed_by"],
+                    "verdict": "distinct",
+                    "because": "Different relationships.",
+                }
+            ],
             judge=CRITIC,
         )
 
@@ -680,9 +685,7 @@ class TestSuppressionIsPermanentByDesign:
         await _twin_labels(storage)
         await _judge_pair(storage)
 
-        await tools.describe_relation(
-            "works_for", storage, description="Employment, not retainer."
-        )
+        await tools.describe_relation("works_for", storage, description="Employment, not retainer.")
 
         assert await _nominated(storage) == set()
 

@@ -74,7 +74,7 @@ def similar_pairs(
         # is the item's index in the full set, and the diagonal lands where the
         # two are equal.
         upper = cols > rows + start
-        for row, col in zip(rows[upper], cols[upper]):
+        for row, col in zip(rows[upper], cols[upper], strict=True):
             found.append((start + int(row), int(col), float(scores[row, col])))
     return found
 

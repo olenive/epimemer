@@ -9,7 +9,7 @@ Both backends, because a judge is graph *state* and the two stores agree about
 it only if something checks — the divergence `tests/conftest.py` exists for.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from epimemer.core.types import (
     Agent,
@@ -22,9 +22,8 @@ from epimemer.core.types import (
 from epimemer.mcp import tools
 from epimemer.storage.protocol import judge_aliases
 
-
-AT = datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
-LATER = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
+AT = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
+LATER = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
 
 
 def _accept(chosen: str | None = None):
@@ -36,8 +35,11 @@ def _accept(chosen: str | None = None):
 
 async def _claim(storage, name: str, description: str = "a critic", now=AT) -> dict:
     result, _ = await tools.claim_agent(
-        storage, agent_id=name, description=description,
-        approve_id=_accept(), now=now,
+        storage,
+        agent_id=name,
+        description=description,
+        approve_id=_accept(),
+        now=now,
     )
     assert result["status"] == "claimed", result.get("reason")
     return result
@@ -72,16 +74,17 @@ class TestAHandleFindsTheJudgeTheUserMeant:
         assert second["agent_id"] == first["agent_id"]
         assert second["name"] == "Opus 5", "the key is not the name"
 
-    async def test_typing_an_existing_name_at_the_new_judge_prompt_joins_it(
-        self, storage
-    ):
+    async def test_typing_an_existing_name_at_the_new_judge_prompt_joins_it(self, storage):
         # The free-text path is reached by asking for a *new* judge, and typing
         # the name of one that exists is how this graph's own split began.
         first = await _claim(storage, "Opus 5")
 
         result, _ = await tools.claim_agent(
-            storage, agent_id="something else", description="a critic",
-            approve_id=_accept("Opus 5"), now=LATER,
+            storage,
+            agent_id="something else",
+            description="a critic",
+            approve_id=_accept("Opus 5"),
+            now=LATER,
         )
 
         assert result["agent_id"] == first["agent_id"]
@@ -98,9 +101,7 @@ class TestAHandleFindsTheJudgeTheUserMeant:
         assert result["agent_id"] == "configured"
         assert await storage.get_approved_agent_ids() == ["configured"]
 
-    async def test_a_record_written_before_the_split_is_named_on_its_next_claim(
-        self, storage
-    ):
+    async def test_a_record_written_before_the_split_is_named_on_its_next_claim(self, storage):
         await storage.upsert_agent(Agent(id="legacy", authorised_at=AT))
         await storage.set_approved_agent_ids(["legacy"])
 
@@ -119,9 +120,7 @@ class TestRenamingCarriesTheDecisions:
         claimed = await _claim(storage, "Opus 5")
         await _decided(storage, claimed["agent_id"])
 
-        result = await tools.rename_judge(
-            storage, handle="Opus 5", name="Opus 5 reviewer"
-        )
+        result = await tools.rename_judge(storage, handle="Opus 5", name="Opus 5 reviewer")
 
         assert result["status"] == "renamed"
         assert result["agent_id"] == claimed["agent_id"]
@@ -132,9 +131,7 @@ class TestRenamingCarriesTheDecisions:
         await _decided(storage, claimed["agent_id"])
         await tools.rename_judge(storage, handle="Opus 5", name="reviewer")
 
-        found = await storage.query_decisions(
-            agent_ids=await judge_aliases(storage, "reviewer")
-        )
+        found = await storage.query_decisions(agent_ids=await judge_aliases(storage, "reviewer"))
 
         assert len(found) == 1
 
@@ -161,9 +158,9 @@ class TestRenamingCarriesTheDecisions:
 
     async def test_a_blank_name_is_refused(self, storage):
         await _claim(storage, "Opus 5")
-        assert (
-            await tools.rename_judge(storage, handle="Opus 5", name="  ")
-        )["status"] == "refused"
+        assert (await tools.rename_judge(storage, handle="Opus 5", name="  "))[
+            "status"
+        ] == "refused"
 
 
 class TestATakenNameIsAQuestionNotAnError:
@@ -174,9 +171,7 @@ class TestATakenNameIsAQuestionNotAnError:
         await _claim(storage, "Opus 5 Judge")
         await _claim(storage, "Opus 5", now=LATER)
 
-        result = await tools.rename_judge(
-            storage, handle="Opus 5 Judge", name="Opus 5"
-        )
+        result = await tools.rename_judge(storage, handle="Opus 5 Judge", name="Opus 5")
 
         assert result["status"] == "same_judge_needed"
         assert "same judge" in result["reason"]
@@ -193,21 +188,15 @@ class TestATakenNameIsAQuestionNotAnError:
         assert result["status"] == "consolidated"
         assert result["agent_id"] == new["agent_id"], "the name's holder survives"
         assert old["agent_id"] in result["former_ids"]
-        assert [agent_name(a) for a in live_agents(await storage.list_agents())] == [
-            "Opus 5"
-        ]
+        assert [agent_name(a) for a in live_agents(await storage.list_agents())] == ["Opus 5"]
 
-    async def test_the_absorbed_records_decisions_are_found_under_the_survivor(
-        self, storage
-    ):
+    async def test_the_absorbed_records_decisions_are_found_under_the_survivor(self, storage):
         old = await _claim(storage, "Opus 5 Judge")
         new = await _claim(storage, "Opus 5", now=LATER)
         await _decided(storage, old["agent_id"], subject="n1")
         await _decided(storage, new["agent_id"], subject="n2")
 
-        await tools.rename_judge(
-            storage, handle="Opus 5 Judge", name="Opus 5", same_judge=True
-        )
+        await tools.rename_judge(storage, handle="Opus 5 Judge", name="Opus 5", same_judge=True)
         result, _ = await tools.review(storage, mode="by_agent", agent_id="Opus 5")
 
         assert len(result["decisions"]) == 2
@@ -218,9 +207,7 @@ class TestATakenNameIsAQuestionNotAnError:
         new = await _claim(storage, "Opus 5", now=LATER)
         record = await _decided(storage, old["agent_id"])
 
-        await tools.rename_judge(
-            storage, handle="Opus 5 Judge", name="Opus 5", same_judge=True
-        )
+        await tools.rename_judge(storage, handle="Opus 5 Judge", name="Opus 5", same_judge=True)
 
         stored = await storage.get_decision(record.id)
         assert stored.judged_by.agent_id == old["agent_id"]
@@ -229,21 +216,15 @@ class TestATakenNameIsAQuestionNotAnError:
     async def test_the_absorbed_record_is_kept_and_stops_being_offered(self, storage):
         old = await _claim(storage, "Opus 5 Judge")
         await _claim(storage, "Opus 5", now=LATER)
-        await tools.rename_judge(
-            storage, handle="Opus 5 Judge", name="Opus 5", same_judge=True
-        )
+        await tools.rename_judge(storage, handle="Opus 5 Judge", name="Opus 5", same_judge=True)
 
         assert await storage.get_agent(old["agent_id"]) is not None, "not deleted"
         assert [c.name for c in await tools.judge_roster(storage)] == ["Opus 5"]
 
-    async def test_a_claim_under_the_absorbed_name_lands_on_the_survivor(
-        self, storage
-    ):
+    async def test_a_claim_under_the_absorbed_name_lands_on_the_survivor(self, storage):
         old = await _claim(storage, "Opus 5 Judge")
         new = await _claim(storage, "Opus 5", now=LATER)
-        await tools.rename_judge(
-            storage, handle="Opus 5 Judge", name="Opus 5", same_judge=True
-        )
+        await tools.rename_judge(storage, handle="Opus 5 Judge", name="Opus 5", same_judge=True)
 
         # The agent proposes the key it was given a session ago.
         result = await _claim(storage, old["agent_id"], now=LATER)
@@ -253,14 +234,10 @@ class TestATakenNameIsAQuestionNotAnError:
 
 
 class TestTheRosterAfterAConsolidation:
-    async def test_an_approved_key_belonging_to_a_live_judge_is_not_offered_twice(
-        self, storage
-    ):
+    async def test_an_approved_key_belonging_to_a_live_judge_is_not_offered_twice(self, storage):
         old = await _claim(storage, "Opus 5 Judge")
         await _claim(storage, "Opus 5", now=LATER)
-        await tools.rename_judge(
-            storage, handle="Opus 5 Judge", name="Opus 5", same_judge=True
-        )
+        await tools.rename_judge(storage, handle="Opus 5 Judge", name="Opus 5", same_judge=True)
 
         # Both keys are still approved — approval is a union and withdrawing one
         # is not this operation's business — but they are one judge now.
@@ -284,9 +261,7 @@ class TestSeedingApprovalsTheWayAPersonNamesThem:
     async def test_a_former_key_seeds_the_judge_that_absorbed_it(self, storage):
         old = await _claim(storage, "Opus 5 Judge")
         new = await _claim(storage, "Opus 5", now=LATER)
-        await tools.rename_judge(
-            storage, handle="Opus 5 Judge", name="Opus 5", same_judge=True
-        )
+        await tools.rename_judge(storage, handle="Opus 5 Judge", name="Opus 5", same_judge=True)
         await storage.set_approved_agent_ids([])
 
         approved = await tools.seed_approved_judges(storage, [old["agent_id"]])
@@ -296,16 +271,17 @@ class TestSeedingApprovalsTheWayAPersonNamesThem:
     async def test_a_name_nobody_holds_is_admitted_as_itself(self, storage):
         # Which is exactly the old behaviour, and the only sensible reading of
         # seeding a judge that does not exist yet: its first claim adopts it.
-        assert await tools.seed_approved_judges(storage, ["configured"]) == [
-            "configured"
-        ]
+        assert await tools.seed_approved_judges(storage, ["configured"]) == ["configured"]
 
     async def test_a_refusal_names_judges_rather_than_keys(self, storage):
         claimed = await _claim(storage, "Opus 5")
 
         result, _ = await tools.claim_agent(
-            storage, agent_id="stranger", description="a critic",
-            approve_id=None, now=LATER,
+            storage,
+            agent_id="stranger",
+            description="a critic",
+            approve_id=None,
+            now=LATER,
         )
 
         assert result["status"] == "refused"

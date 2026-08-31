@@ -48,13 +48,20 @@ def embedding_provider() -> MockEmbeddingProvider:
 
 async def _fact(storage, content: str, *, status=NodeStatus.ACTIVE) -> Fact:
     fact = Fact(
-        content=content, source_id="seg-1", claim_kind=ClaimKind.STATE,
-        status=status, value=ValueSignal(),
+        content=content,
+        source_id="seg-1",
+        claim_kind=ClaimKind.STATE,
+        status=status,
+        value=ValueSignal(),
     )
     await storage.store_node(fact)
-    await storage.store_edge(NodeEdge(
-        src_id=fact.id, dst_id=BASE_METACONTEXT_ID, type=EdgeType.HAS_METACONTEXT,
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=fact.id,
+            dst_id=BASE_METACONTEXT_ID,
+            type=EdgeType.HAS_METACONTEXT,
+        )
+    )
     return fact
 
 
@@ -62,19 +69,29 @@ async def _inference_on(storage, content: str, premises) -> Inference:
     """An inference resting on `premises`, flagged stale for each retired one."""
     inference = Inference(content=content, source_id="seg-1", value=ValueSignal())
     await storage.store_node(inference)
-    await storage.store_edge(NodeEdge(
-        src_id=inference.id, dst_id=BASE_METACONTEXT_ID,
-        type=EdgeType.HAS_METACONTEXT,
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=inference.id,
+            dst_id=BASE_METACONTEXT_ID,
+            type=EdgeType.HAS_METACONTEXT,
+        )
+    )
     for premise in premises:
-        await storage.store_edge(NodeEdge(
-            src_id=inference.id, dst_id=premise.id, type=EdgeType.DERIVED_FROM,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=inference.id,
+                dst_id=premise.id,
+                type=EdgeType.DERIVED_FROM,
+            )
+        )
         if premise.status is not NodeStatus.ACTIVE:
-            await storage.store_edge(NodeEdge(
-                src_id=premise.id, dst_id=inference.id,
-                type=EdgeType.EVIDENCE_SUPERSEDED,
-            ))
+            await storage.store_edge(
+                NodeEdge(
+                    src_id=premise.id,
+                    dst_id=inference.id,
+                    type=EdgeType.EVIDENCE_SUPERSEDED,
+                )
+            )
     return inference
 
 
@@ -124,9 +141,7 @@ class TestAConfirmedInferenceIsNotRenominated:
 
         await record_retention(storage, node_id=inference.id, reasons=[premise.id])
 
-        assert not _nominated(
-            await nominate_archival_candidates(storage), inference.id
-        )
+        assert not _nominated(await nominate_archival_candidates(storage), inference.id)
 
     async def test_a_second_supersession_is_a_reason_nobody_covered(self, storage):
         """The anchoring, and the reason the verdict is not permanent. The keep
@@ -137,16 +152,18 @@ class TestAConfirmedInferenceIsNotRenominated:
         inference = await _inference_on(storage, "the release was rushed", [first, second])
         await record_retention(storage, node_id=inference.id, reasons=[first.id])
 
-        assert not _nominated(
-            await nominate_archival_candidates(storage), inference.id
-        )
+        assert not _nominated(await nominate_archival_candidates(storage), inference.id)
 
         # The world moves: the second premise is superseded too.
         second.status = NodeStatus.SUPERSEDED
         await storage.store_node(second)
-        await storage.store_edge(NodeEdge(
-            src_id=second.id, dst_id=inference.id, type=EdgeType.EVIDENCE_SUPERSEDED,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=second.id,
+                dst_id=inference.id,
+                type=EdgeType.EVIDENCE_SUPERSEDED,
+            )
+        )
 
         assert _nominated(await nominate_archival_candidates(storage), inference.id)
 
@@ -260,16 +277,15 @@ class TestTheWorklistDropsWhatWasKept:
 
 
 class TestTheToolPath:
-    async def test_apply_reflection_records_and_journals_it(
-        self, storage, embedding_provider
-    ):
+    async def test_apply_reflection_records_and_journals_it(self, storage, embedding_provider):
         from epimemer.core.types import DecisionKind
         from epimemer.mcp import tools
 
         fact = await _fact(storage, "the licence file lists MPL-2.0")
 
         result, _ = await tools.apply_reflection(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             retained=[{"node_id": fact.id, "because": "still the licence position"}],
         )
 
@@ -279,10 +295,13 @@ class TestTheToolPath:
         rows = await storage.query_decisions(kinds=[DecisionKind.RETENTION])
         assert [row.subject_ids for row in rows] == [[fact.id]]
 
-    @pytest.mark.parametrize("entry", [
-        {"node_id": "", "because": "no id"},
-        {"node_id": "missing-node", "because": "unknown id"},
-    ])
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {"node_id": "", "because": "no id"},
+            {"node_id": "missing-node", "because": "unknown id"},
+        ],
+    )
     async def test_a_malformed_or_unknown_entry_is_skipped(
         self, storage, embedding_provider, entry
     ):
@@ -290,15 +309,11 @@ class TestTheToolPath:
         whole batch: one bad row must not discard the verdicts beside it."""
         from epimemer.mcp import tools
 
-        result, _ = await tools.apply_reflection(
-            storage, embedding_provider, retained=[entry]
-        )
+        result, _ = await tools.apply_reflection(storage, embedding_provider, retained=[entry])
 
         assert result["retentions_recorded"] == 0
 
-    async def test_a_verdict_with_no_reason_is_skipped(
-        self, storage, embedding_provider
-    ):
+    async def test_a_verdict_with_no_reason_is_skipped(self, storage, embedding_provider):
         """`because` is required for the reason it is required on a review
         confirmation: a keep with no reason marks the node reviewed, so the next
         reviewer skips it having learned nothing."""
@@ -338,19 +353,20 @@ class TestTheDocumentedFlowActuallyWorks:
         inference = await _inference_on(storage, "the release was rushed", [premise])
 
         result, _ = await tools.apply_reflection(
-            storage, embedding_provider,
-            retained=[{
-                "node_id": inference.id,
-                "because": "re-read against the superseding fact; it holds",
-                "covers": [premise.id],
-            }],
+            storage,
+            embedding_provider,
+            retained=[
+                {
+                    "node_id": inference.id,
+                    "because": "re-read against the superseding fact; it holds",
+                    "covers": [premise.id],
+                }
+            ],
         )
 
         assert result["retentions_recorded"] == 1
         assert result["retained_skipped"] == []
-        assert not _nominated(
-            await nominate_archival_candidates(storage), inference.id
-        )
+        assert not _nominated(await nominate_archival_candidates(storage), inference.id)
 
     async def test_a_verdict_without_covers_is_refused_and_names_the_reasons(
         self, storage, embedding_provider
@@ -364,7 +380,8 @@ class TestTheDocumentedFlowActuallyWorks:
         inference = await _inference_on(storage, "the release was rushed", [premise])
 
         result, _ = await tools.apply_reflection(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             retained=[{"node_id": inference.id, "because": "looks fine to me"}],
         )
 
@@ -375,9 +392,7 @@ class TestTheDocumentedFlowActuallyWorks:
         assert _nominated(await nominate_archival_candidates(storage), inference.id)
         assert await confirmed_reasons_for([inference.id], storage) == {}
 
-    async def test_an_anchor_naming_nothing_is_refused(
-        self, storage, embedding_provider
-    ):
+    async def test_an_anchor_naming_nothing_is_refused(self, storage, embedding_provider):
         """A typo'd id writes an edge that permanently fails to cover — the
         failure this verdict exists to end, reintroduced through its own write
         path."""
@@ -387,10 +402,15 @@ class TestTheDocumentedFlowActuallyWorks:
         inference = await _inference_on(storage, "the release was rushed", [premise])
 
         result, _ = await tools.apply_reflection(
-            storage, embedding_provider,
-            retained=[{
-                "node_id": inference.id, "because": "re-read", "covers": ["typo-id"],
-            }],
+            storage,
+            embedding_provider,
+            retained=[
+                {
+                    "node_id": inference.id,
+                    "because": "re-read",
+                    "covers": ["typo-id"],
+                }
+            ],
         )
 
         assert result["retentions_recorded"] == 0
@@ -407,7 +427,8 @@ class TestTheDocumentedFlowActuallyWorks:
         fact = await _fact(storage, "the licence file lists MPL-2.0")
 
         result, _ = await tools.apply_reflection(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             archivals=[fact.id],
             retained=[{"node_id": fact.id, "because": "worth keeping"}],
         )
@@ -438,9 +459,7 @@ class TestArchivedEvidenceIsAnchoredToo:
         assert gone[inference.id] == [premise.id]
 
         await record_retention(storage, node_id=inference.id, reasons=[premise.id])
-        assert not _nominated(
-            await nominate_archival_candidates(storage), inference.id
-        )
+        assert not _nominated(await nominate_archival_candidates(storage), inference.id)
 
     async def test_a_second_archived_premise_is_a_reason_nobody_covered(self, storage):
         first = await _fact(storage, "the deploy failed", status=NodeStatus.ARCHIVED)
@@ -448,9 +467,13 @@ class TestArchivedEvidenceIsAnchoredToo:
         await record_retention(storage, node_id=inference.id, reasons=[first.id])
 
         second = await _fact(storage, "the rollback held", status=NodeStatus.ARCHIVED)
-        await storage.store_edge(NodeEdge(
-            src_id=inference.id, dst_id=second.id, type=EdgeType.DERIVED_FROM,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=inference.id,
+                dst_id=second.id,
+                type=EdgeType.DERIVED_FROM,
+            )
+        )
 
         assert _nominated(await nominate_archival_candidates(storage), inference.id)
 
@@ -467,29 +490,28 @@ class TestCoversIsExactlyTheReasons:
     cover — and only the *write* is exact.
     """
 
-    async def test_surplus_anchors_do_not_pre_cover_the_future(
-        self, storage, embedding_provider
-    ):
+    async def test_surplus_anchors_do_not_pre_cover_the_future(self, storage, embedding_provider):
         """The corner that matters most. Naming every premise 'to be safe' is
         what a hurried caller does, and it would silence the next supersession
         before anyone read it — the one thing anchoring exists to prevent."""
         from epimemer.mcp import tools
 
-        superseded = await _fact(
-            storage, "the deploy failed", status=NodeStatus.SUPERSEDED
-        )
+        superseded = await _fact(storage, "the deploy failed", status=NodeStatus.SUPERSEDED)
         still_active = await _fact(storage, "the rollback held")
         inference = await _inference_on(
             storage, "the release was rushed", [superseded, still_active]
         )
 
         result, _ = await tools.apply_reflection(
-            storage, embedding_provider,
-            retained=[{
-                "node_id": inference.id,
-                "because": "re-read",
-                "covers": [superseded.id, still_active.id],
-            }],
+            storage,
+            embedding_provider,
+            retained=[
+                {
+                    "node_id": inference.id,
+                    "because": "re-read",
+                    "covers": [superseded.id, still_active.id],
+                }
+            ],
         )
 
         assert result["retentions_recorded"] == 0
@@ -499,15 +521,16 @@ class TestCoversIsExactlyTheReasons:
         # And the future it would have pre-covered still arrives as a nomination.
         still_active.status = NodeStatus.SUPERSEDED
         await storage.store_node(still_active)
-        await storage.store_edge(NodeEdge(
-            src_id=still_active.id, dst_id=inference.id,
-            type=EdgeType.EVIDENCE_SUPERSEDED,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=still_active.id,
+                dst_id=inference.id,
+                type=EdgeType.EVIDENCE_SUPERSEDED,
+            )
+        )
         assert _nominated(await nominate_archival_candidates(storage), inference.id)
 
-    async def test_a_reasonless_node_takes_no_covers_at_all(
-        self, storage, embedding_provider
-    ):
+    async def test_a_reasonless_node_takes_no_covers_at_all(self, storage, embedding_provider):
         """The self-anchor is implied and never spelled. Anchoring a
         `never_retrieved` node to some real id writes an edge `retention_covers`
         will never ask about — success reported, nothing suppressed."""
@@ -517,10 +540,15 @@ class TestCoversIsExactlyTheReasons:
         other = await _fact(storage, "five distributions carry no licence metadata")
 
         result, _ = await tools.apply_reflection(
-            storage, embedding_provider,
-            retained=[{
-                "node_id": fact.id, "because": "worth keeping", "covers": [other.id],
-            }],
+            storage,
+            embedding_provider,
+            retained=[
+                {
+                    "node_id": fact.id,
+                    "because": "worth keeping",
+                    "covers": [other.id],
+                }
+            ],
         )
 
         assert result["retentions_recorded"] == 0
@@ -537,9 +565,7 @@ class TestCoversIsExactlyTheReasons:
         head start."""
         from epimemer.mcp import tools
 
-        premise = await _fact(
-            storage, "the deploy failed", status=NodeStatus.SUPERSEDED
-        )
+        premise = await _fact(storage, "the deploy failed", status=NodeStatus.SUPERSEDED)
         inference = await _inference_on(storage, "the release was rushed", [premise])
 
         # The world moves between the nomination and the verdict.
@@ -550,10 +576,15 @@ class TestCoversIsExactlyTheReasons:
                 await storage.delete_edge(edge.id)
 
         result, _ = await tools.apply_reflection(
-            storage, embedding_provider,
-            retained=[{
-                "node_id": inference.id, "because": "re-read", "covers": [premise.id],
-            }],
+            storage,
+            embedding_provider,
+            retained=[
+                {
+                    "node_id": inference.id,
+                    "because": "re-read",
+                    "covers": [premise.id],
+                }
+            ],
         )
 
         assert result["retentions_recorded"] == 0

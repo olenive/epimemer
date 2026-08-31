@@ -38,8 +38,9 @@ machinery than the defect is worth.
 
 A third gap belongs to both: **a notebook whose imports are fine but whose body
 reads something gone still passes.** `05_reflection.py` rendered a "Value Decay"
-section against a Petri net place removed by the field with no reader, and rendered it silently — the
-section was guarded by `if _dp and _dp.tokens`, so a deleted phase reads as a
+section against a Petri net place removed by the field with no reader, and
+rendered it silently — the section was guarded by `if _dp and _dp.tokens`, so
+a deleted phase reads as a
 phase that produced nothing. Catching that needs execution, which needs
 providers, storage and a runtime.
 """
@@ -76,9 +77,7 @@ def _imports_in(tree: ast.AST) -> list[tuple[str, tuple[str, ...]]]:
                 found.extend((alias.name, ()) for alias in aliases)
             case ast.ImportFrom(module=module, names=aliases, level=0) if module:
                 # A star import names nothing to check beyond the module itself.
-                found.append(
-                    (module, tuple(a.name for a in aliases if a.name != "*"))
-                )
+                found.append((module, tuple(a.name for a in aliases if a.name != "*")))
     return found
 
 
@@ -135,9 +134,7 @@ def test_every_notebook_dependency_is_declared(notebook: Path):
     # Both sentinels are modules the notebooks import directly, so neither is a
     # guess at what the extra happens to pull in transitively.
     absent = "notebook dependencies absent — run `uv sync --extra notebooks`"
-    pytest.importorskip(
-        "petritype.plotting.simple_graphviz", reason=absent, exc_type=ImportError
-    )
+    pytest.importorskip("petritype.plotting.simple_graphviz", reason=absent, exc_type=ImportError)
     pytest.importorskip("graphviz", reason=absent, exc_type=ImportError)
 
     problems = _problems(notebook, lambda _: True)
@@ -221,8 +218,13 @@ def _run_cells(notebook: Path) -> list[str]:
     for cell in _cells(tree):
         names = _returned_names(cell)
         runnable = type(cell)(
-            name="_cell", args=cell.args, body=cell.body,
-            decorator_list=[], returns=None, type_comment=None, type_params=[],
+            name="_cell",
+            args=cell.args,
+            body=cell.body,
+            decorator_list=[],
+            returns=None,
+            type_comment=None,
+            type_params=[],
         )
         module = ast.Module(body=[runnable], type_ignores=[])
         ast.fix_missing_locations(module)
@@ -234,7 +236,7 @@ def _run_cells(notebook: Path) -> list[str]:
                 result = asyncio.run(result)
             if names:
                 values = result if isinstance(result, tuple) else (result,)
-                env.update(dict(zip(names, values)))
+                env.update(dict(zip(names, values, strict=True)))
         except Exception as exc:
             line = getattr(cell, "lineno", "?")
             problems.append(f"line {line}: {type(exc).__name__}: {exc}")
@@ -263,9 +265,7 @@ def test_every_notebook_runs(notebook: Path):
     worth.
     """
     absent = "notebook dependencies absent — run `uv sync --extra notebooks`"
-    pytest.importorskip(
-        "petritype.plotting.simple_graphviz", reason=absent, exc_type=ImportError
-    )
+    pytest.importorskip("petritype.plotting.simple_graphviz", reason=absent, exc_type=ImportError)
     pytest.importorskip("graphviz", reason=absent, exc_type=ImportError)
 
     problems = _run_cells(notebook)

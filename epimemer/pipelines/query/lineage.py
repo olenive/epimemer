@@ -16,9 +16,9 @@ its own slot — it matched on its own merits and nothing displaced it.
 from collections.abc import Sequence
 
 from epimemer.core.types import (
+    SUPERSEDED_STATUSES,
     EdgeType,
     EpistemicNode,
-    SUPERSEDED_STATUSES,
 )
 from epimemer.storage.protocol import StorageBackend
 
@@ -42,13 +42,9 @@ async def _successors_within(
     """
     out: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
     for edge_type in LINEAGE_FOLD_EDGE_TYPES:
-        edges = await storage.get_edges_for(
-            list(node_ids), direction="from", edge_type=edge_type
-        )
+        edges = await storage.get_edges_for(list(node_ids), direction="from", edge_type=edge_type)
         for node_id, node_edges in edges.items():
-            out[node_id].extend(
-                edge.dst_id for edge in node_edges if edge.dst_id in matched
-            )
+            out[node_id].extend(edge.dst_id for edge in node_edges if edge.dst_id in matched)
     return out
 
 
@@ -87,10 +83,7 @@ async def fold_lineage(
     protected = set(unfoldable)
     # No retired result, no fold — and no edge query either. Most searches are
     # entirely current, so this is the common path rather than a corner of it.
-    if not any(
-        node.status in SUPERSEDED_STATUSES and node.id not in protected
-        for node in nodes
-    ):
+    if not any(node.status in SUPERSEDED_STATUSES and node.id not in protected for node in nodes):
         return list(nodes), {}
 
     matched = {node.id: node for node in nodes}

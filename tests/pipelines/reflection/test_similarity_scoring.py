@@ -30,7 +30,7 @@ def _naive(vectors, threshold: float) -> list[tuple[int, int, float]]:
     """The pairwise loop the earlier profiling pass removed, kept as the oracle."""
 
     def cosine(a, b) -> float:
-        dot = sum(x * y for x, y in zip(a, b))
+        dot = sum(x * y for x, y in zip(a, b, strict=True))
         norm_a = math.sqrt(sum(x * x for x in a))
         norm_b = math.sqrt(sum(x * x for x in b))
         if norm_a == 0 or norm_b == 0:
@@ -54,7 +54,7 @@ def _same(got, expected) -> None:
     different order of operations on the same arithmetic.
     """
     assert [(i, j) for i, j, _ in got] == [(i, j) for i, j, _ in expected]
-    for (_, _, a), (_, _, b) in zip(got, expected):
+    for (_, _, a), (_, _, b) in zip(got, expected, strict=True):
         assert a == b or abs(a - b) < 1e-9
 
 
@@ -63,7 +63,6 @@ def _random_vectors(count: int, width: int, seed: int = 0) -> np.ndarray:
 
 
 class TestItAgreesWithTheLoopItReplaced:
-
     def test_random_vectors_at_a_middling_threshold(self):
         vectors = _random_vectors(40, 16)
         _same(similar_pairs(vectors, 0.1), _naive(vectors.tolist(), 0.1))
@@ -113,7 +112,6 @@ class TestBlocking:
 
 
 class TestDegenerateVectors:
-
     def test_a_zero_vector_pairs_with_nothing(self):
         """Normalizing divides by the norm, and a zero row would take the whole
         matrix to NaN — at which case every comparison silently goes false and
@@ -132,7 +130,6 @@ class TestDegenerateVectors:
 
 
 class TestOrdering:
-
     def test_pairs_come_back_in_index_order(self):
         """The caller sorts by score, and Python's sort is stable — so ties keep
         this order, and it has to match the loop's to leave the answer alone."""
@@ -144,9 +141,7 @@ class TestOrdering:
         """Every score ties at 1.0, so ordering is entirely the traversal's."""
         vectors = np.ones((5, 3))
         pairs = similar_pairs(vectors, 0.5, block=2)
-        assert [(i, j) for i, j, _ in pairs] == [
-            (i, j) for i in range(5) for j in range(i + 1, 5)
-        ]
+        assert [(i, j) for i, j, _ in pairs] == [(i, j) for i in range(5) for j in range(i + 1, 5)]
 
 
 class TestStackUniformWidth:

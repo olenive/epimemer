@@ -1,6 +1,6 @@
 """Tests for timeline functional interface."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from epimemer.core.types import Timeline, Timepoint
 from epimemer.pipelines.timeline.functions import (
@@ -14,11 +14,10 @@ from epimemer.pipelines.timeline.functions import (
 
 
 def _dt(year: int, month: int = 1, day: int = 1) -> datetime:
-    return datetime(year, month, day, tzinfo=timezone.utc)
+    return datetime(year, month, day, tzinfo=UTC)
 
 
 class TestAddTimepoint:
-
     def test_inserts_concrete_in_sorted_position(self):
         tl = Timeline(name="test")
         tl, tp1 = add_timepoint(tl, start=_dt(2024, 6), label="June")
@@ -52,7 +51,6 @@ class TestAddTimepoint:
 
 
 class TestRemoveTimepoint:
-
     def test_removes_by_id(self):
         tl = Timeline(name="test")
         tl, tp = add_timepoint(tl, start=_dt(2024, 1), label="Jan")
@@ -71,7 +69,6 @@ class TestRemoveTimepoint:
 
 
 class TestGetTimepoint:
-
     def test_returns_correct_timepoint(self):
         tl = Timeline(name="test")
         tl, tp = add_timepoint(tl, start=_dt(2024, 1), label="Jan")
@@ -87,7 +84,6 @@ class TestGetTimepoint:
 
 
 class TestFindNearest:
-
     def test_returns_closest_timepoints(self):
         tl = Timeline(name="test")
         tl, _ = add_timepoint(tl, start=_dt(2020), label="2020")
@@ -122,7 +118,6 @@ class TestFindNearest:
 
 
 class TestGetInRange:
-
     def test_returns_timepoints_in_range(self):
         tl = Timeline(name="test")
         tl, _ = add_timepoint(tl, start=_dt(2020), label="2020")
@@ -159,35 +154,38 @@ class TestGetInRange:
 
 
 class TestReorderTimepoints:
-
     def test_sorts_by_start_datetime(self):
-        tl = Timeline(name="test", timepoints=[
-            Timepoint(start=_dt(2024), label="2024"),
-            Timepoint(start=_dt(2020), label="2020"),
-            Timepoint(start=_dt(2022), label="2022"),
-        ])
+        tl = Timeline(
+            name="test",
+            timepoints=[
+                Timepoint(start=_dt(2024), label="2024"),
+                Timepoint(start=_dt(2020), label="2020"),
+                Timepoint(start=_dt(2022), label="2022"),
+            ],
+        )
         tl = reorder_timepoints(tl)
         labels = [tp.label for tp in tl.timepoints]
         assert labels == ["2020", "2022", "2024"]
 
     def test_vague_at_end(self):
-        tl = Timeline(name="test", timepoints=[
-            Timepoint(label="vague"),
-            Timepoint(start=_dt(2024), label="2024"),
-            Timepoint(start=_dt(2020), label="2020"),
-        ])
+        tl = Timeline(
+            name="test",
+            timepoints=[
+                Timepoint(label="vague"),
+                Timepoint(start=_dt(2024), label="2024"),
+                Timepoint(start=_dt(2020), label="2020"),
+            ],
+        )
         tl = reorder_timepoints(tl)
         labels = [tp.label for tp in tl.timepoints]
         assert labels == ["2020", "2024", "vague"]
 
 
 class TestStableUUIDs:
-
     def test_uuids_survive_add_remove(self):
         tl = Timeline(name="test")
         tl, tp1 = add_timepoint(tl, start=_dt(2020), label="2020")
         tl, tp2 = add_timepoint(tl, start=_dt(2024), label="2024")
-        original_id1 = tp1.id
         original_id2 = tp2.id
 
         # Remove and check the remaining UUID is stable

@@ -10,17 +10,17 @@ import json
 import socket
 from contextlib import asynccontextmanager
 
-import pytest
 import uvicorn
 import websockets
 
-from epimemer.mcp.retrieval_records import new_record_log
-from epimemer.mcp.config import ServerConfig
-from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
+from epimemer.mcp.config import ServerConfig
+from epimemer.mcp.retrieval_records import new_record_log
+from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization.hub import create_hub_app
 from epimemer.visualization.protocol import Register, SessionInfo
+
 
 def _graph_with_the_real() -> InMemoryStorage:
     """An in-memory graph somebody has set up.

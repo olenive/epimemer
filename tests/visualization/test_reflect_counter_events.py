@@ -30,7 +30,6 @@ def _recorder(bus) -> list[ReflectCounterUpdated]:
 
 
 class TestEmission:
-
     async def test_bump_emits_the_new_count_and_threshold(self, bus):
         received = _recorder(bus)
         storage = instrument_storage(InMemoryStorage(), bus, default_threshold=10)

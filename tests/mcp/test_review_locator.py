@@ -1,7 +1,8 @@
 """Where else this agent has decided things (ISSUES `review`'s `elsewhere`).
 
-the misdirected-write scope settled that the journal stays per graph — `subject_ids` are node ids, and a
-node id resolves only where it lives — and left one thing genuinely missing: a
+the misdirected-write scope settled that the journal stays per graph —
+`subject_ids` are node ids, and a node id resolves only where it lives — and
+left one thing genuinely missing: a
 reviewer had no way to find out there was more elsewhere. The graph it is in
 answers loudly; every other graph is silent in a way indistinguishable from
 empty.
@@ -25,7 +26,7 @@ judgment calls a later change would otherwise quietly reverse:
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastmcp import FastMCP
@@ -40,11 +41,10 @@ from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
 
-
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
 EDITOR = JudgeRef(agent_id="editor", digest="d2")
 
-NOW = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
 
 
 def _row(judge: JudgeRef | None = CRITIC, *, at: datetime = NOW) -> DecisionRecord:
@@ -149,7 +149,8 @@ class TestItAgreesWithTheReaderItPointsAt:
         """`since` inclusive, `until` exclusive — the half-open convention, on
         both sides of the line."""
         await _journal(
-            storage, "field-notes",
+            storage,
+            "field-notes",
             _row(at=NOW - timedelta(days=2)),
             _row(at=NOW),
             _row(at=NOW + timedelta(days=2)),
@@ -212,8 +213,11 @@ class TestWhatItDeliberatelyDoesNotNarrowBy:
         await _journal(storage, "field-notes", _row())
 
         result, _ = await tools.review(
-            storage, mode="by_agent", agent_id="critic",
-            since=NOW - timedelta(days=1), certainty_ceiling=0.4,
+            storage,
+            mode="by_agent",
+            agent_id="critic",
+            since=NOW - timedelta(days=1),
+            certainty_ceiling=0.4,
         )
 
         counted_with = result["elsewhere"]["counted_with"]
@@ -256,9 +260,7 @@ class TestReadingAnotherGraphMustNotDisturbThisOne:
         assert result["decisions_scanned"] == 1
         assert len(result["decisions"]) == 1
 
-    async def test_asking_about_a_graph_that_does_not_exist_does_not_create_it(
-        self, storage
-    ):
+    async def test_asking_about_a_graph_that_does_not_exist_does_not_create_it(self, storage):
         """A locator that manufactured the graphs it was asked about would turn
         one review into a namespace full of empty databases."""
         before = set(await storage.list_databases())
@@ -268,9 +270,7 @@ class TestReadingAnotherGraphMustNotDisturbThisOne:
         assert counts == {}, "a graph that does not exist must be omitted, not zero"
         assert set(await storage.list_databases()) == before
 
-    async def test_a_graph_that_cannot_be_read_is_named_rather_than_dropped(
-        self, storage
-    ):
+    async def test_a_graph_that_cannot_be_read_is_named_rather_than_dropped(self, storage):
         """Omitted from the counts, listed in `unreadable`. A graph deleted
         between the listing and the counting is not a graph holding nothing."""
         await _journal(storage, "field-notes", _row())
@@ -337,9 +337,9 @@ class TestTheTurnTheSweepNeeds:
         server, storage = server_on
         await _journal(storage, "field-notes", _row(), _row())
 
-        result = _result(await server.call_tool(
-            "review", {"expected_graph": storage.current_database}
-        ))
+        result = _result(
+            await server.call_tool("review", {"expected_graph": storage.current_database})
+        )
 
         assert "error" not in result, result
         assert result["elsewhere"]["total"] == 2

@@ -31,6 +31,7 @@ _NODE_TYPE_TO_CLASS = {
     NodeType.INFERENCE: Inference,
 }
 
+
 class LexicalHits(BaseModel):
     """Everything the lexical arm found, with each part named.
 
@@ -42,6 +43,7 @@ class LexicalHits(BaseModel):
     was no last element to slice, and a whole node type's hits were relabelled
     as similarity results. Named fields cannot be counted wrong.
     """
+
     # One ranked node-id list per node type, plus one for the nodes reached
     # through segment hits. Scores are deliberately absent: they are not
     # comparable between lists, and ranks are all that may cross a table
@@ -77,15 +79,11 @@ def query_terms(query_text: str) -> list[str]:
     and several of them can out-vote a single rare one under the OR-sum.
     """
     return [
-        token
-        for token in analyze(query_text)
-        if any(character.isalnum() for character in token)
+        token for token in analyze(query_text) if any(character.isalnum() for character in token)
     ]
 
 
-def _merged(
-    per_term: Sequence[Sequence[tuple[str, float]]]
-) -> list[tuple[str, float]]:
+def _merged(per_term: Sequence[Sequence[tuple[str, float]]]) -> list[tuple[str, float]]:
     """One ranked hit list from several per-term ones, merged by rank.
 
     Scores used to do this. BM25 over several terms is the sum of the per-term
@@ -106,10 +104,7 @@ def _merged(
         for item_id, score in hits:
             totals[item_id] = totals.get(item_id, 0.0) + score
     fused = rrf_scores([[item_id for item_id, _ in hits] for hits in per_term])
-    return [
-        (item_id, totals[item_id])
-        for item_id in sorted(fused, key=lambda i: (-fused[i], i))
-    ]
+    return [(item_id, totals[item_id]) for item_id in sorted(fused, key=lambda i: (-fused[i], i))]
 
 
 async def _ranked(
@@ -188,8 +183,13 @@ async def lexical_search(
 
     for node_type in types:
         hits, guarded = await _ranked(
-            storage, terms, corpus="nodes", node_type=node_type,
-            k=k, statuses=statuses, declared=declared,
+            storage,
+            terms,
+            corpus="nodes",
+            node_type=node_type,
+            k=k,
+            statuses=statuses,
+            declared=declared,
         )
         rankings.append([node_id for node_id, _ in hits])
         protected.extend(guarded)
@@ -197,13 +197,16 @@ async def lexical_search(
     direct_ids = [node_id for ranking in rankings for node_id in ranking]
 
     segment_hits, guarded_segments = await _ranked(
-        storage, terms, corpus="segments", node_type=None,
-        k=k, statuses=statuses, declared=declared,
+        storage,
+        terms,
+        corpus="segments",
+        node_type=None,
+        k=k,
+        statuses=statuses,
+        declared=declared,
     )
     if not segment_hits:
-        return LexicalHits(
-            rankings=rankings, protected=protected, direct_ids=direct_ids
-        )
+        return LexicalHits(rankings=rankings, protected=protected, direct_ids=direct_ids)
 
     segment_ids = [segment_id for segment_id, _ in segment_hits]
     bodies = await storage.get_segments(segment_ids)
@@ -218,14 +221,10 @@ async def lexical_search(
         ]
         for segment_id in segment_ids
     }
-    bridged_ids = [
-        node_id for segment_id in segment_ids for node_id in bridged[segment_id]
-    ]
+    bridged_ids = [node_id for segment_id in segment_ids for node_id in bridged[segment_id]]
     rankings.append(bridged_ids)
     protected.extend(
-        bridged[segment_id][0]
-        for segment_id in guarded_segments
-        if bridged.get(segment_id)
+        bridged[segment_id][0] for segment_id in guarded_segments if bridged.get(segment_id)
     )
 
     return LexicalHits(

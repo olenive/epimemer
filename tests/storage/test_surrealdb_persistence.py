@@ -43,8 +43,7 @@ DOCKER = shutil.which("docker")
 
 pytestmark = pytest.mark.skipif(
     not (ENABLED and DOCKER),
-    reason="Set EPIMEMER_SURREAL_PERSIST_TEST=1 (needs docker) to run the "
-    "restart-durability test.",
+    reason="Set EPIMEMER_SURREAL_PERSIST_TEST=1 (needs docker) to run the restart-durability test.",
 )
 
 
@@ -76,9 +75,24 @@ def _docker_run(name: str, volume: str, port: int) -> list[str]:
     uses. rocksdb: is the on-disk backend.
     """
     return [
-        "docker", "run", "-d", "--name", name, "-u", "0:0",
-        "-p", f"{port}:8000", "-v", f"{volume}:/data", IMAGE,
-        "start", "--user", "root", "--pass", "root", "rocksdb:/data/epimemer.db",
+        "docker",
+        "run",
+        "-d",
+        "--name",
+        name,
+        "-u",
+        "0:0",
+        "-p",
+        f"{port}:8000",
+        "-v",
+        f"{volume}:/data",
+        IMAGE,
+        "start",
+        "--user",
+        "root",
+        "--pass",
+        "root",
+        "rocksdb:/data/epimemer.db",
     ]
 
 

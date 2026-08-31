@@ -45,7 +45,6 @@ from epimemer.pipelines.review.apply import (
     review_decision,
 )
 
-
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
 EDITOR = JudgeRef(agent_id="editor", digest="d2")
 
@@ -70,9 +69,9 @@ async def _fact(storage, embedder, content: str, **kwargs) -> Fact:
     node = Fact(content=content, source_id="seg1", **kwargs)
     await storage.store_node(node)
     vectors = await embedder.embed([content])
-    await storage.store_embedding(EmbeddingRecord(
-        item_id=node.id, model_id=embedder.model_id, vector=vectors[0]
-    ))
+    await storage.store_embedding(
+        EmbeddingRecord(item_id=node.id, model_id=embedder.model_id, vector=vectors[0])
+    )
     return node
 
 
@@ -84,8 +83,11 @@ class TestAConfirmationIsARowPointingBack:
         original = await _decision(storage, subject_ids=["a", "b"], judged_by=CRITIC)
 
         outcome = await review_decision(
-            storage, decision_id=original.id, agreed=True,
-            because="checked both against the source", judge=EDITOR,
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="checked both against the source",
+            judge=EDITOR,
         )
 
         assert isinstance(outcome, ReviewRecorded)
@@ -100,7 +102,10 @@ class TestAConfirmationIsARowPointingBack:
         before = (await storage.get_decision(original.id)).model_dump()
 
         await review_decision(
-            storage, decision_id=original.id, agreed=True, because="fine",
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="fine",
             judge=EDITOR,
         )
 
@@ -109,7 +114,10 @@ class TestAConfirmationIsARowPointingBack:
     async def test_review_then_reports_it_reviewed(self, storage):
         original = await _decision(storage, subject_ids=["a"], judged_by=CRITIC)
         await review_decision(
-            storage, decision_id=original.id, agreed=True, because="fine",
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="fine",
             judge=EDITOR,
         )
 
@@ -123,7 +131,10 @@ class TestAConfirmationIsARowPointingBack:
         original = await _decision(storage, subject_ids=["a", "b", "c"])
 
         outcome = await review_decision(
-            storage, decision_id=original.id, agreed=True, because="all three",
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="all three",
         )
 
         assert outcome.subjects == ["a", "b", "c"]
@@ -134,8 +145,11 @@ class TestAConfirmationIsARowPointingBack:
         original = await _decision(storage, subject_ids=["a", "b", "c"])
 
         outcome = await review_decision(
-            storage, decision_id=original.id, agreed=True,
-            because="checked one of the three", subject_ids=["b"],
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="checked one of the three",
+            subject_ids=["b"],
         )
 
         assert outcome.subjects == ["b"]
@@ -144,7 +158,10 @@ class TestAConfirmationIsARowPointingBack:
         original = await _decision(storage, subject_ids=["a"])
 
         outcome = await review_decision(
-            storage, decision_id=original.id, agreed=True, because="x",
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="x",
             subject_ids=["a", "elsewhere"],
         )
 
@@ -157,7 +174,10 @@ class TestAConfirmationIsARowPointingBack:
         original = await _decision(storage, subject_ids=["a"], judged_by=CRITIC)
 
         outcome = await review_decision(
-            storage, decision_id=original.id, agreed=True, because="mine",
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="mine",
             judge=CRITIC,
         )
 
@@ -170,11 +190,14 @@ class TestADissentRecordsTheFindingAndNotTheUndo:
     all (§7), and before this there was nowhere to put the finding."""
 
     async def test_it_reviews_without_superseding(self, storage):
-        original = await _decision(storage, kind=DecisionKind.MERGE,
-                                   subject_ids=["survivor", "a", "b"])
+        original = await _decision(
+            storage, kind=DecisionKind.MERGE, subject_ids=["survivor", "a", "b"]
+        )
 
         outcome = await review_decision(
-            storage, decision_id=original.id, agreed=False,
+            storage,
+            decision_id=original.id,
+            agreed=False,
             because="these are different claims; reverse_merge refuses",
             judge=EDITOR,
         )
@@ -193,7 +216,10 @@ class TestADissentRecordsTheFindingAndNotTheUndo:
         before = (await storage.get_node(node.id)).model_dump()
 
         await review_decision(
-            storage, decision_id=original.id, agreed=False, because="wrong",
+            storage,
+            decision_id=original.id,
+            agreed=False,
+            because="wrong",
         )
 
         assert (await storage.get_node(node.id)).model_dump() == before
@@ -203,7 +229,10 @@ class TestADissentRecordsTheFindingAndNotTheUndo:
         itself an unreviewed decision, so the finding stays visible."""
         original = await _decision(storage, subject_ids=["a"])
         await review_decision(
-            storage, decision_id=original.id, agreed=False, because="wrong",
+            storage,
+            decision_id=original.id,
+            agreed=False,
+            because="wrong",
         )
 
         result, _ = await tools.review(storage, mode="unreviewed")
@@ -218,10 +247,8 @@ class TestADissentRecordsTheFindingAndNotTheUndo:
         cannot be selected on."""
         agreed = await _decision(storage, subject_ids=["a"])
         disputed = await _decision(storage, subject_ids=["b"])
-        await review_decision(storage, decision_id=agreed.id, agreed=True,
-                              because="fine")
-        await review_decision(storage, decision_id=disputed.id, agreed=False,
-                              because="wrong")
+        await review_decision(storage, decision_id=agreed.id, agreed=True, because="fine")
+        await review_decision(storage, decision_id=disputed.id, agreed=False, because="wrong")
 
         rows = await storage.query_decisions(kinds=[DecisionKind.DISSENT])
 
@@ -234,71 +261,90 @@ class TestARetryMustNotReadAsASecondOpinion:
     async def test_the_same_judge_confirming_twice_is_refused(self, storage):
         original = await _decision(storage, subject_ids=["a"])
         first = await review_decision(
-            storage, decision_id=original.id, agreed=True, because="fine",
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="fine",
             judge=EDITOR,
         )
 
         again = await review_decision(
-            storage, decision_id=original.id, agreed=True, because="fine",
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="fine",
             judge=EDITOR,
         )
 
         assert isinstance(again, ReviewRefused)
         assert first.record_id in again.reason
 
-    async def test_a_different_judge_is_the_second_check_this_design_wants(
-        self, storage
-    ):
+    async def test_a_different_judge_is_the_second_check_this_design_wants(self, storage):
         original = await _decision(storage, subject_ids=["a"])
-        await review_decision(storage, decision_id=original.id, agreed=True,
-                              because="fine", judge=EDITOR)
+        await review_decision(
+            storage, decision_id=original.id, agreed=True, because="fine", judge=EDITOR
+        )
 
         second = await review_decision(
-            storage, decision_id=original.id, agreed=True, because="agree",
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="agree",
             judge=CRITIC,
         )
 
         assert isinstance(second, ReviewRecorded)
 
-    async def test_changing_your_mind_is_the_other_verdict_and_is_accepted(
-        self, storage
-    ):
+    async def test_changing_your_mind_is_the_other_verdict_and_is_accepted(self, storage):
         original = await _decision(storage, subject_ids=["a"])
-        await review_decision(storage, decision_id=original.id, agreed=True,
-                              because="fine", judge=EDITOR)
+        await review_decision(
+            storage, decision_id=original.id, agreed=True, because="fine", judge=EDITOR
+        )
 
         changed = await review_decision(
-            storage, decision_id=original.id, agreed=False,
-            because="looked again; the source does not say this", judge=EDITOR,
+            storage,
+            decision_id=original.id,
+            agreed=False,
+            because="looked again; the source does not say this",
+            judge=EDITOR,
         )
 
         assert isinstance(changed, ReviewRecorded)
 
     async def test_naming_different_subjects_is_new_work(self, storage):
         original = await _decision(storage, subject_ids=["a", "b"])
-        await review_decision(storage, decision_id=original.id, agreed=True,
-                              because="checked a", subject_ids=["a"],
-                              judge=EDITOR)
+        await review_decision(
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="checked a",
+            subject_ids=["a"],
+            judge=EDITOR,
+        )
 
         more = await review_decision(
-            storage, decision_id=original.id, agreed=True, because="checked b",
-            subject_ids=["b"], judge=EDITOR,
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="checked b",
+            subject_ids=["b"],
+            judge=EDITOR,
         )
 
         assert isinstance(more, ReviewRecorded)
 
-    async def test_a_blank_judge_cannot_be_told_from_a_second_reviewer(
-        self, storage
-    ):
+    async def test_a_blank_judge_cannot_be_told_from_a_second_reviewer(self, storage):
         """Named rather than hidden: two blanks may be two agents or one retry,
         and refusing on that guess would block a genuine second opinion on every
         graph that does not require a judge."""
         original = await _decision(storage, subject_ids=["a"])
-        await review_decision(storage, decision_id=original.id, agreed=True,
-                              because="fine")
+        await review_decision(storage, decision_id=original.id, agreed=True, because="fine")
 
         again = await review_decision(
-            storage, decision_id=original.id, agreed=True, because="fine",
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="fine",
         )
 
         assert isinstance(again, ReviewRecorded)
@@ -309,17 +355,21 @@ class TestTheRefusalsThatComeFirst:
         original = await _decision(storage, subject_ids=["a"])
 
         outcome = await review_decision(
-            storage, decision_id=original.id, agreed=True, because="   ",
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="   ",
         )
 
         assert isinstance(outcome, ReviewRefused)
         assert "rubber stamp" in outcome.reason
 
-    async def test_a_decision_that_is_not_here_says_the_journal_is_per_graph(
-        self, storage
-    ):
+    async def test_a_decision_that_is_not_here_says_the_journal_is_per_graph(self, storage):
         outcome = await review_decision(
-            storage, decision_id="nope", agreed=True, because="x",
+            storage,
+            decision_id="nope",
+            agreed=True,
+            because="x",
         )
 
         assert isinstance(outcome, ReviewRefused)
@@ -329,7 +379,10 @@ class TestTheRefusalsThatComeFirst:
         original = await _decision(storage, subject_ids=["a"])
 
         outcome = await review_decision(
-            storage, decision_id=original.id, agreed=True, because="x",
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="x",
             certainty=1.5,
         )
 
@@ -345,8 +398,11 @@ class TestTheFirstDeclaredCertainty:
         original = await _decision(storage, subject_ids=["a"])
 
         outcome = await review_decision(
-            storage, decision_id=original.id, agreed=True,
-            because="checked the source", certainty=0.3,
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="checked the source",
+            certainty=0.3,
             certainty_basis="the source hedges on this point",
         )
 
@@ -354,18 +410,20 @@ class TestTheFirstDeclaredCertainty:
         assert written.certainty == 0.3
         assert written.certainty_basis == "the source hedges on this point"
 
-    async def test_it_sorts_above_an_unrated_row_carrying_more_signals(
-        self, storage
-    ):
+    async def test_it_sorts_above_an_unrated_row_carrying_more_signals(self, storage):
         """Tier 1 before tier 2, even here: absence is not a claim of doubt."""
         loaded = await _decision(
-            storage, kind=DecisionKind.MERGE,
+            storage,
+            kind=DecisionKind.MERGE,
             subject_ids=["s", "a", "b", "c", "d"],
         )
         original = await _decision(storage, subject_ids=["x"])
         await review_decision(
-            storage, decision_id=original.id, agreed=False,
-            because="not sure", certainty=0.3,
+            storage,
+            decision_id=original.id,
+            agreed=False,
+            because="not sure",
+            certainty=0.3,
         )
 
         result, _ = await tools.review(storage)
@@ -378,7 +436,10 @@ class TestTheFirstDeclaredCertainty:
         original = await _decision(storage, subject_ids=["a"])
 
         outcome = await review_decision(
-            storage, decision_id=original.id, agreed=True, because="fine",
+            storage,
+            decision_id=original.id,
+            agreed=True,
+            because="fine",
         )
 
         assert (await storage.get_decision(outcome.record_id)).certainty is None
@@ -421,9 +482,7 @@ class TestTheToolBatchesAndRefusesPerEntry:
         result, _ = await tools.apply_review(storage)
         assert result["graph"] == storage.current_database
 
-    async def test_nothing_supplied_is_an_answer_rather_than_an_error(
-        self, storage
-    ):
+    async def test_nothing_supplied_is_an_answer_rather_than_an_error(self, storage):
         result, meta = await tools.apply_review(storage)
         assert result["recorded"] == [] and meta.nodes_returned == 0
 
@@ -434,22 +493,23 @@ class TestTheToolBatchesAndRefusesPerEntry:
         original = await _decision(storage, subject_ids=[node.id])
 
         _, meta = await tools.apply_review(
-            storage, confirmations=[{"decision_id": original.id, "because": "ok"}],
+            storage,
+            confirmations=[{"decision_id": original.id, "because": "ok"}],
         )
 
         assert [r.node_id for r in meta.retrieved] == [node.id]
 
 
 class TestRejudgeRevisesAJudgmentAndNotAClaim:
-    async def test_it_moves_a_claim_kind_without_retiring_anything(
-        self, storage, embedder
-    ):
-        node = await _fact(storage, embedder, "Labour won the election",
-                           claim_kind=ClaimKind.STATE)
+    async def test_it_moves_a_claim_kind_without_retiring_anything(self, storage, embedder):
+        node = await _fact(storage, embedder, "Labour won the election", claim_kind=ClaimKind.STATE)
 
         outcome = await rejudge_node(
-            storage, node_id=node.id, claim_kind=ClaimKind.EVENT,
-            because="an occasion, not a condition that holds", judge=EDITOR,
+            storage,
+            node_id=node.id,
+            claim_kind=ClaimKind.EVENT,
+            because="an occasion, not a condition that holds",
+            judge=EDITOR,
         )
 
         assert isinstance(outcome, Rejudged)
@@ -459,9 +519,7 @@ class TestRejudgeRevisesAJudgmentAndNotAClaim:
         assert after.superseded_at is None
         assert after.lifecycle == []
 
-    async def test_the_wording_and_its_author_are_untouched(
-        self, storage, embedder
-    ):
+    async def test_the_wording_and_its_author_are_untouched(self, storage, embedder):
         """`judged_by` records who wrote the wording, which is unchanged — a new
         version would be a new node, and this is not one."""
         node = await _fact(storage, embedder, "a claim", claim_kind=ClaimKind.STATE)
@@ -469,25 +527,28 @@ class TestRejudgeRevisesAJudgmentAndNotAClaim:
         await storage.store_node(node)
 
         await rejudge_node(
-            storage, node_id=node.id, claim_kind=ClaimKind.EVENT,
-            because="wrong kind", judge=EDITOR,
+            storage,
+            node_id=node.id,
+            claim_kind=ClaimKind.EVENT,
+            because="wrong kind",
+            judge=EDITOR,
         )
 
         after = await storage.get_node(node.id)
         assert after.content == "a claim"
         assert after.judged_by.agent_id == "critic"
 
-    async def test_the_prior_value_is_kept_rather_than_overwritten(
-        self, storage, embedder
-    ):
+    async def test_the_prior_value_is_kept_rather_than_overwritten(self, storage, embedder):
         """Without the trail this would be the one call in the system that
         destroys a judgment rather than superseding it."""
-        node = await _fact(storage, embedder, "a claim",
-                           value=ValueSignal(confidence=0.9))
+        node = await _fact(storage, embedder, "a claim", value=ValueSignal(confidence=0.9))
 
         await rejudge_node(
-            storage, node_id=node.id, confidence=0.3,
-            because="the source hedges", judge=EDITOR,
+            storage,
+            node_id=node.id,
+            confidence=0.3,
+            because="the source hedges",
+            judge=EDITOR,
         )
 
         trail = (await storage.get_node(node.id)).metadata["rejudgments"]
@@ -498,69 +559,74 @@ class TestRejudgeRevisesAJudgmentAndNotAClaim:
         assert trail[0]["judged_by"]["agent_id"] == "editor"
 
     async def test_the_trail_is_append_only(self, storage, embedder):
-        node = await _fact(storage, embedder, "a claim",
-                           value=ValueSignal(confidence=0.9))
+        node = await _fact(storage, embedder, "a claim", value=ValueSignal(confidence=0.9))
         await rejudge_node(storage, node_id=node.id, confidence=0.5, because="a")
         await rejudge_node(storage, node_id=node.id, confidence=0.3, because="b")
 
         trail = (await storage.get_node(node.id)).metadata["rejudgments"]
         assert [entry["because"] for entry in trail] == ["a", "b"]
 
-    async def test_a_basis_lands_beside_the_signal_not_on_it(
-        self, storage, embedder
-    ):
+    async def test_a_basis_lands_beside_the_signal_not_on_it(self, storage, embedder):
         """Where ingest already puts it: the basis is prose about one judgment,
         and `ValueSignal` is the numbers every ranker reads."""
         node = await _fact(storage, embedder, "a claim")
 
         await rejudge_node(
-            storage, node_id=node.id, confidence=0.7,
-            confidence_basis="the spec, about its own behaviour", because="x",
+            storage,
+            node_id=node.id,
+            confidence=0.7,
+            confidence_basis="the spec, about its own behaviour",
+            because="x",
         )
 
         after = await storage.get_node(node.id)
-        assert after.metadata["confidence_basis"] == (
-            "the spec, about its own behaviour"
+        assert after.metadata["confidence_basis"] == ("the spec, about its own behaviour")
+
+    async def test_it_reports_only_what_actually_changed(self, storage, embedder):
+        node = await _fact(
+            storage,
+            embedder,
+            "a claim",
+            claim_kind=ClaimKind.EVENT,
+            value=ValueSignal(confidence=0.9),
         )
 
-    async def test_it_reports_only_what_actually_changed(
-        self, storage, embedder
-    ):
-        node = await _fact(storage, embedder, "a claim",
-                           claim_kind=ClaimKind.EVENT,
-                           value=ValueSignal(confidence=0.9))
-
         outcome = await rejudge_node(
-            storage, node_id=node.id, claim_kind=ClaimKind.EVENT,
-            confidence=0.3, because="only the confidence was wrong",
+            storage,
+            node_id=node.id,
+            claim_kind=ClaimKind.EVENT,
+            confidence=0.3,
+            because="only the confidence was wrong",
         )
 
         assert outcome.changed == {"confidence": 0.3}
 
 
 class TestRejudgePointsAtTheDecisionItRevises:
-    async def test_it_reviews_the_ingest_that_made_the_judgment(
-        self, storage, embedder, config
-    ):
+    async def test_it_reviews_the_ingest_that_made_the_judgment(self, storage, embedder, config):
         seg, _ = await tools.segment_text("A claim.", storage, embedder, config)
         await tools.store_decomposition(
             document_id=seg["document_id"],
-            segments=[{
-                "segment_id": seg["segments"][0]["segment_id"],
-                "topics": [], "inferences": [],
-                "facts": [{"content": "A claim", "claim_kind": "state"}],
-            }],
-            storage=storage, embedding_provider=embedder,
+            segments=[
+                {
+                    "segment_id": seg["segments"][0]["segment_id"],
+                    "topics": [],
+                    "inferences": [],
+                    "facts": [{"content": "A claim", "claim_kind": "state"}],
+                }
+            ],
+            storage=storage,
+            embedding_provider=embedder,
             metacontext_id=BASE_METACONTEXT_ID,
         )
         ingest = (await storage.query_decisions(kinds=[DecisionKind.INGEST]))[0]
-        fact = next(
-            n for n in await storage.query_nodes(node_type=None)
-            if n.content == "A claim"
-        )
+        fact = next(n for n in await storage.query_nodes(node_type=None) if n.content == "A claim")
 
         result, _ = await tools.rejudge(
-            fact.id, storage, because="an occasion", claim_kind="event",
+            fact.id,
+            storage,
+            because="an occasion",
+            claim_kind="event",
         )
 
         assert result["reviews"] == ingest.id
@@ -568,9 +634,7 @@ class TestRejudgePointsAtTheDecisionItRevises:
         assert row.kind is DecisionKind.REJUDGMENT
         assert row.reviews == ingest.id
 
-    async def test_it_points_at_the_decision_not_a_later_confirmation(
-        self, storage, embedder
-    ):
+    async def test_it_points_at_the_decision_not_a_later_confirmation(self, storage, embedder):
         """§10.5's rule for pair verdicts, applied here: the oldest originating
         row is the decision; anything after it is a confirmation of one."""
         node = await _fact(storage, embedder, "a claim")
@@ -578,20 +642,24 @@ class TestRejudgePointsAtTheDecisionItRevises:
         await _decision(storage, subject_ids=[node.id])
 
         outcome = await rejudge_node(
-            storage, node_id=node.id, confidence=0.3, because="x",
+            storage,
+            node_id=node.id,
+            confidence=0.3,
+            because="x",
         )
 
         assert outcome.reviews == first.id
 
-    async def test_a_node_older_than_the_journal_leaves_the_pointer_blank(
-        self, storage, embedder
-    ):
+    async def test_a_node_older_than_the_journal_leaves_the_pointer_blank(self, storage, embedder):
         """The journal cannot cite a row that does not exist, and does not
         pretend to."""
         node = await _fact(storage, embedder, "a claim")
 
         outcome = await rejudge_node(
-            storage, node_id=node.id, confidence=0.3, because="x",
+            storage,
+            node_id=node.id,
+            confidence=0.3,
+            because="x",
         )
 
         assert outcome.reviews is None
@@ -601,24 +669,23 @@ class TestRejudgePointsAtTheDecisionItRevises:
 
 
 class TestRejudgeRefusals:
-    async def test_a_claim_kind_on_a_topic_is_refused_rather_than_dropped(
-        self, storage, embedder
-    ):
+    async def test_a_claim_kind_on_a_topic_is_refused_rather_than_dropped(self, storage, embedder):
         """The refusal ingest already makes: a judgment written into a field
         that does not exist is one the agent believes it made."""
         topic = Topic(content="a theme")
         await storage.store_node(topic)
 
         outcome = await rejudge_node(
-            storage, node_id=topic.id, claim_kind=ClaimKind.EVENT, because="x",
+            storage,
+            node_id=topic.id,
+            claim_kind=ClaimKind.EVENT,
+            because="x",
         )
 
         assert isinstance(outcome, RejudgeRefused)
         assert "facts alone" in outcome.reason
 
-    async def test_nothing_supplied_is_refused_and_names_the_fields(
-        self, storage, embedder
-    ):
+    async def test_nothing_supplied_is_refused_and_names_the_fields(self, storage, embedder):
         node = await _fact(storage, embedder, "a claim")
 
         outcome = await rejudge_node(storage, node_id=node.id, because="x")
@@ -627,9 +694,7 @@ class TestRejudgeRefusals:
         for field in REJUDGEABLE_FIELDS:
             assert field in outcome.reason
 
-    async def test_importance_is_sent_to_its_own_writer(
-        self, storage, embedder
-    ):
+    async def test_importance_is_sent_to_its_own_writer(self, storage, embedder):
         """Two writers for one field is how a value ends up depending on which
         tool ran last."""
         node = await _fact(storage, embedder, "a claim")
@@ -642,11 +707,13 @@ class TestRejudgeRefusals:
     async def test_restating_what_the_node_already_says_is_sent_to_apply_review(
         self, storage, embedder
     ):
-        node = await _fact(storage, embedder, "a claim",
-                           claim_kind=ClaimKind.STATE)
+        node = await _fact(storage, embedder, "a claim", claim_kind=ClaimKind.STATE)
 
         outcome = await rejudge_node(
-            storage, node_id=node.id, claim_kind=ClaimKind.STATE, because="x",
+            storage,
+            node_id=node.id,
+            claim_kind=ClaimKind.STATE,
+            because="x",
         )
 
         assert isinstance(outcome, RejudgeRefused)
@@ -656,45 +723,52 @@ class TestRejudgeRefusals:
         node = await _fact(storage, embedder, "a claim")
 
         outcome = await rejudge_node(
-            storage, node_id=node.id, confidence=0.3, because="",
+            storage,
+            node_id=node.id,
+            confidence=0.3,
+            because="",
         )
 
         assert isinstance(outcome, RejudgeRefused)
 
     async def test_a_missing_node_is_refused(self, storage):
         outcome = await rejudge_node(
-            storage, node_id="nope", confidence=0.3, because="x",
+            storage,
+            node_id="nope",
+            confidence=0.3,
+            because="x",
         )
 
         assert isinstance(outcome, RejudgeRefused)
 
-    async def test_a_confidence_off_the_ladder_is_refused(
-        self, storage, embedder
-    ):
+    async def test_a_confidence_off_the_ladder_is_refused(self, storage, embedder):
         node = await _fact(storage, embedder, "a claim")
 
         outcome = await rejudge_node(
-            storage, node_id=node.id, confidence=2.0, because="x",
+            storage,
+            node_id=node.id,
+            confidence=2.0,
+            because="x",
         )
 
         assert isinstance(outcome, RejudgeRefused)
 
     async def test_a_refusal_leaves_the_node_alone(self, storage, embedder):
-        node = await _fact(storage, embedder, "a claim",
-                           value=ValueSignal(confidence=0.9))
+        node = await _fact(storage, embedder, "a claim", value=ValueSignal(confidence=0.9))
         before = (await storage.get_node(node.id)).model_dump()
 
         await rejudge_node(storage, node_id=node.id, confidence=2.0, because="x")
 
         assert (await storage.get_node(node.id)).model_dump() == before
 
-    async def test_an_unknown_claim_kind_is_refused_by_the_tool(
-        self, storage, embedder
-    ):
+    async def test_an_unknown_claim_kind_is_refused_by_the_tool(self, storage, embedder):
         node = await _fact(storage, embedder, "a claim")
 
         result, _ = await tools.rejudge(
-            node.id, storage, because="x", claim_kind="occurrence",
+            node.id,
+            storage,
+            because="x",
+            claim_kind="occurrence",
         )
 
         assert result["rejudged"] is False
@@ -702,29 +776,33 @@ class TestRejudgeRefusals:
 
 
 class TestRejudgeDeclaresAndJournals:
-    async def test_the_row_carries_the_reviewers_certainty(
-        self, storage, embedder
-    ):
+    async def test_the_row_carries_the_reviewers_certainty(self, storage, embedder):
         node = await _fact(storage, embedder, "a claim")
 
         result, _ = await tools.rejudge(
-            node.id, storage, because="the source hedges", confidence=0.3,
-            certainty=0.7, certainty_basis="the passage is unambiguous",
+            node.id,
+            storage,
+            because="the source hedges",
+            confidence=0.3,
+            certainty=0.7,
+            certainty_basis="the passage is unambiguous",
         )
 
         row = await storage.get_decision(result["decision_id"])
         assert row.certainty == 0.7
         assert row.certainty_basis == "the passage is unambiguous"
 
-    async def test_the_two_numbers_land_in_different_places(
-        self, storage, embedder
-    ):
+    async def test_the_two_numbers_land_in_different_places(self, storage, embedder):
         """`confidence` is about the material and `certainty` about the act of
         re-judging — this is the one call that takes both."""
         node = await _fact(storage, embedder, "a claim")
 
         result, _ = await tools.rejudge(
-            node.id, storage, because="x", confidence=0.3, certainty=0.9,
+            node.id,
+            storage,
+            because="x",
+            confidence=0.3,
+            certainty=0.9,
         )
 
         assert (await storage.get_node(node.id)).value.confidence == 0.3

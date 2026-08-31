@@ -38,22 +38,17 @@ async def assemble_snapshot(storage: StorageBackend, graph: str) -> dict:
         "graph": graph,
         "nodes": [node_to_view(n, graph).model_dump(mode="json") for n in nodes],
         "edges": [edge_to_view(e, graph).model_dump(mode="json") for e in edges],
-        "timelines": [
-            timeline_to_view(t, graph).model_dump(mode="json") for t in timelines
-        ],
+        "timelines": [timeline_to_view(t, graph).model_dump(mode="json") for t in timelines],
         "metacontexts": [
             metacontext_to_view(m, graph).model_dump(mode="json") for m in metacontexts
         ],
         "relation_labels": [
-            relation_label_to_view(rl, graph).model_dump(mode="json")
-            for rl in relation_labels
+            relation_label_to_view(rl, graph).model_dump(mode="json") for rl in relation_labels
         ],
     }
 
 
-async def list_graphs_result(
-    storage: StorageBackend, default_reflect_threshold: int = 10
-) -> dict:
+async def list_graphs_result(storage: StorageBackend, default_reflect_threshold: int = 10) -> dict:
     """Available graphs, the active one, the backend kind, and the active
     graph's reflection pressure.
 

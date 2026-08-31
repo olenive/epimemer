@@ -24,7 +24,7 @@ import logging
 from collections import defaultdict
 from typing import Any, Protocol
 
-from epimemer.visualization.events import AnyEvent, Event, EventCategory
+from epimemer.visualization.events import Event, EventCategory
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 class EventSubscriber(Protocol):
     """Callable that receives an event. Can be sync or async."""
+
     async def __call__(self, event: Event) -> None: ...
 
 

@@ -20,7 +20,7 @@ The tests below therefore split three ways — what refuses, what warns without
 refusing, and what is nominated at all.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -84,15 +84,21 @@ async def _inference(
         lifecycle=list(lifecycle or []),
     )
     await storage.store_node(inference)
-    await storage.store_embedding(EmbeddingRecord(
-        item_id=inference.id,
-        model_id=embedding_provider.model_id,
-        vector=vector or _TWIN,
-    ))
+    await storage.store_embedding(
+        EmbeddingRecord(
+            item_id=inference.id,
+            model_id=embedding_provider.model_id,
+            vector=vector or _TWIN,
+        )
+    )
     if frame is not None:
-        await storage.store_edge(NodeEdge(
-            src_id=inference.id, dst_id=frame, type=EdgeType.HAS_METACONTEXT,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=inference.id,
+                dst_id=frame,
+                type=EdgeType.HAS_METACONTEXT,
+            )
+        )
     return inference
 
 
@@ -103,64 +109,68 @@ async def _premise(storage, content: str) -> Fact:
 
 
 async def _rests_on(storage, inference: Inference, premise: Fact) -> None:
-    await storage.store_edge(NodeEdge(
-        src_id=inference.id, dst_id=premise.id, type=EdgeType.DERIVED_FROM,
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=inference.id,
+            dst_id=premise.id,
+            type=EdgeType.DERIVED_FROM,
+        )
+    )
 
 
 async def _dated(storage, premise: Fact, name: str, *intervals) -> str:
     document = RawDocument(content=f"contents of {name}", source=name)
     await storage.store_document(document)
-    await storage.store_edge(NodeEdge(
-        src_id=premise.id,
-        dst_id=document.id,
-        type=EdgeType.SOURCED_FROM,
-        validity=list(intervals),
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=premise.id,
+            dst_id=document.id,
+            type=EdgeType.SOURCED_FROM,
+            validity=list(intervals),
+        )
+    )
     return document.id
 
 
 async def _frame(storage, node, label: str) -> str:
     frame = Metacontext(content=label)
     await storage.store_metacontext(frame)
-    await storage.store_edge(NodeEdge(
-        src_id=node.id, dst_id=frame.id, type=EdgeType.HAS_METACONTEXT,
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=node.id,
+            dst_id=frame.id,
+            type=EdgeType.HAS_METACONTEXT,
+        )
+    )
     return frame.id
 
 
 def _year(value: int) -> PreciseInstant:
-    return PreciseInstant(at=datetime(value, 1, 1, tzinfo=timezone.utc))
+    return PreciseInstant(at=datetime(value, 1, 1, tzinfo=UTC))
 
 
 def _span(start: int, end: int) -> ValidityInterval:
-    return ValidityInterval(
-        start=_year(start), end=_year(end), basis=IntervalBasis.STATED
-    )
+    return ValidityInterval(start=_year(start), end=_year(end), basis=IntervalBasis.STATED)
 
 
 def _open_from(start: int) -> ValidityInterval:
-    return ValidityInterval(
-        start=_year(start), end=UnknownInstant(), basis=IntervalBasis.STATED
-    )
+    return ValidityInterval(start=_year(start), end=UnknownInstant(), basis=IntervalBasis.STATED)
 
 
 def _completed_cycles(count: int) -> list[LifecycleEpisode]:
     return [
         LifecycleEpisode(
-            retired_at=datetime(2026, 1, i + 1, tzinfo=timezone.utc),
+            retired_at=datetime(2026, 1, i + 1, tzinfo=UTC),
             because=NodeStatus.MERGED,
             counterpart=f"survivor-{i}",
-            restored_at=datetime(2026, 1, i + 2, tzinfo=timezone.utc),
+            restored_at=datetime(2026, 1, i + 2, tzinfo=UTC),
         )
         for i in range(count)
     ]
 
 
 async def _refusal(storage, embedding_provider, sources, **kwargs):
-    return await merge_refusal(
-        sources, storage, model_id=embedding_provider.model_id, **kwargs
-    )
+    return await merge_refusal(sources, storage, model_id=embedding_provider.model_id, **kwargs)
 
 
 class TestWhatWillNotMerge:
@@ -179,12 +189,12 @@ class TestWhatWillNotMerge:
 
         assert refusal is not None and "already itself" in refusal.reason
 
-    async def test_a_retired_derivation_has_been_ruled_on(
-        self, storage, embedding_provider
-    ):
+    async def test_a_retired_derivation_has_been_ruled_on(self, storage, embedding_provider):
         live = await _inference(storage, embedding_provider, "A reading")
         gone = await _inference(
-            storage, embedding_provider, "The same reading",
+            storage,
+            embedding_provider,
+            "The same reading",
             status=NodeStatus.CORRECTED,
         )
 
@@ -194,9 +204,7 @@ class TestWhatWillNotMerge:
         assert "only active inferences merge" in refusal.reason
         assert "corrected" in refusal.reason
 
-    async def test_two_worlds_do_not_become_one_node(
-        self, storage, embedding_provider
-    ):
+    async def test_two_worlds_do_not_become_one_node(self, storage, embedding_provider):
         """The union problem `fact_dedup` refuses on, unchanged.
 
         Two perspectives reaching the same conclusion about different worlds are
@@ -204,9 +212,7 @@ class TestWhatWillNotMerge:
         world what was only ever derived in another.
         """
         real = await _inference(storage, embedding_provider, "The pass was closed")
-        fictional = await _inference(
-            storage, embedding_provider, "The pass was closed", frame=None
-        )
+        fictional = await _inference(storage, embedding_provider, "The pass was closed", frame=None)
         await _frame(storage, fictional, "Novel-X")
 
         refusal = await _refusal(storage, embedding_provider, [real, fictional])
@@ -233,32 +239,29 @@ class TestWhatWillNotMerge:
         one = await _inference(storage, embedding_provider, "A reading")
         bare = Inference(content="The same reading", source_id="seg-1")
         await storage.store_node(bare)
-        await storage.store_edge(NodeEdge(
-            src_id=bare.id, dst_id=BASE_METACONTEXT_ID,
-            type=EdgeType.HAS_METACONTEXT,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=bare.id,
+                dst_id=BASE_METACONTEXT_ID,
+                type=EdgeType.HAS_METACONTEXT,
+            )
+        )
 
         refusal = await _refusal(storage, embedding_provider, [one, bare])
 
         assert refusal is not None and "no stored embedding" in refusal.reason
 
-    async def test_an_oscillation_asks_for_a_person(
-        self, storage, embedding_provider
-    ):
+    async def test_an_oscillation_asks_for_a_person(self, storage, embedding_provider):
         one = await _inference(
             storage, embedding_provider, "A reading", lifecycle=_completed_cycles(2)
         )
         other = await _inference(storage, embedding_provider, "The same reading")
 
-        refusal = await _refusal(
-            storage, embedding_provider, [one, other], cycle_limit=2
-        )
+        refusal = await _refusal(storage, embedding_provider, [one, other], cycle_limit=2)
 
         assert refusal is not None and "Ask the user" in refusal.reason
 
-    async def test_nothing_objects_to_two_twins_in_one_frame(
-        self, storage, embedding_provider
-    ):
+    async def test_nothing_objects_to_two_twins_in_one_frame(self, storage, embedding_provider):
         one = await _inference(storage, embedding_provider, "A reading")
         other = await _inference(storage, embedding_provider, "The same reading")
 
@@ -287,9 +290,7 @@ class TestDisjointPremisesWarnRatherThanRefuse:
     content is written, which is the only moment it can change the answer.
     """
 
-    async def test_premises_that_fall_clear_produce_an_advisory(
-        self, storage, embedding_provider
-    ):
+    async def test_premises_that_fall_clear_produce_an_advisory(self, storage, embedding_provider):
         one = await _inference(storage, embedding_provider, "A reading")
         other = await _inference(storage, embedding_provider, "The same reading")
         early = await _premise(storage, "Leningrad is the city's name")
@@ -305,12 +306,11 @@ class TestDisjointPremisesWarnRatherThanRefuse:
         assert advisories[0].kind is AdvisoryKind.DISJOINT_PREMISES
         assert set(advisories[0].subjects) == {one.id, other.id}
         assert {advisories[0].detail["a"]["id"], advisories[0].detail["b"]["id"]} == {
-            early.id, late.id
+            early.id,
+            late.id,
         }
 
-    async def test_the_advisory_does_not_refuse_the_merge(
-        self, storage, embedding_provider
-    ):
+    async def test_the_advisory_does_not_refuse_the_merge(self, storage, embedding_provider):
         one = await _inference(storage, embedding_provider, "A reading")
         other = await _inference(storage, embedding_provider, "The same reading")
         early = await _premise(storage, "Leningrad is the city's name")
@@ -323,9 +323,7 @@ class TestDisjointPremisesWarnRatherThanRefuse:
         assert await merge_advisories([one, other], storage)
         assert await _refusal(storage, embedding_provider, [one, other]) is None
 
-    async def test_overlapping_premises_say_nothing(
-        self, storage, embedding_provider
-    ):
+    async def test_overlapping_premises_say_nothing(self, storage, embedding_provider):
         one = await _inference(storage, embedding_provider, "A reading")
         other = await _inference(storage, embedding_provider, "The same reading")
         first = await _premise(storage, "The service was degraded")
@@ -354,9 +352,7 @@ class TestDisjointPremisesWarnRatherThanRefuse:
 
         assert await merge_advisories([one, other], storage) == []
 
-    async def test_a_supports_edge_counts_as_a_premise_too(
-        self, storage, embedding_provider
-    ):
+    async def test_a_supports_edge_counts_as_a_premise_too(self, storage, embedding_provider):
         """Both directions, exactly as evidence-staleness already counts them."""
         one = await _inference(storage, embedding_provider, "A reading")
         other = await _inference(storage, embedding_provider, "The same reading")
@@ -364,9 +360,13 @@ class TestDisjointPremisesWarnRatherThanRefuse:
         late = await _premise(storage, "Saint Petersburg is the city's name")
         await _dated(storage, early, "atlas-1970", _span(1924, 1991))
         await _dated(storage, late, "atlas-2020", _open_from(1991))
-        await storage.store_edge(NodeEdge(
-            src_id=early.id, dst_id=one.id, type=EdgeType.SUPPORTS,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=early.id,
+                dst_id=one.id,
+                type=EdgeType.SUPPORTS,
+            )
+        )
         await _rests_on(storage, other, late)
 
         assert len(await merge_advisories([one, other], storage)) == 1
@@ -381,14 +381,10 @@ class TestNominationIsScopedToSharedEvidence:
     saying different things.
     """
 
-    async def test_two_readings_of_one_premise_are_nominated(
-        self, storage, embedding_provider
-    ):
+    async def test_two_readings_of_one_premise_are_nominated(self, storage, embedding_provider):
         premise = await _premise(storage, "The deploy failed")
         one = await _inference(storage, embedding_provider, "The release is unsafe")
-        other = await _inference(
-            storage, embedding_provider, "The release cannot be trusted"
-        )
+        other = await _inference(storage, embedding_provider, "The release cannot be trusted")
         await _rests_on(storage, one, premise)
         await _rests_on(storage, other, premise)
 
@@ -399,24 +395,18 @@ class TestNominationIsScopedToSharedEvidence:
         assert [ref.id for ref in found[0].shared_premises] == [premise.id]
         assert found[0].similarity >= SIMILARITY_NOMINATION_THRESHOLD
 
-    async def test_twins_sharing_no_premise_are_not_offered(
-        self, storage, embedding_provider
-    ):
+    async def test_twins_sharing_no_premise_are_not_offered(self, storage, embedding_provider):
         """The measured case. Two inferences agreeing may be independent support
         — which is the thing corroboration exists to count — and nothing here
         treats agreement alone as redundancy."""
         one = await _inference(storage, embedding_provider, "The release is unsafe")
-        other = await _inference(
-            storage, embedding_provider, "The release cannot be trusted"
-        )
+        other = await _inference(storage, embedding_provider, "The release cannot be trusted")
         await _rests_on(storage, one, await _premise(storage, "The deploy failed"))
         await _rests_on(storage, other, await _premise(storage, "The queue grew"))
 
         assert await nominate_inference_merges(storage, embedding_provider) == []
 
-    async def test_a_shared_premise_is_not_enough_on_its_own(
-        self, storage, embedding_provider
-    ):
+    async def test_a_shared_premise_is_not_enough_on_its_own(self, storage, embedding_provider):
         premise = await _premise(storage, "The deploy failed")
         one = await _inference(storage, embedding_provider, "The release is unsafe")
         other = await _inference(
@@ -437,16 +427,18 @@ class TestNominationIsScopedToSharedEvidence:
         """
         premise = await _premise(storage, "The deploy failed")
         one = await _inference(storage, embedding_provider, "The release is unsafe")
-        other = await _inference(
-            storage, embedding_provider, "The release cannot be trusted"
-        )
+        other = await _inference(storage, embedding_provider, "The release cannot be trusted")
         await _rests_on(storage, one, premise)
         await _rests_on(storage, other, premise)
         assert await nominate_inference_merges(storage, embedding_provider)
 
-        await storage.store_edge(NodeEdge(
-            src_id=one.id, dst_id=other.id, type=EdgeType.ASSESSED,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=one.id,
+                dst_id=other.id,
+                type=EdgeType.ASSESSED,
+            )
+        )
 
         assert await nominate_inference_merges(storage, embedding_provider) == []
 
@@ -465,13 +457,13 @@ class TestNominationIsScopedToSharedEvidence:
 
         assert await nominate_inference_merges(storage, embedding_provider) == []
 
-    async def test_a_retired_inference_is_out_of_the_sweep(
-        self, storage, embedding_provider
-    ):
+    async def test_a_retired_inference_is_out_of_the_sweep(self, storage, embedding_provider):
         premise = await _premise(storage, "The deploy failed")
         live = await _inference(storage, embedding_provider, "The release is unsafe")
         gone = await _inference(
-            storage, embedding_provider, "The release cannot be trusted",
+            storage,
+            embedding_provider,
+            "The release cannot be trusted",
             status=NodeStatus.MERGED,
         )
         await _rests_on(storage, live, premise)
@@ -479,9 +471,7 @@ class TestNominationIsScopedToSharedEvidence:
 
         assert await nominate_inference_merges(storage, embedding_provider) == []
 
-    async def test_the_nomination_carries_its_advisory(
-        self, storage, embedding_provider
-    ):
+    async def test_the_nomination_carries_its_advisory(self, storage, embedding_provider):
         """Pre-decision, which is the point: the agent is told before it writes.
 
         Delivering it afterwards would arrive detached from the decision that
@@ -494,9 +484,7 @@ class TestNominationIsScopedToSharedEvidence:
         await _dated(storage, early, "atlas-1970", _span(1924, 1991))
         await _dated(storage, late, "atlas-2020", _open_from(1991))
         one = await _inference(storage, embedding_provider, "The name changed once")
-        other = await _inference(
-            storage, embedding_provider, "The name has changed once"
-        )
+        other = await _inference(storage, embedding_provider, "The name has changed once")
         for inference in (one, other):
             await _rests_on(storage, inference, shared)
         await _rests_on(storage, one, early)
@@ -505,28 +493,26 @@ class TestNominationIsScopedToSharedEvidence:
         found = await nominate_inference_merges(storage, embedding_provider)
 
         assert len(found) == 1
-        assert [advisory.kind for advisory in found[0].warnings] == [
-            AdvisoryKind.DISJOINT_PREMISES
-        ]
+        assert [advisory.kind for advisory in found[0].warnings] == [AdvisoryKind.DISJOINT_PREMISES]
 
-    async def test_facts_and_topics_are_not_swept_here(
-        self, storage, embedding_provider
-    ):
+    async def test_facts_and_topics_are_not_swept_here(self, storage, embedding_provider):
         """Facts are `merge_facts`; topics consolidate through reflect."""
         premise = await _premise(storage, "The deploy failed")
         twin = await _premise(storage, "The deployment did not succeed")
         topic = Topic(content="Deployments", source_id="seg-1")
         await storage.store_node(topic)
         for node in (premise, twin, topic):
-            await storage.store_embedding(EmbeddingRecord(
-                item_id=node.id, model_id=embedding_provider.model_id, vector=_TWIN,
-            ))
+            await storage.store_embedding(
+                EmbeddingRecord(
+                    item_id=node.id,
+                    model_id=embedding_provider.model_id,
+                    vector=_TWIN,
+                )
+            )
 
         assert await nominate_inference_merges(storage, embedding_provider) == []
 
-    async def test_candidates_come_back_highest_scoring_first(
-        self, storage, embedding_provider
-    ):
+    async def test_candidates_come_back_highest_scoring_first(self, storage, embedding_provider):
         premise = await _premise(storage, "The deploy failed")
         exact = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         near = [0.95, 0.31, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

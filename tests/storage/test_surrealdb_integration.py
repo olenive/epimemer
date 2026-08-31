@@ -30,8 +30,7 @@ profile holding the port, or a wedged container) reads as unreachable here.
 import asyncio
 import os
 import uuid
-
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -47,14 +46,13 @@ from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
     Fact,
+    NodeEdge,
     NodeStatus,
     NodeType,
-    NodeEdge,
     RawDocument,
     Topic,
 )
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
-
 
 WS_URL = os.environ.get("EPIMEMER_SURREAL_WS_URL")
 WS_USER = os.environ.get("EPIMEMER_SURREAL_USER", "root")
@@ -64,8 +62,11 @@ WS_NS = os.environ.get("EPIMEMER_SURREAL_NS", "epimemer_it")
 
 def _make_store(database: str) -> SurrealDBStorage:
     return SurrealDBStorage(
-        url=WS_URL, user=WS_USER, password=WS_PASS,
-        namespace=WS_NS, database=database,
+        url=WS_URL,
+        user=WS_USER,
+        password=WS_PASS,
+        namespace=WS_NS,
+        database=database,
     )
 
 
@@ -167,9 +168,7 @@ async def test_concurrent_write_batches_all_commit(surreal):
         await store.write_batch_tx(nodes=[topic, fact], edges=[edge], embeddings=[emb])
         return topic.id
 
-    topic_ids = await asyncio.gather(
-        *[writer(store, i) for i, store in enumerate(stores)]
-    )
+    topic_ids = await asyncio.gather(*[writer(store, i) for i, store in enumerate(stores)])
 
     # Every batch landed in full.
     for tid in topic_ids:
@@ -198,7 +197,9 @@ async def test_failed_batch_rolls_back_under_concurrency(surreal):
     async def bad() -> str:
         fresh = Topic(content="fresh-partner", source_id="s1")
         collide = Topic(id=squatter.id, content="dupe", source_id="s1")
-        with pytest.raises(Exception):
+        # Blind on purpose: the storage protocol names no exception type, and the
+        # two backends refuse with different ones.
+        with pytest.raises(Exception):  # noqa: B017
             await bad_store.write_batch_tx(nodes=[fresh, collide])
         return fresh.id
 
@@ -232,18 +233,23 @@ async def test_concurrent_supersede_distinct_nodes(surreal):
         new = Topic(content=f"new-for-{old.content}", source_id="s1")
         emb = EmbeddingRecord(item_id=new.id, model_id="m", vector=[1.0, 0.0])
         lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
-        from datetime import datetime, timezone
+        from datetime import datetime
+
         await store.supersede_node_tx(
-            old, new, emb, lineage,             status=NodeStatus.CORRECTED,
-            superseded_at=datetime.now(timezone.utc),
+            old,
+            new,
+            emb,
+            lineage,
+            status=NodeStatus.CORRECTED,
+            superseded_at=datetime.now(UTC),
         )
         return new.id
 
     new_ids = await asyncio.gather(
-        *[supersede(store, old) for store, old in zip(stores, olds)]
+        *[supersede(store, old) for store, old in zip(stores, olds, strict=True)]
     )
 
-    for old, new_id in zip(olds, new_ids):
+    for old, new_id in zip(olds, new_ids, strict=True):
         assert (await verifier.get_node(old.id)).status == NodeStatus.CORRECTED
         assert await verifier.get_node(new_id) is not None
         lineage = await verifier.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)
@@ -258,7 +264,7 @@ async def test_archival_flip_rolls_back_over_a_real_connection(surreal):
     server, not the embedded engine. This is the test that says it works where
     it actually runs.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     store = await surreal()
     verifier = await surreal()
@@ -268,20 +274,20 @@ async def test_archival_flip_rolls_back_over_a_real_connection(surreal):
         await store.store_node(node)
     missing = Fact(content="never stored", source_id="s1")
 
-    with pytest.raises(Exception):
+    # Blind on purpose: the storage protocol names no exception type, and the
+    # two backends refuse with different ones.
+    with pytest.raises(Exception):  # noqa: B017
         await store.set_node_status_tx(
             [*nodes, missing],
             status=NodeStatus.ARCHIVED,
-            at=datetime.now(timezone.utc),
+            at=datetime.now(UTC),
         )
 
     for node in nodes:
         assert (await verifier.get_node(node.id)).status == NodeStatus.ACTIVE
 
     # ...and the same call without the missing node commits every flip.
-    await store.set_node_status_tx(
-        nodes, status=NodeStatus.ARCHIVED, at=datetime.now(timezone.utc)
-    )
+    await store.set_node_status_tx(nodes, status=NodeStatus.ARCHIVED, at=datetime.now(UTC))
     for node in nodes:
         assert (await verifier.get_node(node.id)).status == NodeStatus.ARCHIVED
 
@@ -295,7 +301,7 @@ async def test_lifecycle_episodes_round_trip_over_a_real_connection(surreal):
     connection and coming back through another is the part `mem://` cannot
     vouch for.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     store = await surreal()
     verifier = await surreal()
@@ -303,13 +309,14 @@ async def test_lifecycle_episodes_round_trip_over_a_real_connection(surreal):
     old = Fact(content="the earlier claim", source_id="s1")
     new = Fact(content="what replaced it", source_id="s1")
     await store.store_node(old)
-    at = datetime(2026, 6, 15, tzinfo=timezone.utc)
+    at = datetime(2026, 6, 15, tzinfo=UTC)
     await store.supersede_node_tx(
-        old, new,
+        old,
+        new,
         EmbeddingRecord(item_id=new.id, model_id="test", vector=[1.0, 0.0, 0.0]),
-        NodeEdge(src_id=old.id, dst_id=new.id,
-                 type=EdgeType.TEMPORALLY_FOLLOWED_BY),
-        status=NodeStatus.HISTORICAL, superseded_at=at,
+        NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.TEMPORALLY_FOLLOWED_BY),
+        status=NodeStatus.HISTORICAL,
+        superseded_at=at,
     )
 
     retired = await verifier.get_node(old.id)
@@ -317,9 +324,11 @@ async def test_lifecycle_episodes_round_trip_over_a_real_connection(surreal):
         (at, NodeStatus.HISTORICAL, new.id)
     ]
 
-    came_back = datetime(2026, 6, 20, tzinfo=timezone.utc)
+    came_back = datetime(2026, 6, 20, tzinfo=UTC)
     await store.set_node_status_tx(
-        [retired], status=NodeStatus.ACTIVE, at=came_back,
+        [retired],
+        status=NodeStatus.ACTIVE,
+        at=came_back,
     )
 
     back = await verifier.get_node(old.id)
@@ -331,8 +340,8 @@ async def test_lifecycle_episodes_round_trip_over_a_real_connection(surreal):
     # The window predicate is SurrealQL the server parses for itself, and the
     # retirement it has to find is no longer in `superseded_at`.
     changed = await verifier.query_changes(
-        start=datetime(2026, 6, 14, tzinfo=timezone.utc),
-        end=datetime(2026, 6, 16, tzinfo=timezone.utc),
+        start=datetime(2026, 6, 14, tzinfo=UTC),
+        end=datetime(2026, 6, 16, tzinfo=UTC),
     )
     assert old.id in {n.id for n in changed}
 
@@ -352,20 +361,31 @@ async def test_reactivation_writes_the_flip_and_its_edge_together(surreal):
     document = RawDocument(content="the 2024 result", source="almanac")
     await store.store_node(fact)
     await store.store_document(document)
-    retired = datetime(2010, 5, 11, tzinfo=timezone.utc)
+    retired = datetime(2010, 5, 11, tzinfo=UTC)
     await store.set_node_status_tx(
-        [fact], status=NodeStatus.HISTORICAL, at=retired,
+        [fact],
+        status=NodeStatus.HISTORICAL,
+        at=retired,
     )
 
-    came_back = datetime(2024, 7, 5, tzinfo=timezone.utc)
+    came_back = datetime(2024, 7, 5, tzinfo=UTC)
     await store.set_node_status_tx(
-        [await verifier.get_node(fact.id)], status=NodeStatus.ACTIVE, at=came_back,
-        edges=[NodeEdge(
-            src_id=fact.id, dst_id=document.id, type=EdgeType.SOURCED_FROM,
-            validity=[ValidityInterval(
-                start=PreciseInstant(at=came_back), basis=IntervalBasis.STATED,
-            )],
-        )],
+        [await verifier.get_node(fact.id)],
+        status=NodeStatus.ACTIVE,
+        at=came_back,
+        edges=[
+            NodeEdge(
+                src_id=fact.id,
+                dst_id=document.id,
+                type=EdgeType.SOURCED_FROM,
+                validity=[
+                    ValidityInterval(
+                        start=PreciseInstant(at=came_back),
+                        basis=IntervalBasis.STATED,
+                    )
+                ],
+            )
+        ],
     )
 
     back = await verifier.get_node(fact.id)
@@ -396,20 +416,28 @@ async def test_vector_search_status_filter_over_a_real_connection(surreal):
     for status in (NodeStatus.ACTIVE, NodeStatus.HISTORICAL, NodeStatus.CORRECTED):
         fact = Fact(content=f"a claim, {status.value}", source_id="s1", status=status)
         await store.store_node(fact)
-        await store.store_embedding(EmbeddingRecord(
-            item_id=fact.id, model_id="test", vector=[1.0, 0.0, 0.0],
-        ))
+        await store.store_embedding(
+            EmbeddingRecord(
+                item_id=fact.id,
+                model_id="test",
+                vector=[1.0, 0.0, 0.0],
+            )
+        )
         by_status[status] = fact
 
-    assert [i for i, _ in await verifier.vector_search([1.0, 0.0, 0.0], "test", k=10)] \
-        == [by_status[NodeStatus.ACTIVE].id]
+    assert [i for i, _ in await verifier.vector_search([1.0, 0.0, 0.0], "test", k=10)] == [
+        by_status[NodeStatus.ACTIVE].id
+    ]
 
     nominated = await verifier.vector_search(
-        [1.0, 0.0, 0.0], "test", k=10,
+        [1.0, 0.0, 0.0],
+        "test",
+        k=10,
         statuses=frozenset({NodeStatus.ACTIVE, NodeStatus.HISTORICAL}),
     )
     assert {i for i, _ in nominated} == {
-        by_status[NodeStatus.ACTIVE].id, by_status[NodeStatus.HISTORICAL].id
+        by_status[NodeStatus.ACTIVE].id,
+        by_status[NodeStatus.HISTORICAL].id,
     }
 
 
@@ -429,15 +457,15 @@ async def test_validity_intervals_round_trip_over_a_real_connection(surreal):
     fact = Fact(content="the city is called Leningrad", source_id="s1")
     document = RawDocument(
         content="a 1970 memoir",
-        published_at=PreciseInstant(at=datetime(1970, 6, 1, tzinfo=timezone.utc)),
+        published_at=PreciseInstant(at=datetime(1970, 6, 1, tzinfo=UTC)),
     )
     await store.store_node(fact)
     await store.store_document(document)
     intervals = [
         ValidityInterval(
             start=UnknownInstant(),
-            end=PreciseInstant(at=datetime(1991, 9, 6, tzinfo=timezone.utc)),
-            witnessed_at=PreciseInstant(at=datetime(1970, 1, 1, tzinfo=timezone.utc)),
+            end=PreciseInstant(at=datetime(1991, 9, 6, tzinfo=UTC)),
+            witnessed_at=PreciseInstant(at=datetime(1970, 1, 1, tzinfo=UTC)),
             basis=IntervalBasis.INFERRED,
         ),
         ValidityInterval(
@@ -447,10 +475,14 @@ async def test_validity_intervals_round_trip_over_a_real_connection(surreal):
             basis=IntervalBasis.STATED,
         ),
     ]
-    await store.store_edge(NodeEdge(
-        src_id=fact.id, dst_id=document.id, type=EdgeType.SOURCED_FROM,
-        validity=intervals,
-    ))
+    await store.store_edge(
+        NodeEdge(
+            src_id=fact.id,
+            dst_id=document.id,
+            type=EdgeType.SOURCED_FROM,
+            validity=intervals,
+        )
+    )
 
     edges = await verifier.get_edges_from(fact.id, edge_type=EdgeType.SOURCED_FROM)
     assert len(edges) == 1
@@ -478,9 +510,7 @@ async def test_fts_index_is_defined_for_every_searchable_table(surreal):
 
     for table in ("topic", "fact", "inference", "segment"):
         info = await store._query(f"INFO FOR TABLE {table};")
-        assert f"idx_{table}_fts" in info["indexes"], (
-            f"{table} has no full-text index"
-        )
+        assert f"idx_{table}_fts" in info["indexes"], f"{table} has no full-text index"
 
 
 async def test_text_search_discriminates_a_near_miss_over_a_real_connection(surreal):
@@ -515,19 +545,16 @@ async def test_text_search_discriminates_a_near_miss_over_a_real_connection(surr
     assert [node_id for node_id, _ in hits] == [facts[0].id]
 
     # The gate itself: a corrected claim holding the identifier stays out.
-    await store.set_node_status_tx(
-        [facts[0]], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
-    )
-    assert await verifier.text_search(
-        ["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT
-    ) == []
+    await store.set_node_status_tx([facts[0]], status=NodeStatus.CORRECTED, at=datetime.now(UTC))
+    assert await verifier.text_search(["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT) == []
 
 
 async def test_a_status_set_gates_without_losing_the_index(surreal):
     """`status IN $statuses` sits where `status = $status` did, and must behave.
 
-    The gate went plural for history-by-default retrieval, so retrieval can ask both arms for history
-    with one set. The predicate is the reason to check it on the real engine
+    The gate went plural for history-by-default retrieval, so retrieval can ask
+    both arms for history with one set. The predicate is the reason to check it
+    on the real engine
     rather than only on the embedded one: this planner drops the full-text index
     when the wrong predicate joins the match references, and `@@` then matches
     any token of a term rather than all of them — which is `JIRA-4417` returning
@@ -548,9 +575,7 @@ async def test_a_status_set_gates_without_losing_the_index(surreal):
     facts = [Fact(content=text, source_id="s1") for text in contents]
     for fact in facts:
         await store.store_node(fact)
-    await store.set_node_status_tx(
-        [facts[0]], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
-    )
+    await store.set_node_status_tx([facts[0]], status=NodeStatus.HISTORICAL, at=datetime.now(UTC))
 
     hits = await verifier.text_search(
         ["JIRA-4417"],
@@ -561,9 +586,7 @@ async def test_a_status_set_gates_without_losing_the_index(surreal):
     assert [node_id for node_id, _ in hits] == [facts[0].id]
 
     # And the default set still refuses it, so the widening is opt-in.
-    assert await verifier.text_search(
-        ["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT
-    ) == []
+    assert await verifier.text_search(["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT) == []
 
 
 async def test_containment_keeps_the_index_over_a_real_connection(surreal):
@@ -644,9 +667,7 @@ async def test_a_snapshot_borrow_waits_for_a_write_in_flight(surreal, db_name):
     await asyncio.wait_for(snapshot, timeout=10)
 
     assert store._selected == db_name, "the borrow was not handed back"
-    assert await store.get_node_by_content(
-        written.content, node_type=NodeType.TOPIC
-    ) is not None
+    assert await store.get_node_by_content(written.content, node_type=NodeType.TOPIC) is not None
 
     await elsewhere.delete_database(f"{db_name}_elsewhere")
     await elsewhere.close()

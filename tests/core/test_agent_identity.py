@@ -1,8 +1,9 @@
 """The three layers of a judge: the key, the name, and the claim.
 
 `agent_id` used to be all three at once, and the collapse is what made every
-defect in the judge identity split unfixable in isolation — naming a judge badly on first contact was
-permanent, and splitting one judge's history in two was a typo away. These are
+defect in the judge identity split unfixable in isolation — naming a judge
+badly on first contact was permanent, and splitting one judge's history in two
+was a typo away. These are
 the pure resolutions that replaced it: no storage, no elicitation, no MCP.
 
 Nothing here writes. Consolidating two records **rewrites nothing and deletes
@@ -11,7 +12,7 @@ resolves through the list — so *which judge is this* has to be a derivation, a
 these are the functions that derive it.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from epimemer.core.types import (
     Agent,
@@ -28,7 +29,7 @@ from epimemer.core.types import (
     resolve_agent,
 )
 
-AT = datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
+AT = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
 LATER = AT + timedelta(days=1)
 
 

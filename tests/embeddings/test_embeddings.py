@@ -6,7 +6,6 @@ from epimemer.embeddings.mock import MockEmbeddingProvider
 
 
 class TestMockEmbeddingProvider:
-
     async def test_returns_correct_dimension(self):
         provider = MockEmbeddingProvider(dimension=8)
         vectors = await provider.embed(["hello"])

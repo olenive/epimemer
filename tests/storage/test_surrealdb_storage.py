@@ -5,13 +5,12 @@ Uses mem:// (embedded) mode so no external SurrealDB instance is needed.
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 from websockets.exceptions import ConnectionClosedError
 
-from epimemer.storage import surrealdb_adapter
 from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
@@ -25,6 +24,7 @@ from epimemer.core.types import (
     Timeline,
     Topic,
 )
+from epimemer.storage import surrealdb_adapter
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
 
 
@@ -37,7 +37,6 @@ async def store():
 
 
 class TestDocumentStorage:
-
     async def test_store_and_retrieve(self, store):
         doc = RawDocument(content="Hello world")
         await store.store_document(doc)
@@ -51,7 +50,6 @@ class TestDocumentStorage:
 
 
 class TestSegmentStorage:
-
     async def test_store_and_retrieve(self, store):
         doc = RawDocument(content="Hello world")
         await store.store_document(doc)
@@ -72,7 +70,6 @@ class TestSegmentStorage:
 
 
 class TestNodeStorage:
-
     async def test_store_and_retrieve_topic(self, store):
         t = Topic(content="ML topic", source_id="s1")
         await store.store_node(t)
@@ -109,9 +106,7 @@ class TestNodeStorage:
     async def test_query_by_status(self, store):
         t = Topic(content="topic", source_id="s1")
         await store.store_node(t)
-        await store.set_node_status_tx(
-            [t], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
-        )
+        await store.set_node_status_tx([t], status=NodeStatus.SUPERSEDED, at=datetime.now(UTC))
         active = await store.query_nodes(status=NodeStatus.ACTIVE)
         superseded = await store.query_nodes(status=NodeStatus.SUPERSEDED)
         assert len(active) == 0
@@ -128,7 +123,6 @@ class TestNodeStorage:
 
 
 class TestEdgeStorage:
-
     async def test_store_and_retrieve_edges(self, store):
         e = NodeEdge(src_id="a", dst_id="b", type=EdgeType.SUPPORTS)
         await store.store_edge(e)
@@ -155,7 +149,6 @@ class TestEdgeStorage:
 
 
 class TestCounts:
-
     async def test_count_nodes_empty(self, store):
         counts = await store.count_nodes_by_type()
         assert counts == {NodeType.TOPIC: 0, NodeType.FACT: 0, NodeType.INFERENCE: 0}
@@ -173,9 +166,7 @@ class TestCounts:
     async def test_count_nodes_respects_status(self, store):
         topic = Topic(content="t", source_id="s1")
         await store.store_node(topic)
-        await store.set_node_status_tx(
-            [topic], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
-        )
+        await store.set_node_status_tx([topic], status=NodeStatus.SUPERSEDED, at=datetime.now(UTC))
         active = await store.count_nodes_by_type(status=NodeStatus.ACTIVE)
         superseded = await store.count_nodes_by_type(status=NodeStatus.SUPERSEDED)
         assert active[NodeType.TOPIC] == 0
@@ -184,9 +175,7 @@ class TestCounts:
     async def test_count_edges_by_type(self, store):
         await store.store_edge(NodeEdge(src_id="a", dst_id="b", type=EdgeType.SUPPORTS))
         await store.store_edge(NodeEdge(src_id="c", dst_id="b", type=EdgeType.SUPPORTS))
-        await store.store_edge(
-            NodeEdge(src_id="d", dst_id="a", type=EdgeType.DERIVED_FROM)
-        )
+        await store.store_edge(NodeEdge(src_id="d", dst_id="a", type=EdgeType.DERIVED_FROM))
         counts = await store.count_edges_by_type()
         assert counts[EdgeType.SUPPORTS] == 2
         assert counts[EdgeType.DERIVED_FROM] == 1
@@ -194,7 +183,6 @@ class TestCounts:
 
 
 class TestEmbeddingStorage:
-
     async def test_store_and_retrieve(self, store):
         emb = EmbeddingRecord(item_id="n1", model_id="model-a", vector=[0.1, 0.2])
         await store.store_embedding(emb)
@@ -234,16 +222,18 @@ class TestAtomicOperations:
         fact = Fact(content="supporting fact", source_id="s1")
         await store.store_node(old)
         await store.store_node(fact)
-        await store.store_edge(
-            NodeEdge(src_id=fact.id, dst_id=old.id, type=EdgeType.SUPPORTS)
-        )
+        await store.store_edge(NodeEdge(src_id=fact.id, dst_id=old.id, type=EdgeType.SUPPORTS))
 
         new = Topic(content="new topic", source_id="s1")
         new_emb = EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.1, 0.2, 0.3])
         lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
         await store.supersede_node_tx(
-            old, new, new_emb, lineage,             status=NodeStatus.CORRECTED,
-            superseded_at=datetime.now(timezone.utc),
+            old,
+            new,
+            new_emb,
+            lineage,
+            status=NodeStatus.CORRECTED,
+            superseded_at=datetime.now(UTC),
         )
 
         assert (await store.get_node(old.id)).status == NodeStatus.CORRECTED
@@ -266,10 +256,16 @@ class TestAtomicOperations:
 
         new_emb = EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.1, 0.2])
         lineage = NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY)
-        with pytest.raises(Exception):
+        # Blind on purpose: the storage protocol names no exception type, and the
+        # two backends refuse with different ones.
+        with pytest.raises(Exception):  # noqa: B017
             await store.supersede_node_tx(
-                old, new, new_emb, lineage,                 status=NodeStatus.CORRECTED,
-                superseded_at=datetime.now(timezone.utc),
+                old,
+                new,
+                new_emb,
+                lineage,
+                status=NodeStatus.CORRECTED,
+                superseded_at=datetime.now(UTC),
             )
 
         # Rolled back: the old node was never marked superseded.
@@ -295,7 +291,9 @@ class TestAtomicOperations:
         # Squat the colliding node's uid so its insert aborts the whole batch.
         await store.store_node(Topic(id=collide.id, content="squatter", source_id="s1"))
 
-        with pytest.raises(Exception):
+        # Blind on purpose: the storage protocol names no exception type, and the
+        # two backends refuse with different ones.
+        with pytest.raises(Exception):  # noqa: B017
             await store.write_batch_tx(nodes=[fresh, collide])
 
         # The fresh node never landed.
@@ -313,20 +311,18 @@ class TestAtomicOperations:
         """
         from epimemer.pipelines.timeline.functions import add_timepoint
 
-        original, first = add_timepoint(
-            Timeline(name="tl"), start=datetime(1897, 5, 1, tzinfo=timezone.utc)
-        )
+        original, first = add_timepoint(Timeline(name="tl"), start=datetime(1897, 5, 1, tzinfo=UTC))
         await store.store_timeline(original)
 
-        appended, _ = add_timepoint(
-            original, start=datetime(1897, 9, 1, tzinfo=timezone.utc)
-        )
+        appended, _ = add_timepoint(original, start=datetime(1897, 9, 1, tzinfo=UTC))
         collide = EmbeddingRecord(item_id="x", model_id="m", vector=[1.0])
         await store.store_embedding(
             EmbeddingRecord(id=collide.id, item_id="squatter", model_id="m", vector=[0.0])
         )
 
-        with pytest.raises(Exception):
+        # Blind on purpose: the storage protocol names no exception type, and the
+        # two backends refuse with different ones.
+        with pytest.raises(Exception):  # noqa: B017
             await store.write_batch_tx(timelines=[appended], embeddings=[collide])
 
         stored = await store.get_timeline(original.id)
@@ -338,39 +334,29 @@ class TestAtomicOperations:
         inf = Inference(content="inference", source_id="s1")
         for node in (fact, existing, inf):
             await store.store_node(node)
-        await store.store_edge(
-            NodeEdge(src_id=inf.id, dst_id=fact.id, type=EdgeType.DERIVED_FROM)
-        )
+        await store.store_edge(NodeEdge(src_id=inf.id, dst_id=fact.id, type=EdgeType.DERIVED_FROM))
         candidate = NodeEdge(
             src_id=existing.id, dst_id=fact.id, type=EdgeType.SUPERSESSION_CANDIDATE
         )
         await store.store_edge(candidate)
 
-        lineage = NodeEdge(
-            src_id=fact.id, dst_id=existing.id, type=EdgeType.SUPERSEDED_BY
-        )
-        evidence = [
-            NodeEdge(src_id=fact.id, dst_id=inf.id, type=EdgeType.EVIDENCE_SUPERSEDED)
-        ]
+        lineage = NodeEdge(src_id=fact.id, dst_id=existing.id, type=EdgeType.SUPERSEDED_BY)
+        evidence = [NodeEdge(src_id=fact.id, dst_id=inf.id, type=EdgeType.EVIDENCE_SUPERSEDED)]
         await store.supersede_by_existing_tx(
-            fact, existing.id, lineage,
-            superseded_at=datetime.now(timezone.utc),
+            fact,
+            existing.id,
+            lineage,
+            superseded_at=datetime.now(UTC),
             evidence_edges=evidence,
             clear_edge_ids=[candidate.id],
-        status=NodeStatus.CORRECTED,
-    )
+            status=NodeStatus.CORRECTED,
+        )
 
         assert (await store.get_node(fact.id)).status == NodeStatus.CORRECTED
         assert (await store.get_node(existing.id)).status == NodeStatus.ACTIVE
-        assert len(
-            await store.get_edges_from(fact.id, edge_type=EdgeType.SUPERSEDED_BY)
-        ) == 1
-        assert len(
-            await store.get_edges_to(inf.id, edge_type=EdgeType.EVIDENCE_SUPERSEDED)
-        ) == 1
-        assert await store.get_edges_to(
-            fact.id, edge_type=EdgeType.SUPERSESSION_CANDIDATE
-        ) == []
+        assert len(await store.get_edges_from(fact.id, edge_type=EdgeType.SUPERSEDED_BY)) == 1
+        assert len(await store.get_edges_to(inf.id, edge_type=EdgeType.EVIDENCE_SUPERSEDED)) == 1
+        assert await store.get_edges_to(fact.id, edge_type=EdgeType.SUPERSESSION_CANDIDATE) == []
 
     async def test_merge_tx_migrates_dedupes_and_drops_self_loops(self, store):
         a = Topic(content="a", source_id="s1")
@@ -378,16 +364,10 @@ class TestAtomicOperations:
         fact = Fact(content="shared evidence", source_id="s1")
         for node in (a, b, fact):
             await store.store_node(node)
-        await store.store_edge(
-            NodeEdge(src_id=fact.id, dst_id=a.id, type=EdgeType.SUPPORTS)
-        )
-        await store.store_edge(
-            NodeEdge(src_id=fact.id, dst_id=b.id, type=EdgeType.SUPPORTS)
-        )
+        await store.store_edge(NodeEdge(src_id=fact.id, dst_id=a.id, type=EdgeType.SUPPORTS))
+        await store.store_edge(NodeEdge(src_id=fact.id, dst_id=b.id, type=EdgeType.SUPPORTS))
         # Edge between the sources → becomes a self-loop on merge, must be dropped.
-        await store.store_edge(
-            NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.SUPPORTS)
-        )
+        await store.store_edge(NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.SUPPORTS))
 
         merged = Topic(content="merged", source_id="s1")
         merged_emb = EmbeddingRecord(item_id=merged.id, model_id="m", vector=[0.1, 0.2])
@@ -395,17 +375,12 @@ class TestAtomicOperations:
             NodeEdge(src_id=a.id, dst_id=merged.id, type=EdgeType.MERGED_INTO),
             NodeEdge(src_id=b.id, dst_id=merged.id, type=EdgeType.MERGED_INTO),
         ]
-        await store.merge_nodes_tx(
-            [a, b], merged, merged_emb, lineage, merged_at=datetime.now(timezone.utc)
-        )
+        await store.merge_nodes_tx([a, b], merged, merged_emb, lineage, merged_at=datetime.now(UTC))
 
         # The two shared supports edges collapse to one; the self-loop is gone.
         into_merged = await store.get_edges_to(merged.id, edge_type=EdgeType.SUPPORTS)
         assert len(into_merged) == 1 and into_merged[0].src_id == fact.id
-        self_loops = [
-            e for e in await store.get_edges_from(merged.id)
-            if e.dst_id == merged.id
-        ]
+        self_loops = [e for e in await store.get_edges_from(merged.id) if e.dst_id == merged.id]
         assert self_loops == []
         assert (await store.get_node(a.id)).status == NodeStatus.MERGED
         assert (await store.get_node(b.id)).status == NodeStatus.MERGED
@@ -415,13 +390,14 @@ class TestAtomicOperations:
 
 class TestQueryChanges:
     # Fixed half-open window [W_START, W_END) with deterministic timestamps.
-    W_START = datetime(2026, 6, 10, tzinfo=timezone.utc)
-    W_END = datetime(2026, 6, 20, tzinfo=timezone.utc)
+    W_START = datetime(2026, 6, 10, tzinfo=UTC)
+    W_END = datetime(2026, 6, 20, tzinfo=UTC)
 
     async def test_returns_node_born_in_window(self, store):
         f = Fact(
-            content="born inside", source_id="s1",
-            created_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+            content="born inside",
+            source_id="s1",
+            created_at=datetime(2026, 6, 15, tzinfo=UTC),
         )
         await store.store_node(f)
         changed = await store.query_changes(start=self.W_START, end=self.W_END)
@@ -430,10 +406,11 @@ class TestQueryChanges:
     async def test_returns_node_retired_in_window(self, store):
         # Born before the window, retired inside it.
         t = Topic(
-            content="retired inside", source_id="s1",
-            created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+            content="retired inside",
+            source_id="s1",
+            created_at=datetime(2026, 6, 1, tzinfo=UTC),
             status=NodeStatus.SUPERSEDED,
-            superseded_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+            superseded_at=datetime(2026, 6, 15, tzinfo=UTC),
         )
         await store.store_node(t)
         changed = await store.query_changes(start=self.W_START, end=self.W_END)
@@ -441,12 +418,14 @@ class TestQueryChanges:
 
     async def test_excludes_node_fully_outside(self, store):
         before = Topic(
-            content="before", source_id="s1",
-            created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
+            content="before",
+            source_id="s1",
+            created_at=datetime(2026, 6, 1, tzinfo=UTC),
         )
         after = Inference(
-            content="after", source_id="s1",
-            created_at=datetime(2026, 6, 25, tzinfo=timezone.utc),
+            content="after",
+            source_id="s1",
+            created_at=datetime(2026, 6, 25, tzinfo=UTC),
         )
         await store.store_node(before)
         await store.store_node(after)
@@ -455,12 +434,14 @@ class TestQueryChanges:
 
     async def test_respects_node_type_filter(self, store):
         f = Fact(
-            content="fact in", source_id="s1",
-            created_at=datetime(2026, 6, 15, tzinfo=timezone.utc),
+            content="fact in",
+            source_id="s1",
+            created_at=datetime(2026, 6, 15, tzinfo=UTC),
         )
         t = Topic(
-            content="topic in", source_id="s1",
-            created_at=datetime(2026, 6, 16, tzinfo=timezone.utc),
+            content="topic in",
+            source_id="s1",
+            created_at=datetime(2026, 6, 16, tzinfo=UTC),
         )
         await store.store_node(f)
         await store.store_node(t)
@@ -480,7 +461,6 @@ class TestQueryChanges:
 
 
 class TestSourceTopicAndRelationHelpers:
-
     async def test_get_node_by_content(self, store):
         t = Topic(content="BBC")
         await store.store_node(t)
@@ -492,10 +472,15 @@ class TestSourceTopicAndRelationHelpers:
         a, b = Topic(content="a"), Topic(content="b")
         await store.store_node(a)
         await store.store_node(b)
-        await store.store_edge(NodeEdge(
-            src_id=a.id, dst_id=b.id, type=EdgeType.RELATED,
-            label="funded_by", kind="attribution",
-        ))
+        await store.store_edge(
+            NodeEdge(
+                src_id=a.id,
+                dst_id=b.id,
+                type=EdgeType.RELATED,
+                label="funded_by",
+                kind="attribution",
+            )
+        )
         assert await store.get_relation_kind("funded_by") == "attribution"
         assert await store.get_relation_kind("unknown") is None
 
@@ -558,12 +543,10 @@ class TestVectorSearchOverFetch:
             fact = Fact(content=f"retired {i}", source_id="s1")
             await store.store_node(fact)
             await store.store_embedding(
-                EmbeddingRecord(
-                    item_id=fact.id, model_id=model_id, vector=[1.0, 0.001 * i, 0.0]
-                )
+                EmbeddingRecord(item_id=fact.id, model_id=model_id, vector=[1.0, 0.001 * i, 0.0])
             )
             await store.set_node_status_tx(
-                [fact], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+                [fact], status=NodeStatus.SUPERSEDED, at=datetime.now(UTC)
             )
             made["retired"].append(fact)
         for i in range(live):
@@ -579,9 +562,7 @@ class TestVectorSearchOverFetch:
             made["live"].append(fact)
         return made
 
-    async def test_a_few_retired_nodes_do_not_reach_for_the_exact_query(
-        self, store, monkeypatch
-    ):
+    async def test_a_few_retired_nodes_do_not_reach_for_the_exact_query(self, store, monkeypatch):
         """Over-fetching has to reach *past* `k`, not just to it.
 
         Three retired nodes sit above the live ones, so ranking exactly `k` rows
@@ -604,9 +585,7 @@ class TestVectorSearchOverFetch:
 
         assert len(results) == 5
 
-    async def test_escalation_is_tried_before_the_exact_query(
-        self, store, monkeypatch
-    ):
+    async def test_escalation_is_tried_before_the_exact_query(self, store, monkeypatch):
         """Reaching further is cheap; the exact query is not. Try it first."""
         from epimemer.storage import surrealdb_adapter
 
@@ -638,9 +617,7 @@ class TestVectorSearchOverFetch:
 
         assert sorted(i for i, _ in results) == sorted(n.id for n in made["live"])
 
-    async def test_returns_what_exists_when_fewer_than_k_are_active(
-        self, store, monkeypatch
-    ):
+    async def test_returns_what_exists_when_fewer_than_k_are_active(self, store, monkeypatch):
         """Asking for more than the graph holds returns everything it holds —
         without reaching again for rows that provably are not there.
 
@@ -675,7 +652,7 @@ class TestVectorSearchOverFetch:
         results = await store.vector_search(query, "test", k=5)
 
         def cosine(a, b):
-            dot = sum(x * y for x, y in zip(a, b))
+            dot = sum(x * y for x, y in zip(a, b, strict=True))
             na = sum(x * x for x in a) ** 0.5
             nb = sum(x * x for x in b) ** 0.5
             return dot / (na * nb)
@@ -687,7 +664,7 @@ class TestVectorSearchOverFetch:
         expected = sorted(scored, key=lambda pair: -pair[1])[:5]
 
         assert [i for i, _ in results] == [i for i, _ in expected]
-        for (_, got), (_, want) in zip(results, expected):
+        for (_, got), (_, want) in zip(results, expected, strict=True):
             assert got == pytest.approx(want, rel=1e-6)
 
     async def test_the_typed_path_over_fetches_too(self, store):
@@ -697,9 +674,7 @@ class TestVectorSearchOverFetch:
             fact = Fact(content=f"fact {i}", source_id="s1")
             await store.store_node(fact)
             await store.store_embedding(
-                EmbeddingRecord(
-                    item_id=fact.id, model_id="test", vector=[1.0, 0.001 * i, 0.0]
-                )
+                EmbeddingRecord(item_id=fact.id, model_id="test", vector=[1.0, 0.001 * i, 0.0])
             )
         topic = Topic(content="the one topic", source_id="s1")
         await store.store_node(topic)
@@ -707,9 +682,7 @@ class TestVectorSearchOverFetch:
             EmbeddingRecord(item_id=topic.id, model_id="test", vector=[0.5, 0.85, 0.0])
         )
 
-        results = await store.vector_search(
-            [1.0, 0.0, 0.0], "test", k=1, node_type=NodeType.TOPIC
-        )
+        results = await store.vector_search([1.0, 0.0, 0.0], "test", k=1, node_type=NodeType.TOPIC)
 
         assert [i for i, _ in results] == [topic.id]
 
@@ -739,9 +712,7 @@ class TestReconnection:
         """
 
         def build(url: str):
-            fake = SimpleNamespace(
-                url=url, fails=False, closed=False, queries=[], used=[]
-            )
+            fake = SimpleNamespace(url=url, fails=False, closed=False, queries=[], used=[])
 
             async def connect(target: str | None = None) -> None:
                 return None
@@ -774,16 +745,12 @@ class TestReconnection:
         return build
 
     async def _connected(self, monkeypatch, built: list, url: str):
-        monkeypatch.setattr(
-            surrealdb_adapter, "AsyncSurreal", self._factory(built)
-        )
+        monkeypatch.setattr(surrealdb_adapter, "AsyncSurreal", self._factory(built))
         store = SurrealDBStorage(url=url, database="main")
         await store.connect()
         return store
 
-    async def test_a_dropped_connection_is_rebuilt_and_the_query_retried(
-        self, monkeypatch
-    ):
+    async def test_a_dropped_connection_is_rebuilt_and_the_query_retried(self, monkeypatch):
         built: list = []
         store = await self._connected(monkeypatch, built, "ws://127.0.0.1:8000/rpc")
         assert len(built) == 1
@@ -837,9 +804,7 @@ class TestReconnection:
         store = await self._connected(monkeypatch, built, "ws://127.0.0.1:8000/rpc")
         built[0].fails = True
 
-        results = await asyncio.gather(
-            *[store.get_node(f"n{i}") for i in range(5)]
-        )
+        results = await asyncio.gather(*[store.get_node(f"n{i}") for i in range(5)])
 
         assert results == [None] * 5
         assert len(built) == 2, f"{len(built) - 1} connections built for one drop"
@@ -880,9 +845,7 @@ class TestFullTextDialectAndIdfFloor:
         """
         await self._seed(store)
 
-        assert await store.text_search(
-            ["4417"], corpus="nodes", node_type=NodeType.FACT
-        )
+        assert await store.text_search(["4417"], corpus="nodes", node_type=NodeType.FACT)
 
     async def test_an_uninformative_term_cannot_delete_a_real_hit(self, store):
         """The per-reference score floor, and why the adapter applies its own.
@@ -901,9 +864,7 @@ class TestFullTextDialectAndIdfFloor:
 
         assert [node_id for node_id, _ in with_noise] == [facts[0].id]
 
-    async def test_a_multi_token_term_of_mostly_common_words_is_lost_here(
-        self, store
-    ):
+    async def test_a_multi_token_term_of_mostly_common_words_is_lost_here(self, store):
         """A known divergence, pinned so it is a decision rather than a surprise.
 
         A term is one match reference, and its score is the engine's own sum
@@ -923,22 +884,21 @@ class TestFullTextDialectAndIdfFloor:
         """
         facts = await self._seed(store)
 
-        assert await store.text_search(
-            ["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT
-        ) == []
+        assert await store.text_search(["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT) == []
 
-        await self._seed(store, [
-            "The kitchen tap on floor two has been fixed",
-            "Quarterly revenue exceeded the forecast by four percent",
-            "The onboarding checklist now includes laptop encryption",
-            "A new espresso machine arrived in the north wing",
-            "Cycling to the office is reimbursed from next month",
-            "The annual fire drill happens on a Tuesday",
-        ])
-
-        hits = await store.text_search(
-            ["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT
+        await self._seed(
+            store,
+            [
+                "The kitchen tap on floor two has been fixed",
+                "Quarterly revenue exceeded the forecast by four percent",
+                "The onboarding checklist now includes laptop encryption",
+                "A new espresso machine arrived in the north wing",
+                "Cycling to the office is reimbursed from next month",
+                "The annual fire drill happens on a Tuesday",
+            ],
         )
+
+        hits = await store.text_search(["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT)
         assert [node_id for node_id, _ in hits] == [facts[0].id]
 
 
@@ -967,9 +927,7 @@ class TestContentLookupUsesTheContentIndex:
         return json.dumps(rows, default=str)
 
     @pytest.mark.parametrize("table", ["topic", "fact", "inference"])
-    async def test_the_lookup_does_not_resolve_through_the_status_index(
-        self, store, table
-    ):
+    async def test_the_lookup_does_not_resolve_through_the_status_index(self, store, table):
         plan = await self._plan(store, table)
 
         assert f"idx_{table}_content" in plan, (

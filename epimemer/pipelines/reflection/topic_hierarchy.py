@@ -4,7 +4,7 @@ Provides traversal, cycle detection, and query functions over the
 topic hierarchy stored as SUBTOPIC_OF edges in the graph.
 """
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from epimemer.core.types import EdgeType, EpistemicNode, NodeEdge, NodeType
 from epimemer.storage.protocol import StorageBackend
@@ -34,9 +34,7 @@ async def would_create_cycle(
     return False
 
 
-async def get_children(
-    storage: StorageBackend, topic_id: str
-) -> Sequence[EpistemicNode]:
+async def get_children(storage: StorageBackend, topic_id: str) -> Sequence[EpistemicNode]:
     """Get all direct child topics of a given topic."""
     edges = await storage.get_edges_to(topic_id, edge_type=EdgeType.SUBTOPIC_OF)
     children = []
@@ -47,9 +45,7 @@ async def get_children(
     return children
 
 
-async def get_parents(
-    storage: StorageBackend, topic_id: str
-) -> Sequence[EpistemicNode]:
+async def get_parents(storage: StorageBackend, topic_id: str) -> Sequence[EpistemicNode]:
     """Get all direct parent topics of a given topic."""
     edges = await storage.get_edges_from(topic_id, edge_type=EdgeType.SUBTOPIC_OF)
     parents = []
@@ -60,9 +56,7 @@ async def get_parents(
     return parents
 
 
-async def get_ancestors(
-    storage: StorageBackend, topic_id: str
-) -> Sequence[EpistemicNode]:
+async def get_ancestors(storage: StorageBackend, topic_id: str) -> Sequence[EpistemicNode]:
     """Get all ancestors of a topic, nearest first, excluding the topic itself.
 
     Breadth-first towards the roots, so a caller can read the result as a path
@@ -98,9 +92,7 @@ async def get_roots(storage: StorageBackend) -> Sequence[EpistemicNode]:
     return roots
 
 
-async def get_descendants(
-    storage: StorageBackend, topic_id: str
-) -> Sequence[EpistemicNode]:
+async def get_descendants(storage: StorageBackend, topic_id: str) -> Sequence[EpistemicNode]:
     """Get all descendants of a topic (transitive children), excluding the topic itself."""
     visited: set[str] = set()
     result: list[EpistemicNode] = []

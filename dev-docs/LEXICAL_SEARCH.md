@@ -235,9 +235,7 @@ A second new method is needed for the segment bridge in §1.1, and it has no
 current equivalent:
 
 ```python
-async def get_nodes_by_source(
-    self, source_ids: Sequence[str]
-) -> dict[str, list[EpistemicNode]]:
+async def get_nodes_by_source(self, source_ids: Sequence[str]) -> dict[str, list[EpistemicNode]]:
     """Nodes extracted from each segment.
 
     Batched — one statement, not one per id.
@@ -315,9 +313,9 @@ provenance:
 
 ```python
 class SeedProvenance(StrEnum):
-    VECTOR = "vector"      # embedding similarity
-    LEXICAL = "lexical"    # BM25 on node content
-    SEGMENT = "segment"    # BM25 on a segment, bridged via source_id
+    VECTOR = "vector"  # embedding similarity
+    LEXICAL = "lexical"  # BM25 on node content
+    SEGMENT = "segment"  # BM25 on a segment, bridged via source_id
     EXPANDED = "expanded"  # pulled in by graph expansion from a seed
 ```
 
@@ -326,8 +324,8 @@ a graph node and must not be pretended into one:
 
 ```python
 result = {
-    "nodes": [...],      # each with `provenance` and, where scored, `score`
-    "segments": [...],   # id, text, source document, BM25 score
+    "nodes": [...],  # each with `provenance` and, where scored, `score`
+    "segments": [...],  # id, text, source document, BM25 score
     "edges": [...],
 }
 ```

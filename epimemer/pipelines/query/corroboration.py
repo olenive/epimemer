@@ -198,12 +198,8 @@ async def _partners_by_node(
     Self-loops drop out: a node is not its own corroborating neighbour, and it
     is added to its own set separately and unconditionally.
     """
-    outgoing = await storage.get_edges_for(
-        node_ids, direction="from", edge_type=edge_type
-    )
-    incoming = await storage.get_edges_for(
-        node_ids, direction="to", edge_type=edge_type
-    )
+    outgoing = await storage.get_edges_for(node_ids, direction="from", edge_type=edge_type)
+    incoming = await storage.get_edges_for(node_ids, direction="to", edge_type=edge_type)
     return {
         node_id: {
             endpoint
@@ -228,12 +224,8 @@ async def _supporters_by_node(
     """
     if not node_ids:
         return {}
-    supports = await storage.get_edges_for(
-        node_ids, direction="to", edge_type=EdgeType.SUPPORTS
-    )
-    derived = await storage.get_edges_for(
-        node_ids, direction="to", edge_type=EdgeType.DERIVED_FROM
-    )
+    supports = await storage.get_edges_for(node_ids, direction="to", edge_type=EdgeType.SUPPORTS)
+    derived = await storage.get_edges_for(node_ids, direction="to", edge_type=EdgeType.DERIVED_FROM)
     return {
         node_id: {
             edge.src_id
@@ -257,9 +249,7 @@ async def _source_edges_by_node(
     """
     if not node_ids:
         return {}
-    return await storage.get_edges_for(
-        node_ids, direction="from", edge_type=EdgeType.SOURCED_FROM
-    )
+    return await storage.get_edges_for(node_ids, direction="from", edge_type=EdgeType.SOURCED_FROM)
 
 
 def _documents_from(edges: Sequence[NodeEdge]) -> list[str]:
@@ -298,9 +288,7 @@ async def _publisher_by_document(
     """
     if not document_ids:
         return {}
-    edges = await storage.get_edges_for(
-        document_ids, direction="from", edge_type=EdgeType.RELATED
-    )
+    edges = await storage.get_edges_for(document_ids, direction="from", edge_type=EdgeType.RELATED)
     entity_by_document = {
         document_id: min(
             (
@@ -452,32 +440,22 @@ async def corroboration_for(
     # look-alike that survives to stage 2 walks its own supporters in behind it,
     # and their documents with them, so a comparison made later lets the same
     # publisher back through the side door by a different path.
-    candidates = {
-        subject: similar[subject] - excluded[subject] for subject in subjects
-    }
+    candidates = {subject: similar[subject] - excluded[subject] for subject in subjects}
     source_edges = await _source_edges_by_node(
-        sorted(
-            set(subjects)
-            | {node for members in candidates.values() for node in members}
-        ),
+        sorted(set(subjects) | {node for members in candidates.values() for node in members}),
         storage,
     )
-    intervals = {
-        node_id: _intervals_from(edges) for node_id, edges in source_edges.items()
-    }
+    intervals = {node_id: _intervals_from(edges) for node_id, edges in source_edges.items()}
     adjacent = {
         subject: {
             neighbour
             for neighbour in candidates[subject]
-            if assertions_are_disjoint(
-                intervals.get(subject, []), intervals.get(neighbour, [])
-            )
+            if assertions_are_disjoint(intervals.get(subject, []), intervals.get(neighbour, []))
         }
         for subject in subjects
     }
     neighbourhood = {
-        subject: {subject} | (candidates[subject] - adjacent[subject])
-        for subject in subjects
+        subject: {subject} | (candidates[subject] - adjacent[subject]) for subject in subjects
     }
 
     supporters = await _supporters_by_node(
@@ -485,9 +463,7 @@ async def corroboration_for(
         storage,
     )
     contributing = {
-        subject: (
-            members | {node for member in members for node in supporters[member]}
-        )
+        subject: (members | {node for member in members for node in supporters[member]})
         - excluded[subject]
         - adjacent[subject]
         for subject, members in neighbourhood.items()
@@ -499,29 +475,19 @@ async def corroboration_for(
     nodes = await storage.get_nodes(
         sorted({node for members in contributing.values() for node in members})
     )
-    retired = {
-        node_id
-        for node_id, node in nodes.items()
-        if node.status in DISQUALIFYING_STATUSES
-    }
+    retired = {node_id for node_id, node in nodes.items() if node.status in DISQUALIFYING_STATUSES}
     contributing = {
-        subject: (members - retired) | {subject}
-        for subject, members in contributing.items()
+        subject: (members - retired) | {subject} for subject, members in contributing.items()
     }
 
     # The early read already covers every subject and every look-alike, so this
     # asks only for what the supporter hop added — and for nothing at all where
     # it added nothing.
     source_edges |= await _source_edges_by_node(
-        sorted(
-            {node for members in contributing.values() for node in members}
-            - set(source_edges)
-        ),
+        sorted({node for members in contributing.values() for node in members} - set(source_edges)),
         storage,
     )
-    documents = {
-        node_id: _documents_from(edges) for node_id, edges in source_edges.items()
-    }
+    documents = {node_id: _documents_from(edges) for node_id, edges in source_edges.items()}
     publishers = await _publisher_by_document(
         sorted({document for reached in documents.values() for document in reached}),
         storage,
@@ -537,6 +503,4 @@ async def corroboration_for(
         )
         for subject in subjects
     }
-    return {
-        subject: result for subject, result in results.items() if result is not None
-    }
+    return {subject: result for subject, result in results.items() if result is not None}

@@ -16,19 +16,20 @@ looks for those ids in what came back.
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastmcp import FastMCP
 
+from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.embeddings.mock import MockEmbeddingProvider
-from epimemer.mcp.config import ServerConfig
 from epimemer.mcp import server as server_mod
+from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.mcp.types import ResponseMeta
-from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.storage.memory import InMemoryStorage
+
 
 def _graph_with_the_real() -> InMemoryStorage:
     """An in-memory graph somebody has set up.
@@ -95,47 +96,74 @@ def _parse(result) -> dict:
 
 async def _seed(server: FastMCP) -> dict:
     """A small graph whose ids the oracle then hunts for in every response."""
-    seg = _parse(await server.call_tool("segment", {"expected_graph": "default", 
-        "content": (
-            "The deployment rollback failed on Tuesday. "
-            "JIRA-4417 tracks the certificate rotation."
-        ),
-        "source": "runbook",
-        "published_by": "Platform Team",
-    }))["result"]
+    seg = _parse(
+        await server.call_tool(
+            "segment",
+            {
+                "expected_graph": "default",
+                "content": (
+                    "The deployment rollback failed on Tuesday. "
+                    "JIRA-4417 tracks the certificate rotation."
+                ),
+                "source": "runbook",
+                "published_by": "Platform Team",
+            },
+        )
+    )["result"]
     document_id = seg["document_id"]
     segment_ids = [s["segment_id"] for s in seg["segments"]]
 
-    stored = _parse(await server.call_tool("store_decomposition", {"expected_graph": "default", 
-        "metacontext_id": "the-real",
-        "document_id": document_id,
-        "segments": [
+    stored = _parse(
+        await server.call_tool(
+            "store_decomposition",
             {
-                "segment_id": segment_ids[0],
-                "topics": ["Deployment"],
-                "facts": ["The deployment rollback failed on Tuesday"],
-                "inferences": ["The release process is fragile"],
-            }
-        ],
-        "tags": ["ops"],
-    }))["result"]
+                "expected_graph": "default",
+                "metacontext_id": "the-real",
+                "document_id": document_id,
+                "segments": [
+                    {
+                        "segment_id": segment_ids[0],
+                        "topics": ["Deployment"],
+                        "facts": ["The deployment rollback failed on Tuesday"],
+                        "inferences": ["The release process is fragile"],
+                    }
+                ],
+                "tags": ["ops"],
+            },
+        )
+    )["result"]
 
-    graph = _parse(await server.call_tool(
-        "find_nodes", {"expected_graph": "default", "sourced_from": document_id, "limit": 100}
-    ))["result"]
+    graph = _parse(
+        await server.call_tool(
+            "find_nodes", {"expected_graph": "default", "sourced_from": document_id, "limit": 100}
+        )
+    )["result"]
     nodes = graph["nodes"]
-    by_type = {t: [n["id"] for n in nodes if n["node_type"] == t] for t in
-               ("topic", "fact", "inference")}
+    by_type = {
+        t: [n["id"] for n in nodes if n["node_type"] == t] for t in ("topic", "fact", "inference")
+    }
 
-    timeline = _parse(await server.call_tool(
-        "create_timeline", {"expected_graph": "default", "name": "Ops", "description": "ops events"}
-    ))["result"]
-    timepoint = _parse(await server.call_tool("add_timepoint", {"expected_graph": "default", 
-        "timeline_id": timeline["timeline_id"], "label": "the incident",
-    }))["result"]
-    metacontext = _parse(await server.call_tool(
-        "create_metacontext", {"expected_graph": "default", "content": "Runbook frame"}
-    ))["result"]
+    timeline = _parse(
+        await server.call_tool(
+            "create_timeline",
+            {"expected_graph": "default", "name": "Ops", "description": "ops events"},
+        )
+    )["result"]
+    timepoint = _parse(
+        await server.call_tool(
+            "add_timepoint",
+            {
+                "expected_graph": "default",
+                "timeline_id": timeline["timeline_id"],
+                "label": "the incident",
+            },
+        )
+    )["result"]
+    metacontext = _parse(
+        await server.call_tool(
+            "create_metacontext", {"expected_graph": "default", "content": "Runbook frame"}
+        )
+    )["result"]
 
     return {
         "document_id": document_id,
@@ -159,16 +187,18 @@ def _args(tool: str, seeded: dict) -> dict:
     facts = seeded["by_type"]["fact"]
     topics = seeded["by_type"]["topic"]
     inferences = seeded["by_type"]["inference"]
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return {
         "segment": {"content": "A second document about rollbacks."},
         "store_decomposition": {
             "metacontext_id": "the-real",
             "document_id": seeded["document_id"],
-            "segments": [{
-                "segment_id": seeded["segment_ids"][0],
-                "facts": ["A later claim about the rollback"],
-            }],
+            "segments": [
+                {
+                    "segment_id": seeded["segment_ids"][0],
+                    "facts": ["A later claim about the rollback"],
+                }
+            ],
         },
         "search": {"query": "deployment rollback", "k": 5},
         "link": {"src_id": facts[0], "dst_id": topics[0], "relation": "concerns"},
@@ -178,11 +208,14 @@ def _args(tool: str, seeded: dict) -> dict:
             "because": "it_was_wrong",
         },
         "supersede_by": {
-            "old_id": facts[0], "existing_id": inferences[0],
+            "old_id": facts[0],
+            "existing_id": inferences[0],
             "because": "the_world_changed",
         },
         "judge_importance": {
-            "node_id": facts[0], "direction": "up", "reason": "central to the incident",
+            "node_id": facts[0],
+            "direction": "up",
+            "reason": "central to the incident",
         },
         "check_conflicts": {"fact_ids": facts, "threshold": 0.0},
         "record_contradiction": {"a_id": facts[0], "b_id": inferences[0]},
@@ -195,12 +228,13 @@ def _args(tool: str, seeded: dict) -> dict:
         # refusal still names the ids it was handed, so it still has to declare
         # them — the same property `merge_facts` is here for.
         "merge_inferences": {
-            "source_ids": inferences[:2], "content": "One conclusion.",
+            "source_ids": inferences[:2],
+            "content": "One conclusion.",
         },
         "reflect": {"similarity_threshold": 0.0},
-        "apply_reflection": {"judgments": [
-            {"node_id": facts[0], "direction": "up", "reason": "central"}
-        ]},
+        "apply_reflection": {
+            "judgments": [{"node_id": facts[0], "direction": "up", "reason": "central"}]
+        },
         "query_graph": {"node_id": facts[0], "hops": 2},
         "topic_tree": {"topic_id": topics[0], "depth": 2},
         "graph_as_of": {"at": (now + timedelta(minutes=1)).isoformat()},
@@ -237,13 +271,16 @@ def _args(tool: str, seeded: dict) -> dict:
         # Refused — the seeded facts carry no frame — and a refusal still names
         # the id back at the agent, which is the property under test.
         "reframe": {
-            "node_id": facts[0], "withdraw": "not-a-frame",
+            "node_id": facts[0],
+            "withdraw": "not-a-frame",
             "because": "checking the shape",
         },
         # Refused — no source edge names this document — same property.
         "correct_interval": {
-            "node_id": facts[0], "source_id": "not-a-document",
-            "intervals": [], "because": "checking the shape",
+            "node_id": facts[0],
+            "source_id": "not-a-document",
+            "intervals": [],
+            "because": "checking the shape",
         },
         # Not a merge survivor, so this refuses — and a refusal still names the
         # id back at the agent, which is the property under test.
@@ -271,19 +308,52 @@ def _ids_in(text: str, known: list[str]) -> set[str]:
 
 
 ALL_TOOLS = [
-    "segment", "store_decomposition", "search", "link", "update", "supersede_by",
-    "judge_importance", "check_conflicts", "record_contradiction", "record_variant",
-    "merge_facts", "merge_inferences", "reverse_merge", "configure_merge",
+    "segment",
+    "store_decomposition",
+    "search",
+    "link",
+    "update",
+    "supersede_by",
+    "judge_importance",
+    "check_conflicts",
+    "record_contradiction",
+    "record_variant",
+    "merge_facts",
+    "merge_inferences",
+    "reverse_merge",
+    "configure_merge",
     "configure_warnings",
-    "reflect", "apply_reflection", "review", "apply_review", "rejudge",
-    "reframe", "correct_interval",
-    "query_graph", "topic_tree",
-    "graph_as_of", "query_changes", "find_nodes", "list_sources", "list_relations", "describe_relation", "archive",
-    "restore", "create_timeline", "set_reference_time", "add_timepoint",
-    "query_timeline", "create_timelink", "create_metacontext", "get_metacontexts",
-    "graph_stats", "configure_reflection", "list_graphs", "use_graph",
+    "reflect",
+    "apply_reflection",
+    "review",
+    "apply_review",
+    "rejudge",
+    "reframe",
+    "correct_interval",
+    "query_graph",
+    "topic_tree",
+    "graph_as_of",
+    "query_changes",
+    "find_nodes",
+    "list_sources",
+    "list_relations",
+    "describe_relation",
+    "archive",
+    "restore",
+    "create_timeline",
+    "set_reference_time",
+    "add_timepoint",
+    "query_timeline",
+    "create_timelink",
+    "create_metacontext",
+    "get_metacontexts",
+    "graph_stats",
+    "configure_reflection",
+    "list_graphs",
+    "use_graph",
     "claim_agent",
-    "delete_graph", "viz_status",
+    "delete_graph",
+    "viz_status",
 ]
 
 
@@ -329,12 +399,13 @@ async def test_an_undeclared_tool_is_flagged_not_silent(server, captured):
     _, stats_meta = captured[-1]
 
     await server.call_tool(
-        "find_nodes", {"expected_graph": "default", "sourced_from": seeded["document_id"], "limit": 100}
+        "find_nodes",
+        {"expected_graph": "default", "sourced_from": seeded["document_id"], "limit": 100},
     )
     _, find_meta = captured[-1]
 
-    assert stats_meta.retrieved is None          # never declared
-    assert find_meta.retrieved is not None       # declared, and non-empty
+    assert stats_meta.retrieved is None  # never declared
+    assert find_meta.retrieved is not None  # declared, and non-empty
     assert len(find_meta.retrieved) > 0
 
 
@@ -342,7 +413,9 @@ async def test_declaring_nothing_is_not_the_same_as_not_declaring(server, captur
     await _seed(server)  # a graph exists; this tag does not
     captured.clear()
 
-    await server.call_tool("find_nodes", {"expected_graph": "default", "tagged_with": "no-such-tag", "limit": 5})
+    await server.call_tool(
+        "find_nodes", {"expected_graph": "default", "tagged_with": "no-such-tag", "limit": 5}
+    )
 
     _, meta = captured[-1]
     assert meta.retrieved == []
@@ -358,7 +431,9 @@ async def test_retrieved_ids_are_not_serialized_to_the_agent(server, captured):
     seeded = await _seed(server)
     captured.clear()
 
-    result = await server.call_tool("search", {"expected_graph": "default", "query": "deployment", "k": 5})
+    result = await server.call_tool(
+        "search", {"expected_graph": "default", "query": "deployment", "k": 5}
+    )
 
     _, meta = captured[-1]
     assert meta.retrieved  # the tool did declare

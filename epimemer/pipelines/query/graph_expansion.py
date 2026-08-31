@@ -32,6 +32,7 @@ async def expand_via_graph(
     missing nodes are dropped along with the node. Seed nodes are the caller's
     responsibility and are returned as given.
     """
+
     def _skip(edge: NodeEdge) -> bool:
         if exclude_edge_types is not None:
             return edge.type in exclude_edge_types

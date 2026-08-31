@@ -16,7 +16,7 @@ the graph as it stands. The tier-1 rows below are built by hand, which is the
 only place they exist until step 7's `apply_review`.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -29,13 +29,11 @@ from epimemer.core.types import (
     Fact,
     JudgeRef,
     NodeStatus,
-    Topic,
     ValueSignal,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
-from epimemer.pipelines.review.apply import rejudge_node, review_decision
 from epimemer.pipelines.review.difficulty import (
     DifficultySignal,
     ScoredDecision,
@@ -52,9 +50,8 @@ from epimemer.pipelines.review.modes import (
     passes_ceiling,
 )
 
-
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
-NOON = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
+NOON = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -88,9 +85,7 @@ class TestTheDerivedSignals:
         ordinary = _fact("a plain claim", value=ValueSignal(confidence=0.5))
         record = _row(DecisionKind.INGEST, [thin.id, ordinary.id])
 
-        assert DifficultySignal.THIN_SOURCE in difficulty_signals(
-            record, _by_id(thin, ordinary)
-        )
+        assert DifficultySignal.THIN_SOURCE in difficulty_signals(record, _by_id(thin, ordinary))
         assert DifficultySignal.THIN_SOURCE not in difficulty_signals(
             _row(DecisionKind.INGEST, [ordinary.id]), _by_id(ordinary)
         )
@@ -102,9 +97,7 @@ class TestTheDerivedSignals:
         unrated = _fact("a plain claim")
         assert unrated.value.confidence is None
 
-        assert difficulty_signals(
-            _row(DecisionKind.INGEST, [unrated.id]), _by_id(unrated)
-        ) == []
+        assert difficulty_signals(_row(DecisionKind.INGEST, [unrated.id]), _by_id(unrated)) == []
 
     def test_the_merge_source_count_skips_the_survivor(self):
         """`merge_facts` journals `[survivor, *sources]`, so reading the subject
@@ -117,8 +110,8 @@ class TestTheDerivedSignals:
         subjects = _by_id(*nodes)
         ids = [n.id for n in nodes]
 
-        narrow = _row(DecisionKind.MERGE, ids[:3])       # survivor + two
-        wide = _row(DecisionKind.MERGE, ids[:4])         # survivor + three
+        narrow = _row(DecisionKind.MERGE, ids[:3])  # survivor + two
+        wide = _row(DecisionKind.MERGE, ids[:4])  # survivor + three
 
         assert DifficultySignal.WIDE_MERGE not in difficulty_signals(narrow, subjects)
         assert DifficultySignal.WIDE_MERGE in difficulty_signals(wide, subjects)
@@ -127,9 +120,7 @@ class TestTheDerivedSignals:
         a, b = _fact("the deploy failed"), _fact("the deploy succeeded")
         record = _row(DecisionKind.CONTRADICTION, [a.id, b.id])
 
-        assert DifficultySignal.OPEN_CONTRADICTION in difficulty_signals(
-            record, _by_id(a, b)
-        )
+        assert DifficultySignal.OPEN_CONTRADICTION in difficulty_signals(record, _by_id(a, b))
 
     def test_a_contradiction_one_side_of_which_was_retired_is_not(self):
         """Something was done about it. Which is all this can tell — whether the
@@ -138,17 +129,13 @@ class TestTheDerivedSignals:
         b = _fact("the deploy succeeded", status=NodeStatus.CORRECTED)
         record = _row(DecisionKind.CONTRADICTION, [a.id, b.id])
 
-        assert DifficultySignal.OPEN_CONTRADICTION not in difficulty_signals(
-            record, _by_id(a, b)
-        )
+        assert DifficultySignal.OPEN_CONTRADICTION not in difficulty_signals(record, _by_id(a, b))
 
     def test_ground_moved_means_retired_after_the_decision(self):
         later = _fact("the population is 500,000", superseded_at=NOON + timedelta(days=1))
         record = _row(DecisionKind.INGEST, [later.id])
 
-        assert DifficultySignal.GROUND_MOVED in difficulty_signals(
-            record, _by_id(later)
-        )
+        assert DifficultySignal.GROUND_MOVED in difficulty_signals(record, _by_id(later))
 
     def test_a_decision_that_did_the_retiring_has_not_moved_under_itself(self):
         """A correction, a merge and an archival sweep all journal once the
@@ -157,9 +144,7 @@ class TestTheDerivedSignals:
         retired = _fact("the old figure", superseded_at=NOON - timedelta(seconds=1))
         record = _row(DecisionKind.CORRECTION, [retired.id])
 
-        assert DifficultySignal.GROUND_MOVED not in difficulty_signals(
-            record, _by_id(retired)
-        )
+        assert DifficultySignal.GROUND_MOVED not in difficulty_signals(record, _by_id(retired))
 
     def test_a_naive_timestamp_is_compared_rather_than_raising(self):
         """Backends round-trip datetimes here rather than text, so this is not
@@ -168,9 +153,7 @@ class TestTheDerivedSignals:
         naive = _fact("a claim", superseded_at=datetime(2026, 8, 24, 12, 0))
         record = _row(DecisionKind.INGEST, [naive.id])
 
-        assert DifficultySignal.GROUND_MOVED in difficulty_signals(
-            record, _by_id(naive)
-        )
+        assert DifficultySignal.GROUND_MOVED in difficulty_signals(record, _by_id(naive))
 
     def test_a_subject_that_is_gone_contributes_nothing(self):
         """A reversal destroys its survivor, and a row can be read beside a
@@ -186,9 +169,7 @@ class TestTheOrderIsTwoTiersThatNeverMix:
     def test_a_flagged_decision_outranks_an_unrated_one_with_more_signals(self):
         """The load-bearing rule. Absence is not a claim of doubt, so no amount
         of derived evidence lets an unrated row overtake a declared one."""
-        flagged = ScoredDecision(
-            record=_row(DecisionKind.MERGE, ["a"], certainty=0.9), signals=[]
-        )
+        flagged = ScoredDecision(record=_row(DecisionKind.MERGE, ["a"], certainty=0.9), signals=[])
         shaky = ScoredDecision(
             record=_row(DecisionKind.MERGE, ["b"]),
             signals=[
@@ -201,16 +182,15 @@ class TestTheOrderIsTwoTiersThatNeverMix:
         assert review_order([shaky, flagged]) == [flagged, shaky]
 
     def test_tier_one_runs_least_certain_first(self):
-        low = ScoredDecision(record=_row(DecisionKind.MERGE, ["a"], certainty=0.3),
-                             signals=[])
-        high = ScoredDecision(record=_row(DecisionKind.MERGE, ["b"], certainty=0.9),
-                              signals=[])
+        low = ScoredDecision(record=_row(DecisionKind.MERGE, ["a"], certainty=0.3), signals=[])
+        high = ScoredDecision(record=_row(DecisionKind.MERGE, ["b"], certainty=0.9), signals=[])
 
         assert review_order([high, low]) == [low, high]
 
     def test_tier_two_runs_most_signals_first(self):
-        one = ScoredDecision(record=_row(DecisionKind.INGEST, ["a"]),
-                             signals=[DifficultySignal.THIN_SOURCE])
+        one = ScoredDecision(
+            record=_row(DecisionKind.INGEST, ["a"]), signals=[DifficultySignal.THIN_SOURCE]
+        )
         two = ScoredDecision(
             record=_row(DecisionKind.INGEST, ["b"]),
             signals=[DifficultySignal.THIN_SOURCE, DifficultySignal.GROUND_MOVED],
@@ -232,18 +212,19 @@ class TestTheOrderIsTwoTiersThatNeverMix:
 
 
 class TestTheToolOverARealGraph:
-    async def test_it_puts_the_shaky_decision_first(
-        self, storage, embedder, config
-    ):
-        thin = _fact("a shaky claim", value=ValueSignal(confidence=0.3),
-                     claim_kind=ClaimKind.STATE)
+    async def test_it_puts_the_shaky_decision_first(self, storage, embedder, config):
+        thin = _fact("a shaky claim", value=ValueSignal(confidence=0.3), claim_kind=ClaimKind.STATE)
         plain = _fact("a plain claim", claim_kind=ClaimKind.STATE)
         for node in (thin, plain):
             await storage.store_node(node)
             vectors = await embedder.embed([node.content])
-            await storage.store_embedding(EmbeddingRecord(
-                item_id=node.id, model_id=embedder.model_id, vector=vectors[0],
-            ))
+            await storage.store_embedding(
+                EmbeddingRecord(
+                    item_id=node.id,
+                    model_id=embedder.model_id,
+                    vector=vectors[0],
+                )
+            )
 
         await storage.record_decision(_row(DecisionKind.INGEST, [plain.id]))
         await storage.record_decision(_row(DecisionKind.INGEST, [thin.id]))
@@ -251,14 +232,15 @@ class TestTheToolOverARealGraph:
         result, meta = await tools.review(storage)
 
         assert [d["subjects"][0]["id"] for d in result["decisions"]] == [
-            thin.id, plain.id,
+            thin.id,
+            plain.id,
         ]
         assert result["decisions"][0]["difficulty_signals"] == ["thin_source"]
         assert meta.nodes_returned == 2
 
     async def test_it_names_the_graph_it_answered_from(self, storage):
-        """The misdirected-write scope: the journal is per graph, so an answer that does not say which
-        reads as the whole story."""
+        """The misdirected-write scope: the journal is per graph, so an answer
+        that does not say which reads as the whole story."""
         result, _ = await tools.review(storage)
 
         assert result["graph"] == storage.current_database
@@ -295,9 +277,7 @@ class TestTheToolOverARealGraph:
         property step 7's `unreviewed` mode filters on."""
         original = _row(DecisionKind.MERGE, ["a", "b"])
         await storage.record_decision(original)
-        await storage.record_decision(
-            _row(DecisionKind.REVERSAL, ["a"], reviews=original.id)
-        )
+        await storage.record_decision(_row(DecisionKind.REVERSAL, ["a"], reviews=original.id))
 
         result, _ = await tools.review(storage)
         by_id = {d["decision_id"]: d for d in result["decisions"]}
@@ -355,20 +335,27 @@ class TestItWorksOnTheCorpusAsItStands:
     ):
         seg, _ = await tools.segment_text(
             "The deploy failed.\n\nThe deploy succeeded.",
-            storage, embedder, config,
+            storage,
+            embedder,
+            config,
         )
         await tools.store_decomposition(
             document_id=seg["document_id"],
-            segments=[{
-                "segment_id": s["segment_id"],
-                "topics": [],
-                "facts": [{
-                    "content": f"The deploy {outcome}",
-                    "claim_kind": "event",
-                    "confidence": 0.3,
-                }],
-                "inferences": [],
-            } for s, outcome in zip(seg["segments"], ("failed", "succeeded"))],
+            segments=[
+                {
+                    "segment_id": s["segment_id"],
+                    "topics": [],
+                    "facts": [
+                        {
+                            "content": f"The deploy {outcome}",
+                            "claim_kind": "event",
+                            "confidence": 0.3,
+                        }
+                    ],
+                    "inferences": [],
+                }
+                for s, outcome in zip(seg["segments"], ("failed", "succeeded"), strict=True)
+            ],
             storage=storage,
             embedding_provider=embedder,
             metacontext_id=BASE_METACONTEXT_ID,
@@ -392,9 +379,7 @@ class TestItWorksOnTheCorpusAsItStands:
         )
         assert any(d["difficulty_signals"] for d in result["decisions"])
 
-    async def test_an_empty_journal_is_an_answer_rather_than_an_error(
-        self, storage
-    ):
+    async def test_an_empty_journal_is_an_answer_rather_than_an_error(self, storage):
         result, meta = await tools.review(storage)
 
         assert result["decisions"] == []
@@ -451,9 +436,7 @@ class TestModesSelectAndArgumentsNarrow:
 
     async def test_by_agent_returns_one_judge(self, storage):
         mine = _row(DecisionKind.INGEST, ["n1"], judged_by=CRITIC)
-        theirs = _row(
-            DecisionKind.INGEST, ["n2"], judged_by=JudgeRef(agent_id="other", digest="d")
-        )
+        theirs = _row(DecisionKind.INGEST, ["n2"], judged_by=JudgeRef(agent_id="other", digest="d"))
         for record in (mine, theirs):
             await storage.record_decision(record)
 
@@ -476,14 +459,18 @@ class TestModesSelectAndArgumentsNarrow:
         """`query_changes`' own half-open convention, so adjacent windows
         neither overlap nor drop a row on the boundary."""
         early = DecisionRecord(
-            kind=DecisionKind.INGEST, subject_ids=["a"],
+            kind=DecisionKind.INGEST,
+            subject_ids=["a"],
             decided_at=NOON - timedelta(hours=1),
         )
         on_the_bound = DecisionRecord(
-            kind=DecisionKind.INGEST, subject_ids=["b"], decided_at=NOON,
+            kind=DecisionKind.INGEST,
+            subject_ids=["b"],
+            decided_at=NOON,
         )
         later = DecisionRecord(
-            kind=DecisionKind.INGEST, subject_ids=["c"],
+            kind=DecisionKind.INGEST,
+            subject_ids=["c"],
             decided_at=NOON + timedelta(hours=1),
         )
         for record in (early, on_the_bound, later):
@@ -500,9 +487,7 @@ class TestModesSelectAndArgumentsNarrow:
         loose = _row(DecisionKind.MERGE, ["c", "d"])
         for record in (checked, loose):
             await storage.record_decision(record)
-        await storage.record_decision(
-            _row(DecisionKind.CONFIRMATION, ["a"], reviews=checked.id)
-        )
+        await storage.record_decision(_row(DecisionKind.CONFIRMATION, ["a"], reviews=checked.id))
 
         result, _ = await tools.review(storage, mode="unreviewed")
 
@@ -516,9 +501,7 @@ class TestModesSelectAndArgumentsNarrow:
         await storage.record_decision(target)
         for i in range(5):
             await storage.record_decision(_row(DecisionKind.INGEST, [f"n{i}"]))
-        await storage.record_decision(
-            _row(DecisionKind.CONFIRMATION, ["a"], reviews=target.id)
-        )
+        await storage.record_decision(_row(DecisionKind.CONFIRMATION, ["a"], reviews=target.id))
 
         result, _ = await tools.review(storage, mode="all", max_results=1)
 
@@ -532,12 +515,12 @@ class TestModesSelectAndArgumentsNarrow:
         checked = _row(DecisionKind.INGEST, ["n3"], judged_by=CRITIC)
         for record in (wanted, wrong_agent, checked):
             await storage.record_decision(record)
-        await storage.record_decision(
-            _row(DecisionKind.CONFIRMATION, ["n3"], reviews=checked.id)
-        )
+        await storage.record_decision(_row(DecisionKind.CONFIRMATION, ["n3"], reviews=checked.id))
 
         result, _ = await tools.review(
-            storage, mode="unreviewed", agent_id="critic",
+            storage,
+            mode="unreviewed",
+            agent_id="critic",
             since=NOON - timedelta(hours=1),
         )
 
@@ -575,16 +558,12 @@ class TestTheCertaintyCeiling:
         result, _ = await tools.review(storage)
         assert result["certainty_ceiling"] is None
 
-    async def test_the_unrated_it_left_out_stay_counted_nowhere_misleading(
-        self, storage
-    ):
+    async def test_the_unrated_it_left_out_stay_counted_nowhere_misleading(self, storage):
         """`unrated_count` is over what was selected, and the ceiling excludes
         every unrated row — so it reads zero rather than reporting a population
         the filter already removed."""
         await storage.record_decision(_row(DecisionKind.INGEST, ["a"]))
-        await storage.record_decision(
-            _row(DecisionKind.INGEST, ["b"], certainty=0.3)
-        )
+        await storage.record_decision(_row(DecisionKind.INGEST, ["b"], certainty=0.3))
 
         result, _ = await tools.review(storage, certainty_ceiling=0.5)
 

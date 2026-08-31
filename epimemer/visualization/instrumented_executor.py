@@ -134,27 +134,35 @@ def pipeline_observer(bus: InProcessEventBus, pipeline_name: str) -> Observer:
             for transition_name in _transition_names(graph):
                 fired = current.get(transition_name, 0) - previous.get(transition_name, 0)
                 for _ in range(fired):
-                    await bus.publish(TransitionEnabled(
-                        pipeline_name=pipeline_name,
-                        transition_name=transition_name,
-                    ))
-                    await bus.publish(TransitionFired(
-                        pipeline_name=pipeline_name,
-                        transition_name=transition_name,
-                        input_places=_input_place_names(graph, transition_name),
-                    ))
-                    await bus.publish(TransitionCompleted(
-                        pipeline_name=pipeline_name,
-                        transition_name=transition_name,
-                        output_places=_output_place_names(graph, transition_name),
-                        duration_ms=(now - state["since"]) * 1000,
-                    ))
+                    await bus.publish(
+                        TransitionEnabled(
+                            pipeline_name=pipeline_name,
+                            transition_name=transition_name,
+                        )
+                    )
+                    await bus.publish(
+                        TransitionFired(
+                            pipeline_name=pipeline_name,
+                            transition_name=transition_name,
+                            input_places=_input_place_names(graph, transition_name),
+                        )
+                    )
+                    await bus.publish(
+                        TransitionCompleted(
+                            pipeline_name=pipeline_name,
+                            transition_name=transition_name,
+                            output_places=_output_place_names(graph, transition_name),
+                            duration_ms=(now - state["since"]) * 1000,
+                        )
+                    )
 
         state["since"] = now
-        await bus.publish(TokensUpdated(
-            pipeline_name=pipeline_name,
-            place_token_counts=_place_token_counts(graph),
-        ))
+        await bus.publish(
+            TokensUpdated(
+                pipeline_name=pipeline_name,
+                place_token_counts=_place_token_counts(graph),
+            )
+        )
 
     return observe
 
@@ -177,12 +185,14 @@ async def execute_with_events(
     started_at = time.monotonic()
     steps_before = graph.step_count
 
-    await bus.publish(PipelineStarted(
-        pipeline_name=pipeline_name,
-        place_names=_place_names(graph),
-        transition_names=_transition_names(graph),
-        edges=_topology_edges(graph),
-    ))
+    await bus.publish(
+        PipelineStarted(
+            pipeline_name=pipeline_name,
+            place_names=_place_names(graph),
+            transition_names=_transition_names(graph),
+            edges=_topology_edges(graph),
+        )
+    )
 
     # A raising transition must still close the stream. The runner mutates this
     # graph in place, so `step_count` reflects what fired before the failure even
@@ -194,19 +204,23 @@ async def execute_with_events(
             RunContext(graph=graph, observers=(pipeline_observer(bus, pipeline_name),))
         )
     except Exception as exc:
-        await bus.publish(PipelineFailed(
-            pipeline_name=pipeline_name,
-            error=str(exc),
-            transitions_fired=graph.step_count - steps_before,
-            duration_ms=(time.monotonic() - started_at) * 1000,
-        ))
+        await bus.publish(
+            PipelineFailed(
+                pipeline_name=pipeline_name,
+                error=str(exc),
+                transitions_fired=graph.step_count - steps_before,
+                duration_ms=(time.monotonic() - started_at) * 1000,
+            )
+        )
         raise
 
     fired = graph.step_count - steps_before
-    await bus.publish(PipelineCompleted(
-        pipeline_name=pipeline_name,
-        transitions_fired=fired,
-        duration_ms=(time.monotonic() - started_at) * 1000,
-    ))
+    await bus.publish(
+        PipelineCompleted(
+            pipeline_name=pipeline_name,
+            transitions_fired=fired,
+            duration_ms=(time.monotonic() - started_at) * 1000,
+        )
+    )
 
     return graph, fired

@@ -74,7 +74,7 @@ for i in $(seq 1 15); do
             -e EPIMEMER_STORAGE_BACKEND=surrealdb \
             -e EPIMEMER_SURREALDB_URL="ws://localhost:${SURREAL_PORT}/rpc" \
             -e EPIMEMER_LOG_FILE=/tmp/epimemer.log \
-            -- uv run --directory "$PROJECT_DIR" python -m epimemer.mcp.server
+            -- uv run --directory "$PROJECT_DIR" epimemer serve
 
         echo ""
         echo "Done. Restart Claude Code to connect to the persistent graph."

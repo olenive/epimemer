@@ -23,7 +23,6 @@ def _filled(n: int, *, capacity: int) -> tuple[int, ...]:
 
 
 class TestBounds:
-
     def test_a_ring_below_its_capacity_keeps_everything(self):
         assert _filled(3, capacity=5) == (0, 1, 2)
 
@@ -46,7 +45,6 @@ class TestBounds:
 
 
 class TestPurity:
-
     def test_remember_leaves_its_input_alone(self):
         """The hub keeps a ring per session in a dict it also iterates. A ring
         that mutated in place would have every reader sharing one buffer."""
@@ -59,7 +57,6 @@ class TestPurity:
 
 
 class TestBackfill:
-
     def test_backfill_replays_oldest_first(self):
         """A browser has to see the acts in the order they happened, not the
         order the ring happens to store them in."""

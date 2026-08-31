@@ -47,9 +47,10 @@ direct caller is safe without knowing any of this.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from contextvars import ContextVar
-from typing import AsyncIterator, Callable, NamedTuple
+from typing import NamedTuple
 
 
 class GraphGuard(NamedTuple):

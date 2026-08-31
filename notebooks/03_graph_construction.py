@@ -9,7 +9,8 @@ def _(mo):
     mo.md("""
     # Graph Construction Pipeline
 
-    Step through edge creation from a decomposed segment. Shows how typed edges are produced between Topics, Facts, and Inferences.
+    Step through edge creation from a decomposed segment. Shows how typed edges
+    are produced between Topics, Facts, and Inferences.
     """)
     return
 
@@ -20,8 +21,12 @@ def _():
     from petritype.core.executable_graph_components import ExecutableGraphOperations
     from petritype.plotting.rustworkx_graph import RustworkxGraph
     from petritype.plotting.simple_graphviz import SimpleGraphvizVisualization
+
     from epimemer.core.types import Fact, Inference, Segment, Topic
-    from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment, edge_creation_net
+    from epimemer.pipelines.graph_construction.edge_creation import (
+        DecomposedSegment,
+        edge_creation_net,
+    )
 
     return (
         DecomposedSegment,
@@ -68,7 +73,9 @@ async def _(
 
     graph = edge_creation_net(decomposed)
     if step.value > 0:
-        graph, fired = await ExecutableGraphOperations.execute_graph(graph, max_transitions=step.value)
+        graph, fired = await ExecutableGraphOperations.execute_graph(
+            graph, max_transitions=step.value
+        )
     else:
         fired = 0
 
@@ -149,10 +156,12 @@ def _(decomposed, graph, mo):
             if _e.src_id in _nodes and _e.dst_id in _nodes:
                 _dot.edge(_e.src_id, _e.dst_id, label=_e.type.value)
 
-        kg_output = mo.vstack([
-            mo.md("### Knowledge Graph"),
-            mo.image(_dot.pipe(format="png")),
-        ])
+        kg_output = mo.vstack(
+            [
+                mo.md("### Knowledge Graph"),
+                mo.image(_dot.pipe(format="png")),
+            ]
+        )
 
     kg_output
     return

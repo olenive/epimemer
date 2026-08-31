@@ -8,14 +8,15 @@ Two properties are load-bearing and tested as such. **Append is the only
 write**: a reversal, a confirmation and an overturn are all new rows, and the
 absence of an update path is what makes that structural rather than a habit.
 And **`reviewed` is derived** from a row pointing back, never stored as a flag —
-the mutable-copy-in-two-places shape that per-edge-type migration, the drifted lookup tables and the drifted lookup tables all were.
+the mutable-copy-in-two-places shape that per-edge-type migration and the
+drifted lookup tables both were.
 
 Both backends, because a nullable field one store keeps and the other drops is
 the divergence `tests/conftest.py` exists for — and here it would be invisible
 until somebody asked who decided something months later.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -24,13 +25,12 @@ from epimemer.storage.memory import InMemoryStorage
 from epimemer.storage.protocol import StorageBackend
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
 
-
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
 # The same judge after a re-description: one agent, two description versions.
 CRITIC_V2 = JudgeRef(agent_id="critic", digest="d2")
 EDITOR = JudgeRef(agent_id="editor", digest="d3")
 
-AT = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
+AT = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
 
 
 def _record(**kwargs) -> DecisionRecord:
@@ -148,9 +148,7 @@ class TestTheOtherThreeReads:
         await storage.record_decision(_record(kind=DecisionKind.CORRECTION))
         await storage.record_decision(_record(kind=DecisionKind.INGEST))
 
-        found = await storage.query_decisions(
-            kinds=[DecisionKind.MERGE, DecisionKind.CORRECTION]
-        )
+        found = await storage.query_decisions(kinds=[DecisionKind.MERGE, DecisionKind.CORRECTION])
 
         assert len(found) == 2
 
@@ -183,9 +181,7 @@ class TestTheOtherThreeReads:
         await storage.record_decision(_record(kind=DecisionKind.MERGE, judged_by=EDITOR))
         await storage.record_decision(_record(kind=DecisionKind.INGEST, judged_by=CRITIC))
 
-        found = await storage.query_decisions(
-            agent_ids=["critic"], kinds=[DecisionKind.MERGE]
-        )
+        found = await storage.query_decisions(agent_ids=["critic"], kinds=[DecisionKind.MERGE])
 
         assert [r.id for r in found] == [wanted.id]
 
@@ -199,9 +195,7 @@ class TestTheWindow:
         await storage.record_decision(on_the_hour)
         await storage.record_decision(later)
 
-        assert {r.id for r in await storage.query_decisions(since=AT)} == {
-            on_the_hour.id, later.id
-        }
+        assert {r.id for r in await storage.query_decisions(since=AT)} == {on_the_hour.id, later.id}
         assert [r.id for r in await storage.query_decisions(until=AT + timedelta(hours=1))] == [
             on_the_hour.id
         ]
@@ -210,11 +204,11 @@ class TestTheWindow:
         """The case string comparison gets wrong when one side omits its
         microseconds: `"…41Z"` sorts *after* `"…41.5Z"` because `Z > .`, which
         would put an earlier row past a later bound."""
-        whole = _record(decided_at=datetime(2026, 8, 23, 12, 0, 41, tzinfo=timezone.utc))
+        whole = _record(decided_at=datetime(2026, 8, 23, 12, 0, 41, tzinfo=UTC))
         await storage.record_decision(whole)
 
         found = await storage.query_decisions(
-            since=datetime(2026, 8, 23, 12, 0, 41, 500000, tzinfo=timezone.utc)
+            since=datetime(2026, 8, 23, 12, 0, 41, 500000, tzinfo=UTC)
         )
 
         assert found == []
@@ -241,9 +235,7 @@ class TestOrder:
 
         assert [r.id for r in await storage.query_decisions()] == [new.id, old.id]
 
-    async def test_a_batch_sharing_one_timestamp_is_ordered_the_same_way_by_both(
-        self, storage
-    ):
+    async def test_a_batch_sharing_one_timestamp_is_ordered_the_same_way_by_both(self, storage):
         """Rows written in one call share a timestamp to the microsecond. The
         tiebreak is arbitrary — the point is that it is the *same* arbitrary on
         both backends, or a parity test passes or fails on the clock."""
@@ -253,9 +245,7 @@ class TestOrder:
 
         found = await storage.query_decisions()
 
-        assert [r.id for r in found] == sorted(
-            (r.id for r in records), reverse=True
-        )
+        assert [r.id for r in found] == sorted((r.id for r in records), reverse=True)
 
     async def test_limit_truncates_in_journal_order(self, storage):
         old = _record(decided_at=AT - timedelta(days=1))
@@ -302,12 +292,11 @@ class TestAppendIsTheOnlyWrite:
     backend that offered an edit would let review state become mutable in one
     place and derived in another."""
 
-    @pytest.mark.parametrize(
-        "backend", [InMemoryStorage, SurrealDBStorage, StorageBackend]
-    )
+    @pytest.mark.parametrize("backend", [InMemoryStorage, SurrealDBStorage, StorageBackend])
     def test_no_backend_can_change_or_remove_a_row(self, backend):
         forbidden = [
-            name for name in dir(backend)
+            name
+            for name in dir(backend)
             if "decision" in name.lower()
             and name.split("_")[0] in {"update", "delete", "remove", "set", "edit"}
         ]

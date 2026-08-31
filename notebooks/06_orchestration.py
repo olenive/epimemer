@@ -9,7 +9,8 @@ def _(mo):
     mo.md("""
     # Orchestration Pipeline
 
-    Step through the top-level orchestration net that routes requests to sub-pipelines. Select an action and watch it route through the Petri net.
+    Step through the top-level orchestration net that routes requests to
+    sub-pipelines. Select an action and watch it route through the Petri net.
 
     The net routes four actions. Three of them take a self-contained payload and
     are offered below. The fourth, `store_decomposition`, is **step 2 of ingest**:
@@ -26,6 +27,7 @@ def _():
     from petritype.core.executable_graph_components import ExecutableGraphOperations
     from petritype.plotting.rustworkx_graph import RustworkxGraph
     from petritype.plotting.simple_graphviz import SimpleGraphvizVisualization
+
     from epimemer.embeddings.mock import MockEmbeddingProvider
     from epimemer.mcp.config import ServerConfig
     from epimemer.pipelines.orchestration.orchestration_net import MemoryRequest, orchestration_net
@@ -103,7 +105,9 @@ async def _(
     graph = orchestration_net(request, storage, emb, config)
 
     if step.value > 0:
-        graph, fired = await ExecutableGraphOperations.execute_graph(graph, max_transitions=step.value)
+        graph, fired = await ExecutableGraphOperations.execute_graph(
+            graph, max_transitions=step.value
+        )
     else:
         fired = 0
 
@@ -125,7 +129,9 @@ def _(graph, mo):
     _mrp = graph.place_named("MemoryResult")
     if _mrp and _mrp.tokens:
         _mr = _mrp.tokens[0]
-        _output = mo.md(f"### Result (action: {_mr.action})\n```json\n{_mr.model_dump_json(indent=2)}\n```")
+        _output = mo.md(
+            f"### Result (action: {_mr.action})\n```json\n{_mr.model_dump_json(indent=2)}\n```"
+        )
     else:
         _occ = []
         for _pn in ["SegmentInput", "StoreInput", "SearchInput", "ReflectInput"]:

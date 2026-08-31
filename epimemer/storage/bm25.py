@@ -204,9 +204,7 @@ def bm25_scores(
 
     n_documents = len(analyzed)
     average_length = sum(len(tokens) for tokens in analyzed.values()) / n_documents
-    document_frequency = Counter(
-        token for tokens in analyzed.values() for token in set(tokens)
-    )
+    document_frequency = Counter(token for tokens in analyzed.values() for token in set(tokens))
     idf = {
         token: _inverse_document_frequency(n_documents, document_frequency[token])
         for tokens in term_tokens
@@ -226,9 +224,7 @@ def bm25_scores(
             continue
         scores[doc_id] = sum(
             idf[token]
-            * _term_frequency_weight(
-                occurrences[token], len(tokens), average_length, k1, b
-            )
+            * _term_frequency_weight(occurrences[token], len(tokens), average_length, k1, b)
             for token in matched
         )
     return scores

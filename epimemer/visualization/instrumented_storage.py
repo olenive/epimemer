@@ -14,17 +14,18 @@ Usage:
 """
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Literal, Sequence
+from typing import Literal
 
 from epimemer.core.types import (
     Agent,
     DecisionKind,
     DecisionRecord,
     EdgeType,
-    JudgeRef,
     EmbeddingRecord,
     EpistemicNode,
+    JudgeRef,
     Metacontext,
     NodeEdge,
     NodeStatus,
@@ -70,9 +71,7 @@ class InstrumentedStorage:
     All read methods delegate directly with no overhead.
     """
 
-    def __init__(
-        self, inner: object, bus: InProcessEventBus, default_threshold: int
-    ) -> None:
+    def __init__(self, inner: object, bus: InProcessEventBus, default_threshold: int) -> None:
         self._inner = inner
         self._bus = bus
         # The process default the reflect counter is judged against. Stored here
@@ -92,11 +91,13 @@ class InstrumentedStorage:
 
     async def store_document(self, doc: RawDocument) -> str:
         result = await self._inner.store_document(doc)
-        await self._bus.publish(DocumentStored(
-            document_id=doc.id,
-            content_preview=doc.content[:200],
-            metadata=doc.metadata,
-        ))
+        await self._bus.publish(
+            DocumentStored(
+                document_id=doc.id,
+                content_preview=doc.content[:200],
+                metadata=doc.metadata,
+            )
+        )
         return result
 
     # --- Documents (read) ---
@@ -111,13 +112,15 @@ class InstrumentedStorage:
 
     async def store_segment(self, segment: Segment) -> str:
         result = await self._inner.store_segment(segment)
-        await self._bus.publish(SegmentStored(
-            segment_id=segment.id,
-            source_id=segment.source_id,
-            text_preview=segment.text[:200],
-            span_start=segment.span_start,
-            span_end=segment.span_end,
-        ))
+        await self._bus.publish(
+            SegmentStored(
+                segment_id=segment.id,
+                source_id=segment.source_id,
+                text_preview=segment.text[:200],
+                span_start=segment.span_start,
+                span_end=segment.span_end,
+            )
+        )
         return result
 
     # --- Segments (read) ---
@@ -133,10 +136,12 @@ class InstrumentedStorage:
     async def store_node(self, node: EpistemicNode) -> str:
         result = await self._inner.store_node(node)
         graph = self._inner.current_database
-        await self._bus.publish(NodeStored(
-            graph=graph,
-            node=node_to_view(node, graph),
-        ))
+        await self._bus.publish(
+            NodeStored(
+                graph=graph,
+                node=node_to_view(node, graph),
+            )
+        )
         return result
 
     async def get_relation_kind(self, label: str) -> str | None:
@@ -158,7 +163,9 @@ class InstrumentedStorage:
         status: NodeStatus = NodeStatus.ACTIVE,
     ) -> EpistemicNode | None:
         return await self._inner.get_node_by_content(
-            content, node_type=node_type, status=status,
+            content,
+            node_type=node_type,
+            status=status,
         )
 
     async def query_nodes(
@@ -169,7 +176,9 @@ class InstrumentedStorage:
         at_time: datetime | None = None,
     ) -> Sequence[EpistemicNode]:
         return await self._inner.query_nodes(
-            node_type=node_type, status=status, at_time=at_time,
+            node_type=node_type,
+            status=status,
+            at_time=at_time,
         )
 
     async def query_changes(
@@ -180,7 +189,9 @@ class InstrumentedStorage:
         node_type: NodeType | None = None,
     ) -> Sequence[EpistemicNode]:
         return await self._inner.query_changes(
-            start=start, end=end, node_type=node_type,
+            start=start,
+            end=end,
+            node_type=node_type,
         )
 
     async def count_nodes_by_type(
@@ -202,10 +213,12 @@ class InstrumentedStorage:
     async def store_edge(self, edge: NodeEdge) -> str:
         result = await self._inner.store_edge(edge)
         graph = self._inner.current_database
-        await self._bus.publish(EdgeStored(
-            graph=graph,
-            edge=edge_to_view(edge, graph),
-        ))
+        await self._bus.publish(
+            EdgeStored(
+                graph=graph,
+                edge=edge_to_view(edge, graph),
+            )
+        )
         return result
 
     async def delete_edge(self, edge_id: str) -> None:
@@ -227,31 +240,39 @@ class InstrumentedStorage:
         judge: JudgeRef | None = None,
     ) -> None:
         await self._inner.supersede_node_tx(
-            old_node, new_node, new_embedding, lineage_edge,
-            status=status, superseded_at=superseded_at,
+            old_node,
+            new_node,
+            new_embedding,
+            lineage_edge,
+            status=status,
+            superseded_at=superseded_at,
             evidence_edges=evidence_edges,
             clear_edge_ids=clear_edge_ids,
             judge=judge,
         )
         # Publish only after the atomic operation succeeds.
         graph = self._inner.current_database
-        await self._bus.publish(NodeStatusChanged(
-            graph=graph,
-            node_id=old_node.id,
-            old_status=old_node.status.value,
-            new_status=status.value,
-            counterpart=new_node.id,
-        ))
+        await self._bus.publish(
+            NodeStatusChanged(
+                graph=graph,
+                node_id=old_node.id,
+                old_status=old_node.status.value,
+                new_status=status.value,
+                counterpart=new_node.id,
+            )
+        )
         await self._bus.publish(NodeStored(graph=graph, node=node_to_view(new_node, graph)))
         await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(lineage_edge, graph)))
         for edge in evidence_edges:
             await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
-        await self._bus.publish(graph_action(
-            graph=graph,
-            verb=verb_for_status(status),
-            subjects=[old_node.id, new_node.id],
-            counts={"nodes": 1, "edges": 1 + len(evidence_edges)},
-        ))
+        await self._bus.publish(
+            graph_action(
+                graph=graph,
+                verb=verb_for_status(status),
+                subjects=[old_node.id, new_node.id],
+                counts={"nodes": 1, "edges": 1 + len(evidence_edges)},
+            )
+        )
 
     async def supersede_by_existing_tx(
         self,
@@ -266,29 +287,36 @@ class InstrumentedStorage:
         judge: JudgeRef | None = None,
     ) -> None:
         await self._inner.supersede_by_existing_tx(
-            old_node, existing_id, lineage_edge,
-            status=status, superseded_at=superseded_at,
+            old_node,
+            existing_id,
+            lineage_edge,
+            status=status,
+            superseded_at=superseded_at,
             evidence_edges=evidence_edges,
             clear_edge_ids=clear_edge_ids,
             judge=judge,
         )
         graph = self._inner.current_database
-        await self._bus.publish(NodeStatusChanged(
-            graph=graph,
-            node_id=old_node.id,
-            old_status=old_node.status.value,
-            new_status=status.value,
-            counterpart=existing_id,
-        ))
+        await self._bus.publish(
+            NodeStatusChanged(
+                graph=graph,
+                node_id=old_node.id,
+                old_status=old_node.status.value,
+                new_status=status.value,
+                counterpart=existing_id,
+            )
+        )
         await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(lineage_edge, graph)))
         for edge in evidence_edges:
             await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
-        await self._bus.publish(graph_action(
-            graph=graph,
-            verb=verb_for_status(status),
-            subjects=[old_node.id, existing_id],
-            counts={"edges": 1 + len(evidence_edges)},
-        ))
+        await self._bus.publish(
+            graph_action(
+                graph=graph,
+                verb=verb_for_status(status),
+                subjects=[old_node.id, existing_id],
+                counts={"edges": 1 + len(evidence_edges)},
+            )
+        )
 
     async def set_node_status_tx(
         self,
@@ -299,27 +327,29 @@ class InstrumentedStorage:
         edges: Sequence[NodeEdge] = (),
         judge: JudgeRef | None = None,
     ) -> None:
-        await self._inner.set_node_status_tx(
-            nodes, status=status, at=at, edges=edges, judge=judge
-        )
+        await self._inner.set_node_status_tx(nodes, status=status, at=at, edges=edges, judge=judge)
         graph = self._inner.current_database
         for node in nodes:
-            await self._bus.publish(NodeStatusChanged(
-                graph=graph,
-                node_id=node.id,
-                old_status=node.status.value,
-                new_status=status.value,
-            ))
+            await self._bus.publish(
+                NodeStatusChanged(
+                    graph=graph,
+                    node_id=node.id,
+                    old_status=node.status.value,
+                    new_status=status.value,
+                )
+            )
         # Archival flips a batch; restore flips it back. Either way it is one
         # act, whatever it swept up — which is what keeps a 600-node archival
         # run from being 600 log lines.
         if nodes:
-            await self._bus.publish(graph_action(
-                graph=graph,
-                verb=verb_for_status(status),
-                subjects=[node.id for node in nodes],
-                counts={"nodes": len(nodes)},
-            ))
+            await self._bus.publish(
+                graph_action(
+                    graph=graph,
+                    verb=verb_for_status(status),
+                    subjects=[node.id for node in nodes],
+                    counts={"nodes": len(nodes)},
+                )
+            )
 
     async def merge_nodes_tx(
         self,
@@ -333,29 +363,38 @@ class InstrumentedStorage:
         judge: JudgeRef | None = None,
     ) -> None:
         await self._inner.merge_nodes_tx(
-            source_nodes, merged_node, merged_embedding, lineage_edges,
-            merged_at=merged_at, evidence_edges=evidence_edges, judge=judge,
+            source_nodes,
+            merged_node,
+            merged_embedding,
+            lineage_edges,
+            merged_at=merged_at,
+            evidence_edges=evidence_edges,
+            judge=judge,
         )
         graph = self._inner.current_database
         await self._bus.publish(NodeStored(graph=graph, node=node_to_view(merged_node, graph)))
         for source in source_nodes:
-            await self._bus.publish(NodeStatusChanged(
-                graph=graph,
-                node_id=source.id,
-                old_status=source.status.value,
-                new_status=NodeStatus.MERGED.value,
-                counterpart=merged_node.id,
-            ))
+            await self._bus.publish(
+                NodeStatusChanged(
+                    graph=graph,
+                    node_id=source.id,
+                    old_status=source.status.value,
+                    new_status=NodeStatus.MERGED.value,
+                    counterpart=merged_node.id,
+                )
+            )
         for edge in [*lineage_edges, *evidence_edges]:
             await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
-        await self._bus.publish(graph_action(
-            graph=graph,
-            verb=ActionVerb.MERGED,
-            # The survivor first: "merged 2 nodes into 5e6f7g8h" is the line, and
-            # where the content went is the part worth reading.
-            subjects=[merged_node.id, *(s.id for s in source_nodes)],
-            counts={"nodes": 1, "edges": len(lineage_edges) + len(evidence_edges)},
-        ))
+        await self._bus.publish(
+            graph_action(
+                graph=graph,
+                verb=ActionVerb.MERGED,
+                # The survivor first: "merged 2 nodes into 5e6f7g8h" is the line, and
+                # where the content went is the part worth reading.
+                subjects=[merged_node.id, *(s.id for s in source_nodes)],
+                counts={"nodes": 1, "edges": len(lineage_edges) + len(evidence_edges)},
+            )
+        )
 
     async def reverse_merge_tx(
         self,
@@ -368,18 +407,24 @@ class InstrumentedStorage:
         judge: JudgeRef | None = None,
     ) -> None:
         await self._inner.reverse_merge_tx(
-            survivor, source_nodes, restored_edges,
-            restored_at=restored_at, delete_edge_ids=delete_edge_ids, judge=judge,
+            survivor,
+            source_nodes,
+            restored_edges,
+            restored_at=restored_at,
+            delete_edge_ids=delete_edge_ids,
+            judge=judge,
         )
         graph = self._inner.current_database
         for source in source_nodes:
-            await self._bus.publish(NodeStatusChanged(
-                graph=graph,
-                node_id=source.id,
-                old_status=NodeStatus.MERGED.value,
-                new_status=NodeStatus.ACTIVE.value,
-                counterpart=survivor.id,
-            ))
+            await self._bus.publish(
+                NodeStatusChanged(
+                    graph=graph,
+                    node_id=source.id,
+                    old_status=NodeStatus.MERGED.value,
+                    new_status=NodeStatus.ACTIVE.value,
+                    counterpart=survivor.id,
+                )
+            )
         for edge in restored_edges:
             await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
         # RESTORED rather than a verb of its own: what a reader needs from the
@@ -387,12 +432,14 @@ class InstrumentedStorage:
         # deletion is not published** — there is no node-deleted event and no
         # renderer for one, so a viewer keeps showing it until the next
         # snapshot. Recorded as a known gap rather than half-built here.
-        await self._bus.publish(graph_action(
-            graph=graph,
-            verb=ActionVerb.RESTORED,
-            subjects=[source.id for source in source_nodes],
-            counts={"nodes": len(source_nodes), "edges": len(restored_edges)},
-        ))
+        await self._bus.publish(
+            graph_action(
+                graph=graph,
+                verb=ActionVerb.RESTORED,
+                subjects=[source.id for source in source_nodes],
+                counts={"nodes": len(source_nodes), "edges": len(restored_edges)},
+            )
+        )
 
     async def write_batch_tx(
         self,
@@ -415,26 +462,33 @@ class InstrumentedStorage:
             for edge in edges:
                 await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
             for embedding in embeddings:
-                await self._bus.publish(EmbeddingStored(
-                    item_id=embedding.item_id,
-                    model_id=embedding.model_id,
-                    dimensions=len(embedding.vector),
-                ))
+                await self._bus.publish(
+                    EmbeddingStored(
+                        item_id=embedding.item_id,
+                        model_id=embedding.model_id,
+                        dimensions=len(embedding.vector),
+                    )
+                )
             for timeline in timelines:
-                await self._bus.publish(TimelineStored(
-                    graph=graph, timeline=timeline_to_view(timeline, graph),
-                ))
-            await self._bus.publish(graph_action(
-                graph=graph,
-                verb=ActionVerb.STORED,
-                subjects=[node.id for node in nodes],
-                counts={
-                    "nodes": len(nodes),
-                    "edges": len(edges),
-                    "embeddings": len(embeddings),
-                    "timelines": len(timelines),
-                },
-            ))
+                await self._bus.publish(
+                    TimelineStored(
+                        graph=graph,
+                        timeline=timeline_to_view(timeline, graph),
+                    )
+                )
+            await self._bus.publish(
+                graph_action(
+                    graph=graph,
+                    verb=ActionVerb.STORED,
+                    subjects=[node.id for node in nodes],
+                    counts={
+                        "nodes": len(nodes),
+                        "edges": len(edges),
+                        "embeddings": len(embeddings),
+                        "timelines": len(timelines),
+                    },
+                )
+            )
         except Exception:
             logger.exception("write_batch_tx event emission failed; write already committed")
 
@@ -457,9 +511,7 @@ class InstrumentedStorage:
         direction: EdgeDirection,
         edge_type: EdgeType | None = None,
     ) -> dict[str, list[NodeEdge]]:
-        return await self._inner.get_edges_for(
-            node_ids, direction=direction, edge_type=edge_type
-        )
+        return await self._inner.get_edges_for(node_ids, direction=direction, edge_type=edge_type)
 
     async def count_edges_by_type(self) -> dict[EdgeType, int]:
         return await self._inner.count_edges_by_type()
@@ -468,11 +520,13 @@ class InstrumentedStorage:
 
     async def store_embedding(self, embedding: EmbeddingRecord) -> str:
         result = await self._inner.store_embedding(embedding)
-        await self._bus.publish(EmbeddingStored(
-            item_id=embedding.item_id,
-            model_id=embedding.model_id,
-            dimensions=len(embedding.vector),
-        ))
+        await self._bus.publish(
+            EmbeddingStored(
+                item_id=embedding.item_id,
+                model_id=embedding.model_id,
+                dimensions=len(embedding.vector),
+            )
+        )
         return result
 
     # --- Embeddings (read) ---
@@ -497,7 +551,11 @@ class InstrumentedStorage:
         statuses: frozenset[NodeStatus] = frozenset({NodeStatus.ACTIVE}),
     ) -> Sequence[tuple[str, float]]:
         return await self._inner.vector_search(
-            query_vector, model_id, k=k, node_type=node_type, statuses=statuses,
+            query_vector,
+            model_id,
+            k=k,
+            node_type=node_type,
+            statuses=statuses,
         )
 
     async def text_search(
@@ -528,10 +586,12 @@ class InstrumentedStorage:
 
     async def store_timeline(self, timeline: Timeline) -> str:
         timeline_id = await self._inner.store_timeline(timeline)
-        await self._bus.publish(TimelineStored(
-            graph=self._inner.current_database,
-            timeline=timeline_to_view(timeline, self._inner.current_database),
-        ))
+        await self._bus.publish(
+            TimelineStored(
+                graph=self._inner.current_database,
+                timeline=timeline_to_view(timeline, self._inner.current_database),
+            )
+        )
         return timeline_id
 
     async def get_timeline(self, timeline_id: str) -> Timeline | None:
@@ -546,9 +606,7 @@ class InstrumentedStorage:
     async def viz_list_metacontexts(self, database: str) -> Sequence[Metacontext]:
         return await self._inner.viz_list_metacontexts(database)
 
-    async def viz_list_relation_labels(
-        self, database: str
-    ) -> Sequence[RelationLabel]:
+    async def viz_list_relation_labels(self, database: str) -> Sequence[RelationLabel]:
         return await self._inner.viz_list_relation_labels(database)
 
     # --- Metacontexts (pass-through) ---
@@ -562,9 +620,7 @@ class InstrumentedStorage:
     async def store_relation_label(self, label: RelationLabel) -> str:
         return await self._inner.store_relation_label(label)
 
-    async def get_relation_label(
-        self, name: str, kind: str
-    ) -> RelationLabel | None:
+    async def get_relation_label(self, name: str, kind: str) -> RelationLabel | None:
         return await self._inner.get_relation_label(name, kind)
 
     async def query_relation_labels(self) -> Sequence[RelationLabel]:
@@ -579,9 +635,7 @@ class InstrumentedStorage:
     async def query_relation_verdicts(self) -> Sequence[RelationVerdict]:
         return await self._inner.query_relation_verdicts()
 
-    async def relation_verdicts_for(
-        self, label_ids: Sequence[str]
-    ) -> Sequence[RelationVerdict]:
+    async def relation_verdicts_for(self, label_ids: Sequence[str]) -> Sequence[RelationVerdict]:
         return await self._inner.relation_verdicts_for(label_ids)
 
     async def query_metacontexts(
@@ -604,12 +658,14 @@ class InstrumentedStorage:
             await self._inner.get_reflect_threshold_override(),
             self._default_threshold,
         )
-        await self._bus.publish(ReflectCounterUpdated(
-            graph=self._inner.current_database,
-            count=count,
-            threshold=threshold,
-            suggested=count >= threshold,
-        ))
+        await self._bus.publish(
+            ReflectCounterUpdated(
+                graph=self._inner.current_database,
+                count=count,
+                threshold=threshold,
+                suggested=count >= threshold,
+            )
+        )
 
     async def get_reflect_counter(self) -> int:
         return await self._inner.get_reflect_counter()
@@ -697,8 +753,13 @@ class InstrumentedStorage:
         limit: int | None = None,
     ) -> list[DecisionRecord]:
         return await self._inner.query_decisions(
-            agent_ids=agent_ids, kinds=kinds, subject_id=subject_id,
-            reviews=reviews, since=since, until=until, limit=limit,
+            agent_ids=agent_ids,
+            kinds=kinds,
+            subject_id=subject_id,
+            reviews=reviews,
+            since=since,
+            until=until,
+            limit=limit,
         )
 
     async def reviewed_decision_ids(self, decision_ids: Sequence[str]) -> set[str]:
@@ -739,11 +800,13 @@ class InstrumentedStorage:
     async def switch_database(self, database: str) -> None:
         previous = self._inner.current_database
         await self._inner.switch_database(database)
-        await self._bus.publish(GraphSwitched(
-            graph=database,
-            previous_graph=previous,
-            new_graph=database,
-        ))
+        await self._bus.publish(
+            GraphSwitched(
+                graph=database,
+                previous_graph=previous,
+                new_graph=database,
+            )
+        )
 
     async def delete_database(self, database: str) -> None:
         await self._inner.delete_database(database)
@@ -757,7 +820,8 @@ class InstrumentedStorage:
         historical_status: NodeStatus = NodeStatus.ACTIVE,
     ) -> Sequence[EpistemicNode]:
         return await self._inner.viz_list_nodes(
-            database, historical_status=historical_status,
+            database,
+            historical_status=historical_status,
         )
 
     async def viz_list_edges(

@@ -37,7 +37,6 @@ from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
     JudgeRef,
-    Metacontext,
     NodeEdge,
     Topic,
 )
@@ -45,7 +44,6 @@ from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
 from epimemer.pipelines.frames import declare_frames, reframe_node
-
 
 DECLARER = JudgeRef(agent_id="the-user", digest="d1")
 
@@ -76,38 +74,46 @@ async def _topic(storage, embedder, content, *, frames=()):
     topic = Topic(content=content, source_id="seg1")
     await storage.store_node(topic)
     vectors = await embedder.embed([content])
-    await storage.store_embedding(EmbeddingRecord(
-        item_id=topic.id, model_id=embedder.model_id, vector=vectors[0],
-    ))
+    await storage.store_embedding(
+        EmbeddingRecord(
+            item_id=topic.id,
+            model_id=embedder.model_id,
+            vector=vectors[0],
+        )
+    )
     for frame in frames:
-        await storage.store_edge(NodeEdge(
-            src_id=topic.id, dst_id=frame, type=EdgeType.HAS_METACONTEXT,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=topic.id,
+                dst_id=frame,
+                type=EdgeType.HAS_METACONTEXT,
+            )
+        )
     return topic
 
 
 async def _frames_of(storage, node_id) -> set[str]:
-    edges = await storage.get_edges_from(
-        node_id, edge_type=EdgeType.HAS_METACONTEXT
-    )
+    edges = await storage.get_edges_from(node_id, edge_type=EdgeType.HAS_METACONTEXT)
     return {edge.dst_id for edge in edges}
 
 
 class TestEveryPathThatNamesAFrameChecksIt:
     """One test per entry point, and the list is closed by the scan below."""
 
-    async def test_ingest_refuses_and_writes_nothing(
-        self, storage, embedder, config
-    ):
+    async def test_ingest_refuses_and_writes_nothing(self, storage, embedder, config):
         seg, _ = await tools.segment_text("A doc.", storage, embedder, config)
 
         with pytest.raises(ValueError, match="does not exist in graph"):
             await tools.store_decomposition(
                 document_id=seg["document_id"],
-                segments=[{
-                    "segment_id": seg["segments"][0]["segment_id"],
-                    "topics": ["a topic"], "facts": [], "inferences": [],
-                }],
+                segments=[
+                    {
+                        "segment_id": seg["segments"][0]["segment_id"],
+                        "topics": ["a topic"],
+                        "facts": [],
+                        "inferences": [],
+                    }
+                ],
                 storage=storage,
                 embedding_provider=embedder,
                 metacontext_id="nowhere",
@@ -115,24 +121,20 @@ class TestEveryPathThatNamesAFrameChecksIt:
 
         assert [n for n in await storage.query_nodes() if isinstance(n, Topic)] == []
 
-    async def test_reframe_refuses_an_assignment_that_resolves_nowhere(
-        self, storage, embedder
-    ):
+    async def test_reframe_refuses_an_assignment_that_resolves_nowhere(self, storage, embedder):
         fiction, _ = await tools.create_metacontext("The novel", storage)
-        node = await _topic(
-            storage, embedder, "the council", frames=[fiction["metacontext_id"]]
-        )
+        node = await _topic(storage, embedder, "the council", frames=[fiction["metacontext_id"]])
 
         outcome = await reframe_node(
-            storage, node_id=node.id,
-            withdraw=fiction["metacontext_id"], assign="nowhere",
+            storage,
+            node_id=node.id,
+            withdraw=fiction["metacontext_id"],
+            assign="nowhere",
             because="mis-filed",
         )
 
         assert "no metacontext 'nowhere'" in outcome.reason
-        assert await _frames_of(storage, node.id) == {
-            fiction["metacontext_id"]
-        }
+        assert await _frames_of(storage, node.id) == {fiction["metacontext_id"]}
 
     async def test_the_declaration_sweep_refuses_one_too(self, storage, embedder):
         """The gap that shipped. A sweep is the worst place to lose this: it
@@ -152,48 +154,42 @@ class TestTheDerivedPathsCannotIntroduceOne:
     closes the graph, and these assert the derivation rather than a check.
     """
 
-    async def test_a_split_states_only_what_the_parent_states(
-        self, storage, embedder
-    ):
+    async def test_a_split_states_only_what_the_parent_states(self, storage, embedder):
         fiction, _ = await tools.create_metacontext("The novel", storage)
         parent = await _topic(
-            storage, embedder, "the novel's politics",
+            storage,
+            embedder,
+            "the novel's politics",
             frames=[fiction["metacontext_id"]],
         )
 
         await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             splits=[{"topic_id": parent.id, "subtopics": ["the council"]}],
             judge=DECLARER,
         )
 
         child = next(
-            node for node in await storage.query_nodes()
+            node
+            for node in await storage.query_nodes()
             if node.metadata.get("split_from") == parent.id
         )
-        assert await _frames_of(storage, child.id) <= await _frames_of(
-            storage, parent.id
-        )
+        assert await _frames_of(storage, child.id) <= await _frames_of(storage, parent.id)
 
-    async def test_a_synthesis_states_only_what_its_children_state(
-        self, storage, embedder
-    ):
-        a = await _topic(
-            storage, embedder, "the council", frames=[BASE_METACONTEXT_ID]
-        )
-        b = await _topic(
-            storage, embedder, "the war", frames=[BASE_METACONTEXT_ID]
-        )
+    async def test_a_synthesis_states_only_what_its_children_state(self, storage, embedder):
+        a = await _topic(storage, embedder, "the council", frames=[BASE_METACONTEXT_ID])
+        b = await _topic(storage, embedder, "the war", frames=[BASE_METACONTEXT_ID])
 
         await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             parents=[{"children_ids": [a.id, b.id], "content": "politics"}],
             judge=DECLARER,
         )
 
         parent = next(
-            node for node in await storage.query_nodes()
-            if node.metadata.get("synthesized_from")
+            node for node in await storage.query_nodes() if node.metadata.get("synthesized_from")
         )
         assert await _frames_of(storage, parent.id) == {BASE_METACONTEXT_ID}
 
@@ -214,9 +210,7 @@ def _modules_writing_frame_edges() -> set[str]:
             if not isinstance(node, ast.Call):
                 continue
             callee = node.func
-            name = callee.attr if isinstance(callee, ast.Attribute) else getattr(
-                callee, "id", None
-            )
+            name = callee.attr if isinstance(callee, ast.Attribute) else getattr(callee, "id", None)
             if name != "NodeEdge":
                 continue
             for keyword in node.keywords:

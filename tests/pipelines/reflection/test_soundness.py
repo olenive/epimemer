@@ -11,7 +11,7 @@ graph and be switched off within a week — and the flag's whole value is that i
 is rare.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -34,12 +34,10 @@ def _period(start: int | None = None, end: int | None = None) -> ValidityInterva
             return {"instant_kind": "unknown"}
         return {
             "instant_kind": "precise",
-            "at": datetime(year, 1, 1, tzinfo=timezone.utc).isoformat(),
+            "at": datetime(year, 1, 1, tzinfo=UTC).isoformat(),
         }
 
-    return ValidityInterval(
-        start=instant(start), end=instant(end), basis=IntervalBasis.STATED
-    )
+    return ValidityInterval(start=instant(start), end=instant(end), basis=IntervalBasis.STATED)
 
 
 @pytest.fixture
@@ -49,18 +47,18 @@ async def document(storage) -> RawDocument:
     return doc
 
 
-async def _premise(
-    storage, document, content: str, *periods: ValidityInterval
-) -> Fact:
+async def _premise(storage, document, content: str, *periods: ValidityInterval) -> Fact:
     """A fact, and the source edge carrying whatever periods it was given."""
     fact = Fact(content=content, source_id="seg-1", value=ValueSignal())
     await storage.store_node(fact)
-    await storage.store_edge(NodeEdge(
-        src_id=fact.id,
-        dst_id=document.id,
-        type=EdgeType.SOURCED_FROM,
-        validity=list(periods),
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=fact.id,
+            dst_id=document.id,
+            type=EdgeType.SOURCED_FROM,
+            validity=list(periods),
+        )
+    )
     return fact
 
 
@@ -80,19 +78,11 @@ async def _inference(
 
 
 class TestWhatItFlags:
-    async def test_premises_no_source_puts_in_the_same_period(
-        self, storage, document
-    ):
+    async def test_premises_no_source_puts_in_the_same_period(self, storage, document):
         """The motivating case, and the reason the validity model outranks everything else."""
-        early = await _premise(
-            storage, document, "Labour was in government", _period(1997, 2010)
-        )
-        late = await _premise(
-            storage, document, "the policy was in force", _period(2024, 2030)
-        )
-        drawn = await _inference(
-            storage, "Labour introduced the policy", [early, late]
-        )
+        early = await _premise(storage, document, "Labour was in government", _period(1997, 2010))
+        late = await _premise(storage, document, "the policy was in force", _period(2024, 2030))
+        drawn = await _inference(storage, "Labour introduced the policy", [early, late])
 
         [flagged] = await find_unsound_inferences(storage)
 
@@ -114,15 +104,11 @@ class TestWhatItFlags:
         assert by_id[late.id].periods[0].start.at.year == 2024
         assert by_id[early.id].content == "one claim"
 
-    async def test_a_premise_reached_by_supports_counts_too(
-        self, storage, document
-    ):
+    async def test_a_premise_reached_by_supports_counts_too(self, storage, document):
         """Both edges record the same relation, as evidence-staleness already reads them."""
         early = await _premise(storage, document, "one claim", _period(1997, 2010))
         late = await _premise(storage, document, "another", _period(2024, 2030))
-        await _inference(
-            storage, "a conclusion", [early, late], edge_type=EdgeType.SUPPORTS
-        )
+        await _inference(storage, "a conclusion", [early, late], edge_type=EdgeType.SUPPORTS)
 
         [flagged] = await find_unsound_inferences(storage)
 
@@ -142,9 +128,7 @@ class TestWhatItFlags:
         """A third premise that overlaps both is not part of the finding."""
         early = await _premise(storage, document, "one claim", _period(1997, 2010))
         late = await _premise(storage, document, "another", _period(2024, 2030))
-        spanning = await _premise(
-            storage, document, "throughout", _period(1990, 2040)
-        )
+        spanning = await _premise(storage, document, "throughout", _period(1990, 2040))
         await _inference(storage, "a conclusion", [early, late, spanning])
 
         [flagged] = await find_unsound_inferences(storage)
@@ -180,16 +164,12 @@ class TestWhatItStaysSilentAbout:
 
     async def test_premises_that_overlap(self, storage, document):
         early = await _premise(storage, document, "one claim", _period(1997, 2010))
-        overlapping = await _premise(
-            storage, document, "another", _period(2005, 2030)
-        )
+        overlapping = await _premise(storage, document, "another", _period(2005, 2030))
         await _inference(storage, "a conclusion", [early, overlapping])
 
         assert await find_unsound_inferences(storage) == []
 
-    async def test_a_second_source_asserting_a_later_episode(
-        self, storage, document
-    ):
+    async def test_a_second_source_asserting_a_later_episode(self, storage, document):
         """The union per premise, and the safe error direction.
 
         A second source says the first claim held again in the 2020s. That is
@@ -208,23 +188,25 @@ class TestWhatItStaysSilentAbout:
         """An inference across an in-universe claim and a real one is
         temporally uncheckable, which is not the same as unsound."""
         real = await _premise(storage, document, "one claim", _period(1997, 2010))
-        in_universe = Fact(
-            content="another", source_id="seg-1", value=ValueSignal()
-        )
+        in_universe = Fact(content="another", source_id="seg-1", value=ValueSignal())
         await storage.store_node(in_universe)
-        await storage.store_edge(NodeEdge(
-            src_id=in_universe.id,
-            dst_id=document.id,
-            type=EdgeType.SOURCED_FROM,
-            validity=[ValidityInterval(
-                start={
-                    "instant_kind": "precise",
-                    "at": datetime(2024, 1, 1, tzinfo=timezone.utc).isoformat(),
-                },
-                timeline_id="third-age",
-                basis=IntervalBasis.STATED,
-            )],
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=in_universe.id,
+                dst_id=document.id,
+                type=EdgeType.SOURCED_FROM,
+                validity=[
+                    ValidityInterval(
+                        start={
+                            "instant_kind": "precise",
+                            "at": datetime(2024, 1, 1, tzinfo=UTC).isoformat(),
+                        },
+                        timeline_id="third-age",
+                        basis=IntervalBasis.STATED,
+                    )
+                ],
+            )
+        )
         await _inference(storage, "a conclusion", [real, in_universe])
 
         assert await find_unsound_inferences(storage) == []
@@ -235,7 +217,7 @@ class TestWhatItStaysSilentAbout:
         late = await _premise(storage, document, "another", _period(2024, 2030))
         retired = await _inference(storage, "a conclusion", [early, late])
         await storage.set_node_status_tx(
-            [retired], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
+            [retired], status=NodeStatus.CORRECTED, at=datetime.now(UTC)
         )
 
         assert await find_unsound_inferences(storage) == []
@@ -252,9 +234,7 @@ class TestItOnlyReads:
         early = await _premise(storage, document, "one claim", _period(1997, 2010))
         late = await _premise(storage, document, "another", _period(2024, 2030))
         drawn = await _inference(storage, "a conclusion", [early, late])
-        before = [
-            (node.id, node.status) for node in await storage.query_nodes()
-        ]
+        before = [(node.id, node.status) for node in await storage.query_nodes()]
 
         assert await find_unsound_inferences(storage) != []
 

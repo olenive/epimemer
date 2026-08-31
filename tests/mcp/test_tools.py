@@ -6,11 +6,9 @@ against every storage backend, with mock providers.
 
 import asyncio
 import sys
+from datetime import UTC, datetime, timedelta
 
 import pytest
-
-from datetime import datetime, timedelta, timezone
-
 from petritype.core.executable_graph_components import (
     ArgumentEdgeToTransition,
     ExecutableGraph,
@@ -19,6 +17,7 @@ from petritype.core.executable_graph_components import (
     ListPlaceNode,
     ReturnedEdgeFromTransition,
 )
+from pydantic import ValidationError
 
 from epimemer.core.temporal import IntervalBasis, UnknownInstant, ValidityInterval
 from epimemer.core.types import (
@@ -37,20 +36,24 @@ from epimemer.core.types import (
     ValueSignal,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
+from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
+from epimemer.mcp.server import _resolve_windows
 from epimemer.mcp.tools import (
+    _node_to_dict,
     add_timeline_timepoint,
     apply_reflection,
     archive,
-    graph_as_of,
     check_conflicts,
     create_metacontext,
+    create_timeline,
+    create_timelink,
     events_in_window,
     find_nodes,
-    create_timelink,
-    create_timeline,
     get_metacontexts_for_node,
+    graph_as_of,
     graph_stats,
+    judge_importance,
     link,
     list_relations,
     list_sources,
@@ -60,7 +63,6 @@ from epimemer.mcp.tools import (
     record_contradiction,
     record_variant,
     reflect,
-    judge_importance,
     restore,
     search,
     segment_text,
@@ -69,13 +71,8 @@ from epimemer.mcp.tools import (
     supersede_by,
     update,
 )
-from epimemer.mcp import tools
 from epimemer.pipelines.reflection.archival import judgment_is_stale
-from epimemer.mcp.tools import _node_to_dict
-from epimemer.mcp.server import _resolve_windows
-from epimemer.storage.memory import InMemoryStorage
 from epimemer.storage.protocol import StorageBackend
-
 
 # --- Fixtures ---
 
@@ -107,7 +104,10 @@ async def _two_step_ingest(
 ) -> tuple[dict, dict]:
     """Run the two-step ingest: segment then store decomposition with dummy extraction."""
     seg_result, seg_meta = await segment_text(
-        content, storage, embedding_provider, config,
+        content,
+        storage,
+        embedding_provider,
+        config,
     )
     segments = [
         {
@@ -164,13 +164,12 @@ async def _only_timeline(storage: StorageBackend):
 
 
 class TestSegment:
-
-    async def test_segments_text_and_stores_document(
-        self, storage, embedding_provider, config
-    ):
+    async def test_segments_text_and_stores_document(self, storage, embedding_provider, config):
         result, meta = await segment_text(
             "Paragraph one about ML.\n\nParagraph two about climate.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
         assert len(result["segments"]) == 2
         assert result["document_id"]
@@ -178,22 +177,22 @@ class TestSegment:
         doc = await storage.get_document(result["document_id"])
         assert doc is not None
 
-    async def test_segments_stored_in_storage(
-        self, storage, embedding_provider, config
-    ):
+    async def test_segments_stored_in_storage(self, storage, embedding_provider, config):
         result, _ = await segment_text(
             "First.\n\nSecond.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
         stored = await storage.get_segments_for_document(result["document_id"])
         assert len(stored) == 2
 
-    async def test_single_paragraph(
-        self, storage, embedding_provider, config
-    ):
+    async def test_single_paragraph(self, storage, embedding_provider, config):
         result, _ = await segment_text(
             "Just one paragraph here.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
         assert len(result["segments"]) == 1
 
@@ -215,19 +214,21 @@ class TestTimepointProposal:
     ):
         await _ingest_facts(
             ["The treaty was signed on 12 March 1997."],
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
 
         timeline = await _only_timeline(storage)
         assert len(timeline.timepoints) == 1
-        assert timeline.timepoints[0].start == datetime(1997, 3, 12, tzinfo=timezone.utc)
+        assert timeline.timepoints[0].start == datetime(1997, 3, 12, tzinfo=UTC)
 
-    async def test_the_node_is_linked_to_its_timepoint(
-        self, storage, embedding_provider, config
-    ):
+    async def test_the_node_is_linked_to_its_timepoint(self, storage, embedding_provider, config):
         await _ingest_facts(
             ["The treaty was signed on 12 March 1997."],
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
 
         timeline = await _only_timeline(storage)
@@ -236,13 +237,13 @@ class TestTimepointProposal:
         assert [e.dst_id for e in links] == [timeline.id]
         assert links[0].metadata["timepoint_id"] == timeline.timepoints[0].id
 
-    async def test_a_vague_expression_stays_undated(
-        self, storage, embedding_provider, config
-    ):
+    async def test_a_vague_expression_stays_undated(self, storage, embedding_provider, config):
         """The undated lane exists so this never has to become a date."""
         await _ingest_facts(
             ["Trade grew during the Renaissance."],
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
 
         point = (await _only_timeline(storage)).timepoints[0]
@@ -256,7 +257,9 @@ class TestTimepointProposal:
         it looks like data that failed to load."""
         await _ingest_facts(
             ["The room was quiet and the door was shut."],
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
 
         assert await storage.query_timelines() == []
@@ -268,7 +271,9 @@ class TestTimepointProposal:
         said about it, not two coincident marks."""
         await _ingest_facts(
             ["The siege began in 1897.", "The harvest failed in 1897."],
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
 
         timeline = await _only_timeline(storage)
@@ -285,12 +290,8 @@ class TestTimepointProposal:
     ):
         """One timeline per graph, not per document: the panel shows one
         timeline at a time, so a timeline per document buries every mark."""
-        await _ingest_facts(
-            ["The siege began in 1897."], storage, embedding_provider, config
-        )
-        await _ingest_facts(
-            ["The siege was lifted in 1901."], storage, embedding_provider, config
-        )
+        await _ingest_facts(["The siege began in 1897."], storage, embedding_provider, config)
+        await _ingest_facts(["The siege was lifted in 1901."], storage, embedding_provider, config)
 
         timeline = await _only_timeline(storage)
         assert [p.start.year for p in timeline.timepoints] == [1897, 1901]
@@ -298,12 +299,8 @@ class TestTimepointProposal:
     async def test_a_repeated_date_reuses_the_existing_timepoint(
         self, storage, embedding_provider, config
     ):
-        await _ingest_facts(
-            ["The siege began in 1897."], storage, embedding_provider, config
-        )
-        await _ingest_facts(
-            ["The harvest failed in 1897."], storage, embedding_provider, config
-        )
+        await _ingest_facts(["The siege began in 1897."], storage, embedding_provider, config)
+        await _ingest_facts(["The harvest failed in 1897."], storage, embedding_provider, config)
 
         assert len((await _only_timeline(storage)).timepoints) == 1
 
@@ -313,7 +310,9 @@ class TestTimepointProposal:
         created, _ = await create_timeline("Novel", storage)
         await _ingest_facts(
             ["The siege began in 1897."],
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
             timeline_id=created["timeline_id"],
         )
 
@@ -328,27 +327,29 @@ class TestTimepointProposal:
         with pytest.raises(ValueError, match="nonexistent"):
             await _ingest_facts(
                 ["The siege began in 1897."],
-                storage, embedding_provider, config,
+                storage,
+                embedding_provider,
+                config,
                 timeline_id="nonexistent",
             )
 
-    async def test_proposals_can_be_switched_off(
-        self, storage, embedding_provider, config
-    ):
+    async def test_proposals_can_be_switched_off(self, storage, embedding_provider, config):
         await _ingest_facts(
             ["The siege began in 1897."],
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
             propose_timepoints=False,
         )
 
         assert await storage.query_timelines() == []
 
-    async def test_the_result_reports_what_was_proposed(
-        self, storage, embedding_provider, config
-    ):
+    async def test_the_result_reports_what_was_proposed(self, storage, embedding_provider, config):
         result = await _ingest_facts(
             ["The siege began in 1897.", "Trade grew during the Renaissance."],
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
         assert result["timepoints_proposed"] == 2
 
@@ -360,7 +361,9 @@ class TestTimepointProposal:
         proposal that looks wrong."""
         await _ingest_facts(
             ["The treaty was signed on 12 March 1997."],
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
 
         point = (await _only_timeline(storage)).timepoints[0]
@@ -370,16 +373,16 @@ class TestTimepointProposal:
     async def test_topics_and_inferences_are_proposed_from_too(
         self, storage, embedding_provider, config
     ):
-        seg_result, _ = await segment_text(
-            "Anything.", storage, embedding_provider, config
-        )
+        seg_result, _ = await segment_text("Anything.", storage, embedding_provider, config)
         await store_decomposition(
             document_id=seg_result["document_id"],
-            segments=[{
-                "segment_id": seg_result["segments"][0]["segment_id"],
-                "topics": ["The siege that began in 1897"],
-                "inferences": ["The siege probably ended in 1901."],
-            }],
+            segments=[
+                {
+                    "segment_id": seg_result["segments"][0]["segment_id"],
+                    "topics": ["The siege that began in 1897"],
+                    "inferences": ["The siege probably ended in 1901."],
+                }
+            ],
             storage=storage,
             embedding_provider=embedding_provider,
             metacontext_id=BASE_METACONTEXT_ID,
@@ -392,55 +395,56 @@ class TestTimepointProposal:
 
 
 class TestStoreDecomposition:
-
-    async def test_creates_nodes_and_edges(
-        self, storage, embedding_provider, config
-    ):
+    async def test_creates_nodes_and_edges(self, storage, embedding_provider, config):
         _, store_result = await _two_step_ingest(
             "Paragraph one about ML.\n\nParagraph two about climate.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
         assert store_result["nodes_created"]["topics"] == 2
         assert store_result["nodes_created"]["facts"] == 2
         assert store_result["nodes_created"]["inferences"] == 2
         assert store_result["edges_created"] > 0
 
-    async def test_embeddings_stored(
-        self, storage, embedding_provider, config
-    ):
+    async def test_embeddings_stored(self, storage, embedding_provider, config):
         await _two_step_ingest(
             "Text about embeddings.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
         from epimemer.core.types import NodeType
+
         topics = await storage.query_nodes(node_type=NodeType.TOPIC)
         for topic in topics:
             embs = await storage.get_embeddings_for_item(topic.id)
             assert len(embs) >= 1
 
-    async def test_response_counts_accurate(
-        self, storage, embedding_provider, config
-    ):
+    async def test_response_counts_accurate(self, storage, embedding_provider, config):
         _, store_result = await _two_step_ingest(
             "A single paragraph.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
         total_nodes = sum(store_result["nodes_created"].values())
         assert total_nodes == 3  # 1 topic + 1 fact + 1 inference
 
-    async def test_with_metacontext(
-        self, storage, embedding_provider, config
-    ):
+    async def test_with_metacontext(self, storage, embedding_provider, config):
         mc = Metacontext(content="Science fiction")
         await storage.store_metacontext(mc)
 
         await _two_step_ingest(
             "The Culture ships are sentient AIs.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
             metacontext_id=mc.id,
         )
 
         from epimemer.core.types import NodeType
+
         topics = await storage.query_nodes(node_type=NodeType.TOPIC)
         for topic in topics:
             edges = await storage.get_edges_from(topic.id)
@@ -459,16 +463,23 @@ class TestIngestRecordsWhenAClaimWasTrue:
     """
 
     async def _ingest_with_validity(
-        self, storage, embedding_provider, config, validity: list[dict],
-        *, content: str = "The city is called Leningrad.",
+        self,
+        storage,
+        embedding_provider,
+        config,
+        validity: list[dict],
+        *,
+        content: str = "The city is called Leningrad.",
     ) -> str:
         seg_result, _ = await segment_text(content, storage, embedding_provider, config)
         await store_decomposition(
             document_id=seg_result["document_id"],
-            segments=[{
-                "segment_id": seg_result["segments"][0]["segment_id"],
-                "facts": [{"content": content, "validity": validity}],
-            }],
+            segments=[
+                {
+                    "segment_id": seg_result["segments"][0]["segment_id"],
+                    "facts": [{"content": content, "validity": validity}],
+                }
+            ],
             storage=storage,
             embedding_provider=embedding_provider,
             metacontext_id=BASE_METACONTEXT_ID,
@@ -478,9 +489,7 @@ class TestIngestRecordsWhenAClaimWasTrue:
     async def _provenance_edge(self, storage, document_id: str):
         facts = await storage.query_nodes(node_type=NodeType.FACT)
         assert len(facts) == 1
-        edges = await storage.get_edges_from(
-            facts[0].id, edge_type=EdgeType.SOURCED_FROM
-        )
+        edges = await storage.get_edges_from(facts[0].id, edge_type=EdgeType.SOURCED_FROM)
         assert len(edges) == 1 and edges[0].dst_id == document_id
         return edges[0]
 
@@ -488,13 +497,17 @@ class TestIngestRecordsWhenAClaimWasTrue:
         self, storage, embedding_provider, config
     ):
         document_id = await self._ingest_with_validity(
-            storage, embedding_provider, config,
-            [{
-                "start": {"instant_kind": "unknown"},
-                "end": {"instant_kind": "precise", "at": "1991-09-06T00:00:00Z"},
-                "witnessed_at": {"instant_kind": "precise", "at": "1970-01-01T00:00:00Z"},
-                "basis": "inferred",
-            }],
+            storage,
+            embedding_provider,
+            config,
+            [
+                {
+                    "start": {"instant_kind": "unknown"},
+                    "end": {"instant_kind": "precise", "at": "1991-09-06T00:00:00Z"},
+                    "witnessed_at": {"instant_kind": "precise", "at": "1970-01-01T00:00:00Z"},
+                    "basis": "inferred",
+                }
+            ],
         )
 
         edge = await self._provenance_edge(storage, document_id)
@@ -509,7 +522,9 @@ class TestIngestRecordsWhenAClaimWasTrue:
         self, storage, embedding_provider, config
     ):
         document_id = await self._ingest_with_validity(
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
             [
                 {
                     "start": {"instant_kind": "precise", "at": "1997-05-02T00:00:00Z"},
@@ -531,11 +546,15 @@ class TestIngestRecordsWhenAClaimWasTrue:
         self, storage, embedding_provider, config
     ):
         document_id = await self._ingest_with_validity(
-            storage, embedding_provider, config,
-            [{
-                "start": {"instant_kind": "named", "label": "during the Renaissance"},
-                "basis": "stated",
-            }],
+            storage,
+            embedding_provider,
+            config,
+            [
+                {
+                    "start": {"instant_kind": "named", "label": "during the Renaissance"},
+                    "basis": "stated",
+                }
+            ],
         )
 
         edge = await self._provenance_edge(storage, document_id)
@@ -546,14 +565,15 @@ class TestIngestRecordsWhenAClaimWasTrue:
     ):
         """The overwhelming case. Absence must stay free of ceremony."""
         _, _ = await _two_step_ingest(
-            "A paragraph with no dates in it.", storage, embedding_provider, config,
+            "A paragraph with no dates in it.",
+            storage,
+            embedding_provider,
+            config,
         )
 
         facts = await storage.query_nodes(node_type=NodeType.FACT)
         for fact in facts:
-            for edge in await storage.get_edges_from(
-                fact.id, edge_type=EdgeType.SOURCED_FROM
-            ):
+            for edge in await storage.get_edges_from(fact.id, edge_type=EdgeType.SOURCED_FROM):
                 assert edge.validity == []
 
     async def test_two_documents_disagreeing_are_both_kept(
@@ -565,31 +585,39 @@ class TestIngestRecordsWhenAClaimWasTrue:
         edges = []
         for year, document in ((1997, "almanac"), (1995, "blog")):
             seg_result, _ = await segment_text(
-                claim, storage, embedding_provider, config, source=document,
+                claim,
+                storage,
+                embedding_provider,
+                config,
+                source=document,
             )
             await store_decomposition(
                 document_id=seg_result["document_id"],
-                segments=[{
-                    "segment_id": seg_result["segments"][0]["segment_id"],
-                    "facts": [{
-                        "content": f"{claim} ({document})",
-                        "validity": [{
-                            "start": {
-                                "instant_kind": "precise",
-                                "at": f"{year}-05-02T00:00:00Z",
-                            },
-                            "basis": "stated",
-                        }],
-                    }],
-                }],
+                segments=[
+                    {
+                        "segment_id": seg_result["segments"][0]["segment_id"],
+                        "facts": [
+                            {
+                                "content": f"{claim} ({document})",
+                                "validity": [
+                                    {
+                                        "start": {
+                                            "instant_kind": "precise",
+                                            "at": f"{year}-05-02T00:00:00Z",
+                                        },
+                                        "basis": "stated",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
                 storage=storage,
                 embedding_provider=embedding_provider,
                 metacontext_id=BASE_METACONTEXT_ID,
             )
         for fact in await storage.query_nodes(node_type=NodeType.FACT):
-            edges.extend(
-                await storage.get_edges_from(fact.id, edge_type=EdgeType.SOURCED_FROM)
-            )
+            edges.extend(await storage.get_edges_from(fact.id, edge_type=EdgeType.SOURCED_FROM))
 
         starts = sorted(e.validity[0].start.at.year for e in edges)
         assert starts == [1995, 1997], "each source keeps its own period"
@@ -603,7 +631,10 @@ class TestDocumentsRecordWhenTheyWerePublished:
         self, storage, embedding_provider, config
     ):
         result, _ = await segment_text(
-            "A 1970 memoir.", storage, embedding_provider, config,
+            "A 1970 memoir.",
+            storage,
+            embedding_provider,
+            config,
             source="memoir",
             published_at={"instant_kind": "precise", "at": "1970-06-01T00:00:00Z"},
         )
@@ -617,7 +648,10 @@ class TestDocumentsRecordWhenTheyWerePublished:
         """The fallback is the bug with an extra step: every undated document
         would claim its facts were witnessed on the day it was ingested."""
         result, _ = await segment_text(
-            "No publication date.", storage, embedding_provider, config,
+            "No publication date.",
+            storage,
+            embedding_provider,
+            config,
         )
 
         doc = await storage.get_document(result["document_id"])
@@ -639,14 +673,19 @@ class TestStoreDecompositionValuePriors:
 
     async def _store(self, storage, embedding_provider, config, entries):
         seg_result, _ = await segment_text(
-            "One paragraph.", storage, embedding_provider, config,
+            "One paragraph.",
+            storage,
+            embedding_provider,
+            config,
         )
         await store_decomposition(
             document_id=seg_result["document_id"],
-            segments=[{
-                "segment_id": seg_result["segments"][0]["segment_id"],
-                "facts": entries,
-            }],
+            segments=[
+                {
+                    "segment_id": seg_result["segments"][0]["segment_id"],
+                    "facts": entries,
+                }
+            ],
             storage=storage,
             embedding_provider=embedding_provider,
             metacontext_id=BASE_METACONTEXT_ID,
@@ -654,13 +693,16 @@ class TestStoreDecompositionValuePriors:
         facts = await storage.query_nodes(node_type=NodeType.FACT)
         return {f.content: f for f in facts}
 
-    async def test_importance_prior_applied_per_entry(
-        self, storage, embedding_provider, config
-    ):
-        by_content = await self._store(storage, embedding_provider, config, [
-            {"content": "load-bearing fact", "importance": 0.9},
-            "ordinary fact",
-        ])
+    async def test_importance_prior_applied_per_entry(self, storage, embedding_provider, config):
+        by_content = await self._store(
+            storage,
+            embedding_provider,
+            config,
+            [
+                {"content": "load-bearing fact", "importance": 0.9},
+                "ordinary fact",
+            ],
+        )
 
         assert by_content["load-bearing fact"].value.importance == pytest.approx(0.9)
         assert by_content["ordinary fact"].value.importance == pytest.approx(0.5)
@@ -669,43 +711,54 @@ class TestStoreDecompositionValuePriors:
         self, storage, embedding_provider, config
     ):
         with pytest.raises(ValueError):
-            await self._store(storage, embedding_provider, config, [
-                {"content": "too important", "importance": 1.5},
-            ])
+            await self._store(
+                storage,
+                embedding_provider,
+                config,
+                [
+                    {"content": "too important", "importance": 1.5},
+                ],
+            )
 
-    async def test_confidence_prior_applied_per_entry(
-        self, storage, embedding_provider, config
-    ):
+    async def test_confidence_prior_applied_per_entry(self, storage, embedding_provider, config):
         """Per node, never per document — the same source states different
         claims at different strengths, which matters most for conversation
         with the user, this system's commonest ingest.
         """
-        by_content = await self._store(storage, embedding_provider, config, [
-            {"content": "the user prefers a functional style", "confidence": 0.9},
-            {"content": "the user thinks DNS broke the deploy", "confidence": 0.3},
-        ])
+        by_content = await self._store(
+            storage,
+            embedding_provider,
+            config,
+            [
+                {"content": "the user prefers a functional style", "confidence": 0.9},
+                {"content": "the user thinks DNS broke the deploy", "confidence": 0.3},
+            ],
+        )
 
-        assert by_content[
-            "the user prefers a functional style"
-        ].value.confidence == pytest.approx(0.9)
-        assert by_content[
-            "the user thinks DNS broke the deploy"
-        ].value.confidence == pytest.approx(0.3)
+        assert by_content["the user prefers a functional style"].value.confidence == pytest.approx(
+            0.9
+        )
+        assert by_content["the user thinks DNS broke the deploy"].value.confidence == pytest.approx(
+            0.3
+        )
 
     async def test_an_omitted_confidence_stores_absence_not_the_default(
         self, storage, embedding_provider, config
     ):
         """The whole point of amendment 1: an unconsidered node is
         distinguishable from one an agent read and rated middling."""
-        by_content = await self._store(storage, embedding_provider, config, [
-            "nobody rated this",
-            {"content": "considered, and middling", "confidence": 0.5},
-        ])
+        by_content = await self._store(
+            storage,
+            embedding_provider,
+            config,
+            [
+                "nobody rated this",
+                {"content": "considered, and middling", "confidence": 0.5},
+            ],
+        )
 
         assert by_content["nobody rated this"].value.confidence is None
-        assert by_content[
-            "considered, and middling"
-        ].value.confidence == pytest.approx(0.5)
+        assert by_content["considered, and middling"].value.confidence == pytest.approx(0.5)
 
     async def test_confidence_prior_out_of_range_rejected(
         self, storage, embedding_provider, config
@@ -714,27 +767,35 @@ class TestStoreDecompositionValuePriors:
         a clamp turns an agent's misreading of the scale into a plausible
         number nobody can spot later."""
         with pytest.raises(ValueError):
-            await self._store(storage, embedding_provider, config, [
-                {"content": "certain beyond revision", "confidence": 1.7},
-            ])
+            await self._store(
+                storage,
+                embedding_provider,
+                config,
+                [
+                    {"content": "certain beyond revision", "confidence": 1.7},
+                ],
+            )
 
     async def test_a_supplied_basis_is_recorded_beside_the_prior(
         self, storage, embedding_provider, config
     ):
         """Amendment 2: a non-default prior with no reason recorded is the
         unattributable judgment `judge_importance` already refuses."""
-        by_content = await self._store(storage, embedding_provider, config, [
-            {
-                "content": "the spec defines the retry budget as 3",
-                "confidence": 0.9,
-                "confidence_basis": "the spec, about its own behaviour",
-            },
-        ])
+        by_content = await self._store(
+            storage,
+            embedding_provider,
+            config,
+            [
+                {
+                    "content": "the spec defines the retry budget as 3",
+                    "confidence": 0.9,
+                    "confidence_basis": "the spec, about its own behaviour",
+                },
+            ],
+        )
         node = by_content["the spec defines the retry budget as 3"]
 
-        assert node.metadata["confidence_basis"] == (
-            "the spec, about its own behaviour"
-        )
+        assert node.metadata["confidence_basis"] == ("the spec, about its own behaviour")
 
     async def test_a_missing_basis_does_not_fail_the_call(
         self, storage, embedding_provider, config
@@ -742,9 +803,14 @@ class TestStoreDecompositionValuePriors:
         """Guidance, not refusal — narrowed that way when amendment 2 was
         signed off, with the stated cost that absence then means nothing.
         """
-        by_content = await self._store(storage, embedding_provider, config, [
-            {"content": "asserted without a stated reason", "confidence": 0.9},
-        ])
+        by_content = await self._store(
+            storage,
+            embedding_provider,
+            config,
+            [
+                {"content": "asserted without a stated reason", "confidence": 0.9},
+            ],
+        )
         node = by_content["asserted without a stated reason"]
 
         assert node.value.confidence == pytest.approx(0.9)
@@ -760,10 +826,15 @@ class TestStoreDecompositionValuePriors:
         Substituting the default here would put the distinction back exactly
         where it was invisible before.
         """
-        by_content = await self._store(storage, embedding_provider, config, [
-            "nobody rated this",
-            {"content": "rated ordinary", "confidence": 0.5},
-        ])
+        by_content = await self._store(
+            storage,
+            embedding_provider,
+            config,
+            [
+                "nobody rated this",
+                {"content": "rated ordinary", "confidence": 0.5},
+            ],
+        )
 
         unrated = _node_to_dict(by_content["nobody rated this"])
         rated = _node_to_dict(by_content["rated ordinary"])
@@ -771,40 +842,40 @@ class TestStoreDecompositionValuePriors:
         assert unrated["value"]["confidence"] is None
         assert rated["value"]["confidence"] == pytest.approx(0.5)
 
-    async def test_a_basis_without_a_prior_is_still_kept(
-        self, storage, embedding_provider, config
-    ):
+    async def test_a_basis_without_a_prior_is_still_kept(self, storage, embedding_provider, config):
         """It reads as "why this is ordinary", which is worth as much as the
         other direction and costs nothing to keep.
         """
-        by_content = await self._store(storage, embedding_provider, config, [
-            {
-                "content": "plainly stated, no reason to doubt it",
-                "confidence_basis": "stated plainly, source has no stake",
-            },
-        ])
+        by_content = await self._store(
+            storage,
+            embedding_provider,
+            config,
+            [
+                {
+                    "content": "plainly stated, no reason to doubt it",
+                    "confidence_basis": "stated plainly, source has no stake",
+                },
+            ],
+        )
         node = by_content["plainly stated, no reason to doubt it"]
 
         assert node.value.confidence is None
-        assert node.metadata["confidence_basis"] == (
-            "stated plainly, source has no stake"
-        )
+        assert node.metadata["confidence_basis"] == ("stated plainly, source has no stake")
 
 
 # --- Search tests ---
 
 
 class TestSearch:
-
     async def _ingest_content(self, storage, embedding_provider, config):
         await _two_step_ingest(
             "Machine learning models require large datasets for training.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
 
-    async def test_returns_relevant_nodes(
-        self, storage, embedding_provider, config
-    ):
+    async def test_returns_relevant_nodes(self, storage, embedding_provider, config):
         await self._ingest_content(storage, embedding_provider, config)
         result, meta = await search(
             "Machine learning models require large datasets for training.",
@@ -816,9 +887,7 @@ class TestSearch:
         assert len(result["nodes"]) > 0
         assert meta.nodes_returned > 0
 
-    async def test_respects_node_type_filter(
-        self, storage, embedding_provider, config
-    ):
+    async def test_respects_node_type_filter(self, storage, embedding_provider, config):
         await self._ingest_content(storage, embedding_provider, config)
         result, _ = await search(
             "Machine learning",
@@ -831,9 +900,7 @@ class TestSearch:
         for node in result["nodes"]:
             assert node["node_type"] == "topic"
 
-    async def test_meta_has_source_types(
-        self, storage, embedding_provider, config
-    ):
+    async def test_meta_has_source_types(self, storage, embedding_provider, config):
         await self._ingest_content(storage, embedding_provider, config)
         _, meta = await search(
             "Machine learning",
@@ -863,13 +930,13 @@ class TestSearchRecordsRetrieval:
     nomination is built on.
     """
 
-    async def test_search_stamps_the_nodes_it_returned(
-        self, storage, embedding_provider, config
-    ):
+    async def test_search_stamps_the_nodes_it_returned(self, storage, embedding_provider, config):
         await _two_step_ingest(
             "Machine learning models require large datasets.\n\n"
             "Volcanoes erupt when magma reaches the surface.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
         before = await _value_signals(storage)
         assert all(retrieved is None for retrieved, _, _ in before.values())
@@ -893,9 +960,7 @@ class TestSearchRecordsRetrieval:
             else:
                 assert signal == before[node_id], "an unreturned node was touched"
 
-    async def test_being_read_is_not_being_judged(
-        self, storage, embedding_provider, config
-    ):
+    async def test_being_read_is_not_being_judged(self, storage, embedding_provider, config):
         """Retrieval moves the retrieval clock and nothing else.
 
         The two are deliberately separate: a node returned by every search has
@@ -905,7 +970,9 @@ class TestSearchRecordsRetrieval:
         """
         await _two_step_ingest(
             "Machine learning models require large datasets.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
         before = await _value_signals(storage)
 
@@ -926,13 +993,13 @@ class TestSearchRecordsRetrieval:
             assert importance == old_importance
             assert judged_at == old_judged_at is None
 
-    async def test_recording_can_be_switched_off(
-        self, storage, embedding_provider, config
-    ):
+    async def test_recording_can_be_switched_off(self, storage, embedding_provider, config):
         """It costs a write per returned node, so it has an off switch."""
         await _two_step_ingest(
             "Machine learning models require large datasets.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
         before = await _value_signals(storage)
 
@@ -964,8 +1031,11 @@ class TestJudgeImportanceDownward:
         await storage.store_node(node)
 
         await judge_importance(
-            node.id, direction="down", reason="the bug was fixed",
-            storage=storage, importance_step=0.25,
+            node.id,
+            direction="down",
+            reason="the bug was fixed",
+            storage=storage,
+            importance_step=0.25,
         )
 
         stored = await storage.get_node(node.id)
@@ -973,9 +1043,7 @@ class TestJudgeImportanceDownward:
         # nomination ceiling, which is the point of the whole issue.
         assert stored.value.importance == pytest.approx(0.375)
 
-    async def test_repeated_downward_judgments_approach_zero_without_reaching(
-        self, storage
-    ):
+    async def test_repeated_downward_judgments_approach_zero_without_reaching(self, storage):
         """Arithmetic must never judge a node out of existence.
 
         The mirror of the upward asymptote, and the same commitment as
@@ -986,8 +1054,11 @@ class TestJudgeImportanceDownward:
 
         for _ in range(50):
             await judge_importance(
-                node.id, direction="down", reason="less",
-                storage=storage, importance_step=0.25,
+                node.id,
+                direction="down",
+                reason="less",
+                storage=storage,
+                importance_step=0.25,
             )
 
         stored = await storage.get_node(node.id)
@@ -998,11 +1069,13 @@ class TestJudgeImportanceDownward:
         node = Fact(content="contested", source_id="s1")
         await storage.store_node(node)
 
-        await judge_importance(node.id, direction="up", reason="u",
-                               storage=storage, importance_step=0.25)
+        await judge_importance(
+            node.id, direction="up", reason="u", storage=storage, importance_step=0.25
+        )
         after_up = (await storage.get_node(node.id)).value.importance
-        await judge_importance(node.id, direction="down", reason="d",
-                               storage=storage, importance_step=0.25)
+        await judge_importance(
+            node.id, direction="down", reason="d", storage=storage, importance_step=0.25
+        )
         after_down = (await storage.get_node(node.id)).value.importance
 
         assert after_up == pytest.approx(0.625)
@@ -1022,16 +1095,20 @@ class TestJudgeImportanceDownward:
 
         for i in range(40):
             await judge_importance(
-                node.id, direction="up" if i % 2 == 0 else "down",
-                reason="disagreement", storage=storage, importance_step=0.25,
+                node.id,
+                direction="up" if i % 2 == 0 else "down",
+                reason="disagreement",
+                storage=storage,
+                importance_step=0.25,
             )
 
         after_down = (await storage.get_node(node.id)).value.importance
-        assert after_down == pytest.approx(3 / 7, abs=1e-6)   # 0.42857…
-        await judge_importance(node.id, direction="up", reason="u",
-                               storage=storage, importance_step=0.25)
+        assert after_down == pytest.approx(3 / 7, abs=1e-6)  # 0.42857…
+        await judge_importance(
+            node.id, direction="up", reason="u", storage=storage, importance_step=0.25
+        )
         after_up = (await storage.get_node(node.id)).value.importance
-        assert after_up == pytest.approx(4 / 7, abs=1e-6)     # 0.57142…
+        assert after_up == pytest.approx(4 / 7, abs=1e-6)  # 0.57142…
 
     async def test_both_directions_share_one_provenance_trail_in_order(self, storage):
         """One chronological story, with each entry's direction on it.
@@ -1042,22 +1119,20 @@ class TestJudgeImportanceDownward:
         node = Fact(content="judged twice", source_id="s1")
         await storage.store_node(node)
 
-        await judge_importance(node.id, direction="up", reason="cited",
-                               storage=storage)
-        await judge_importance(node.id, direction="down", reason="obsolete",
-                               storage=storage)
+        await judge_importance(node.id, direction="up", reason="cited", storage=storage)
+        await judge_importance(node.id, direction="down", reason="obsolete", storage=storage)
 
         trail = (await storage.get_node(node.id)).metadata["reinforcements"]
         assert [(e["direction"], e["reason"]) for e in trail] == [
-            ("up", "cited"), ("down", "obsolete"),
+            ("up", "cited"),
+            ("down", "obsolete"),
         ]
 
     async def test_a_downward_judgment_stamps_the_judgment_clock_only(self, storage):
         node = Fact(content="downgraded", source_id="s1")
         await storage.store_node(node)
 
-        await judge_importance(node.id, direction="down", reason="less",
-                               storage=storage)
+        await judge_importance(node.id, direction="down", reason="less", storage=storage)
 
         stored = await storage.get_node(node.id)
         assert stored.value.importance_judged_at is not None
@@ -1067,18 +1142,17 @@ class TestJudgeImportanceDownward:
         node = Fact(content="real", source_id="s1")
         await storage.store_node(node)
         with pytest.raises(ValueError, match="direction"):
-            await judge_importance(node.id, direction="sideways", reason="r",
-                                   storage=storage)
+            await judge_importance(node.id, direction="sideways", reason="r", storage=storage)
 
     async def test_rejects_unknown_node_and_unknown_related_id(self, storage):
         with pytest.raises(ValueError, match="nope"):
-            await judge_importance("nope", direction="up", reason="r",
-                                   storage=storage)
+            await judge_importance("nope", direction="up", reason="r", storage=storage)
         node = Fact(content="real", source_id="s1")
         await storage.store_node(node)
         with pytest.raises(ValueError, match="ghost"):
-            await judge_importance(node.id, direction="up", reason="r",
-                                   storage=storage, related_id="ghost")
+            await judge_importance(
+                node.id, direction="up", reason="r", storage=storage, related_id="ghost"
+            )
 
 
 class TestJudgeImportanceUpward:
@@ -1119,21 +1193,22 @@ class TestJudgeImportanceUpward:
         node = Fact(content="reinforced twice", source_id="s1")
         await storage.store_node(node)
 
-        await judge_importance(node.id, direction="up", reason="first",
-                               storage=storage, importance_step=0.25)
-        await judge_importance(node.id, direction="up", reason="second",
-                               storage=storage, importance_step=0.25)
+        await judge_importance(
+            node.id, direction="up", reason="first", storage=storage, importance_step=0.25
+        )
+        await judge_importance(
+            node.id, direction="up", reason="second", storage=storage, importance_step=0.25
+        )
 
         stored = await storage.get_node(node.id)
         # Asymptotic: 0.5 → 0.625 → 0.71875, approaching 1.0 without reaching it.
         assert stored.value.importance == pytest.approx(0.71875)
         assert [r["reason"] for r in stored.metadata["reinforcements"]] == [
-            "first", "second",
+            "first",
+            "second",
         ]
 
-    async def test_reinforce_stamps_the_judgment_clock_and_only_that_one(
-        self, storage
-    ):
+    async def test_reinforce_stamps_the_judgment_clock_and_only_that_one(self, storage):
         """The two clocks are independent, which is the point of having two.
 
         A judgment is not a use. Stamping the retrieval clock here would make an
@@ -1159,7 +1234,10 @@ class TestJudgeImportanceUpward:
 
         with pytest.raises(ValueError, match="ghost"):
             await judge_importance(
-                node.id, direction="up", reason="r", storage=storage,
+                node.id,
+                direction="up",
+                reason="r",
+                storage=storage,
                 related_id="ghost",
             )
 
@@ -1173,7 +1251,6 @@ class TestJudgeImportanceUpward:
 
 
 class TestLink:
-
     async def test_creates_edge(self, storage):
         t = Topic(content="topic A", source_id="s1")
         f = Fact(content="fact B", source_id="s1")
@@ -1231,7 +1308,6 @@ class TestLink:
 
 
 class TestUpdate:
-
     async def test_supersedes_node(self, storage, embedding_provider):
         t = Topic(content="old content", source_id="s1")
         await storage.store_node(t)
@@ -1308,8 +1384,7 @@ class TestUpdate:
         Left unset, the replacement silently takes the model default, so every
         corrected node would claim a provenance nobody asserted.
         """
-        f = Fact(content="old fact", source_id="s1",
-                 extraction_method="agent:import")
+        f = Fact(content="old fact", source_id="s1", extraction_method="agent:import")
         await storage.store_node(f)
 
         result, _ = await update(
@@ -1328,7 +1403,6 @@ class TestUpdate:
 
 
 class TestSupersedeBy:
-
     async def test_supersedes_old_by_existing(self, storage):
         old = Fact(content="CEO is X", source_id="s1")
         new = Fact(content="CEO is Y", source_id="s1")
@@ -1350,9 +1424,7 @@ class TestSupersedeBy:
         support = Fact(content="2020 report", source_id="s1")
         for node in (old, new, support):
             await storage.store_node(node)
-        await storage.store_edge(
-            NodeEdge(src_id=support.id, dst_id=old.id, type=EdgeType.SUPPORTS)
-        )
+        await storage.store_edge(NodeEdge(src_id=support.id, dst_id=old.id, type=EdgeType.SUPPORTS))
 
         await supersede_by(old.id, new.id, storage, because="it_was_wrong")
 
@@ -1375,7 +1447,6 @@ class TestSupersedeBy:
 
 
 class TestCaseBEvidenceStaleness:
-
     async def test_supersede_by_flags_inference_via_derived_from(self, storage):
         fact = Fact(content="80% effective", source_id="s1")
         newer = Fact(content="30% effective", source_id="s1")
@@ -1396,9 +1467,7 @@ class TestCaseBEvidenceStaleness:
         inf = Inference(content="inference", source_id="s1")
         await storage.store_node(fact)
         await storage.store_node(inf)
-        await storage.store_edge(
-            NodeEdge(src_id=fact.id, dst_id=inf.id, type=EdgeType.SUPPORTS)
-        )
+        await storage.store_edge(NodeEdge(src_id=fact.id, dst_id=inf.id, type=EdgeType.SUPPORTS))
 
         await update(
             fact.id,
@@ -1422,16 +1491,13 @@ class TestCaseBEvidenceStaleness:
 
         await supersede_by(fact.id, newer.id, storage, because="it_was_wrong")
 
-        assert await storage.get_edges_to(
-            fact.id, edge_type=EdgeType.SUPERSESSION_CANDIDATE
-        ) == []
+        assert await storage.get_edges_to(fact.id, edge_type=EdgeType.SUPERSESSION_CANDIDATE) == []
 
 
 # --- Reflect tests ---
 
 
 class TestReflect:
-
     async def test_runs_all_operations(self, storage, embedding_provider):
         t1 = Topic(content="machine learning", source_id="s1")
         t2 = Topic(content="deep learning", source_id="s2")
@@ -1465,21 +1531,20 @@ class TestReflect:
         assert entry["review"]["superseded_candidate"] == [newer.id]
         assert entry["node"]["node_type"] == "fact"
 
-
     async def test_surfaces_archival_candidates(self, storage, embedding_provider):
         """Hygiene is another arm of the same loop: a worklist, like pending_review."""
-        born = datetime.now(timezone.utc) - timedelta(days=30)
+        born = datetime.now(UTC) - timedelta(days=30)
         trivial = Fact(
-            content="a passing detail", source_id="s1", created_at=born,
+            content="a passing detail",
+            source_id="s1",
+            created_at=born,
             value=ValueSignal(importance=0.2),
         )
         await storage.store_node(trivial)
 
         result, _ = await reflect(storage, embedding_provider)
 
-        entry = next(
-            c for c in result["archival_candidates"] if c["node_id"] == trivial.id
-        )
+        entry = next(c for c in result["archival_candidates"] if c["node_id"] == trivial.id)
         assert entry["reason"] == "never_retrieved"
         assert entry["node_type"] == "fact"
 
@@ -1495,10 +1560,11 @@ class TestApplyReflectionJudgments:
 
     async def _judged_long_ago(self, storage):
         node = Fact(
-            content="mattered during the incident", source_id="s1",
+            content="mattered during the incident",
+            source_id="s1",
             value=ValueSignal(
                 importance=0.9,
-                importance_judged_at=datetime.now(timezone.utc) - timedelta(days=400),
+                importance_judged_at=datetime.now(UTC) - timedelta(days=400),
             ),
         )
         await storage.store_node(node)
@@ -1511,12 +1577,15 @@ class TestApplyReflectionJudgments:
         before = node.value.importance_judged_at
 
         result, _ = await apply_reflection(
-            storage, embedding_provider,
-            judgments=[{
-                "node_id": node.id,
-                "direction": "down",
-                "reason": "the incident closed a year ago",
-            }],
+            storage,
+            embedding_provider,
+            judgments=[
+                {
+                    "node_id": node.id,
+                    "direction": "down",
+                    "reason": "the incident closed a year ago",
+                }
+            ],
         )
 
         stored = await storage.get_node(node.id)
@@ -1524,9 +1593,7 @@ class TestApplyReflectionJudgments:
         assert stored.value.importance < 0.9
         assert stored.value.importance_judged_at > before
 
-    async def test_judging_back_up_also_clears_the_staleness(
-        self, storage, embedding_provider
-    ):
+    async def test_judging_back_up_also_clears_the_staleness(self, storage, embedding_provider):
         """Re-confirming is a real answer to the nomination, not a no-op.
 
         Whichever way the judgment goes, the clock moves and the node leaves the
@@ -1535,26 +1602,27 @@ class TestApplyReflectionJudgments:
         node = await self._judged_long_ago(storage)
 
         await apply_reflection(
-            storage, embedding_provider,
-            judgments=[{
-                "node_id": node.id, "direction": "up",
-                "reason": "still load-bearing",
-            }],
+            storage,
+            embedding_provider,
+            judgments=[
+                {
+                    "node_id": node.id,
+                    "direction": "up",
+                    "reason": "still load-bearing",
+                }
+            ],
         )
 
         stored = await storage.get_node(node.id)
         assert stored.value.importance > 0.9
-        assert not judgment_is_stale(
-            stored, datetime.now(timezone.utc) - timedelta(days=180)
-        )
+        assert not judgment_is_stale(stored, datetime.now(UTC) - timedelta(days=180))
 
-    async def test_unknown_ids_are_skipped_as_supersessions_are(
-        self, storage, embedding_provider
-    ):
+    async def test_unknown_ids_are_skipped_as_supersessions_are(self, storage, embedding_provider):
         node = await self._judged_long_ago(storage)
 
         result, _ = await apply_reflection(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             judgments=[
                 {"node_id": "ghost", "direction": "down", "reason": "r"},
                 {"node_id": node.id, "direction": "down", "reason": "r"},
@@ -1572,22 +1640,24 @@ class TestApplyReflectionArchivals:
     """
 
     async def _trivial_fact(self, storage, content="a passing detail"):
-        born = datetime.now(timezone.utc) - timedelta(days=30)
+        born = datetime.now(UTC) - timedelta(days=30)
         node = Fact(
-            content=content, source_id="s1", created_at=born,
+            content=content,
+            source_id="s1",
+            created_at=born,
             value=ValueSignal(importance=0.2),
         )
         await storage.store_node(node)
         return node
 
-    async def test_archives_exactly_the_approved_ids(
-        self, storage, embedding_provider
-    ):
+    async def test_archives_exactly_the_approved_ids(self, storage, embedding_provider):
         approved = await self._trivial_fact(storage, "approved for archival")
         spared = await self._trivial_fact(storage, "not approved")
 
         result, _ = await apply_reflection(
-            storage, embedding_provider, archivals=[approved.id],
+            storage,
+            embedding_provider,
+            archivals=[approved.id],
         )
 
         assert result["nodes_archived"] == 1
@@ -1600,26 +1670,31 @@ class TestApplyReflectionArchivals:
     async def test_archived_node_can_be_restored(self, storage, embedding_provider):
         node = await self._trivial_fact(storage)
         result, _ = await apply_reflection(
-            storage, embedding_provider, archivals=[node.id],
+            storage,
+            embedding_provider,
+            archivals=[node.id],
         )
 
         await restore(storage, archive_data=result["archive_data"])
 
         assert (await storage.get_node(node.id)).status == NodeStatus.ACTIVE
 
-    async def test_archived_node_leaves_search(
-        self, storage, embedding_provider, config
-    ):
+    async def test_archived_node_leaves_search(self, storage, embedding_provider, config):
         """The point of the status flip: retrieval stops returning it."""
         seg_result, _ = await segment_text(
-            "One paragraph about kestrels.", storage, embedding_provider, config,
+            "One paragraph about kestrels.",
+            storage,
+            embedding_provider,
+            config,
         )
         await store_decomposition(
             document_id=seg_result["document_id"],
-            segments=[{
-                "segment_id": seg_result["segments"][0]["segment_id"],
-                "facts": ["Kestrels hover while hunting."],
-            }],
+            segments=[
+                {
+                    "segment_id": seg_result["segments"][0]["segment_id"],
+                    "facts": ["Kestrels hover while hunting."],
+                }
+            ],
             storage=storage,
             embedding_provider=embedding_provider,
             metacontext_id=BASE_METACONTEXT_ID,
@@ -1627,16 +1702,24 @@ class TestApplyReflectionArchivals:
         fact = (await storage.query_nodes(node_type=NodeType.FACT))[0]
 
         found, _ = await search(
-            "Kestrels hover while hunting.", storage, embedding_provider,
-            k=5, graph_hops=0, record_retrieval=False,
+            "Kestrels hover while hunting.",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
+            record_retrieval=False,
         )
         assert fact.id in {n["id"] for n in found["nodes"]}
 
         await apply_reflection(storage, embedding_provider, archivals=[fact.id])
 
         after, _ = await search(
-            "Kestrels hover while hunting.", storage, embedding_provider,
-            k=5, graph_hops=0, record_retrieval=False,
+            "Kestrels hover while hunting.",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
+            record_retrieval=False,
         )
         assert fact.id not in {n["id"] for n in after["nodes"]}
 
@@ -1644,40 +1727,45 @@ class TestApplyReflectionArchivals:
         self, storage, embedding_provider
     ):
         """Part of the same loop: archiving evidence re-nominates what rests on it."""
-        born = datetime.now(timezone.utc) - timedelta(days=30)
+        born = datetime.now(UTC) - timedelta(days=30)
         evidence = Fact(
-            content="a passing detail", source_id="s1", created_at=born,
+            content="a passing detail",
+            source_id="s1",
+            created_at=born,
             value=ValueSignal(importance=0.2),
         )
         inference = Inference(
-            content="rests entirely on that detail", source_id="s1",
+            content="rests entirely on that detail",
+            source_id="s1",
             created_at=born,
             # High importance, so only the follow-on rule can nominate it.
             value=ValueSignal(importance=0.9),
         )
         await storage.store_node(evidence)
         await storage.store_node(inference)
-        await storage.store_edge(NodeEdge(
-            src_id=inference.id, dst_id=evidence.id, type=EdgeType.DERIVED_FROM,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=inference.id,
+                dst_id=evidence.id,
+                type=EdgeType.DERIVED_FROM,
+            )
+        )
 
         await apply_reflection(storage, embedding_provider, archivals=[evidence.id])
 
         result, _ = await reflect(storage, embedding_provider)
-        entry = next(
-            c for c in result["archival_candidates"] if c["node_id"] == inference.id
-        )
+        entry = next(c for c in result["archival_candidates"] if c["node_id"] == inference.id)
         assert entry["reason"] == "evidence_stale"
 
-    async def test_skips_missing_and_already_archived_ids(
-        self, storage, embedding_provider
-    ):
+    async def test_skips_missing_and_already_archived_ids(self, storage, embedding_provider):
         """Same forgiveness as supersessions: a stale worklist partially applies."""
         node = await self._trivial_fact(storage)
         await apply_reflection(storage, embedding_provider, archivals=[node.id])
 
         result, _ = await apply_reflection(
-            storage, embedding_provider, archivals=[node.id, "no-such-node"],
+            storage,
+            embedding_provider,
+            archivals=[node.id, "no-such-node"],
         )
 
         assert result["nodes_archived"] == 0
@@ -1688,14 +1776,11 @@ class TestApplyReflectionArchivals:
 
 
 class TestApplyReflectionMerge:
-
     async def _store_topic(self, storage, embedding_provider, content, vector):
         t = Topic(content=content, source_id="s1")
         await storage.store_node(t)
         await storage.store_embedding(
-            EmbeddingRecord(
-                item_id=t.id, model_id=embedding_provider.model_id, vector=vector
-            )
+            EmbeddingRecord(item_id=t.id, model_id=embedding_provider.model_id, vector=vector)
         )
         return t
 
@@ -1706,7 +1791,8 @@ class TestApplyReflectionMerge:
         )
 
         result, _ = await apply_reflection(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             merges=[{"source_ids": [a.id, b.id], "content": "Machine learning basics"}],
             merge_similarity_threshold=0.9,
         )
@@ -1726,7 +1812,8 @@ class TestApplyReflectionMerge:
         b = await self._store_topic(storage, embedding_provider, "Cooking", [0.0, 1.0])
 
         result, _ = await apply_reflection(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             merges=[{"source_ids": [a.id, b.id], "content": "X"}],
             merge_similarity_threshold=0.9,
         )
@@ -1737,17 +1824,15 @@ class TestApplyReflectionMerge:
         assert (await storage.get_node(a.id)).status == NodeStatus.ACTIVE
         assert (await storage.get_node(b.id)).status == NodeStatus.ACTIVE
 
-    async def test_the_wired_merge_carries_the_value_clocks(
-        self, storage, embedding_provider
-    ):
+    async def test_the_wired_merge_carries_the_value_clocks(self, storage, embedding_provider):
         """The agent-driven path has the same obligation as the helper.
 
         This is the merge that actually runs in production — `merge_similar_topics`
         is the pipeline helper. Carrying `importance` forward without the date it
         was judged leaves the merged node exempt from `stale_judgment` forever.
         """
-        judged_at = datetime.now(timezone.utc) - timedelta(days=400)
-        retrieved_at = datetime.now(timezone.utc) - timedelta(days=3)
+        judged_at = datetime.now(UTC) - timedelta(days=400)
+        retrieved_at = datetime.now(UTC) - timedelta(days=3)
         a = await self._store_topic(storage, embedding_provider, "ML basics", [1.0, 0.0])
         a.value = ValueSignal(
             importance=0.9, importance_judged_at=judged_at, retrieved_at=retrieved_at
@@ -1758,7 +1843,8 @@ class TestApplyReflectionMerge:
         )
 
         result, _ = await apply_reflection(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             merges=[{"source_ids": [a.id, b.id], "content": "Machine learning basics"}],
             merge_similarity_threshold=0.9,
         )
@@ -1777,7 +1863,8 @@ class TestApplyReflectionMerge:
         await storage.store_node(b)
 
         result, _ = await apply_reflection(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             merges=[{"source_ids": [a.id, b.id], "content": "AB"}],
         )
 
@@ -1787,7 +1874,6 @@ class TestApplyReflectionMerge:
 
 
 class TestApplyReflectionSupersessions:
-
     async def test_resolves_flagged_node(self, storage, embedding_provider):
         old = Fact(content="CEO is X", source_id="s1")
         winner = Fact(content="CEO is Y", source_id="s1")
@@ -1798,12 +1884,11 @@ class TestApplyReflectionSupersessions:
         await storage.store_edge(
             NodeEdge(src_id=winner.id, dst_id=old.id, type=EdgeType.SUPERSESSION_CANDIDATE)
         )
-        await storage.store_edge(
-            NodeEdge(src_id=old.id, dst_id=inf.id, type=EdgeType.SUPPORTS)
-        )
+        await storage.store_edge(NodeEdge(src_id=old.id, dst_id=inf.id, type=EdgeType.SUPPORTS))
 
         result, _ = await apply_reflection(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             supersessions=[
                 {"old_id": old.id, "by_id": winner.id, "because": "it_was_wrong"},
             ],
@@ -1815,19 +1900,16 @@ class TestApplyReflectionSupersessions:
         lineage = await storage.get_edges_from(old.id, edge_type=EdgeType.SUPERSEDED_BY)
         assert len(lineage) == 1 and lineage[0].dst_id == winner.id
         # Candidacy is cleared and the dependent inference is flagged evidence_stale.
-        assert await storage.get_edges_to(
-            old.id, edge_type=EdgeType.SUPERSESSION_CANDIDATE
-        ) == []
-        assert len(await storage.get_edges_to(
-            inf.id, edge_type=EdgeType.EVIDENCE_SUPERSEDED
-        )) == 1
+        assert await storage.get_edges_to(old.id, edge_type=EdgeType.SUPERSESSION_CANDIDATE) == []
+        assert len(await storage.get_edges_to(inf.id, edge_type=EdgeType.EVIDENCE_SUPERSEDED)) == 1
 
     async def test_skips_self_and_missing(self, storage, embedding_provider):
         a = Fact(content="a", source_id="s1")
         await storage.store_node(a)
 
         result, _ = await apply_reflection(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             supersessions=[
                 # self-supersede
                 {"old_id": a.id, "by_id": a.id, "because": "it_was_wrong"},
@@ -1845,15 +1927,12 @@ class TestApplyReflectionSupersessions:
 
 
 class TestQueryGraph:
-
     async def test_returns_neighbor_subgraph(self, storage):
         t = Topic(content="topic", source_id="s1")
         f = Fact(content="fact", source_id="s1")
         await storage.store_node(t)
         await storage.store_node(f)
-        await storage.store_edge(
-            NodeEdge(src_id=f.id, dst_id=t.id, type=EdgeType.SUPPORTS)
-        )
+        await storage.store_edge(NodeEdge(src_id=f.id, dst_id=t.id, type=EdgeType.SUPPORTS))
 
         result, meta = await query_graph(t.id, storage, hops=1)
         node_ids = {n["id"] for n in result["nodes"]}
@@ -1869,12 +1948,8 @@ class TestQueryGraph:
         await storage.store_node(t1)
         await storage.store_node(t2)
         await storage.store_node(f)
-        await storage.store_edge(
-            NodeEdge(src_id=f.id, dst_id=t1.id, type=EdgeType.SUPPORTS)
-        )
-        await storage.store_edge(
-            NodeEdge(src_id=f.id, dst_id=t2.id, type=EdgeType.SUPPORTS)
-        )
+        await storage.store_edge(NodeEdge(src_id=f.id, dst_id=t1.id, type=EdgeType.SUPPORTS))
+        await storage.store_edge(NodeEdge(src_id=f.id, dst_id=t2.id, type=EdgeType.SUPPORTS))
 
         result, _ = await query_graph(t1.id, storage, hops=0)
         assert len(result["nodes"]) == 1
@@ -1888,16 +1963,13 @@ class TestQueryGraph:
 
 
 class TestArchive:
-
     async def test_finds_old_superseded_nodes(self, storage):
         from datetime import timedelta
 
         t = Topic(content="old topic", source_id="s1")
         await storage.store_node(t)
-        old_time = datetime.now(timezone.utc) - timedelta(days=200)
-        await storage.set_node_status_tx(
-            [t], status=NodeStatus.SUPERSEDED, at=old_time
-        )
+        old_time = datetime.now(UTC) - timedelta(days=200)
+        await storage.set_node_status_tx([t], status=NodeStatus.SUPERSEDED, at=old_time)
 
         result, meta = await archive(storage, max_age_days=90)
         assert result["nodes_archived"] == 1
@@ -1915,7 +1987,6 @@ class TestArchive:
 
 
 class TestRestore:
-
     async def test_reimports_nodes(self, storage):
         archive_data = {
             "nodes": [
@@ -1950,9 +2021,7 @@ class TestRestore:
         would write nothing and the node would stay out of the active set."""
         node = Fact(content="archived but wanted back", source_id="s1")
         await storage.store_node(node)
-        await storage.set_node_status_tx(
-            [node], status=NodeStatus.ARCHIVED, at=datetime.now(timezone.utc)
-        )
+        await storage.set_node_status_tx([node], status=NodeStatus.ARCHIVED, at=datetime.now(UTC))
 
         result, _ = await restore(storage, archive_data={"nodes": [_node_to_dict(node)]})
 
@@ -1967,9 +2036,7 @@ class TestRestore:
         retired — restoring an archive is not a blanket resurrection."""
         node = Fact(content="wrong and superseded", source_id="s1")
         await storage.store_node(node)
-        await storage.set_node_status_tx(
-            [node], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
-        )
+        await storage.set_node_status_tx([node], status=NodeStatus.SUPERSEDED, at=datetime.now(UTC))
 
         result, _ = await restore(storage, archive_data={"nodes": [_node_to_dict(node)]})
 
@@ -1992,7 +2059,7 @@ class TestRestore:
             ],
             "edges": [{"id": "edge-bad", "src_id": "restore-atomic-1", "type": "supports"}],
         }
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             await restore(storage, archive_data=archive_data)
 
         assert await storage.get_node("restore-atomic-1") is None
@@ -2010,9 +2077,7 @@ class TestAClaimComesBack:
     async def _historical(self, storage, content="Labour is in government") -> Fact:
         fact = Fact(content=content, source_id="s1")
         await storage.store_node(fact)
-        await storage.set_node_status_tx(
-            [fact], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
-        )
+        await storage.set_node_status_tx([fact], status=NodeStatus.HISTORICAL, at=datetime.now(UTC))
         return fact
 
     async def _document(self, storage, source="2024 almanac") -> str:
@@ -2025,11 +2090,15 @@ class TestAClaimComesBack:
         document_id = await self._document(storage)
 
         result, _ = await restore(
-            storage, node_ids=[fact.id], sourced_from=document_id,
-            validity=[{
-                "start": {"instant_kind": "precise", "at": "2024-07-05T00:00:00Z"},
-                "basis": "stated",
-            }],
+            storage,
+            node_ids=[fact.id],
+            sourced_from=document_id,
+            validity=[
+                {
+                    "start": {"instant_kind": "precise", "at": "2024-07-05T00:00:00Z"},
+                    "basis": "stated",
+                }
+            ],
         )
 
         assert result["nodes_reactivated"] == 1
@@ -2058,9 +2127,7 @@ class TestAClaimComesBack:
         state: before the status split it could only say "not superseded"."""
         fact = Fact(content="wrong all along", source_id="s1")
         await storage.store_node(fact)
-        await storage.set_node_status_tx(
-            [fact], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
-        )
+        await storage.set_node_status_tx([fact], status=NodeStatus.CORRECTED, at=datetime.now(UTC))
         document_id = await self._document(storage)
 
         with pytest.raises(ValueError, match="cannot be restored"):
@@ -2084,15 +2151,11 @@ class TestAClaimComesBack:
         good = await self._historical(storage)
         bad = Fact(content="wrong all along", source_id="s1")
         await storage.store_node(bad)
-        await storage.set_node_status_tx(
-            [bad], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
-        )
+        await storage.set_node_status_tx([bad], status=NodeStatus.CORRECTED, at=datetime.now(UTC))
         document_id = await self._document(storage)
 
         with pytest.raises(ValueError):
-            await restore(
-                storage, node_ids=[good.id, bad.id], sourced_from=document_id
-            )
+            await restore(storage, node_ids=[good.id, bad.id], sourced_from=document_id)
 
         assert (await storage.get_node(good.id)).status is NodeStatus.HISTORICAL
 
@@ -2107,9 +2170,7 @@ class TestAClaimComesBack:
         document_id = await self._document(storage)
 
         await restore(storage, node_ids=[fact.id], sourced_from=document_id)
-        result, _ = await restore(
-            storage, node_ids=[fact.id], sourced_from=document_id
-        )
+        result, _ = await restore(storage, node_ids=[fact.id], sourced_from=document_id)
 
         assert result["nodes_reactivated"] == 0
         assert (await storage.get_node(fact.id)).status is NodeStatus.ACTIVE
@@ -2119,22 +2180,32 @@ class TestAClaimComesBack:
         ends holding several disjoint periods — which is what a list was for."""
         fact = await self._historical(storage)
         first_document = await self._document(storage, source="2010 almanac")
-        await storage.store_edge(NodeEdge(
-            src_id=fact.id, dst_id=first_document, type=EdgeType.SOURCED_FROM,
-            validity=[{
-                "start": {"instant_kind": "precise", "at": "1997-05-02T00:00:00Z"},
-                "end": {"instant_kind": "precise", "at": "2010-05-11T00:00:00Z"},
-                "basis": "stated",
-            }],
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=fact.id,
+                dst_id=first_document,
+                type=EdgeType.SOURCED_FROM,
+                validity=[
+                    {
+                        "start": {"instant_kind": "precise", "at": "1997-05-02T00:00:00Z"},
+                        "end": {"instant_kind": "precise", "at": "2010-05-11T00:00:00Z"},
+                        "basis": "stated",
+                    }
+                ],
+            )
+        )
         second_document = await self._document(storage, source="2024 almanac")
 
         await restore(
-            storage, node_ids=[fact.id], sourced_from=second_document,
-            validity=[{
-                "start": {"instant_kind": "precise", "at": "2024-07-05T00:00:00Z"},
-                "basis": "stated",
-            }],
+            storage,
+            node_ids=[fact.id],
+            sourced_from=second_document,
+            validity=[
+                {
+                    "start": {"instant_kind": "precise", "at": "2024-07-05T00:00:00Z"},
+                    "basis": "stated",
+                }
+            ],
         )
 
         edges = await storage.get_edges_from(fact.id, edge_type=EdgeType.SOURCED_FROM)
@@ -2147,7 +2218,6 @@ class TestAClaimComesBack:
 
 
 class TestTimelineTools:
-
     async def test_create_timeline(self, storage):
         result, meta = await create_timeline("AI History", storage, description="Key AI events")
         assert result["name"] == "AI History"
@@ -2159,7 +2229,7 @@ class TestTimelineTools:
 
     async def test_create_timeline_with_reference_time(self, storage):
         """A fictional timeline's present is knowable at creation."""
-        when = datetime(1897, 5, 26, tzinfo=timezone.utc)
+        when = datetime(1897, 5, 26, tzinfo=UTC)
         result, _ = await create_timeline("Dracula", storage, reference_time=when)
 
         assert result["reference_time"] == when.isoformat()
@@ -2175,7 +2245,7 @@ class TestTimelineTools:
         """Learned later, and revisable — a fiction's 'now' can be read wrong first."""
         created, _ = await create_timeline("Dracula", storage)
         tl_id = created["timeline_id"]
-        when = datetime(1897, 5, 26, tzinfo=timezone.utc)
+        when = datetime(1897, 5, 26, tzinfo=UTC)
 
         result, meta = await set_reference_time(tl_id, storage, reference_time=when)
         assert result["reference_time"] == when.isoformat()
@@ -2191,11 +2261,15 @@ class TestTimelineTools:
         created, _ = await create_timeline("Dracula", storage)
         tl_id = created["timeline_id"]
         await add_timeline_timepoint(
-            tl_id, storage, start=datetime(1897, 5, 26, tzinfo=timezone.utc),
+            tl_id,
+            storage,
+            start=datetime(1897, 5, 26, tzinfo=UTC),
         )
 
         await set_reference_time(
-            tl_id, storage, reference_time=datetime(1897, 6, 1, tzinfo=timezone.utc),
+            tl_id,
+            storage,
+            reference_time=datetime(1897, 6, 1, tzinfo=UTC),
         )
 
         assert len((await storage.get_timeline(tl_id)).timepoints) == 1
@@ -2205,7 +2279,7 @@ class TestTimelineTools:
             await set_reference_time("no-such-timeline", storage)
 
     async def test_query_timeline_reports_reference_time(self, storage):
-        when = datetime(1897, 5, 26, tzinfo=timezone.utc)
+        when = datetime(1897, 5, 26, tzinfo=UTC)
         created, _ = await create_timeline("Dracula", storage, reference_time=when)
 
         result, _ = await query_timeline(created["timeline_id"], storage)
@@ -2217,8 +2291,9 @@ class TestTimelineTools:
         tl_id = result["timeline_id"]
 
         result, _ = await add_timeline_timepoint(
-            tl_id, storage,
-            start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            tl_id,
+            storage,
+            start=datetime(2024, 1, 1, tzinfo=UTC),
             label="New Year 2024",
         )
         assert result["timepoint_id"]
@@ -2228,8 +2303,12 @@ class TestTimelineTools:
         result, _ = await create_timeline("test", storage)
         tl_id = result["timeline_id"]
 
-        await add_timeline_timepoint(tl_id, storage, start=datetime(2024, 6, 1, tzinfo=timezone.utc), label="June")
-        await add_timeline_timepoint(tl_id, storage, start=datetime(2024, 1, 1, tzinfo=timezone.utc), label="Jan")
+        await add_timeline_timepoint(
+            tl_id, storage, start=datetime(2024, 6, 1, tzinfo=UTC), label="June"
+        )
+        await add_timeline_timepoint(
+            tl_id, storage, start=datetime(2024, 1, 1, tzinfo=UTC), label="Jan"
+        )
 
         tl = await storage.get_timeline(tl_id)
         assert tl.timepoints[0].label == "Jan"
@@ -2243,12 +2322,17 @@ class TestTimelineTools:
         result, _ = await create_timeline("test", storage)
         tl_id = result["timeline_id"]
 
-        await add_timeline_timepoint(tl_id, storage, start=datetime(2020, 1, 1, tzinfo=timezone.utc), label="2020")
-        await add_timeline_timepoint(tl_id, storage, start=datetime(2024, 1, 1, tzinfo=timezone.utc), label="2024")
+        await add_timeline_timepoint(
+            tl_id, storage, start=datetime(2020, 1, 1, tzinfo=UTC), label="2020"
+        )
+        await add_timeline_timepoint(
+            tl_id, storage, start=datetime(2024, 1, 1, tzinfo=UTC), label="2024"
+        )
 
         result, meta = await query_timeline(
-            tl_id, storage,
-            target=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            tl_id,
+            storage,
+            target=datetime(2023, 1, 1, tzinfo=UTC),
             k=1,
         )
         assert len(result["timepoints"]) == 1
@@ -2257,14 +2341,21 @@ class TestTimelineTools:
         result, _ = await create_timeline("test", storage)
         tl_id = result["timeline_id"]
 
-        await add_timeline_timepoint(tl_id, storage, start=datetime(2020, 1, 1, tzinfo=timezone.utc), label="2020")
-        await add_timeline_timepoint(tl_id, storage, start=datetime(2022, 1, 1, tzinfo=timezone.utc), label="2022")
-        await add_timeline_timepoint(tl_id, storage, start=datetime(2024, 1, 1, tzinfo=timezone.utc), label="2024")
+        await add_timeline_timepoint(
+            tl_id, storage, start=datetime(2020, 1, 1, tzinfo=UTC), label="2020"
+        )
+        await add_timeline_timepoint(
+            tl_id, storage, start=datetime(2022, 1, 1, tzinfo=UTC), label="2022"
+        )
+        await add_timeline_timepoint(
+            tl_id, storage, start=datetime(2024, 1, 1, tzinfo=UTC), label="2024"
+        )
 
         result, _ = await query_timeline(
-            tl_id, storage,
-            range_start=datetime(2021, 1, 1, tzinfo=timezone.utc),
-            range_end=datetime(2023, 1, 1, tzinfo=timezone.utc),
+            tl_id,
+            storage,
+            range_start=datetime(2021, 1, 1, tzinfo=UTC),
+            range_end=datetime(2023, 1, 1, tzinfo=UTC),
         )
         assert len(result["timepoints"]) == 1  # Only 2022
 
@@ -2275,8 +2366,9 @@ class TestTimelineTools:
         tl_result, _ = await create_timeline("AI Timeline", storage)
         tl_id = tl_result["timeline_id"]
         tp_result, _ = await add_timeline_timepoint(
-            tl_id, storage,
-            start=datetime(2023, 3, 1, tzinfo=timezone.utc),
+            tl_id,
+            storage,
+            start=datetime(2023, 3, 1, tzinfo=UTC),
             label="GPT-4 release",
         )
         tp_id = tp_result["timepoint_id"]
@@ -2307,7 +2399,6 @@ class TestTimelineTools:
 
 
 class TestMetacontextTools:
-
     async def test_create_metacontext(self, storage):
         result, _ = await create_metacontext("Real historical events", storage)
         assert result["content"] == "Real historical events"
@@ -2323,9 +2414,13 @@ class TestMetacontextTools:
         t = Topic(content="Vampires", source_id="s1")
         await storage.store_node(t)
 
-        await storage.store_edge(NodeEdge(
-            src_id=t.id, dst_id=mc.id, type=EdgeType.HAS_METACONTEXT,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=t.id,
+                dst_id=mc.id,
+                type=EdgeType.HAS_METACONTEXT,
+            )
+        )
 
         result, meta = await get_metacontexts_for_node(t.id, storage)
         assert len(result["metacontexts"]) == 1
@@ -2348,7 +2443,8 @@ class TestMetacontextTools:
         await storage.switch_database("virgin")
 
         result, _ = await create_metacontext(
-            "The Real", storage,
+            "The Real",
+            storage,
             description="Claims about the real world.",
             metacontext_id=BASE_METACONTEXT_ID,
         )
@@ -2381,7 +2477,10 @@ class TestAnIngestNoLongerInventsAFrame:
 
         with pytest.raises(ValueError, match="does not exist in graph"):
             await _two_step_ingest(
-                "Some content.", storage, embedding_provider, config,
+                "Some content.",
+                storage,
+                embedding_provider,
+                config,
                 metacontext_id=BASE_METACONTEXT_ID,
             )
 
@@ -2391,14 +2490,17 @@ class TestAnIngestNoLongerInventsAFrame:
         from epimemer.core.types import BASE_METACONTEXT_ID
 
         _, stored = await _two_step_ingest(
-            "Some content.", storage, embedding_provider, config,
+            "Some content.",
+            storage,
+            embedding_provider,
+            config,
             metacontext_id=BASE_METACONTEXT_ID,
         )
 
         assert stored["nodes_created"]["topics"] >= 1
-        assert (await graph_stats(
-            storage, default_reflect_threshold=10
-        ))[0]["nodes_without_frame"] == 0
+        assert (await graph_stats(storage, default_reflect_threshold=10))[0][
+            "nodes_without_frame"
+        ] == 0
 
 
 class TestAStatedFrameMustResolveHere:
@@ -2417,7 +2519,10 @@ class TestAStatedFrameMustResolveHere:
     ):
         with pytest.raises(ValueError, match="does not exist in graph"):
             await _two_step_ingest(
-                "Some content.", storage, embedding_provider, config,
+                "Some content.",
+                storage,
+                embedding_provider,
+                config,
                 metacontext_id="mc-from-another-graph",
             )
 
@@ -2433,7 +2538,10 @@ class TestAStatedFrameMustResolveHere:
 
         with pytest.raises(ValueError) as excinfo:
             await _two_step_ingest(
-                "Some content.", storage, embedding_provider, config,
+                "Some content.",
+                storage,
+                embedding_provider,
+                config,
                 metacontext_id="nope",
             )
         message = str(excinfo.value)
@@ -2448,28 +2556,30 @@ class TestAStatedFrameMustResolveHere:
         # there is no partial decomposition to find and no edge to clean up.
         with pytest.raises(ValueError):
             await _two_step_ingest(
-                "Some content.", storage, embedding_provider, config,
+                "Some content.",
+                storage,
+                embedding_provider,
+                config,
                 metacontext_id="nope",
             )
         stats, _ = await graph_stats(storage, default_reflect_threshold=10)
         assert stats["total_nodes"] == 0
         assert stats["total_edges"] == 0
 
-    async def test_a_frame_that_exists_is_accepted(
-        self, storage, embedding_provider, config
-    ):
+    async def test_a_frame_that_exists_is_accepted(self, storage, embedding_provider, config):
         mc = Metacontext(content="Fiction")
         await storage.store_metacontext(mc)
 
         _, store_result = await _two_step_ingest(
-            "Some content.", storage, embedding_provider, config,
+            "Some content.",
+            storage,
+            embedding_provider,
+            config,
             metacontext_id=mc.id,
         )
         assert store_result["nodes_created"]["topics"] >= 1
 
-    async def test_the_base_frame_is_an_ordinary_frame(
-        self, storage, embedding_provider, config
-    ):
+    async def test_the_base_frame_is_an_ordinary_frame(self, storage, embedding_provider, config):
         """`the-real` used to be accepted with no row, because an untagged node
         resolved to it and it therefore named something in every graph. Nothing
         resolves to it now, so accepting it rowless would admit an id pointing
@@ -2483,39 +2593,45 @@ class TestAStatedFrameMustResolveHere:
 
         with pytest.raises(ValueError, match="does not exist in graph"):
             await search(
-                "anything", storage, embedding_provider,
-                k=5, graph_hops=0, metacontexts=[BASE_METACONTEXT_ID],
+                "anything",
+                storage,
+                embedding_provider,
+                k=5,
+                graph_hops=0,
+                metacontexts=[BASE_METACONTEXT_ID],
             )
 
-    async def test_search_refuses_an_id_that_names_nothing(
-        self, storage, embedding_provider
-    ):
+    async def test_search_refuses_an_id_that_names_nothing(self, storage, embedding_provider):
         # The read is the worse half: a frame that does not resolve narrows the
         # search to nothing and answers as though the graph held nothing about
         # it, and a wrong answer to a search leaves no artifact behind anywhere.
         with pytest.raises(ValueError, match="does not exist in graph"):
             await search(
-                "anything", storage, embedding_provider,
-                k=5, graph_hops=0, metacontexts=["mc-from-another-graph"],
+                "anything",
+                storage,
+                embedding_provider,
+                k=5,
+                graph_hops=0,
+                metacontexts=["mc-from-another-graph"],
             )
 
-    async def test_every_frame_in_the_list_is_checked(
-        self, storage, embedding_provider
-    ):
+    async def test_every_frame_in_the_list_is_checked(self, storage, embedding_provider):
         """Not just the first. A union carrying one dead id answers a narrower
         question than the caller asked, and says nothing about having done so."""
         from epimemer.core.types import BASE_METACONTEXT_ID
 
         with pytest.raises(ValueError, match="does not exist in graph"):
             await search(
-                "anything", storage, embedding_provider,
-                k=5, graph_hops=0,
+                "anything",
+                storage,
+                embedding_provider,
+                k=5,
+                graph_hops=0,
                 metacontexts=[BASE_METACONTEXT_ID, "nope"],
             )
 
 
 class TestReviewEdgeTraversal:
-
     async def test_review_edges_hidden_from_default_traversal(self, storage):
         a = Fact(content="a", source_id="s1")
         b = Fact(content="b", source_id="s1")
@@ -2530,23 +2646,17 @@ class TestReviewEdgeTraversal:
         assert b.id not in {n["id"] for n in result["nodes"]}
 
         # ...but it is reachable with an explicit edge_types filter.
-        result2, _ = await query_graph(
-            a.id, storage, hops=1, edge_types=["supersession_candidate"]
-        )
+        result2, _ = await query_graph(a.id, storage, hops=1, edge_types=["supersession_candidate"])
         assert b.id in {n["id"] for n in result2["nodes"]}
 
 
 # --- Review loop: detection + verdict recording ---
 
 
-async def _store_fact_with_embedding(
-    storage, model_id, content, vector, *, metacontext_id=None
-):
+async def _store_fact_with_embedding(storage, model_id, content, vector, *, metacontext_id=None):
     f = Fact(content=content, source_id="s1")
     await storage.store_node(f)
-    await storage.store_embedding(
-        EmbeddingRecord(item_id=f.id, model_id=model_id, vector=vector)
-    )
+    await storage.store_embedding(EmbeddingRecord(item_id=f.id, model_id=model_id, vector=vector))
     if metacontext_id is not None:
         await storage.store_edge(
             NodeEdge(src_id=f.id, dst_id=metacontext_id, type=EdgeType.HAS_METACONTEXT)
@@ -2565,13 +2675,9 @@ class TestRecurrenceIsNominated:
     """
 
     async def _retired(self, storage, node, status: NodeStatus) -> None:
-        await storage.set_node_status_tx(
-            [node], status=status, at=datetime.now(timezone.utc)
-        )
+        await storage.set_node_status_tx([node], status=status, at=datetime.now(UTC))
 
-    async def test_a_historical_twin_is_offered_for_judgment(
-        self, storage, embedding_provider
-    ):
+    async def test_a_historical_twin_is_offered_for_judgment(self, storage, embedding_provider):
         model_id = embedding_provider.model_id
         new_fact = await _store_fact_with_embedding(
             storage, model_id, "Labour is in government", [1.0, 0.0]
@@ -2581,16 +2687,12 @@ class TestRecurrenceIsNominated:
         )
         await self._retired(storage, twin, NodeStatus.HISTORICAL)
 
-        result, _ = await check_conflicts(
-            [new_fact.id], storage, embedding_provider, threshold=0.5
-        )
+        result, _ = await check_conflicts([new_fact.id], storage, embedding_provider, threshold=0.5)
 
         candidates = result["conflicts"][0]["candidates"]
         assert twin.id in {c["id"] for c in candidates}
 
-    async def test_each_candidate_says_which_status_it_has(
-        self, storage, embedding_provider
-    ):
+    async def test_each_candidate_says_which_status_it_has(self, storage, embedding_provider):
         """The distinction between `redundant` and `recurs` rests entirely on
         it — a candidate list that hides it invites the misclassification the
         verdict was added to prevent."""
@@ -2614,9 +2716,7 @@ class TestRecurrenceIsNominated:
         assert by_id[active_twin.id] == "active"
         assert by_id[historical_twin.id] == "historical"
 
-    async def test_a_corrected_claim_is_never_nominated(
-        self, storage, embedding_provider
-    ):
+    async def test_a_corrected_claim_is_never_nominated(self, storage, embedding_provider):
         """It has no route back, so nominating it invites a verdict nothing can
         record — `restore` refuses it by design."""
         model_id = embedding_provider.model_id
@@ -2628,9 +2728,7 @@ class TestRecurrenceIsNominated:
         )
         await self._retired(storage, wrong, NodeStatus.CORRECTED)
 
-        result, _ = await check_conflicts(
-            [new_fact.id], storage, embedding_provider, threshold=0.5
-        )
+        result, _ = await check_conflicts([new_fact.id], storage, embedding_provider, threshold=0.5)
 
         assert result["conflicts"] == []
 
@@ -2652,25 +2750,21 @@ class TestVerbatimRecurrenceIsFlaggedAtIngest:
         retired = Fact(content=claim, source_id="s1")
         await storage.store_node(retired)
         await storage.set_node_status_tx(
-            [retired], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
+            [retired], status=NodeStatus.HISTORICAL, at=datetime.now(UTC)
         )
 
         result = await _ingest_facts([claim], storage, embedding_provider, config)
 
         assert [t["historical_id"] for t in result["historical_twins"]] == [retired.id]
 
-    async def test_an_ordinary_ingest_reports_none(
-        self, storage, embedding_provider, config
-    ):
+    async def test_an_ordinary_ingest_reports_none(self, storage, embedding_provider, config):
         result = await _ingest_facts(
             ["Something nobody has said before."], storage, embedding_provider, config
         )
 
         assert result["historical_twins"] == []
 
-    async def test_an_active_twin_is_not_a_recurrence(
-        self, storage, embedding_provider, config
-    ):
+    async def test_an_active_twin_is_not_a_recurrence(self, storage, embedding_provider, config):
         """Two live nodes saying the same thing is redundancy, which is fact dedup's
         subject and a different verdict entirely."""
         claim = "Labour is in government."
@@ -2682,7 +2776,6 @@ class TestVerbatimRecurrenceIsFlaggedAtIngest:
 
 
 class TestCheckConflicts:
-
     async def test_surfaces_similar_active_facts(self, storage, embedding_provider):
         model_id = embedding_provider.model_id
         query = await _store_fact_with_embedding(storage, model_id, "CEO is Alice", [1.0, 0.0])
@@ -2691,9 +2784,7 @@ class TestCheckConflicts:
         )
         await _store_fact_with_embedding(storage, model_id, "unrelated", [0.0, 1.0])
 
-        result, meta = await check_conflicts(
-            [query.id], storage, embedding_provider, threshold=0.5
-        )
+        result, meta = await check_conflicts([query.id], storage, embedding_provider, threshold=0.5)
 
         assert len(result["conflicts"]) == 1
         entry = result["conflicts"][0]
@@ -2709,9 +2800,7 @@ class TestCheckConflicts:
         query = await _store_fact_with_embedding(storage, model_id, "a", [1.0, 0.0])
         await _store_fact_with_embedding(storage, model_id, "b", [0.0, 1.0])
 
-        result, _ = await check_conflicts(
-            [query.id], storage, embedding_provider, threshold=0.9
-        )
+        result, _ = await check_conflicts([query.id], storage, embedding_provider, threshold=0.9)
         # Only self (excluded) and an orthogonal fact (below 0.9) → nothing.
         assert result["conflicts"] == []
 
@@ -2723,16 +2812,15 @@ class TestCheckConflicts:
             storage, model_id, "Napoleon lost at Waterloo", [1.0, 0.0]
         )
         variant = await _store_fact_with_embedding(
-            storage, model_id, "Napoleon won at Waterloo", [1.0, 0.0],
+            storage,
+            model_id,
+            "Napoleon won at Waterloo",
+            [1.0, 0.0],
             metacontext_id=fiction.id,
         )
 
-        result, _ = await check_conflicts(
-            [query.id], storage, embedding_provider, threshold=0.5
-        )
-        cand = next(
-            c for c in result["conflicts"][0]["candidates"] if c["id"] == variant.id
-        )
+        result, _ = await check_conflicts([query.id], storage, embedding_provider, threshold=0.5)
+        cand = next(c for c in result["conflicts"][0]["candidates"] if c["id"] == variant.id)
         assert cand["same_frame"] is False
         assert "Fiction" in cand["metacontexts"]
 
@@ -2744,17 +2832,19 @@ class TestCheckConflicts:
 
 
 class TestRecordContradiction:
-
     async def test_records_same_frame_and_signals_notify(self, storage):
         a = Fact(content="X is true", source_id="s1")
         b = Fact(content="X is false", source_id="s1")
         await storage.store_node(a)
         await storage.store_node(b)
         for _node in (a, b):
-            await storage.store_edge(NodeEdge(
-                src_id=_node.id, dst_id=BASE_METACONTEXT_ID,
-                type=EdgeType.HAS_METACONTEXT,
-            ))
+            await storage.store_edge(
+                NodeEdge(
+                    src_id=_node.id,
+                    dst_id=BASE_METACONTEXT_ID,
+                    type=EdgeType.HAS_METACONTEXT,
+                )
+            )
 
         result, _ = await record_contradiction(a.id, b.id, storage)
 
@@ -2806,7 +2896,6 @@ class TestRecordContradiction:
 
 
 class TestRecordVariant:
-
     async def test_records_cross_frame_variant(self, storage):
         novel = Metacontext(content="Novel-X")
         await storage.store_metacontext(novel)
@@ -2831,10 +2920,13 @@ class TestRecordVariant:
         await storage.store_node(a)
         await storage.store_node(b)
         for _node in (a, b):
-            await storage.store_edge(NodeEdge(
-                src_id=_node.id, dst_id=BASE_METACONTEXT_ID,
-                type=EdgeType.HAS_METACONTEXT,
-            ))
+            await storage.store_edge(
+                NodeEdge(
+                    src_id=_node.id,
+                    dst_id=BASE_METACONTEXT_ID,
+                    type=EdgeType.HAS_METACONTEXT,
+                )
+            )
         result, _ = await record_variant(a.id, b.id, storage)
         assert result["same_frame"] is True
         assert "warning" in result
@@ -2850,7 +2942,6 @@ class TestRecordVariant:
 
 
 class TestReflectFrameAware:
-
     async def _fact(self, storage, model_id, content, vector, *, mc=None):
         f = Fact(content=content, source_id="s1")
         await storage.store_node(f)
@@ -2863,23 +2954,15 @@ class TestReflectFrameAware:
             )
         return f
 
-    async def test_cross_frame_pairs_dropped_from_contradictions(
-        self, storage, embedding_provider
-    ):
+    async def test_cross_frame_pairs_dropped_from_contradictions(self, storage, embedding_provider):
         model_id = embedding_provider.model_id
         fiction = Metacontext(content="Fiction")
         await storage.store_metacontext(fiction)
         # Same-frame near-identical pair.
-        await self._fact(
-            storage, model_id, "real A", [1.0, 0.0], mc=BASE_METACONTEXT_ID
-        )
-        await self._fact(
-            storage, model_id, "real B", [1.0, 0.0], mc=BASE_METACONTEXT_ID
-        )
+        await self._fact(storage, model_id, "real A", [1.0, 0.0], mc=BASE_METACONTEXT_ID)
+        await self._fact(storage, model_id, "real B", [1.0, 0.0], mc=BASE_METACONTEXT_ID)
         # Cross-frame near-identical pair.
-        await self._fact(
-            storage, model_id, "story A", [0.0, 1.0], mc=BASE_METACONTEXT_ID
-        )
+        await self._fact(storage, model_id, "story A", [0.0, 1.0], mc=BASE_METACONTEXT_ID)
         await self._fact(storage, model_id, "story B", [0.0, 1.0], mc=fiction.id)
 
         result, _ = await reflect(storage, embedding_provider)
@@ -2896,10 +2979,7 @@ class TestReflectFrameAware:
 
 
 class TestSearchFrameScoping:
-
-    async def test_only_the_frames_named_come_back(
-        self, storage, embedding_provider
-    ):
+    async def test_only_the_frames_named_come_back(self, storage, embedding_provider):
         """A union the caller states, with no frame inheriting another. This
         used to return the named frame *plus* untagged base reality, on the
         reasoning that real-world knowledge is the background every frame is
@@ -2915,25 +2995,38 @@ class TestSearchFrameScoping:
         query = "anything"
         qvec = (await embedding_provider.embed([query]))[0]
         real = await _store_fact_with_embedding(
-            storage, embedding_provider.model_id, "real fact", qvec,
+            storage,
+            embedding_provider.model_id,
+            "real fact",
+            qvec,
             metacontext_id=mc_real.id,
         )
         fic = await _store_fact_with_embedding(
-            storage, embedding_provider.model_id, "fiction fact", qvec,
+            storage,
+            embedding_provider.model_id,
+            "fiction fact",
+            qvec,
             metacontext_id=mc_fiction.id,
         )
         frameless = await _store_fact_with_embedding(
-            storage, embedding_provider.model_id, "unframed fact", qvec,
+            storage,
+            embedding_provider.model_id,
+            "unframed fact",
+            qvec,
         )
 
         result, _ = await search(
-            query, storage, embedding_provider,
-            k=20, graph_hops=0, metacontexts=[mc_real.id],
+            query,
+            storage,
+            embedding_provider,
+            k=20,
+            graph_hops=0,
+            metacontexts=[mc_real.id],
         )
         ids = {n["id"] for n in result["nodes"]}
-        assert real.id in ids            # named
-        assert fic.id not in ids         # a sibling frame is not inherited
-        assert frameless.id not in ids   # and neither is saying nothing
+        assert real.id in ids  # named
+        assert fic.id not in ids  # a sibling frame is not inherited
+        assert frameless.id not in ids  # and neither is saying nothing
 
     async def test_two_frames_are_a_union(self, storage, embedding_provider):
         """How a caller asks for a novel's world read against real history: by
@@ -2947,17 +3040,27 @@ class TestSearchFrameScoping:
         query = "anything"
         qvec = (await embedding_provider.embed([query]))[0]
         real = await _store_fact_with_embedding(
-            storage, embedding_provider.model_id, "real fact", qvec,
+            storage,
+            embedding_provider.model_id,
+            "real fact",
+            qvec,
             metacontext_id=mc_real.id,
         )
         fic = await _store_fact_with_embedding(
-            storage, embedding_provider.model_id, "fiction fact", qvec,
+            storage,
+            embedding_provider.model_id,
+            "fiction fact",
+            qvec,
             metacontext_id=mc_fiction.id,
         )
 
         result, _ = await search(
-            query, storage, embedding_provider,
-            k=20, graph_hops=0, metacontexts=[mc_real.id, mc_fiction.id],
+            query,
+            storage,
+            embedding_provider,
+            k=20,
+            graph_hops=0,
+            metacontexts=[mc_real.id, mc_fiction.id],
         )
 
         assert {real.id, fic.id} <= {n["id"] for n in result["nodes"]}
@@ -2974,20 +3077,33 @@ class TestSearchFrameScoping:
         query = "anything"
         qvec = (await embedding_provider.embed([query]))[0]
         real = await _store_fact_with_embedding(
-            storage, embedding_provider.model_id, "real fact", qvec,
+            storage,
+            embedding_provider.model_id,
+            "real fact",
+            qvec,
             metacontext_id=mc_real.id,
         )
         fic = await _store_fact_with_embedding(
-            storage, embedding_provider.model_id, "fiction fact", qvec,
+            storage,
+            embedding_provider.model_id,
+            "fiction fact",
+            qvec,
             metacontext_id=mc_fiction.id,
         )
 
         frameless = await _store_fact_with_embedding(
-            storage, embedding_provider.model_id, "unframed fact", qvec,
+            storage,
+            embedding_provider.model_id,
+            "unframed fact",
+            qvec,
         )
 
         result, _ = await search(
-            query, storage, embedding_provider, k=20, graph_hops=0,
+            query,
+            storage,
+            embedding_provider,
+            k=20,
+            graph_hops=0,
         )
         ids = {n["id"] for n in result["nodes"]}
         assert {real.id, fic.id, frameless.id} <= ids
@@ -3002,9 +3118,7 @@ class TestSearchFrameScopingBeyondTopK:
     in-frame node still surfaces when out-of-frame nodes outrank it.
     """
 
-    async def test_frame_scoped_search_reaches_beyond_top_k(
-        self, storage, embedding_provider
-    ):
+    async def test_frame_scoped_search_reaches_beyond_top_k(self, storage, embedding_provider):
         mc = Metacontext(content="Frame")
         sibling = Metacontext(content="Sibling")
         await storage.store_metacontext(mc)
@@ -3028,8 +3142,12 @@ class TestSearchFrameScopingBeyondTopK:
         )
 
         result, _ = await search(
-            "anything", storage, embedding_provider,
-            k=k, graph_hops=0, metacontexts=[mc.id],
+            "anything",
+            storage,
+            embedding_provider,
+            k=k,
+            graph_hops=0,
+            metacontexts=[mc.id],
         )
         ids = {n["id"] for n in result["nodes"]}
         assert in_frame.id in ids  # missed pre-fix: filtered out of the top-k
@@ -3058,8 +3176,12 @@ class TestSearchFrameScopingBeyondTopK:
         )
 
         result, _ = await search(
-            "anything", storage, embedding_provider,
-            k=k, graph_hops=0, metacontexts=[mc.id],
+            "anything",
+            storage,
+            embedding_provider,
+            k=k,
+            graph_hops=0,
+            metacontexts=[mc.id],
         )
         ids = {n["id"] for n in result["nodes"]}
         assert in_frame.id in ids
@@ -3068,7 +3190,6 @@ class TestSearchFrameScopingBeyondTopK:
 
 
 class TestReviewLabelsInRetrieval:
-
     async def test_query_graph_flags_superseded_candidate(self, storage):
         old = Fact(content="old", source_id="s1")
         newer = Fact(content="new", source_id="s1")
@@ -3089,13 +3210,14 @@ class TestReviewLabelsInRetrieval:
         await storage.store_node(a)
         await storage.store_node(b)
         for _node in (a, b):
-            await storage.store_edge(NodeEdge(
-                src_id=_node.id, dst_id=BASE_METACONTEXT_ID,
-                type=EdgeType.HAS_METACONTEXT,
-            ))
-        await storage.store_edge(
-            NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.CONTRADICTION)
-        )
+            await storage.store_edge(
+                NodeEdge(
+                    src_id=_node.id,
+                    dst_id=BASE_METACONTEXT_ID,
+                    type=EdgeType.HAS_METACONTEXT,
+                )
+            )
+        await storage.store_edge(NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.CONTRADICTION))
 
         result, _ = await query_graph(a.id, storage, hops=0)
         assert result["nodes"][0]["review"]["contested"] == [b.id]
@@ -3127,10 +3249,7 @@ class TestReviewLabelsInRetrieval:
 
 
 class TestSearchWithMetacontext:
-
-    async def test_search_filtered_by_metacontext(
-        self, storage, embedding_provider, config
-    ):
+    async def test_search_filtered_by_metacontext(self, storage, embedding_provider, config):
         mc_real = Metacontext(content="Real world")
         mc_fiction = Metacontext(content="Fiction")
         await storage.store_metacontext(mc_real)
@@ -3138,19 +3257,25 @@ class TestSearchWithMetacontext:
 
         await _two_step_ingest(
             "Neural networks are used in image recognition.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
             metacontext_id=mc_real.id,
         )
         await _two_step_ingest(
             "The neural lace allows direct brain-computer interface.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
             metacontext_id=mc_fiction.id,
         )
 
         result, meta = await search(
             "Neural networks",
-            storage, embedding_provider,
-            k=10, graph_hops=0,
+            storage,
+            embedding_provider,
+            k=10,
+            graph_hops=0,
             metacontexts=[mc_real.id],
         )
 
@@ -3160,7 +3285,6 @@ class TestSearchWithMetacontext:
 
 
 class TestGraphStats:
-
     async def test_empty_graph(self, storage):
         # A graph nobody has written to *or* set up: the fixture's graph already
         # holds the frame every ingest names, and `empty` is about knowledge.
@@ -3205,7 +3329,7 @@ class TestGraphStats:
         topic = Topic(content="t", source_id="s1")
         await storage.store_node(topic)
         await storage.set_node_status_tx(
-            [topic], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
+            [topic], status=NodeStatus.SUPERSEDED, at=datetime.now(UTC)
         )
 
         result, _ = await graph_stats(storage, default_reflect_threshold=10)
@@ -3223,123 +3347,131 @@ class TestGraphStats:
 
 # --- Temporal queries: graph_as_of + query_changes ---
 
-_W_START = datetime(2026, 6, 10, tzinfo=timezone.utc)
-_W_END = datetime(2026, 6, 20, tzinfo=timezone.utc)
+_W_START = datetime(2026, 6, 10, tzinfo=UTC)
+_W_END = datetime(2026, 6, 20, tzinfo=UTC)
 
 
 def _fact_at(content, created, *, status=NodeStatus.ACTIVE, retired=None):
     return Fact(
-        content=content, source_id="s1", created_at=created,
-        status=status, superseded_at=retired,
+        content=content,
+        source_id="s1",
+        created_at=created,
+        status=status,
+        superseded_at=retired,
     )
 
 
 async def _supersede(storage, old, new, *, status, at):
     """A real supersession at a chosen instant, so windows can be exact."""
     await storage.supersede_node_tx(
-        old, new,
+        old,
+        new,
         EmbeddingRecord(item_id=new.id, model_id="test", vector=[1.0, 0.0, 0.0]),
         NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY),
-        status=status, superseded_at=at,
+        status=status,
+        superseded_at=at,
     )
 
 
 class TestEventsInWindow:
-
     def test_created_in_window(self):
-        f = _fact_at("x", datetime(2026, 6, 15, tzinfo=timezone.utc))
+        f = _fact_at("x", datetime(2026, 6, 15, tzinfo=UTC))
         evs = events_in_window(f, _W_START, _W_END)
         assert [e.kind for e in evs] == ["created"]
         assert evs[0].at == f.created_at
 
     def test_superseded_in_window(self):
         f = _fact_at(
-            "x", datetime(2026, 6, 1, tzinfo=timezone.utc),
+            "x",
+            datetime(2026, 6, 1, tzinfo=UTC),
             status=NodeStatus.SUPERSEDED,
-            retired=datetime(2026, 6, 15, tzinfo=timezone.utc),
+            retired=datetime(2026, 6, 15, tzinfo=UTC),
         )
         assert [e.kind for e in events_in_window(f, _W_START, _W_END)] == ["superseded"]
 
     def test_merged_in_window(self):
         f = _fact_at(
-            "x", datetime(2026, 6, 1, tzinfo=timezone.utc),
+            "x",
+            datetime(2026, 6, 1, tzinfo=UTC),
             status=NodeStatus.MERGED,
-            retired=datetime(2026, 6, 15, tzinfo=timezone.utc),
+            retired=datetime(2026, 6, 15, tzinfo=UTC),
         )
         assert [e.kind for e in events_in_window(f, _W_START, _W_END)] == ["merged"]
 
     def test_created_and_retired_same_window_yields_two_events(self):
         f = _fact_at(
-            "x", datetime(2026, 6, 12, tzinfo=timezone.utc),
+            "x",
+            datetime(2026, 6, 12, tzinfo=UTC),
             status=NodeStatus.SUPERSEDED,
-            retired=datetime(2026, 6, 15, tzinfo=timezone.utc),
+            retired=datetime(2026, 6, 15, tzinfo=UTC),
         )
         assert [e.kind for e in events_in_window(f, _W_START, _W_END)] == [
-            "created", "superseded",
+            "created",
+            "superseded",
         ]
 
     def test_outside_window_yields_nothing(self):
-        f = _fact_at("x", datetime(2026, 6, 1, tzinfo=timezone.utc))
+        f = _fact_at("x", datetime(2026, 6, 1, tzinfo=UTC))
         assert events_in_window(f, _W_START, _W_END) == []
 
 
 class TestAsOf:
-
     async def test_snapshot_returns_active_set_at_instant(self, storage):
         old = _fact_at(
-            "old", datetime(2026, 6, 1, tzinfo=timezone.utc),
+            "old",
+            datetime(2026, 6, 1, tzinfo=UTC),
             status=NodeStatus.SUPERSEDED,
-            retired=datetime(2026, 6, 15, tzinfo=timezone.utc),
+            retired=datetime(2026, 6, 15, tzinfo=UTC),
         )
-        new = _fact_at("new", datetime(2026, 6, 15, tzinfo=timezone.utc))
+        new = _fact_at("new", datetime(2026, 6, 15, tzinfo=UTC))
         await storage.store_node(old)
         await storage.store_node(new)
 
         # Before new is born and before old is retired: only old is live.
-        early, _ = await graph_as_of(datetime(2026, 6, 10, tzinfo=timezone.utc), storage)
+        early, _ = await graph_as_of(datetime(2026, 6, 10, tzinfo=UTC), storage)
         assert [n["id"] for n in early["nodes"]] == [old.id]
 
         # After old retired and new born: only new is live.
-        late, meta = await graph_as_of(datetime(2026, 6, 20, tzinfo=timezone.utc), storage)
+        late, meta = await graph_as_of(datetime(2026, 6, 20, tzinfo=UTC), storage)
         assert [n["id"] for n in late["nodes"]] == [new.id]
         assert meta.nodes_returned == 1
 
     async def test_omits_review_labels(self, storage):
         # A node with an incoming supersession_candidate edge would be labelled
         # `superseded_candidate` by review_labels — graph_as_of must not surface that.
-        old = _fact_at("old", datetime(2026, 6, 1, tzinfo=timezone.utc))
-        new = _fact_at("new", datetime(2026, 6, 2, tzinfo=timezone.utc))
+        old = _fact_at("old", datetime(2026, 6, 1, tzinfo=UTC))
+        new = _fact_at("new", datetime(2026, 6, 2, tzinfo=UTC))
         await storage.store_node(old)
         await storage.store_node(new)
         await storage.store_edge(
             NodeEdge(src_id=new.id, dst_id=old.id, type=EdgeType.SUPERSESSION_CANDIDATE)
         )
-        result, _ = await graph_as_of(datetime(2026, 6, 10, tzinfo=timezone.utc), storage)
+        result, _ = await graph_as_of(datetime(2026, 6, 10, tzinfo=UTC), storage)
         assert all("review" not in n for n in result["nodes"])
 
     async def test_node_type_filter(self, storage):
-        f = _fact_at("f", datetime(2026, 6, 1, tzinfo=timezone.utc))
-        t = Topic(content="t", source_id="s1",
-                  created_at=datetime(2026, 6, 1, tzinfo=timezone.utc))
+        f = _fact_at("f", datetime(2026, 6, 1, tzinfo=UTC))
+        t = Topic(content="t", source_id="s1", created_at=datetime(2026, 6, 1, tzinfo=UTC))
         await storage.store_node(f)
         await storage.store_node(t)
         result, _ = await graph_as_of(
-            datetime(2026, 6, 10, tzinfo=timezone.utc), storage, node_types=["fact"]
+            datetime(2026, 6, 10, tzinfo=UTC), storage, node_types=["fact"]
         )
         assert [n["id"] for n in result["nodes"]] == [f.id]
 
 
 class TestQueryChangesTool:
-
     async def test_groups_by_window_with_event_tags(self, storage):
-        a = _fact_at("a", datetime(2026, 6, 15, tzinfo=timezone.utc))   # window 1
-        b = _fact_at("b", datetime(2026, 6, 25, tzinfo=timezone.utc))   # window 2
+        a = _fact_at("a", datetime(2026, 6, 15, tzinfo=UTC))  # window 1
+        b = _fact_at("b", datetime(2026, 6, 25, tzinfo=UTC))  # window 2
         await storage.store_node(a)
         await storage.store_node(b)
 
         w1 = (_W_START, _W_END)
-        w2 = (datetime(2026, 6, 20, tzinfo=timezone.utc),
-              datetime(2026, 6, 30, tzinfo=timezone.utc))
+        w2 = (
+            datetime(2026, 6, 20, tzinfo=UTC),
+            datetime(2026, 6, 30, tzinfo=UTC),
+        )
         result, meta = await query_changes([w1, w2], storage)
 
         win1, win2 = result["windows"]
@@ -3350,9 +3482,10 @@ class TestQueryChangesTool:
 
     async def test_two_events_for_create_and_retire_in_window(self, storage):
         f = _fact_at(
-            "f", datetime(2026, 6, 12, tzinfo=timezone.utc),
+            "f",
+            datetime(2026, 6, 12, tzinfo=UTC),
             status=NodeStatus.SUPERSEDED,
-            retired=datetime(2026, 6, 15, tzinfo=timezone.utc),
+            retired=datetime(2026, 6, 15, tzinfo=UTC),
         )
         await storage.store_node(f)
         result, _ = await query_changes([(_W_START, _W_END)], storage)
@@ -3364,8 +3497,8 @@ class TestQueryChangesTool:
     async def test_includes_metacontext_and_review_labels(self, storage):
         fiction = Metacontext(content="Fiction")
         await storage.store_metacontext(fiction)
-        a = _fact_at("a", datetime(2026, 6, 15, tzinfo=timezone.utc))
-        newer = _fact_at("newer", datetime(2026, 6, 16, tzinfo=timezone.utc))
+        a = _fact_at("a", datetime(2026, 6, 15, tzinfo=UTC))
+        newer = _fact_at("newer", datetime(2026, 6, 16, tzinfo=UTC))
         await storage.store_node(a)
         await storage.store_node(newer)
         await storage.store_edge(
@@ -3383,22 +3516,25 @@ class TestQueryChangesTool:
     async def test_query_changes_names_the_superseding_node(self, storage):
         """Counterpart ids, durable surface. Before this, the history reported *that* a node
         retired and never *by whom* — the relation existed only as an edge."""
-        old = _fact_at("Leningrad", datetime(2026, 6, 12, tzinfo=timezone.utc))
-        new = _fact_at("Saint Petersburg", datetime(2026, 6, 14, tzinfo=timezone.utc))
+        old = _fact_at("Leningrad", datetime(2026, 6, 12, tzinfo=UTC))
+        new = _fact_at("Saint Petersburg", datetime(2026, 6, 14, tzinfo=UTC))
         await storage.store_node(old)
-        await _supersede(storage, old, new,
-                         status=NodeStatus.HISTORICAL,
-                         at=datetime(2026, 6, 15, tzinfo=timezone.utc))
+        await _supersede(
+            storage,
+            old,
+            new,
+            status=NodeStatus.HISTORICAL,
+            at=datetime(2026, 6, 15, tzinfo=UTC),
+        )
 
         result, _ = await query_changes([(_W_START, _W_END)], storage)
         by_id = {c["id"]: c for c in result["windows"][0]["changes"]}
-        retirements = [
-            e for e in by_id[old.id]["events"] if e["kind"] == "historical"
-        ]
+        retirements = [e for e in by_id[old.id]["events"] if e["kind"] == "historical"]
         assert [e["counterpart"] for e in retirements] == [new.id]
 
     async def test_query_changes_reports_every_episode_of_a_recurring_node(
-        self, storage,
+        self,
+        storage,
     ):
         """Retired, brought back, retired again — three transitions, three reports.
 
@@ -3408,47 +3544,56 @@ class TestQueryChangesTool:
         status. A scalar `restored_at` defers the same overwrite to the second
         retirement rather than fixing it.
         """
-        node = _fact_at("the claim", datetime(2026, 6, 1, tzinfo=timezone.utc))
-        first = _fact_at("what replaced it",
-                         datetime(2026, 6, 11, tzinfo=timezone.utc))
-        second = _fact_at("what replaced it next",
-                          datetime(2026, 6, 15, tzinfo=timezone.utc))
+        node = _fact_at("the claim", datetime(2026, 6, 1, tzinfo=UTC))
+        first = _fact_at("what replaced it", datetime(2026, 6, 11, tzinfo=UTC))
+        second = _fact_at("what replaced it next", datetime(2026, 6, 15, tzinfo=UTC))
         await storage.store_node(node)
 
-        retired_first = datetime(2026, 6, 11, tzinfo=timezone.utc)
-        came_back = datetime(2026, 6, 13, tzinfo=timezone.utc)
-        retired_again = datetime(2026, 6, 15, tzinfo=timezone.utc)
+        retired_first = datetime(2026, 6, 11, tzinfo=UTC)
+        came_back = datetime(2026, 6, 13, tzinfo=UTC)
+        retired_again = datetime(2026, 6, 15, tzinfo=UTC)
 
-        await _supersede(storage, node, first,
-                         status=NodeStatus.HISTORICAL, at=retired_first)
+        await _supersede(storage, node, first, status=NodeStatus.HISTORICAL, at=retired_first)
         # The return, driven at the storage layer: the `recurs` verdict that will
         # call this is the edge split work, and the contract it needs holds here already.
         await storage.set_node_status_tx(
-            [await storage.get_node(node.id)], status=NodeStatus.ACTIVE, at=came_back,
+            [await storage.get_node(node.id)],
+            status=NodeStatus.ACTIVE,
+            at=came_back,
         )
-        await _supersede(storage, await storage.get_node(node.id), second,
-                         status=NodeStatus.HISTORICAL, at=retired_again)
+        await _supersede(
+            storage,
+            await storage.get_node(node.id),
+            second,
+            status=NodeStatus.HISTORICAL,
+            at=retired_again,
+        )
 
         def window(start_day, end_day):
-            return (datetime(2026, 6, start_day, tzinfo=timezone.utc),
-                    datetime(2026, 6, end_day, tzinfo=timezone.utc))
+            return (
+                datetime(2026, 6, start_day, tzinfo=UTC),
+                datetime(2026, 6, end_day, tzinfo=UTC),
+            )
 
         result, _ = await query_changes(
-            [window(10, 12), window(12, 14), window(14, 16)], storage,
+            [window(10, 12), window(12, 14), window(14, 16)],
+            storage,
         )
         reported = [
             [e for c in win["changes"] if c["id"] == node.id for e in c["events"]]
             for win in result["windows"]
         ]
         assert [[e["kind"] for e in evs] for evs in reported] == [
-            ["historical"], ["restored"], ["historical"],
+            ["historical"],
+            ["restored"],
+            ["historical"],
         ]
         assert [e["counterpart"] for e in reported[0]] == [first.id]
         assert [e["counterpart"] for e in reported[2]] == [second.id]
 
 
 class TestResolveWindows:
-    NOW = datetime(2026, 6, 28, 12, 0, tzinfo=timezone.utc)
+    NOW = datetime(2026, 6, 28, 12, 0, tzinfo=UTC)
 
     def test_defaults_to_last_24h(self):
         windows = _resolve_windows(self.NOW)
@@ -3459,20 +3604,21 @@ class TestResolveWindows:
         assert windows == [(self.NOW - timedelta(hours=6), self.NOW)]
 
     def test_explicit_windows_with_open_end_uses_now(self):
-        windows = _resolve_windows(
-            self.NOW, windows=[["2026-06-20T00:00:00+00:00", ""]]
-        )
-        assert windows == [(datetime(2026, 6, 20, tzinfo=timezone.utc), self.NOW)]
+        windows = _resolve_windows(self.NOW, windows=[["2026-06-20T00:00:00+00:00", ""]])
+        assert windows == [(datetime(2026, 6, 20, tzinfo=UTC), self.NOW)]
 
     def test_windows_take_precedence_over_relative(self):
         windows = _resolve_windows(
-            self.NOW, last_hours=6,
+            self.NOW,
+            last_hours=6,
             windows=[["2026-06-01T00:00:00+00:00", "2026-06-02T00:00:00+00:00"]],
         )
-        assert windows == [(
-            datetime(2026, 6, 1, tzinfo=timezone.utc),
-            datetime(2026, 6, 2, tzinfo=timezone.utc),
-        )]
+        assert windows == [
+            (
+                datetime(2026, 6, 1, tzinfo=UTC),
+                datetime(2026, 6, 2, tzinfo=UTC),
+            )
+        ]
 
     def test_rejects_inverted_window(self):
         with pytest.raises(ValueError):
@@ -3481,11 +3627,13 @@ class TestResolveWindows:
                 windows=[["2026-06-20T00:00:00+00:00", "2026-06-10T00:00:00+00:00"]],
             )
 
+
 # --- Sources, tags-as-topics, relations ---
 
 
 class _FixedEmbed:
     """Embedding provider returning a fixed vector per exact string (for tests)."""
+
     model_id = "fixed"
 
     def __init__(self, mapping):
@@ -3502,68 +3650,94 @@ async def _ingest(storage, ep, config, content, *, source, tags=None, facts):
     await store_decomposition(
         document_id=seg["document_id"],
         segments=[{"segment_id": sid, "topics": [], "facts": facts, "inferences": []}],
-        storage=storage, embedding_provider=ep, tags=tags,
+        storage=storage,
+        embedding_provider=ep,
+        tags=tags,
         metacontext_id=BASE_METACONTEXT_ID,
     )
     return seg["document_id"]
 
 
 class TestIngestSourcesAndTags:
-
     async def test_sourced_from_edge_per_node(self, storage, embedding_provider, config):
-        doc_id = await _ingest(storage, embedding_provider, config, "One para.",
-                               source="ISSUES.md", facts=["a fact"])
+        doc_id = await _ingest(
+            storage, embedding_provider, config, "One para.", source="ISSUES.md", facts=["a fact"]
+        )
         facts = await storage.query_nodes(node_type=NodeType.FACT)
         assert facts
         for f in facts:
             srcs = await storage.get_edges_from(f.id, edge_type=EdgeType.SOURCED_FROM)
             assert [e.dst_id for e in srcs] == [doc_id]
 
-    async def test_tagged_with_creates_and_reuses_one_topic(self, storage, embedding_provider, config):
-        await _ingest(storage, embedding_provider, config, "Alpha.",
-                      source="A.md", tags=["billing"], facts=["af"])
-        await _ingest(storage, embedding_provider, config, "Beta.",
-                      source="B.md", tags=["billing"], facts=["bf"])
+    async def test_tagged_with_creates_and_reuses_one_topic(
+        self, storage, embedding_provider, config
+    ):
+        await _ingest(
+            storage,
+            embedding_provider,
+            config,
+            "Alpha.",
+            source="A.md",
+            tags=["billing"],
+            facts=["af"],
+        )
+        await _ingest(
+            storage,
+            embedding_provider,
+            config,
+            "Beta.",
+            source="B.md",
+            tags=["billing"],
+            facts=["bf"],
+        )
         billing = await storage.get_node_by_content("billing", node_type=NodeType.TOPIC)
         assert billing is not None
         # Exactly one billing Topic, with a tagged_with edge from each fact.
-        topics = [t for t in await storage.query_nodes(node_type=NodeType.TOPIC)
-                  if t.content == "billing"]
+        topics = [
+            t for t in await storage.query_nodes(node_type=NodeType.TOPIC) if t.content == "billing"
+        ]
         assert len(topics) == 1
         taggers = await storage.get_edges_to(billing.id, edge_type=EdgeType.TAGGED_WITH)
         assert len(taggers) == 2
 
     async def test_published_by_entity_edge(self, storage, embedding_provider, config):
         seg, _ = await segment_text(
-            "An article.", storage, embedding_provider, config,
-            source="BBC article", published_by="BBC",
+            "An article.",
+            storage,
+            embedding_provider,
+            config,
+            source="BBC article",
+            published_by="BBC",
         )
         bbc = await storage.get_node_by_content("BBC", node_type=NodeType.TOPIC)
         assert bbc is not None
         edges = await storage.get_edges_to(bbc.id)
         assert any(
-            e.type == EdgeType.RELATED and e.label == "published_by"
-            and e.kind == "attribution" for e in edges
+            e.type == EdgeType.RELATED and e.label == "published_by" and e.kind == "attribution"
+            for e in edges
         )
 
 
 class TestFindNodesTraversal:
-
     async def _two(self, storage, ep, config):
-        await _ingest(storage, ep, config, "Alpha.", source="ISSUES.md",
-                      tags=["billing"], facts=["af"])
-        await _ingest(storage, ep, config, "Beta.", source="README.md",
-                      tags=["weather"], facts=["bf"])
+        await _ingest(
+            storage, ep, config, "Alpha.", source="ISSUES.md", tags=["billing"], facts=["af"]
+        )
+        await _ingest(
+            storage, ep, config, "Beta.", source="README.md", tags=["weather"], facts=["bf"]
+        )
 
     async def test_find_by_sourced_from(self, storage, embedding_provider, config):
-        doc_id = await _ingest(storage, embedding_provider, config, "Alpha.",
-                               source="ISSUES.md", facts=["af"])
+        doc_id = await _ingest(
+            storage, embedding_provider, config, "Alpha.", source="ISSUES.md", facts=["af"]
+        )
         result, _ = await find_nodes(storage, sourced_from=doc_id)
         assert {n["content"] for n in result["nodes"]} == {"af"}
 
     async def test_find_by_sourced_from_document_name(self, storage, embedding_provider, config):
-        await _ingest(storage, embedding_provider, config, "Alpha.",
-                      source="ISSUES.md", facts=["af"])
+        await _ingest(
+            storage, embedding_provider, config, "Alpha.", source="ISSUES.md", facts=["af"]
+        )
         # Resolves the document by its human source name, not just its id.
         result, _ = await find_nodes(storage, sourced_from="ISSUES.md")
         assert {n["content"] for n in result["nodes"]} == {"af"}
@@ -3579,33 +3753,46 @@ class TestFindNodesTraversal:
 
 
 class TestListSourcesAndRelations:
-
     async def test_list_sources(self, storage, embedding_provider, config):
-        await _ingest(storage, embedding_provider, config, "Alpha.",
-                      source="ISSUES.md", facts=["af"])
-        await segment_text("Article.", storage, embedding_provider, config,
-                           source="BBC article", published_by="BBC")
+        await _ingest(
+            storage, embedding_provider, config, "Alpha.", source="ISSUES.md", facts=["af"]
+        )
+        await segment_text(
+            "Article.",
+            storage,
+            embedding_provider,
+            config,
+            source="BBC article",
+            published_by="BBC",
+        )
         result, _ = await list_sources(storage)
         names = {s["name"] for s in result["sources"]}
         assert "BBC" in names  # the publishing entity is a source
 
     async def test_list_relations(self, storage, embedding_provider, config):
-        await segment_text("Article.", storage, embedding_provider, config,
-                           source="BBC article", published_by="BBC")
+        await segment_text(
+            "Article.",
+            storage,
+            embedding_provider,
+            config,
+            source="BBC article",
+            published_by="BBC",
+        )
         result, _ = await list_relations(storage)
         labels = {r["label"]: r["kind"] for r in result["relations"]}
         assert labels.get("published_by") == "attribution"
 
 
 class TestTraversalVsMigration:
-
     async def test_sourced_from_migrates_but_search_does_not_expand(
         self, storage, embedding_provider, config
     ):
         from epimemer.pipelines.graph_construction.versioning import supersede_node
         from epimemer.pipelines.query.graph_expansion import expand_via_graph
-        doc_id = await _ingest(storage, embedding_provider, config, "Para.",
-                               source="ISSUES.md", facts=["the fact"])
+
+        doc_id = await _ingest(
+            storage, embedding_provider, config, "Para.", source="ISSUES.md", facts=["the fact"]
+        )
         fact = (await storage.query_nodes(node_type=NodeType.FACT))[0]
 
         # Default expansion from the fact must NOT cross sourced_from to the doc.
@@ -3626,8 +3813,16 @@ class TestTraversalVsMigration:
 
     async def test_tagged_with_is_traversed(self, storage, embedding_provider, config):
         from epimemer.pipelines.query.graph_expansion import expand_via_graph
-        await _ingest(storage, embedding_provider, config, "Para.",
-                      source="A.md", tags=["billing"], facts=["the fact"])
+
+        await _ingest(
+            storage,
+            embedding_provider,
+            config,
+            "Para.",
+            source="A.md",
+            tags=["billing"],
+            facts=["the fact"],
+        )
         fact = (await storage.query_nodes(node_type=NodeType.FACT))[0]
         billing = await storage.get_node_by_content("billing", node_type=NodeType.TOPIC)
         nodes, _ = await expand_via_graph([fact], storage, hops=1)
@@ -3635,23 +3830,48 @@ class TestTraversalVsMigration:
 
 
 class TestRelationConsolidation:
-
     async def test_sweep_similar_relation_pairs(self, storage):
         from epimemer.pipelines.reflection.relation_consolidation import (
             sweep_similar_relation_pairs,
         )
-        emb = _FixedEmbed({
-            "authored_by": [1.0, 0.0], "written_by": [1.0, 0.0], "funded_by": [0.0, 1.0],
-        })
+
+        emb = _FixedEmbed(
+            {
+                "authored_by": [1.0, 0.0],
+                "written_by": [1.0, 0.0],
+                "funded_by": [0.0, 1.0],
+            }
+        )
         a, b, c, d = (Topic(content=x) for x in ("a", "b", "c", "d"))
         for n in (a, b, c, d):
             await storage.store_node(n)
-        await storage.store_edge(NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.RELATED,
-                                          label="authored_by", kind="relationship"))
-        await storage.store_edge(NodeEdge(src_id=a.id, dst_id=c.id, type=EdgeType.RELATED,
-                                          label="written_by", kind="relationship"))
-        await storage.store_edge(NodeEdge(src_id=a.id, dst_id=d.id, type=EdgeType.RELATED,
-                                          label="funded_by", kind="relationship"))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=a.id,
+                dst_id=b.id,
+                type=EdgeType.RELATED,
+                label="authored_by",
+                kind="relationship",
+            )
+        )
+        await storage.store_edge(
+            NodeEdge(
+                src_id=a.id,
+                dst_id=c.id,
+                type=EdgeType.RELATED,
+                label="written_by",
+                kind="relationship",
+            )
+        )
+        await storage.store_edge(
+            NodeEdge(
+                src_id=a.id,
+                dst_id=d.id,
+                type=EdgeType.RELATED,
+                label="funded_by",
+                kind="relationship",
+            )
+        )
         pairs = (await sweep_similar_relation_pairs(storage, emb, similarity_threshold=0.9)).pairs
         got = {frozenset((p["label_a"], p["label_b"])) for p in pairs}
         assert got == {frozenset(("authored_by", "written_by"))}
@@ -3666,9 +3886,7 @@ class TestGraphNameValidationTools:
     reach SurrealQL that interpolates the database name."""
 
     async def test_use_graph_rejects_hostile_name(self, storage):
-        result, _ = await tools.use_graph(
-            "pwn`; REMOVE DATABASE `victim", storage, confirm=True
-        )
+        result, _ = await tools.use_graph("pwn`; REMOVE DATABASE `victim", storage, confirm=True)
         assert result["status"] == "invalid_name"
         assert "pwn`; REMOVE DATABASE `victim" not in await storage.list_databases()
 
@@ -3704,13 +3922,15 @@ class TestRunNetStdout:
             return x * 2
 
         def _build() -> ExecutableGraph:
-            return ExecutableGraphOperations.construct_graph([
-                ListPlaceNode("Input", int, [5]),
-                ListPlaceNode("Output", int),
-                FunctionTransitionNode("double", _slow_double),
-                ArgumentEdgeToTransition("Input", "double", "x"),
-                ReturnedEdgeFromTransition("double", "Output"),
-            ])
+            return ExecutableGraphOperations.construct_graph(
+                [
+                    ListPlaceNode("Input", int, [5]),
+                    ListPlaceNode("Output", int),
+                    FunctionTransitionNode("double", _slow_double),
+                    ArgumentEdgeToTransition("Input", "double", "x"),
+                    ReturnedEdgeFromTransition("double", "Output"),
+                ]
+            )
 
         results = await asyncio.gather(
             tools._run_net(_build(), "pipeline-a", None),
@@ -3785,11 +4005,13 @@ class TestLexicalSearch:
             fact = Fact(content=content, source_id="seg-1")
             await storage.store_node(fact)
             vectors = await embedding_provider.embed([content])
-            await storage.store_embedding(EmbeddingRecord(
-                item_id=fact.id,
-                model_id=embedding_provider.model_id,
-                vector=vectors[0],
-            ))
+            await storage.store_embedding(
+                EmbeddingRecord(
+                    item_id=fact.id,
+                    model_id=embedding_provider.model_id,
+                    vector=vectors[0],
+                )
+            )
             facts.append(fact)
         return facts
 
@@ -3825,19 +4047,17 @@ class TestLexicalSearch:
         """
         facts = await self._tickets(storage, embedding_provider)
 
-        result, _ = await search(
-            "JIRA-4417", storage, embedding_provider, k=5, graph_hops=1
-        )
+        result, _ = await search("JIRA-4417", storage, embedding_provider, k=5, graph_hops=1)
 
         by_id = {node["id"]: node for node in result["nodes"]}
         assert by_id[facts[0].id]["provenance"] == "lexical"
         assert by_id.get(facts[1].id, {}).get("provenance") in (
-            None, "vector", "expanded",
+            None,
+            "vector",
+            "expanded",
         )
 
-    async def test_search_response_labels_seed_provenance(
-        self, storage, embedding_provider
-    ):
+    async def test_search_response_labels_seed_provenance(self, storage, embedding_provider):
         """Every node the agent is handed says how it was reached.
 
         A flat "retrieved" set throws away the most useful thing the feature
@@ -3847,9 +4067,7 @@ class TestLexicalSearch:
         """
         await self._tickets(storage, embedding_provider)
 
-        result, _ = await search(
-            "JIRA-4417", storage, embedding_provider, k=5, graph_hops=1
-        )
+        result, _ = await search("JIRA-4417", storage, embedding_provider, k=5, graph_hops=1)
 
         labels = {node["provenance"] for node in result["nodes"]}
         assert labels
@@ -3866,15 +4084,11 @@ class TestLexicalSearch:
         """
         await self._store(storage, embedding_provider, self.TICKETS)
 
-        result, _ = await search(
-            "the ticket", storage, embedding_provider, k=5, graph_hops=0
-        )
+        result, _ = await search("the ticket", storage, embedding_provider, k=5, graph_hops=0)
 
         assert {node["provenance"] for node in result["nodes"]} == {"vector"}
 
-    async def test_declared_terms_drive_the_lexical_arm(
-        self, storage, embedding_provider
-    ):
+    async def test_declared_terms_drive_the_lexical_arm(self, storage, embedding_provider):
         """R2: the caller says which token is load-bearing, rather than the
         system inferring it from query shape.
 
@@ -3928,9 +4142,7 @@ class TestLexicalSearch:
         by_id = {node["id"]: node for node in result["nodes"]}
         assert by_id[facts[0].id]["provenance"] == "lexical"
 
-    async def test_segment_hit_bridges_to_its_extracted_nodes(
-        self, storage, embedding_provider
-    ):
+    async def test_segment_hit_bridges_to_its_extracted_nodes(self, storage, embedding_provider):
         """§1.1: the identifier is in the passage and nowhere else.
 
         `store_decomposition` is agent-driven, so a fact written as "the
@@ -3947,26 +4159,22 @@ class TestLexicalSearch:
             "Notes on the new starter onboarding checklist",
         )
         for index, text in enumerate(passages):
-            segment = Segment(
-                source_id="doc-1", text=text, span_start=index, span_end=index + 1
-            )
+            segment = Segment(source_id="doc-1", text=text, span_start=index, span_end=index + 1)
             await storage.store_segment(segment)
             segments.append(segment)
 
-        paraphrase = Fact(
-            content="the deployment ticket was closed", source_id=segments[0].id
-        )
+        paraphrase = Fact(content="the deployment ticket was closed", source_id=segments[0].id)
         await storage.store_node(paraphrase)
         vectors = await embedding_provider.embed([paraphrase.content])
-        await storage.store_embedding(EmbeddingRecord(
-            item_id=paraphrase.id,
-            model_id=embedding_provider.model_id,
-            vector=vectors[0],
-        ))
-
-        result, _ = await search(
-            "JIRA-4417", storage, embedding_provider, k=5, graph_hops=0
+        await storage.store_embedding(
+            EmbeddingRecord(
+                item_id=paraphrase.id,
+                model_id=embedding_provider.model_id,
+                vector=vectors[0],
+            )
         )
+
+        result, _ = await search("JIRA-4417", storage, embedding_provider, k=5, graph_hops=0)
 
         by_id = {node["id"]: node for node in result["nodes"]}
         assert by_id[paraphrase.id]["provenance"] == "segment"
@@ -3976,9 +4184,7 @@ class TestLexicalSearch:
         assert result["segments"][0]["text"] == passages[0]
         assert result["segments"][0]["document_id"] == "doc-1"
 
-    async def test_segment_bridge_respects_the_status_gate(
-        self, storage, embedding_provider
-    ):
+    async def test_segment_bridge_respects_the_status_gate(self, storage, embedding_provider):
         """R7: the bridge is not a side door around the gate.
 
         A CORRECTED node is a claim concluded *wrong*. Gating the direct route
@@ -3994,23 +4200,15 @@ class TestLexicalSearch:
         )
         segments = []
         for index, text in enumerate(passages):
-            segment = Segment(
-                source_id="doc-1", text=text, span_start=index, span_end=index + 1
-            )
+            segment = Segment(source_id="doc-1", text=text, span_start=index, span_end=index + 1)
             await storage.store_segment(segment)
             segments.append(segment)
 
-        wrong = Fact(
-            content="the deployment ticket was closed", source_id=segments[0].id
-        )
+        wrong = Fact(content="the deployment ticket was closed", source_id=segments[0].id)
         await storage.store_node(wrong)
-        await storage.set_node_status_tx(
-            [wrong], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
-        )
+        await storage.set_node_status_tx([wrong], status=NodeStatus.CORRECTED, at=datetime.now(UTC))
 
-        result, _ = await search(
-            "JIRA-4417", storage, embedding_provider, k=5, graph_hops=0
-        )
+        result, _ = await search("JIRA-4417", storage, embedding_provider, k=5, graph_hops=0)
 
         assert wrong.id not in {node["id"] for node in result["nodes"]}
         # The passage itself still matched, and saying so is honest: the segment
@@ -4032,20 +4230,24 @@ class TestWhatARetrievalCanReach:
         fact = Fact(content=content, source_id="seg-1", value=ValueSignal())
         await storage.store_node(fact)
         vector = (await embedding_provider.embed([content]))[0]
-        await storage.store_embedding(EmbeddingRecord(
-            item_id=fact.id, model_id=embedding_provider.model_id, vector=vector,
-        ))
-        await storage.set_node_status_tx(
-            [fact], status=status, at=datetime.now(timezone.utc)
+        await storage.store_embedding(
+            EmbeddingRecord(
+                item_id=fact.id,
+                model_id=embedding_provider.model_id,
+                vector=vector,
+            )
         )
+        await storage.set_node_status_tx([fact], status=status, at=datetime.now(UTC))
         return fact
 
     async def test_a_claim_the_world_moved_past_comes_back_by_default(
         self, storage, embedding_provider
     ):
         retired = await self._retire(
-            storage, embedding_provider,
-            "the city is called Leningrad", NodeStatus.HISTORICAL,
+            storage,
+            embedding_provider,
+            "the city is called Leningrad",
+            NodeStatus.HISTORICAL,
         )
 
         result, _ = await search(
@@ -4059,13 +4261,19 @@ class TestWhatARetrievalCanReach:
 
     async def test_it_can_be_switched_off(self, storage, embedding_provider):
         retired = await self._retire(
-            storage, embedding_provider,
-            "the city is called Leningrad", NodeStatus.HISTORICAL,
+            storage,
+            embedding_provider,
+            "the city is called Leningrad",
+            NodeStatus.HISTORICAL,
         )
 
         result, _ = await search(
-            "what is the city called", storage, embedding_provider,
-            k=5, graph_hops=0, include_historical=False,
+            "what is the city called",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
+            include_historical=False,
         )
 
         assert retired.id not in {node["id"] for node in result["nodes"]}
@@ -4074,19 +4282,28 @@ class TestWhatARetrievalCanReach:
         self, storage, embedding_provider
     ):
         wrong = await self._retire(
-            storage, embedding_provider,
-            "the release shipped in March", NodeStatus.CORRECTED,
+            storage,
+            embedding_provider,
+            "the release shipped in March",
+            NodeStatus.CORRECTED,
         )
 
         default, _ = await search(
-            "when did the release ship", storage, embedding_provider,
-            k=5, graph_hops=0,
+            "when did the release ship",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
         )
         assert wrong.id not in {node["id"] for node in default["nodes"]}
 
         audited, _ = await search(
-            "when did the release ship", storage, embedding_provider,
-            k=5, graph_hops=0, include_corrected=True,
+            "when did the release ship",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
+            include_corrected=True,
         )
         assert wrong.id in {node["id"] for node in audited["nodes"]}
 
@@ -4097,19 +4314,28 @@ class TestWhatARetrievalCanReach:
         already reads them as corrections. Putting them behind the cautious
         switch keeps the two readings of one unrecorded retirement in step."""
         legacy = await self._retire(
-            storage, embedding_provider,
-            "the release shipped in March", NodeStatus.SUPERSEDED,
+            storage,
+            embedding_provider,
+            "the release shipped in March",
+            NodeStatus.SUPERSEDED,
         )
 
         default, _ = await search(
-            "when did the release ship", storage, embedding_provider,
-            k=5, graph_hops=0,
+            "when did the release ship",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
         )
         assert legacy.id not in {node["id"] for node in default["nodes"]}
 
         audited, _ = await search(
-            "when did the release ship", storage, embedding_provider,
-            k=5, graph_hops=0, include_corrected=True,
+            "when did the release ship",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
+            include_corrected=True,
         )
         assert legacy.id in {node["id"] for node in audited["nodes"]}
 
@@ -4125,25 +4351,32 @@ class TestAClaimsHistoryHangsOffIt:
     async def _renaming(self, storage, embedding_provider):
         old = Fact(
             content="the city is called Leningrad",
-            source_id="seg-1", value=ValueSignal(),
+            source_id="seg-1",
+            value=ValueSignal(),
         )
         current = Fact(
             content="the city is called Saint Petersburg",
-            source_id="seg-1", value=ValueSignal(),
+            source_id="seg-1",
+            value=ValueSignal(),
         )
         for node in (old, current):
             await storage.store_node(node)
             vector = (await embedding_provider.embed([node.content]))[0]
-            await storage.store_embedding(EmbeddingRecord(
-                item_id=node.id, model_id=embedding_provider.model_id, vector=vector,
-            ))
-        await storage.set_node_status_tx(
-            [old], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
+            await storage.store_embedding(
+                EmbeddingRecord(
+                    item_id=node.id,
+                    model_id=embedding_provider.model_id,
+                    vector=vector,
+                )
+            )
+        await storage.set_node_status_tx([old], status=NodeStatus.HISTORICAL, at=datetime.now(UTC))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=old.id,
+                dst_id=current.id,
+                type=EdgeType.TEMPORALLY_FOLLOWED_BY,
+            )
         )
-        await storage.store_edge(NodeEdge(
-            src_id=old.id, dst_id=current.id,
-            type=EdgeType.TEMPORALLY_FOLLOWED_BY,
-        ))
         return old, current
 
     async def test_the_replacement_takes_the_slot_and_carries_the_rest(
@@ -4152,15 +4385,16 @@ class TestAClaimsHistoryHangsOffIt:
         old, current = await self._renaming(storage, embedding_provider)
 
         result, _ = await search(
-            "what is the city called", storage, embedding_provider,
-            k=5, graph_hops=0,
+            "what is the city called",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
         )
 
         found = {node["id"]: node for node in result["nodes"]}
         assert old.id not in found
-        assert [
-            earlier["id"] for earlier in found[current.id]["earlier_versions"]
-        ] == [old.id]
+        assert [earlier["id"] for earlier in found[current.id]["earlier_versions"]] == [old.id]
         # Enough to decide whether to fetch it, and not the whole node.
         assert found[current.id]["earlier_versions"][0]["status"] == "historical"
 
@@ -4170,8 +4404,12 @@ class TestAClaimsHistoryHangsOffIt:
         old, current = await self._renaming(storage, embedding_provider)
 
         result, _ = await search(
-            "what is the city called", storage, embedding_provider,
-            k=5, graph_hops=0, include_historical=False,
+            "what is the city called",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
+            include_historical=False,
         )
 
         found = {node["id"]: node for node in result["nodes"]}
@@ -4193,11 +4431,13 @@ class TestAskingWhatWasTrueThen:
 
         old = Fact(
             content="the city is called Leningrad",
-            source_id="seg-1", value=ValueSignal(),
+            source_id="seg-1",
+            value=ValueSignal(),
         )
         current = Fact(
             content="the city is called Saint Petersburg",
-            source_id="seg-1", value=ValueSignal(),
+            source_id="seg-1",
+            value=ValueSignal(),
         )
         periods = {
             old.id: ValidityInterval(
@@ -4213,33 +4453,43 @@ class TestAskingWhatWasTrueThen:
         for node in (old, current):
             await storage.store_node(node)
             vector = (await embedding_provider.embed([node.content]))[0]
-            await storage.store_embedding(EmbeddingRecord(
-                item_id=node.id, model_id=embedding_provider.model_id, vector=vector,
-            ))
-            await storage.store_edge(NodeEdge(
-                src_id=node.id, dst_id=document.id, type=EdgeType.SOURCED_FROM,
-                validity=[periods[node.id]],
-            ))
-        await storage.set_node_status_tx(
-            [old], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
+            await storage.store_embedding(
+                EmbeddingRecord(
+                    item_id=node.id,
+                    model_id=embedding_provider.model_id,
+                    vector=vector,
+                )
+            )
+            await storage.store_edge(
+                NodeEdge(
+                    src_id=node.id,
+                    dst_id=document.id,
+                    type=EdgeType.SOURCED_FROM,
+                    validity=[periods[node.id]],
+                )
+            )
+        await storage.set_node_status_tx([old], status=NodeStatus.HISTORICAL, at=datetime.now(UTC))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=old.id,
+                dst_id=current.id,
+                type=EdgeType.TEMPORALLY_FOLLOWED_BY,
+            )
         )
-        await storage.store_edge(NodeEdge(
-            src_id=old.id, dst_id=current.id,
-            type=EdgeType.TEMPORALLY_FOLLOWED_BY,
-        ))
         return document, old, current
 
     async def test_the_periods_come_back_attributed_to_their_source(
         self, storage, embedding_provider
     ):
         """T1 §3's read surface: `(source, interval)` pairs, uncollapsed."""
-        document, _, current = await self._dated_renaming(
-            storage, embedding_provider
-        )
+        document, _, current = await self._dated_renaming(storage, embedding_provider)
 
         result, _ = await search(
-            "what is the city called", storage, embedding_provider,
-            k=5, graph_hops=0,
+            "what is the city called",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
         )
 
         found = {node["id"]: node for node in result["nodes"]}
@@ -4247,16 +4497,17 @@ class TestAskingWhatWasTrueThen:
         assert source["source_id"] == document.id
         assert source["intervals"][0]["start"]["at"].startswith("1991-09-06")
 
-    async def test_the_claim_true_then_keeps_its_own_slot(
-        self, storage, embedding_provider
-    ):
+    async def test_the_claim_true_then_keeps_its_own_slot(self, storage, embedding_provider):
         """Otherwise the asked-for answer is a footnote on the wrong one."""
         _, old, current = await self._dated_renaming(storage, embedding_provider)
 
         result, _ = await search(
-            "what is the city called", storage, embedding_provider,
-            k=5, graph_hops=0,
-            valid_as_of=datetime(1980, 1, 1, tzinfo=timezone.utc),
+            "what is the city called",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
+            valid_as_of=datetime(1980, 1, 1, tzinfo=UTC),
         )
 
         found = {node["id"]: node for node in result["nodes"]}
@@ -4270,18 +4521,26 @@ class TestAskingWhatWasTrueThen:
         """The whole argument against a filter: absence of a date is not a no."""
         undated = Fact(
             content="the city is called Leningrad",
-            source_id="seg-1", value=ValueSignal(),
+            source_id="seg-1",
+            value=ValueSignal(),
         )
         await storage.store_node(undated)
         vector = (await embedding_provider.embed([undated.content]))[0]
-        await storage.store_embedding(EmbeddingRecord(
-            item_id=undated.id, model_id=embedding_provider.model_id, vector=vector,
-        ))
+        await storage.store_embedding(
+            EmbeddingRecord(
+                item_id=undated.id,
+                model_id=embedding_provider.model_id,
+                vector=vector,
+            )
+        )
 
         result, _ = await search(
-            "what is the city called", storage, embedding_provider,
-            k=5, graph_hops=0,
-            valid_as_of=datetime(1980, 1, 1, tzinfo=timezone.utc),
+            "what is the city called",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
+            valid_as_of=datetime(1980, 1, 1, tzinfo=UTC),
         )
 
         found = {node["id"]: node for node in result["nodes"]}
@@ -4289,16 +4548,17 @@ class TestAskingWhatWasTrueThen:
         assert "validity" not in found[undated.id]
         assert result["valid_at"]["unknown"] == [undated.id]
 
-    async def test_no_moment_asked_means_no_verdict_invented(
-        self, storage, embedding_provider
-    ):
-        """"Current" is the timeline's reference time, never the wall clock, so
+    async def test_no_moment_asked_means_no_verdict_invented(self, storage, embedding_provider):
+        """ "Current" is the timeline's reference time, never the wall clock, so
         an unasked question gets no answer rather than today's."""
         _, old, _ = await self._dated_renaming(storage, embedding_provider)
 
         result, _ = await search(
-            "what is the city called", storage, embedding_provider,
-            k=5, graph_hops=0,
+            "what is the city called",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
         )
 
         assert "valid_at" not in result
@@ -4326,26 +4586,44 @@ class TestCorroborationOnTheSearchPath:
             await storage.store_document(document)
             entity = Topic(content=outlet, source_id=None)
             await storage.store_node(entity)
-            await storage.store_edge(NodeEdge(
-                src_id=document.id, dst_id=entity.id, type=EdgeType.RELATED,
-                label="published_by", kind="attribution",
-            ))
+            await storage.store_edge(
+                NodeEdge(
+                    src_id=document.id,
+                    dst_id=entity.id,
+                    type=EdgeType.RELATED,
+                    label="published_by",
+                    kind="attribution",
+                )
+            )
             fact = Fact(
                 content="the harbour bridge closed for repairs",
-                source_id="seg-1", value=ValueSignal(),
+                source_id="seg-1",
+                value=ValueSignal(),
             )
             await storage.store_node(fact)
             vector = (await embedding_provider.embed([fact.content]))[0]
-            await storage.store_embedding(EmbeddingRecord(
-                item_id=fact.id, model_id=embedding_provider.model_id, vector=vector,
-            ))
-            await storage.store_edge(NodeEdge(
-                src_id=fact.id, dst_id=document.id, type=EdgeType.SOURCED_FROM,
-            ))
+            await storage.store_embedding(
+                EmbeddingRecord(
+                    item_id=fact.id,
+                    model_id=embedding_provider.model_id,
+                    vector=vector,
+                )
+            )
+            await storage.store_edge(
+                NodeEdge(
+                    src_id=fact.id,
+                    dst_id=document.id,
+                    type=EdgeType.SOURCED_FROM,
+                )
+            )
             nodes.append(fact)
-        await storage.store_edge(NodeEdge(
-            src_id=nodes[0].id, dst_id=nodes[1].id, type=EdgeType.SIMILARITY,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=nodes[0].id,
+                dst_id=nodes[1].id,
+                type=EdgeType.SIMILARITY,
+            )
+        )
         return nodes
 
     async def test_it_is_absent_unless_asked_for(self, storage, embedding_provider):
@@ -4353,19 +4631,25 @@ class TestCorroborationOnTheSearchPath:
         await self._two_outlets(storage, embedding_provider)
 
         result, _ = await search(
-            "harbour bridge", storage, embedding_provider, k=5, graph_hops=0,
+            "harbour bridge",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
         )
 
         assert result["nodes"]
         assert all("corroboration" not in node for node in result["nodes"])
 
-    async def test_asking_for_it_counts_distinct_publishers(
-        self, storage, embedding_provider
-    ):
+    async def test_asking_for_it_counts_distinct_publishers(self, storage, embedding_provider):
         first, _ = await self._two_outlets(storage, embedding_provider)
 
         result, _ = await search(
-            "harbour bridge", storage, embedding_provider, k=5, graph_hops=0,
+            "harbour bridge",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
             include_corroboration=True,
         )
 
@@ -4373,18 +4657,21 @@ class TestCorroborationOnTheSearchPath:
         corroboration = found[first.id]["corroboration"]
         assert corroboration["count"] == 2
         assert {source["publisher"] for source in corroboration["sources"]} == {
-            "Alpha Wire", "Beta Press"
+            "Alpha Wire",
+            "Beta Press",
         }
 
-    async def test_the_contributing_nodes_ride_along(
-        self, storage, embedding_provider
-    ):
+    async def test_the_contributing_nodes_ride_along(self, storage, embedding_provider):
         """A number computed over a similarity neighbourhood has to be
         checkable, because the neighbourhood is sometimes wrong."""
         first, second = await self._two_outlets(storage, embedding_provider)
 
         result, _ = await search(
-            "harbour bridge", storage, embedding_provider, k=5, graph_hops=0,
+            "harbour bridge",
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=0,
             include_corroboration=True,
         )
 

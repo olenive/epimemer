@@ -17,16 +17,16 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import pytest
-
 from fastmcp import FastMCP
 
+from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.embeddings.mock import MockEmbeddingProvider
-from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.config import ServerConfig
+from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.mcp.tools import graph_stats
-from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.storage.memory import InMemoryStorage
+
 
 def _graph_with_the_real() -> InMemoryStorage:
     """An in-memory graph somebody has set up.
@@ -44,7 +44,6 @@ def _graph_with_the_real() -> InMemoryStorage:
 
 
 class TestReflectCounterInStats:
-
     async def test_reports_reflect_counter(self, storage):
         await storage.bump_reflect_counter()
         await storage.bump_reflect_counter()
@@ -94,9 +93,7 @@ class TestReflectCounterInStats:
         result, _ = await graph_stats(storage, default_reflect_threshold=10)
 
         assert result["empty"] is True
-        assert {"stores_since_reflect", "reflect_threshold", "reflect_suggested"} <= (
-            result.keys()
-        )
+        assert {"stores_since_reflect", "reflect_threshold", "reflect_suggested"} <= (result.keys())
 
 
 # --- The MCP wrapper must hand the tool the configured threshold ---
@@ -145,15 +142,22 @@ async def test_tool_reports_the_configured_threshold(config):
     config = config.model_copy(update={"reflect_threshold": 3})
 
     async with _session(storage, config) as server:
-        seg = _result(await server.call_tool("segment", {"expected_graph": "default", "content": "Cats are mammals."}))
-        await server.call_tool("store_decomposition", {"expected_graph": "default", 
-        "metacontext_id": "the-real",
-            "document_id": seg["document_id"],
-            "segments": [
-                {"segment_id": s["segment_id"], "topics": ["Cats"]}
-                for s in seg["segments"]
-            ],
-        })
+        seg = _result(
+            await server.call_tool(
+                "segment", {"expected_graph": "default", "content": "Cats are mammals."}
+            )
+        )
+        await server.call_tool(
+            "store_decomposition",
+            {
+                "expected_graph": "default",
+                "metacontext_id": "the-real",
+                "document_id": seg["document_id"],
+                "segments": [
+                    {"segment_id": s["segment_id"], "topics": ["Cats"]} for s in seg["segments"]
+                ],
+            },
+        )
 
         stats = _result(await server.call_tool("graph_stats", {"expected_graph": "default"}))
 

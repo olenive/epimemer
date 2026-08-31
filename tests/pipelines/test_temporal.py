@@ -7,7 +7,7 @@ inventing 1500-01-01 for it, and a wrong date is far more expensive than a
 missing one — it is indistinguishable from a real one once stored.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -18,7 +18,7 @@ from epimemer.pipelines.timeline.temporal import (
 
 
 def utc(*args) -> datetime:
-    return datetime(*args, tzinfo=timezone.utc)
+    return datetime(*args, tzinfo=UTC)
 
 
 def only(text: str) -> TemporalExpression:
@@ -105,7 +105,7 @@ class TestRanges:
         assert (found.start, found.end) == (utc(1897, 1, 1), utc(1902, 1, 1))
 
     def test_a_backwards_range_is_not_a_range(self):
-        """"From 1901 to 1897" is a typo, or a sentence that happens to contain
+        """ "From 1901 to 1897" is a typo, or a sentence that happens to contain
         two years. Either way, silently swapping the ends would be a guess — so
         it falls back to whichever endpoints stand on their own."""
         found = detect_temporal_expressions("from 1901 to 1897")
@@ -169,13 +169,11 @@ class TestWhatItRefusesToMatch:
 
 class TestMultipleAndOverlapping:
     def test_reports_each_expression_in_order(self):
-        found = detect_temporal_expressions(
-            "on 12 March 1997 he resigned; in 1999 he returned"
-        )
+        found = detect_temporal_expressions("on 12 March 1997 he resigned; in 1999 he returned")
         assert [f.text for f in found] == ["12 March 1997", "1999"]
 
     def test_a_longer_match_wins_over_the_one_inside_it(self):
-        """"12 March 1997" must not also yield "March 1997" and "1997"."""
+        """ "12 March 1997" must not also yield "March 1997" and "1997"."""
         found = detect_temporal_expressions("on 12 March 1997")
         assert [f.text for f in found] == ["12 March 1997"]
 

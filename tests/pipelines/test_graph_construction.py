@@ -11,10 +11,9 @@ Covers:
 - Storage round-trip: store and retrieve complete graph
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-
 from petritype.core.executable_graph_components import ExecutableGraphOperations
 
 from epimemer.core.temporal import (
@@ -30,8 +29,8 @@ from epimemer.core.types import (
     NodeStatus,
     Segment,
     Topic,
-    ValueSignal,
 )
+from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.pipelines.graph_construction.edge_creation import (
     DecomposedSegment,
     create_edges,
@@ -41,9 +40,7 @@ from epimemer.pipelines.graph_construction.versioning import (
     merge_nodes,
     supersede_node,
 )
-from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.storage.memory import InMemoryStorage
-
 
 # --- Fixtures ---
 
@@ -136,8 +133,11 @@ class TestEdgeCreation:
     def test_fact_to_topic_supports_edge(self, decomposed: DecomposedSegment) -> None:
         edges = create_edges(decomposed)
         supports_edges = [
-            e for e in edges
-            if e.type == EdgeType.SUPPORTS and e.src_id == decomposed.facts[0].id and e.dst_id == decomposed.topics[0].id
+            e
+            for e in edges
+            if e.type == EdgeType.SUPPORTS
+            and e.src_id == decomposed.facts[0].id
+            and e.dst_id == decomposed.topics[0].id
         ]
         assert len(supports_edges) == 1
 
@@ -151,8 +151,11 @@ class TestEdgeCreation:
     def test_fact_to_inference_supports_edge(self, decomposed: DecomposedSegment) -> None:
         edges = create_edges(decomposed)
         supports_edges = [
-            e for e in edges
-            if e.type == EdgeType.SUPPORTS and e.src_id == decomposed.facts[0].id and e.dst_id == decomposed.inferences[0].id
+            e
+            for e in edges
+            if e.type == EdgeType.SUPPORTS
+            and e.src_id == decomposed.facts[0].id
+            and e.dst_id == decomposed.inferences[0].id
         ]
         assert len(supports_edges) == 1
 
@@ -213,7 +216,8 @@ class TestEdgeCreationPetriNet:
     async def test_petri_net_produces_edges(self, decomposed: DecomposedSegment) -> None:
         graph = edge_creation_net(decomposed)
         graph, transitions_fired = await ExecutableGraphOperations.execute_graph(
-            graph, stop_after_n_firings=10,
+            graph,
+            stop_after_n_firings=10,
         )
         assert transitions_fired == 1
 
@@ -225,7 +229,8 @@ class TestEdgeCreationPetriNet:
     async def test_petri_net_input_consumed(self, decomposed: DecomposedSegment) -> None:
         graph = edge_creation_net(decomposed)
         graph, _ = await ExecutableGraphOperations.execute_graph(
-            graph, stop_after_n_firings=10,
+            graph,
+            stop_after_n_firings=10,
         )
 
         input_place = graph.place_named("DecomposedSegments")
@@ -236,7 +241,8 @@ class TestEdgeCreationPetriNet:
     async def test_petri_net_edge_types_correct(self, decomposed: DecomposedSegment) -> None:
         graph = edge_creation_net(decomposed)
         graph, _ = await ExecutableGraphOperations.execute_graph(
-            graph, stop_after_n_firings=10,
+            graph,
+            stop_after_n_firings=10,
         )
 
         edges_place = graph.place_named("Edges")
@@ -472,16 +478,10 @@ class TestVersioning:
         for node in (t1, t2, fact):
             await storage.store_node(node)
         # The same fact supports both sources → collapses to one edge after merge.
-        await storage.store_edge(
-            NodeEdge(src_id=fact.id, dst_id=t1.id, type=EdgeType.SUPPORTS)
-        )
-        await storage.store_edge(
-            NodeEdge(src_id=fact.id, dst_id=t2.id, type=EdgeType.SUPPORTS)
-        )
+        await storage.store_edge(NodeEdge(src_id=fact.id, dst_id=t1.id, type=EdgeType.SUPPORTS))
+        await storage.store_edge(NodeEdge(src_id=fact.id, dst_id=t2.id, type=EdgeType.SUPPORTS))
         # An edge between the two sources becomes a self-loop after the merge.
-        await storage.store_edge(
-            NodeEdge(src_id=t1.id, dst_id=t2.id, type=EdgeType.SUPPORTS)
-        )
+        await storage.store_edge(NodeEdge(src_id=t1.id, dst_id=t2.id, type=EdgeType.SUPPORTS))
 
         await merge_nodes([t1, t2], merged, storage, embedding_provider)
 
@@ -512,12 +512,12 @@ class TestVersioning:
         cross-source union §3 forbids.
         """
         first_period = ValidityInterval(
-            start=PreciseInstant(at=datetime(1997, 5, 2, tzinfo=timezone.utc)),
-            end=PreciseInstant(at=datetime(2010, 5, 11, tzinfo=timezone.utc)),
+            start=PreciseInstant(at=datetime(1997, 5, 2, tzinfo=UTC)),
+            end=PreciseInstant(at=datetime(2010, 5, 11, tzinfo=UTC)),
             basis=IntervalBasis.STATED,
         )
         second_period = ValidityInterval(
-            start=PreciseInstant(at=datetime(2024, 7, 5, tzinfo=timezone.utc)),
+            start=PreciseInstant(at=datetime(2024, 7, 5, tzinfo=UTC)),
             basis=IntervalBasis.STATED,
         )
         t1 = Topic(id="merge-val-1", content="Labour in government", source_id="seg-1")
@@ -526,24 +526,24 @@ class TestVersioning:
         for node in (t1, t2):
             await storage.store_node(node)
         for node, period in ((t1, first_period), (t2, second_period)):
-            await storage.store_edge(NodeEdge(
-                src_id=node.id, dst_id="merge-val-doc", type=EdgeType.SOURCED_FROM,
-                validity=[period],
-            ))
+            await storage.store_edge(
+                NodeEdge(
+                    src_id=node.id,
+                    dst_id="merge-val-doc",
+                    type=EdgeType.SOURCED_FROM,
+                    validity=[period],
+                )
+            )
 
         await merge_nodes([t1, t2], merged, storage, embedding_provider)
 
-        provenance = await storage.get_edges_from(
-            "merge-val-dst", edge_type=EdgeType.SOURCED_FROM
-        )
+        provenance = await storage.get_edges_from("merge-val-dst", edge_type=EdgeType.SOURCED_FROM)
         assert len(provenance) == 1, "one edge per (node, document)"
         # Compared without regard to order: which of the collapsing edges is the
         # survivor is a backend's own business, and nothing reads these
         # positionally. What must not vary is that both periods are still there.
         by_value = sorted(provenance[0].validity, key=lambda i: i.model_dump_json())
-        assert by_value == sorted(
-            [first_period, second_period], key=lambda i: i.model_dump_json()
-        )
+        assert by_value == sorted([first_period, second_period], key=lambda i: i.model_dump_json())
 
 
 # --- Storage Round-Trip Tests ---
@@ -620,7 +620,7 @@ class TestStorageRoundTrip:
             content="Updated topic",
             source_id="seg-1",
         )
-        edge = await supersede_node(
+        await supersede_node(
             original,
             updated,
             storage,

@@ -35,7 +35,7 @@ precondition for adding it back.
 """
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 
 from pydantic import BaseModel
@@ -90,7 +90,7 @@ def _utc(at: datetime) -> datetime:
     aware raises rather than answering wrongly. Assume UTC, which is what every
     writer in this system stores.
     """
-    return at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at
+    return at.replace(tzinfo=UTC) if at.tzinfo is None else at
 
 
 def merge_source_count(record: DecisionRecord) -> int:
@@ -125,16 +125,12 @@ def difficulty_signals(
     # node itself has no such field, and reading it off one is how this first
     # tripped over a `Topic`.
     if any(
-        node.value.confidence is not None
-        and node.value.confidence < THIN_CONFIDENCE_BELOW
+        node.value.confidence is not None and node.value.confidence < THIN_CONFIDENCE_BELOW
         for node in present
     ):
         signals.append(DifficultySignal.THIN_SOURCE)
 
-    if (
-        record.kind is DecisionKind.MERGE
-        and merge_source_count(record) >= WIDE_MERGE_SOURCES
-    ):
+    if record.kind is DecisionKind.MERGE and merge_source_count(record) >= WIDE_MERGE_SOURCES:
         signals.append(DifficultySignal.WIDE_MERGE)
 
     # A contradiction resolves by one side being retired — corrected, overtaken
@@ -154,8 +150,7 @@ def difficulty_signals(
     # subjects carry a retirement instant just before the row's.
     decided_at = _utc(record.decided_at)
     if any(
-        node.superseded_at is not None and _utc(node.superseded_at) > decided_at
-        for node in present
+        node.superseded_at is not None and _utc(node.superseded_at) > decided_at for node in present
     ):
         signals.append(DifficultySignal.GROUND_MOVED)
 
@@ -180,6 +175,7 @@ def review_order(scored: Sequence[ScoredDecision]) -> list[ScoredDecision]:
     that reshuffled between two identical calls would make `truncated` mean a
     different set each time.
     """
+
     def key(item: ScoredDecision):
         record = item.record
         rated = record.certainty is not None

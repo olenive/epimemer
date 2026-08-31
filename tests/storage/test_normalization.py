@@ -15,8 +15,6 @@ import inspect
 import types
 import typing
 
-import pytest
-
 from pydantic import BaseModel
 
 from epimemer.core import types as core_types
@@ -25,19 +23,14 @@ from epimemer.storage.protocol import drop_none_values, normalize_for_storage
 
 
 class TestDropNoneValues:
-
     def test_drops_none_valued_key(self):
         assert drop_none_values({"a": None, "keep": 1}) == {"keep": 1}
 
     def test_drops_recursively(self):
-        assert drop_none_values({"outer": {"a": None, "keep": 1}}) == {
-            "outer": {"keep": 1}
-        }
+        assert drop_none_values({"outer": {"a": None, "keep": 1}}) == {"outer": {"keep": 1}}
 
     def test_drops_inside_dicts_nested_in_lists(self):
-        assert drop_none_values({"xs": [{"a": None, "keep": 1}]}) == {
-            "xs": [{"keep": 1}]
-        }
+        assert drop_none_values({"xs": [{"a": None, "keep": 1}]}) == {"xs": [{"keep": 1}]}
 
     def test_preserves_none_as_a_list_element(self):
         """Arrays keep their positions; dropping would shift every later index."""
@@ -64,7 +57,6 @@ class TestDropNoneValues:
 
 
 class TestNormalizeForStorage:
-
     def test_normalizes_dict_fields(self):
         topic = Topic(content="x", source_id="s1", metadata={"a": None, "keep": 1})
         assert normalize_for_storage(topic).metadata == {"keep": 1}
@@ -100,10 +92,14 @@ def _nullable_fields():
             continue
         for name, field in model.model_fields.items():
             annotation = field.annotation
-            admits_none = annotation is None or (
-                isinstance(annotation, types.UnionType)
-                or typing.get_origin(annotation) is typing.Union
-            ) and type(None) in typing.get_args(annotation)
+            admits_none = (
+                annotation is None
+                or (
+                    isinstance(annotation, types.UnionType)
+                    or typing.get_origin(annotation) is typing.Union
+                )
+                and type(None) in typing.get_args(annotation)
+            )
             if admits_none:
                 yield model, name, field
 

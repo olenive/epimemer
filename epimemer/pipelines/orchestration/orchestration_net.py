@@ -16,8 +16,6 @@ as transitions, making the full request flow visualizable via Petritype.
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
-
 from petritype import petri_net
 from petritype.core.executable_graph_components import (
     ArgumentEdgeToTransition,
@@ -28,30 +26,37 @@ from petritype.core.executable_graph_components import (
     ReturnedEdgeFromTransition,
 )
 from petritype.runtime import RunContext, Runner
+from pydantic import BaseModel, Field
 
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.tools import (
-    segment_text as segment_tool,
-    store_decomposition as store_decomposition_tool,
-    search as search_tool,
     reflect as reflect_tool,
 )
-from epimemer.mcp.types import ResponseMeta
+from epimemer.mcp.tools import (
+    search as search_tool,
+)
+from epimemer.mcp.tools import (
+    segment_text as segment_tool,
+)
+from epimemer.mcp.tools import (
+    store_decomposition as store_decomposition_tool,
+)
 from epimemer.storage.protocol import StorageBackend
-
 
 # --- Token types ---
 
 
 class MemoryRequest(BaseModel):
     """A request to the memory system."""
+
     action: Literal["segment", "store_decomposition", "search", "reflect"]
     payload: dict = Field(default_factory=dict)
 
 
 class SegmentInput(BaseModel):
     """Routed input for the segmentation pipeline (step 1 of ingest)."""
+
     content: str
     metadata: dict = Field(default_factory=dict)
     segmentation_strategy: str | None = None
@@ -59,6 +64,7 @@ class SegmentInput(BaseModel):
 
 class StoreDecompositionInput(BaseModel):
     """Routed input for storing agent-provided decomposition (step 2 of ingest)."""
+
     document_id: str
     segments: list[dict] = Field(default_factory=list)
     # Required, like the tool it routes to. Optional here it would default
@@ -69,6 +75,7 @@ class StoreDecompositionInput(BaseModel):
 
 class SearchInput(BaseModel):
     """Routed input for the search pipeline."""
+
     query: str
     k: int = 10
     node_types: list[str] | None = None
@@ -82,11 +89,13 @@ class SearchInput(BaseModel):
 
 class ReflectInput(BaseModel):
     """Routed input for the reflection pipeline."""
+
     similarity_threshold: float = 0.85
 
 
 class MemoryResult(BaseModel):
     """Result from any memory operation."""
+
     action: str
     result: dict = Field(default_factory=dict)
     meta: dict = Field(default_factory=dict)
@@ -94,6 +103,7 @@ class MemoryResult(BaseModel):
 
 class OrchestrationState(BaseModel):
     """Tracks orchestration state for auto-reflect."""
+
     stores_since_reflect: int = 0
     auto_reflect_threshold: int = 10
 
@@ -103,6 +113,7 @@ class OrchestrationState(BaseModel):
 
 class RouteResult(BaseModel):
     """Holds the routed input for fan-out to the correct pipeline."""
+
     segment_input: SegmentInput | None = None
     store_input: StoreDecompositionInput | None = None
     search_input: SearchInput | None = None
@@ -242,80 +253,76 @@ def orchestration_net(
     Routes a MemoryRequest to the correct sub-pipeline (segment,
     store_decomposition, search, or reflect) and produces a MemoryResult.
     """
-    return ExecutableGraphOperations.construct_graph([
-        # Input place
-        ListPlaceNode("MemoryRequest", MemoryRequest, [request]),
-
-        # Routed input places (one per pipeline)
-        ListPlaceNode("SegmentInput", SegmentInput),
-        ListPlaceNode("StoreInput", StoreDecompositionInput),
-        ListPlaceNode("SearchInput", SearchInput),
-        ListPlaceNode("ReflectInput", ReflectInput),
-
-        # Output place
-        ListPlaceNode("MemoryResult", MemoryResult),
-
-        # Transition 0: route request to the correct input place
-        FunctionTransitionNode(
-            "route_request",
-            route_request,
-            output_distribution_function=distribute_route,
-        ),
-        ArgumentEdgeToTransition("MemoryRequest", "route_request", "request"),
-        ReturnedEdgeFromTransition("route_request", "SegmentInput"),
-        ReturnedEdgeFromTransition("route_request", "StoreInput"),
-        ReturnedEdgeFromTransition("route_request", "SearchInput"),
-        ReturnedEdgeFromTransition("route_request", "ReflectInput"),
-
-        # Transition 1: run segment
-        FunctionTransitionNode(
-            "run_segment",
-            run_segment,
-            kwargs={
-                "storage": storage,
-                "embedding_provider": embedding_provider,
-                "config": config,
-            },
-        ),
-        ArgumentEdgeToTransition("SegmentInput", "run_segment", "input"),
-        ReturnedEdgeFromTransition("run_segment", "MemoryResult"),
-
-        # Transition 2: run store_decomposition
-        FunctionTransitionNode(
-            "run_store_decomposition",
-            run_store_decomposition,
-            kwargs={
-                "storage": storage,
-                "embedding_provider": embedding_provider,
-            },
-        ),
-        ArgumentEdgeToTransition("StoreInput", "run_store_decomposition", "input"),
-        ReturnedEdgeFromTransition("run_store_decomposition", "MemoryResult"),
-
-        # Transition 3: run search
-        FunctionTransitionNode(
-            "run_search",
-            run_search,
-            kwargs={
-                "storage": storage,
-                "embedding_provider": embedding_provider,
-            },
-        ),
-        ArgumentEdgeToTransition("SearchInput", "run_search", "input"),
-        ReturnedEdgeFromTransition("run_search", "MemoryResult"),
-
-        # Transition 4: run reflect
-        FunctionTransitionNode(
-            "run_reflect",
-            run_reflect,
-            kwargs={
-                "storage": storage,
-                "embedding_provider": embedding_provider,
-            },
-        ),
-        ArgumentEdgeToTransition("ReflectInput", "run_reflect", "input"),
-        ReturnedEdgeFromTransition("run_reflect", "MemoryResult"),
-    ], expect_acyclic=True)
+    return ExecutableGraphOperations.construct_graph(
+        [
+            # Input place
+            ListPlaceNode("MemoryRequest", MemoryRequest, [request]),
+            # Routed input places (one per pipeline)
+            ListPlaceNode("SegmentInput", SegmentInput),
+            ListPlaceNode("StoreInput", StoreDecompositionInput),
+            ListPlaceNode("SearchInput", SearchInput),
+            ListPlaceNode("ReflectInput", ReflectInput),
+            # Output place
+            ListPlaceNode("MemoryResult", MemoryResult),
+            # Transition 0: route request to the correct input place
+            FunctionTransitionNode(
+                "route_request",
+                route_request,
+                output_distribution_function=distribute_route,
+            ),
+            ArgumentEdgeToTransition("MemoryRequest", "route_request", "request"),
+            ReturnedEdgeFromTransition("route_request", "SegmentInput"),
+            ReturnedEdgeFromTransition("route_request", "StoreInput"),
+            ReturnedEdgeFromTransition("route_request", "SearchInput"),
+            ReturnedEdgeFromTransition("route_request", "ReflectInput"),
+            # Transition 1: run segment
+            FunctionTransitionNode(
+                "run_segment",
+                run_segment,
+                kwargs={
+                    "storage": storage,
+                    "embedding_provider": embedding_provider,
+                    "config": config,
+                },
+            ),
+            ArgumentEdgeToTransition("SegmentInput", "run_segment", "input"),
+            ReturnedEdgeFromTransition("run_segment", "MemoryResult"),
+            # Transition 2: run store_decomposition
+            FunctionTransitionNode(
+                "run_store_decomposition",
+                run_store_decomposition,
+                kwargs={
+                    "storage": storage,
+                    "embedding_provider": embedding_provider,
+                },
+            ),
+            ArgumentEdgeToTransition("StoreInput", "run_store_decomposition", "input"),
+            ReturnedEdgeFromTransition("run_store_decomposition", "MemoryResult"),
+            # Transition 3: run search
+            FunctionTransitionNode(
+                "run_search",
+                run_search,
+                kwargs={
+                    "storage": storage,
+                    "embedding_provider": embedding_provider,
+                },
+            ),
+            ArgumentEdgeToTransition("SearchInput", "run_search", "input"),
+            ReturnedEdgeFromTransition("run_search", "MemoryResult"),
+            # Transition 4: run reflect
+            FunctionTransitionNode(
+                "run_reflect",
+                run_reflect,
+                kwargs={
+                    "storage": storage,
+                    "embedding_provider": embedding_provider,
+                },
+            ),
+            ArgumentEdgeToTransition("ReflectInput", "run_reflect", "input"),
+            ReturnedEdgeFromTransition("run_reflect", "MemoryResult"),
+        ],
+        expect_acyclic=True,
+    )
 
 
 # --- Auto-reflect helper ---
@@ -344,14 +351,19 @@ async def execute_with_auto_reflect(
 
     reflect_result = None
     if request.action == "store_decomposition":
-        state = state.model_copy(update={
-            "stores_since_reflect": state.stores_since_reflect + 1,
-        })
+        state = state.model_copy(
+            update={
+                "stores_since_reflect": state.stores_since_reflect + 1,
+            }
+        )
 
         if should_auto_reflect(state):
             reflect_request = MemoryRequest(action="reflect", payload={})
             reflect_graph = orchestration_net(
-                reflect_request, storage, embedding_provider, config,
+                reflect_request,
+                storage,
+                embedding_provider,
+                config,
             )
             reflect_graph = await Runner.run_to_completion(RunContext(graph=reflect_graph))
             reflect_result = reflect_graph.place_named("MemoryResult").tokens[0]

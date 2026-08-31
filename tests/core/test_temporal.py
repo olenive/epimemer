@@ -7,7 +7,7 @@ in pairs — what it concludes, and what it declines to conclude from data that
 looks almost sufficient.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -33,7 +33,7 @@ PACKAGE = Path(__file__).resolve().parents[2] / "epimemer"
 
 
 def _at(year: int, month: int = 1, day: int = 1) -> PreciseInstant:
-    return PreciseInstant(at=datetime(year, month, day, tzinfo=timezone.utc))
+    return PreciseInstant(at=datetime(year, month, day, tzinfo=UTC))
 
 
 def _span(
@@ -69,9 +69,7 @@ class TestEndpointsKeepUnknownAndUnboundedApart:
         assert renaissance.label == "during the Renaissance"
 
     def test_a_resolved_endpoint_keeps_the_phrase_that_justified_it(self):
-        resolved = PreciseInstant(
-            at=datetime(1991, 9, 6, tzinfo=timezone.utc), label="the 1991 renaming"
-        )
+        resolved = PreciseInstant(at=datetime(1991, 9, 6, tzinfo=UTC), label="the 1991 renaming")
 
         assert resolved.at.year == 1991
         assert resolved.label == "the 1991 renaming"
@@ -231,9 +229,9 @@ class TestComparisonAnswersOnlyWhatItKnows:
 
         for one in spans:
             for other in spans:
-                assert compare_intervals(other, one) is inverse[
-                    compare_intervals(one, other)
-                ], f"asymmetric answer for {one} vs {other}"
+                assert compare_intervals(other, one) is inverse[compare_intervals(one, other)], (
+                    f"asymmetric answer for {one} vs {other}"
+                )
 
 
 class TestWitnessPointsCarryUndatedSources:
@@ -366,36 +364,32 @@ class TestAskingWhetherAClaimHeldAtAMoment:
     """
 
     def test_a_moment_inside_a_stated_period_is_valid(self):
-        assert validity_at(
-            [_span(start=_at(1924), end=_at(1991))], datetime(1980, 1, 1, tzinfo=timezone.utc)
-        ) is ValidityVerdict.VALID
+        assert (
+            validity_at([_span(start=_at(1924), end=_at(1991))], datetime(1980, 1, 1, tzinfo=UTC))
+            is ValidityVerdict.VALID
+        )
 
     def test_a_moment_outside_every_stated_period_is_unknown_not_false(self):
         """The open-world rule, and the whole reason nothing is ever excluded."""
-        assert validity_at(
-            [_span(start=_at(1924), end=_at(1991))], datetime(2000, 1, 1, tzinfo=timezone.utc)
-        ) is ValidityVerdict.UNKNOWN
-
-    def test_a_claim_nobody_dated_is_unknown(self):
-        assert validity_at([], datetime(1980, 1, 1, tzinfo=timezone.utc)) is (
-            ValidityVerdict.UNKNOWN
+        assert (
+            validity_at([_span(start=_at(1924), end=_at(1991))], datetime(2000, 1, 1, tzinfo=UTC))
+            is ValidityVerdict.UNKNOWN
         )
 
+    def test_a_claim_nobody_dated_is_unknown(self):
+        assert validity_at([], datetime(1980, 1, 1, tzinfo=UTC)) is (ValidityVerdict.UNKNOWN)
+
     def test_unknown_endpoints_conclude_nothing(self):
-        assert validity_at(
-            [_span()], datetime(1980, 1, 1, tzinfo=timezone.utc)
-        ) is ValidityVerdict.UNKNOWN
+        assert validity_at([_span()], datetime(1980, 1, 1, tzinfo=UTC)) is ValidityVerdict.UNKNOWN
 
     def test_a_claim_asserted_to_have_always_held_covers_any_moment(self):
         always = _span(start=UnboundedInstant(), end=UnboundedInstant())
 
-        assert validity_at(
-            [always], datetime(1980, 1, 1, tzinfo=timezone.utc)
-        ) is ValidityVerdict.VALID
+        assert validity_at([always], datetime(1980, 1, 1, tzinfo=UTC)) is ValidityVerdict.VALID
 
     def test_the_period_that_starts_on_an_instant_owns_it(self):
         """Half-open, `[start, end)`. The renaming instant belongs to the new name."""
-        renamed = datetime(1991, 1, 1, tzinfo=timezone.utc)
+        renamed = datetime(1991, 1, 1, tzinfo=UTC)
 
         assert validity_at([_span(start=_at(1924), end=_at(1991))], renamed) is (
             ValidityVerdict.UNKNOWN
@@ -411,9 +405,10 @@ class TestAskingWhetherAClaimHeldAtAMoment:
         and reading `unknown` as though it meant that is the fabrication the two
         values exist to keep apart.
         """
-        assert validity_at(
-            [_span(start=_at(1991))], datetime(2010, 1, 1, tzinfo=timezone.utc)
-        ) is ValidityVerdict.UNKNOWN
+        assert (
+            validity_at([_span(start=_at(1991))], datetime(2010, 1, 1, tzinfo=UTC))
+            is ValidityVerdict.UNKNOWN
+        )
 
     def test_a_witness_reaches_from_the_start_to_itself(self):
         """What witness points are for: concluding where an endpoint cannot.
@@ -423,31 +418,30 @@ class TestAskingWhetherAClaimHeldAtAMoment:
         it — and 2021 is still not.
         """
         still_running = _span(
-            start=_at(1991), witnessed_at=_at(2020),
+            start=_at(1991),
+            witnessed_at=_at(2020),
         )
 
-        assert validity_at(
-            [still_running], datetime(2010, 1, 1, tzinfo=timezone.utc)
-        ) is ValidityVerdict.VALID
-        assert validity_at(
-            [still_running], datetime(2021, 1, 1, tzinfo=timezone.utc)
-        ) is ValidityVerdict.UNKNOWN
+        assert (
+            validity_at([still_running], datetime(2010, 1, 1, tzinfo=UTC)) is ValidityVerdict.VALID
+        )
+        assert (
+            validity_at([still_running], datetime(2021, 1, 1, tzinfo=UTC))
+            is ValidityVerdict.UNKNOWN
+        )
 
     def test_a_witness_reaches_forward_to_a_known_end(self):
         """The mirror: an unknown *start* with a witness bounds from the inside."""
         span = _span(end=_at(1991), witnessed_at=_at(1950))
 
-        assert validity_at(
-            [span], datetime(1960, 1, 1, tzinfo=timezone.utc)
-        ) is ValidityVerdict.VALID
-        assert validity_at(
-            [span], datetime(1940, 1, 1, tzinfo=timezone.utc)
-        ) is ValidityVerdict.UNKNOWN
+        assert validity_at([span], datetime(1960, 1, 1, tzinfo=UTC)) is ValidityVerdict.VALID
+        assert validity_at([span], datetime(1940, 1, 1, tzinfo=UTC)) is ValidityVerdict.UNKNOWN
 
     def test_the_witnessed_moment_itself_is_inside(self):
-        assert validity_at(
-            [_span(witnessed_at=_at(1990))], datetime(1990, 1, 1, tzinfo=timezone.utc)
-        ) is ValidityVerdict.VALID
+        assert (
+            validity_at([_span(witnessed_at=_at(1990))], datetime(1990, 1, 1, tzinfo=UTC))
+            is ValidityVerdict.VALID
+        )
 
     def test_one_source_is_enough(self):
         """Existential, not universal: two sources may describe two episodes.
@@ -457,28 +451,30 @@ class TestAskingWhetherAClaimHeldAtAMoment:
         """
         sources = [_span(start=_at(1997), end=_at(2010)), _span(start=_at(2024))]
 
-        assert validity_at(sources, datetime(2000, 1, 1, tzinfo=timezone.utc)) is (
-            ValidityVerdict.VALID
-        )
+        assert validity_at(sources, datetime(2000, 1, 1, tzinfo=UTC)) is (ValidityVerdict.VALID)
 
     def test_a_period_on_another_clock_answers_nothing(self):
         """No conversion exists between an in-universe date and a real one."""
         in_universe = _span(start=_at(1924), end=_at(1991), timeline_id="third-age")
 
-        assert validity_at(
-            [in_universe], datetime(1980, 1, 1, tzinfo=timezone.utc)
-        ) is ValidityVerdict.UNKNOWN
-        assert validity_at(
-            [in_universe],
-            datetime(1980, 1, 1, tzinfo=timezone.utc),
-            timeline_id="third-age",
-        ) is ValidityVerdict.VALID
+        assert (
+            validity_at([in_universe], datetime(1980, 1, 1, tzinfo=UTC)) is ValidityVerdict.UNKNOWN
+        )
+        assert (
+            validity_at(
+                [in_universe],
+                datetime(1980, 1, 1, tzinfo=UTC),
+                timeline_id="third-age",
+            )
+            is ValidityVerdict.VALID
+        )
 
     def test_a_naive_moment_is_read_as_utc(self):
         """Rather than raising from inside a comparison, as `PreciseInstant` does."""
-        assert validity_at(
-            [_span(start=_at(1924), end=_at(1991))], datetime(1980, 1, 1)
-        ) is ValidityVerdict.VALID
+        assert (
+            validity_at([_span(start=_at(1924), end=_at(1991))], datetime(1980, 1, 1))
+            is ValidityVerdict.VALID
+        )
 
     def test_there_are_exactly_two_verdicts(self):
         """A value nothing can produce is worse than no value: callers branch on it.
@@ -509,10 +505,13 @@ class TestWhetherTwoClaimsWereEverBothAsserted:
         assert assertions_are_disjoint(later, governed) is True
 
     def test_overlapping_periods_are_not(self):
-        assert assertions_are_disjoint(
-            [_span(start=_at(1997), end=_at(2010))],
-            [_span(start=_at(2005), end=_at(2030))],
-        ) is False
+        assert (
+            assertions_are_disjoint(
+                [_span(start=_at(1997), end=_at(2010))],
+                [_span(start=_at(2005), end=_at(2030))],
+            )
+            is False
+        )
 
     def test_one_source_asserting_a_second_episode_suppresses_the_finding(self):
         """The union per side, and the safe error direction it buys.
@@ -526,9 +525,9 @@ class TestWhetherTwoClaimsWereEverBothAsserted:
             _span(start=_at(2024), end=_at(2030)),
         ]
 
-        assert assertions_are_disjoint(
-            two_episodes, [_span(start=_at(2025), end=_at(2026))]
-        ) is False
+        assert (
+            assertions_are_disjoint(two_episodes, [_span(start=_at(2025), end=_at(2026))]) is False
+        )
 
     def test_every_pair_must_fall_clear(self):
         """Two episodes either side of a period is still disjoint from it."""
@@ -537,23 +536,22 @@ class TestWhetherTwoClaimsWereEverBothAsserted:
             _span(start=_at(2024), end=_at(2030)),
         ]
 
-        assert assertions_are_disjoint(
-            two_episodes, [_span(start=_at(2011), end=_at(2012))]
-        ) is True
+        assert (
+            assertions_are_disjoint(two_episodes, [_span(start=_at(2011), end=_at(2012))]) is True
+        )
 
     def test_a_pair_that_cannot_be_placed_blocks_the_finding(self):
         """Never fires on unknown — otherwise it is a check on ignorance."""
-        assert assertions_are_disjoint(
-            [_span(start=_at(1997), end=_at(2010))], [_span()]
-        ) is False
+        assert assertions_are_disjoint([_span(start=_at(1997), end=_at(2010))], [_span()]) is False
 
     def test_one_vague_period_beside_a_definite_one_still_blocks_it(self):
         """Adding an unplaceable period suppresses; it must never manufacture."""
         definite_and_vague = [_span(start=_at(1997), end=_at(2010)), _span()]
 
-        assert assertions_are_disjoint(
-            definite_and_vague, [_span(start=_at(2024), end=_at(2030))]
-        ) is False
+        assert (
+            assertions_are_disjoint(definite_and_vague, [_span(start=_at(2024), end=_at(2030))])
+            is False
+        )
 
     def test_a_claim_nobody_dated_is_not_evidence(self):
         dated = [_span(start=_at(1997), end=_at(2010))]
@@ -564,17 +562,18 @@ class TestWhetherTwoClaimsWereEverBothAsserted:
 
     def test_periods_on_different_clocks_never_fire(self):
         """There is no conversion between an in-universe date and a real one."""
-        assert assertions_are_disjoint(
-            [_span(start=_at(1997), end=_at(2010))],
-            [_span(start=_at(2024), end=_at(2030), timeline_id="third-age")],
-        ) is False
+        assert (
+            assertions_are_disjoint(
+                [_span(start=_at(1997), end=_at(2010))],
+                [_span(start=_at(2024), end=_at(2030), timeline_id="third-age")],
+            )
+            is False
+        )
 
     def test_a_claim_asserted_to_have_always_held_is_disjoint_from_nothing(self):
         always = [_span(start=UnboundedInstant(), end=UnboundedInstant())]
 
-        assert assertions_are_disjoint(
-            always, [_span(start=_at(1997), end=_at(2010))]
-        ) is False
+        assert assertions_are_disjoint(always, [_span(start=_at(1997), end=_at(2010))]) is False
 
 
 class TestTheEndpointKindIsReadInOnePlace:

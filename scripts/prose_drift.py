@@ -37,8 +37,17 @@ from epimemer.pipelines.reflection.batch_validation import ID_VALUED, REQUIRED_K
 from epimemer.pipelines.review.modes import REVIEW_MODES
 
 NUMBER_WORDS = {
-    "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
-    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
 }
 
 # What the code enumerates, the phrase a sentence would count it with, and a
@@ -69,17 +78,14 @@ SUBJECTS: dict[str, tuple[int, str, str]] = {
         r"kinds of decision|steps share|steps are applied|decision kinds",
         r"apply_reflection|reflect",
     ),
-    "AdvisoryKind": (
-        len(AdvisoryKind), r"advisory kinds|kinds of advisory", r"advisor"
-    ),
+    "AdvisoryKind": (len(AdvisoryKind), r"advisory kinds|kinds of advisory", r"advisor"),
     "AdvisoryAction": (len(AdvisoryAction), r"advisory actions", r"advisor"),
     "AdvisoryStance": (
         len({stance for stance in ADVISORY_STANCE.values()}),
-        r"advisory stances", r"advisor",
+        r"advisory stances",
+        r"advisor",
     ),
-    "DecisionKind": (
-        len(DecisionKind), r"journal kinds|kinds of journal row", r"journal|review"
-    ),
+    "DecisionKind": (len(DecisionKind), r"journal kinds|kinds of journal row", r"journal|review"),
     "REVIEW_MODES": (len(REVIEW_MODES), r"review modes|modes of review", r"review"),
 }
 
@@ -92,8 +98,12 @@ WINDOW = 240
 # date rather than a claim about the state now — the same reason a measurement
 # is never reported here.
 DOCS = ("*.md", "docs/*.md", "epimemer_prompts/*.md")
-SOURCE = ("epimemer/core/*.py", "epimemer/mcp/*.py", "epimemer/pipelines/**/*.py",
-          "epimemer/storage/*.py")
+SOURCE = (
+    "epimemer/core/*.py",
+    "epimemer/mcp/*.py",
+    "epimemer/pipelines/**/*.py",
+    "epimemer/storage/*.py",
+)
 
 
 def _files(root: Path):
@@ -112,13 +122,11 @@ def _findings(root: Path) -> list[str]:
                 flags=re.IGNORECASE,
             )
             for match in pattern.finditer(text):
-                window = text[
-                    max(0, match.start() - WINDOW) : match.end() + WINDOW
-                ]
+                window = text[max(0, match.start() - WINDOW) : match.end() + WINDOW]
                 if not re.search(confirm, window, flags=re.IGNORECASE):
                     continue
                 stated = NUMBER_WORDS[match.group(1).lower()]
-                line = text[:match.start()].count("\n") + 1
+                line = text[: match.start()].count("\n") + 1
                 verdict = "STALE" if stated != size else "live count"
                 clause = re.sub(r"\s+", " ", match.group(0)).strip()
                 found.append(
@@ -137,8 +145,10 @@ def main() -> int:
     if not found:
         print("No prose found restating a code-enumerated list.")
         return 0
-    print(f"\n{len(found)} to look at. A `live count` is right today and will "
-          f"not stay right; a `STALE` one is already wrong.")
+    print(
+        f"\n{len(found)} to look at. A `live count` is right today and will "
+        f"not stay right; a `STALE` one is already wrong."
+    )
     return 1
 
 

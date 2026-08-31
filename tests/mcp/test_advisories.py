@@ -47,18 +47,26 @@ async def _fact(storage, content, *, frame=BASE_METACONTEXT_ID):
     fact = Fact(content=content, source_id="seg-1")
     await storage.store_node(fact)
     if frame is not None:
-        await storage.store_edge(NodeEdge(
-            src_id=fact.id, dst_id=frame, type=EdgeType.HAS_METACONTEXT,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=fact.id,
+                dst_id=frame,
+                type=EdgeType.HAS_METACONTEXT,
+            )
+        )
     return fact
 
 
 async def _elsewhere(storage, fact, label):
     frame = Metacontext(content=label)
     await storage.store_metacontext(frame)
-    await storage.store_edge(NodeEdge(
-        src_id=fact.id, dst_id=frame.id, type=EdgeType.HAS_METACONTEXT,
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=fact.id,
+            dst_id=frame.id,
+            type=EdgeType.HAS_METACONTEXT,
+        )
+    )
     return frame.id
 
 
@@ -74,44 +82,40 @@ class TestThePolicyResolvesWithoutASingleton:
     def test_a_kind_nobody_named_takes_the_default_action(self):
         policy = WarningPolicy(default_action=AdvisoryAction.FLAG, by_kind={})
 
-        assert resolved_action(policy, AdvisoryKind.DISJOINT_PREMISES) is (
-            AdvisoryAction.FLAG
-        )
+        assert resolved_action(policy, AdvisoryKind.DISJOINT_PREMISES) is (AdvisoryAction.FLAG)
 
     def test_a_same_frame_contradiction_flags_out_of_the_box(self):
         """Not a preference — a compatibility requirement. `record_contradiction`
         has always notified on a same-frame pair, and a default of `proceed`
         would have kept the key while quietly changing its trigger."""
-        assert resolved_action(
-            WarningPolicy(), AdvisoryKind.SAME_FRAME_CONTRADICTION
-        ) is AdvisoryAction.FLAG
+        assert (
+            resolved_action(WarningPolicy(), AdvisoryKind.SAME_FRAME_CONTRADICTION)
+            is AdvisoryAction.FLAG
+        )
 
     def test_an_override_of_one_kind_keeps_the_defaults_for_the_others(self):
         """A map override that silently dropped unnamed keys is the same class of
         bug as a field-by-field rebuild forgetting a field."""
         resolved = resolve_warning_policy(
-            WarningOverrides(
-                by_kind={AdvisoryKind.DISJOINT_PREMISES: AdvisoryAction.FLAG}
-            ),
+            WarningOverrides(by_kind={AdvisoryKind.DISJOINT_PREMISES: AdvisoryAction.FLAG}),
             WarningPolicy(),
         )
 
         assert resolved.by_kind[AdvisoryKind.DISJOINT_PREMISES] is AdvisoryAction.FLAG
-        assert resolved.by_kind[AdvisoryKind.SAME_FRAME_CONTRADICTION] is (
-            AdvisoryAction.FLAG
-        )
+        assert resolved.by_kind[AdvisoryKind.SAME_FRAME_CONTRADICTION] is (AdvisoryAction.FLAG)
 
     def test_a_graph_can_quieten_a_kind_the_default_escalates(self):
         resolved = resolve_warning_policy(
-            WarningOverrides(by_kind={
-                AdvisoryKind.SAME_FRAME_CONTRADICTION: AdvisoryAction.PROCEED
-            }),
+            WarningOverrides(
+                by_kind={AdvisoryKind.SAME_FRAME_CONTRADICTION: AdvisoryAction.PROCEED}
+            ),
             WarningPolicy(),
         )
 
-        assert resolved_action(
-            resolved, AdvisoryKind.SAME_FRAME_CONTRADICTION
-        ) is AdvisoryAction.PROCEED
+        assert (
+            resolved_action(resolved, AdvisoryKind.SAME_FRAME_CONTRADICTION)
+            is AdvisoryAction.PROCEED
+        )
 
     def test_no_override_follows_the_default_rather_than_freezing_it(self):
         """`None` means *follow the process default at the time*, so a default
@@ -150,21 +154,17 @@ class TestThePolicyResolvesWithoutASingleton:
         """The exception is narrow on purpose: a kind nobody named is general,
         however the general default is set."""
         advisories = [Advisory(kind=AdvisoryKind.CROSS_FRAME, message="x")]
-        loud = WarningPolicy(
-            surface=False, default_action=AdvisoryAction.FLAG, by_kind={}
-        )
+        loud = WarningPolicy(surface=False, default_action=AdvisoryAction.FLAG, by_kind={})
 
         assert surfaced(loud, advisories) == []
 
     def test_setting_a_named_kind_to_proceed_is_how_an_escalation_is_withdrawn(
         self,
     ):
-        advisories = [
-            Advisory(kind=AdvisoryKind.SAME_FRAME_CONTRADICTION, message="y")
-        ]
-        quiet = WarningPolicy(surface=False, by_kind={
-            AdvisoryKind.SAME_FRAME_CONTRADICTION: AdvisoryAction.PROCEED
-        })
+        advisories = [Advisory(kind=AdvisoryKind.SAME_FRAME_CONTRADICTION, message="y")]
+        quiet = WarningPolicy(
+            surface=False, by_kind={AdvisoryKind.SAME_FRAME_CONTRADICTION: AdvisoryAction.PROCEED}
+        )
 
         assert surfaced(quiet, advisories) == []
         assert notify_user(quiet, advisories) is False
@@ -190,31 +190,34 @@ class TestEachKindGivesExactlyOneKindOfAdvice:
 
     def test_only_the_same_frame_contradiction_endorses_the_call(self):
         endorsing = {
-            kind for kind, stance in ADVISORY_STANCE.items()
-            if stance is AdvisoryStance.ESCALATES
+            kind for kind, stance in ADVISORY_STANCE.items() if stance is AdvisoryStance.ESCALATES
         }
         assert endorsing == {AdvisoryKind.SAME_FRAME_CONTRADICTION}
 
     def test_an_escalating_advisory_has_nothing_to_proceed_despite(self):
-        assert objects_to_the_call([
-            Advisory(kind=AdvisoryKind.SAME_FRAME_CONTRADICTION, message="y")
-        ]) is False
-        assert objects_to_the_call([
-            Advisory(kind=AdvisoryKind.SAME_FRAME_VARIANT, message="y")
-        ]) is True
+        assert (
+            objects_to_the_call([Advisory(kind=AdvisoryKind.SAME_FRAME_CONTRADICTION, message="y")])
+            is False
+        )
+        assert (
+            objects_to_the_call([Advisory(kind=AdvisoryKind.SAME_FRAME_VARIANT, message="y")])
+            is True
+        )
 
     def test_a_mixed_set_objects_if_anything_in_it_does(self):
-        assert objects_to_the_call([
-            Advisory(kind=AdvisoryKind.SAME_FRAME_CONTRADICTION, message="y"),
-            Advisory(kind=AdvisoryKind.DISJOINT_PREMISES, message="x"),
-        ]) is True
+        assert (
+            objects_to_the_call(
+                [
+                    Advisory(kind=AdvisoryKind.SAME_FRAME_CONTRADICTION, message="y"),
+                    Advisory(kind=AdvisoryKind.DISJOINT_PREMISES, message="x"),
+                ]
+            )
+            is True
+        )
 
 
 class TestConfigureWarnings:
-
-    async def test_it_reports_what_is_in_force_without_changing_anything(
-        self, storage
-    ):
+    async def test_it_reports_what_is_in_force_without_changing_anything(self, storage):
         result, _ = await tools.configure_warnings(storage)
 
         assert result["surface"] is True
@@ -223,9 +226,7 @@ class TestConfigureWarnings:
         assert result["overridden"] == {}
 
     async def test_setting_one_kind_leaves_the_rest_inherited(self, storage):
-        await tools.configure_warnings(
-            storage, actions={"disjoint_premises": "flag"}
-        )
+        await tools.configure_warnings(storage, actions={"disjoint_premises": "flag"})
 
         result, _ = await tools.configure_warnings(storage)
 
@@ -236,17 +237,14 @@ class TestConfigureWarnings:
         assert result["overridden"] == {"by_kind": {"disjoint_premises": "flag"}}
 
     async def test_a_second_call_merges_rather_than_replacing(self, storage):
-        await tools.configure_warnings(
-            storage, actions={"disjoint_premises": "flag"}
-        )
-        await tools.configure_warnings(
-            storage, actions={"cross_frame": "flag"}
-        )
+        await tools.configure_warnings(storage, actions={"disjoint_premises": "flag"})
+        await tools.configure_warnings(storage, actions={"cross_frame": "flag"})
 
         result, _ = await tools.configure_warnings(storage)
 
         assert result["overridden"]["by_kind"] == {
-            "disjoint_premises": "flag", "cross_frame": "flag",
+            "disjoint_premises": "flag",
+            "cross_frame": "flag",
         }
 
     async def test_clear_goes_back_to_the_default_at_the_time(self, storage):
@@ -270,13 +268,9 @@ class TestConfigureWarnings:
 
     async def test_reject_is_refused_and_says_why(self, storage):
         with pytest.raises(ValueError, match="'reject' does not exist"):
-            await tools.configure_warnings(
-                storage, actions={"disjoint_premises": "reject"}
-            )
+            await tools.configure_warnings(storage, actions={"disjoint_premises": "reject"})
 
-    async def test_the_setting_is_per_graph_state_that_survives_a_read(
-        self, storage
-    ):
+    async def test_the_setting_is_per_graph_state_that_survives_a_read(self, storage):
         await tools.configure_warnings(storage, surface=False)
 
         assert (await storage.get_warning_overrides()).surface is False
@@ -297,9 +291,7 @@ class TestTheTwoExistingWarningsBecameAdvisories:
         assert result["notify_user"] is True
         assert result["warnings"][0]["kind"] == "same_frame_contradiction"
 
-    async def test_a_cross_frame_contradiction_still_says_use_record_variant(
-        self, storage
-    ):
+    async def test_a_cross_frame_contradiction_still_says_use_record_variant(self, storage):
         a = await _fact(storage, "real")
         b = await _fact(storage, "fictional", frame=None)
         await _elsewhere(storage, b, "Fiction")
@@ -311,9 +303,7 @@ class TestTheTwoExistingWarningsBecameAdvisories:
         assert "record_variant" in result["warning"]
         assert result["warnings"][0]["kind"] == "cross_frame"
 
-    async def test_a_cross_frame_variant_is_the_correct_use_and_says_nothing(
-        self, storage
-    ):
+    async def test_a_cross_frame_variant_is_the_correct_use_and_says_nothing(self, storage):
         a = await _fact(storage, "Napoleon lost at Waterloo")
         b = await _fact(storage, "Napoleon won at Waterloo", frame=None)
         await _elsewhere(storage, b, "Novel-X")
@@ -324,9 +314,7 @@ class TestTheTwoExistingWarningsBecameAdvisories:
         assert "warning" not in result and "warnings" not in result
         assert result["notify_user"] is False
 
-    async def test_a_same_frame_variant_is_advised_against_and_stays_quiet(
-        self, storage
-    ):
+    async def test_a_same_frame_variant_is_advised_against_and_stays_quiet(self, storage):
         """It keeps the whisper it always had — but as a policy rather than a
         hard-coding, so a graph that wants it louder can name it."""
         a = await _fact(storage, "a")
@@ -339,9 +327,7 @@ class TestTheTwoExistingWarningsBecameAdvisories:
         assert result["notify_user"] is False
 
     async def test_a_same_frame_variant_can_be_escalated_by_a_graph(self, storage):
-        await tools.configure_warnings(
-            storage, actions={"same_frame_variant": "flag"}
-        )
+        await tools.configure_warnings(storage, actions={"same_frame_variant": "flag"})
         a = await _fact(storage, "a")
         b = await _fact(storage, "b")
 
@@ -349,9 +335,7 @@ class TestTheTwoExistingWarningsBecameAdvisories:
 
         assert result["notify_user"] is True
 
-    async def test_the_wrong_tool_is_recorded_and_the_right_one_is_not(
-        self, storage
-    ):
+    async def test_the_wrong_tool_is_recorded_and_the_right_one_is_not(self, storage):
         """The whole of the stance split, at the two call sites that motivated
         it. A same-frame variant used the wrong tool and the graph says so; a
         same-frame contradiction used the right one and had nothing to proceed
@@ -359,27 +343,21 @@ class TestTheTwoExistingWarningsBecameAdvisories:
         a = await _fact(storage, "a")
         b = await _fact(storage, "b")
         await tools.record_variant(a.id, b.id, storage)
-        objections = await storage.query_decisions(
-            kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY]
-        )
+        objections = await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY])
         assert len(objections) == 1
 
         c = await _fact(storage, "X is true")
         d = await _fact(storage, "X is false")
         await tools.record_contradiction(c.id, d.id, storage)
 
-        assert len(await storage.query_decisions(
-            kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY]
-        )) == 1
+        assert (
+            len(await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY])) == 1
+        )
 
-    async def test_a_graph_can_turn_the_notification_off_as_a_decision(
-        self, storage
-    ):
+    async def test_a_graph_can_turn_the_notification_off_as_a_decision(self, storage):
         """It stays possible; it just becomes something somebody chose rather
         than a side effect of a representation change."""
-        await tools.configure_warnings(
-            storage, actions={"same_frame_contradiction": "proceed"}
-        )
+        await tools.configure_warnings(storage, actions={"same_frame_contradiction": "proceed"})
         a = await _fact(storage, "X is true")
         b = await _fact(storage, "X is false")
 
@@ -388,9 +366,7 @@ class TestTheTwoExistingWarningsBecameAdvisories:
         assert result["notify_user"] is False
         assert result["warnings"][0]["kind"] == "same_frame_contradiction"
 
-    async def test_a_mute_does_not_withdraw_the_contradiction_escalation(
-        self, storage
-    ):
+    async def test_a_mute_does_not_withdraw_the_contradiction_escalation(self, storage):
         """It is named `flag` by default, and a switch that names no kind is the
         more general statement. Setting it to `proceed` is how it goes quiet."""
         await tools.configure_warnings(storage, surface=False)
@@ -412,9 +388,9 @@ class TestTheTwoExistingWarningsBecameAdvisories:
         assert "warning" not in result and "warnings" not in result
         assert result["notify_user"] is False
         # Muted, and recorded anyway: that separation is the load-bearing part.
-        assert len(await storage.query_decisions(
-            kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY]
-        )) == 1
+        assert (
+            len(await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY])) == 1
+        )
 
 
 class TestTheRecordIsReadBackByReview:
@@ -432,11 +408,10 @@ class TestTheRecordIsReadBackByReview:
         only, _ = await tools.review(storage, mode="advisory")
 
         assert {d["kind"] for d in every["decisions"]} == {
-            "contradiction", "proceeded_despite_advisory",
+            "contradiction",
+            "proceeded_despite_advisory",
         }
-        assert {d["kind"] for d in only["decisions"]} == {
-            "proceeded_despite_advisory"
-        }
+        assert {d["kind"] for d in only["decisions"]} == {"proceeded_despite_advisory"}
 
     async def test_the_commonest_path_does_not_double_the_journal(self, storage):
         """A same-frame contradiction is the ordinary, correct use of the tool.
@@ -470,9 +445,7 @@ class TestTheRecordIsReadBackByReview:
         assert "advisory" in REVIEW_MODES
         assert MODE_KINDS["advisory"] == [DecisionKind.PROCEEDED_DESPITE_ADVISORY]
 
-    async def test_nothing_contested_is_an_empty_list_rather_than_a_refusal(
-        self, storage
-    ):
+    async def test_nothing_contested_is_an_empty_list_rather_than_a_refusal(self, storage):
         result, _ = await tools.review(storage, mode="advisory")
 
         assert result["decisions"] == []
@@ -492,19 +465,13 @@ class TestAStoredOverrideFromANewerBuild:
 
     def test_an_unknown_kind_raises_rather_than_being_dropped(self):
         with pytest.raises(ValidationError):
-            WarningOverrides.model_validate(
-                {"by_kind": {"a_kind_from_the_future": "flag"}}
-            )
+            WarningOverrides.model_validate({"by_kind": {"a_kind_from_the_future": "flag"}})
 
     def test_an_unknown_action_raises_too(self):
         with pytest.raises(ValidationError):
-            WarningOverrides.model_validate(
-                {"by_kind": {"cross_frame": "reject"}}
-            )
+            WarningOverrides.model_validate({"by_kind": {"cross_frame": "reject"}})
 
-    async def test_the_failure_reaches_the_tools_that_read_the_policy(
-        self, storage
-    ):
+    async def test_the_failure_reaches_the_tools_that_read_the_policy(self, storage):
         """Not a defect to fix here — a consequence to know about. Recovering
         would mean either dropping the unreadable entry, which loses a setting
         silently, or refusing the write that made it, which no older build can
@@ -513,9 +480,7 @@ class TestAStoredOverrideFromANewerBuild:
         b = await _fact(storage, "X is false")
 
         async def unreadable() -> WarningOverrides:
-            return WarningOverrides.model_validate(
-                {"by_kind": {"a_kind_from_the_future": "flag"}}
-            )
+            return WarningOverrides.model_validate({"by_kind": {"a_kind_from_the_future": "flag"}})
 
         storage.get_warning_overrides = unreadable
 

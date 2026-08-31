@@ -1,8 +1,8 @@
 """Tests for InstrumentedStorage multi-graph pass-through and events."""
 
-import pytest
+from datetime import UTC, datetime
 
-from datetime import datetime, timezone
+import pytest
 
 from epimemer.core.types import (
     EdgeType,
@@ -83,8 +83,8 @@ class TestTagTopicEmission:
         tag = Topic(content="smoke-test", source_id=None, extraction_method="agent:tag")
         await wrapped.write_batch_tx(nodes=[tag])
 
-        assert await wrapped.get_node(tag.id) is not None       # committed
-        assert len(received) == 1                                # emitted
+        assert await wrapped.get_node(tag.id) is not None  # committed
+        assert len(received) == 1  # emitted
         assert received[0].node.source_id is None
 
     async def test_write_batch_tx_survives_emit_failure(self, bus, monkeypatch):
@@ -103,9 +103,9 @@ class TestTagTopicEmission:
         monkeypatch.setattr(instrumented_storage_mod, "node_to_view", boom)
 
         node = Topic(content="t", source_id="s1")
-        await wrapped.write_batch_tx(nodes=[node])   # must not raise
+        await wrapped.write_batch_tx(nodes=[node])  # must not raise
 
-        assert await wrapped.get_node(node.id) is not None       # still committed
+        assert await wrapped.get_node(node.id) is not None  # still committed
 
 
 class TestSupersessionCounterpart:
@@ -127,12 +127,12 @@ class TestSupersessionCounterpart:
         new = Fact(content="Saint Petersburg is the city's name", source_id="s1")
         await wrapped.store_node(old)
         await wrapped.supersede_node_tx(
-            old, new,
+            old,
+            new,
             EmbeddingRecord(item_id=new.id, model_id="test", vector=[1.0, 0.0]),
-            NodeEdge(src_id=old.id, dst_id=new.id,
-                     type=lineage_edge_type_for(status)),
+            NodeEdge(src_id=old.id, dst_id=new.id, type=lineage_edge_type_for(status)),
             status=status,
-            superseded_at=datetime.now(timezone.utc),
+            superseded_at=datetime.now(UTC),
         )
         return old, new, received
 
@@ -161,10 +161,11 @@ class TestSupersessionCounterpart:
         await wrapped.store_node(old)
         await wrapped.store_node(winner)
         await wrapped.supersede_by_existing_tx(
-            old, winner.id,
+            old,
+            winner.id,
             NodeEdge(src_id=old.id, dst_id=winner.id, type=EdgeType.SUPERSEDED_BY),
             status=NodeStatus.CORRECTED,
-            superseded_at=datetime.now(timezone.utc),
+            superseded_at=datetime.now(UTC),
         )
 
         assert [e.counterpart for e in received] == [winner.id]
@@ -182,16 +183,15 @@ class TestSupersessionCounterpart:
             await wrapped.store_node(node)
         merged = Fact(content="the one kept", source_id="s1")
         await wrapped.merge_nodes_tx(
-            sources, merged,
+            sources,
+            merged,
             EmbeddingRecord(item_id=merged.id, model_id="test", vector=[1.0, 0.0]),
-            [NodeEdge(src_id=s.id, dst_id=merged.id, type=EdgeType.MERGED_INTO)
-             for s in sources],
-            merged_at=datetime.now(timezone.utc),
+            [NodeEdge(src_id=s.id, dst_id=merged.id, type=EdgeType.MERGED_INTO) for s in sources],
+            merged_at=datetime.now(UTC),
         )
 
         assert {e.node_id for e in received} == {s.id for s in sources}
         assert {e.counterpart for e in received} == {merged.id}
-
 
     async def test_merge_publishes_the_flags_it_wrote_on_dependents(self, bus):
         """Both supersession paths publish their evidence edges; a merge writes
@@ -209,14 +209,16 @@ class TestSupersessionCounterpart:
         dependent = Inference(content="what rests on them", source_id="s1")
         await wrapped.store_node(dependent)
         flag = NodeEdge(
-            src_id=sources[0].id, dst_id=dependent.id, type=EdgeType.EVIDENCE_MERGED,
+            src_id=sources[0].id,
+            dst_id=dependent.id,
+            type=EdgeType.EVIDENCE_MERGED,
         )
         await wrapped.merge_nodes_tx(
-            sources, merged,
+            sources,
+            merged,
             EmbeddingRecord(item_id=merged.id, model_id="test", vector=[1.0, 0.0]),
-            [NodeEdge(src_id=s.id, dst_id=merged.id, type=EdgeType.MERGED_INTO)
-             for s in sources],
-            merged_at=datetime.now(timezone.utc),
+            [NodeEdge(src_id=s.id, dst_id=merged.id, type=EdgeType.MERGED_INTO) for s in sources],
+            merged_at=datetime.now(UTC),
             evidence_edges=[flag],
         )
 
@@ -302,7 +304,7 @@ class TestTimelineEvents:
 
         timeline, _ = add_timepoint(
             Timeline(name="History"),
-            start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            start=datetime(2024, 1, 1, tzinfo=UTC),
             label="the beginning",
         )
         await wrapped.store_timeline(timeline)
@@ -324,9 +326,7 @@ class TestTimelineEvents:
 
         timeline = Timeline(name="History")
         await wrapped.store_timeline(timeline)
-        extended, _ = add_timepoint(
-            timeline, start=datetime(2024, 6, 1, tzinfo=timezone.utc)
-        )
+        extended, _ = add_timepoint(timeline, start=datetime(2024, 6, 1, tzinfo=UTC))
         await wrapped.store_timeline(extended)
 
         assert [len(e.timeline.timepoints) for e in received] == [0, 1]
@@ -340,9 +340,7 @@ class TestTimelineEvents:
         received: list[TimelineStored] = []
         bus.subscribe(TimelineStored, handler=lambda e: received.append(e))
 
-        timeline, _ = add_timepoint(
-            Timeline(name="History"), label="during the Renaissance"
-        )
+        timeline, _ = add_timepoint(Timeline(name="History"), label="during the Renaissance")
         await wrapped.store_timeline(timeline)
 
         [point] = received[0].timeline.timepoints
@@ -379,9 +377,7 @@ class TestAggregatePassThrough:
 
         inner = InMemoryStorage()
         wrapped = instrument_storage(inner, bus)
-        await wrapped.store_edge(
-            NodeEdge(src_id="a", dst_id="b", type=EdgeType.SUPPORTS)
-        )
+        await wrapped.store_edge(NodeEdge(src_id="a", dst_id="b", type=EdgeType.SUPPORTS))
 
         counts = await wrapped.count_edges_by_type()
         assert counts[EdgeType.SUPPORTS] == 1
@@ -396,9 +392,7 @@ def test_wrapper_implements_full_storage_protocol(bus):
     from epimemer.storage.protocol import StorageBackend
 
     wrapped = instrument_storage(InMemoryStorage(), bus)
-    protocol_members = [
-        name for name in dir(StorageBackend) if not name.startswith("_")
-    ]
+    protocol_members = [name for name in dir(StorageBackend) if not name.startswith("_")]
     missing = [name for name in protocol_members if not hasattr(wrapped, name)]
     assert missing == [], f"InstrumentedStorage missing protocol members: {missing}"
 
@@ -429,6 +423,4 @@ def test_wrapper_takes_the_same_arguments_as_the_protocol(bus):
         if expected != actual:
             drifted[name] = (expected, actual)
 
-    assert drifted == {}, (
-        f"the wrapper's arguments have drifted from the protocol's: {drifted}"
-    )
+    assert drifted == {}, f"the wrapper's arguments have drifted from the protocol's: {drifted}"

@@ -25,16 +25,13 @@ def _record(record_id: str = "000000000001", **over) -> RetrievalRecord:
         "tool": "epimemer.search",
         "query": "deployment rollbacks",
         "graph": "default",
-        "retrieved": [
-            RetrievedNode(node_id="n1", provenance=SeedProvenance.VECTOR, score=0.82)
-        ],
+        "retrieved": [RetrievedNode(node_id="n1", provenance=SeedProvenance.VECTOR, score=0.82)],
         "response_text": '{"result": {"nodes": []}}',
     }
     return RetrievalRecord(**{**fields, **over})
 
 
 class TestProvenance:
-
     def test_a_tool_that_does_not_rank_says_direct(self):
         """§3: `find_nodes`, `graph_as_of`, `query_changes` and `topic_tree` return
         nodes without ranking them. `LEXICAL_SEARCH.md` §6 left room for this
@@ -49,9 +46,7 @@ class TestProvenance:
     def test_check_conflicts_candidates_are_vector_hits(self):
         """§3 amended: they genuinely are vector-similarity results, with the
         cosine as the score — no new enum value is needed for them."""
-        node = RetrievedNode(
-            node_id="n1", provenance=SeedProvenance.VECTOR, score=0.91
-        )
+        node = RetrievedNode(node_id="n1", provenance=SeedProvenance.VECTOR, score=0.91)
         assert node.provenance is SeedProvenance.VECTOR
 
 

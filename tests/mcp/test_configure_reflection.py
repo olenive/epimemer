@@ -16,16 +16,16 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import pytest
-
 from fastmcp import FastMCP
 
+from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.embeddings.mock import MockEmbeddingProvider
-from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.config import ServerConfig
+from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.mcp.tools import configure_reflection, effective_reflect_threshold, graph_stats
-from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.storage.memory import InMemoryStorage
+
 
 def _graph_with_the_real() -> InMemoryStorage:
     """An in-memory graph somebody has set up.
@@ -94,7 +94,6 @@ class TestOverrideStorage:
 
 
 class TestEffectiveThreshold:
-
     async def test_falls_back_to_the_configured_default(self, storage):
         assert await effective_reflect_threshold(storage, 10) == 10
 
@@ -118,11 +117,8 @@ class TestEffectiveThreshold:
 
 
 class TestConfigureReflectionTool:
-
     async def test_sets_the_override_and_reports_the_effect(self, storage):
-        result, _ = await configure_reflection(
-            storage, threshold=3, default_threshold=10
-        )
+        result, _ = await configure_reflection(storage, threshold=3, default_threshold=10)
 
         assert result["reflect_threshold"] == 3
         assert result["overridden"] is True
@@ -131,9 +127,7 @@ class TestConfigureReflectionTool:
     async def test_clears_the_override(self, storage):
         await storage.set_reflect_threshold_override(3)
 
-        result, _ = await configure_reflection(
-            storage, threshold=None, default_threshold=10
-        )
+        result, _ = await configure_reflection(storage, threshold=None, default_threshold=10)
 
         assert result["reflect_threshold"] == 10
         assert result["overridden"] is False
@@ -144,9 +138,7 @@ class TestConfigureReflectionTool:
         await storage.bump_reflect_counter()
         await storage.bump_reflect_counter()
 
-        result, _ = await configure_reflection(
-            storage, threshold=2, default_threshold=10
-        )
+        result, _ = await configure_reflection(storage, threshold=2, default_threshold=10)
 
         assert result["stores_since_reflect"] == 2
         assert result["reflect_suggested"] is True
@@ -174,7 +166,6 @@ class TestConfigureReflectionTool:
 
 
 class TestOverrideReachesTheReadouts:
-
     async def test_graph_stats_reports_the_override(self, storage):
         await storage.set_reflect_threshold_override(2)
         await storage.bump_reflect_counter()
@@ -230,15 +221,23 @@ def _result(tool_result) -> dict:
 
 
 async def _ingest(server: FastMCP, content: str) -> dict:
-    seg = _result(await server.call_tool("segment", {"expected_graph": "default", "content": content}))
-    return _result(await server.call_tool("store_decomposition", {"expected_graph": "default", 
-        "metacontext_id": "the-real",
-        "document_id": seg["document_id"],
-        "segments": [
-            {"segment_id": s["segment_id"], "topics": [f"Topic {s['segment_id']}"]}
-            for s in seg["segments"]
-        ],
-    }))
+    seg = _result(
+        await server.call_tool("segment", {"expected_graph": "default", "content": content})
+    )
+    return _result(
+        await server.call_tool(
+            "store_decomposition",
+            {
+                "expected_graph": "default",
+                "metacontext_id": "the-real",
+                "document_id": seg["document_id"],
+                "segments": [
+                    {"segment_id": s["segment_id"], "topics": [f"Topic {s['segment_id']}"]}
+                    for s in seg["segments"]
+                ],
+            },
+        )
+    )
 
 
 @pytest.fixture
@@ -252,7 +251,9 @@ async def test_configure_reflection_persists_override(config):
 
     async with _session(storage, config) as server:
         set_result = _result(
-            await server.call_tool("configure_reflection", {"expected_graph": "default", "threshold": 2})
+            await server.call_tool(
+                "configure_reflection", {"expected_graph": "default", "threshold": 2}
+            )
         )
         assert set_result["reflect_threshold"] == 2
 
@@ -269,7 +270,9 @@ async def test_store_decomposition_honours_the_override(config):
     storage = _graph_with_the_real()
 
     async with _session(storage, config) as server:
-        await server.call_tool("configure_reflection", {"expected_graph": "default", "threshold": 2})
+        await server.call_tool(
+            "configure_reflection", {"expected_graph": "default", "threshold": 2}
+        )
 
         first = await _ingest(server, "Cats are mammals.")
         assert first["reflect_threshold"] == 2
@@ -284,8 +287,12 @@ async def test_clearing_returns_to_the_configured_default(config):
     config = config.model_copy(update={"reflect_threshold": 7})
 
     async with _session(storage, config) as server:
-        await server.call_tool("configure_reflection", {"expected_graph": "default", "threshold": 2})
-        cleared = _result(await server.call_tool("configure_reflection", {"expected_graph": "default"}))
+        await server.call_tool(
+            "configure_reflection", {"expected_graph": "default", "threshold": 2}
+        )
+        cleared = _result(
+            await server.call_tool("configure_reflection", {"expected_graph": "default"})
+        )
 
     assert cleared["reflect_threshold"] == 7
     assert cleared["overridden"] is False

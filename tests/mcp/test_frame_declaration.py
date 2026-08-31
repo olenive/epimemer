@@ -16,21 +16,19 @@ import pytest
 
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
+    QUARANTINE_METACONTEXT_ID,
     DecisionKind,
     EdgeType,
-    EmbeddingRecord,
     Fact,
     JudgeRef,
     Metacontext,
     NodeEdge,
-    QUARANTINE_METACONTEXT_ID,
     Topic,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
 from epimemer.pipelines.frames import declare_frames
-
 
 DECLARER = JudgeRef(agent_id="the-user", digest="d1")
 
@@ -48,16 +46,18 @@ def config():
 async def _node(storage, node, *, frames=()):
     await storage.store_node(node)
     for frame in frames:
-        await storage.store_edge(NodeEdge(
-            src_id=node.id, dst_id=frame, type=EdgeType.HAS_METACONTEXT,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=node.id,
+                dst_id=frame,
+                type=EdgeType.HAS_METACONTEXT,
+            )
+        )
     return node
 
 
 async def _frames_of(storage, node_id) -> set[str]:
-    edges = await storage.get_edges_from(
-        node_id, edge_type=EdgeType.HAS_METACONTEXT
-    )
+    edges = await storage.get_edges_from(node_id, edge_type=EdgeType.HAS_METACONTEXT)
     return {edge.dst_id for edge in edges}
 
 
@@ -65,9 +65,7 @@ class TestTheSweepStampsWhatNobodySpokeFor:
     async def test_an_unframed_node_is_declared(self, storage):
         legacy = await _node(storage, Topic(content="Vienna", source_id="s1"))
 
-        result = await declare_frames(
-            storage, frame=BASE_METACONTEXT_ID, judge=DECLARER
-        )
+        result = await declare_frames(storage, frame=BASE_METACONTEXT_ID, judge=DECLARER)
 
         assert result.declared == 1
         assert await _frames_of(storage, legacy.id) == {BASE_METACONTEXT_ID}
@@ -79,19 +77,16 @@ class TestTheSweepStampsWhatNobodySpokeFor:
         worlds, which is the outcome every gate in this system refuses."""
         fiction, _ = await tools.create_metacontext("The novel", storage)
         framed = await _node(
-            storage, Topic(content="the council", source_id="s1"),
+            storage,
+            Topic(content="the council", source_id="s1"),
             frames=[fiction["metacontext_id"]],
         )
 
-        result = await declare_frames(
-            storage, frame=BASE_METACONTEXT_ID, judge=DECLARER
-        )
+        result = await declare_frames(storage, frame=BASE_METACONTEXT_ID, judge=DECLARER)
 
         assert result.declared == 0
         assert result.already_framed == 1
-        assert await _frames_of(storage, framed.id) == {
-            fiction["metacontext_id"]
-        }
+        assert await _frames_of(storage, framed.id) == {fiction["metacontext_id"]}
 
     async def test_a_rerun_declares_nothing(self, storage):
         """Idempotent, and that is what lets the command be run without
@@ -100,9 +95,7 @@ class TestTheSweepStampsWhatNobodySpokeFor:
         await _node(storage, Topic(content="Vienna", source_id="s1"))
 
         await declare_frames(storage, frame=BASE_METACONTEXT_ID, judge=DECLARER)
-        again = await declare_frames(
-            storage, frame=BASE_METACONTEXT_ID, judge=DECLARER
-        )
+        again = await declare_frames(storage, frame=BASE_METACONTEXT_ID, judge=DECLARER)
 
         assert again.declared == 0
         assert again.already_framed == 1
@@ -132,9 +125,7 @@ class TestTheSweepStampsWhatNobodySpokeFor:
 
         await declare_frames(storage, frame=BASE_METACONTEXT_ID, judge=DECLARER)
 
-        edges = await storage.get_edges_from(
-            legacy.id, edge_type=EdgeType.HAS_METACONTEXT
-        )
+        edges = await storage.get_edges_from(legacy.id, edge_type=EdgeType.HAS_METACONTEXT)
         assert [edge.judged_by.agent_id for edge in edges] == ["the-user"]
 
 
@@ -148,9 +139,7 @@ class TestOneRowForTheSweep:
 
         await declare_frames(storage, frame=BASE_METACONTEXT_ID, judge=DECLARER)
 
-        rows = await storage.query_decisions(
-            kinds=[DecisionKind.FRAME_DECLARATION]
-        )
+        rows = await storage.query_decisions(kinds=[DecisionKind.FRAME_DECLARATION])
         assert len(rows) == 1
         assert set(rows[0].subject_ids) == {a.id, b.id}
         assert rows[0].judged_by.agent_id == "the-user"
@@ -160,9 +149,7 @@ class TestOneRowForTheSweep:
         `store_decomposition` already follows for a call that stored nothing."""
         await declare_frames(storage, frame=BASE_METACONTEXT_ID, judge=DECLARER)
 
-        assert await storage.query_decisions(
-            kinds=[DecisionKind.FRAME_DECLARATION]
-        ) == []
+        assert await storage.query_decisions(kinds=[DecisionKind.FRAME_DECLARATION]) == []
 
 
 class TestTheQuarantineFrameIsWriteOnlyForTheSweep:
@@ -171,28 +158,22 @@ class TestTheQuarantineFrameIsWriteOnlyForTheSweep:
         that, rather than left carrying no frame — which would leave them
         isolated from everything, including each other."""
         legacy = await _node(storage, Topic(content="something", source_id="s1"))
-        await storage.store_metacontext(Metacontext(
-            id=QUARANTINE_METACONTEXT_ID,
-            content="Unvouched",
-            description="Nobody has vouched for these.",
-        ))
-
-        await declare_frames(
-            storage, frame=QUARANTINE_METACONTEXT_ID, judge=DECLARER
+        await storage.store_metacontext(
+            Metacontext(
+                id=QUARANTINE_METACONTEXT_ID,
+                content="Unvouched",
+                description="Nobody has vouched for these.",
+            )
         )
 
-        assert await _frames_of(storage, legacy.id) == {
-            QUARANTINE_METACONTEXT_ID
-        }
+        await declare_frames(storage, frame=QUARANTINE_METACONTEXT_ID, judge=DECLARER)
 
-    async def test_an_agent_may_not_ingest_into_it(
-        self, storage, embedder, config
-    ):
+        assert await _frames_of(storage, legacy.id) == {QUARANTINE_METACONTEXT_ID}
+
+    async def test_an_agent_may_not_ingest_into_it(self, storage, embedder, config):
         """A frame an agent can assert into stops meaning *nobody vouched for
         this* and becomes untagged again under a new name."""
-        await tools.create_metacontext(
-            "unvouched", storage, description="quarantine"
-        )
+        await tools.create_metacontext("unvouched", storage, description="quarantine")
         seg, _ = await tools.segment_text("A doc.", storage, embedder, config)
 
         with pytest.raises(ValueError, match="not a frame anything may be"):
@@ -208,18 +189,18 @@ class TestTheQuarantineFrameIsWriteOnlyForTheSweep:
         """Asking what nobody has vouched for is a reasonable question — the
         rule is about assertion, not about looking. So the refusal is on the
         write side only, which is why `require_metacontext` takes `writing`."""
-        await storage.store_metacontext(Metacontext(
-            id=QUARANTINE_METACONTEXT_ID,
-            content="Unvouched",
-            description="Nobody has vouched for these.",
-        ))
+        await storage.store_metacontext(
+            Metacontext(
+                id=QUARANTINE_METACONTEXT_ID,
+                content="Unvouched",
+                description="Nobody has vouched for these.",
+            )
+        )
 
         await tools.require_metacontext(QUARANTINE_METACONTEXT_ID, storage)
 
         with pytest.raises(ValueError, match="not a frame anything may be"):
-            await tools.require_metacontext(
-                QUARANTINE_METACONTEXT_ID, storage, writing=True
-            )
+            await tools.require_metacontext(QUARANTINE_METACONTEXT_ID, storage, writing=True)
 
 
 class TestGraphStatsIsTheCompletenessCheck:
@@ -245,7 +226,8 @@ class TestGraphStatsIsTheCompletenessCheck:
     async def test_a_framed_node_never_counts(self, storage):
         fiction, _ = await tools.create_metacontext("The novel", storage)
         await _node(
-            storage, Topic(content="the council", source_id="s1"),
+            storage,
+            Topic(content="the council", source_id="s1"),
             frames=[fiction["metacontext_id"]],
         )
 

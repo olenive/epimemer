@@ -12,7 +12,6 @@ from epimemer.logging.structured import (
 
 
 class TestJSONFormatter:
-
     def test_outputs_valid_json(self):
         formatter = JSONFormatter()
         record = logging.LogRecord(
@@ -49,7 +48,6 @@ class TestJSONFormatter:
 
 
 class TestToolInvocationLog:
-
     def test_model_validates(self):
         entry = ToolInvocationLog(
             tool_name="epimemer.search",
@@ -72,7 +70,6 @@ class TestToolInvocationLog:
 
 
 class TestLogToolCall:
-
     def test_emits_to_logger(self):
         # Set up logging to capture output
         setup_logging(level="DEBUG")

@@ -9,8 +9,9 @@ with SurrealDB's built-in 'id' field (which uses RecordID type).
 
 import asyncio
 import contextlib
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Literal, Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from datetime import UTC, datetime
+from typing import Any, Literal
 
 from surrealdb import AsyncSurreal
 from websockets.exceptions import ConnectionClosed, WebSocketException
@@ -21,11 +22,11 @@ from epimemer.core.types import (
     DecisionKind,
     DecisionRecord,
     EdgeType,
-    JudgeRef,
     EmbeddingRecord,
     EpistemicNode,
     Fact,
     Inference,
+    JudgeRef,
     LifecycleEpisode,
     Metacontext,
     NodeEdge,
@@ -34,13 +35,13 @@ from epimemer.core.types import (
     RawDocument,
     RelationLabel,
     RelationVerdict,
-    recorded_relation_label,
-    relation_pair_key,
     Segment,
     Timeline,
     Topic,
     migration_disposition,
     moved_edge_types,
+    recorded_relation_label,
+    relation_pair_key,
     with_retirement,
     with_return,
 )
@@ -53,7 +54,6 @@ from epimemer.storage.protocol import (
     drop_none_values,
     validate_graph_name,
 )
-
 
 # Schemes the SDK maps to `AsyncEmbeddedSurrealConnection`, which is not a
 # connection to anything: the engine, and therefore the whole graph, lives inside
@@ -174,8 +174,7 @@ async def _ids_with_status(
         return []
     return list(
         await query(
-            f"SELECT VALUE uid FROM {tables} "
-            f"WHERE status IN $statuses AND uid IN $ids",
+            f"SELECT VALUE uid FROM {tables} WHERE status IN $statuses AND uid IN $ids",
             {"statuses": wanted, "ids": among},
         )
     )
@@ -396,8 +395,7 @@ _REFLECT_FIELD = "stores_since_reflect"
 
 _REFLECT_GET = f"SELECT {_REFLECT_FIELD} FROM {_REFLECT_RECORD};"
 _REFLECT_BUMP = (
-    f"UPSERT {_REFLECT_RECORD} SET {_REFLECT_FIELD} = "
-    f"({_REFLECT_FIELD} ?? 0) + 1 RETURN AFTER;"
+    f"UPSERT {_REFLECT_RECORD} SET {_REFLECT_FIELD} = ({_REFLECT_FIELD} ?? 0) + 1 RETURN AFTER;"
 )
 _REFLECT_RESET = f"UPSERT {_REFLECT_RECORD} SET {_REFLECT_FIELD} = 0 RETURN BEFORE;"
 
@@ -408,9 +406,7 @@ _REFLECT_RESET = f"UPSERT {_REFLECT_RECORD} SET {_REFLECT_FIELD} = 0 RETURN BEFO
 _THRESHOLD_FIELD = "reflect_threshold_override"
 
 _THRESHOLD_GET = f"SELECT {_THRESHOLD_FIELD} FROM {_REFLECT_RECORD};"
-_THRESHOLD_SET = (
-    f"UPSERT {_REFLECT_RECORD} SET {_THRESHOLD_FIELD} = $threshold RETURN AFTER;"
-)
+_THRESHOLD_SET = f"UPSERT {_REFLECT_RECORD} SET {_THRESHOLD_FIELD} = $threshold RETURN AFTER;"
 
 
 def _reflect_count(rows) -> int:
@@ -446,9 +442,7 @@ def _threshold_override(rows) -> int | None:
 _MERGE_FIELD = "merge_overrides"
 
 _MERGE_GET = f"SELECT {_MERGE_FIELD} FROM {_REFLECT_RECORD};"
-_MERGE_SET = (
-    f"UPSERT {_REFLECT_RECORD} SET {_MERGE_FIELD} = $overrides RETURN AFTER;"
-)
+_MERGE_SET = f"UPSERT {_REFLECT_RECORD} SET {_MERGE_FIELD} = $overrides RETURN AFTER;"
 
 
 def _merge_overrides(rows) -> MergeOverrides:
@@ -467,9 +461,7 @@ def _merge_overrides(rows) -> MergeOverrides:
 _WARNING_FIELD = "warning_overrides"
 
 _WARNING_GET = f"SELECT {_WARNING_FIELD} FROM {_REFLECT_RECORD};"
-_WARNING_SET = (
-    f"UPSERT {_REFLECT_RECORD} SET {_WARNING_FIELD} = $overrides RETURN AFTER;"
-)
+_WARNING_SET = f"UPSERT {_REFLECT_RECORD} SET {_WARNING_FIELD} = $overrides RETURN AFTER;"
 
 
 def _warning_overrides(rows) -> WarningOverrides:
@@ -481,9 +473,7 @@ def _warning_overrides(rows) -> WarningOverrides:
     if not rows or rows[0] is None:
         return WarningOverrides()
     stored = rows[0].get(_WARNING_FIELD)
-    return (
-        WarningOverrides() if not stored else WarningOverrides.model_validate(stored)
-    )
+    return WarningOverrides() if not stored else WarningOverrides.model_validate(stored)
 
 
 # The approved-agent ids share the reflect record for the third time and on the
@@ -493,9 +483,7 @@ def _warning_overrides(rows) -> WarningOverrides:
 _APPROVED_AGENTS_FIELD = "approved_agent_ids"
 
 _APPROVED_AGENTS_GET = f"SELECT {_APPROVED_AGENTS_FIELD} FROM {_REFLECT_RECORD};"
-_APPROVED_AGENTS_SET = (
-    f"UPSERT {_REFLECT_RECORD} SET {_APPROVED_AGENTS_FIELD} = $ids RETURN AFTER;"
-)
+_APPROVED_AGENTS_SET = f"UPSERT {_REFLECT_RECORD} SET {_APPROVED_AGENTS_FIELD} = $ids RETURN AFTER;"
 
 
 def _approved_agent_ids(rows) -> list[str]:
@@ -559,12 +547,8 @@ def _iso_micros(at: datetime) -> str:
     narrowing it.
     """
     if at.tzinfo is None:
-        at = at.replace(tzinfo=timezone.utc)
-    return (
-        at.astimezone(timezone.utc)
-        .isoformat(timespec="microseconds")
-        .replace("+00:00", "Z")
-    )
+        at = at.replace(tzinfo=UTC)
+    return at.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _decision_row(record: DecisionRecord) -> dict:
@@ -776,7 +760,7 @@ class SurrealDBStorage:
         conn = self.db
         try:
             return await operation(conn)
-        except (ConnectionClosed, WebSocketException):
+        except ConnectionClosed, WebSocketException:
             if is_embedded_url(self._url):
                 raise
             await self._reconnect(conn)
@@ -863,7 +847,6 @@ class SurrealDBStorage:
                 yield
             finally:
                 await self._use(original_db)
-
 
     async def viz_list_nodes(
         self,
@@ -1084,9 +1067,7 @@ class SurrealDBStorage:
         found: dict[str, Segment] = {}
         for start in range(0, len(wanted), _NODE_FETCH_CHUNK):
             chunk = wanted[start : start + _NODE_FETCH_CHUNK]
-            rows = await self._query(
-                "SELECT * FROM segment WHERE uid IN $ids", {"ids": chunk}
-            )
+            rows = await self._query("SELECT * FROM segment WHERE uid IN $ids", {"ids": chunk})
             for row in rows or []:
                 segment = Segment.model_validate(_clean_record(row))
                 found[segment.id] = segment
@@ -1124,9 +1105,7 @@ class SurrealDBStorage:
         for start in range(0, len(wanted), _NODE_FETCH_CHUNK):
             chunk = wanted[start : start + _NODE_FETCH_CHUNK]
             for table in ("topic", "fact", "inference"):
-                rows = await self._query(
-                    f"SELECT * FROM {table} WHERE uid IN $ids", {"ids": chunk}
-                )
+                rows = await self._query(f"SELECT * FROM {table} WHERE uid IN $ids", {"ids": chunk})
                 for row in rows or []:
                     node = _record_to_node(table, row)
                     found[node.id] = node
@@ -1336,25 +1315,27 @@ class SurrealDBStorage:
             # a large set costs more than reading the type and discarding what
             # nobody asked for. Reflection always arrives on this branch — it
             # asks about every active node at once.
-            collect(await self._query(
-                "SELECT * FROM node_edge" + (" WHERE type = $type" if edge_type else ""),
-                params,
-            ))
+            collect(
+                await self._query(
+                    "SELECT * FROM node_edge" + (" WHERE type = $type" if edge_type else ""),
+                    params,
+                )
+            )
             return found
 
         # One statement: the branch above bounds this list, so there is no
         # chunk seam on the edge path to get wrong.
-        collect(await self._query(
-            f"SELECT * FROM node_edge WHERE {field} IN $ids{type_clause}",
-            {**params, "ids": wanted},
-        ))
+        collect(
+            await self._query(
+                f"SELECT * FROM node_edge WHERE {field} IN $ids{type_clause}",
+                {**params, "ids": wanted},
+            )
+        )
         return found
 
     async def count_edges_by_type(self) -> dict[EdgeType, int]:
         counts = {et: 0 for et in EdgeType}
-        rows = await self._query(
-            "SELECT type, count() AS c FROM node_edge GROUP BY type"
-        )
+        rows = await self._query("SELECT type, count() AS c FROM node_edge GROUP BY type")
         for row in rows or []:
             raw_type = row.get("type")
             if raw_type is None:
@@ -1364,9 +1345,7 @@ class SurrealDBStorage:
 
     # --- Atomic compound operations ---
 
-    async def _run_transaction(
-        self, statements: list[str], params: dict
-    ) -> None:
+    async def _run_transaction(self, statements: list[str], params: dict) -> None:
         """Execute statements as one atomic BEGIN…COMMIT batch.
 
         SurrealDB only treats a single multi-statement query as a transaction;
@@ -1379,13 +1358,11 @@ class SurrealDBStorage:
 
         if isinstance(resp, dict) and resp.get("error") is not None:
             raise RuntimeError(f"Transaction failed: {resp['error']}")
-        for result in (resp.get("result", []) if isinstance(resp, dict) else []):
+        for result in resp.get("result", []) if isinstance(resp, dict) else []:
             if isinstance(result, dict) and result.get("status") not in (None, "OK"):
                 raise RuntimeError(f"Transaction failed: {result.get('result')}")
 
-    async def _plan_copied_edges(
-        self, old_id: str, new_id: str, status: NodeStatus
-    ) -> list[dict]:
+    async def _plan_copied_edges(self, old_id: str, new_id: str, status: NodeStatus) -> list[dict]:
         """Rows for the edges a retirement *copies* onto the replacement.
 
         Planned in Python and read pre-transaction, the same way
@@ -1411,10 +1388,16 @@ class SurrealDBStorage:
             if new_src == new_dst or signature in seen:
                 continue
             seen.add(signature)
-            rows.append(_edge_row(NodeEdge(
-                **(edge.model_dump(exclude={"id", "created_at"})
-                   | {"src_id": new_src, "dst_id": new_dst}),
-            )))
+            rows.append(
+                _edge_row(
+                    NodeEdge(
+                        **(
+                            edge.model_dump(exclude={"id", "created_at"})
+                            | {"src_id": new_src, "dst_id": new_dst}
+                        ),
+                    )
+                )
+            )
         return rows
 
     async def _stored_lifecycles(
@@ -1472,10 +1455,8 @@ class SurrealDBStorage:
         ]
         if moved:
             statements += [
-                "UPDATE node_edge SET src_id = $new_uid "
-                "WHERE src_id = $old_uid AND type IN $moved",
-                "UPDATE node_edge SET dst_id = $new_uid "
-                "WHERE dst_id = $old_uid AND type IN $moved",
+                "UPDATE node_edge SET src_id = $new_uid WHERE src_id = $old_uid AND type IN $moved",
+                "UPDATE node_edge SET dst_id = $new_uid WHERE dst_id = $old_uid AND type IN $moved",
                 "DELETE node_edge WHERE src_id = $new_uid AND dst_id = $new_uid",
             ]
         if copied_data:
@@ -1488,10 +1469,15 @@ class SurrealDBStorage:
             "new_uid": new_node.id,
             "new_data": _serialize(new_node),
             "emb_data": _serialize(new_embedding),
-            "lifecycle": _episode_rows(with_retirement(
-                lifecycles[old_node.id], at=superseded_at, because=status,
-                counterpart=new_node.id, judge=judge,
-            )),
+            "lifecycle": _episode_rows(
+                with_retirement(
+                    lifecycles[old_node.id],
+                    at=superseded_at,
+                    because=status,
+                    counterpart=new_node.id,
+                    judge=judge,
+                )
+            ),
             "moved": moved,
             "copied_data": copied_data,
             "lineage_data": _edge_row(lineage_edge),
@@ -1523,10 +1509,15 @@ class SurrealDBStorage:
             "sup_at": superseded_at.isoformat(),
             "old_uid": old_node.id,
             "lineage_data": _edge_row(lineage_edge),
-            "lifecycle": _episode_rows(with_retirement(
-                lifecycles[old_node.id], at=superseded_at, because=status,
-                counterpart=existing_id, judge=judge,
-            )),
+            "lifecycle": _episode_rows(
+                with_retirement(
+                    lifecycles[old_node.id],
+                    at=superseded_at,
+                    because=status,
+                    counterpart=existing_id,
+                    judge=judge,
+                )
+            ),
         }
         self._append_review_writes(statements, params, evidence_edges, clear_edge_ids)
         await self._run_transaction(statements, params)
@@ -1550,10 +1541,8 @@ class SurrealDBStorage:
         # applied" is exactly the behaviour that must not differ.
         uids = [node.id for node in nodes]
         statements = [
-            f"LET $found = (SELECT VALUE uid FROM {_node_tables(None)} "
-            "WHERE uid IN $uids)",
-            "IF array::len($found) != $expected "
-            "{ THROW 'set_node_status_tx: node not found' }",
+            f"LET $found = (SELECT VALUE uid FROM {_node_tables(None)} WHERE uid IN $uids)",
+            "IF array::len($found) != $expected { THROW 'set_node_status_tx: node not found' }",
         ]
         returning = status is NodeStatus.ACTIVE
         params: dict = {
@@ -1573,16 +1562,14 @@ class SurrealDBStorage:
         lifecycles = await self._stored_lifecycles(nodes)
         for i, node in enumerate(nodes):
             episodes = (
-                with_return(lifecycles[node.id], at=at, judge=judge) if returning
-                else with_retirement(
-                    lifecycles[node.id], at=at, because=status, judge=judge
-                )
+                with_return(lifecycles[node.id], at=at, judge=judge)
+                if returning
+                else with_retirement(lifecycles[node.id], at=at, because=status, judge=judge)
             )
             params[f"lifecycle_{i}"] = _episode_rows(episodes)
             params[f"uid_{i}"] = node.id
             statements.append(
-                f"UPDATE {_node_to_table(node)} SET lifecycle = $lifecycle_{i} "
-                f"WHERE uid = $uid_{i}"
+                f"UPDATE {_node_to_table(node)} SET lifecycle = $lifecycle_{i} WHERE uid = $uid_{i}"
             )
         # Inside the same transaction, so a reactivated node can never be left
         # ACTIVE without the edge saying what asserted it again.
@@ -1695,10 +1682,15 @@ class SurrealDBStorage:
         source_params: dict = {}
         for i, source in enumerate(source_nodes):
             source_params[f"source_{i}"] = source.id
-            source_params[f"lifecycle_{i}"] = _episode_rows(with_retirement(
-                lifecycles[source.id], at=merged_at, because=NodeStatus.MERGED,
-                counterpart=merged_node.id, judge=judge,
-            ))
+            source_params[f"lifecycle_{i}"] = _episode_rows(
+                with_retirement(
+                    lifecycles[source.id],
+                    at=merged_at,
+                    because=NodeStatus.MERGED,
+                    counterpart=merged_node.id,
+                    judge=judge,
+                )
+            )
 
         params: dict = {
             **source_params,
@@ -1735,9 +1727,7 @@ class SurrealDBStorage:
         # The check is the protocol's requirement — a survivor still carrying an
         # edge after the planned deletions means the guard let something
         # through, and deleting the node anyway would take that edge with it.
-        remaining = {
-            edge.id for edge in await self.get_edges_from(survivor.id)
-        } | {
+        remaining = {edge.id for edge in await self.get_edges_from(survivor.id)} | {
             edge.id for edge in await self.get_edges_to(survivor.id)
         }
         remaining -= set(delete_edge_ids)
@@ -1777,9 +1767,7 @@ class SurrealDBStorage:
             )
         params["status"] = NodeStatus.ACTIVE.value
 
-        statements.append(
-            f"DELETE {_node_to_table(survivor)} WHERE uid = $survivor_uid"
-        )
+        statements.append(f"DELETE {_node_to_table(survivor)} WHERE uid = $survivor_uid")
         # The vector is stored per item, so deleting the node alone would strand
         # an entry the index still returns.
         statements.append("DELETE embedding WHERE item_id = $survivor_uid")
@@ -1819,9 +1807,7 @@ class SurrealDBStorage:
         # they get one statement each: `UPSERT ... WHERE uid` matches a single
         # row and cannot be expressed as a bulk insert of rows.
         for i, timeline in enumerate(timelines):
-            statements.append(
-                _upsert("timeline", data=f"timeline_{i}", uid=f"timeline_uid_{i}")
-            )
+            statements.append(_upsert("timeline", data=f"timeline_{i}", uid=f"timeline_uid_{i}"))
             params[f"timeline_{i}"] = _serialize(timeline)
             params[f"timeline_uid_{i}"] = timeline.id
 
@@ -1926,7 +1912,9 @@ class SurrealDBStorage:
             candidates = await _ranked_items(self._query, query_vector, model_id, limit)
             keep = set(
                 await _ids_with_status(
-                    self._query, node_type, statuses,
+                    self._query,
+                    node_type,
+                    statuses,
                     among=[item_id for item_id, _ in candidates],
                 )
             )
@@ -2135,12 +2123,9 @@ class SurrealDBStorage:
         )
         return stored.id
 
-    async def get_relation_label(
-        self, name: str, kind: str
-    ) -> RelationLabel | None:
+    async def get_relation_label(self, name: str, kind: str) -> RelationLabel | None:
         rows = await self._query(
-            "SELECT * FROM relation_label WHERE name = $name AND kind = $kind "
-            "LIMIT 1",
+            "SELECT * FROM relation_label WHERE name = $name AND kind = $kind LIMIT 1",
             {"name": name, "kind": kind},
         )
         if not rows:
@@ -2176,9 +2161,7 @@ class SurrealDBStorage:
             if len(ids := list(row.get("label_ids") or [])) == 2
         }
 
-    async def relation_verdicts_for(
-        self, label_ids: Sequence[str]
-    ) -> Sequence[RelationVerdict]:
+    async def relation_verdicts_for(self, label_ids: Sequence[str]) -> Sequence[RelationVerdict]:
         if len(set(label_ids)) != 2:
             return []
         a, b = sorted(set(label_ids))
@@ -2221,7 +2204,8 @@ class SurrealDBStorage:
 
     async def set_merge_overrides(self, overrides: MergeOverrides) -> None:
         await self._query(
-            _MERGE_SET, {"overrides": drop_none_values(overrides.model_dump())},
+            _MERGE_SET,
+            {"overrides": drop_none_values(overrides.model_dump())},
         )
 
     async def get_warning_overrides(self) -> WarningOverrides:
@@ -2240,17 +2224,13 @@ class SurrealDBStorage:
     # --- Agents ---
 
     async def get_agent(self, agent_id: str) -> Agent | None:
-        rows = await self._query(
-            "SELECT * FROM agent WHERE uid = $uid LIMIT 1", {"uid": agent_id}
-        )
+        rows = await self._query("SELECT * FROM agent WHERE uid = $uid LIMIT 1", {"uid": agent_id})
         if not rows:
             return None
         return Agent.model_validate(_clean_record(rows[0]))
 
     async def upsert_agent(self, agent: Agent) -> None:
-        await self._query(
-            _upsert("agent"), {"data": _serialize(agent), "uid": agent.id}
-        )
+        await self._query(_upsert("agent"), {"data": _serialize(agent), "uid": agent.id})
 
     async def list_agents(self) -> list[Agent]:
         rows = await self._query("SELECT * FROM agent")
@@ -2273,9 +2253,7 @@ class SurrealDBStorage:
     # --- The decision journal ---
 
     async def record_decision(self, record: DecisionRecord) -> str:
-        await self._query(
-            _upsert("decision"), {"data": _decision_row(record), "uid": record.id}
-        )
+        await self._query(_upsert("decision"), {"data": _decision_row(record), "uid": record.id})
         return record.id
 
     async def get_decision(self, decision_id: str) -> DecisionRecord | None:
@@ -2318,9 +2296,7 @@ class SurrealDBStorage:
         ids = list(decision_ids)
         if not ids:
             return set()
-        rows = await self._query(
-            "SELECT reviews FROM decision WHERE reviews IN $ids", {"ids": ids}
-        )
+        rows = await self._query("SELECT reviews FROM decision WHERE reviews IN $ids", {"ids": ids})
         return {r["reviews"] for r in rows if r.get("reviews")}
 
     async def count_decisions_by_graph(
@@ -2348,9 +2324,7 @@ class SurrealDBStorage:
         table, which is a real zero rather than a missing graph — the two are
         distinguished above, not here.
         """
-        where, params = _decision_clauses(
-            agent_ids=agent_ids, since=since, until=until
-        )
+        where, params = _decision_clauses(agent_ids=agent_ids, since=since, until=until)
         counts: dict[str, int] = {}
         async with self._guard.moving():
             existing = set(await self.list_databases())

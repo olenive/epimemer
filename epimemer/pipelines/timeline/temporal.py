@@ -28,7 +28,7 @@ against it is a separate piece of work.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel
 
@@ -66,8 +66,7 @@ _MONTHS = {
     name: number
     for number, name in enumerate(
         (
-            "january february march april may june july august september "
-            "october november december"
+            "january february march april may june july august september october november december"
         ).split(),
         start=1,
     )
@@ -83,13 +82,14 @@ _MONTH_NAMES = "|".join(_MONTHS)
 _NOT_A_NUMBER_BEFORE = r"(?<![\d.\-/])"
 _NOT_A_NUMBER_AFTER = r"(?!\d)(?![.\-/]\d)"
 
+
 def _year_group(name: str) -> str:
     """A four-digit year captured as `name`, guarded against longer numbers."""
     return rf"{_NOT_A_NUMBER_BEFORE}(?P<{name}>[12]\d{{3}}){_NOT_A_NUMBER_AFTER}"
 
 
 def _utc(year: int, month: int = 1, day: int = 1) -> datetime:
-    return datetime(year, month, day, tzinfo=timezone.utc)
+    return datetime(year, month, day, tzinfo=UTC)
 
 
 def _next_day(moment: datetime) -> datetime:
@@ -101,9 +101,7 @@ def _next_day(moment: datetime) -> datetime:
 
 
 def _next_month(moment: datetime) -> datetime:
-    return (
-        _utc(moment.year + 1, 1) if moment.month == 12 else _utc(moment.year, moment.month + 1)
-    )
+    return _utc(moment.year + 1, 1) if moment.month == 12 else _utc(moment.year, moment.month + 1)
 
 
 def _in_range(year: int) -> bool:
@@ -162,9 +160,7 @@ def _year_range(m: re.Match) -> TemporalExpression | None:
     # left to match on their own terms.
     if not (_in_range(first) and _in_range(last)) or last < first:
         return None
-    return TemporalExpression(
-        text=m.group("expr"), start=_utc(first), end=_utc(last + 1)
-    )
+    return TemporalExpression(text=m.group("expr"), start=_utc(first), end=_utc(last + 1))
 
 
 def _decade(m: re.Match) -> TemporalExpression | None:
@@ -226,9 +222,7 @@ _PATTERNS: tuple[tuple[re.Pattern, object], ...] = (
         _iso_day,
     ),
     (
-        re.compile(
-            rf"{_NOT_A_NUMBER_BEFORE}(?P<y>\d{{4}})-(?P<m>\d{{2}}){_NOT_A_NUMBER_AFTER}"
-        ),
+        re.compile(rf"{_NOT_A_NUMBER_BEFORE}(?P<y>\d{{4}})-(?P<m>\d{{2}}){_NOT_A_NUMBER_AFTER}"),
         _iso_month,
     ),
     (
@@ -261,9 +255,7 @@ _PATTERNS: tuple[tuple[re.Pattern, object], ...] = (
         _decade,
     ),
     (
-        re.compile(
-            r"(?P<expr>(?P<century>\d{1,2})(?:st|nd|rd|th)\s+century)", re.IGNORECASE
-        ),
+        re.compile(r"(?P<expr>(?P<century>\d{1,2})(?:st|nd|rd|th)\s+century)", re.IGNORECASE),
         _century,
     ),
     (

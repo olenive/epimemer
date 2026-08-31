@@ -4,7 +4,7 @@ Handles node supersession (creating a new version) and node merging
 (combining multiple nodes into one).
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pydantic import BaseModel
 
@@ -13,8 +13,8 @@ from epimemer.core.types import (
     EmbeddingRecord,
     EpistemicNode,
     JudgeRef,
-    MergeUndo,
     MergedEdge,
+    MergeUndo,
     NodeEdge,
     NodeStatus,
     Topic,
@@ -75,7 +75,7 @@ async def supersede_node(
         plan_evidence_stale_edges,
     )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Sources, tags, and relationships ride along via edge migration below
     # (sourced_from / tagged_with / user edges are migrated, not version-anchored).
@@ -95,9 +95,14 @@ async def supersede_node(
     clear_edge_ids = await find_candidate_edge_ids_into(old_node.id, storage)
 
     await storage.supersede_node_tx(
-        old_node, new_node, new_embedding, lineage_edge,
-        status=status, superseded_at=now,
-        evidence_edges=evidence_edges, clear_edge_ids=clear_edge_ids,
+        old_node,
+        new_node,
+        new_embedding,
+        lineage_edge,
+        status=status,
+        superseded_at=now,
+        evidence_edges=evidence_edges,
+        clear_edge_ids=clear_edge_ids,
         judge=judge,
     )
     return lineage_edge
@@ -131,7 +136,7 @@ async def supersede_by_existing(
         plan_evidence_stale_edges,
     )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     lineage_edge = NodeEdge(
         src_id=old_node.id,
         dst_id=existing_id,
@@ -141,12 +146,16 @@ async def supersede_by_existing(
     clear_edge_ids = await find_candidate_edge_ids_into(old_node.id, storage)
 
     await storage.supersede_by_existing_tx(
-        old_node, existing_id, lineage_edge, status=status, superseded_at=now,
-        evidence_edges=evidence_edges, clear_edge_ids=clear_edge_ids,
+        old_node,
+        existing_id,
+        lineage_edge,
+        status=status,
+        superseded_at=now,
+        evidence_edges=evidence_edges,
+        clear_edge_ids=clear_edge_ids,
         judge=judge,
     )
     return lineage_edge
-
 
 
 async def plan_merge_undo(
@@ -189,14 +198,16 @@ async def plan_merge_undo(
         if migration_disposition(edge.type, NodeStatus.MERGED) == "keep":
             continue
         intra_set = edge.src_id in source_ids and edge.dst_id in source_ids
-        captured.append(MergedEdge(
-            # For an intra-set edge both endpoints are merging, so `owner_id` is
-            # arbitrary and the edge body carries the truth; `src_id` keeps it
-            # deterministic.
-            owner_id=edge.src_id if edge.src_id in source_ids else edge.dst_id,
-            edge=edge.model_dump(exclude={"id"}, mode="json"),
-            intra_set=intra_set,
-        ))
+        captured.append(
+            MergedEdge(
+                # For an intra-set edge both endpoints are merging, so `owner_id` is
+                # arbitrary and the edge body carries the truth; `src_id` keeps it
+                # deterministic.
+                owner_id=edge.src_id if edge.src_id in source_ids else edge.dst_id,
+                edge=edge.model_dump(exclude={"id"}, mode="json"),
+                intra_set=intra_set,
+            )
+        )
 
     return MergeUndo(
         source_ids=[node.id for node in source_nodes],
@@ -207,7 +218,10 @@ async def plan_merge_undo(
 
 
 async def evict_deep_merge_undo(
-    survivor: EpistemicNode, storage: StorageBackend, *, depth: int,
+    survivor: EpistemicNode,
+    storage: StorageBackend,
+    *,
+    depth: int,
 ) -> list[str]:
     """Clear merge payloads more than `depth` levels back along the lineage.
 
@@ -250,9 +264,11 @@ async def evict_deep_merge_undo(
             # past an evicted level, since everything above it is deeper still.
             next_frontier.extend(ancestor_undo.source_ids)
             if level > depth:
-                await storage.store_node(node.model_copy(
-                    update={"metadata": with_merge_undo(node.metadata, None)},
-                ))
+                await storage.store_node(
+                    node.model_copy(
+                        update={"metadata": with_merge_undo(node.metadata, None)},
+                    )
+                )
                 cleared.append(node_id)
         frontier = next_frontier
     return cleared
@@ -315,9 +331,7 @@ async def merge_nodes(
         A list of merged_into edges, one per source node.
     """
     if undo_depth is None:
-        undo_depth = (
-            resolve_merge_settings(await storage.get_merge_overrides())
-        ).undo_depth
+        undo_depth = (resolve_merge_settings(await storage.get_merge_overrides())).undo_depth
     if undo_depth < 1:
         raise ValueError(
             f"undo_depth must be at least 1, got {undo_depth}: the merge being "
@@ -326,7 +340,7 @@ async def merge_nodes(
         )
     from epimemer.pipelines.reflection.review import plan_evidence_merged_edges
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # The merged node inherits its sources' sources/tags/relationships via edge
     # migration below (sourced_from / tagged_with / user edges are migrated).
@@ -385,9 +399,13 @@ async def merge_nodes(
     )
 
     await storage.merge_nodes_tx(
-        source_nodes, merged_node, merged_embedding,
-        [*lineage_edges, *restated], merged_at=now,
-        evidence_edges=evidence_edges, judge=judge,
+        source_nodes,
+        merged_node,
+        merged_embedding,
+        [*lineage_edges, *restated],
+        merged_at=now,
+        evidence_edges=evidence_edges,
+        judge=judge,
     )
 
     # After the transaction, so a merge that fails evicts nothing. Eviction is
@@ -443,9 +461,7 @@ async def reversal_refusal(
         # `merged_into` is always `MERGED`, so a second condition would be
         # unreachable. It is the common case, though, and it has a next step,
         # so the message says so rather than making the caller work it out.
-        merged_again = await storage.get_edges_from(
-            survivor.id, edge_type=EdgeType.MERGED_INTO
-        )
+        merged_again = await storage.get_edges_from(survivor.id, edge_type=EdgeType.MERGED_INTO)
         if merged_again:
             return ReverseRefused(
                 reason=(
@@ -463,36 +479,36 @@ async def reversal_refusal(
         )
 
     source_ids = set(undo.source_ids)
-    expected = {
-        (
-            _repointed(captured.edge["src_id"], source_ids, survivor.id),
-            _repointed(captured.edge["dst_id"], source_ids, survivor.id),
-            captured.edge["type"],
-        )
-        for captured in undo.edges
-        if not captured.intra_set
-    } | {
-        (source_id, survivor.id, EdgeType.MERGED_INTO.value)
-        for source_id in source_ids
-    } | {
-        # The frame the merge **re-stated** on the survivor. It is not in
-        # the captured partition, because a merge no longer migrates
-        # `has_metacontext` — the sources kept theirs, and these are new edges
-        # the merge itself wrote. Left out, every merge became irreversible the
-        # moment re-statement shipped: the guard would see the survivor's own
-        # frame as something added since. Derived the same way `merge_nodes`
-        # derived it, from the sources, so the two cannot drift.
-        (survivor.id, frame, EdgeType.HAS_METACONTEXT.value)
-        for frames in (
-            await _frames_for_reversal(list(source_ids), storage)
-        ).values()
-        for frame in frames
-    }
+    expected = (
+        {
+            (
+                _repointed(captured.edge["src_id"], source_ids, survivor.id),
+                _repointed(captured.edge["dst_id"], source_ids, survivor.id),
+                captured.edge["type"],
+            )
+            for captured in undo.edges
+            if not captured.intra_set
+        }
+        | {(source_id, survivor.id, EdgeType.MERGED_INTO.value) for source_id in source_ids}
+        | {
+            # The frame the merge **re-stated** on the survivor. It is not in
+            # the captured partition, because a merge no longer migrates
+            # `has_metacontext` — the sources kept theirs, and these are new edges
+            # the merge itself wrote. Left out, every merge became irreversible the
+            # moment re-statement shipped: the guard would see the survivor's own
+            # frame as something added since. Derived the same way `merge_nodes`
+            # derived it, from the sources, so the two cannot drift.
+            (survivor.id, frame, EdgeType.HAS_METACONTEXT.value)
+            for frames in (await _frames_for_reversal(list(source_ids), storage)).values()
+            for frame in frames
+        }
+    )
 
     incident = {edge.id: edge for edge in await storage.get_edges_from(survivor.id)}
     incident |= {edge.id: edge for edge in await storage.get_edges_to(survivor.id)}
     unexpected = [
-        edge for edge in incident.values()
+        edge
+        for edge in incident.values()
         if (edge.src_id, edge.dst_id, edge.type.value) not in expected
     ]
     if unexpected:
@@ -592,9 +608,7 @@ async def reverse_merge(
     # an identity the graph no longer holds. Everything else — `metadata`,
     # `created_at`, `validity` — is replayed exactly, which is what keeps a
     # judgment's attribution and date intact across the cycle.
-    restored_edges = [
-        NodeEdge(**captured.edge) for captured in undo.edges
-    ]
+    restored_edges = [NodeEdge(**captured.edge) for captured in undo.edges]
 
     incident = {edge.id: edge for edge in await storage.get_edges_from(survivor.id)}
     incident |= {edge.id: edge for edge in await storage.get_edges_to(survivor.id)}
@@ -604,15 +618,17 @@ async def reverse_merge(
     # these, and stays retired until this reversal, so every such edge on it
     # belongs to the merge being undone.
     for source in source_nodes:
-        for edge in await storage.get_edges_from(
-            source.id, edge_type=EdgeType.EVIDENCE_MERGED
-        ):
+        for edge in await storage.get_edges_from(source.id, edge_type=EdgeType.EVIDENCE_MERGED):
             delete_edge_ids.append(edge.id)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await storage.reverse_merge_tx(
-        survivor, source_nodes, restored_edges,
-        restored_at=now, delete_edge_ids=delete_edge_ids, judge=judge,
+        survivor,
+        source_nodes,
+        restored_edges,
+        restored_at=now,
+        delete_edge_ids=delete_edge_ids,
+        judge=judge,
     )
     return {
         "reversed": True,
@@ -651,9 +667,11 @@ async def plan_subtopic_edges(
     for child in children:
         if await would_create_cycle(storage, child.id, parent_id):
             continue
-        edges.append(NodeEdge(
-            src_id=child.id,
-            dst_id=parent_id,
-            type=EdgeType.SUBTOPIC_OF,
-        ))
+        edges.append(
+            NodeEdge(
+                src_id=child.id,
+                dst_id=parent_id,
+                type=EdgeType.SUBTOPIC_OF,
+            )
+        )
     return edges

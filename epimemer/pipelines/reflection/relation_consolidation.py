@@ -52,12 +52,8 @@ async def related_edges_of_active_nodes(
     to whatever order the two queries come back in.
     """
     node_ids = [node.id for node in await storage.query_nodes()]
-    outgoing = await storage.get_edges_for(
-        node_ids, direction="from", edge_type=EdgeType.RELATED
-    )
-    incoming = await storage.get_edges_for(
-        node_ids, direction="to", edge_type=EdgeType.RELATED
-    )
+    outgoing = await storage.get_edges_for(node_ids, direction="from", edge_type=EdgeType.RELATED)
+    incoming = await storage.get_edges_for(node_ids, direction="to", edge_type=EdgeType.RELATED)
 
     by_id: dict[str, NodeEdge] = {}
     for node_id in node_ids:
@@ -67,7 +63,7 @@ async def related_edges_of_active_nodes(
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(x * x for x in b))
     if norm_a == 0 or norm_b == 0:
@@ -131,7 +127,7 @@ async def sweep_similar_relation_pairs(
 
     keys = list(counts.keys())
     vectors = await embedding_provider.embed([label for (label, _) in keys])
-    vec_by = dict(zip(keys, vectors))
+    vec_by = dict(zip(keys, vectors, strict=True))
 
     groups: dict[str, list[tuple[str, str]]] = defaultdict(list)
     for key in keys:
@@ -142,8 +138,7 @@ async def sweep_similar_relation_pairs(
     # the graph with the most labels — the one this exists for.
     judged = await storage.judged_relation_pairs()
     ids_by = {
-        (record.name, record.kind): record.id
-        for record in await storage.query_relation_labels()
+        (record.name, record.kind): record.id for record in await storage.query_relation_labels()
     }
 
     pairs: list[dict] = []
@@ -158,14 +153,16 @@ async def sweep_similar_relation_pairs(
                     continue
                 sim = _cosine_similarity(vec_by[a], vec_by[b])
                 if sim >= similarity_threshold:
-                    pairs.append({
-                        "label_a": a[0],
-                        "label_b": b[0],
-                        "kind": a[1],
-                        "count_a": counts[a],
-                        "count_b": counts[b],
-                        "similarity": round(sim, 4),
-                    })
+                    pairs.append(
+                        {
+                            "label_a": a[0],
+                            "label_b": b[0],
+                            "kind": a[1],
+                            "count_a": counts[a],
+                            "count_b": counts[b],
+                            "similarity": round(sim, 4),
+                        }
+                    )
 
     pairs.sort(key=lambda p: p["similarity"], reverse=True)
     return RelationPairSweep(pairs=pairs, suppressed=suppressed)

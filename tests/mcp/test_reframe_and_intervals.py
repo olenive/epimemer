@@ -16,7 +16,7 @@ means the promotion.
 Both backends via the `storage` fixture.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from epimemer.core.temporal import (
     IntervalBasis,
@@ -35,7 +35,6 @@ from epimemer.core.types import (
     RawDocument,
 )
 from epimemer.mcp import tools
-
 
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
 EDITOR = JudgeRef(agent_id="editor", digest="d2")
@@ -57,8 +56,10 @@ async def _framed(storage, node, *frames):
     for mc in frames:
         await storage.store_edge(
             NodeEdge(
-                src_id=node.id, dst_id=mc.id,
-                type=EdgeType.HAS_METACONTEXT, judged_by=CRITIC,
+                src_id=node.id,
+                dst_id=mc.id,
+                type=EdgeType.HAS_METACONTEXT,
+                judged_by=CRITIC,
             )
         )
 
@@ -79,9 +80,12 @@ class TestMovingAFrameIsOneCall:
         await _framed(storage, node, novel)
 
         result, _ = await tools.reframe(
-            node.id, storage,
-            withdraw=novel.id, assign=real_history.id,
-            because="a fact about the author, not about Anarres", judge=EDITOR,
+            node.id,
+            storage,
+            withdraw=novel.id,
+            assign=real_history.id,
+            because="a fact about the author, not about Anarres",
+            judge=EDITOR,
         )
 
         assert result["reframed"] is True
@@ -98,14 +102,14 @@ class TestMovingAFrameIsOneCall:
         await _framed(storage, node, novel)
 
         result, _ = await tools.reframe(
-            node.id, storage, withdraw=novel.id, assign=history.id,
+            node.id,
+            storage,
+            withdraw=novel.id,
+            assign=history.id,
             because="mis-filed",
         )
 
-
-    async def test_assigning_a_frame_this_graph_does_not_have_is_refused(
-        self, storage
-    ):
+    async def test_assigning_a_frame_this_graph_does_not_have_is_refused(self, storage):
         """Frame ids are per graph. One carried over from another names nothing
         here, and a node framed by nothing shares a frame with no other node."""
         node = await _fact(storage)
@@ -113,7 +117,10 @@ class TestMovingAFrameIsOneCall:
         await _framed(storage, node, novel)
 
         result, _ = await tools.reframe(
-            node.id, storage, withdraw=novel.id, assign="from-another-graph",
+            node.id,
+            storage,
+            withdraw=novel.id,
+            assign="from-another-graph",
             because="mis-filed",
         )
 
@@ -127,7 +134,10 @@ class TestMovingAFrameIsOneCall:
         await _framed(storage, node, novel, history)
 
         result, _ = await tools.reframe(
-            node.id, storage, withdraw=novel.id, because="only ever real history",
+            node.id,
+            storage,
+            withdraw=novel.id,
+            because="only ever real history",
         )
 
         assert result["frames_now"] == [history.id]
@@ -148,7 +158,10 @@ class TestWithdrawingTheLastFrameIsRefused:
         await _framed(storage, node, novel)
 
         result, _ = await tools.reframe(
-            node.id, storage, withdraw=novel.id, because="a real publication fact",
+            node.id,
+            storage,
+            withdraw=novel.id,
+            because="a real publication fact",
         )
 
         assert result["reframed"] is False
@@ -163,13 +176,19 @@ class TestWithdrawingTheLastFrameIsRefused:
         await _framed(storage, node, novel)
 
         refusal, _ = await tools.reframe(
-            node.id, storage, withdraw=novel.id, because="a fact about the author",
+            node.id,
+            storage,
+            withdraw=novel.id,
+            because="a fact about the author",
         )
         assert "assign=" in refusal["refused"]
 
         real = await _frame(storage, "The Real")
         result, _ = await tools.reframe(
-            node.id, storage, withdraw=novel.id, assign=real.id,
+            node.id,
+            storage,
+            withdraw=novel.id,
+            assign=real.id,
             because="a fact about the author, not about Anarres",
         )
 
@@ -184,7 +203,10 @@ class TestWithdrawingTheLastFrameIsRefused:
         await _framed(storage, node, novel, history)
 
         result, _ = await tools.reframe(
-            node.id, storage, withdraw=novel.id, because="only ever real history",
+            node.id,
+            storage,
+            withdraw=novel.id,
+            because="only ever real history",
         )
 
         assert result["reframed"] is True
@@ -198,7 +220,10 @@ class TestWhatReframingRefuses:
         await _framed(storage, node, novel)
 
         result, _ = await tools.reframe(
-            node.id, storage, withdraw=novel.id, because="   ",
+            node.id,
+            storage,
+            withdraw=novel.id,
+            because="   ",
         )
 
         assert result["reframed"] is False
@@ -210,7 +235,10 @@ class TestWhatReframingRefuses:
         await _framed(storage, node, novel)
 
         result, _ = await tools.reframe(
-            node.id, storage, withdraw=history.id, because="mis-filed",
+            node.id,
+            storage,
+            withdraw=history.id,
+            because="mis-filed",
         )
 
         assert result["reframed"] is False
@@ -221,7 +249,10 @@ class TestWhatReframingRefuses:
         node = await _fact(storage)
 
         result, _ = await tools.reframe(
-            node.id, storage, withdraw=BASE_METACONTEXT_ID, because="mis-filed",
+            node.id,
+            storage,
+            withdraw=BASE_METACONTEXT_ID,
+            because="mis-filed",
         )
 
         assert result["reframed"] is False
@@ -229,7 +260,10 @@ class TestWhatReframingRefuses:
 
     async def test_no_such_node(self, storage):
         result, _ = await tools.reframe(
-            "nope", storage, withdraw="anything", because="mis-filed",
+            "nope",
+            storage,
+            withdraw="anything",
+            because="mis-filed",
         )
 
         assert result["reframed"] is False
@@ -245,8 +279,12 @@ class TestTheWithdrawnFrameSurvives:
         await _framed(storage, node, novel)
 
         await tools.reframe(
-            node.id, storage, withdraw=novel.id, assign=history.id,
-            because="a fact about the author", judge=EDITOR,
+            node.id,
+            storage,
+            withdraw=novel.id,
+            assign=history.id,
+            because="a fact about the author",
+            judge=EDITOR,
         )
 
         stored = await storage.get_node(node.id)
@@ -265,15 +303,11 @@ class TestTheWithdrawnFrameSurvives:
         )
         await _framed(storage, node, a)
 
-        await tools.reframe(node.id, storage, withdraw=a.id, assign=b.id,
-                            because="first")
-        await tools.reframe(node.id, storage, withdraw=b.id, assign=c.id,
-                            because="second")
+        await tools.reframe(node.id, storage, withdraw=a.id, assign=b.id, because="first")
+        await tools.reframe(node.id, storage, withdraw=b.id, assign=c.id, because="second")
 
         stored = await storage.get_node(node.id)
-        assert [e["because"] for e in stored.metadata["reframings"]] == [
-            "first", "second"
-        ]
+        assert [e["because"] for e in stored.metadata["reframings"]] == ["first", "second"]
 
     async def test_it_journals_its_own_kind(self, storage):
         node = await _fact(storage)
@@ -282,8 +316,12 @@ class TestTheWithdrawnFrameSurvives:
 
         history = await _frame(storage, "History")
         result, _ = await tools.reframe(
-            node.id, storage, withdraw=novel.id, assign=history.id,
-            because="a real publication fact", judge=EDITOR,
+            node.id,
+            storage,
+            withdraw=novel.id,
+            assign=history.id,
+            because="a real publication fact",
+            judge=EDITOR,
         )
 
         [row] = await storage.query_decisions(kinds=[DecisionKind.REFRAME])
@@ -298,8 +336,9 @@ class TestTheWithdrawnFrameSurvives:
         before = await storage.get_node(node.id)
 
         history = await _frame(storage, "History")
-        await tools.reframe(node.id, storage, withdraw=novel.id,
-                            assign=history.id, because="mis-filed")
+        await tools.reframe(
+            node.id, storage, withdraw=novel.id, assign=history.id, because="mis-filed"
+        )
 
         after = await storage.get_node(node.id)
         assert after.status == before.status
@@ -312,10 +351,11 @@ class TestTheWithdrawnFrameSurvives:
 
 def _interval(start_year, end_year=None, basis=IntervalBasis.STATED):
     return ValidityInterval(
-        start=PreciseInstant(at=datetime(start_year, 1, 1, tzinfo=timezone.utc)),
+        start=PreciseInstant(at=datetime(start_year, 1, 1, tzinfo=UTC)),
         end=(
-            PreciseInstant(at=datetime(end_year, 1, 1, tzinfo=timezone.utc))
-            if end_year else UnknownInstant()
+            PreciseInstant(at=datetime(end_year, 1, 1, tzinfo=UTC))
+            if end_year
+            else UnknownInstant()
         ),
         basis=basis,
     )
@@ -328,8 +368,11 @@ async def _sourced(storage, *intervals, content="Blair is Prime Minister"):
     await storage.store_node(node)
     await storage.store_edge(
         NodeEdge(
-            src_id=node.id, dst_id=doc.id, type=EdgeType.SOURCED_FROM,
-            validity=list(intervals), judged_by=CRITIC,
+            src_id=node.id,
+            dst_id=doc.id,
+            type=EdgeType.SOURCED_FROM,
+            validity=list(intervals),
+            judged_by=CRITIC,
         )
     )
     return node, doc
@@ -340,7 +383,9 @@ class TestCorrectingAPeriodThatIsPresentAndWrong:
         node, doc = await _sourced(storage, _interval(1979, 1999))
 
         result, _ = await tools.correct_interval(
-            node.id, storage, source_id=doc.id,
+            node.id,
+            storage,
+            source_id=doc.id,
             intervals=[_interval(1997, 1999).model_dump(mode="json")],
             because="1979 was the republication date, misread as the original",
             judge=EDITOR,
@@ -356,7 +401,10 @@ class TestCorrectingAPeriodThatIsPresentAndWrong:
         node, doc = await _sourced(storage, _interval(1979, 1999))
 
         result, _ = await tools.correct_interval(
-            node.id, storage, source_id=doc.id, intervals=[],
+            node.id,
+            storage,
+            source_id=doc.id,
+            intervals=[],
             because="the article gives no dates; this was invented",
         )
 
@@ -366,19 +414,18 @@ class TestCorrectingAPeriodThatIsPresentAndWrong:
 
     async def test_the_edge_keeps_its_id_and_its_judge(self, storage):
         node, doc = await _sourced(storage, _interval(1979, 1999))
-        [before] = await storage.get_edges_from(
-            node.id, edge_type=EdgeType.SOURCED_FROM
-        )
+        [before] = await storage.get_edges_from(node.id, edge_type=EdgeType.SOURCED_FROM)
 
         await tools.correct_interval(
-            node.id, storage, source_id=doc.id,
+            node.id,
+            storage,
+            source_id=doc.id,
             intervals=[_interval(1997, 1999).model_dump(mode="json")],
-            because="misread", judge=EDITOR,
+            because="misread",
+            judge=EDITOR,
         )
 
-        [after] = await storage.get_edges_from(
-            node.id, edge_type=EdgeType.SOURCED_FROM
-        )
+        [after] = await storage.get_edges_from(node.id, edge_type=EdgeType.SOURCED_FROM)
         assert after.id == before.id
         assert after.judged_by == CRITIC, "who recorded the provenance is unchanged"
 
@@ -386,9 +433,12 @@ class TestCorrectingAPeriodThatIsPresentAndWrong:
         node, doc = await _sourced(storage, _interval(1979, 1999))
 
         await tools.correct_interval(
-            node.id, storage, source_id=doc.id,
+            node.id,
+            storage,
+            source_id=doc.id,
             intervals=[_interval(1997, 1999).model_dump(mode="json")],
-            because="misread the republication date", judge=EDITOR,
+            because="misread the republication date",
+            judge=EDITOR,
         )
 
         [edge] = await storage.get_edges_from(node.id, edge_type=EdgeType.SOURCED_FROM)
@@ -401,14 +451,15 @@ class TestCorrectingAPeriodThatIsPresentAndWrong:
         node, doc = await _sourced(storage, _interval(1979, 1999))
 
         result, _ = await tools.correct_interval(
-            node.id, storage, source_id=doc.id,
+            node.id,
+            storage,
+            source_id=doc.id,
             intervals=[_interval(1997, 1999).model_dump(mode="json")],
-            because="misread", judge=EDITOR,
+            because="misread",
+            judge=EDITOR,
         )
 
-        [row] = await storage.query_decisions(
-            kinds=[DecisionKind.INTERVAL_CORRECTION]
-        )
+        [row] = await storage.query_decisions(kinds=[DecisionKind.INTERVAL_CORRECTION])
         assert row.subject_ids == [node.id]
         assert row.id == result["decision_id"]
 
@@ -419,12 +470,10 @@ class TestCorrectingAPeriodThatIsPresentAndWrong:
         node, doc = await _sourced(storage, _interval(1979, 1999))
 
         await tools.correct_interval(
-            node.id, storage, source_id=doc.id,
-            intervals=[
-                _interval(1997, 1999, basis=IntervalBasis.STATED).model_dump(
-                    mode="json"
-                )
-            ],
+            node.id,
+            storage,
+            source_id=doc.id,
+            intervals=[_interval(1997, 1999, basis=IntervalBasis.STATED).model_dump(mode="json")],
             because="the article states 1997",
         )
 
@@ -437,7 +486,9 @@ class TestWhatCorrectingRefuses:
         node, doc = await _sourced(storage, _interval(1979, 1999))
 
         result, _ = await tools.correct_interval(
-            node.id, storage, source_id=doc.id,
+            node.id,
+            storage,
+            source_id=doc.id,
             intervals=[_interval(1997, 1999).model_dump(mode="json")],
             because="  ",
         )
@@ -448,7 +499,10 @@ class TestWhatCorrectingRefuses:
         node, _doc = await _sourced(storage, _interval(1979, 1999))
 
         result, _ = await tools.correct_interval(
-            node.id, storage, source_id="not-a-document", intervals=[],
+            node.id,
+            storage,
+            source_id="not-a-document",
+            intervals=[],
             because="misread",
         )
 
@@ -460,7 +514,9 @@ class TestWhatCorrectingRefuses:
         node, doc = await _sourced(storage, _interval(1979, 1999))
 
         result, _ = await tools.correct_interval(
-            node.id, storage, source_id=doc.id,
+            node.id,
+            storage,
+            source_id=doc.id,
             intervals=[_interval(1979, 1999).model_dump(mode="json")],
             because="checking",
         )
@@ -474,8 +530,11 @@ class TestWhatCorrectingRefuses:
         node, doc = await _sourced(storage, _interval(1979, 1999))
 
         result, _ = await tools.correct_interval(
-            node.id, storage, source_id=doc.id,
-            intervals=[{"timeline_id": None}], because="misread",
+            node.id,
+            storage,
+            source_id=doc.id,
+            intervals=[{"timeline_id": None}],
+            because="misread",
         )
 
         assert result["corrected"] is False
@@ -485,13 +544,14 @@ class TestWhatCorrectingRefuses:
         node, _doc = await _sourced(storage, _interval(1979, 1999))
 
         await tools.correct_interval(
-            node.id, storage, source_id="not-a-document", intervals=[],
+            node.id,
+            storage,
+            source_id="not-a-document",
+            intervals=[],
             because="misread",
         )
 
-        assert await storage.query_decisions(
-            kinds=[DecisionKind.INTERVAL_CORRECTION]
-        ) == []
+        assert await storage.query_decisions(kinds=[DecisionKind.INTERVAL_CORRECTION]) == []
 
 
 class TestRejudgeSendsYouToTheRightTool:

@@ -50,8 +50,9 @@ from epimemer.pipelines.reflection.contradiction_detection import detect_contrad
 from epimemer.pipelines.reflection.pair_scoring import similar_pairs
 from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
 
-# The model `SentenceTransformersProvider` defaults to, and the window the embedding-window measurement is
-# about. Read from the model itself when the survival pass loads it; this is
+# The model `SentenceTransformersProvider` defaults to, and the window the
+# embedding-window measurement is about. Read from the model itself when the
+# survival pass loads it; this is
 # the value used for the tokenizer-only pass, where loading the full model to
 # read one integer is not worth the seconds.
 MODEL_NAME = "all-MiniLM-L6-v2"
@@ -62,8 +63,9 @@ WINDOW = 256
 BYTES_PER_PAIR = 580
 
 # Which tables hold text, and under which field. Segments are separate from
-# nodes throughout because the embedding-window measurement names them separately — they are a second corpus
-# with a different length distribution, and averaging them together would hide
+# nodes throughout because the embedding-window measurement names them
+# separately — they are a second corpus with a different length distribution,
+# and averaging them together would hide
 # whichever one is at risk.
 NODE_TABLES = ("fact", "inference", "topic")
 SEGMENT_TABLE = "segment"
@@ -199,9 +201,7 @@ def _distribution(lengths: list[int], window: int) -> dict:
         # How much is lost where anything is lost. Nothing else reports this,
         # and "3 nodes affected" reads very differently at 260 tokens than at
         # 2,000 — the first loses a clause, the second loses most of the text.
-        "worst_lost_pct": (
-            round(max((n - window) / n for n in over) * 100, 1) if over else 0.0
-        ),
+        "worst_lost_pct": (round(max((n - window) / n for n in over) * 100, 1) if over else 0.0),
     }
 
 
@@ -216,9 +216,7 @@ def _vectors(sql, table: str) -> tuple[np.ndarray, int]:
     ids = [row["uid"] for row in sql(f"SELECT uid FROM {table};") if row.get("uid")]
     if not ids:
         return np.zeros((0, 0)), 0
-    rows = sql(
-        f"SELECT item_id, vector FROM embedding WHERE model_id = '{MODEL_NAME}';"
-    )
+    rows = sql(f"SELECT item_id, vector FROM embedding WHERE model_id = '{MODEL_NAME}';")
     by_item = {row["item_id"]: row["vector"] for row in rows if row.get("vector")}
     found = [by_item[i] for i in ids if i in by_item]
     return np.array(found, dtype=np.float64), len(ids) - len(found)
@@ -269,13 +267,13 @@ def _score_spread(vectors: np.ndarray) -> dict:
     if len(vectors) < 2:
         return {}
     unit = vectors / np.where(
-        np.linalg.norm(vectors, axis=1, keepdims=True) == 0.0, 1.0,
+        np.linalg.norm(vectors, axis=1, keepdims=True) == 0.0,
+        1.0,
         np.linalg.norm(vectors, axis=1, keepdims=True),
     )
     scores = (unit @ unit.T)[np.triu_indices(len(unit), k=1)]
     return {
-        f"score_p{pct}": round(float(np.percentile(scores, pct)), 4)
-        for pct in (50, 90, 99, 99.9)
+        f"score_p{pct}": round(float(np.percentile(scores, pct)), 4) for pct in (50, 90, 99, 99.9)
     } | {"score_max": round(float(scores.max()), 4)}
 
 
@@ -295,14 +293,14 @@ def _scaling(vectors: np.ndarray, threshold: float, *, seed: int = 1) -> list[di
     for size in (s for s in (50, 100, 200, 400, 800) if s <= n):
         subset = vectors[rng.choice(n, size=size, replace=False)]
         pairs = size * (size - 1) // 2
-        rows.append({
-            "items": size,
-            "pairs": pairs,
-            "survivors": len(similar_pairs(subset, threshold)),
-            "survival_rate_pct": round(
-                len(similar_pairs(subset, threshold)) / pairs * 100, 4
-            ),
-        })
+        rows.append(
+            {
+                "items": size,
+                "pairs": pairs,
+                "survivors": len(similar_pairs(subset, threshold)),
+                "survival_rate_pct": round(len(similar_pairs(subset, threshold)) / pairs * 100, 4),
+            }
+        )
     return rows
 
 
@@ -325,6 +323,7 @@ def _synthetic_control(threshold: float, *, count: int, seed: int = 1) -> dict:
     "the bench corpus" means the corpus the bench actually uses.
     """
     import random
+
     sys.path.insert(0, str(__file__.rsplit("/", 1)[0]))
     from bench import _sentence
 
@@ -334,10 +333,13 @@ def _synthetic_control(threshold: float, *, count: int, seed: int = 1) -> dict:
     texts = [_sentence(rng, 8) for _ in range(count)]
     provider = SentenceTransformersProvider()
     import asyncio
+
     vectors = np.array(asyncio.run(provider.embed(texts)), dtype=np.float64)
     return {
-        "measurement": "synthetic_control", "corpus": "bench-templated",
-        "embeddings": "real", **_survival(vectors, threshold),
+        "measurement": "synthetic_control",
+        "corpus": "bench-templated",
+        "embeddings": "real",
+        **_survival(vectors, threshold),
         **_score_spread(vectors),
     }
 
@@ -353,8 +355,7 @@ def _token_lengths(texts: list[str]) -> list[int]:
 
     tokenizer = AutoTokenizer.from_pretrained(f"sentence-transformers/{MODEL_NAME}")
     return [
-        len(tokenizer.encode(text, add_special_tokens=True, truncation=False))
-        for text in texts
+        len(tokenizer.encode(text, add_special_tokens=True, truncation=False)) for text in texts
     ]
 
 
@@ -367,10 +368,15 @@ def _measure(sql, database: str, *, skip_survival: bool) -> dict[str, list[str]]
     texts["segment"] = _texts(sql, SEGMENT_TABLE, "text")
 
     for corpus, corpus_texts in texts.items():
-        _emit({
-            "measurement": "truncation", "database": database, "corpus": corpus,
-            "window": WINDOW, **_distribution(_token_lengths(corpus_texts), WINDOW),
-        })
+        _emit(
+            {
+                "measurement": "truncation",
+                "database": database,
+                "corpus": corpus,
+                "window": WINDOW,
+                **_distribution(_token_lengths(corpus_texts), WINDOW),
+            }
+        )
 
     if skip_survival:
         return texts
@@ -378,11 +384,16 @@ def _measure(sql, database: str, *, skip_survival: bool) -> dict[str, list[str]]
     for table, threshold in _thresholds().items():
         _progress(f"[{database}] scoring {table} pairs at {threshold}...")
         vectors, missing = _vectors(sql, table)
-        _emit({
-            "measurement": "survival", "database": database, "corpus": table,
-            "without_vectors": missing,
-            **_survival(vectors, threshold), **_score_spread(vectors),
-        })
+        _emit(
+            {
+                "measurement": "survival",
+                "database": database,
+                "corpus": table,
+                "without_vectors": missing,
+                **_survival(vectors, threshold),
+                **_score_spread(vectors),
+            }
+        )
     return texts
 
 
@@ -390,14 +401,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--url", default="http://localhost:8000", help="SurrealDB HTTP URL")
     parser.add_argument("--namespace", default="epimemer", help="namespace to read")
-    parser.add_argument(
-        "--database", default="memory", help="database(s) to read, comma-separated"
-    )
+    parser.add_argument("--database", default="memory", help="database(s) to read, comma-separated")
     parser.add_argument("--user", default="root")
     parser.add_argument("--password", default="root")
-    parser.add_argument(
-        "--skip-survival", action="store_true", help="token lengths only"
-    )
+    parser.add_argument("--skip-survival", action="store_true", help="token lengths only")
     parser.add_argument(
         "--synthetic-control",
         type=int,
@@ -414,15 +421,12 @@ def main() -> None:
     pooled_texts: dict[str, list[str]] = {}
 
     for database in databases:
+
         def sql(query: str, database: str = database):
-            return _sql(
-                args.url, args.user, args.password, args.namespace, database, query
-            )
+            return _sql(args.url, args.user, args.password, args.namespace, database, query)
 
         try:
-            for corpus, texts in _measure(
-                sql, database, skip_survival=args.skip_survival
-            ).items():
+            for corpus, texts in _measure(sql, database, skip_survival=args.skip_survival).items():
                 pooled_texts.setdefault(corpus, []).extend(texts)
             if not args.skip_survival:
                 for table in pooled:
@@ -434,22 +438,25 @@ def main() -> None:
 
     # Pooled truncation, emitted whenever more than one graph was read. The
     # per-database rows are the honest unit — this one exists because the
-    # question the embedding-window measurement asks ("does real node text reach the window?") is about the
-    # text, not about which graph it came from, and a pooled p95 is what a
+    # question the embedding-window measurement asks ("does real node text
+    # reach the window?") is about the text, not about which graph it came
+    # from, and a pooled p95 is what a
     # decision about the embedding path would be taken against.
     if len(databases) > 1:
         for corpus, texts in pooled_texts.items():
-            _emit({
-                "measurement": "truncation", "database": "+".join(databases),
-                "corpus": corpus, "window": WINDOW,
-                **_distribution(_token_lengths(texts), WINDOW),
-            })
+            _emit(
+                {
+                    "measurement": "truncation",
+                    "database": "+".join(databases),
+                    "corpus": corpus,
+                    "window": WINDOW,
+                    **_distribution(_token_lengths(texts), WINDOW),
+                }
+            )
 
     if args.synthetic_control:
         _progress(f"[control] embedding {args.synthetic_control} bench sentences...")
-        _emit(_synthetic_control(
-            _thresholds()["fact"], count=args.synthetic_control
-        ))
+        _emit(_synthetic_control(_thresholds()["fact"], count=args.synthetic_control))
 
     # Pooled across every graph read, purely to widen the range the scaling
     # check has to work with. Pooling two graphs is not itself a realistic
@@ -461,11 +468,17 @@ def main() -> None:
         vectors = np.vstack(chunks)
         threshold = _thresholds()[table]
         _progress(f"[pooled] {table} scaling at {threshold} over {len(vectors)}...")
-        _emit({
-            "measurement": "scaling", "database": "+".join(databases),
-            "corpus": table, "threshold": threshold, "items": len(vectors),
-            "steps": _scaling(vectors, threshold), **_score_spread(vectors),
-        })
+        _emit(
+            {
+                "measurement": "scaling",
+                "database": "+".join(databases),
+                "corpus": table,
+                "threshold": threshold,
+                "items": len(vectors),
+                "steps": _scaling(vectors, threshold),
+                **_score_spread(vectors),
+            }
+        )
 
 
 if __name__ == "__main__":

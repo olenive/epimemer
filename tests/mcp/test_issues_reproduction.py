@@ -14,7 +14,7 @@ traversal; ``link`` resolves epistemic nodes only).
 References are to ISSUES.md (discovered 2026-06-25).
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -60,23 +60,23 @@ async def _store_with_embedding(
 class TestIssue1UpdateEmbedsReplacement:
     """High: the corrected node must enter the vector index."""
 
-    async def test_update_embeds_the_replacement_node(
-        self, storage, embedding_provider
-    ):
+    async def test_update_embeds_the_replacement_node(self, storage, embedding_provider):
         old = Topic(content="Petri nets model concurrency", source_id="s1")
         await _store_with_embedding(storage, embedding_provider, old)
 
         result, _ = await update(
-            old.id, "Petri nets model concurrent systems", storage, embedding_provider
-        , because="it_was_wrong")
+            old.id,
+            "Petri nets model concurrent systems",
+            storage,
+            embedding_provider,
+            because="it_was_wrong",
+        )
         new_id = result["new_node_id"]
 
         embeddings = await storage.get_embeddings_for_item(new_id)
         assert len(embeddings) >= 1
 
-    async def test_corrected_node_is_retrievable_by_search(
-        self, storage, embedding_provider
-    ):
+    async def test_corrected_node_is_retrievable_by_search(self, storage, embedding_provider):
         old = Topic(content="Petri nets model concurrency", source_id="s1")
         await _store_with_embedding(storage, embedding_provider, old)
 
@@ -91,7 +91,11 @@ class TestIssue1UpdateEmbedsReplacement:
         new_id = result["new_node_id"]
 
         search_result, _ = await search(
-            new_content, storage, embedding_provider, k=25, graph_hops=0,
+            new_content,
+            storage,
+            embedding_provider,
+            k=25,
+            graph_hops=0,
         )
         returned_ids = {n["id"] for n in search_result["nodes"]}
         assert new_id in returned_ids
@@ -109,26 +113,24 @@ class TestIssue2SearchExcludesSupersededNodes:
         await storage.store_embedding(
             EmbeddingRecord(item_id=node.id, model_id="m", vector=[1.0, 0.0, 0.0])
         )
-        await storage.set_node_status_tx(
-            [node], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
-        )
+        await storage.set_node_status_tx([node], status=NodeStatus.SUPERSEDED, at=datetime.now(UTC))
 
         # Exact-match query → cosine 1.0 → would top the list if not filtered.
         results = await storage.vector_search([1.0, 0.0, 0.0], "m", k=10)
         returned_ids = {item_id for item_id, _ in results}
         assert node.id not in returned_ids
 
-    async def test_search_does_not_return_superseded_node(
-        self, storage, embedding_provider
-    ):
+    async def test_search_does_not_return_superseded_node(self, storage, embedding_provider):
         node = Topic(content="neural networks for vision", source_id="s1")
         await _store_with_embedding(storage, embedding_provider, node)
-        await storage.set_node_status_tx(
-            [node], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
-        )
+        await storage.set_node_status_tx([node], status=NodeStatus.SUPERSEDED, at=datetime.now(UTC))
 
         result, _ = await search(
-            node.content, storage, embedding_provider, k=10, graph_hops=0,
+            node.content,
+            storage,
+            embedding_provider,
+            k=10,
+            graph_hops=0,
         )
         returned_ids = {n["id"] for n in result["nodes"]}
         assert node.id not in returned_ids
@@ -140,16 +142,12 @@ class TestIssue2SearchExcludesSupersededNodes:
 class TestIssue3SupersedeMigratesEdges:
     """Medium: the replacement inherits the original's edges."""
 
-    async def test_supporting_edge_follows_to_replacement(
-        self, storage, embedding_provider
-    ):
+    async def test_supporting_edge_follows_to_replacement(self, storage, embedding_provider):
         old = Topic(content="old topic", source_id="s1")
         fact = Fact(content="a supporting fact", source_id="s1")
         await storage.store_node(old)
         await storage.store_node(fact)
-        await storage.store_edge(
-            NodeEdge(src_id=fact.id, dst_id=old.id, type=EdgeType.SUPPORTS)
-        )
+        await storage.store_edge(NodeEdge(src_id=fact.id, dst_id=old.id, type=EdgeType.SUPPORTS))
 
         result, _ = await update(
             old.id,
@@ -161,16 +159,12 @@ class TestIssue3SupersedeMigratesEdges:
         new_id = result["new_node_id"]
 
         # The supporting fact now backs the current node, not the dead one.
-        supports_into_new = await storage.get_edges_to(
-            new_id, edge_type=EdgeType.SUPPORTS
-        )
+        supports_into_new = await storage.get_edges_to(new_id, edge_type=EdgeType.SUPPORTS)
         assert len(supports_into_new) == 1
         assert supports_into_new[0].src_id == fact.id
 
         # ...and no longer backs the superseded original.
-        supports_into_old = await storage.get_edges_to(
-            old.id, edge_type=EdgeType.SUPPORTS
-        )
+        supports_into_old = await storage.get_edges_to(old.id, edge_type=EdgeType.SUPPORTS)
         assert supports_into_old == []
 
 
@@ -184,9 +178,7 @@ class TestIssue4LineageTraversal:
     test documents both the default behaviour and the explicit-filter workaround.
     """
 
-    async def test_default_traversal_hides_replacement(
-        self, storage, embedding_provider
-    ):
+    async def test_default_traversal_hides_replacement(self, storage, embedding_provider):
         old = Topic(content="old topic", source_id="s1")
         await storage.store_node(old)
         result, _ = await update(
@@ -219,9 +211,7 @@ class TestIssue4LineageTraversal:
         )
         new_id = result["new_node_id"]
 
-        graph, _ = await query_graph(
-            old.id, storage, hops=2, edge_types=["superseded_by"]
-        )
+        graph, _ = await query_graph(old.id, storage, hops=2, edge_types=["superseded_by"])
         node_ids = {n["id"] for n in graph["nodes"]}
         assert new_id in node_ids
 
@@ -270,9 +260,13 @@ class TestCombinedUpdateRetrieval:
         new_id = result["new_node_id"]
 
         search_result, _ = await search(
-            new_content, storage, embedding_provider, k=25, graph_hops=0,
+            new_content,
+            storage,
+            embedding_provider,
+            k=25,
+            graph_hops=0,
         )
         returned_ids = {n["id"] for n in search_result["nodes"]}
 
-        assert new_id in returned_ids        # correction is retrievable (Issue 1)
-        assert old.id not in returned_ids    # superseded original is gone (Issue 2)
+        assert new_id in returned_ids  # correction is retrievable (Issue 1)
+        assert old.id not in returned_ids  # superseded original is gone (Issue 2)

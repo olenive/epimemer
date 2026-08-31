@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.14"
+      # `--locked` refuses to run if pyproject.toml and uv.lock disagree, so a
+      # dependency change that forgot to re-lock fails here rather than
+      # resolving to something different on every machine.
+      - run: uv sync --locked --extra dev --extra notebooks
+      - run: uv run --no-sync python -m pytest tests/ -q
+
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.14"
+      - run: uv sync --locked --extra dev
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
+
+  frontend:
+    name: Visualization frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: epimemer/visualization/frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: epimemer/visualization/frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      # The bundle is never committed, so this is the only place it is proven
+      # to build before the release workflow needs it.
+      - run: npm run build
+
+  integration:
+    name: SurrealDB integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.14"
+      - run: uv sync --locked --extra dev
+      # The same target a developer runs: a throwaway server for the ws://
+      # suite, and the durability suite starts and restarts its own.
+      - run: make test-integration

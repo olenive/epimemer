@@ -11,20 +11,19 @@ it. The scoring itself now lives in `pair_scoring`, shared with the topic phase
 """
 
 from epimemer.core.types import (
-    EdgeType,
     EpistemicNode,
     Fact,
     NodeStatus,
     NodeType,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
-from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
-from epimemer.pipelines.reflection.similarity_decisions import already_judged_pairs
 from epimemer.pipelines.reflection.pair_scoring import (
     SCORE_BLOCK,
     similar_pairs,
     stack_uniform_width,
 )
+from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
+from epimemer.pipelines.reflection.similarity_decisions import already_judged_pairs
 from epimemer.storage.protocol import StorageBackend
 
 __all__ = [
@@ -32,7 +31,6 @@ __all__ = [
     "detect_contradictions",
     "similar_pairs",
 ]
-
 
 
 async def detect_contradictions(
@@ -95,9 +93,7 @@ async def detect_contradictions(
     # for the *compatible* verdict, so a declined pair was recorded nowhere and
     # came back on every pass — thirteen of eighteen, on the graph that
     # motivated the verdict record. The other three are the pairs that got an action.
-    already_linked = await already_judged_pairs(
-        [fact.id for fact in facts], storage
-    )
+    already_linked = await already_judged_pairs([fact.id for fact in facts], storage)
 
     # Score every pair at once, over the facts whose vectors can form a matrix.
     by_id = {fact.id: fact for fact in facts}

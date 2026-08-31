@@ -179,6 +179,7 @@ protocol, no capability flags, per the standing rule.
 ```python
 # storage/protocol.py, a new section after the metacontext reads
 
+
 async def store_relation_label(self, label: RelationLabel) -> str:
     """Store a relation label, or update its description and metadata.
 
@@ -189,14 +190,14 @@ async def store_relation_label(self, label: RelationLabel) -> str:
     is wider than the design.
     """
 
-async def get_relation_label(
-    self, name: str, kind: str
-) -> RelationLabel | None:
+
+async def get_relation_label(self, name: str, kind: str) -> RelationLabel | None:
     """The record for one label, or None if it has none.
 
     `None` is the ordinary answer on any graph that predates this, and every
     caller must degrade to today's behaviour rather than refuse (§2.3).
     """
+
 
 async def query_relation_labels(self) -> list[RelationLabel]:
     """Every relation label record in the active graph."""
@@ -367,9 +368,9 @@ class RelationVerdict(BaseModel):
 
 ```python
 async def record_relation_verdict(self, verdict: RelationVerdict) -> str: ...
-async def judged_relation_pairs(self) -> set[tuple[str, str]]: ...      # the sweep's read
+async def judged_relation_pairs(self) -> set[tuple[str, str]]: ...  # the sweep's read
 async def relation_verdicts_for(self, label_ids) -> Sequence[...]: ...  # the writer's read
-async def query_relation_verdicts(self) -> Sequence[...]: ...           # the reader's read
+async def query_relation_verdicts(self) -> Sequence[...]: ...  # the reader's read
 ```
 
 Three reads because three questions: the sweep asks *has this pair been

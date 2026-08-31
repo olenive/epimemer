@@ -4,8 +4,8 @@ Use type annotations in Python where possible but don't overcomplicate the code 
 Avoid making classes that use `self` or `@staticmethod`.
 However, using Pydantic BaseModel for data structures is encouraged.
 Prefer uv over pip.
-Use the Petritype library `../petritype` for complex precesses and data pipelines.
-Remember to run `uv lock --upgrade-package petritype` in case Petritype main branch has been updated.
+Use the Petritype library (the `petritype` package on PyPI) for complex processes and data pipelines.
+Epimemer depends on released Petritype only. A change that needs new Petritype code is a Petritype release first, then a bump of the `petritype>=` pin here. For local iteration, `uv pip install -e ../petritype` into the venv — never a committed path source.
 When using Marimo notebooks remember to not re-define variables in different cells, that cells correspond to functions and these funcitons need to return values.
 
 Our goal is to build a robust and secure system, not simply a prototype. We don't want to trade speed for technical debt.

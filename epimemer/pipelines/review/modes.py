@@ -32,7 +32,11 @@ from epimemer.core.types import DecisionKind, DecisionRecord
 
 # The modes that exist, in the order a tool schema should list them.
 REVIEW_MODES: tuple[str, ...] = (
-    "all", "by_agent", "since", "unreviewed", "advisory",
+    "all",
+    "by_agent",
+    "since",
+    "unreviewed",
+    "advisory",
 )
 
 # The modes that are a selection on kind, and which kinds. A mode absent from
@@ -62,9 +66,7 @@ UNBUILT_MODES: dict[str, str] = {
 }
 
 
-def mode_refusal(
-    mode: str, *, agent_id: str | None, since_given: bool
-) -> str | None:
+def mode_refusal(mode: str, *, agent_id: str | None, since_given: bool) -> str | None:
     """Why this call cannot be answered as asked, or None.
 
     `since_given` rather than the datetime itself: the caller has already parsed

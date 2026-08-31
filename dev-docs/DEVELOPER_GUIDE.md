@@ -3,17 +3,18 @@
 ## Setup
 
 ```bash
-# Clone both repos as siblings
-git clone <petritype-url> petritype
-git clone <epimemer-url> epimemer
+git clone https://github.com/olenive/epimemer.git
 cd epimemer
-
-# Install (petritype is an editable local dependency)
-uv sync
+uv sync --extra dev
 
 # Verify
 uv run python -m pytest tests/ -q
 ```
+
+Petritype comes from PyPI. To work on both at once, install a checkout into
+this venv for the session — `uv pip install -e ../petritype` — and never commit
+a path source: Epimemer depends on released Petritype only, so a change that
+needs new Petritype code is a Petritype release first and a pin bump here.
 
 ## Running Tests
 
@@ -82,6 +83,10 @@ Run this when a change touches storage or concurrency. Either suite skipping is
 reported as a pass by pytest, so check the counts — `5 passed` and `1 passed`,
 not `5 skipped`.
 
+For a persistent local server outside the test run, on macOS,
+`scripts/start_local_surrealdb.sh` starts one via Colima on disk and registers
+the MCP server with Claude Code against it.
+
 ## Debugging Individual Sections
 
 Each pipeline is independently testable. The key to debugging is understanding that every pipeline is a Petri net with typed places and transitions.
@@ -92,6 +97,7 @@ All Pydantic models live in `epimemer/core/types.py`. To inspect a model:
 
 ```python
 from epimemer.core.types import Topic, Timeline, Metacontext
+
 t = Topic(content="test", source_id="s1")
 print(t.model_dump_json(indent=2))
 ```
@@ -105,12 +111,14 @@ import asyncio
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.core.types import Topic
 
+
 async def main():
     store = InMemoryStorage()
     t = Topic(content="test topic", source_id="s1")
     await store.store_node(t)
     got = await store.get_node(t.id)
     print(got)
+
 
 asyncio.run(main())
 ```
@@ -119,6 +127,7 @@ For SurrealDB, use embedded mode (`mem://`) in tests — no server needed:
 
 ```python
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
+
 
 async def main():
     store = SurrealDBStorage(url="mem://")
@@ -141,6 +150,7 @@ from petritype.runtime import RunContext, Runner
 from epimemer.core.types import RawDocument
 from epimemer.pipelines.segmentation.paragraph_split import paragraph_split_segmentation_net
 
+
 async def main():
     doc = RawDocument(content="First paragraph.\n\nSecond paragraph.\n\nThird.")
     graph = paragraph_split_segmentation_net(doc)
@@ -151,6 +161,7 @@ async def main():
     print(f"Fired: {fired}")
     segments = graph.place_named("Segments").tokens
     print(f"Segments: {[s.text for s in segments]}")
+
 
 asyncio.run(main())
 ```
@@ -175,6 +186,7 @@ from epimemer.pipelines.query.hybrid_retrieval import hybrid_retrieval_net
 from epimemer.pipelines.query.types import QueryRequest
 from epimemer.storage.memory import InMemoryStorage
 
+
 async def main():
     storage = InMemoryStorage()
     emb = MockEmbeddingProvider(model_id="mock", dimension=8)
@@ -193,6 +205,7 @@ async def main():
     await Runner.step(ctx)
     expanded = graph.place_named("ExpandedResults").tokens
     print(f"Expanded: {expanded}")
+
 
 asyncio.run(main())
 ```
@@ -215,6 +228,7 @@ from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.tools import reflect
 from epimemer.storage.memory import InMemoryStorage
 
+
 async def main():
     storage = InMemoryStorage()
     emb = MockEmbeddingProvider(model_id="mock", dimension=8)
@@ -226,6 +240,7 @@ async def main():
     print(f"Split candidates: {result['split_candidates']}")
     print(f"Contradictions: {result['contradictions']}")
     print(f"Pending review: {result['pending_review']}")
+
 
 asyncio.run(main())
 ```
@@ -296,6 +311,7 @@ from epimemer.mcp.config import ServerConfig
 from epimemer.pipelines.orchestration.orchestration_net import MemoryRequest, orchestration_net
 from epimemer.storage.memory import InMemoryStorage
 
+
 async def main():
     storage = InMemoryStorage()
     emb = MockEmbeddingProvider(model_id="mock", dimension=8)
@@ -314,6 +330,7 @@ async def main():
     result = graph.place_named("MemoryResult").tokens[0]
     print(f"Result: {result.action} — {result.result}")
 
+
 asyncio.run(main())
 ```
 
@@ -328,6 +345,7 @@ from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.tools import segment_text, search
 from epimemer.storage.memory import InMemoryStorage
 
+
 async def main():
     storage = InMemoryStorage()
     emb = MockEmbeddingProvider(model_id="mock", dimension=8)
@@ -340,6 +358,7 @@ async def main():
     # Step 2: search (after store_decomposition populates nodes)
     result, meta = await search("Some text", storage, emb, k=5)
     print(f"Search: {result}")
+
 
 asyncio.run(main())
 ```
@@ -496,7 +515,7 @@ Two things move it, and that is the whole list:
 `storage/active_graph.py` has the guard. Everything else takes the other side:
 
 ```python
-async with storage.graph_guard.using():   # a tool call — see _run_with_timeout
+async with storage.graph_guard.using():  # a tool call — see _run_with_timeout
     ...
 ```
 

@@ -6,8 +6,8 @@ The implementation is swappable later without changing the interface.
 """
 
 from bisect import bisect_left, insort_left
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Sequence
 
 from epimemer.core.types import EdgeType, NodeEdge, Timeline, Timepoint
 from epimemer.pipelines.timeline.temporal import detect_temporal_expressions
@@ -203,11 +203,13 @@ def propose_timepoints(
                 timepoint_id = timepoint.id
                 known[key] = timepoint_id
                 added += 1
-            edges.append(NodeEdge(
-                src_id=node_id,
-                dst_id=timeline.id,
-                type=EdgeType.TIMELINK,
-                metadata={"timepoint_id": timepoint_id},
-            ))
+            edges.append(
+                NodeEdge(
+                    src_id=node_id,
+                    dst_id=timeline.id,
+                    type=EdgeType.TIMELINK,
+                    metadata={"timepoint_id": timepoint_id},
+                )
+            )
 
     return timeline, edges, added

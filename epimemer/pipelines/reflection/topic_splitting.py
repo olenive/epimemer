@@ -18,12 +18,6 @@ and applies the split through `apply_reflection`.
 
 import math
 
-from epimemer.core.types import (
-    Topic,
-)
-from epimemer.storage.protocol import StorageBackend
-
-
 # --- Vector math helpers ---
 
 
@@ -35,7 +29,7 @@ def _centroid(vectors: list[list[float]]) -> list[float]:
 
 
 def _euclidean_distance(a: list[float], b: list[float]) -> float:
-    return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
+    return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b, strict=True)))
 
 
 def _mean_distance_to_centroid(vectors: list[list[float]], centroid: list[float]) -> float:
@@ -72,7 +66,9 @@ def _bisect(vectors: list[list[float]], max_iterations: int = 20) -> tuple[list[
         cluster_a: list[int] = []
         cluster_b: list[int] = []
         for i in range(n):
-            if _euclidean_distance(vectors[i], centroid_a) <= _euclidean_distance(vectors[i], centroid_b):
+            if _euclidean_distance(vectors[i], centroid_a) <= _euclidean_distance(
+                vectors[i], centroid_b
+            ):
                 cluster_a.append(i)
             else:
                 cluster_b.append(i)
@@ -85,7 +81,7 @@ def _bisect(vectors: list[list[float]], max_iterations: int = 20) -> tuple[list[
         new_centroid_b = _centroid([vectors[i] for i in cluster_b])
 
         # Convergence check
-        if (new_centroid_a == centroid_a and new_centroid_b == centroid_b):
+        if new_centroid_a == centroid_a and new_centroid_b == centroid_b:
             break
         centroid_a = new_centroid_a
         centroid_b = new_centroid_b
@@ -137,4 +133,3 @@ def should_split(
         return inter_distance > 0.0
 
     return inter_distance / mean_intra >= split_ratio
-

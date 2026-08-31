@@ -36,7 +36,6 @@ from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
 from epimemer.pipelines.reflection.review import frames_of
 
-
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
 
 
@@ -61,22 +60,27 @@ async def _topic(storage, embedder, content, *, vector=None, frames=()):
     topic = Topic(content=content, source_id="seg1")
     await storage.store_node(topic)
     vectors = await embedder.embed([content])
-    await storage.store_embedding(EmbeddingRecord(
-        item_id=topic.id, model_id=embedder.model_id,
-        vector=vector if vector is not None else vectors[0],
-    ))
+    await storage.store_embedding(
+        EmbeddingRecord(
+            item_id=topic.id,
+            model_id=embedder.model_id,
+            vector=vector if vector is not None else vectors[0],
+        )
+    )
     for frame in frames:
-        await storage.store_edge(NodeEdge(
-            src_id=topic.id, dst_id=frame, type=EdgeType.HAS_METACONTEXT,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=topic.id,
+                dst_id=frame,
+                type=EdgeType.HAS_METACONTEXT,
+            )
+        )
     return topic
 
 
 async def _frames_stated(storage, node_id) -> set[str]:
     """What the node **says**, not what it is read as — no promotion."""
-    edges = await storage.get_edges_from(
-        node_id, edge_type=EdgeType.HAS_METACONTEXT
-    )
+    edges = await storage.get_edges_from(node_id, edge_type=EdgeType.HAS_METACONTEXT)
     return {edge.dst_id for edge in edges}
 
 
@@ -91,12 +95,14 @@ async def _ingest(storage, embedder, config, content, *, metacontext_id):
     seg, _ = await tools.segment_text(content, storage, embedder, config)
     stored, _ = await tools.store_decomposition(
         document_id=seg["document_id"],
-        segments=[{
-            "segment_id": seg["segments"][0]["segment_id"],
-            "topics": ["a topic"],
-            "facts": ["a claim"],
-            "inferences": [],
-        }],
+        segments=[
+            {
+                "segment_id": seg["segments"][0]["segment_id"],
+                "topics": ["a topic"],
+                "facts": ["a claim"],
+                "inferences": [],
+            }
+        ],
         storage=storage,
         embedding_provider=embedder,
         metacontext_id=metacontext_id,
@@ -106,9 +112,7 @@ async def _ingest(storage, embedder, config, content, *, metacontext_id):
 
 
 class TestTheFrameIsRequired:
-    async def test_the_tool_has_no_default_to_fall_back_on(
-        self, storage, embedder, config
-    ):
+    async def test_the_tool_has_no_default_to_fall_back_on(self, storage, embedder, config):
         """A required keyword, not a defaulted one. The distinction is the whole
         change: a default would answer the question on behalf of an agent who
         never considered it, which is what absence already did."""
@@ -137,9 +141,7 @@ class TestTheFrameIsRequired:
                 metacontext_id="   ",
             )
 
-    async def test_the_refusal_no_longer_teaches_omitting_it(
-        self, storage, embedder, config
-    ):
+    async def test_the_refusal_no_longer_teaches_omitting_it(self, storage, embedder, config):
         """A wrong id used to be answered with *"or omit metacontext_id"*, which
         is now advice to do the impossible on ingest — and, before the
         requirement, advice to make the silent assertion this issue is about."""
@@ -155,9 +157,7 @@ class TestTheFrameIsRequired:
         assert "omit metacontext_id" not in str(caught.value)
         assert BASE_METACONTEXT_ID in str(caught.value)
 
-    async def test_a_frame_from_another_graph_is_still_refused(
-        self, storage, embedder, config
-    ):
+    async def test_a_frame_from_another_graph_is_still_refused(self, storage, embedder, config):
         """Requiring the field does not weaken the existing check — a stated id
         must still resolve here, since a node framed by nothing shares a frame
         with no other node."""
@@ -181,11 +181,12 @@ class TestAStatedFrameLeavesAMark:
     assertion somebody made, and the other is a question nobody was asked.
     """
 
-    async def test_the_real_is_written_as_an_edge(
-        self, storage, embedder, config
-    ):
+    async def test_the_real_is_written_as_an_edge(self, storage, embedder, config):
         await _ingest(
-            storage, embedder, config, "A real claim.",
+            storage,
+            embedder,
+            config,
+            "A real claim.",
             metacontext_id=BASE_METACONTEXT_ID,
         )
         nodes = await storage.query_nodes()
@@ -203,31 +204,30 @@ class TestAStatedFrameLeavesAMark:
         world. `epimemer frames declare` is what ends that state."""
         legacy = await _topic(storage, embedder, "written before the rule")
         await _ingest(
-            storage, embedder, config, "written after.",
+            storage,
+            embedder,
+            config,
+            "written after.",
             metacontext_id=BASE_METACONTEXT_ID,
         )
-        stated = next(
-            node for node in await storage.query_nodes()
-            if node.id != legacy.id
-        )
+        stated = next(node for node in await storage.query_nodes() if node.id != legacy.id)
 
         assert await frames_of(legacy.id, storage) == set()
         assert await frames_of(stated.id, storage) == {BASE_METACONTEXT_ID}
 
-    async def test_the_edge_carries_the_judge(
-        self, storage, embedder, config
-    ):
+    async def test_the_edge_carries_the_judge(self, storage, embedder, config):
         """What makes the error recoverable rather than merely visible: the
         frame is a judgment, so `review(by_agent=…)` can find every claim this
         agent filed into a world."""
         await _ingest(
-            storage, embedder, config, "A real claim.",
+            storage,
+            embedder,
+            config,
+            "A real claim.",
             metacontext_id=BASE_METACONTEXT_ID,
         )
         node = (await storage.query_nodes())[0]
-        edges = await storage.get_edges_from(
-            node.id, edge_type=EdgeType.HAS_METACONTEXT
-        )
+        edges = await storage.get_edges_from(node.id, edge_type=EdgeType.HAS_METACONTEXT)
         assert [edge.judged_by.agent_id for edge in edges] == ["critic"]
 
 
@@ -239,31 +239,27 @@ class TestReflectStopsMintingUntaggedNodes:
     knowledge into an assertion about the real world, with no agent involved.
     """
 
-    async def test_a_split_inherits_the_parents_frame(
-        self, storage, embedder
-    ):
+    async def test_a_split_inherits_the_parents_frame(self, storage, embedder):
         fiction = await _fiction(storage)
-        parent = await _topic(
-            storage, embedder, "the novel's politics", frames=[fiction]
-        )
+        parent = await _topic(storage, embedder, "the novel's politics", frames=[fiction])
 
         await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             splits=[{"topic_id": parent.id, "subtopics": ["the council", "the war"]}],
             judge=CRITIC,
         )
 
         children = [
-            node for node in await storage.query_nodes()
+            node
+            for node in await storage.query_nodes()
             if node.metadata.get("split_from") == parent.id
         ]
         assert len(children) == 2
         for child in children:
             assert await _frames_stated(storage, child.id) == {fiction}
 
-    async def test_a_split_of_an_unspoken_for_topic_invents_no_frame(
-        self, storage, embedder
-    ):
+    async def test_a_split_of_an_unspoken_for_topic_invents_no_frame(self, storage, embedder):
         """A subtopic inherits what its parent states, and a parent written
         before the rule states nothing — so the split says nothing either. It
         used to mint an explicit `the-real` here, back when absence resolved to
@@ -273,56 +269,55 @@ class TestReflectStopsMintingUntaggedNodes:
         parent = await _topic(storage, embedder, "European history")
 
         await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             splits=[{"topic_id": parent.id, "subtopics": ["the Congress"]}],
             judge=CRITIC,
         )
 
         child = next(
-            node for node in await storage.query_nodes()
+            node
+            for node in await storage.query_nodes()
             if node.metadata.get("split_from") == parent.id
         )
         assert await _frames_stated(storage, child.id) == set()
         assert await _frames_stated(storage, parent.id) == set()
 
-    async def test_a_synthesised_parent_inherits_the_shared_frame(
-        self, storage, embedder
-    ):
+    async def test_a_synthesised_parent_inherits_the_shared_frame(self, storage, embedder):
         fiction = await _fiction(storage)
         a = await _topic(storage, embedder, "the council", frames=[fiction])
         b = await _topic(storage, embedder, "the war", frames=[fiction])
 
         result, _ = await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             parents=[{"children_ids": [a.id, b.id], "content": "the novel's politics"}],
             judge=CRITIC,
         )
 
         assert result["parents_created"] == 1
         parent = next(
-            node for node in await storage.query_nodes()
-            if node.metadata.get("synthesized_from")
+            node for node in await storage.query_nodes() if node.metadata.get("synthesized_from")
         )
         assert await _frames_stated(storage, parent.id) == {fiction}
 
-    async def test_a_synthesis_across_frames_is_refused(
-        self, storage, embedder
-    ):
+    async def test_a_synthesis_across_frames_is_refused(self, storage, embedder):
         """Not a union. A topic drawn from a fiction claim and a real one would
         assert in both worlds, which `fact_dedup` calls the worst outcome
         available — this is that gate one tier up."""
         fiction = await _fiction(storage)
         invented = await _topic(storage, embedder, "the council", frames=[fiction])
-        real = await _topic(
-            storage, embedder, "the Congress", frames=[BASE_METACONTEXT_ID]
-        )
+        real = await _topic(storage, embedder, "the Congress", frames=[BASE_METACONTEXT_ID])
 
         result, _ = await tools.apply_reflection(
-            storage, embedder,
-            parents=[{
-                "children_ids": [invented.id, real.id],
-                "content": "assemblies",
-            }],
+            storage,
+            embedder,
+            parents=[
+                {
+                    "children_ids": [invented.id, real.id],
+                    "content": "assemblies",
+                }
+            ],
             judge=CRITIC,
         )
 
@@ -331,37 +326,33 @@ class TestReflectStopsMintingUntaggedNodes:
         assert result["parents_refused"][0]["children_ids"] == [invented.id, real.id]
         assert "frames" in result["parents_refused"][0]["reason"]
         assert not [
-            node for node in await storage.query_nodes()
-            if node.metadata.get("synthesized_from")
+            node for node in await storage.query_nodes() if node.metadata.get("synthesized_from")
         ]
 
-    async def test_an_unspoken_for_child_and_a_stated_one_are_refused(
-        self, storage, embedder
-    ):
+    async def test_an_unspoken_for_child_and_a_stated_one_are_refused(self, storage, embedder):
         """This used to synthesise, because absence resolved to the base frame
         and the two compared equal. It is refused now, and that is the cost the
         declaration sweep exists to pay: combining them would put a claim nobody
         framed into a frame somebody named."""
         legacy = await _topic(storage, embedder, "Vienna")
-        stated = await _topic(
-            storage, embedder, "Salzburg", frames=[BASE_METACONTEXT_ID]
-        )
+        stated = await _topic(storage, embedder, "Salzburg", frames=[BASE_METACONTEXT_ID])
 
         result, _ = await tools.apply_reflection(
-            storage, embedder,
-            parents=[{
-                "children_ids": [legacy.id, stated.id],
-                "content": "Austrian cities",
-            }],
+            storage,
+            embedder,
+            parents=[
+                {
+                    "children_ids": [legacy.id, stated.id],
+                    "content": "Austrian cities",
+                }
+            ],
             judge=CRITIC,
         )
 
         assert result["parents_created"] == 0
         assert len(result["parents_refused"]) == 1
 
-    async def test_two_unspoken_for_children_still_synthesise(
-        self, storage, embedder
-    ):
+    async def test_two_unspoken_for_children_still_synthesise(self, storage, embedder):
         """Neither says anything, so the sets are equal and the parent inherits
         nothing. `same_frame` answers the *overlap* question the other way for
         the same pair — both are right, and the difference is only visible on a
@@ -370,15 +361,15 @@ class TestReflectStopsMintingUntaggedNodes:
         b = await _topic(storage, embedder, "Salzburg")
 
         result, _ = await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             parents=[{"children_ids": [a.id, b.id], "content": "Austrian cities"}],
             judge=CRITIC,
         )
 
         assert result["parents_created"] == 1
         parent = next(
-            node for node in await storage.query_nodes()
-            if node.metadata.get("synthesized_from")
+            node for node in await storage.query_nodes() if node.metadata.get("synthesized_from")
         )
         assert await _frames_stated(storage, parent.id) == set()
 
@@ -393,16 +384,18 @@ class TestTopicMergeGetsTheGateFactsAlreadyHad:
     async def test_a_cross_frame_merge_is_refused(self, storage, embedder):
         fiction = await _fiction(storage)
         twin = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        a = await _topic(
-            storage, embedder, "the council", vector=twin, frames=[fiction]
-        )
+        a = await _topic(storage, embedder, "the council", vector=twin, frames=[fiction])
         b = await _topic(
-            storage, embedder, "the councils", vector=twin,
+            storage,
+            embedder,
+            "the councils",
+            vector=twin,
             frames=[BASE_METACONTEXT_ID],
         )
 
         result, _ = await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             merges=[{"source_ids": [a.id, b.id], "content": "councils"}],
             judge=CRITIC,
         )
@@ -416,16 +409,18 @@ class TestTopicMergeGetsTheGateFactsAlreadyHad:
     async def test_a_refused_merge_retires_nothing(self, storage, embedder):
         fiction = await _fiction(storage)
         twin = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        a = await _topic(
-            storage, embedder, "the council", vector=twin, frames=[fiction]
-        )
+        a = await _topic(storage, embedder, "the council", vector=twin, frames=[fiction])
         b = await _topic(
-            storage, embedder, "the councils", vector=twin,
+            storage,
+            embedder,
+            "the councils",
+            vector=twin,
             frames=[BASE_METACONTEXT_ID],
         )
 
         await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             merges=[{"source_ids": [a.id, b.id], "content": "councils"}],
             judge=CRITIC,
         )
@@ -436,15 +431,12 @@ class TestTopicMergeGetsTheGateFactsAlreadyHad:
     async def test_a_same_frame_merge_still_applies(self, storage, embedder):
         fiction = await _fiction(storage)
         twin = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        a = await _topic(
-            storage, embedder, "the council", vector=twin, frames=[fiction]
-        )
-        b = await _topic(
-            storage, embedder, "the councils", vector=twin, frames=[fiction]
-        )
+        a = await _topic(storage, embedder, "the council", vector=twin, frames=[fiction])
+        b = await _topic(storage, embedder, "the councils", vector=twin, frames=[fiction])
 
         result, _ = await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             merges=[{"source_ids": [a.id, b.id], "content": "councils"}],
             judge=CRITIC,
         )
@@ -463,21 +455,25 @@ class TestTheReadSideStaysOptional:
         Requiring it here would make cross-frame search impossible."""
         fiction = await _fiction(storage)
         await _ingest(
-            storage, embedder, config, "The council met in winter.",
+            storage,
+            embedder,
+            config,
+            "The council met in winter.",
             metacontext_id=fiction,
         )
 
         found, _ = await tools.search(
-            query="council", storage=storage, embedding_provider=embedder, k=5,
+            query="council",
+            storage=storage,
+            embedding_provider=embedder,
+            k=5,
         )
 
         assert found["nodes"]
 
 
 class TestTheLegacyPopulationIsLeftAlone:
-    async def test_an_ingest_does_not_backfill_older_nodes(
-        self, storage, embedder, config
-    ):
+    async def test_an_ingest_does_not_backfill_older_nodes(self, storage, embedder, config):
         """Writing `the-real` onto nodes nobody asked would manufacture exactly
         the deliberate-looking assertions this issue exists to end — the confidence prior's
         treatment of the legacy `0.5` confidences, which were sized and dated
@@ -485,7 +481,10 @@ class TestTheLegacyPopulationIsLeftAlone:
         legacy = await _topic(storage, embedder, "written before the rule")
 
         await _ingest(
-            storage, embedder, config, "written after.",
+            storage,
+            embedder,
+            config,
+            "written after.",
             metacontext_id=BASE_METACONTEXT_ID,
         )
 
@@ -514,7 +513,11 @@ class TestTheIngestRowNamesTheFrame:
 
         fiction = await _fiction(storage)
         await _ingest(
-            storage, embedder, config, "The council met.", metacontext_id=fiction,
+            storage,
+            embedder,
+            config,
+            "The council met.",
+            metacontext_id=fiction,
         )
 
         [row] = await storage.query_decisions(kinds=[DecisionKind.INGEST])
@@ -528,23 +531,18 @@ class TestTheIngestRowNamesTheFrame:
 
         await declare_frames(storage, frame=BASE_METACONTEXT_ID, judge=CRITIC)
 
-        [row] = await storage.query_decisions(
-            kinds=[DecisionKind.FRAME_DECLARATION]
-        )
+        [row] = await storage.query_decisions(kinds=[DecisionKind.FRAME_DECLARATION])
         assert row.frame == BASE_METACONTEXT_ID
 
-    async def test_a_decision_that_names_no_frame_leaves_it_blank(
-        self, storage, embedder
-    ):
+    async def test_a_decision_that_names_no_frame_leaves_it_blank(self, storage, embedder):
         """Most kinds do not apply one, and a blank is the honest answer — not
         a default, which is the mistake this whole issue is about."""
         from epimemer.core.types import DecisionKind
 
-        parent = await _topic(
-            storage, embedder, "European history", frames=[BASE_METACONTEXT_ID]
-        )
+        parent = await _topic(storage, embedder, "European history", frames=[BASE_METACONTEXT_ID])
         await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             splits=[{"topic_id": parent.id, "subtopics": ["the Congress"]}],
             judge=CRITIC,
         )
@@ -565,34 +563,34 @@ class TestAMergeRestatesTheFrame:
         twin = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         ingester = JudgeRef(agent_id="ingester", digest="d9")
         a = await _topic(
-            storage, embedder, "the council", vector=twin,
+            storage,
+            embedder,
+            "the council",
+            vector=twin,
             frames=[BASE_METACONTEXT_ID],
         )
         b = await _topic(
-            storage, embedder, "the councils", vector=twin,
+            storage,
+            embedder,
+            "the councils",
+            vector=twin,
             frames=[BASE_METACONTEXT_ID],
         )
         for node in (a, b):
-            for edge in await storage.get_edges_from(
-                node.id, edge_type=EdgeType.HAS_METACONTEXT
-            ):
-                await storage.store_edge(
-                    edge.model_copy(update={"judged_by": ingester})
-                )
+            for edge in await storage.get_edges_from(node.id, edge_type=EdgeType.HAS_METACONTEXT):
+                await storage.store_edge(edge.model_copy(update={"judged_by": ingester}))
 
         await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             merges=[{"source_ids": [a.id, b.id], "content": "councils"}],
             judge=CRITIC,
         )
 
         survivor = next(
-            node for node in await storage.query_nodes()
-            if node.metadata.get("merged_from")
+            node for node in await storage.query_nodes() if node.metadata.get("merged_from")
         )
-        edges = await storage.get_edges_from(
-            survivor.id, edge_type=EdgeType.HAS_METACONTEXT
-        )
+        edges = await storage.get_edges_from(survivor.id, edge_type=EdgeType.HAS_METACONTEXT)
         assert [(e.dst_id, e.judged_by.agent_id) for e in edges] == [
             (BASE_METACONTEXT_ID, "critic")
         ]
@@ -602,21 +600,26 @@ class TestAMergeRestatesTheFrame:
         which world they were about — which is what a reversal restores to."""
         twin = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         a = await _topic(
-            storage, embedder, "the council", vector=twin,
+            storage,
+            embedder,
+            "the council",
+            vector=twin,
             frames=[BASE_METACONTEXT_ID],
         )
         b = await _topic(
-            storage, embedder, "the councils", vector=twin,
+            storage,
+            embedder,
+            "the councils",
+            vector=twin,
             frames=[BASE_METACONTEXT_ID],
         )
 
         await tools.apply_reflection(
-            storage, embedder,
+            storage,
+            embedder,
             merges=[{"source_ids": [a.id, b.id], "content": "councils"}],
             judge=CRITIC,
         )
 
         for node in (a, b):
-            assert await _frames_stated(storage, node.id) == {
-                BASE_METACONTEXT_ID
-            }
+            assert await _frames_stated(storage, node.id) == {BASE_METACONTEXT_ID}

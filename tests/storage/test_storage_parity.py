@@ -10,7 +10,7 @@ Anything the protocol promises but the two backends could implement
 differently belongs in this file.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -90,9 +90,7 @@ class TestStoreIsUpsert:
         timeline = Timeline(name="tl")
         await store.store_timeline(timeline)
 
-        updated, _ = add_timepoint(
-            timeline, start=datetime(2024, 1, 1, tzinfo=timezone.utc)
-        )
+        updated, _ = add_timepoint(timeline, start=datetime(2024, 1, 1, tzinfo=UTC))
         await store.store_timeline(updated)
 
         got = await store.get_timeline(timeline.id)
@@ -105,9 +103,7 @@ class TestStoreIsUpsert:
 
         current = timeline
         for day in (1, 2, 3):
-            current, _ = add_timepoint(
-                current, start=datetime(2024, 1, day, tzinfo=timezone.utc)
-            )
+            current, _ = add_timepoint(current, start=datetime(2024, 1, day, tzinfo=UTC))
             await store.store_timeline(current)
 
         got = await store.get_timeline(timeline.id)
@@ -137,9 +133,7 @@ class TestStoreIsUpsert:
         assert got.description == "now described"
 
     async def test_store_embedding_twice_updates_in_place(self, store):
-        emb = EmbeddingRecord(
-            item_id="item1", model_id="m", vector=[0.1, 0.2, 0.3]
-        )
+        emb = EmbeddingRecord(item_id="item1", model_id="m", vector=[0.1, 0.2, 0.3])
         await store.store_embedding(emb)
 
         emb.vector = [0.9, 0.8, 0.7]
@@ -248,7 +242,8 @@ class TestPayloadFidelity:
     async def test_a_deliberate_middling_confidence_is_not_absence(self, store):
         """The other half: a rated 0.5 must not come back as unrated."""
         topic = Topic(
-            content="considered, and middling", source_id="s1",
+            content="considered, and middling",
+            source_id="s1",
             value=ValueSignal(confidence=0.5),
         )
         await store.store_node(topic)
@@ -275,8 +270,7 @@ class TestPayloadFidelity:
         what makes the backends interchangeable; that it drops rather than
         keeps is the documented trade.
         """
-        topic = Topic(content="meta", source_id="s1",
-                      metadata={"note": None, "keep": 1})
+        topic = Topic(content="meta", source_id="s1", metadata={"note": None, "keep": 1})
         await store.store_node(topic)
 
         got = await store.get_node(topic.id)
@@ -284,8 +278,7 @@ class TestPayloadFidelity:
         assert got.metadata == {"keep": 1}
 
     async def test_none_dropped_from_nested_metadata(self, store):
-        topic = Topic(content="meta", source_id="s1",
-                      metadata={"outer": {"note": None, "keep": 1}})
+        topic = Topic(content="meta", source_id="s1", metadata={"outer": {"note": None, "keep": 1}})
         await store.store_node(topic)
 
         got = await store.get_node(topic.id)
@@ -294,8 +287,7 @@ class TestPayloadFidelity:
 
     async def test_none_preserved_inside_metadata_list(self, store):
         """A None *element* survives — dropping it would shift every index."""
-        topic = Topic(content="meta", source_id="s1",
-                      metadata={"xs": [1, None, 2]})
+        topic = Topic(content="meta", source_id="s1", metadata={"xs": [1, None, 2]})
         await store.store_node(topic)
 
         got = await store.get_node(topic.id)
@@ -334,8 +326,8 @@ class TestValidityRoundTrips:
         return [
             ValidityInterval(
                 start=UnknownInstant(),
-                end=PreciseInstant(at=datetime(1991, 9, 6, tzinfo=timezone.utc)),
-                witnessed_at=PreciseInstant(at=datetime(1970, 1, 1, tzinfo=timezone.utc)),
+                end=PreciseInstant(at=datetime(1991, 9, 6, tzinfo=UTC)),
+                witnessed_at=PreciseInstant(at=datetime(1970, 1, 1, tzinfo=UTC)),
                 basis=IntervalBasis.INFERRED,
             ),
             ValidityInterval(
@@ -348,7 +340,9 @@ class TestValidityRoundTrips:
 
     async def test_an_edges_intervals_survive_the_round_trip(self, store):
         edge = NodeEdge(
-            src_id="fact-1", dst_id="doc-1", type=EdgeType.SOURCED_FROM,
+            src_id="fact-1",
+            dst_id="doc-1",
+            type=EdgeType.SOURCED_FROM,
             validity=self._leningrad(),
         )
         await store.store_edge(edge)
@@ -360,7 +354,9 @@ class TestValidityRoundTrips:
     async def test_the_endpoint_states_stay_distinct(self, store):
         """`unknown` must not read back as `unbounded`, or the reverse."""
         edge = NodeEdge(
-            src_id="fact-2", dst_id="doc-1", type=EdgeType.SOURCED_FROM,
+            src_id="fact-2",
+            dst_id="doc-1",
+            type=EdgeType.SOURCED_FROM,
             validity=self._leningrad(),
         )
         await store.store_edge(edge)
@@ -382,7 +378,7 @@ class TestValidityRoundTrips:
     async def test_a_documents_publication_date_survives_the_round_trip(self, store):
         doc = RawDocument(
             content="a 1970 memoir",
-            published_at=PreciseInstant(at=datetime(1970, 6, 1, tzinfo=timezone.utc)),
+            published_at=PreciseInstant(at=datetime(1970, 6, 1, tzinfo=UTC)),
         )
         await store.store_document(doc)
 
@@ -424,9 +420,13 @@ class TestVectorSearchStatusFilter:
         for status in (NodeStatus.ACTIVE, NodeStatus.HISTORICAL, NodeStatus.CORRECTED):
             fact = Fact(content=f"a claim, {status.value}", source_id="s1", status=status)
             await store.store_node(fact)
-            await store.store_embedding(EmbeddingRecord(
-                item_id=fact.id, model_id="m", vector=[1.0, 0.0, 0.0],
-            ))
+            await store.store_embedding(
+                EmbeddingRecord(
+                    item_id=fact.id,
+                    model_id="m",
+                    vector=[1.0, 0.0, 0.0],
+                )
+            )
             by_status[status] = fact
         return by_status
 
@@ -441,12 +441,15 @@ class TestVectorSearchStatusFilter:
         facts = await self._graph(store)
 
         hits = await store.vector_search(
-            [1.0, 0.0, 0.0], "m", k=10,
+            [1.0, 0.0, 0.0],
+            "m",
+            k=10,
             statuses=frozenset({NodeStatus.ACTIVE, NodeStatus.HISTORICAL}),
         )
 
         assert {i for i, _ in hits} == {
-            facts[NodeStatus.ACTIVE].id, facts[NodeStatus.HISTORICAL].id
+            facts[NodeStatus.ACTIVE].id,
+            facts[NodeStatus.HISTORICAL].id,
         }
 
     async def test_a_corrected_claim_stays_out_unless_named(self, store):
@@ -455,7 +458,9 @@ class TestVectorSearchStatusFilter:
         facts = await self._graph(store)
 
         hits = await store.vector_search(
-            [1.0, 0.0, 0.0], "m", k=10,
+            [1.0, 0.0, 0.0],
+            "m",
+            k=10,
             statuses=frozenset({NodeStatus.ACTIVE, NodeStatus.HISTORICAL}),
         )
 
@@ -464,9 +469,7 @@ class TestVectorSearchStatusFilter:
     async def test_an_empty_status_set_returns_nothing(self, store):
         await self._graph(store)
 
-        assert await store.vector_search(
-            [1.0, 0.0, 0.0], "m", k=10, statuses=frozenset()
-        ) == []
+        assert await store.vector_search([1.0, 0.0, 0.0], "m", k=10, statuses=frozenset()) == []
 
     async def test_k_counts_results_not_rows_examined(self, store):
         """The filter runs before the truncation, on both backends.
@@ -477,13 +480,18 @@ class TestVectorSearchStatusFilter:
         """
         for i in range(6):
             fact = Fact(
-                content=f"claim {i}", source_id="s1",
+                content=f"claim {i}",
+                source_id="s1",
                 status=NodeStatus.CORRECTED if i < 4 else NodeStatus.ACTIVE,
             )
             await store.store_node(fact)
-            await store.store_embedding(EmbeddingRecord(
-                item_id=fact.id, model_id="m", vector=[1.0, 0.0, 0.0],
-            ))
+            await store.store_embedding(
+                EmbeddingRecord(
+                    item_id=fact.id,
+                    model_id="m",
+                    vector=[1.0, 0.0, 0.0],
+                )
+            )
 
         hits = await store.vector_search([1.0, 0.0, 0.0], "m", k=2)
 
@@ -499,19 +507,26 @@ class TestStatusFlipCanCarryAnEdge:
     """
 
     async def test_the_edge_lands_with_the_flip(self, store):
-        fact = Fact(content="Labour is in government", source_id="s1",
-                    status=NodeStatus.HISTORICAL)
+        fact = Fact(content="Labour is in government", source_id="s1", status=NodeStatus.HISTORICAL)
         await store.store_node(fact)
 
         await store.set_node_status_tx(
-            [fact], status=NodeStatus.ACTIVE, at=datetime.now(timezone.utc),
-            edges=[NodeEdge(
-                src_id=fact.id, dst_id="doc-2026", type=EdgeType.SOURCED_FROM,
-                validity=[ValidityInterval(
-                    start=PreciseInstant(at=datetime(2024, 7, 5, tzinfo=timezone.utc)),
-                    basis=IntervalBasis.STATED,
-                )],
-            )],
+            [fact],
+            status=NodeStatus.ACTIVE,
+            at=datetime.now(UTC),
+            edges=[
+                NodeEdge(
+                    src_id=fact.id,
+                    dst_id="doc-2026",
+                    type=EdgeType.SOURCED_FROM,
+                    validity=[
+                        ValidityInterval(
+                            start=PreciseInstant(at=datetime(2024, 7, 5, tzinfo=UTC)),
+                            basis=IntervalBasis.STATED,
+                        )
+                    ],
+                )
+            ],
         )
 
         back = await store.get_node(fact.id)
@@ -526,7 +541,9 @@ class TestStatusFlipCanCarryAnEdge:
         await store.store_node(fact)
 
         await store.set_node_status_tx(
-            [fact], status=NodeStatus.ACTIVE, at=datetime.now(timezone.utc),
+            [fact],
+            status=NodeStatus.ACTIVE,
+            at=datetime.now(UTC),
         )
 
         assert await store.get_edges_from(fact.id) == []
@@ -561,7 +578,7 @@ class TestTimelineReferenceTime:
     """
 
     async def test_reference_time_round_trips(self, store):
-        when = datetime(1897, 5, 26, tzinfo=timezone.utc)
+        when = datetime(1897, 5, 26, tzinfo=UTC)
         timeline = Timeline(name="Dracula", reference_time=when)
         await store.store_timeline(timeline)
 
@@ -580,7 +597,7 @@ class TestTimelineReferenceTime:
     async def test_reference_time_can_be_cleared(self, store):
         timeline = Timeline(
             name="was fictional",
-            reference_time=datetime(1897, 5, 26, tzinfo=timezone.utc),
+            reference_time=datetime(1897, 5, 26, tzinfo=UTC),
         )
         await store.store_timeline(timeline)
 
@@ -601,10 +618,10 @@ class TestTimelineToolsPersist:
         timeline_id = created["timeline_id"]
 
         first, _ = await tools.add_timeline_timepoint(
-            timeline_id, store, start=datetime(2024, 1, 1, tzinfo=timezone.utc)
+            timeline_id, store, start=datetime(2024, 1, 1, tzinfo=UTC)
         )
         second, _ = await tools.add_timeline_timepoint(
-            timeline_id, store, start=datetime(2024, 6, 1, tzinfo=timezone.utc)
+            timeline_id, store, start=datetime(2024, 6, 1, tzinfo=UTC)
         )
 
         assert second["timepoints_count"] == 2
@@ -615,8 +632,8 @@ class TestTimelineToolsPersist:
         queried, _ = await tools.query_timeline(
             timeline_id,
             store,
-            range_start=datetime(2023, 1, 1, tzinfo=timezone.utc),
-            range_end=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            range_start=datetime(2023, 1, 1, tzinfo=UTC),
+            range_end=datetime(2025, 1, 1, tzinfo=UTC),
         )
         returned_ids = {tp["id"] for tp in queried["timepoints"]}
         assert returned_ids == {first["timepoint_id"], second["timepoint_id"]}
@@ -639,7 +656,7 @@ class TestWriteBatchTxTimelines:
     async def test_timeline_and_timelink_commit_together(self, store):
         node = Fact(content="the siege began", source_id="s1")
         timeline, point = add_timepoint(
-            Timeline(name="Extracted"), start=datetime(1897, 5, 1, tzinfo=timezone.utc)
+            Timeline(name="Extracted"), start=datetime(1897, 5, 1, tzinfo=UTC)
         )
         link = NodeEdge(
             src_id=node.id,
@@ -658,7 +675,7 @@ class TestWriteBatchTxTimelines:
     async def test_a_failed_batch_leaves_neither(self, store):
         node = Fact(content="the siege began", source_id="s1")
         timeline, point = add_timepoint(
-            Timeline(name="Extracted"), start=datetime(1897, 5, 1, tzinfo=timezone.utc)
+            Timeline(name="Extracted"), start=datetime(1897, 5, 1, tzinfo=UTC)
         )
         link = NodeEdge(
             src_id=node.id,
@@ -686,13 +703,11 @@ class TestWriteBatchTxTimelines:
     async def test_appending_to_an_existing_timeline_keeps_the_earlier_points(self, store):
         """The second document into a named timeline must not erase the first."""
         original, first = add_timepoint(
-            Timeline(name="Extracted"), start=datetime(1897, 5, 1, tzinfo=timezone.utc)
+            Timeline(name="Extracted"), start=datetime(1897, 5, 1, tzinfo=UTC)
         )
         await store.store_timeline(original)
 
-        appended, second = add_timepoint(
-            original, start=datetime(1897, 9, 1, tzinfo=timezone.utc)
-        )
+        appended, second = add_timepoint(original, start=datetime(1897, 9, 1, tzinfo=UTC))
         await store.write_batch_tx(timelines=[appended])
 
         stored = await store.get_timeline(original.id)
@@ -702,22 +717,18 @@ class TestWriteBatchTxTimelines:
     async def test_a_failed_batch_leaves_an_existing_timeline_as_it_was(self, store):
         """Rolling back an upsert means restoring the old row, not dropping it."""
         original, first = add_timepoint(
-            Timeline(name="Extracted"), start=datetime(1897, 5, 1, tzinfo=timezone.utc)
+            Timeline(name="Extracted"), start=datetime(1897, 5, 1, tzinfo=UTC)
         )
         await store.store_timeline(original)
 
-        appended, _ = add_timepoint(
-            original, start=datetime(1897, 9, 1, tzinfo=timezone.utc)
-        )
+        appended, _ = add_timepoint(original, start=datetime(1897, 9, 1, tzinfo=UTC))
 
         def boom_embeddings():
             raise RuntimeError("injected failure")
             yield  # pragma: no cover - generator body, never reached
 
         with pytest.raises(RuntimeError, match="injected failure"):
-            await store.write_batch_tx(
-                timelines=[appended], embeddings=boom_embeddings()
-            )
+            await store.write_batch_tx(timelines=[appended], embeddings=boom_embeddings())
 
         stored = await store.get_timeline(original.id)
         assert stored is not None
@@ -731,7 +742,7 @@ class TestVizListTimelines:
 
     async def test_returns_timelines_with_their_timepoints(self, store):
         timeline, _ = add_timepoint(
-            Timeline(name="History"), start=datetime(2024, 1, 1, tzinfo=timezone.utc)
+            Timeline(name="History"), start=datetime(2024, 1, 1, tzinfo=UTC)
         )
         await store.store_timeline(timeline)
 
@@ -865,12 +876,8 @@ class TestVectorSearchReturnsOnlyActiveNodes:
         return node
 
     async def test_superseded_nodes_never_resurface(self, store):
-        topic = await self._stored(
-            store, Topic(content="ML", source_id="s1"), [1.0, 0.0, 0.0]
-        )
-        await store.set_node_status_tx(
-            [topic], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
-        )
+        topic = await self._stored(store, Topic(content="ML", source_id="s1"), [1.0, 0.0, 0.0])
+        await store.set_node_status_tx([topic], status=NodeStatus.SUPERSEDED, at=datetime.now(UTC))
 
         # An exact match on the query vector: only the status filter can hide it.
         results = await store.vector_search([1.0, 0.0, 0.0], "test", k=5)
@@ -878,12 +885,8 @@ class TestVectorSearchReturnsOnlyActiveNodes:
         assert all(item_id != topic.id for item_id, _ in results)
 
     async def test_merged_nodes_never_resurface(self, store):
-        topic = await self._stored(
-            store, Topic(content="ML", source_id="s1"), [1.0, 0.0, 0.0]
-        )
-        await store.set_node_status_tx(
-            [topic], status=NodeStatus.MERGED, at=datetime.now(timezone.utc)
-        )
+        topic = await self._stored(store, Topic(content="ML", source_id="s1"), [1.0, 0.0, 0.0])
+        await store.set_node_status_tx([topic], status=NodeStatus.MERGED, at=datetime.now(UTC))
 
         results = await store.vector_search([1.0, 0.0, 0.0], "test", k=5)
 
@@ -891,9 +894,7 @@ class TestVectorSearchReturnsOnlyActiveNodes:
 
     async def test_active_nodes_are_still_returned(self, store):
         """The filter must not be so eager that it hides live nodes."""
-        topic = await self._stored(
-            store, Topic(content="ML", source_id="s1"), [1.0, 0.0, 0.0]
-        )
+        topic = await self._stored(store, Topic(content="ML", source_id="s1"), [1.0, 0.0, 0.0])
 
         results = await store.vector_search([0.9, 0.1, 0.0], "test", k=5)
 
@@ -901,19 +902,11 @@ class TestVectorSearchReturnsOnlyActiveNodes:
 
     async def test_the_type_filter_also_excludes_inactive(self, store):
         """The typed path is a separate query on both backends."""
-        topic = await self._stored(
-            store, Topic(content="ML", source_id="s1"), [1.0, 0.0, 0.0]
-        )
-        live = await self._stored(
-            store, Topic(content="AI", source_id="s1"), [0.9, 0.1, 0.0]
-        )
-        await store.set_node_status_tx(
-            [topic], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
-        )
+        topic = await self._stored(store, Topic(content="ML", source_id="s1"), [1.0, 0.0, 0.0])
+        live = await self._stored(store, Topic(content="AI", source_id="s1"), [0.9, 0.1, 0.0])
+        await store.set_node_status_tx([topic], status=NodeStatus.SUPERSEDED, at=datetime.now(UTC))
 
-        results = await store.vector_search(
-            [1.0, 0.0, 0.0], "test", k=5, node_type=NodeType.TOPIC
-        )
+        results = await store.vector_search([1.0, 0.0, 0.0], "test", k=5, node_type=NodeType.TOPIC)
 
         assert [item_id for item_id, _ in results] == [live.id]
 
@@ -934,9 +927,7 @@ class TestVectorSearchReturnsOnlyActiveNodes:
             )
             for i in range(6)
         ]
-        await store.set_node_status_tx(
-            retired, status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
-        )
+        await store.set_node_status_tx(retired, status=NodeStatus.SUPERSEDED, at=datetime.now(UTC))
         live = [
             await self._stored(
                 store,
@@ -989,9 +980,7 @@ class TestBatchedEdgeFetch:
             ("from", store.get_edges_from),
             ("to", store.get_edges_to),
         ):
-            batched = await store.get_edges_for(
-                ids, direction=direction, edge_type=edge_type
-            )
+            batched = await store.get_edges_for(ids, direction=direction, edge_type=edge_type)
             for node_id in ids:
                 expected = await single(node_id, edge_type=edge_type)
                 assert {e.id for e in batched[node_id]} == {e.id for e in expected}, (
@@ -1004,9 +993,7 @@ class TestBatchedEdgeFetch:
 
     async def test_the_type_filter_agrees_too(self, store):
         a, b, c = await self._triangle(store)
-        await self._agrees_with_singles(
-            store, [a.id, b.id, c.id], edge_type=EdgeType.SUPPORTS
-        )
+        await self._agrees_with_singles(store, [a.id, b.id, c.id], edge_type=EdgeType.SUPPORTS)
 
     async def test_every_requested_id_gets_a_key(self, store):
         """Including ids with no matching edges, and ids that are not nodes.
@@ -1015,9 +1002,7 @@ class TestBatchedEdgeFetch:
         iterate the map and a missing key would silently skip a node.
         """
         a, b, c = await self._triangle(store)
-        result = await store.get_edges_for(
-            [a.id, c.id, "no-such-node"], direction="to"
-        )
+        result = await store.get_edges_for([a.id, c.id, "no-such-node"], direction="to")
 
         assert set(result) == {a.id, c.id, "no-such-node"}
         assert result[a.id] == []  # nothing points at `a`
@@ -1081,9 +1066,7 @@ class TestBatchedEdgeFetch:
         facts = [Fact(content=f"f{i}", source_id="s1") for i in range(count)]
         for fact in facts:
             await store.store_node(fact)
-            await store.store_edge(
-                NodeEdge(src_id=fact.id, dst_id=hub.id, type=EdgeType.SUPPORTS)
-            )
+            await store.store_edge(NodeEdge(src_id=fact.id, dst_id=hub.id, type=EdgeType.SUPPORTS))
         return hub, facts
 
     @pytest.mark.parametrize("count", [40, 250])
@@ -1117,14 +1100,10 @@ class TestBatchedEdgeFetch:
         hub, facts = await self._hub_and_spokes(store, 150)
         stranger = Fact(content="stranger", source_id="s2")
         await store.store_node(stranger)
-        await store.store_edge(
-            NodeEdge(src_id=stranger.id, dst_id=hub.id, type=EdgeType.SUPPORTS)
-        )
+        await store.store_edge(NodeEdge(src_id=stranger.id, dst_id=hub.id, type=EdgeType.SUPPORTS))
 
         asked = [f.id for f in facts]
-        result = await store.get_edges_for(
-            asked, direction="from", edge_type=EdgeType.SUPPORTS
-        )
+        result = await store.get_edges_for(asked, direction="from", edge_type=EdgeType.SUPPORTS)
 
         assert set(result) == set(asked)
         assert stranger.id not in result
@@ -1133,9 +1112,7 @@ class TestBatchedEdgeFetch:
     async def test_the_large_path_still_honours_no_type_filter(self, store):
         """Without a type the scan reads the whole edge table — same contract."""
         hub, facts = await self._hub_and_spokes(store, 150)
-        extra = NodeEdge(
-            src_id=facts[0].id, dst_id=hub.id, type=EdgeType.RELATED, label="also"
-        )
+        extra = NodeEdge(src_id=facts[0].id, dst_id=hub.id, type=EdgeType.RELATED, label="also")
         await store.store_edge(extra)
 
         result = await store.get_edges_for([f.id for f in facts], direction="from")
@@ -1204,9 +1181,7 @@ class TestBatchedNodeFetch:
         here would turn a batched read into a silently different question.
         """
         nodes = await self._mixed(store)
-        await store.set_node_status_tx(
-            [nodes[1]], status=NodeStatus.ARCHIVED, at=datetime.now(timezone.utc)
-        )
+        await store.set_node_status_tx([nodes[1]], status=NodeStatus.ARCHIVED, at=datetime.now(UTC))
 
         result = await store.get_nodes([n.id for n in nodes])
 
@@ -1216,8 +1191,10 @@ class TestBatchedNodeFetch:
     async def test_nodes_come_back_whole(self, store):
         """Callers read content, value signals and metadata off these."""
         fact = Fact(
-            content="whole", source_id="s1",
-            value=ValueSignal(importance=0.9), metadata={"note": "kept"},
+            content="whole",
+            source_id="s1",
+            value=ValueSignal(importance=0.9),
+            metadata={"note": "kept"},
         )
         await store.store_node(fact)
 
@@ -1251,9 +1228,9 @@ class TestBatchedEmbeddingFetch:
         facts = [Fact(content=f"f{i}", source_id="s1") for i in range(count)]
         for i, fact in enumerate(facts):
             await store.store_node(fact)
-            await store.store_embedding(EmbeddingRecord(
-                item_id=fact.id, model_id=model_id, vector=[float(i), 0.5]
-            ))
+            await store.store_embedding(
+                EmbeddingRecord(item_id=fact.id, model_id=model_id, vector=[float(i), 0.5])
+            )
         return facts
 
     async def test_it_agrees_with_the_single_item_method(self, store):
@@ -1267,9 +1244,9 @@ class TestBatchedEmbeddingFetch:
 
     async def test_the_model_filter_agrees_too(self, store):
         fact = (await self._embedded(store, 1, model_id="model-a"))[0]
-        await store.store_embedding(EmbeddingRecord(
-            item_id=fact.id, model_id="model-b", vector=[9.0, 9.0]
-        ))
+        await store.store_embedding(
+            EmbeddingRecord(item_id=fact.id, model_id="model-b", vector=[9.0, 9.0])
+        )
 
         batched = await store.get_embeddings_for_items([fact.id], model_id="model-a")
 
@@ -1283,9 +1260,7 @@ class TestBatchedEmbeddingFetch:
         bare = Fact(content="unembedded", source_id="s1")
         await store.store_node(bare)
 
-        result = await store.get_embeddings_for_items(
-            [facts[0].id, bare.id, "no-such-item"]
-        )
+        result = await store.get_embeddings_for_items([facts[0].id, bare.id, "no-such-item"])
 
         assert set(result) == {facts[0].id, bare.id, "no-such-item"}
         assert result[bare.id] == []
@@ -1294,9 +1269,7 @@ class TestBatchedEmbeddingFetch:
 
     async def test_repeated_ids_collapse_to_one_entry(self, store):
         facts = await self._embedded(store, 2)
-        result = await store.get_embeddings_for_items(
-            [facts[0].id, facts[0].id, facts[1].id]
-        )
+        result = await store.get_embeddings_for_items([facts[0].id, facts[0].id, facts[1].id])
         assert set(result) == {facts[0].id, facts[1].id}
         assert len(result[facts[0].id]) == 1
 
@@ -1308,9 +1281,9 @@ class TestBatchedEmbeddingFetch:
         """A projection would satisfy every other test here and break ranking."""
         fact = Fact(content="v", source_id="s1")
         await store.store_node(fact)
-        await store.store_embedding(EmbeddingRecord(
-            item_id=fact.id, model_id="model-a", vector=[0.1, 0.2, 0.3]
-        ))
+        await store.store_embedding(
+            EmbeddingRecord(item_id=fact.id, model_id="model-a", vector=[0.1, 0.2, 0.3])
+        )
 
         got = (await store.get_embeddings_for_items([fact.id]))[fact.id][0]
 
@@ -1347,26 +1320,18 @@ class TestArchivalStatus:
         return node
 
     async def test_archived_nodes_excluded_from_queries(self, store):
-        keep = await self._stored(
-            store, Fact(content="kept", source_id="s1"), [1.0, 0.0, 0.0]
-        )
-        junk = await self._stored(
-            store, Fact(content="trivial", source_id="s1"), [1.0, 0.0, 0.0]
-        )
-        at = datetime.now(timezone.utc)
+        keep = await self._stored(store, Fact(content="kept", source_id="s1"), [1.0, 0.0, 0.0])
+        junk = await self._stored(store, Fact(content="trivial", source_id="s1"), [1.0, 0.0, 0.0])
+        at = datetime.now(UTC)
 
-        await store.set_node_status_tx(
-            [junk], status=NodeStatus.ARCHIVED, at=at
-        )
+        await store.set_node_status_tx([junk], status=NodeStatus.ARCHIVED, at=at)
 
         active_ids = {n.id for n in await store.query_nodes(status=NodeStatus.ACTIVE)}
         assert keep.id in active_ids
         assert junk.id not in active_ids
 
         # An exact match on the query vector: only the status filter can hide it.
-        found = {item_id for item_id, _ in await store.vector_search(
-            [1.0, 0.0, 0.0], "test", k=5
-        )}
+        found = {item_id for item_id, _ in await store.vector_search([1.0, 0.0, 0.0], "test", k=5)}
         assert keep.id in found
         assert junk.id not in found
 
@@ -1375,16 +1340,10 @@ class TestArchivalStatus:
         assert archived[0].superseded_at is not None
 
     async def test_restore_returns_an_archived_node_to_active(self, store):
-        junk = await self._stored(
-            store, Fact(content="trivial", source_id="s1"), [1.0, 0.0, 0.0]
-        )
-        await store.set_node_status_tx(
-            [junk], status=NodeStatus.ARCHIVED, at=datetime.now(timezone.utc)
-        )
+        junk = await self._stored(store, Fact(content="trivial", source_id="s1"), [1.0, 0.0, 0.0])
+        await store.set_node_status_tx([junk], status=NodeStatus.ARCHIVED, at=datetime.now(UTC))
 
-        await store.set_node_status_tx(
-            [junk], status=NodeStatus.ACTIVE, at=datetime.now(timezone.utc)
-        )
+        await store.set_node_status_tx([junk], status=NodeStatus.ACTIVE, at=datetime.now(UTC))
 
         active_ids = {n.id for n in await store.query_nodes(status=NodeStatus.ACTIVE)}
         assert junk.id in active_ids
@@ -1400,13 +1359,14 @@ class TestArchivalStatus:
             store, Fact(content="the earlier claim", source_id="s1"), [1.0, 0.0, 0.0]
         )
         new = Fact(content="what replaced it", source_id="s1")
-        at = datetime(2026, 6, 15, tzinfo=timezone.utc)
+        at = datetime(2026, 6, 15, tzinfo=UTC)
         await store.supersede_node_tx(
-            old, new,
+            old,
+            new,
             EmbeddingRecord(item_id=new.id, model_id="test", vector=[1.0, 0.0, 0.0]),
-            NodeEdge(src_id=old.id, dst_id=new.id,
-                     type=EdgeType.TEMPORALLY_FOLLOWED_BY),
-            status=NodeStatus.HISTORICAL, superseded_at=at,
+            NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.TEMPORALLY_FOLLOWED_BY),
+            status=NodeStatus.HISTORICAL,
+            superseded_at=at,
         )
 
         retired = await store.get_node(old.id)
@@ -1417,9 +1377,11 @@ class TestArchivalStatus:
         assert episode.counterpart == new.id
         assert episode.restored_at is None
 
-        came_back = datetime(2026, 6, 20, tzinfo=timezone.utc)
+        came_back = datetime(2026, 6, 20, tzinfo=UTC)
         await store.set_node_status_tx(
-            [retired], status=NodeStatus.ACTIVE, at=came_back,
+            [retired],
+            status=NodeStatus.ACTIVE,
+            at=came_back,
         )
 
         back = await store.get_node(old.id)
@@ -1434,12 +1396,12 @@ class TestArchivalStatus:
         """Archival retires a node too, and nothing superseded it. The episode
         records the retirement; `counterpart` is honestly empty rather than
         borrowed from somewhere."""
-        junk = await self._stored(
-            store, Fact(content="trivial", source_id="s1"), [1.0, 0.0, 0.0]
-        )
-        at = datetime(2026, 6, 15, tzinfo=timezone.utc)
+        junk = await self._stored(store, Fact(content="trivial", source_id="s1"), [1.0, 0.0, 0.0])
+        at = datetime(2026, 6, 15, tzinfo=UTC)
         await store.set_node_status_tx(
-            [junk], status=NodeStatus.ARCHIVED, at=at,
+            [junk],
+            status=NodeStatus.ARCHIVED,
+            at=at,
         )
 
         archived = await store.get_node(junk.id)
@@ -1454,18 +1416,18 @@ class TestArchivalStatus:
         told what was archived, and a partial flip makes that report a lie.
         """
         nodes = [
-            await self._stored(
-                store, Fact(content=f"junk {i}", source_id="s1"), [1.0, 0.0, 0.0]
-            )
+            await self._stored(store, Fact(content=f"junk {i}", source_id="s1"), [1.0, 0.0, 0.0])
             for i in range(3)
         ]
         missing = Fact(content="never stored", source_id="s1")
 
-        with pytest.raises(Exception):
+        # Blind on purpose: the storage protocol names no exception type, and the
+        # two backends refuse with different ones.
+        with pytest.raises(Exception):  # noqa: B017
             await store.set_node_status_tx(
                 [*nodes, missing],
                 status=NodeStatus.ARCHIVED,
-                at=datetime.now(timezone.utc),
+                at=datetime.now(UTC),
             )
 
         active_ids = {n.id for n in await store.query_nodes(status=NodeStatus.ACTIVE)}
@@ -1488,9 +1450,9 @@ class TestLifecycleComesFromTheStoredRow:
     way, and only the record of how it got there is short.
     """
 
-    RETIRED = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    CAME_BACK = datetime(2026, 2, 1, tzinfo=timezone.utc)
-    AGAIN = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    RETIRED = datetime(2026, 1, 1, tzinfo=UTC)
+    CAME_BACK = datetime(2026, 2, 1, tzinfo=UTC)
+    AGAIN = datetime(2026, 3, 1, tzinfo=UTC)
 
     async def _out_and_back(self, store, content: str):
         """A node that has left the active set once and returned.
@@ -1501,12 +1463,8 @@ class TestLifecycleComesFromTheStoredRow:
         node = Fact(content=content, source_id="s1")
         await store.store_node(node)
         stale = node.model_copy(deep=True)
-        await store.set_node_status_tx(
-            [node], status=NodeStatus.ARCHIVED, at=self.RETIRED
-        )
-        await store.set_node_status_tx(
-            [node], status=NodeStatus.ACTIVE, at=self.CAME_BACK
-        )
+        await store.set_node_status_tx([node], status=NodeStatus.ARCHIVED, at=self.RETIRED)
+        await store.set_node_status_tx([node], status=NodeStatus.ACTIVE, at=self.CAME_BACK)
         return node, stale
 
     async def test_supersede_appends_to_the_stored_history(self, store):
@@ -1552,9 +1510,7 @@ class TestLifecycleComesFromTheStoredRow:
     async def test_archiving_appends_to_the_stored_history(self, store):
         node, stale = await self._out_and_back(store, "trivial")
 
-        await store.set_node_status_tx(
-            [stale], status=NodeStatus.ARCHIVED, at=self.AGAIN
-        )
+        await store.set_node_status_tx([stale], status=NodeStatus.ARCHIVED, at=self.AGAIN)
 
         stored = await store.get_node(node.id)
         assert [(e.retired_at, e.restored_at) for e in stored.lifecycle] == [
@@ -1572,13 +1528,9 @@ class TestLifecycleComesFromTheStoredRow:
         node = Fact(content="trivial", source_id="s1")
         await store.store_node(node)
         stale = node.model_copy(deep=True)
-        await store.set_node_status_tx(
-            [node], status=NodeStatus.ARCHIVED, at=self.RETIRED
-        )
+        await store.set_node_status_tx([node], status=NodeStatus.ARCHIVED, at=self.RETIRED)
 
-        await store.set_node_status_tx(
-            [stale], status=NodeStatus.ACTIVE, at=self.CAME_BACK
-        )
+        await store.set_node_status_tx([stale], status=NodeStatus.ACTIVE, at=self.CAME_BACK)
 
         stored = await store.get_node(node.id)
         assert [(e.retired_at, e.restored_at) for e in stored.lifecycle] == [
@@ -1627,9 +1579,7 @@ class TestLexicalSearch:
         """
         facts = await self._facts(store)
 
-        hits = await store.text_search(
-            ["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT
-        )
+        hits = await store.text_search(["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT)
 
         assert [node_id for node_id, _ in hits] == [facts[0].id]
 
@@ -1650,13 +1600,11 @@ class TestLexicalSearch:
         both = await store.text_search(
             ["rollback", "zzzznotpresent"], corpus="nodes", node_type=NodeType.FACT
         )
-        alone = await store.text_search(
-            ["rollback"], corpus="nodes", node_type=NodeType.FACT
-        )
+        alone = await store.text_search(["rollback"], corpus="nodes", node_type=NodeType.FACT)
 
         assert [node_id for node_id, _ in both] == [node_id for node_id, _ in alone]
         assert both
-        for (_, with_absent), (_, without) in zip(both, alone):
+        for (_, with_absent), (_, without) in zip(both, alone, strict=True):
             assert with_absent == pytest.approx(without, rel=1e-9)
 
     async def test_zero_scored_matches_never_reach_fusion(self, store):
@@ -1669,9 +1617,9 @@ class TestLexicalSearch:
         """
         await self._facts(store)
 
-        assert await store.text_search(
-            ["deployment"], corpus="nodes", node_type=NodeType.FACT
-        ) == []
+        assert (
+            await store.text_search(["deployment"], corpus="nodes", node_type=NodeType.FACT) == []
+        )
 
     async def test_a_rare_term_outranks_a_less_rare_one(self, store):
         """Order parity where the scores are unambiguous, §4. Within one list
@@ -1682,17 +1630,18 @@ class TestLexicalSearch:
         Snowball and this test agree about its root, which is the one thing §4
         says not to depend on.
         """
-        await self._facts(store, [
-            "zqxx wobble",
-            "wobble frunk",
-            "grelt frunk",
-            "plink grelt",
-            "snorf plink",
-        ])
-
-        hits = await store.text_search(
-            ["zqxx", "wobble"], corpus="nodes", node_type=NodeType.FACT
+        await self._facts(
+            store,
+            [
+                "zqxx wobble",
+                "wobble frunk",
+                "grelt frunk",
+                "plink grelt",
+                "snorf plink",
+            ],
         )
+
+        hits = await store.text_search(["zqxx", "wobble"], corpus="nodes", node_type=NodeType.FACT)
 
         # `zqxx` is in one of five and `wobble` in two, so the fact holding both
         # outranks the fact holding only the commoner one.
@@ -1707,13 +1656,16 @@ class TestLexicalSearch:
         which is the honest reading, not an artefact. A backend that scored one
         merged corpus gets a single answer for both and fails here.
         """
-        await self._facts(store, [
-            "orbit correction burn scheduled",
-            "orbit decay measured again",
-            "orbit insertion completed",
-            "unrelated ground station note",
-            "another unrelated note entirely",
-        ])
+        await self._facts(
+            store,
+            [
+                "orbit correction burn scheduled",
+                "orbit decay measured again",
+                "orbit insertion completed",
+                "unrelated ground station note",
+                "another unrelated note entirely",
+            ],
+        )
         for content in (
             "orbit",
             "ground stations",
@@ -1723,12 +1675,8 @@ class TestLexicalSearch:
         ):
             await store.store_node(Topic(content=content, source_id="s1"))
 
-        facts = await store.text_search(
-            ["orbit"], corpus="nodes", node_type=NodeType.FACT
-        )
-        topics = await store.text_search(
-            ["orbit"], corpus="nodes", node_type=NodeType.TOPIC
-        )
+        facts = await store.text_search(["orbit"], corpus="nodes", node_type=NodeType.FACT)
+        topics = await store.text_search(["orbit"], corpus="nodes", node_type=NodeType.TOPIC)
 
         assert facts == []
         assert len(topics) == 1 and topics[0][1] > 0
@@ -1748,12 +1696,10 @@ class TestLexicalSearch:
         """
         facts = await self._facts(store)
         await store.set_node_status_tx(
-            [facts[0]], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
+            [facts[0]], status=NodeStatus.CORRECTED, at=datetime.now(UTC)
         )
 
-        assert await store.text_search(
-            ["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT
-        ) == []
+        assert await store.text_search(["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT) == []
         # ...and it is reachable when explicitly asked for, exactly as
         # `query_nodes` treats status.
         corrected = await store.text_search(
@@ -1765,7 +1711,8 @@ class TestLexicalSearch:
         assert [node_id for node_id, _ in corrected] == [facts[0].id]
 
     async def test_both_seed_routes_take_the_same_status_set(self, store):
-        """History-by-default retrieval: a hybrid search asks one set of both arms, so both take a set.
+        """History-by-default retrieval: a hybrid search asks one set of both
+        arms, so both take a set.
 
         The asymmetry this closes was real and one-sided — `vector_search` went
         plural for recurrence while this stayed singular — and it would have
@@ -1774,7 +1721,7 @@ class TestLexicalSearch:
         """
         facts = await self._facts(store)
         await store.set_node_status_tx(
-            [facts[0]], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
+            [facts[0]], status=NodeStatus.HISTORICAL, at=datetime.now(UTC)
         )
 
         both = await store.text_search(
@@ -1794,16 +1741,12 @@ class TestLexicalSearch:
         numbers from the same graph.
         """
         facts = await self._facts(store)
-        before = await store.text_search(
-            ["rollback"], corpus="nodes", node_type=NodeType.FACT
-        )
+        before = await store.text_search(["rollback"], corpus="nodes", node_type=NodeType.FACT)
 
         await store.set_node_status_tx(
-            [facts[2]], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
+            [facts[2]], status=NodeStatus.CORRECTED, at=datetime.now(UTC)
         )
-        after = await store.text_search(
-            ["rollback"], corpus="nodes", node_type=NodeType.FACT
-        )
+        after = await store.text_search(["rollback"], corpus="nodes", node_type=NodeType.FACT)
 
         assert [node_id for node_id, _ in before] == [node_id for node_id, _ in after]
         assert before[0][1] == pytest.approx(after[0][1], rel=1e-9)
@@ -1833,17 +1776,20 @@ class TestLexicalSearch:
         only adjacency signal available, so it decides the order and the score
         decides ties within each half.
         """
-        facts = await self._facts(store, [
-            "Ticket JIRA-4417 was closed after the deployment rollback",
-            "JIRA - 4417 JIRA - 4417 quick note",
-            "The kitchen tap on floor two has been fixed",
-            "Quarterly revenue exceeded the forecast",
-            "A note about the weather this morning",
-        ])
+        facts = await self._facts(
+            store,
+            [
+                "Ticket JIRA-4417 was closed after the deployment rollback",
+                "JIRA - 4417 JIRA - 4417 quick note",
+                "The kitchen tap on floor two has been fixed",
+                "Quarterly revenue exceeded the forecast",
+                "A note about the weather this morning",
+            ],
+        )
 
-        plain = dict(await store.text_search(
-            ["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT
-        ))
+        plain = dict(
+            await store.text_search(["JIRA-4417"], corpus="nodes", node_type=NodeType.FACT)
+        )
         verified = await store.text_search(
             ["JIRA-4417"],
             corpus="nodes",
@@ -1863,13 +1809,16 @@ class TestLexicalSearch:
         tokenize whole, so `44170` is not `4417` and the token match never offers
         it for checking. The two filters run in this order for that reason.
         """
-        facts = await self._facts(store, [
-            "Ticket JIRA-4417 was closed after the deployment rollback",
-            "Ticket JIRA-44170 tracks the follow-up work",
-            "The kitchen tap on floor two has been fixed",
-            "Quarterly revenue exceeded the forecast",
-            "A note about the weather this morning",
-        ])
+        facts = await self._facts(
+            store,
+            [
+                "Ticket JIRA-4417 was closed after the deployment rollback",
+                "Ticket JIRA-44170 tracks the follow-up work",
+                "The kitchen tap on floor two has been fixed",
+                "Quarterly revenue exceeded the forecast",
+                "A note about the weather this morning",
+            ],
+        )
 
         hits = await store.text_search(
             ["JIRA-4417"],
@@ -1882,22 +1831,21 @@ class TestLexicalSearch:
 
     async def test_text_search_without_terms_returns_nothing(self, store):
         await self._facts(store)
-        assert await store.text_search(
-            [], corpus="nodes", node_type=NodeType.FACT
-        ) == []
+        assert await store.text_search([], corpus="nodes", node_type=NodeType.FACT) == []
 
     async def test_text_search_honours_k(self, store):
-        await self._facts(store, [
-            "alpha rollback one",
-            "alpha rollback two",
-            "beta note three",
-            "gamma note four",
-            "delta note five",
-        ])
-
-        hits = await store.text_search(
-            ["rollback"], corpus="nodes", node_type=NodeType.FACT, k=1
+        await self._facts(
+            store,
+            [
+                "alpha rollback one",
+                "alpha rollback two",
+                "beta note three",
+                "gamma note four",
+                "delta note five",
+            ],
         )
+
+        hits = await store.text_search(["rollback"], corpus="nodes", node_type=NodeType.FACT, k=1)
 
         assert len(hits) == 1
 
@@ -1960,9 +1908,7 @@ class TestNodesBySource:
         await store.store_segment(segment)
         retired = Fact(content="a retired fact", source_id=segment.id)
         await store.store_node(retired)
-        await store.set_node_status_tx(
-            [retired], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
-        )
+        await store.set_node_status_tx([retired], status=NodeStatus.CORRECTED, at=datetime.now(UTC))
 
         by_source = await store.get_nodes_by_source([segment.id])
 
@@ -2024,12 +1970,10 @@ class TestTimestampsAtAWholeSecond:
     write a timestamp comparison will reach for `>=` first.
     """
 
-    WHOLE = datetime(2026, 8, 23, 12, 0, 41, tzinfo=timezone.utc)
-    HALF_PAST = datetime(2026, 8, 23, 12, 0, 41, 500000, tzinfo=timezone.utc)
+    WHOLE = datetime(2026, 8, 23, 12, 0, 41, tzinfo=UTC)
+    HALF_PAST = datetime(2026, 8, 23, 12, 0, 41, 500000, tzinfo=UTC)
 
-    async def test_a_node_created_on_a_whole_second_existed_a_moment_later(
-        self, store
-    ):
+    async def test_a_node_created_on_a_whole_second_existed_a_moment_later(self, store):
         node = Fact(content="x", source_id="s1", created_at=self.WHOLE)
         await store.store_node(node)
 
@@ -2037,19 +1981,16 @@ class TestTimestampsAtAWholeSecond:
 
         assert [n.id for n in found] == [node.id]
 
-    async def test_a_node_retired_on_a_whole_second_is_gone_a_moment_later(
-        self, store
-    ):
+    async def test_a_node_retired_on_a_whole_second_is_gone_a_moment_later(self, store):
         """The other direction, and the one that reads as *history was rewritten*
         rather than *a node is missing*."""
         node = Fact(
-            content="x", source_id="s1",
+            content="x",
+            source_id="s1",
             created_at=self.WHOLE - timedelta(days=1),
         )
         await store.store_node(node)
-        await store.set_node_status_tx(
-            [node], status=NodeStatus.CORRECTED, at=self.WHOLE
-        )
+        await store.set_node_status_tx([node], status=NodeStatus.CORRECTED, at=self.WHOLE)
 
         found = await store.query_nodes(at_time=self.HALF_PAST)
 
@@ -2059,13 +2000,12 @@ class TestTimestampsAtAWholeSecond:
         """`query_changes` reads the episodes rather than `superseded_at`, and
         compares the same way."""
         node = Fact(
-            content="x", source_id="s1",
+            content="x",
+            source_id="s1",
             created_at=self.WHOLE - timedelta(days=1),
         )
         await store.store_node(node)
-        await store.set_node_status_tx(
-            [node], status=NodeStatus.CORRECTED, at=self.WHOLE
-        )
+        await store.set_node_status_tx([node], status=NodeStatus.CORRECTED, at=self.WHOLE)
 
         changed = await store.query_changes(
             start=self.WHOLE - timedelta(seconds=1),
@@ -2078,7 +2018,8 @@ class TestTimestampsAtAWholeSecond:
         """The control. Nothing was ever wrong with the comparison itself — only
         with two renderings of it, which is why this looked fine for months."""
         node = Fact(
-            content="x", source_id="s1",
+            content="x",
+            source_id="s1",
             created_at=self.WHOLE.replace(microsecond=1),
         )
         await store.store_node(node)

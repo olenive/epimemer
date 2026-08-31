@@ -1,14 +1,13 @@
 """Tests for the event bus and instrumented storage."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from epimemer.core.types import (
-    Fact,
-    NodeEdge,
     EdgeType,
     EmbeddingRecord,
+    NodeEdge,
     RawDocument,
     Segment,
     Topic,
@@ -33,11 +32,18 @@ from epimemer.visualization.instrumented_storage import instrument_storage
 
 def _make_node_view(**overrides) -> NodeView:
     """Helper to create a NodeView with sensible defaults."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     defaults = dict(
-        node_id="n1", node_type="topic", content="test", status="active",
-        source_id="seg1", extraction_method="agent", confidence=0.5,
-        retrieved_at=now, created_at=now, graph="default",
+        node_id="n1",
+        node_type="topic",
+        content="test",
+        status="active",
+        source_id="seg1",
+        extraction_method="agent",
+        confidence=0.5,
+        retrieved_at=now,
+        created_at=now,
+        graph="default",
     )
     defaults.update(overrides)
     return NodeView(**defaults)
@@ -45,10 +51,15 @@ def _make_node_view(**overrides) -> NodeView:
 
 def _make_edge_view(**overrides) -> EdgeView:
     """Helper to create an EdgeView with sensible defaults."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     defaults = dict(
-        edge_id="e1", src_id="a", dst_id="b", edge_type="supports",
-        weight=1.0, created_at=now, graph="default",
+        edge_id="e1",
+        src_id="a",
+        dst_id="b",
+        edge_type="supports",
+        weight=1.0,
+        created_at=now,
+        graph="default",
     )
     defaults.update(overrides)
     return EdgeView(**defaults)
@@ -210,9 +221,8 @@ async def test_node_status_change_emits_event(bus, storage):
     await storage.store_node(topic)
 
     from epimemer.core.types import NodeStatus
-    await storage.set_node_status_tx(
-        [topic], status=NodeStatus.SUPERSEDED, at=datetime.now(timezone.utc)
-    )
+
+    await storage.set_node_status_tx([topic], status=NodeStatus.SUPERSEDED, at=datetime.now(UTC))
 
     assert len(received) == 1
     assert received[0].old_status == "active"

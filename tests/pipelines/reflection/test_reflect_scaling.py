@@ -13,7 +13,7 @@ What matters here is that frame resolution is proportional to *nodes*, not to
 """
 
 import contextlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -82,10 +82,13 @@ async def _facts_that_look_alike(storage, provider, count: int):
         await storage.store_node(fact)
         # States a frame, as every ingested node has since the frame requirement — absence names
         # none, so frameless nodes are never paired at all.
-        await storage.store_edge(NodeEdge(
-            src_id=fact.id, dst_id=BASE_METACONTEXT_ID,
-            type=EdgeType.HAS_METACONTEXT,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=fact.id,
+                dst_id=BASE_METACONTEXT_ID,
+                type=EdgeType.HAS_METACONTEXT,
+            )
+        )
         await storage.store_embedding(
             EmbeddingRecord(item_id=fact.id, model_id=provider.model_id, vector=vector)
         )
@@ -94,10 +97,7 @@ async def _facts_that_look_alike(storage, provider, count: int):
 
 
 class TestFrameResolutionScales:
-
-    async def test_frames_are_resolved_for_the_whole_set_at_once(
-        self, storage, embedding_provider
-    ):
+    async def test_frames_are_resolved_for_the_whole_set_at_once(self, storage, embedding_provider):
         """With 12 mutually-similar facts there are 66 candidate pairs. Resolving
         frames once per pair means 132 lookups for 12 nodes."""
         facts = await _facts_that_look_alike(storage, embedding_provider, 12)
@@ -111,9 +111,7 @@ class TestFrameResolutionScales:
             "in smaller groups than the pass already knows about"
         )
 
-    async def test_request_count_does_not_follow_the_pair_count(
-        self, storage, embedding_provider
-    ):
+    async def test_request_count_does_not_follow_the_pair_count(self, storage, embedding_provider):
         """Doubling the facts quadruples the pairs. Requests must not move."""
         await _facts_that_look_alike(storage, embedding_provider, 8)
         small: list[list[str]] = []
@@ -128,8 +126,7 @@ class TestFrameResolutionScales:
         # 8 → 16 facts: pairs go 28 → 120. A per-pair implementation would grow
         # ~4×, a per-node one 2×; one request for the set does not grow at all.
         assert len(large) == len(small), (
-            f"frame requests grew {len(small)} → {len(large)} when the pair "
-            "count quadrupled"
+            f"frame requests grew {len(small)} → {len(large)} when the pair count quadrupled"
         )
 
 
@@ -145,9 +142,7 @@ class TestContradictionScoringIsBatched:
     module docstring above says.
     """
 
-    async def test_no_python_cosine_call_per_pair(
-        self, storage, embedding_provider, monkeypatch
-    ):
+    async def test_no_python_cosine_call_per_pair(self, storage, embedding_provider, monkeypatch):
         """12 mutually-similar facts are 66 pairs, and 66 Python calls.
 
         In production each of those calls walks a 384-component vector twice to
@@ -162,9 +157,7 @@ class TestContradictionScoringIsBatched:
             calls += 1
             return 0.0  # below any threshold, so nothing downstream shifts
 
-        monkeypatch.setattr(
-            contradiction_detection, "_cosine_similarity", counted, raising=False
-        )
+        monkeypatch.setattr(contradiction_detection, "_cosine_similarity", counted, raising=False)
 
         await reflect(storage, embedding_provider)
 
@@ -209,10 +202,13 @@ async def _topics_that_look_alike(storage, provider, count: int):
         await storage.store_node(topic)
         # States a frame, as every ingested node has since the frame requirement — absence names
         # none, so frameless nodes are never paired at all.
-        await storage.store_edge(NodeEdge(
-            src_id=topic.id, dst_id=BASE_METACONTEXT_ID,
-            type=EdgeType.HAS_METACONTEXT,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=topic.id,
+                dst_id=BASE_METACONTEXT_ID,
+                type=EdgeType.HAS_METACONTEXT,
+            )
+        )
         await storage.store_embedding(
             EmbeddingRecord(item_id=topic.id, model_id=provider.model_id, vector=vector)
         )
@@ -229,13 +225,12 @@ class TestTopicScoringIsBatched:
     the comparisons are genuine work, so they move into one matrix product
     rather than being reduced.
 
-    As with the earlier profiling pass, neither test asserts a duration. The exponent does not change,
-    so what is pinned is the shape; `make bench` measures the constant.
+    As with the earlier profiling pass, neither test asserts a duration. The
+    exponent does not change, so what is pinned is the shape; `make bench`
+    measures the constant.
     """
 
-    async def test_no_python_cosine_call_per_pair(
-        self, storage, embedding_provider, monkeypatch
-    ):
+    async def test_no_python_cosine_call_per_pair(self, storage, embedding_provider, monkeypatch):
         """12 mutually-similar topics are 66 pairs, and 66 Python calls.
 
         Each one re-derives both norms from scratch, so the same topic's vector
@@ -250,9 +245,7 @@ class TestTopicScoringIsBatched:
             calls += 1
             return 0.0  # below any threshold, so nothing downstream shifts
 
-        monkeypatch.setattr(
-            topic_consolidation, "_cosine_similarity", counted, raising=False
-        )
+        monkeypatch.setattr(topic_consolidation, "_cosine_similarity", counted, raising=False)
 
         await reflect(storage, embedding_provider)
 
@@ -287,8 +280,9 @@ class TestTopicScoringIsBatched:
 class TestEdgeFetchesDoNotScaleWithTheGraph:
     """Every phase asks for its edges in bulk.
 
-    Profiling `reflect` on SurrealDB after the earlier profiling pass put it at **4,323 storage calls
-    for 400 nodes**, and the dominant sites were not the ones batching predicted:
+    Profiling `reflect` on SurrealDB after the earlier profiling pass put it at
+    **4,323 storage calls for 400 nodes**, and the dominant sites were not the
+    ones batching predicted:
     `gather_pending_review` alone issued three per node (35%), relation
     consolidation two more (18%), while the contradiction phase batching named was
     14%. All of them share one shape — iterate nodes, fetch that node's edges —
@@ -304,10 +298,7 @@ class TestEdgeFetchesDoNotScaleWithTheGraph:
         await _facts_that_look_alike(storage, provider, count)
 
         calls = 0
-        originals = {
-            name: getattr(storage, name)
-            for name in ("get_edges_from", "get_edges_to")
-        }
+        originals = {name: getattr(storage, name) for name in ("get_edges_from", "get_edges_to")}
 
         def counting(original):
             async def counted(node_id, *, edge_type=None):
@@ -326,9 +317,7 @@ class TestEdgeFetchesDoNotScaleWithTheGraph:
                 setattr(storage, name, original)
         return calls
 
-    async def test_doubling_the_graph_does_not_add_lookups(
-        self, storage, embedding_provider
-    ):
+    async def test_doubling_the_graph_does_not_add_lookups(self, storage, embedding_provider):
         """8 → 16 facts. A per-node fetch doubles; a batched one does not move.
 
         Deliberately a growth assertion rather than a budget: what is wrong is
@@ -370,10 +359,7 @@ class TestEdgeFetchesDoNotScaleWithTheGraph:
 
 
 class TestMaterialIsGatheredOnce:
-
-    async def test_a_topic_material_is_read_once_per_reflect(
-        self, storage, embedding_provider
-    ):
+    async def test_a_topic_material_is_read_once_per_reflect(self, storage, embedding_provider):
         """Split detection and the enrichment scan both need every topic's
         material. Gathering it twice doubles the read for nothing.
 
@@ -403,13 +389,11 @@ class TestMaterialIsGatheredOnce:
 
         assert counts, "no material lookups happened — test no longer exercises this"
         assert max(counts.values()) == 1, (
-            f"topic material was gathered {max(counts.values())} times in one "
-            "reflect"
+            f"topic material was gathered {max(counts.values())} times in one reflect"
         )
 
 
 class TestAnswersAreUnchanged:
-
     async def test_disjoint_frames_still_suppress_a_contradiction(
         self, storage, embedding_provider
     ):
@@ -490,9 +474,7 @@ class TestReflectWritesNothing:
     still trying to make fit inside the tool timeout.
     """
 
-    async def test_no_node_is_written_during_a_reflect(
-        self, storage, embedding_provider
-    ):
+    async def test_no_node_is_written_during_a_reflect(self, storage, embedding_provider):
         await _facts_that_look_alike(storage, embedding_provider, 6)
         topic = Topic(content="Weather", source_id="s1")
         await storage.store_node(topic)
@@ -510,9 +492,7 @@ class TestReflectWritesNothing:
         finally:
             storage.store_node = original
 
-        assert written == [], (
-            f"reflect wrote {len(written)} nodes; it must only propose"
-        )
+        assert written == [], f"reflect wrote {len(written)} nodes; it must only propose"
 
 
 class TestReflectCatchesRecurrenceItsOwnWay:
@@ -527,9 +507,7 @@ class TestReflectCatchesRecurrenceItsOwnWay:
     """
 
     async def _retire(self, storage, node, status: NodeStatus) -> None:
-        await storage.set_node_status_tx(
-            [node], status=status, at=datetime.now(timezone.utc)
-        )
+        await storage.set_node_status_tx([node], status=status, at=datetime.now(UTC))
 
     async def test_a_live_claim_repeating_a_retired_one_is_reported(
         self, storage, embedding_provider
@@ -544,9 +522,7 @@ class TestReflectCatchesRecurrenceItsOwnWay:
         statuses = {pairs[0]["fact_a"]["status"], pairs[0]["fact_b"]["status"]}
         assert statuses == {"active", "historical"}
 
-    async def test_it_is_not_filed_as_a_contradiction(
-        self, storage, embedding_provider
-    ):
+    async def test_it_is_not_filed_as_a_contradiction(self, storage, embedding_provider):
         facts = await _facts_that_look_alike(storage, embedding_provider, 2)
         await self._retire(storage, facts[0], NodeStatus.HISTORICAL)
 
@@ -554,9 +530,7 @@ class TestReflectCatchesRecurrenceItsOwnWay:
 
         assert result["contradictions"] == []
 
-    async def test_two_live_claims_stay_contradictions(
-        self, storage, embedding_provider
-    ):
+    async def test_two_live_claims_stay_contradictions(self, storage, embedding_provider):
         """Two active facts saying the same thing is redundancy or conflict —
         the older question, and still the one `contradictions` answers."""
         await _facts_that_look_alike(storage, embedding_provider, 2)
@@ -566,9 +540,7 @@ class TestReflectCatchesRecurrenceItsOwnWay:
         assert result["contradictions"]
         assert result["recurrences"] == []
 
-    async def test_a_corrected_claim_is_never_nominated(
-        self, storage, embedding_provider
-    ):
+    async def test_a_corrected_claim_is_never_nominated(self, storage, embedding_provider):
         facts = await _facts_that_look_alike(storage, embedding_provider, 2)
         await self._retire(storage, facts[0], NodeStatus.CORRECTED)
 
@@ -614,24 +586,24 @@ class TestReflectFlagsAnInferenceItsPremisesCannotSupport:
     async def _premise(self, storage, document, content, *periods):
         fact = Fact(content=content, source_id="s1", value=ValueSignal())
         await storage.store_node(fact)
-        await storage.store_edge(NodeEdge(
-            src_id=fact.id,
-            dst_id=document.id,
-            type=EdgeType.SOURCED_FROM,
-            validity=list(periods),
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=fact.id,
+                dst_id=document.id,
+                type=EdgeType.SOURCED_FROM,
+                validity=list(periods),
+            )
+        )
         return fact
 
     def _period(self, start: int, end: int):
         def at(year: int) -> dict:
             return {
                 "instant_kind": "precise",
-                "at": datetime(year, 1, 1, tzinfo=timezone.utc).isoformat(),
+                "at": datetime(year, 1, 1, tzinfo=UTC).isoformat(),
             }
 
-        return ValidityInterval(
-            start=at(start), end=at(end), basis=IntervalBasis.STATED
-        )
+        return ValidityInterval(start=at(start), end=at(end), basis=IntervalBasis.STATED)
 
     async def _drawn_across_two_periods(self, storage):
         document = RawDocument(content="A history", source="test")
@@ -649,16 +621,16 @@ class TestReflectFlagsAnInferenceItsPremisesCannotSupport:
         )
         await storage.store_node(inference)
         for premise in (early, late):
-            await storage.store_edge(NodeEdge(
-                src_id=inference.id,
-                dst_id=premise.id,
-                type=EdgeType.DERIVED_FROM,
-            ))
+            await storage.store_edge(
+                NodeEdge(
+                    src_id=inference.id,
+                    dst_id=premise.id,
+                    type=EdgeType.DERIVED_FROM,
+                )
+            )
         return inference
 
-    async def test_it_is_reported_under_its_own_key(
-        self, storage, embedding_provider
-    ):
+    async def test_it_is_reported_under_its_own_key(self, storage, embedding_provider):
         inference = await self._drawn_across_two_periods(storage)
 
         result, meta = await reflect(storage, embedding_provider)
@@ -670,9 +642,7 @@ class TestReflectFlagsAnInferenceItsPremisesCannotSupport:
         # returns — nested under `id`, which is what `_ids_within` reads.
         assert inference.id in {node.node_id for node in meta.retrieved}
 
-    async def test_an_undated_graph_reports_nothing(
-        self, storage, embedding_provider
-    ):
+    async def test_an_undated_graph_reports_nothing(self, storage, embedding_provider):
         """Silence is the common case, and the reason the flag is worth reading."""
         await _facts_that_look_alike(storage, embedding_provider, 3)
 
@@ -699,7 +669,7 @@ class TestReflectProposesWhereOnePeriodEndsAndTheNextBegins:
             def at(year: int) -> dict:
                 return {
                     "instant_kind": "precise",
-                    "at": datetime(year, 1, 1, tzinfo=timezone.utc).isoformat(),
+                    "at": datetime(year, 1, 1, tzinfo=UTC).isoformat(),
                 }
 
             return ValidityInterval(
@@ -709,11 +679,13 @@ class TestReflectProposesWhereOnePeriodEndsAndTheNextBegins:
             )
 
         leningrad = Fact(
-            content="the city is called Leningrad", source_id="s1",
+            content="the city is called Leningrad",
+            source_id="s1",
             value=ValueSignal(),
         )
         petersburg = Fact(
-            content="the city is called Saint Petersburg", source_id="s1",
+            content="the city is called Saint Petersburg",
+            source_id="s1",
             value=ValueSignal(),
         )
         for node, document, span in (
@@ -721,22 +693,27 @@ class TestReflectProposesWhereOnePeriodEndsAndTheNextBegins:
             (petersburg, newer, period(1991)),
         ):
             await storage.store_node(node)
-            await storage.store_edge(NodeEdge(
-                src_id=node.id, dst_id=document.id,
-                type=EdgeType.SOURCED_FROM, validity=[span],
-            ))
+            await storage.store_edge(
+                NodeEdge(
+                    src_id=node.id,
+                    dst_id=document.id,
+                    type=EdgeType.SOURCED_FROM,
+                    validity=[span],
+                )
+            )
         await storage.set_node_status_tx(
-            [leningrad], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
+            [leningrad], status=NodeStatus.HISTORICAL, at=datetime.now(UTC)
         )
-        await storage.store_edge(NodeEdge(
-            src_id=leningrad.id, dst_id=petersburg.id,
-            type=EdgeType.TEMPORALLY_FOLLOWED_BY,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=leningrad.id,
+                dst_id=petersburg.id,
+                type=EdgeType.TEMPORALLY_FOLLOWED_BY,
+            )
+        )
         return leningrad, older
 
-    async def test_it_is_reported_under_its_own_key(
-        self, storage, embedding_provider
-    ):
+    async def test_it_is_reported_under_its_own_key(self, storage, embedding_provider):
         leningrad, older = await self._renaming(storage)
 
         result, meta = await reflect(storage, embedding_provider)
@@ -747,25 +724,19 @@ class TestReflectProposesWhereOnePeriodEndsAndTheNextBegins:
         assert proposal["at"].startswith("1991")
         assert leningrad.id in {node.node_id for node in meta.retrieved}
 
-    async def test_reflect_alone_changes_nothing(
-        self, storage, embedding_provider
-    ):
+    async def test_reflect_alone_changes_nothing(self, storage, embedding_provider):
         leningrad, older = await self._renaming(storage)
 
         await reflect(storage, embedding_provider)
 
         [edge] = [
             edge
-            for edge in await storage.get_edges_from(
-                leningrad.id, edge_type=EdgeType.SOURCED_FROM
-            )
+            for edge in await storage.get_edges_from(leningrad.id, edge_type=EdgeType.SOURCED_FROM)
             if edge.dst_id == older.id
         ]
         assert edge.validity[0].end.instant_kind == "unknown"
 
-    async def test_apply_reflection_writes_the_one_you_accept(
-        self, storage, embedding_provider
-    ):
+    async def test_apply_reflection_writes_the_one_you_accept(self, storage, embedding_provider):
         from epimemer.mcp.tools import apply_reflection
 
         leningrad, older = await self._renaming(storage)
@@ -773,44 +744,46 @@ class TestReflectProposesWhereOnePeriodEndsAndTheNextBegins:
         [proposal] = result["boundary_proposals"]
 
         applied, _ = await apply_reflection(
-            storage, embedding_provider,
-            boundaries=[{
-                "node_id": proposal["node"]["id"],
-                "source_id": proposal["source_id"],
-                "endpoint": proposal["endpoint"],
-                "at": proposal["at"],
-                "timeline_id": proposal["timeline_id"],
-            }],
+            storage,
+            embedding_provider,
+            boundaries=[
+                {
+                    "node_id": proposal["node"]["id"],
+                    "source_id": proposal["source_id"],
+                    "endpoint": proposal["endpoint"],
+                    "at": proposal["at"],
+                    "timeline_id": proposal["timeline_id"],
+                }
+            ],
         )
 
         assert applied["boundaries_applied"] == 1
         assert applied["boundaries_refused"] == []
         [edge] = [
             edge
-            for edge in await storage.get_edges_from(
-                leningrad.id, edge_type=EdgeType.SOURCED_FROM
-            )
+            for edge in await storage.get_edges_from(leningrad.id, edge_type=EdgeType.SOURCED_FROM)
             if edge.dst_id == older.id
         ]
         assert edge.validity[0].end.at.year == 1991
         assert edge.validity[0].basis is IntervalBasis.INFERRED
 
-    async def test_a_refusal_comes_back_out_loud(
-        self, storage, embedding_provider
-    ):
+    async def test_a_refusal_comes_back_out_loud(self, storage, embedding_provider):
         """A boundary silently not applied is worse than one rejected loudly."""
         from epimemer.mcp.tools import apply_reflection
 
         leningrad, older = await self._renaming(storage)
 
         applied, _ = await apply_reflection(
-            storage, embedding_provider,
-            boundaries=[{
-                "node_id": leningrad.id,
-                "source_id": older.id,
-                "endpoint": "end",
-                "at": "1900-01-01T00:00:00+00:00",
-            }],
+            storage,
+            embedding_provider,
+            boundaries=[
+                {
+                    "node_id": leningrad.id,
+                    "source_id": older.id,
+                    "endpoint": "end",
+                    "at": "1900-01-01T00:00:00+00:00",
+                }
+            ],
         )
 
         assert applied["boundaries_applied"] == 0
@@ -818,9 +791,7 @@ class TestReflectProposesWhereOnePeriodEndsAndTheNextBegins:
         assert refusal["node_id"] == leningrad.id
         assert "must start before it ends" in refusal["reason"]
 
-    async def test_an_undated_graph_proposes_nothing(
-        self, storage, embedding_provider
-    ):
+    async def test_an_undated_graph_proposes_nothing(self, storage, embedding_provider):
         await _facts_that_look_alike(storage, embedding_provider, 3)
 
         result, _ = await reflect(storage, embedding_provider)

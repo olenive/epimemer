@@ -20,6 +20,7 @@ is a flake, and the measurement belongs in `make bench`.
 """
 
 import math
+from datetime import UTC
 
 import pytest
 
@@ -67,13 +68,20 @@ async def _fanned_facts(storage, provider, count: int) -> list[Fact]:
         # Every node states a frame, as every ingested one has since the frame requirement:
         # absence names none, so two frameless nodes share none and the
         # contradiction sweep would skip every pair here.
-        await storage.store_edge(NodeEdge(
-            src_id=fact.id, dst_id=BASE_METACONTEXT_ID,
-            type=EdgeType.HAS_METACONTEXT,
-        ))
-        await storage.store_embedding(EmbeddingRecord(
-            item_id=fact.id, model_id=provider.model_id, vector=_fanned_vector(i),
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=fact.id,
+                dst_id=BASE_METACONTEXT_ID,
+                type=EdgeType.HAS_METACONTEXT,
+            )
+        )
+        await storage.store_embedding(
+            EmbeddingRecord(
+                item_id=fact.id,
+                model_id=provider.model_id,
+                vector=_fanned_vector(i),
+            )
+        )
         facts.append(fact)
     return facts
 
@@ -88,13 +96,20 @@ async def _identical_topics(storage, provider, count: int) -> list[Topic]:
         # Every node states a frame, as every ingested one has since the frame requirement:
         # absence names none, so two frameless nodes share none and the
         # contradiction sweep would skip every pair here.
-        await storage.store_edge(NodeEdge(
-            src_id=topic.id, dst_id=BASE_METACONTEXT_ID,
-            type=EdgeType.HAS_METACONTEXT,
-        ))
-        await storage.store_embedding(EmbeddingRecord(
-            item_id=topic.id, model_id=provider.model_id, vector=vector,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=topic.id,
+                dst_id=BASE_METACONTEXT_ID,
+                type=EdgeType.HAS_METACONTEXT,
+            )
+        )
+        await storage.store_embedding(
+            EmbeddingRecord(
+                item_id=topic.id,
+                model_id=provider.model_id,
+                vector=vector,
+            )
+        )
         topics.append(topic)
     return topics
 
@@ -106,18 +121,14 @@ class TestThePairListsAreBounded:
     async def test_contradictions_stop_at_the_cap(self, storage, embedding_provider):
         await _fanned_facts(storage, embedding_provider, 30)
 
-        result, _ = await reflect(
-            storage, embedding_provider, max_nominations=10
-        )
+        result, _ = await reflect(storage, embedding_provider, max_nominations=10)
 
         assert len(result["contradictions"]) == 10
 
     async def test_topic_pairs_stop_at_the_cap(self, storage, embedding_provider):
         await _identical_topics(storage, embedding_provider, 30)
 
-        result, _ = await reflect(
-            storage, embedding_provider, max_nominations=10
-        )
+        result, _ = await reflect(storage, embedding_provider, max_nominations=10)
 
         assert len(result["similar_pairs"]) == 10
 
@@ -139,24 +150,18 @@ class TestItSaysWhenItCut:
     async def test_a_truncated_list_is_named(self, storage, embedding_provider):
         await _fanned_facts(storage, embedding_provider, 30)
 
-        result, _ = await reflect(
-            storage, embedding_provider, max_nominations=10
-        )
+        result, _ = await reflect(storage, embedding_provider, max_nominations=10)
 
         assert result["truncated"] == ["contradictions"]
 
-    async def test_an_untruncated_response_names_nothing(
-        self, storage, embedding_provider
-    ):
+    async def test_an_untruncated_response_names_nothing(self, storage, embedding_provider):
         await _fanned_facts(storage, embedding_provider, 3)
 
         result, _ = await reflect(storage, embedding_provider)
 
         assert result["truncated"] == []
 
-    async def test_a_list_exactly_at_the_cap_is_not_truncated(
-        self, storage, embedding_provider
-    ):
+    async def test_a_list_exactly_at_the_cap_is_not_truncated(self, storage, embedding_provider):
         """Off-by-one in the direction that lies: reporting a cut that did not
         happen sends a caller looking for nominees that do not exist."""
         await _fanned_facts(storage, embedding_provider, 3)  # exactly 3 pairs
@@ -166,9 +171,7 @@ class TestItSaysWhenItCut:
         assert len(result["contradictions"]) == 3
         assert result["truncated"] == []
 
-    async def test_every_capped_key_is_a_key_of_the_response(
-        self, storage, embedding_provider
-    ):
+    async def test_every_capped_key_is_a_key_of_the_response(self, storage, embedding_provider):
         """`CAPPED_KEYS` naming a list that no longer exists would cap nothing
         and say nothing, silently."""
         result, _ = await reflect(storage, embedding_provider)
@@ -180,14 +183,10 @@ class TestTheSurvivorsAreTheHighestScoring:
     """Top-k, not first-k. A cap that kept an arbitrary slice would hand the
     agent the weakest candidates as readily as the strongest."""
 
-    async def test_the_kept_pairs_are_the_closest_ones(
-        self, storage, embedding_provider
-    ):
+    async def test_the_kept_pairs_are_the_closest_ones(self, storage, embedding_provider):
         await _fanned_facts(storage, embedding_provider, 30)
 
-        result, _ = await reflect(
-            storage, embedding_provider, max_nominations=10
-        )
+        result, _ = await reflect(storage, embedding_provider, max_nominations=10)
 
         kept = [pair["similarity"] for pair in result["contradictions"]]
         assert kept == sorted(kept, reverse=True), "the response is not score-ordered"
@@ -204,16 +203,14 @@ class TestRecurrencesAreCappedOnTheirOwn:
     async def test_a_recurrence_survives_a_full_contradiction_list(
         self, storage, embedding_provider
     ):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         facts = await _fanned_facts(storage, embedding_provider, 30)
         await storage.set_node_status_tx(
-            [facts[0]], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
+            [facts[0]], status=NodeStatus.HISTORICAL, at=datetime.now(UTC)
         )
 
-        result, _ = await reflect(
-            storage, embedding_provider, max_nominations=5
-        )
+        result, _ = await reflect(storage, embedding_provider, max_nominations=5)
 
         assert len(result["contradictions"]) == 5
         assert result["recurrences"], (
@@ -240,17 +237,12 @@ class TestTheDefaultDoesNotFireOnAnOrdinaryGraph:
 
 
 class TestTheMetaCountsWhatWasReturned:
-
-    async def test_nodes_returned_follows_the_capped_lists(
-        self, storage, embedding_provider
-    ):
+    async def test_nodes_returned_follows_the_capped_lists(self, storage, embedding_provider):
         """`retrieved` is what the response carried, never what reflect looked
         at — the rule §2 already states for this tool."""
         await _fanned_facts(storage, embedding_provider, 30)
 
-        result, meta = await reflect(
-            storage, embedding_provider, max_nominations=10
-        )
+        result, meta = await reflect(storage, embedding_provider, max_nominations=10)
 
         assert meta.nodes_returned == sum(
             len(value)

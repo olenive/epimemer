@@ -30,9 +30,7 @@ def embedding_provider() -> MockEmbeddingProvider:
 async def _store_topic_with_embedding(storage, model_id, content, vector):
     t = Topic(content=content, source_id="s1")
     await storage.store_node(t)
-    await storage.store_embedding(
-        EmbeddingRecord(item_id=t.id, model_id=model_id, vector=vector)
-    )
+    await storage.store_embedding(EmbeddingRecord(item_id=t.id, model_id=model_id, vector=vector))
     return t
 
 
@@ -54,15 +52,20 @@ async def _build_hierarchy(storage, embedding_provider, query_vector):
     them and only the annotation logic decides what each node carries.
     """
     root = await _store_topic_with_embedding(
-        storage, embedding_provider.model_id, "root topic", query_vector,
+        storage,
+        embedding_provider.model_id,
+        "root topic",
+        query_vector,
     )
     await apply_reflection(
-        storage, embedding_provider,
+        storage,
+        embedding_provider,
         splits=[{"topic_id": root.id, "subtopics": ["mid one", "mid two"]}],
     )
     mids = await _children_of(storage, root.id)
     await apply_reflection(
-        storage, embedding_provider,
+        storage,
+        embedding_provider,
         splits=[{"topic_id": mids["mid one"].id, "subtopics": ["leaf a", "leaf b"]}],
     )
     leaves = await _children_of(storage, mids["mid one"].id)
@@ -70,37 +73,37 @@ async def _build_hierarchy(storage, embedding_provider, query_vector):
 
 
 class TestSearchHierarchyAnnotations:
-
     async def test_annotates_parents_and_subtopics(self, storage, embedding_provider):
         qvec = (await embedding_provider.embed(["anything"]))[0]
         root, mids, leaves = await _build_hierarchy(storage, embedding_provider, qvec)
 
         result, _ = await search(
-            "anything", storage, embedding_provider, k=20, graph_hops=0,
+            "anything",
+            storage,
+            embedding_provider,
+            k=20,
+            graph_hops=0,
         )
         by_id = {n["id"]: n for n in result["nodes"]}
 
         # The root is nobody's child, but it has both mid topics under it.
         assert "parents" not in by_id[root.id]
         assert {s["id"] for s in by_id[root.id]["subtopics"]} == {
-            mids["mid one"].id, mids["mid two"].id
+            mids["mid one"].id,
+            mids["mid two"].id,
         }
 
         # A mid topic sits in the middle: one parent above, two leaves below.
         mid_one = by_id[mids["mid one"].id]
         assert [p["id"] for p in mid_one["parents"]] == [root.id]
-        assert {s["id"] for s in mid_one["subtopics"]} == {
-            leaves["leaf a"].id, leaves["leaf b"].id
-        }
+        assert {s["id"] for s in mid_one["subtopics"]} == {leaves["leaf a"].id, leaves["leaf b"].id}
 
         # A leaf has a parent and nothing below it.
         leaf_a = by_id[leaves["leaf a"].id]
         assert [p["id"] for p in leaf_a["parents"]] == [mids["mid one"].id]
         assert "subtopics" not in leaf_a
 
-    async def test_annotations_carry_previews_not_full_content(
-        self, storage, embedding_provider
-    ):
+    async def test_annotations_carry_previews_not_full_content(self, storage, embedding_provider):
         """Annotations exist so the agent can decide whether to drill.
 
         Inlining the neighbour's full material would defeat that — the caller
@@ -109,16 +112,24 @@ class TestSearchHierarchyAnnotations:
         qvec = (await embedding_provider.embed(["anything"]))[0]
         long_content = "x" * 500
         parent = await _store_topic_with_embedding(
-            storage, embedding_provider.model_id, long_content, qvec,
+            storage,
+            embedding_provider.model_id,
+            long_content,
+            qvec,
         )
         await apply_reflection(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             splits=[{"topic_id": parent.id, "subtopics": ["child"]}],
         )
         children = await _children_of(storage, parent.id)
 
         result, _ = await search(
-            "anything", storage, embedding_provider, k=20, graph_hops=0,
+            "anything",
+            storage,
+            embedding_provider,
+            k=20,
+            graph_hops=0,
         )
         by_id = {n["id"]: n for n in result["nodes"]}
 
@@ -127,38 +138,43 @@ class TestSearchHierarchyAnnotations:
         assert len(preview) <= 101  # 100 chars plus the ellipsis
         assert long_content.startswith(preview[:100])
 
-    async def test_unrelated_topics_carry_no_hierarchy_keys(
-        self, storage, embedding_provider
-    ):
+    async def test_unrelated_topics_carry_no_hierarchy_keys(self, storage, embedding_provider):
         """A topic outside any hierarchy must not gain empty annotation keys."""
         qvec = (await embedding_provider.embed(["anything"]))[0]
         lone = await _store_topic_with_embedding(
-            storage, embedding_provider.model_id, "lone topic", qvec,
+            storage,
+            embedding_provider.model_id,
+            "lone topic",
+            qvec,
         )
 
         result, _ = await search(
-            "anything", storage, embedding_provider, k=20, graph_hops=0,
+            "anything",
+            storage,
+            embedding_provider,
+            k=20,
+            graph_hops=0,
         )
         node = next(n for n in result["nodes"] if n["id"] == lone.id)
 
         assert "parents" not in node
         assert "subtopics" not in node
 
-    async def test_non_topic_nodes_are_not_annotated(
-        self, storage, embedding_provider
-    ):
+    async def test_non_topic_nodes_are_not_annotated(self, storage, embedding_provider):
         """Only Topics participate in SUBTOPIC_OF; facts must be left alone."""
         qvec = (await embedding_provider.embed(["anything"]))[0]
         f = Fact(content="a fact", source_id="s1")
         await storage.store_node(f)
         await storage.store_embedding(
-            EmbeddingRecord(
-                item_id=f.id, model_id=embedding_provider.model_id, vector=qvec
-            )
+            EmbeddingRecord(item_id=f.id, model_id=embedding_provider.model_id, vector=qvec)
         )
 
         result, _ = await search(
-            "anything", storage, embedding_provider, k=20, graph_hops=0,
+            "anything",
+            storage,
+            embedding_provider,
+            k=20,
+            graph_hops=0,
         )
         node = next(n for n in result["nodes"] if n["id"] == f.id)
 
@@ -167,10 +183,7 @@ class TestSearchHierarchyAnnotations:
 
 
 class TestTopicTree:
-
-    async def test_returns_ancestors_and_nested_descendants(
-        self, storage, embedding_provider
-    ):
+    async def test_returns_ancestors_and_nested_descendants(self, storage, embedding_provider):
         qvec = (await embedding_provider.embed(["anything"]))[0]
         root, mids, leaves = await _build_hierarchy(storage, embedding_provider, qvec)
 
@@ -179,36 +192,24 @@ class TestTopicTree:
         assert result["topic"]["id"] == root.id
         assert result["ancestors"] == []
 
-        mid_one = next(
-            s for s in result["subtopics"] if s["id"] == mids["mid one"].id
-        )
-        assert {c["id"] for c in mid_one["subtopics"]} == {
-            leaves["leaf a"].id, leaves["leaf b"].id
-        }
-        mid_two = next(
-            s for s in result["subtopics"] if s["id"] == mids["mid two"].id
-        )
+        mid_one = next(s for s in result["subtopics"] if s["id"] == mids["mid one"].id)
+        assert {c["id"] for c in mid_one["subtopics"]} == {leaves["leaf a"].id, leaves["leaf b"].id}
+        mid_two = next(s for s in result["subtopics"] if s["id"] == mids["mid two"].id)
         assert mid_two["subtopics"] == []
 
         # root + 2 mids + 2 leaves
         assert meta.nodes_returned == 5
 
-    async def test_ancestors_run_from_nearest_parent_to_root(
-        self, storage, embedding_provider
-    ):
+    async def test_ancestors_run_from_nearest_parent_to_root(self, storage, embedding_provider):
         qvec = (await embedding_provider.embed(["anything"]))[0]
         root, mids, leaves = await _build_hierarchy(storage, embedding_provider, qvec)
 
         result, _ = await topic_tree(leaves["leaf a"].id, storage, depth=2)
 
-        assert [a["id"] for a in result["ancestors"]] == [
-            mids["mid one"].id, root.id
-        ]
+        assert [a["id"] for a in result["ancestors"]] == [mids["mid one"].id, root.id]
         assert result["subtopics"] == []
 
-    async def test_depth_limits_descent_and_flags_more(
-        self, storage, embedding_provider
-    ):
+    async def test_depth_limits_descent_and_flags_more(self, storage, embedding_provider):
         """At the depth limit, a node with children says so rather than lying.
 
         Without the flag the caller cannot tell a true leaf from a truncated
@@ -219,12 +220,8 @@ class TestTopicTree:
 
         result, _ = await topic_tree(root.id, storage, depth=1)
 
-        mid_one = next(
-            s for s in result["subtopics"] if s["id"] == mids["mid one"].id
-        )
-        mid_two = next(
-            s for s in result["subtopics"] if s["id"] == mids["mid two"].id
-        )
+        mid_one = next(s for s in result["subtopics"] if s["id"] == mids["mid one"].id)
+        mid_two = next(s for s in result["subtopics"] if s["id"] == mids["mid two"].id)
         assert mid_one["subtopics"] == []
         assert mid_one["has_more"] is True
         # mid two really is a leaf, so it must not claim there is more.
@@ -234,10 +231,14 @@ class TestTopicTree:
         qvec = (await embedding_provider.embed(["anything"]))[0]
         long_content = "y" * 500
         parent = await _store_topic_with_embedding(
-            storage, embedding_provider.model_id, long_content, qvec,
+            storage,
+            embedding_provider.model_id,
+            long_content,
+            qvec,
         )
         await apply_reflection(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             splits=[{"topic_id": parent.id, "subtopics": ["child"]}],
         )
 

@@ -17,7 +17,7 @@ import contextlib
 import json
 import logging
 import sys
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from websockets.asyncio.client import connect as ws_connect
 
@@ -90,9 +90,7 @@ async def start_hub_client(
         try:
             async with read_turn():
                 if req.method == "list_graphs":
-                    result = await list_graphs_result(
-                        raw_storage, default_reflect_threshold
-                    )
+                    result = await list_graphs_result(raw_storage, default_reflect_threshold)
                 elif req.method == "snapshot":
                     result = await assemble_snapshot(raw_storage, req.params["graph"])
                 elif req.method == "retrievals":
@@ -136,9 +134,7 @@ async def start_hub_client(
         await ws.send(Register(info=state["info"]).model_dump_json())
         sender = asyncio.create_task(_sender(ws))
         receiver = asyncio.create_task(_receiver(ws))
-        done, pending = await asyncio.wait(
-            {sender, receiver}, return_when=asyncio.FIRST_COMPLETED
-        )
+        done, pending = await asyncio.wait({sender, receiver}, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
         for task in pending:

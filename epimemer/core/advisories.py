@@ -84,7 +84,7 @@ class AdvisoryStance(str, Enum):
 # claim is the failure the frame requirement exists to prevent. A test asserts
 # both directions, so a kind added without a stance fails rather than defaulting
 # to the safer-sounding half.
-ADVISORY_STANCE: dict["AdvisoryKind", AdvisoryStance] = {
+ADVISORY_STANCE: dict[AdvisoryKind, AdvisoryStance] = {
     AdvisoryKind.DISJOINT_PREMISES: AdvisoryStance.OBJECTS,
     AdvisoryKind.CROSS_FRAME: AdvisoryStance.OBJECTS,
     AdvisoryKind.SAME_FRAME_VARIANT: AdvisoryStance.OBJECTS,
@@ -166,8 +166,7 @@ def notify_user(policy: WarningPolicy, advisories: list[Advisory]) -> bool:
     with no text to relay is an instruction nobody can follow.
     """
     return any(
-        resolved_action(policy, advisory.kind) is AdvisoryAction.FLAG
-        for advisory in advisories
+        resolved_action(policy, advisory.kind) is AdvisoryAction.FLAG for advisory in advisories
     )
 
 
@@ -188,7 +187,8 @@ def surfaced(policy: WarningPolicy, advisories: list[Advisory]) -> list[Advisory
     if policy.surface:
         return list(advisories)
     return [
-        advisory for advisory in advisories
+        advisory
+        for advisory in advisories
         if policy.by_kind.get(advisory.kind) is AdvisoryAction.FLAG
     ]
 
@@ -201,7 +201,4 @@ def objects_to_the_call(advisories: list[Advisory]) -> bool:
     a graph with warnings muted should still answer *what was decided while
     nobody was looking*.
     """
-    return any(
-        ADVISORY_STANCE[advisory.kind] is AdvisoryStance.OBJECTS
-        for advisory in advisories
-    )
+    return any(ADVISORY_STANCE[advisory.kind] is AdvisoryStance.OBJECTS for advisory in advisories)

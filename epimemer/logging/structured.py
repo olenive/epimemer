@@ -6,7 +6,7 @@ for recording every MCP tool invocation with timing and metadata.
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
@@ -15,7 +15,7 @@ class ToolInvocationLog(BaseModel):
     """Structured log entry for an MCP tool invocation."""
 
     tool_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     input_summary: str = ""
     output_summary: str = ""
     latency_ms: float = 0.0
@@ -28,7 +28,7 @@ class JSONFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         entry = {
-            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),

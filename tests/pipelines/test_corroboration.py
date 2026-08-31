@@ -1,7 +1,8 @@
 """Corroboration derived at read time — how many *independent* sources say this.
 
-read-time corroboration. The `ValueSignal` docs promised two things and the confidence prior gave the
-first one a home: *"how well-supported by evidence"* became the caller-supplied
+read-time corroboration. The `ValueSignal` docs promised two things and the
+confidence prior gave the first one a home: *"how well-supported by evidence"*
+became the caller-supplied
 `confidence` prior. This is the second, *"multiple independent sources increase
 confidence"* — and it is a fact about the **graph** rather than about the
 material, so it changes whenever the graph changes.
@@ -25,12 +26,13 @@ checked, where a wrong merge destroys a node and cannot be undone.
 
 The inaccuracy the entry shipped with — "the city is called Leningrad" and
 "the city is called Saint Petersburg" are similar, so they corroborated each
-other — is closed by the successor-corroboration fix, at the bottom of this file. The rule it applies is
-the validity model's, which was expected to remove the defect and did not until something read
+other — is closed by the successor-corroboration fix, at the bottom of this
+file. The rule it applies is the validity model's, which was expected to
+remove the defect and did not until something read
 the intervals it stores.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from epimemer.core.temporal import IntervalBasis, ValidityInterval
 from epimemer.core.types import (
@@ -75,10 +77,15 @@ async def _document(storage, source: str, publisher: str | None = None) -> RawDo
     await storage.store_document(doc)
     if publisher is not None:
         entity = await _publisher_entity(storage, publisher)
-        await storage.store_edge(NodeEdge(
-            src_id=doc.id, dst_id=entity.id, type=EdgeType.RELATED,
-            label="published_by", kind="attribution",
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=doc.id,
+                dst_id=entity.id,
+                type=EdgeType.RELATED,
+                label="published_by",
+                kind="attribution",
+            )
+        )
     return doc
 
 
@@ -86,9 +93,9 @@ async def _fact(storage, content: str, doc: RawDocument | None = None) -> Fact:
     fact = Fact(content=content, source_id="seg-1", value=ValueSignal())
     await storage.store_node(fact)
     if doc is not None:
-        await storage.store_edge(NodeEdge(
-            src_id=fact.id, dst_id=doc.id, type=EdgeType.SOURCED_FROM
-        ))
+        await storage.store_edge(
+            NodeEdge(src_id=fact.id, dst_id=doc.id, type=EdgeType.SOURCED_FROM)
+        )
     return fact
 
 
@@ -96,9 +103,9 @@ async def _inference(storage, content: str, doc: RawDocument | None = None) -> I
     node = Inference(content=content, source_id="seg-1", value=ValueSignal())
     await storage.store_node(node)
     if doc is not None:
-        await storage.store_edge(NodeEdge(
-            src_id=node.id, dst_id=doc.id, type=EdgeType.SOURCED_FROM
-        ))
+        await storage.store_edge(
+            NodeEdge(src_id=node.id, dst_id=doc.id, type=EdgeType.SOURCED_FROM)
+        )
     return node
 
 
@@ -117,7 +124,7 @@ def _period(
             return {"instant_kind": "unknown"}
         return {
             "instant_kind": "precise",
-            "at": datetime(year, 1, 1, tzinfo=timezone.utc).isoformat(),
+            "at": datetime(year, 1, 1, tzinfo=UTC).isoformat(),
         }
 
     return ValidityInterval(
@@ -128,9 +135,7 @@ def _period(
     )
 
 
-async def _dated_fact(
-    storage, content: str, doc: RawDocument, *periods: ValidityInterval
-) -> Fact:
+async def _dated_fact(storage, content: str, doc: RawDocument, *periods: ValidityInterval) -> Fact:
     """A fact whose *source note* carries the periods that source asserts.
 
     The periods ride on the `sourced_from` edge rather than on the node (the validity model
@@ -140,19 +145,19 @@ async def _dated_fact(
     """
     fact = Fact(content=content, source_id="seg-1", value=ValueSignal())
     await storage.store_node(fact)
-    await storage.store_edge(NodeEdge(
-        src_id=fact.id,
-        dst_id=doc.id,
-        type=EdgeType.SOURCED_FROM,
-        validity=list(periods),
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=fact.id,
+            dst_id=doc.id,
+            type=EdgeType.SOURCED_FROM,
+            validity=list(periods),
+        )
+    )
     return fact
 
 
 async def _join(storage, src, dst, edge_type: EdgeType) -> None:
-    await storage.store_edge(
-        NodeEdge(src_id=src.id, dst_id=dst.id, type=edge_type)
-    )
+    await storage.store_edge(NodeEdge(src_id=src.id, dst_id=dst.id, type=edge_type))
 
 
 async def _count(storage, node) -> int:
@@ -170,9 +175,7 @@ class TestCountingDistinctSources:
     is `docs/RETRIEVAL.md` §8.
     """
 
-    async def test_three_supporters_from_one_document_score_one(
-        self, storage
-    ):
+    async def test_three_supporters_from_one_document_score_one(self, storage):
         """The motivating case, and the whole argument against in-degree.
 
         Three nodes point at the claim, so its in-degree is three and its
@@ -186,9 +189,7 @@ class TestCountingDistinctSources:
 
         assert await _count(storage, claim) == 1
 
-    async def test_two_documents_with_distinct_publishers_score_two(
-        self, storage
-    ):
+    async def test_two_documents_with_distinct_publishers_score_two(self, storage):
         """Independence is the content of the claim, so this is the real 2."""
         bbc = await _document(storage, "bbc-report", publisher="BBC")
         reuters = await _document(storage, "reuters-report", publisher="Reuters")
@@ -330,9 +331,7 @@ class TestTheAnswerIsAuditable:
         [result] = (await corroboration_for([claim.id], storage)).values()
 
         assert result.count == len(result.sources) == 2
-        contributed = {
-            node_id for source in result.sources for node_id in source.node_ids
-        }
+        contributed = {node_id for source in result.sources for node_id in source.node_ids}
         assert contributed == {claim.id, elsewhere.id}
 
     async def test_a_source_names_its_publisher_and_its_documents(self, storage):
@@ -352,9 +351,7 @@ class TestTheAnswerIsAuditable:
         assert source.publisher == "BBC"
         assert set(source.document_ids) == {morning.id, evening.id}
 
-    async def test_the_unattributed_fallback_is_reported_not_hidden(
-        self, storage
-    ):
+    async def test_the_unattributed_fallback_is_reported_not_hidden(self, storage):
         """Whether the caller bothered to attribute is an *ingest habit*, and
         it shows up here as a corroboration difference — the `relevance`
         confound in miniature. The entry's verdict is to state it in the
@@ -443,9 +440,7 @@ class TestTheNonInteractionWithConfidence:
     must be shown not to interact.
     """
 
-    async def test_hedged_sources_count_the_same_as_confident_ones(
-        self, storage
-    ):
+    async def test_hedged_sources_count_the_same_as_confident_ones(self, storage):
         async def claim_from(publisher: str, confidence: float) -> Fact:
             doc = await _document(storage, f"{publisher}-report", publisher=publisher)
             fact = Fact(
@@ -454,9 +449,9 @@ class TestTheNonInteractionWithConfidence:
                 value=ValueSignal(confidence=confidence),
             )
             await storage.store_node(fact)
-            await storage.store_edge(NodeEdge(
-                src_id=fact.id, dst_id=doc.id, type=EdgeType.SOURCED_FROM
-            ))
+            await storage.store_edge(
+                NodeEdge(src_id=fact.id, dst_id=doc.id, type=EdgeType.SOURCED_FROM)
+            )
             return fact
 
         hedged = await claim_from("Alpha", 0.3)
@@ -469,7 +464,8 @@ class TestTheNonInteractionWithConfidence:
 
 
 class TestAClaimAboutAnotherPeriodIsNotASecondWitness:
-    """The successor-corroboration fix — the Leningrad defect this module shipped with, and what closed it.
+    """The successor-corroboration fix — the Leningrad defect this module
+    shipped with, and what closed it.
 
     "The city is called Leningrad" (BBC, 1924–1991) and "the city is called
     Saint Petersburg" (Reuters, 1991–) are near-identical sentences, so
@@ -494,18 +490,21 @@ class TestAClaimAboutAnotherPeriodIsNotASecondWitness:
     be a check on how diligently the corpus was dated.
     """
 
-    async def test_a_successor_claim_does_not_corroborate_its_predecessor(
-        self, storage
-    ):
-        """The defect, stated as the entry states it. Two before the successor-corroboration fix, one after."""
+    async def test_a_successor_claim_does_not_corroborate_its_predecessor(self, storage):
+        """The defect, stated as the entry states it. Two before the
+        successor-corroboration fix, one after."""
         bbc = await _document(storage, "bbc-1970", publisher="BBC")
         reuters = await _document(storage, "reuters-2020", publisher="Reuters")
         leningrad = await _dated_fact(
-            storage, "the city on the Neva is called Leningrad", bbc,
+            storage,
+            "the city on the Neva is called Leningrad",
+            bbc,
             _period(1924, 1991),
         )
         petersburg = await _dated_fact(
-            storage, "the city on the Neva is called Saint Petersburg", reuters,
+            storage,
+            "the city on the Neva is called Saint Petersburg",
+            reuters,
             _period(1991, None),
         )
         await _join(storage, leningrad, petersburg, EdgeType.SIMILARITY)
@@ -522,7 +521,9 @@ class TestAClaimAboutAnotherPeriodIsNotASecondWitness:
             storage, "the city is called Leningrad", bbc, _period(1924, 1991)
         )
         petersburg = await _dated_fact(
-            storage, "the city is called Saint Petersburg", reuters,
+            storage,
+            "the city is called Saint Petersburg",
+            reuters,
             _period(1991, None),
         )
         await _join(storage, leningrad, petersburg, EdgeType.SIMILARITY)
@@ -543,7 +544,9 @@ class TestAClaimAboutAnotherPeriodIsNotASecondWitness:
             storage, "the city is called Leningrad", bbc, _period(1924, 1991)
         )
         petersburg = await _dated_fact(
-            storage, "the city is called Saint Petersburg", reuters,
+            storage,
+            "the city is called Saint Petersburg",
+            reuters,
             _period(1991, None),
         )
         await _join(storage, leningrad, petersburg, EdgeType.SIMILARITY)
@@ -572,16 +575,16 @@ class TestAClaimAboutAnotherPeriodIsNotASecondWitness:
 
         assert await _count(storage, leningrad) == 2
 
-    async def test_a_look_alike_dated_on_one_side_only_still_corroborates(
-        self, storage
-    ):
+    async def test_a_look_alike_dated_on_one_side_only_still_corroborates(self, storage):
         """An empty side answers `False` outright — the subject being dated is
         not enough on its own, and most of today's corpus is this case."""
         bbc = await _document(storage, "bbc-1970", publisher="BBC")
         reuters = await _document(storage, "reuters-2020", publisher="Reuters")
         undated = await _fact(storage, "the city is called Leningrad", bbc)
         dated = await _dated_fact(
-            storage, "the city is called Saint Petersburg", reuters,
+            storage,
+            "the city is called Saint Petersburg",
+            reuters,
             _period(1991, None),
         )
         await _join(storage, undated, dated, EdgeType.SIMILARITY)
@@ -593,9 +596,7 @@ class TestAClaimAboutAnotherPeriodIsNotASecondWitness:
         witnesses to it, which is the ordinary case this must not break."""
         bbc = await _document(storage, "bbc-report", publisher="BBC")
         reuters = await _document(storage, "reuters-report", publisher="Reuters")
-        ours = await _dated_fact(
-            storage, "the city is called Leningrad", bbc, _period(1924, 1991)
-        )
+        ours = await _dated_fact(storage, "the city is called Leningrad", bbc, _period(1924, 1991))
         theirs = await _dated_fact(
             storage, "the city is called Leningrad", reuters, _period(1950, 1980)
         )
@@ -610,9 +611,7 @@ class TestAClaimAboutAnotherPeriodIsNotASecondWitness:
         check to the boundary."""
         bbc = await _document(storage, "bbc-report", publisher="BBC")
         reuters = await _document(storage, "reuters-report", publisher="Reuters")
-        ours = await _dated_fact(
-            storage, "the city is called Leningrad", bbc, _period(1924, 1991)
-        )
+        ours = await _dated_fact(storage, "the city is called Leningrad", bbc, _period(1924, 1991))
         theirs = await _dated_fact(
             storage, "the city is called Leningrad", reuters, _period(1960, 1999)
         )
@@ -626,43 +625,38 @@ class TestAClaimAboutAnotherPeriodIsNotASecondWitness:
         subtracting across them would be arithmetic on incomparable numbers."""
         bbc = await _document(storage, "bbc-report", publisher="BBC")
         gollancz = await _document(storage, "the-novel", publisher="Gollancz")
-        ours = await _dated_fact(
-            storage, "the city is called Leningrad", bbc, _period(1924, 1991)
-        )
+        ours = await _dated_fact(storage, "the city is called Leningrad", bbc, _period(1924, 1991))
         in_universe = await _dated_fact(
-            storage, "the city is called Leningrad", gollancz,
+            storage,
+            "the city is called Leningrad",
+            gollancz,
             _period(2100, 2200, timeline="tl-novel"),
         )
         await _join(storage, ours, in_universe, EdgeType.SIMILARITY)
 
         assert await _count(storage, ours) == 2
 
-    async def test_one_overlapping_period_is_enough_to_keep_counting(
-        self, storage
-    ):
+    async def test_one_overlapping_period_is_enough_to_keep_counting(self, storage):
         """The collapse per side is the *existential union* — the moments some
         source says the claim held. A source asserting two periods, one of them
         overlapping, has witnessed the claim, so every cross pair must clear
         before the look-alike stops counting."""
         bbc = await _document(storage, "bbc-report", publisher="BBC")
         reuters = await _document(storage, "reuters-report", publisher="Reuters")
-        ours = await _dated_fact(
-            storage, "the city is called Leningrad", bbc, _period(1924, 1991)
-        )
+        ours = await _dated_fact(storage, "the city is called Leningrad", bbc, _period(1924, 1991))
         twice = await _dated_fact(
-            storage, "the city is called Leningrad", reuters,
-            _period(1991, None), _period(1930, 1940),
+            storage,
+            "the city is called Leningrad",
+            reuters,
+            _period(1991, None),
+            _period(1930, 1940),
         )
         await _join(storage, ours, twice, EdgeType.SIMILARITY)
 
         assert await _count(storage, ours) == 2
-        assert (await corroboration_for([ours.id], storage))[
-            ours.id
-        ].adjacent_periods == []
+        assert (await corroboration_for([ours.id], storage))[ours.id].adjacent_periods == []
 
-    async def test_an_inference_from_the_other_period_brings_nothing_back(
-        self, storage
-    ):
+    async def test_an_inference_from_the_other_period_brings_nothing_back(self, storage):
         """Why the comparison runs *before* the supporter hop.
 
         Stage 2 collects whatever reasons from the neighbourhood, so a
@@ -676,20 +670,18 @@ class TestAClaimAboutAnotherPeriodIsNotASecondWitness:
             storage, "the city is called Leningrad", bbc, _period(1924, 1991)
         )
         petersburg = await _dated_fact(
-            storage, "the city is called Saint Petersburg", reuters,
+            storage,
+            "the city is called Saint Petersburg",
+            reuters,
             _period(1991, None),
         )
-        reading = await _inference(
-            storage, "the city was renamed after 1991", reuters
-        )
+        reading = await _inference(storage, "the city was renamed after 1991", reuters)
         await _join(storage, leningrad, petersburg, EdgeType.SIMILARITY)
         await _join(storage, reading, petersburg, EdgeType.DERIVED_FROM)
 
         assert await _count(storage, leningrad) == 1
 
-    async def test_a_shared_publisher_keeps_the_count_and_still_reports(
-        self, storage
-    ):
+    async def test_a_shared_publisher_keeps_the_count_and_still_reports(self, storage):
         """The count is publishers, not nodes, so leaving a look-alike out only
         lowers it where that look-alike was the sole route to a publisher. The
         report is not conditional on the number having moved."""
@@ -699,7 +691,9 @@ class TestAClaimAboutAnotherPeriodIsNotASecondWitness:
             storage, "the city is called Leningrad", morning, _period(1924, 1991)
         )
         petersburg = await _dated_fact(
-            storage, "the city is called Saint Petersburg", evening,
+            storage,
+            "the city is called Saint Petersburg",
+            evening,
             _period(1991, None),
         )
         await _join(storage, leningrad, petersburg, EdgeType.SIMILARITY)
@@ -710,20 +704,14 @@ class TestAClaimAboutAnotherPeriodIsNotASecondWitness:
         assert [source.document_ids for source in result.sources] == [[morning.id]]
         assert [a.node_id for a in result.adjacent_periods] == [petersburg.id]
 
-    async def test_a_contradicting_look_alike_is_not_reported_as_adjacent(
-        self, storage
-    ):
+    async def test_a_contradicting_look_alike_is_not_reported_as_adjacent(self, storage):
         """Already excluded, and for a different reason: it is not a claim about
         another period, it is a claim this one denies. Reporting it here would
         relabel a contradiction as a compatible neighbour."""
         ours = await _document(storage, "our-report", publisher="BBC")
         theirs = await _document(storage, "their-report", publisher="Reuters")
-        claim = await _dated_fact(
-            storage, "the deploy failed", ours, _period(2020, 2021)
-        )
-        denial = await _dated_fact(
-            storage, "the deploy succeeded", theirs, _period(2022, 2023)
-        )
+        claim = await _dated_fact(storage, "the deploy failed", ours, _period(2020, 2021))
+        denial = await _dated_fact(storage, "the deploy succeeded", theirs, _period(2022, 2023))
         await _join(storage, claim, denial, EdgeType.SIMILARITY)
         await _join(storage, claim, denial, EdgeType.CONTRADICTION)
 
@@ -736,9 +724,7 @@ class TestAClaimAboutAnotherPeriodIsNotASecondWitness:
         """The field is empty rather than absent for the ordinary case, so a
         caller reads one shape."""
         doc = await _document(storage, "only-report", publisher="BBC")
-        claim = await _dated_fact(
-            storage, "the deploy failed", doc, _period(2020, 2021)
-        )
+        claim = await _dated_fact(storage, "the deploy failed", doc, _period(2020, 2021))
 
         [result] = (await corroboration_for([claim.id], storage)).values()
 

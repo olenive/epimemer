@@ -7,27 +7,21 @@ Covers:
 - Segment validity checks (non-overlapping, full coverage, valid spans)
 """
 
-from pydantic import BaseModel
-
 from petritype.core.executable_graph_components import ExecutableGraphOperations
 
 from epimemer.core.types import RawDocument, Segment
 from epimemer.embeddings.mock import MockEmbeddingProvider
+from epimemer.pipelines.segmentation.paragraph_split import (
+    paragraph_split_segmentation_net,
+)
 from epimemer.pipelines.segmentation.semantic_similarity import (
     SentenceList,
     SimilarityScores,
     _cosine_similarity,
     _detect_boundaries,
     _split_into_sentences,
-    detect_boundaries_and_form_segments,
     semantic_similarity_segmentation_net,
-    split_sentences,
 )
-from epimemer.pipelines.segmentation.paragraph_split import (
-    paragraph_split_segmentation_net,
-    split_paragraphs,
-)
-
 
 # --- Helper: Controlled embedding provider for deterministic tests ---
 
@@ -68,13 +62,17 @@ def _segments_are_valid(segments: list[Segment], source_content: str, source_id:
     assert len(segments) > 0, "Expected at least one segment"
 
     for seg in segments:
-        assert seg.source_id == source_id, f"Segment source_id mismatch: {seg.source_id} != {source_id}"
+        assert seg.source_id == source_id, (
+            f"Segment source_id mismatch: {seg.source_id} != {source_id}"
+        )
         assert seg.span_start >= 0, f"Negative span_start: {seg.span_start}"
-        assert seg.span_end <= len(source_content), f"span_end exceeds content length: {seg.span_end} > {len(source_content)}"
+        assert seg.span_end <= len(source_content), (
+            f"span_end exceeds content length: {seg.span_end} > {len(source_content)}"
+        )
         assert seg.span_start < seg.span_end, f"Empty span: {seg.span_start} >= {seg.span_end}"
         assert isinstance(seg, Segment), f"Expected Segment, got {type(seg)}"
         # The segment text should match the source content at the given span
-        expected_text = source_content[seg.span_start:seg.span_end]
+        expected_text = source_content[seg.span_start : seg.span_end]
         assert seg.text == expected_text, (
             f"Segment text mismatch at [{seg.span_start}:{seg.span_end}]:\n"
             f"  segment.text = {seg.text!r}\n"
@@ -99,9 +97,7 @@ def _segments_are_valid(segments: list[Segment], source_content: str, source_id:
     # Every non-whitespace character should be covered
     for i, ch in enumerate(source_content):
         if not ch.isspace():
-            assert i in covered, (
-                f"Character at index {i} ({ch!r}) not covered by any segment"
-            )
+            assert i in covered, f"Character at index {i} ({ch!r}) not covered by any segment"
 
 
 # ========================================================================
@@ -110,7 +106,6 @@ def _segments_are_valid(segments: list[Segment], source_content: str, source_id:
 
 
 class TestSentenceSplitting:
-
     def test_split_simple_text(self):
         text = "Hello world. This is a test. Another sentence here."
         sentences = _split_into_sentences(text)
@@ -136,7 +131,6 @@ class TestSentenceSplitting:
 
 
 class TestCosineSimilarity:
-
     def test_identical_vectors(self):
         v = [1.0, 0.0, 0.0]
         assert abs(_cosine_similarity(v, v) - 1.0) < 1e-6
@@ -158,7 +152,6 @@ class TestCosineSimilarity:
 
 
 class TestBoundaryDetection:
-
     def test_no_boundaries_uniform_scores(self):
         scores = [0.9, 0.9, 0.9, 0.9]
         boundaries = _detect_boundaries(scores, threshold_factor=1.0)
@@ -187,12 +180,14 @@ class TestSemanticSimilarityStrategy:
         doc = RawDocument(content=text)
 
         # Sentences about cats get one direction, physics gets another
-        provider = ControlledEmbeddingProvider({
-            "The cat sat on the mat.": [0.9, 0.1, 0.0, 0.0],
-            "The cat purred softly.": [0.85, 0.15, 0.0, 0.0],
-            "Quantum physics explains wave-particle duality.": [0.0, 0.0, 0.9, 0.1],
-            "Schrodinger's equation models quantum states.": [0.0, 0.0, 0.85, 0.15],
-        })
+        provider = ControlledEmbeddingProvider(
+            {
+                "The cat sat on the mat.": [0.9, 0.1, 0.0, 0.0],
+                "The cat purred softly.": [0.85, 0.15, 0.0, 0.0],
+                "Quantum physics explains wave-particle duality.": [0.0, 0.0, 0.9, 0.1],
+                "Schrodinger's equation models quantum states.": [0.0, 0.0, 0.85, 0.15],
+            }
+        )
 
         graph = semantic_similarity_segmentation_net(doc, provider)
         updated_graph, fired = await ExecutableGraphOperations.execute_graph(
@@ -200,7 +195,9 @@ class TestSemanticSimilarityStrategy:
         )
 
         segments = updated_graph.place_named("Segments").tokens
-        assert len(segments) == 2, f"Expected 2 segments but got {len(segments)}: {[s.text for s in segments]}"
+        assert len(segments) == 2, (
+            f"Expected 2 segments but got {len(segments)}: {[s.text for s in segments]}"
+        )
 
         # First segment should be about cats, second about physics
         assert "cat" in segments[0].text.lower()
@@ -218,11 +215,13 @@ class TestSemanticSimilarityStrategy:
         doc = RawDocument(content=text)
 
         # All sentences get similar vectors — no topic shift
-        provider = ControlledEmbeddingProvider({
-            "Python is a programming language.": [0.9, 0.1, 0.0, 0.0],
-            "Python supports multiple paradigms.": [0.88, 0.12, 0.0, 0.0],
-            "Python has a large standard library.": [0.87, 0.13, 0.0, 0.0],
-        })
+        provider = ControlledEmbeddingProvider(
+            {
+                "Python is a programming language.": [0.9, 0.1, 0.0, 0.0],
+                "Python supports multiple paradigms.": [0.88, 0.12, 0.0, 0.0],
+                "Python has a large standard library.": [0.87, 0.13, 0.0, 0.0],
+            }
+        )
 
         graph = semantic_similarity_segmentation_net(doc, provider)
         updated_graph, fired = await ExecutableGraphOperations.execute_graph(
@@ -260,12 +259,14 @@ class TestSemanticSimilarityStrategy:
         doc = RawDocument(content=text)
 
         # Create a clear topic shift
-        provider = ControlledEmbeddingProvider({
-            "The weather today is sunny.": [0.9, 0.0, 0.0, 0.0],
-            "It will be warm.": [0.85, 0.05, 0.0, 0.0],
-            "Machine learning is transforming technology.": [0.0, 0.0, 0.9, 0.0],
-            "Neural networks are powerful.": [0.0, 0.0, 0.85, 0.05],
-        })
+        provider = ControlledEmbeddingProvider(
+            {
+                "The weather today is sunny.": [0.9, 0.0, 0.0, 0.0],
+                "It will be warm.": [0.85, 0.05, 0.0, 0.0],
+                "Machine learning is transforming technology.": [0.0, 0.0, 0.9, 0.0],
+                "Neural networks are powerful.": [0.0, 0.0, 0.85, 0.05],
+            }
+        )
 
         graph = semantic_similarity_segmentation_net(doc, provider)
         updated_graph, _ = await ExecutableGraphOperations.execute_graph(
@@ -356,7 +357,6 @@ class TestSemanticPetriNetFlow:
 
 
 class TestParagraphSplitStrategy:
-
     async def test_splits_on_double_newlines(self):
         """Text with double newlines should be split into paragraph segments."""
         text = "First paragraph here.\n\nSecond paragraph here.\n\nThird paragraph here."
@@ -441,11 +441,10 @@ class TestParagraphSplitStrategy:
 
         segments = updated_graph.place_named("Segments").tokens
         for seg in segments:
-            assert text[seg.span_start:seg.span_end] == seg.text
+            assert text[seg.span_start : seg.span_end] == seg.text
 
 
 class TestParagraphPetriNetFlow:
-
     async def test_single_transition_fires(self):
         """The paragraph net has only one transition."""
         text = "A.\n\nB."

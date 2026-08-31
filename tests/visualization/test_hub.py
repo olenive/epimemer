@@ -186,10 +186,7 @@ async def _subscribe(browser, session: str, graphs=None) -> None:
 
 
 async def _drain(browser, n: int, timeout: float = 3.0) -> list[dict]:
-    return [
-        json.loads(await asyncio.wait_for(browser.recv(), timeout=timeout))
-        for _ in range(n)
-    ]
+    return [json.loads(await asyncio.wait_for(browser.recv(), timeout=timeout)) for _ in range(n)]
 
 
 async def test_ring_evicts_oldest_and_backfills_on_subscribe(hub, monkeypatch):
@@ -283,9 +280,9 @@ async def test_action_ids_are_monotonic_across_browser_reconnects(hub):
             replayed = await _drain(second, 3)
 
     assert [m["seq"] for m in live] == [1, 2]
-    assert [m["seq"] for m in replayed] == [1, 2, 3]      # seq restarted
+    assert [m["seq"] for m in replayed] == [1, 2, 3]  # seq restarted
     ids = [m["action_id"] for m in replayed]
-    assert ids == sorted(ids) == ["000", "001", "002"]    # the ids did not
+    assert ids == sorted(ids) == ["000", "001", "002"]  # the ids did not
     assert [m["action_id"] for m in live] == ids[:2]
 
 
@@ -393,10 +390,12 @@ async def test_the_retrievals_rpc_reaches_the_session(hub):
         pending = asyncio.create_task(_http_get(hub.addr, "/api/retrievals?session=s-a"))
         req = json.loads(await asyncio.wait_for(sess.recv(), timeout=3))
         assert req["method"] == "retrievals"
-        await sess.send(RpcResponse(
-            request_id=req["request_id"],
-            result={"records": [{"record_id": "001", "response_text": "{}"}]},
-        ).model_dump_json())
+        await sess.send(
+            RpcResponse(
+                request_id=req["request_id"],
+                result={"records": [{"record_id": "001", "response_text": "{}"}]},
+            ).model_dump_json()
+        )
 
         status, body = await asyncio.wait_for(pending, timeout=3)
 
@@ -469,3 +468,19 @@ async def test_run_exits_1_when_a_stranger_holds_the_port(monkeypatch):
         assert await asyncio.to_thread(hubmod.run) == 1
     finally:
         stranger.close()
+
+
+# --- the bundle is build output ---
+
+
+async def test_a_missing_bundle_says_how_to_build_it(hub, monkeypatch, tmp_path):
+    """A checkout has no bundle until it is built. The API keeps serving; the
+    page says what to run rather than failing with a missing file."""
+    monkeypatch.setattr(hubmod, "STATIC_DIR", tmp_path / "not-built")
+
+    status, body = await _http_get(hub.addr, "/")
+    assert status == 503
+    assert "make build-frontend" in body
+
+    health_status, _ = await _http_get(hub.addr, "/api/health")
+    assert health_status == 200

@@ -22,9 +22,7 @@ from collections.abc import Iterable, Sequence
 _K = 60
 
 
-def rrf_scores(
-    rankings: Sequence[Sequence[str]], *, k: int = _K
-) -> dict[str, float]:
+def rrf_scores(rankings: Sequence[Sequence[str]], *, k: int = _K) -> dict[str, float]:
     """Fuse ranked id lists into one score per id. `Σ 1/(k + rank)`, rank 1-based.
 
     A rank-1 hit contributes `1/61`, the most any single list can give — so an
@@ -80,12 +78,8 @@ def fuse(
 
     kept = ordered[:limit]
     rescued = [
-        item_id
-        for item_id in dict.fromkeys(protected)
-        if item_id in scores and item_id not in kept
+        item_id for item_id in dict.fromkeys(protected) if item_id in scores and item_id not in kept
     ]
     if not rescued:
         return kept
-    return sorted(
-        [*kept, *rescued], key=lambda item_id: (-scores[item_id], item_id)
-    )
+    return sorted([*kept, *rescued], key=lambda item_id: (-scores[item_id], item_id))

@@ -10,9 +10,9 @@ Everything here is a value. Where the records live, who may see them, and when
 they are written belongs to `server.py` and the hub.
 """
 
-from datetime import datetime, timezone
+from collections.abc import Iterator, Sequence
+from datetime import UTC, datetime
 from itertools import count
-from typing import Iterator, Sequence
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -39,7 +39,7 @@ def next_record_id() -> str:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class RetrievedNode(BaseModel):
@@ -72,7 +72,7 @@ class RetrievalRecord(BaseModel):
     truncated: bool = False
 
     @model_validator(mode="after")
-    def _apply_caps(self) -> "RetrievalRecord":
+    def _apply_caps(self) -> RetrievalRecord:
         """Trim to the caps, and say when the trim bit.
 
         Done here rather than at the call site so a record cannot be built

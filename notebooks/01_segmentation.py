@@ -9,7 +9,8 @@ def _(mo):
     mo.md("""
     # Segmentation Pipeline
 
-    Step through the paragraph-split segmentation Petri net. Use the slider to control how many transitions fire.
+    Step through the paragraph-split segmentation Petri net. Use the slider to
+    control how many transitions fire.
     """)
     return
 
@@ -20,6 +21,7 @@ def _():
     from petritype.core.executable_graph_components import ExecutableGraphOperations
     from petritype.plotting.rustworkx_graph import RustworkxGraph
     from petritype.plotting.simple_graphviz import SimpleGraphvizVisualization
+
     from epimemer.core.types import RawDocument
     from epimemer.pipelines.segmentation.paragraph_split import paragraph_split_segmentation_net
 
@@ -36,7 +38,11 @@ def _():
 @app.cell
 def _(mo):
     test_content = mo.ui.text_area(
-        value="Machine learning models learn from data.\n\nNeural networks are inspired by the brain.\n\nDeep learning uses multiple layers.",
+        value=(
+            "Machine learning models learn from data.\n\n"
+            "Neural networks are inspired by the brain.\n\n"
+            "Deep learning uses multiple layers."
+        ),
         label="Document content",
         full_width=True,
     )
@@ -66,7 +72,9 @@ async def _(
     graph = paragraph_split_segmentation_net(doc)
 
     if step.value > 0:
-        graph, fired = await ExecutableGraphOperations.execute_graph(graph, max_transitions=step.value)
+        graph, fired = await ExecutableGraphOperations.execute_graph(
+            graph, max_transitions=step.value
+        )
     else:
         fired = 0
 

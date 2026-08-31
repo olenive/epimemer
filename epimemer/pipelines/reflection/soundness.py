@@ -91,10 +91,12 @@ async def premise_ids_for(
         list(inference_ids), direction="to", edge_type=EdgeType.SUPPORTS
     )
     return {
-        inference_id: list(dict.fromkeys(
-            [edge.dst_id for edge in derived[inference_id]]
-            + [edge.src_id for edge in supported[inference_id]]
-        ))
+        inference_id: list(
+            dict.fromkeys(
+                [edge.dst_id for edge in derived[inference_id]]
+                + [edge.src_id for edge in supported[inference_id]]
+            )
+        )
         for inference_id in inference_ids
     }
 
@@ -145,11 +147,7 @@ async def premise_periods_for(
             content=facts[premise_id].content,
             # The existential union per premise: what *some* source asserts.
             # Named in `assertions_are_disjoint`, applied here.
-            periods=[
-                interval
-                for source in sources
-                for interval in source.intervals
-            ],
+            periods=[interval for source in sources for interval in source.intervals],
         )
         for premise_id, sources in validity.items()
         # A `supports` edge into an inference can only come from a fact by
@@ -184,23 +182,21 @@ async def find_unsound_inferences(
         return []
 
     premise_ids = await premise_ids_for([node.id for node in inferences], storage)
-    wanted = list(dict.fromkeys(
-        premise_id for ids in premise_ids.values() for premise_id in ids
-    ))
+    wanted = list(dict.fromkeys(premise_id for ids in premise_ids.values() for premise_id in ids))
     dated = await premise_periods_for(wanted, storage)
     if not dated:
         return []
 
     flagged: list[UnsoundInference] = []
     for inference in inferences:
-        pairs = disjoint_pairs([
-            dated[premise_id]
-            for premise_id in premise_ids[inference.id]
-            if premise_id in dated
-        ])
+        pairs = disjoint_pairs(
+            [dated[premise_id] for premise_id in premise_ids[inference.id] if premise_id in dated]
+        )
         if pairs:
-            flagged.append(UnsoundInference(
-                inference=NodeRef(id=inference.id, content=inference.content),
-                disjoint_premises=pairs,
-            ))
+            flagged.append(
+                UnsoundInference(
+                    inference=NodeRef(id=inference.id, content=inference.content),
+                    disjoint_premises=pairs,
+                )
+            )
     return flagged

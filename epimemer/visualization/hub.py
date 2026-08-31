@@ -28,15 +28,16 @@ import socket
 import sys
 import time
 import urllib.request
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from uuid import uuid4
 
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse
+from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
@@ -53,8 +54,8 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-HUB_SERVICE = "epimemer-viz-hub"        # marker in /api/health, so a probe knows
-DISCONNECT_GRACE_SECONDS = 300          # keep a dropped session listed (greyed) this long
+HUB_SERVICE = "epimemer-viz-hub"  # marker in /api/health, so a probe knows
+DISCONNECT_GRACE_SECONDS = 300  # keep a dropped session listed (greyed) this long
 RPC_TIMEOUT_SECONDS = 10.0
 
 # The coarse acts the log reads. Selected by `event_type` rather than by
@@ -78,11 +79,8 @@ _RING_KEYS = {ACTION_EVENT_TYPE: "actions", RETRIEVAL_EVENT_TYPE: "retrievals"}
 def _ring_capacity(event_type: str) -> int:
     """Read at call time, not captured — the capacities are module constants a
     test may substitute, and a table built at import would not see it."""
-    return (
-        LOG_RING_CAPACITY
-        if event_type == ACTION_EVENT_TYPE
-        else RETRIEVAL_RING_CAPACITY
-    )
+    return LOG_RING_CAPACITY if event_type == ACTION_EVENT_TYPE else RETRIEVAL_RING_CAPACITY
+
 
 try:
     from importlib.metadata import version as _pkg_version
@@ -93,7 +91,7 @@ except Exception:  # pragma: no cover - version lookup is best-effort
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _pidfile_path() -> Path:
@@ -152,7 +150,7 @@ def create_hub_app() -> Starlette:
             return
         targets = [(ws, st) for ws, st in browsers.items() if predicate(st)]
         alive = await asyncio.gather(*[_send(ws, st, message) for ws, st in targets])
-        for (ws, _), ok in zip(targets, alive):
+        for (ws, _), ok in zip(targets, alive, strict=True):
             if not ok:
                 browsers.pop(ws, None)
 
@@ -230,7 +228,7 @@ def create_hub_app() -> Starlette:
         # First message must be a Register.
         try:
             first = json.loads(await ws.receive_text())
-        except (WebSocketDisconnect, json.JSONDecodeError):
+        except WebSocketDisconnect, json.JSONDecodeError:
             await ws.close(code=1002)
             return
         if first.get("type") != "register":
@@ -258,8 +256,12 @@ def create_hub_app() -> Starlette:
             "actions": existing["actions"] if existing else (),
             "retrievals": existing["retrievals"] if existing else (),
         }
-        logger.info("Session registered: %s (%s:%s pid %s)", sid, info.backend, info.active_graph, info.pid)
-        await _broadcast_system({"type": "session_connected", "session": _session_public(sid, sessions[sid])})
+        logger.info(
+            "Session registered: %s (%s:%s pid %s)", sid, info.backend, info.active_graph, info.pid
+        )
+        await _broadcast_system(
+            {"type": "session_connected", "session": _session_public(sid, sessions[sid])}
+        )
 
         try:
             while True:
@@ -277,7 +279,8 @@ def create_hub_app() -> Starlette:
                     ring_key = _RING_KEYS.get(payload.get("event_type", ""))
                     if ring_key is not None:
                         sessions[sid][ring_key] = remember(
-                            sessions[sid][ring_key], payload,
+                            sessions[sid][ring_key],
+                            payload,
                             capacity=_ring_capacity(payload["event_type"]),
                         )
                     await _broadcast_event(payload)
@@ -287,7 +290,10 @@ def create_hub_app() -> Starlette:
                     new_info = SessionInfo.model_validate(msg["info"])
                     sessions[sid]["info"] = new_info
                     await _broadcast_system(
-                        {"type": "session_connected", "session": _session_public(sid, sessions[sid])}
+                        {
+                            "type": "session_connected",
+                            "session": _session_public(sid, sessions[sid]),
+                        }
                     )
 
                 elif mtype == "rpc_response":
@@ -339,7 +345,7 @@ def create_hub_app() -> Starlette:
                 raw = await ws.receive_text()
                 try:
                     msg = json.loads(raw)
-                except (json.JSONDecodeError, TypeError):
+                except json.JSONDecodeError, TypeError:
                     continue
                 sub = msg.get("subscribe")
                 if isinstance(sub, dict):
@@ -361,8 +367,13 @@ def create_hub_app() -> Starlette:
 
     async def api_health(request: Request) -> JSONResponse:
         return JSONResponse(
-            {"ok": True, "service": HUB_SERVICE, "pid": os.getpid(), "version": VERSION,
-             "sessions": len(sessions)}
+            {
+                "ok": True,
+                "service": HUB_SERVICE,
+                "pid": os.getpid(),
+                "version": VERSION,
+                "sessions": len(sessions),
+            }
         )
 
     async def api_sessions(request: Request) -> JSONResponse:
@@ -378,7 +389,9 @@ def create_hub_app() -> Starlette:
         session_id = request.query_params.get("session")
         graph = request.query_params.get("graph")
         if not session_id or not graph:
-            return JSONResponse({"error": "Missing 'session' or 'graph' query parameter"}, status_code=400)
+            return JSONResponse(
+                {"error": "Missing 'session' or 'graph' query parameter"}, status_code=400
+            )
         return await _rpc_endpoint(session_id, "snapshot", {"graph": graph})
 
     async def api_retrievals(request: Request) -> JSONResponse:
@@ -399,14 +412,27 @@ def create_hub_app() -> Starlette:
             result = await _rpc(session_id, method, params)
         except LookupError as exc:
             return JSONResponse({"error": str(exc)}, status_code=404)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return JSONResponse({"error": "session RPC timed out"}, status_code=504)
         except (ConnectionError, RuntimeError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=502)
         return JSONResponse(result)
 
-    async def _index(request: Request) -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+    async def _index(request: Request) -> FileResponse | PlainTextResponse:
+        # The bundle is build output and never committed, so a checkout has
+        # none until it is built. The API and both sockets work without it;
+        # the page is the only thing missing, and this says how to get it.
+        index = STATIC_DIR / "index.html"
+        if not index.exists():
+            return PlainTextResponse(
+                "The epimemer visualization page is not built.\n\n"
+                "This hub is serving its API and websockets, but the browser\n"
+                "bundle is absent. Build it with `make build-frontend` (or\n"
+                "`npm ci && npm run build` in epimemer/visualization/frontend)\n"
+                "and reload. A released wheel carries the bundle already.\n",
+                status_code=503,
+            )
+        return FileResponse(index)
 
     routes = [
         Route("/", _index),
@@ -534,7 +560,7 @@ def _remove_pidfile() -> None:
 def _read_pidfile() -> int | None:
     try:
         return int(_pidfile_path().read_text().strip())
-    except (FileNotFoundError, ValueError):
+    except FileNotFoundError, ValueError:
         return None
 
 
@@ -570,7 +596,10 @@ def status() -> int:
     if health is None:
         print(f"viz hub: not running (nothing healthy on {host}:{port})")
         return 1
-    print(f"viz hub: running on {host}:{port} (pid {health.get('pid')}, version {health.get('version')})")
+    print(
+        f"viz hub: running on {host}:{port} "
+        f"(pid {health.get('pid')}, version {health.get('version')})"
+    )
     sessions = _get_json(f"http://{host}:{port}/api/sessions") or []
     if not sessions:
         print("  sessions: none")
@@ -609,7 +638,9 @@ def stop() -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="epimemer-viz", description="Epimemer visualization hub.")
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--status", action="store_true", help="Report hub + session status and exit.")
+    group.add_argument(
+        "--status", action="store_true", help="Report hub + session status and exit."
+    )
     group.add_argument("--stop", action="store_true", help="Stop a running hub and exit.")
     args = parser.parse_args(argv)
 

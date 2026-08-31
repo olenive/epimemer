@@ -25,7 +25,6 @@ from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
 from epimemer.storage.protocol import resolve_require_judge
 
-
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
 
 
@@ -43,20 +42,28 @@ async def _ingest(storage, embedder, config, *, judge=None, **kwargs):
     """One document through both ingest steps, returning both results."""
     seg, _ = await tools.segment_text(
         "The treaty was signed in Vienna in 1815.",
-        storage, embedder, config, judge=judge, **kwargs,
+        storage,
+        embedder,
+        config,
+        judge=judge,
+        **kwargs,
     )
     store, _ = await tools.store_decomposition(
         document_id=seg["document_id"],
-        segments=[{
-            "segment_id": seg["segments"][0]["segment_id"],
-            "topics": ["the Congress of Vienna"],
-            "facts": [{
-                "content": "the treaty was signed in Vienna",
-                "claim_kind": "event",
-                "tags": ["diplomacy"],
-            }],
-            "inferences": ["the powers wanted a settled border"],
-        }],
+        segments=[
+            {
+                "segment_id": seg["segments"][0]["segment_id"],
+                "topics": ["the Congress of Vienna"],
+                "facts": [
+                    {
+                        "content": "the treaty was signed in Vienna",
+                        "claim_kind": "event",
+                        "tags": ["diplomacy"],
+                    }
+                ],
+                "inferences": ["the powers wanted a settled border"],
+            }
+        ],
         storage=storage,
         embedding_provider=embedder,
         judge=judge,
@@ -70,9 +77,7 @@ class TestIngestRecordsWhoReadTheMaterial:
     judgments nothing downstream will re-make, which is why §3.1 calls ingest the
     place the unreviewable judgments live."""
 
-    async def test_every_stored_node_names_its_judge(
-        self, storage, embedder, config
-    ):
+    async def test_every_stored_node_names_its_judge(self, storage, embedder, config):
         await _ingest(storage, embedder, config, judge=CRITIC)
 
         nodes = await storage.query_nodes()
@@ -81,9 +86,7 @@ class TestIngestRecordsWhoReadTheMaterial:
             (n.content, n.judged_by) for n in nodes if n.judged_by != CRITIC
         ]
 
-    async def test_every_edge_the_ingest_wrote_names_its_judge(
-        self, storage, embedder, config
-    ):
+    async def test_every_edge_the_ingest_wrote_names_its_judge(self, storage, embedder, config):
         """One stamp covers all five kinds this call builds, three of which come
         out of a Petritype net that would otherwise have to carry the judge."""
         _, _ = await _ingest(storage, embedder, config, judge=CRITIC)
@@ -91,64 +94,62 @@ class TestIngestRecordsWhoReadTheMaterial:
         facts = [n for n in await storage.query_nodes(node_type=NodeType.FACT)]
         edges = [e for f in facts for e in await storage.get_edges_from(f.id)]
         assert {e.type for e in edges} >= {
-            EdgeType.SOURCED_FROM, EdgeType.TAGGED_WITH,
+            EdgeType.SOURCED_FROM,
+            EdgeType.TAGGED_WITH,
         }
         assert all(e.judged_by == CRITIC for e in edges)
 
-    async def test_a_tag_topic_names_the_agent_that_introduced_it(
-        self, storage, embedder, config
-    ):
+    async def test_a_tag_topic_names_the_agent_that_introduced_it(self, storage, embedder, config):
         await _ingest(storage, embedder, config, judge=CRITIC)
 
         tag = await storage.get_node_by_content("diplomacy", node_type=NodeType.TOPIC)
         assert tag is not None and tag.judged_by == CRITIC
 
-    async def test_a_publisher_entity_names_its_judge(
-        self, storage, embedder, config
-    ):
+    async def test_a_publisher_entity_names_its_judge(self, storage, embedder, config):
         await tools.segment_text(
-            "A report.", storage, embedder, config,
-            published_by="The Gazette", judge=CRITIC,
+            "A report.",
+            storage,
+            embedder,
+            config,
+            published_by="The Gazette",
+            judge=CRITIC,
         )
 
-        entity = await storage.get_node_by_content(
-            "The Gazette", node_type=NodeType.TOPIC
-        )
+        entity = await storage.get_node_by_content("The Gazette", node_type=NodeType.TOPIC)
         assert entity.judged_by == CRITIC
 
-    async def test_reusing_an_entity_does_not_restamp_it(
-        self, storage, embedder, config
-    ):
+    async def test_reusing_an_entity_does_not_restamp_it(self, storage, embedder, config):
         """Mentioning a name again is not introducing it, and crediting the
         second agent would take the node from whoever created it."""
         await tools.segment_text(
-            "A report.", storage, embedder, config,
-            published_by="The Gazette", judge=CRITIC,
+            "A report.",
+            storage,
+            embedder,
+            config,
+            published_by="The Gazette",
+            judge=CRITIC,
         )
 
         await tools.segment_text(
-            "Another report.", storage, embedder, config,
+            "Another report.",
+            storage,
+            embedder,
+            config,
             published_by="The Gazette",
             judge=JudgeRef(agent_id="editor", digest="d2"),
         )
 
-        entity = await storage.get_node_by_content(
-            "The Gazette", node_type=NodeType.TOPIC
-        )
+        entity = await storage.get_node_by_content("The Gazette", node_type=NodeType.TOPIC)
         assert entity.judged_by == CRITIC
 
-    async def test_ingesting_without_a_judge_records_unknown(
-        self, storage, embedder, config
-    ):
+    async def test_ingesting_without_a_judge_records_unknown(self, storage, embedder, config):
         """The default, and not a degraded path."""
         await _ingest(storage, embedder, config)
 
         nodes = await storage.query_nodes()
         assert nodes and all(n.judged_by is None for n in nodes)
 
-    async def test_the_document_itself_carries_no_judge(
-        self, storage, embedder, config
-    ):
+    async def test_the_document_itself_carries_no_judge(self, storage, embedder, config):
         """*Who pasted this text* is a different question from *who judged what
         it says*, and only the second is a claim about the world."""
         seg, _ = await _ingest(storage, embedder, config, judge=CRITIC)
@@ -172,9 +173,7 @@ class TestTheGraphDecidesWhetherAJudgeIsRequired:
         assert await tools.judge_required(storage, process_default=True) is True
         assert await tools.judge_required(storage, process_default=False) is False
 
-    async def test_clearing_follows_the_default_rather_than_freezing_it(
-        self, storage
-    ):
+    async def test_clearing_follows_the_default_rather_than_freezing_it(self, storage):
         """`None` means *follow the default*, deliberately not *today's value of
         the default* — the same rule the reflect threshold states, so changing
         the server's setting later still reaches a graph that was once set."""
@@ -205,7 +204,8 @@ class TestTheGraphDecidesWhetherAJudgeIsRequired:
         later and nobody noticing it undoes the point of the setting.
         """
         setters = [
-            name for name in dir(tools)
+            name
+            for name in dir(tools)
             if "require" in name.lower() and name.startswith(("set_", "configure"))
         ]
         assert setters == []
@@ -263,9 +263,7 @@ class TestTheGateAtTheBoundary:
                 raise RuntimeError("no session exists")
             self.set_calls.append(value)
 
-    async def test_a_permissive_graph_lets_an_unnamed_write_through(
-        self, storage, config
-    ):
+    async def test_a_permissive_graph_lets_an_unnamed_write_through(self, storage, config):
         from epimemer.mcp.server import _judge_for_write
 
         judge, refused = await _judge_for_write(
@@ -297,9 +295,7 @@ class TestTheGateAtTheBoundary:
 
         assert judge == CRITIC and refused is None
 
-    async def test_a_wrong_graph_is_answered_before_the_judge_is(
-        self, storage, config
-    ):
+    async def test_a_wrong_graph_is_answered_before_the_judge_is(self, storage, config):
         """The refusal names the graph, not the judge.
 
         Without this the agent is sent to `claim_agent` — which is itself gated
@@ -310,9 +306,7 @@ class TestTheGateAtTheBoundary:
 
         await storage.set_require_judge(True)
 
-        judge, refused = await _judge_for_write(
-            self._Ctx(storage, config), "somewhere-else"
-        )
+        judge, refused = await _judge_for_write(self._Ctx(storage, config), "somewhere-else")
 
         assert judge is None
         assert refused is not None
@@ -338,9 +332,7 @@ class TestTheGateAtTheBoundary:
 
         assert "not approved" not in caplog.text
 
-    async def test_a_revoked_id_is_refused_where_a_judge_is_required(
-        self, storage, config
-    ):
+    async def test_a_revoked_id_is_refused_where_a_judge_is_required(self, storage, config):
         """The two rules compose: approval is re-checked on every write, and a
         graph that requires a judge has no unknown to fall back to."""
         from epimemer.mcp.server import _judge_for_write
@@ -353,9 +345,7 @@ class TestTheGateAtTheBoundary:
 
         assert judge is None and refused is not None
 
-    async def test_the_process_default_applies_where_the_graph_has_no_answer(
-        self, storage
-    ):
+    async def test_the_process_default_applies_where_the_graph_has_no_answer(self, storage):
         from epimemer.mcp.server import _judge_for_write
 
         strict = ServerConfig(storage_backend="memory", require_judge=True)
@@ -370,9 +360,7 @@ class TestASessionlessClientCanStillClaim:
     would leave a strict graph refusing every write from a client that had
     correctly claimed an identity — the approval gap of §10.3, one layer over."""
 
-    async def test_a_claim_without_a_session_still_binds_the_process(
-        self, storage, config
-    ):
+    async def test_a_claim_without_a_session_still_binds_the_process(self, storage, config):
         from epimemer.mcp.server import _bind_judge, _judge_for_write
 
         ctx = TestTheGateAtTheBoundary._Ctx(storage, config, raises=True)

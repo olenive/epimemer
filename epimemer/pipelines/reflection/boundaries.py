@@ -45,10 +45,10 @@ from epimemer.core.temporal import (
 )
 from epimemer.core.types import (
     EdgeType,
-    JudgeRef,
     EpistemicNode,
     Fact,
     Inference,
+    JudgeRef,
     NodeEdge,
     NodeStatus,
 )
@@ -60,9 +60,12 @@ from epimemer.storage.protocol import StorageBackend
 # `HISTORICAL` and a successor `ACTIVE`, but a recurrence reactivates the older
 # one and a longer chain leaves middles retired — so both sides are drawn from
 # the same set rather than from an assumption about which end is which.
-SUCCESSION_STATUSES: frozenset[NodeStatus] = frozenset({
-    NodeStatus.ACTIVE, NodeStatus.HISTORICAL,
-})
+SUCCESSION_STATUSES: frozenset[NodeStatus] = frozenset(
+    {
+        NodeStatus.ACTIVE,
+        NodeStatus.HISTORICAL,
+    }
+)
 
 # Only these carry validity (T1 §1). A topic is a subject rather than an
 # assertion — there is nothing there to be true, so nothing to be true *during*.
@@ -97,9 +100,7 @@ class BoundaryProposal(BaseModel):
     because_source_id: str
 
 
-def _revised(
-    interval: ValidityInterval, endpoint: str, at: datetime
-) -> ValidityInterval:
+def _revised(interval: ValidityInterval, endpoint: str, at: datetime) -> ValidityInterval:
     """The interval with one endpoint filled in, rebuilt so it is checked.
 
     `model_copy(update=...)` skips validation, and the validation is the point:
@@ -110,18 +111,13 @@ def _revised(
     worked out from two sources read together rather than copied from either.
     """
     return ValidityInterval.model_validate(
-        interval.model_dump()
-        | {endpoint: PreciseInstant(at=at), "basis": IntervalBasis.INFERRED}
+        interval.model_dump() | {endpoint: PreciseInstant(at=at), "basis": IntervalBasis.INFERRED}
     )
 
 
 def _periods(sources: Sequence[SourceValidity]) -> list[tuple[str, ValidityInterval]]:
     """Every period a node holds, each paired with the source asserting it."""
-    return [
-        (source.source_id, interval)
-        for source in sources
-        for interval in source.intervals
-    ]
+    return [(source.source_id, interval) for source in sources for interval in source.intervals]
 
 
 def _proposal(
@@ -209,9 +205,13 @@ def _across_one_succession(
         if opens is None:
             continue
         proposal = _proposal(
-            node=earlier, source_id=source_id, interval=interval,
-            endpoint="end", at=opens[1],
-            because=later, because_source_id=opens[0],
+            node=earlier,
+            source_id=source_id,
+            interval=interval,
+            endpoint="end",
+            at=opens[1],
+            because=later,
+            because_source_id=opens[0],
         )
         if proposal is not None:
             proposals.append(proposal)
@@ -223,9 +223,13 @@ def _across_one_succession(
         if closes is None:
             continue
         proposal = _proposal(
-            node=later, source_id=source_id, interval=interval,
-            endpoint="start", at=closes[1],
-            because=earlier, because_source_id=closes[0],
+            node=later,
+            source_id=source_id,
+            interval=interval,
+            endpoint="start",
+            at=closes[1],
+            because=earlier,
+            because_source_id=closes[0],
         )
         if proposal is not None:
             proposals.append(proposal)
@@ -309,9 +313,7 @@ async def apply_boundary(
     prevent.
     """
     if endpoint not in ("start", "end"):
-        return BoundaryRefused(
-            node_id=node_id, reason=f"'{endpoint}' is not an endpoint"
-        )
+        return BoundaryRefused(node_id=node_id, reason=f"'{endpoint}' is not an endpoint")
 
     node = await storage.get_node(node_id)
     if node is None or node.status not in SUCCESSION_STATUSES:
@@ -322,9 +324,7 @@ async def apply_boundary(
 
     edges = [
         edge
-        for edge in await storage.get_edges_from(
-            node_id, edge_type=EdgeType.SOURCED_FROM
-        )
+        for edge in await storage.get_edges_from(node_id, edge_type=EdgeType.SOURCED_FROM)
         if edge.dst_id == source_id
     ]
     if len(edges) != 1:
@@ -337,15 +337,13 @@ async def apply_boundary(
     candidates = [
         index
         for index, interval in enumerate(edge.validity)
-        if interval.timeline_id == timeline_id
-        and is_open_boundary(getattr(interval, endpoint))
+        if interval.timeline_id == timeline_id and is_open_boundary(getattr(interval, endpoint))
     ]
     if len(candidates) != 1:
         return BoundaryRefused(
             node_id=node_id,
             reason=(
-                f"{len(candidates)} periods from that source are still open at "
-                f"their {endpoint}"
+                f"{len(candidates)} periods from that source are still open at their {endpoint}"
             ),
         )
 
@@ -455,9 +453,7 @@ async def correct_interval(
 
     edges = [
         edge
-        for edge in await storage.get_edges_from(
-            node_id, edge_type=EdgeType.SOURCED_FROM
-        )
+        for edge in await storage.get_edges_from(node_id, edge_type=EdgeType.SOURCED_FROM)
         if edge.dst_id == source_id
     ]
     if len(edges) != 1:
@@ -499,6 +495,4 @@ async def correct_interval(
         ],
     }
     await storage.store_edge(revised)
-    return IntervalCorrected(
-        node_id=node_id, source_id=source_id, was=was, now=replacement
-    )
+    return IntervalCorrected(node_id=node_id, source_id=source_id, was=was, now=replacement)

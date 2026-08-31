@@ -40,7 +40,7 @@ Deleting fails closed: every reader agrees, and the prior value survives in the
 node's trail and in the journal row, which is where `rejudge` keeps its own.
 """
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from pydantic import BaseModel
 
@@ -129,10 +129,7 @@ async def reframe_node(
         return ReframeRefused(node_id=node_id, reason=f"no such node: {node_id}.")
 
     edges = [
-        edge
-        for edge in await storage.get_edges_from(
-            node_id, edge_type=EdgeType.HAS_METACONTEXT
-        )
+        edge for edge in await storage.get_edges_from(node_id, edge_type=EdgeType.HAS_METACONTEXT)
     ]
     held = {edge.dst_id for edge in edges}
     if withdraw not in held:
@@ -151,8 +148,7 @@ async def reframe_node(
             return ReframeRefused(
                 node_id=node_id,
                 reason=(
-                    f"`assign` and `withdraw` are both '{withdraw}', so there "
-                    f"is nothing to revise."
+                    f"`assign` and `withdraw` are both '{withdraw}', so there is nothing to revise."
                 ),
             )
         if await storage.get_metacontext(assign) is None:
@@ -223,9 +219,7 @@ async def reframe_node(
     )
 
 
-async def shared_frame_set(
-    node_ids: Sequence[str], storage: StorageBackend
-) -> set[str] | None:
+async def shared_frame_set(node_ids: Sequence[str], storage: StorageBackend) -> set[str] | None:
     """The one frame set all of these nodes stand in, or `None` if they differ.
 
     **Exact set equality, not overlap**, and `fact_dedup` states the reason for
@@ -340,8 +334,11 @@ async def declare_frames(
 
     if unframed:
         await journal(
-            storage, DecisionKind.FRAME_DECLARATION, unframed,
-            judge=judge, frame=frame,
+            storage,
+            DecisionKind.FRAME_DECLARATION,
+            unframed,
+            judge=judge,
+            frame=frame,
         )
 
     return FrameDeclaration(

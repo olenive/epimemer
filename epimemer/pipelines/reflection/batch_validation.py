@@ -117,15 +117,11 @@ def _entry_problems(field: str, entry: object) -> list[str]:
     problems: list[str] = []
     for key in LIST_VALUED.get(field, ()):
         if not _is_list(entry[key]):
-            problems.append(
-                f"{key!r} must be a list, not {type(entry[key]).__name__}"
-            )
+            problems.append(f"{key!r} must be a list, not {type(entry[key]).__name__}")
     if field in ("similarities", "relation_verdicts"):
         pair = entry["pair"]
         if _is_list(pair) and len(pair) != 2:
-            problems.append(
-                f"'pair' names {len(pair)} thing(s); a verdict is about two"
-            )
+            problems.append(f"'pair' names {len(pair)} thing(s); a verdict is about two")
     if field == "supersessions" and entry["because"] not in SUPERSESSION_REASONS:
         problems.append(
             f"'because' is {entry['because']!r}, and the supersession reasons "
@@ -136,11 +132,8 @@ def _entry_problems(field: str, entry: object) -> list[str]:
     if field == "boundaries" and not isinstance(entry["at"], datetime):
         try:
             datetime.fromisoformat(entry["at"])
-        except (TypeError, ValueError):
-            problems.append(
-                f"'at' is neither a datetime nor an ISO-8601 string: "
-                f"{entry['at']!r}"
-            )
+        except TypeError, ValueError:
+            problems.append(f"'at' is neither a datetime nor an ISO-8601 string: {entry['at']!r}")
     return problems
 
 
@@ -166,20 +159,19 @@ def malformed_entries(
     for field in ID_VALUED:
         for index, node_id in enumerate(batch.get(field) or []):
             if not isinstance(node_id, str):
-                found.append(MalformedEntry(
-                    field=field, index=index,
-                    problem=(
-                        f"entry is {type(node_id).__name__}, not a node id"
-                    ),
-                ))
+                found.append(
+                    MalformedEntry(
+                        field=field,
+                        index=index,
+                        problem=(f"entry is {type(node_id).__name__}, not a node id"),
+                    )
+                )
     return found
 
 
 def refusal_message(found: Sequence[MalformedEntry]) -> str:
     """What the agent is told, and it has to lead with what was written."""
-    listed = "\n".join(
-        f"  {item.field}[{item.index}]: {item.problem}" for item in found
-    )
+    listed = "\n".join(f"  {item.field}[{item.index}]: {item.problem}" for item in found)
     entries = "entry is" if len(found) == 1 else f"{len(found)} entries are"
     return (
         f"apply_reflection wrote nothing: {entries} malformed.\n{listed}\n\n"

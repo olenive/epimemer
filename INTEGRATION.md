@@ -4,8 +4,11 @@
 
 ### Add to Claude Code
 
+Install the package, then register the server:
+
 ```bash
-claude mcp add epimemer -- uv run --directory /path/to/epimemer python -m epimemer.mcp.server
+uv tool install "epimemer[sentence-transformers]"
+claude mcp add epimemer -- epimemer serve
 ```
 
 Or add directly to `~/.claude.json`:
@@ -14,8 +17,8 @@ Or add directly to `~/.claude.json`:
 {
   "mcpServers": {
     "epimemer": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/epimemer", "python", "-m", "epimemer.mcp.server"],
+      "command": "epimemer",
+      "args": ["serve"],
       "env": {
         "EPIMEMER_VIZ_ENABLED": "true"
       }
@@ -24,9 +27,13 @@ Or add directly to `~/.claude.json`:
 }
 ```
 
+From a checkout, `uv run --directory /path/to/epimemer epimemer serve` is the
+equivalent command.
+
 This uses the defaults: sentence-transformers for embeddings and in-memory
-storage. The sentence-transformers model (`all-MiniLM-L6-v2`, ~80MB) downloads
-on first run.
+storage. The embedding model (`all-MiniLM-L6-v2`, ~80MB) downloads on first
+run. The provider itself is the `sentence-transformers` extra; selecting it
+without that extra installed refuses at startup and names it.
 
 Epimemer performs no decomposition of its own — extracting topics, facts, and
 inferences from text is the calling agent's job, via the `segment` →

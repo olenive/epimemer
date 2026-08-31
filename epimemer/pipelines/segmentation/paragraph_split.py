@@ -19,7 +19,6 @@ from petritype.core.executable_graph_components import (
 
 from epimemer.core.types import RawDocument, Segment
 
-
 # --- Transition function ---
 
 
@@ -84,13 +83,15 @@ def paragraph_split_segmentation_net(
     Returns:
         An ExecutableGraph ready to execute.
     """
-    return ExecutableGraphOperations.construct_graph([
-        # Places
-        ListPlaceNode("RawDocument", RawDocument, [document]),
-        ListPlaceNode("Segments", Segment),
-
-        # Single transition: split on double newlines
-        FunctionTransitionNode("split_paragraphs", split_paragraphs),
-        ArgumentEdgeToTransition("RawDocument", "split_paragraphs", "doc"),
-        ReturnedEdgeFromTransition("split_paragraphs", "Segments"),
-    ], expect_acyclic=True)
+    return ExecutableGraphOperations.construct_graph(
+        [
+            # Places
+            ListPlaceNode("RawDocument", RawDocument, [document]),
+            ListPlaceNode("Segments", Segment),
+            # Single transition: split on double newlines
+            FunctionTransitionNode("split_paragraphs", split_paragraphs),
+            ArgumentEdgeToTransition("RawDocument", "split_paragraphs", "doc"),
+            ReturnedEdgeFromTransition("split_paragraphs", "Segments"),
+        ],
+        expect_acyclic=True,
+    )

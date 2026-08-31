@@ -15,20 +15,20 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
-import pytest
 import uvicorn
 from fastmcp import FastMCP
 
+from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log, records_of
 from epimemer.mcp.server import mcp as epimemer_mcp
-from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization.event_bus import create_event_bus
 from epimemer.visualization.hub import create_hub_app
 from epimemer.visualization.hub_client import start_hub_client
 from epimemer.visualization.protocol import SessionInfo
+
 
 def _graph_with_the_real() -> InMemoryStorage:
     """An in-memory graph somebody has set up.
@@ -43,6 +43,7 @@ def _graph_with_the_real() -> InMemoryStorage:
         description="Claims about the real world.",
     )
     return store
+
 
 SESSION_ID = "session-under-test"
 
@@ -77,9 +78,7 @@ async def _wired() -> AsyncIterator[SimpleNamespace]:
     sock.bind(("127.0.0.1", 0))
     addr = f"127.0.0.1:{sock.getsockname()[1]}"
 
-    server = uvicorn.Server(
-        uvicorn.Config(create_hub_app(), log_level="warning", lifespan="off")
-    )
+    server = uvicorn.Server(uvicorn.Config(create_hub_app(), log_level="warning", lifespan="off"))
     serving = asyncio.create_task(server.serve(sockets=[sock]))
     for _ in range(300):
         if server.started:
@@ -93,22 +92,16 @@ async def _wired() -> AsyncIterator[SimpleNamespace]:
     stop_client = await start_hub_client(
         bus,
         storage,
-        SessionInfo(
-            session_id=SESSION_ID, pid=1, backend="memory", active_graph="default"
-        ),
+        SessionInfo(session_id=SESSION_ID, pid=1, backend="memory", active_graph="default"),
         f"ws://{addr}/ingest",
-        records=lambda: [
-            json.loads(record.model_dump_json()) for record in records_of(log)
-        ],
+        records=lambda: [json.loads(record.model_dump_json()) for record in records_of(log)],
     )
 
     @asynccontextmanager
     async def _lifespan(_server):
         yield {
             "storage": storage,
-            "embedding_provider": MockEmbeddingProvider(
-                model_id="mock-embed", dimension=8
-            ),
+            "embedding_provider": MockEmbeddingProvider(model_id="mock-embed", dimension=8),
             "config": ServerConfig(storage_backend="memory", embedding_provider="mock"),
             "event_bus": bus,
             "viz_session": None,
@@ -121,6 +114,7 @@ async def _wired() -> AsyncIterator[SimpleNamespace]:
     async with _lifespan(epimemer_mcp) as ctx:
         epimemer_mcp._lifespan_result = ctx
         try:
+
             async def _registered() -> bool:
                 _, body = await _http_get(addr, "/api/sessions")
                 return any(s["session_id"] == SESSION_ID for s in json.loads(body))
@@ -134,9 +128,7 @@ async def _wired() -> AsyncIterator[SimpleNamespace]:
                     stopped["client"] = True
                     await stop_client()
 
-            yield SimpleNamespace(
-                server=epimemer_mcp, addr=addr, stop_session=_stop_session
-            )
+            yield SimpleNamespace(server=epimemer_mcp, addr=addr, stop_session=_stop_session)
         finally:
             epimemer_mcp._lifespan_result = None
             epimemer_mcp._lifespan = original
@@ -151,28 +143,43 @@ def _parse(result) -> dict:
 
 
 async def _seed(server: FastMCP) -> list[str]:
-    seg = _parse(await server.call_tool("segment", {"expected_graph": "default", 
-        "content": (
-            "The deployment rollback failed on Tuesday. "
-            "The certificate rotation completed on Wednesday."
-        ),
-    }))["result"]
-    await server.call_tool("store_decomposition", {"expected_graph": "default", 
-        "metacontext_id": "the-real",
-        "document_id": seg["document_id"],
-        "segments": [{
-            "segment_id": seg["segments"][0]["segment_id"],
-            "topics": ["Deployment"],
-            "facts": [
-                "The deployment rollback failed on Tuesday",
-                "The deployment rollback succeeded on Tuesday",
+    seg = _parse(
+        await server.call_tool(
+            "segment",
+            {
+                "expected_graph": "default",
+                "content": (
+                    "The deployment rollback failed on Tuesday. "
+                    "The certificate rotation completed on Wednesday."
+                ),
+            },
+        )
+    )["result"]
+    await server.call_tool(
+        "store_decomposition",
+        {
+            "expected_graph": "default",
+            "metacontext_id": "the-real",
+            "document_id": seg["document_id"],
+            "segments": [
+                {
+                    "segment_id": seg["segments"][0]["segment_id"],
+                    "topics": ["Deployment"],
+                    "facts": [
+                        "The deployment rollback failed on Tuesday",
+                        "The deployment rollback succeeded on Tuesday",
+                    ],
+                    "inferences": ["The release process is fragile"],
+                }
             ],
-            "inferences": ["The release process is fragile"],
-        }],
-    })
-    found = _parse(await server.call_tool(
-        "find_nodes", {"expected_graph": "default", "sourced_from": seg["document_id"], "limit": 50}
-    ))["result"]
+        },
+    )
+    found = _parse(
+        await server.call_tool(
+            "find_nodes",
+            {"expected_graph": "default", "sourced_from": seg["document_id"], "limit": 50},
+        )
+    )["result"]
     return [n["id"] for n in found["nodes"]]
 
 
@@ -181,21 +188,38 @@ async def test_rpc_hands_the_frontend_exactly_what_the_agent_saw():
         server, addr = wired.server, wired.addr
         known = await _seed(server)
         facts = [
-            n["id"] for n in _parse(await server.call_tool(
-                "find_nodes", {"expected_graph": "default", "sourced_from": known[0], "limit": 50}
-            ))["result"]["nodes"]
+            n["id"]
+            for n in _parse(
+                await server.call_tool(
+                    "find_nodes",
+                    {"expected_graph": "default", "sourced_from": known[0], "limit": 50},
+                )
+            )["result"]["nodes"]
         ] or known
 
         responses = {
-            "epimemer.search": (await server.call_tool(
-                "search", {"expected_graph": "default", "query": "deployment rollback", "k": 5}
-            )).content[0].text,
-            "epimemer.check_conflicts": (await server.call_tool(
-                "check_conflicts", {"expected_graph": "default", "fact_ids": facts, "threshold": 0.0}
-            )).content[0].text,
-            "epimemer.reflect": (await server.call_tool(
-                "reflect", {"expected_graph": "default", "similarity_threshold": 0.0}
-            )).content[0].text,
+            "epimemer.search": (
+                await server.call_tool(
+                    "search", {"expected_graph": "default", "query": "deployment rollback", "k": 5}
+                )
+            )
+            .content[0]
+            .text,
+            "epimemer.check_conflicts": (
+                await server.call_tool(
+                    "check_conflicts",
+                    {"expected_graph": "default", "fact_ids": facts, "threshold": 0.0},
+                )
+            )
+            .content[0]
+            .text,
+            "epimemer.reflect": (
+                await server.call_tool(
+                    "reflect", {"expected_graph": "default", "similarity_threshold": 0.0}
+                )
+            )
+            .content[0]
+            .text,
         }
 
         status, body = await _http_get(addr, f"/api/retrievals?session={SESSION_ID}")
@@ -226,9 +250,15 @@ async def test_a_reflect_record_names_its_nominees_not_its_scan():
     async with _wired() as wired:
         server, addr = wired.server, wired.addr
         known = await _seed(server)
-        text = (await server.call_tool(
-            "reflect", {"expected_graph": "default", "similarity_threshold": 0.99}
-        )).content[0].text
+        text = (
+            (
+                await server.call_tool(
+                    "reflect", {"expected_graph": "default", "similarity_threshold": 0.99}
+                )
+            )
+            .content[0]
+            .text
+        )
 
         status, body = await _http_get(addr, f"/api/retrievals?session={SESSION_ID}")
 
@@ -249,7 +279,9 @@ async def test_the_rpc_is_gone_with_the_session_and_the_mirror_is_not():
     async with _wired() as wired:
         server, addr = wired.server, wired.addr
         await _seed(server)
-        await server.call_tool("search", {"expected_graph": "default", "query": "deployment", "k": 5})
+        await server.call_tool(
+            "search", {"expected_graph": "default", "query": "deployment", "k": 5}
+        )
         live_status, _ = await _http_get(addr, f"/api/retrievals?session={SESSION_ID}")
         assert live_status == 200
 

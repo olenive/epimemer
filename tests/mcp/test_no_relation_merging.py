@@ -52,11 +52,11 @@ TWINS = _FixedEmbed()
 
 
 class TestTheToolCannotBeAsked:
-
     async def test_apply_reflection_takes_no_relation_merges(self, storage):
         with pytest.raises(TypeError):
             await tools.apply_reflection(
-                storage, TWINS,
+                storage,
+                TWINS,
                 relation_merges=[{"labels": ["works_for"], "into": "employed_by"}],
             )
 
@@ -70,8 +70,7 @@ class TestTheToolCannotBeAsked:
 
     async def test_no_response_key_promises_a_rewrite(self, storage):
         result, _ = await tools.apply_reflection(storage, TWINS)
-        for key in ("relations_consolidated", "edges_relabeled",
-                    "relation_descriptions_orphaned"):
+        for key in ("relations_consolidated", "edges_relabeled", "relation_descriptions_orphaned"):
             assert key not in result
 
 
@@ -108,26 +107,25 @@ class TestTheNominationsStillHaveSomewhereToGo:
             await storage.store_node(dst)
             await tools.link(src.id, dst.id, storage, relation=label, judge=CRITIC)
 
-        nominated = await sweep_similar_relation_pairs(
-            storage, TWINS, similarity_threshold=0.9
-        )
+        nominated = await sweep_similar_relation_pairs(storage, TWINS, similarity_threshold=0.9)
         assert len(nominated.pairs) == 1, "the pair has to be offered first"
 
         result, _ = await tools.apply_reflection(
-            storage, TWINS,
-            relation_verdicts=[{
-                "pair": ["works_for", "employed_by"],
-                "kind": "relationship",
-                "verdict": "synonymous",
-                "because": "one relationship written two ways",
-            }],
+            storage,
+            TWINS,
+            relation_verdicts=[
+                {
+                    "pair": ["works_for", "employed_by"],
+                    "kind": "relationship",
+                    "verdict": "synonymous",
+                    "because": "one relationship written two ways",
+                }
+            ],
             judge=CRITIC,
         )
         assert result["relation_verdicts_recorded"] == 1
 
-        after = await sweep_similar_relation_pairs(
-            storage, TWINS, similarity_threshold=0.9
-        )
+        after = await sweep_similar_relation_pairs(storage, TWINS, similarity_threshold=0.9)
         assert after.pairs == []
         assert after.suppressed == 1
 
@@ -141,13 +139,16 @@ class TestTheNominationsStillHaveSomewhereToGo:
             await tools.link(src.id, dst.id, storage, relation=label, judge=CRITIC)
 
         await tools.apply_reflection(
-            storage, TWINS,
-            relation_verdicts=[{
-                "pair": ["works_for", "employed_by"],
-                "kind": "relationship",
-                "verdict": "synonymous",
-                "because": "one relationship written two ways",
-            }],
+            storage,
+            TWINS,
+            relation_verdicts=[
+                {
+                    "pair": ["works_for", "employed_by"],
+                    "kind": "relationship",
+                    "verdict": "synonymous",
+                    "because": "one relationship written two ways",
+                }
+            ],
             judge=CRITIC,
         )
 

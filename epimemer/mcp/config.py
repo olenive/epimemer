@@ -13,7 +13,6 @@ from epimemer.core.advisories import WarningPolicy
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.storage.protocol import StorageBackend
 
-
 # Recording retrieval is on by default. Defined here rather than inline on the
 # field so `tools.search` can share the constant instead of keeping a second
 # copy that can drift out of step with the config.
@@ -100,7 +99,6 @@ class ServerConfig(BaseModel):
     viz_port: int = 8765
     viz_autospawn: bool = True
 
-
     @field_validator("approved_agents", mode="before")
     @classmethod
     def _split_ids(cls, value):
@@ -164,6 +162,7 @@ def create_storage(config: ServerConfig) -> StorageBackend:
     """
     if config.storage_backend == "surrealdb":
         from epimemer.storage.surrealdb_adapter import SurrealDBStorage
+
         # EPIMEMER_GRAPH first, then EPIMEMER_SURREALDB_DATABASE. Empty means
         # unset rather than a graph named "".
         database = config.graph if config.graph != "" else config.surrealdb_database
@@ -176,16 +175,31 @@ def create_storage(config: ServerConfig) -> StorageBackend:
         )
     else:
         from epimemer.storage.memory import InMemoryStorage
+
         return InMemoryStorage()
 
 
 def create_embedding_provider(config: ServerConfig) -> EmbeddingProvider:
     """Create an embedding provider from config."""
     if config.embedding_provider == "sentence-transformers":
-        from epimemer.embeddings.sentence_transformers import SentenceTransformersProvider
+        # An optional extra, because it brings PyTorch with it. Refusing here
+        # names the extra; the alternative is an ImportError from three
+        # modules down that names a package the user never asked for.
+        try:
+            from epimemer.embeddings.sentence_transformers import (
+                SentenceTransformersProvider,
+            )
+        except ImportError as missing:
+            raise RuntimeError(
+                "EPIMEMER_EMBEDDING_PROVIDER is 'sentence-transformers' but that "
+                "package is not installed. It is an optional extra: install "
+                "'epimemer[sentence-transformers]', or set "
+                "EPIMEMER_EMBEDDING_PROVIDER to another provider."
+            ) from missing
         return SentenceTransformersProvider(model_name=config.embedding_model_id)
     else:
         from epimemer.embeddings.mock import MockEmbeddingProvider
+
         return MockEmbeddingProvider(
             model_id=config.embedding_model_id,
             dimension=config.embedding_dimension,

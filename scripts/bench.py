@@ -90,7 +90,7 @@ import statistics
 import sys
 import time
 from collections.abc import Callable, Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 
@@ -161,28 +161,42 @@ shifted split merged closed reappeared dwindled hardened settled cracked warmed
 lapsed doubled vanished recovered stalled widened sank rose fractured cleared""".split()
 
 _QUALIFIERS = (
-    "after the long drought", "before the second survey", "during the winter closure",
-    "under the new charter", "beyond the parish boundary", "within a single season",
-    "against the surveyor's advice", "throughout the rebuilding", "despite the shortfall",
-    "following the boundary dispute", "since the last audit", "near the old crossing",
+    "after the long drought",
+    "before the second survey",
+    "during the winter closure",
+    "under the new charter",
+    "beyond the parish boundary",
+    "within a single season",
+    "against the surveyor's advice",
+    "throughout the rebuilding",
+    "despite the shortfall",
+    "following the boundary dispute",
+    "since the last audit",
+    "near the old crossing",
 )
 
 
 def _diverse_topic(rng: random.Random) -> str:
-    return (f"{rng.choice(_ADJECTIVES)} {rng.choice(_NOUNS)} and "
-            f"{rng.choice(_ADJECTIVES)} {rng.choice(_NOUNS)}")
+    return (
+        f"{rng.choice(_ADJECTIVES)} {rng.choice(_NOUNS)} and "
+        f"{rng.choice(_ADJECTIVES)} {rng.choice(_NOUNS)}"
+    )
 
 
 def _diverse_fact(rng: random.Random) -> str:
-    return (f"The {rng.choice(_ADJECTIVES)} {rng.choice(_NOUNS)} {rng.choice(_VERBS)} "
-            f"while the {rng.choice(_ADJECTIVES)} {rng.choice(_NOUNS)} {rng.choice(_VERBS)} "
-            f"{rng.choice(_QUALIFIERS)}.")
+    return (
+        f"The {rng.choice(_ADJECTIVES)} {rng.choice(_NOUNS)} {rng.choice(_VERBS)} "
+        f"while the {rng.choice(_ADJECTIVES)} {rng.choice(_NOUNS)} {rng.choice(_VERBS)} "
+        f"{rng.choice(_QUALIFIERS)}."
+    )
 
 
 def _diverse_inference(rng: random.Random) -> str:
-    return (f"Because the {rng.choice(_ADJECTIVES)} {rng.choice(_NOUNS)} {rng.choice(_VERBS)}, "
-            f"the {rng.choice(_ADJECTIVES)} {rng.choice(_NOUNS)} {rng.choice(_VERBS)} "
-            f"{rng.choice(_QUALIFIERS)}.")
+    return (
+        f"Because the {rng.choice(_ADJECTIVES)} {rng.choice(_NOUNS)} {rng.choice(_VERBS)}, "
+        f"the {rng.choice(_ADJECTIVES)} {rng.choice(_NOUNS)} {rng.choice(_VERBS)} "
+        f"{rng.choice(_QUALIFIERS)}."
+    )
 
 
 # Which generator each corpus uses for each kind of text. Data rather than a
@@ -210,9 +224,16 @@ CORPORA: tuple[str, ...] = tuple(_GENERATORS)
 # restatement has to stay the same claim, or the pair it forms is not the pair
 # a duplicate corpus is being built to produce.
 _RESTATEMENTS = {
-    "the": "that", "while": "as", "after": "following", "before": "ahead of",
-    "during": "through", "despite": "in spite of", "because": "since",
-    "within": "inside", "beyond": "past", "near": "close to",
+    "the": "that",
+    "while": "as",
+    "after": "following",
+    "before": "ahead of",
+    "during": "through",
+    "despite": "in spite of",
+    "because": "since",
+    "within": "inside",
+    "beyond": "past",
+    "near": "close to",
 }
 
 # Each segment contributes this many nodes, so a target node count converts to
@@ -233,9 +254,7 @@ def _sentence(rng: random.Random, words: int = 12) -> str:
 def _document(rng: random.Random, segments: int, corpus: str) -> str:
     """A document of `segments` paragraphs — the paragraph strategy splits on blank lines."""
     prose = _GENERATORS[corpus]["prose"]
-    return "\n\n".join(
-        " ".join(prose(rng) for _ in range(3)) for _ in range(segments)
-    )
+    return "\n\n".join(" ".join(prose(rng) for _ in range(3)) for _ in range(segments))
 
 
 def _restate(text: str, rng: random.Random) -> str:
@@ -246,10 +265,13 @@ def _restate(text: str, rng: random.Random) -> str:
     the same claim again, which is the one thing this must not do.
     """
     words = text.split()
-    return " ".join(words[:1] + [
-        _RESTATEMENTS.get(word.lower(), word) if rng.random() < 0.7 else word
-        for word in words[1:]
-    ])
+    return " ".join(
+        words[:1]
+        + [
+            _RESTATEMENTS.get(word.lower(), word) if rng.random() < 0.7 else word
+            for word in words[1:]
+        ]
+    )
 
 
 def _planted_pairs(pool: int, groups: int, size: int) -> int:
@@ -266,9 +288,7 @@ def _planted_pairs(pool: int, groups: int, size: int) -> int:
     return fits * size * (size - 1) // 2
 
 
-def _fact_pool(
-    rng: random.Random, *, count: int, corpus: str, groups: int, size: int
-) -> list[str]:
+def _fact_pool(rng: random.Random, *, count: int, corpus: str, groups: int, size: int) -> list[str]:
     """Every fact this run will ingest, restatement clusters already placed.
 
     Built up front rather than per document because a cluster spans documents —
@@ -286,7 +306,7 @@ def _fact_pool(
     fits = min(groups, count // size)
     positions = rng.sample(range(count), fits * size)
     for start in range(0, fits * size, size):
-        cluster = positions[start:start + size]
+        cluster = positions[start : start + size]
         original = texts[cluster[0]]
         for index in cluster[1:]:
             texts[index] = _restate(original, rng)
@@ -328,9 +348,7 @@ def _decomposition(
             "segment_id": sid,
             "topics": [generate["topic"](rng) for _ in range(_TOPICS_PER_SEGMENT)],
             "facts": [next(facts) for _ in range(facts_per_segment)],
-            "inferences": [
-                generate["inference"](rng) for _ in range(_INFERENCES_PER_SEGMENT)
-            ],
+            "inferences": [generate["inference"](rng) for _ in range(_INFERENCES_PER_SEGMENT)],
         }
         for sid in segment_ids
     ]
@@ -355,10 +373,19 @@ def _progress(message: str) -> None:
 
 
 async def _seed(
-    storage, provider, config, *,
-    docs: int, segments: int, publishers: int, corpus: str,
-    duplicate_groups: int, duplicate_size: int, facts_per_segment: int,
-    rng, fact_rng,
+    storage,
+    provider,
+    config,
+    *,
+    docs: int,
+    segments: int,
+    publishers: int,
+    corpus: str,
+    duplicate_groups: int,
+    duplicate_size: int,
+    facts_per_segment: int,
+    rng,
+    fact_rng,
 ) -> float:
     """Ingest `docs` documents. Returns elapsed seconds.
 
@@ -376,11 +403,13 @@ async def _seed(
     """
     # Every ingest names its frame, so the graph needs one. A real graph gets
     # this once from `create_metacontext`; a benchmark builds its own world.
-    await storage.store_metacontext(Metacontext(
-        id=BASE_METACONTEXT_ID,
-        content="The Real",
-        description="Claims about the real world.",
-    ))
+    await storage.store_metacontext(
+        Metacontext(
+            id=BASE_METACONTEXT_ID,
+            content="The Real",
+            description="Claims about the real world.",
+        )
+    )
     entities: dict[str, Topic] = {}
     facts = _fact_stream(
         fact_rng,
@@ -392,7 +421,10 @@ async def _seed(
     start = time.perf_counter()
     for i in range(docs):
         seg_result, _ = await segment_text(
-            _document(rng, segments, corpus), storage, provider, config,
+            _document(rng, segments, corpus),
+            storage,
+            provider,
+            config,
             source=f"bench-doc-{i}",
         )
         if publishers:
@@ -405,14 +437,22 @@ async def _seed(
                     content=name, source_id=None, extraction_method="agent:source"
                 )
                 await storage.store_node(entities[name])
-            await storage.store_edge(NodeEdge(
-                src_id=seg_result["document_id"], dst_id=entities[name].id,
-                type=EdgeType.RELATED, label="published_by", kind="attribution",
-            ))
+            await storage.store_edge(
+                NodeEdge(
+                    src_id=seg_result["document_id"],
+                    dst_id=entities[name].id,
+                    type=EdgeType.RELATED,
+                    label="published_by",
+                    kind="attribution",
+                )
+            )
         await store_decomposition(
             seg_result["document_id"],
             _decomposition(
-                rng, [s["segment_id"] for s in seg_result["segments"]], corpus, facts,
+                rng,
+                [s["segment_id"] for s in seg_result["segments"]],
+                corpus,
+                facts,
                 facts_per_segment,
             ),
             storage,
@@ -440,9 +480,13 @@ async def _wire_similarity(storage, *, degree: int, rng) -> int:
         for partner in rng.sample(facts, min(degree, len(facts))):
             if partner.id == fact.id:
                 continue
-            await storage.store_edge(NodeEdge(
-                src_id=fact.id, dst_id=partner.id, type=EdgeType.SIMILARITY,
-            ))
+            await storage.store_edge(
+                NodeEdge(
+                    src_id=fact.id,
+                    dst_id=partner.id,
+                    type=EdgeType.SIMILARITY,
+                )
+            )
             written += 1
     return written
 
@@ -461,21 +505,15 @@ async def _time_annotations(storage, provider, *, runs: int, rng) -> dict:
     nodes = list((await storage.get_nodes(node_ids)).values())
 
     async def median_ms(factory) -> float:
-        return round(
-            statistics.median([await _timed(factory) for _ in range(runs)]), 3
-        )
+        return round(statistics.median([await _timed(factory) for _ in range(runs)]), 3)
 
     return {
         "result_set": len(node_ids),
         "hierarchy_ms": await median_ms(lambda: _hierarchy_annotations(nodes, storage)),
-        "metacontexts_ms": await median_ms(
-            lambda: _metacontext_labels_for(node_ids, storage)
-        ),
+        "metacontexts_ms": await median_ms(lambda: _metacontext_labels_for(node_ids, storage)),
         "review_labels_ms": await median_ms(lambda: review_labels_for(nodes, storage)),
         "validity_ms": await median_ms(lambda: validity_for(node_ids, storage)),
-        "corroboration_ms": await median_ms(
-            lambda: corroboration_for(node_ids, storage)
-        ),
+        "corroboration_ms": await median_ms(lambda: corroboration_for(node_ids, storage)),
     }
 
 
@@ -507,7 +545,7 @@ async def _wire_validity(storage, *, share: float, rng) -> int:
     edges = await storage.get_edges_for(
         [fact.id for fact in facts], direction="from", edge_type=EdgeType.SOURCED_FROM
     )
-    epoch = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    epoch = datetime(2000, 1, 1, tzinfo=UTC)
     periods: dict[str, tuple[datetime, datetime]] = {}
     dated = 0
     for node_edges in edges.values():
@@ -518,11 +556,13 @@ async def _wire_validity(storage, *, share: float, rng) -> int:
                 start = epoch + timedelta(days=rng.randrange(0, 3650))
                 periods[edge.dst_id] = (start, start + timedelta(days=365))
             start, end = periods[edge.dst_id]
-            edge.validity = [ValidityInterval(
-                start=PreciseInstant(at=start),
-                end=PreciseInstant(at=end),
-                basis=IntervalBasis.STATED,
-            )]
+            edge.validity = [
+                ValidityInterval(
+                    start=PreciseInstant(at=start),
+                    end=PreciseInstant(at=end),
+                    basis=IntervalBasis.STATED,
+                )
+            ]
             await storage.store_edge(edge)
             dated += 1
     return dated
@@ -551,7 +591,7 @@ async def _time_embedding(provider, *, corpus: str, runs: int, rng) -> dict:
     for size in sizes:
         texts = [make(rng) for _ in range(size)]
         ms = statistics.median(
-            [await _timed(lambda: provider.embed(texts)) for _ in range(runs)]
+            [await _timed(lambda texts=texts: provider.embed(texts)) for _ in range(runs)]
         )
         measured[f"batch_{size}"] = {
             "ms": round(ms, 3),
@@ -569,9 +609,7 @@ def _fact_threshold() -> float:
     survival rate reported against a threshold nothing uses is worse than no
     survival rate at all.
     """
-    return inspect.signature(detect_contradictions).parameters[
-        "similarity_threshold"
-    ].default
+    return inspect.signature(detect_contradictions).parameters["similarity_threshold"].default
 
 
 async def _corpus_survival(storage, *, planted_pairs: int, dated_facts: int) -> dict:
@@ -596,16 +634,17 @@ async def _corpus_survival(storage, *, planted_pairs: int, dated_facts: int) -> 
     records = await storage.get_embeddings_for_items([fact.id for fact in facts])
     read_ms = (time.perf_counter() - start) * 1000
 
-    vectors = np.array(
-        [rows[0].vector for rows in records.values() if rows], dtype=np.float64
-    )
+    vectors = np.array([rows[0].vector for rows in records.values() if rows], dtype=np.float64)
     threshold = _fact_threshold()
     count = len(vectors)
     pairs = count * (count - 1) // 2
     if pairs == 0:
         return {
-            "items": count, "pairs": 0, "dated_facts": dated_facts,
-            "unsound_inferences": unsound, "read_ms": round(read_ms, 2),
+            "items": count,
+            "pairs": 0,
+            "dated_facts": dated_facts,
+            "unsound_inferences": unsound,
+            "read_ms": round(read_ms, 2),
         }
 
     start = time.perf_counter()
@@ -737,88 +776,111 @@ async def _run_one(
     try:
         _progress(f"[{backend}] seeding ~{nodes} nodes ({docs} docs × {segments} segments)...")
         elapsed = await _seed(
-            storage, provider, config,
-            docs=docs, segments=segments, publishers=publishers, corpus=corpus,
-            duplicate_groups=duplicate_groups, duplicate_size=duplicate_size,
-            facts_per_segment=facts_per_segment, rng=rng, fact_rng=fact_rng,
+            storage,
+            provider,
+            config,
+            docs=docs,
+            segments=segments,
+            publishers=publishers,
+            corpus=corpus,
+            duplicate_groups=duplicate_groups,
+            duplicate_size=duplicate_size,
+            facts_per_segment=facts_per_segment,
+            rng=rng,
+            fact_rng=fact_rng,
         )
-        similarity_edges = await _wire_similarity(
-            storage, degree=similarity_degree, rng=rng
-        )
+        similarity_edges = await _wire_similarity(storage, degree=similarity_degree, rng=rng)
         dated_facts = await _wire_validity(storage, share=dated_share, rng=rng)
         stats, _ = await graph_stats(storage, default_reflect_threshold=10)
-        _emit({
-            **tags,
-            "operation": "store_decomposition",
-            "nodes_actual": stats["total_nodes"],
-            "edges": stats["total_edges"],
-            "seconds": round(elapsed, 3),
-            "docs_per_min": round(docs / elapsed * 60, 1) if elapsed else None,
-        })
+        _emit(
+            {
+                **tags,
+                "operation": "store_decomposition",
+                "nodes_actual": stats["total_nodes"],
+                "edges": stats["total_edges"],
+                "seconds": round(elapsed, 3),
+                "docs_per_min": round(docs / elapsed * 60, 1) if elapsed else None,
+            }
+        )
 
         _progress(f"[{backend}] corpus survival...")
-        _emit({
-            **tags,
-            "operation": "corpus",
-            **await _corpus_survival(
-                storage,
-                planted_pairs=_planted_pairs(
-                    docs * segments * facts_per_segment,
-                    duplicate_groups,
-                    duplicate_size,
+        _emit(
+            {
+                **tags,
+                "operation": "corpus",
+                **await _corpus_survival(
+                    storage,
+                    planted_pairs=_planted_pairs(
+                        docs * segments * facts_per_segment,
+                        duplicate_groups,
+                        duplicate_size,
+                    ),
+                    dated_facts=dated_facts,
                 ),
-                dated_facts=dated_facts,
-            ),
-        })
+            }
+        )
 
         _progress(f"[{backend}] embedding throughput...")
-        _emit({
-            **tags,
-            "operation": "embedding",
-            "runs": 3,
-            **await _time_embedding(provider, corpus=corpus, runs=3, rng=rng),
-        })
+        _emit(
+            {
+                **tags,
+                "operation": "embedding",
+                "runs": 3,
+                **await _time_embedding(provider, corpus=corpus, runs=3, rng=rng),
+            }
+        )
 
         _progress(f"[{backend}] search ×{searches}...")
         latencies = await _time_search(storage, provider, runs=searches, rng=rng)
-        _emit({
-            **tags,
-            "operation": "search",
-            "runs": searches,
-            "p50_ms": round(statistics.median(latencies), 2),
-            "p95_ms": round(_percentile(latencies, 95), 2),
-            "max_ms": round(max(latencies), 2),
-        })
+        _emit(
+            {
+                **tags,
+                "operation": "search",
+                "runs": searches,
+                "p50_ms": round(statistics.median(latencies), 2),
+                "p95_ms": round(_percentile(latencies, 95), 2),
+                "max_ms": round(max(latencies), 2),
+            }
+        )
 
         _progress(f"[{backend}] list_sources...")
-        _emit({
-            **tags,
-            "operation": "list_sources",
-            "ms": round(await _timed(lambda: list_sources(storage)), 2),
-        })
+        _emit(
+            {
+                **tags,
+                "operation": "list_sources",
+                "ms": round(await _timed(lambda: list_sources(storage)), 2),
+            }
+        )
 
         _progress(f"[{backend}] read-time annotations...")
-        _emit({
-            **tags,
-            "operation": "annotations",
-            "runs": min(searches, 15),
-            "similarity_edges": similarity_edges,
-            **await _time_annotations(
-                storage, provider, runs=min(searches, 15), rng=rng
-            ),
-        })
+        _emit(
+            {
+                **tags,
+                "operation": "annotations",
+                "runs": min(searches, 15),
+                "similarity_edges": similarity_edges,
+                **await _time_annotations(storage, provider, runs=min(searches, 15), rng=rng),
+            }
+        )
 
         if not skip_reflect:
             _progress(f"[{backend}] reflect (slowest step; minutes at 10k)...")
-            _emit({
-                **tags,
-                "operation": "reflect",
-                "ms": round(await _timed(lambda: reflect(storage, provider)), 2),
-            })
+            _emit(
+                {
+                    **tags,
+                    "operation": "reflect",
+                    "ms": round(await _timed(lambda: reflect(storage, provider)), 2),
+                }
+            )
             if reflect_phases:
                 _progress(f"[{backend}] reflect again, watched, for the phase split...")
-                _emit({**tags, "operation": "reflect_phases",
-                       **await _reflect_phases(storage, provider)})
+                _emit(
+                    {
+                        **tags,
+                        "operation": "reflect_phases",
+                        **await _reflect_phases(storage, provider),
+                    }
+                )
     finally:
         await storage.close()
 
@@ -828,9 +890,7 @@ async def _run_one(
 async def _drop(url: str, namespace: str, databases: list[str]) -> None:
     """Remove the databases this run created. Prefix-guarded: it will not touch
     anything it did not name itself."""
-    storage = SurrealDBStorage(
-        url=url, namespace=namespace, database="bench_cleanup"
-    )
+    storage = SurrealDBStorage(url=url, namespace=namespace, database="bench_cleanup")
     await storage.connect()
     try:
         for name in databases:
@@ -849,7 +909,7 @@ async def _main(args) -> None:
         backends.append("surrealdb")
 
     common = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "segments_per_doc": args.segments,
         "embeddings": "real" if args.real_embeddings else "mock-384",
         "publishers": args.publishers,
@@ -931,9 +991,7 @@ def main() -> None:
             "reads are round-trips."
         ),
     )
-    parser.add_argument(
-        "--real-embeddings", action="store_true", help="use sentence-transformers"
-    )
+    parser.add_argument("--real-embeddings", action="store_true", help="use sentence-transformers")
     parser.add_argument(
         "--namespace",
         default="epimemer_bench",

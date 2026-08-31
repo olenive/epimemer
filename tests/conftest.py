@@ -33,11 +33,13 @@ async def _set_up(store):
     the behaviour. The tests that are *about* the requirement name frames that
     do not exist, and are unaffected by this one existing.
     """
-    await store.store_metacontext(Metacontext(
-        id=BASE_METACONTEXT_ID,
-        content="The Real",
-        description="Claims about the real world.",
-    ))
+    await store.store_metacontext(
+        Metacontext(
+            id=BASE_METACONTEXT_ID,
+            content="The Real",
+            description="Claims about the real world.",
+        )
+    )
     return store
 
 

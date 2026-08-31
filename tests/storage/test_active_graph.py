@@ -40,7 +40,9 @@ class TestUsersDoNotExcludeEachOther:
     async def test_two_users_hold_it_at_once(self):
         guard = make_graph_guard()
         first_inside, release, second_inside = (
-            asyncio.Event(), asyncio.Event(), asyncio.Event(),
+            asyncio.Event(),
+            asyncio.Event(),
+            asyncio.Event(),
         )
 
         async def first():
@@ -92,7 +94,9 @@ class TestAMoveWaitsForTheWorkInFlight:
         which is exactly when somebody is watching the dashboard."""
         guard = make_graph_guard()
         inside, release, late_inside = (
-            asyncio.Event(), asyncio.Event(), asyncio.Event(),
+            asyncio.Event(),
+            asyncio.Event(),
+            asyncio.Event(),
         )
 
         async def user(entered: asyncio.Event, hold: asyncio.Event | None = None):
@@ -195,14 +199,16 @@ class TestTheBackendsTakeTheirOwnTurn:
         await asyncio.wait_for(switch, timeout=5)
 
         assert storage.current_database == "elsewhere"
-        assert await storage.get_node_by_content(
-            "written where it started", node_type=NodeType.TOPIC
-        ) is None, "the write followed the switch"
+        assert (
+            await storage.get_node_by_content("written where it started", node_type=NodeType.TOPIC)
+            is None
+        ), "the write followed the switch"
 
         await storage.switch_database(started_on)
-        assert await storage.get_node_by_content(
-            "written where it started", node_type=NodeType.TOPIC
-        ) is not None
+        assert (
+            await storage.get_node_by_content("written where it started", node_type=NodeType.TOPIC)
+            is not None
+        )
 
 
 class TestOnlyTheBorrowerPaysForTheBorrow:

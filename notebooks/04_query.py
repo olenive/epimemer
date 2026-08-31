@@ -9,7 +9,8 @@ def _(mo):
     mo.md("""
     # Query Pipeline
 
-    Step through hybrid retrieval: vector search → graph expansion → result assembly. Pre-populates a small graph with nodes and embeddings.
+    Step through hybrid retrieval: vector search → graph expansion → result
+    assembly. Pre-populates a small graph with nodes and embeddings.
     """)
     return
 
@@ -20,6 +21,7 @@ def _():
     from petritype.core.executable_graph_components import ExecutableGraphOperations
     from petritype.plotting.rustworkx_graph import RustworkxGraph
     from petritype.plotting.simple_graphviz import SimpleGraphvizVisualization
+
     from epimemer.core.types import EdgeType, EmbeddingRecord, Fact, Inference, NodeEdge, Topic
     from epimemer.embeddings.mock import MockEmbeddingProvider
     from epimemer.pipelines.query.hybrid_retrieval import hybrid_retrieval_net
@@ -66,23 +68,31 @@ async def _(
     for node in [topic, fact, inference]:
         await storage.store_node(node)
         vecs = await emb_provider.embed([node.content])
-        await storage.store_embedding(EmbeddingRecord(item_id=node.id, model_id="mock", vector=vecs[0]))
+        await storage.store_embedding(
+            EmbeddingRecord(item_id=node.id, model_id="mock", vector=vecs[0])
+        )
 
     await storage.store_edge(NodeEdge(src_id=fact.id, dst_id=topic.id, type=EdgeType.SUPPORTS))
-    await storage.store_edge(NodeEdge(src_id=inference.id, dst_id=topic.id, type=EdgeType.ABSTRACTS))
+    await storage.store_edge(
+        NodeEdge(src_id=inference.id, dst_id=topic.id, type=EdgeType.ABSTRACTS)
+    )
     return emb_provider, storage
 
 
 @app.cell
 def _(mo):
-    query_text = mo.ui.text(value="Neural networks require training data", label="Search query", full_width=True)
+    query_text = mo.ui.text(
+        value="Neural networks require training data", label="Search query", full_width=True
+    )
     query_text
     return (query_text,)
 
 
 @app.cell
 def _(mo):
-    step = mo.ui.slider(0, 3, value=0, label="Execution step (3 transitions total)", full_width=True)
+    step = mo.ui.slider(
+        0, 3, value=0, label="Execution step (3 transitions total)", full_width=True
+    )
     step
     return (step,)
 
@@ -104,7 +114,9 @@ async def _(
     graph = hybrid_retrieval_net(request, emb_provider, storage)
 
     if step.value > 0:
-        graph, fired = await ExecutableGraphOperations.execute_graph(graph, max_transitions=step.value)
+        graph, fired = await ExecutableGraphOperations.execute_graph(
+            graph, max_transitions=step.value
+        )
     else:
         fired = 0
 
@@ -127,7 +139,7 @@ def _(graph, mo):
     if _rp and _rp.tokens:
         _qr = _rp.tokens[0]
         _lines = [
-            f"### Query Result",
+            "### Query Result",
             f"- **Nodes returned:** {len(_qr.nodes)}",
             f"- **Edges returned:** {len(_qr.edges)}",
             f"- **Source types:** {_qr.metadata.source_types}",

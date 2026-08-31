@@ -9,7 +9,6 @@ that it stays gone.
 """
 
 import pytest
-
 from petritype.core.executable_graph_components import (
     ArgumentEdgeToTransition,
     ExecutableGraph,
@@ -60,12 +59,14 @@ def _chain_graph(length: int) -> ExecutableGraph:
     """
     components: list = [ListPlaceNode("P0", int, [0])]
     for step in range(length):
-        components.extend([
-            ListPlaceNode(f"P{step + 1}", int),
-            FunctionTransitionNode(f"t{step}", _increment),
-            ArgumentEdgeToTransition(f"P{step}", f"t{step}", "x"),
-            ReturnedEdgeFromTransition(f"t{step}", f"P{step + 1}"),
-        ])
+        components.extend(
+            [
+                ListPlaceNode(f"P{step + 1}", int),
+                FunctionTransitionNode(f"t{step}", _increment),
+                ArgumentEdgeToTransition(f"P{step}", f"t{step}", "x"),
+                ReturnedEdgeFromTransition(f"t{step}", f"P{step + 1}"),
+            ]
+        )
     return ExecutableGraphOperations.construct_graph(components)
 
 
@@ -75,17 +76,19 @@ def _failing_chain_graph() -> ExecutableGraph:
     t0 fires cleanly, t1 raises — so a run gets one good firing and then a
     failure, which is the case the event stream must still close on.
     """
-    return ExecutableGraphOperations.construct_graph([
-        ListPlaceNode("P0", int, [0]),
-        ListPlaceNode("P1", int),
-        ListPlaceNode("P2", int),
-        FunctionTransitionNode("t0", _increment),
-        ArgumentEdgeToTransition("P0", "t0", "x"),
-        ReturnedEdgeFromTransition("t0", "P1"),
-        FunctionTransitionNode("t1", _boom),
-        ArgumentEdgeToTransition("P1", "t1", "x"),
-        ReturnedEdgeFromTransition("t1", "P2"),
-    ])
+    return ExecutableGraphOperations.construct_graph(
+        [
+            ListPlaceNode("P0", int, [0]),
+            ListPlaceNode("P1", int),
+            ListPlaceNode("P2", int),
+            FunctionTransitionNode("t0", _increment),
+            ArgumentEdgeToTransition("P0", "t0", "x"),
+            ReturnedEdgeFromTransition("t0", "P1"),
+            FunctionTransitionNode("t1", _boom),
+            ArgumentEdgeToTransition("P1", "t1", "x"),
+            ReturnedEdgeFromTransition("t1", "P2"),
+        ]
+    )
 
 
 def _parallel_fan_graph(width: int) -> ExecutableGraph:
@@ -97,13 +100,15 @@ def _parallel_fan_graph(width: int) -> ExecutableGraph:
     """
     components: list = []
     for i in range(width):
-        components.extend([
-            ListPlaceNode(f"A{i}", int, [0]),
-            ListPlaceNode(f"B{i}", int),
-            FunctionTransitionNode(f"t{i}", _increment),
-            ArgumentEdgeToTransition(f"A{i}", f"t{i}", "x"),
-            ReturnedEdgeFromTransition(f"t{i}", f"B{i}"),
-        ])
+        components.extend(
+            [
+                ListPlaceNode(f"A{i}", int, [0]),
+                ListPlaceNode(f"B{i}", int),
+                FunctionTransitionNode(f"t{i}", _increment),
+                ArgumentEdgeToTransition(f"A{i}", f"t{i}", "x"),
+                ReturnedEdgeFromTransition(f"t{i}", f"B{i}"),
+            ]
+        )
     return ExecutableGraphOperations.construct_graph(components)
 
 
@@ -132,9 +137,7 @@ class TestRunsToQuiescence:
     async def test_both_paths_agree_on_the_result(self):
         """Observing a run must not change it — the bus is a tap, not a valve."""
         bus = create_event_bus()
-        observed, observed_fired = await tools._run_net(
-            _chain_graph(CHAIN_LENGTH), "chain", bus
-        )
+        observed, observed_fired = await tools._run_net(_chain_graph(CHAIN_LENGTH), "chain", bus)
         plain, plain_fired = await tools._run_net(_chain_graph(CHAIN_LENGTH), "chain", None)
 
         assert observed_fired == plain_fired
@@ -151,9 +154,7 @@ class TestEventsCoverEveryTransition:
 
         await tools._run_net(_chain_graph(CHAIN_LENGTH), "chain", bus)
 
-        fired = [
-            e.transition_name for e in events if e.event_type == "transition_fired"
-        ]
+        fired = [e.transition_name for e in events if e.event_type == "transition_fired"]
         assert fired == [f"t{step}" for step in range(CHAIN_LENGTH)]
 
     async def test_completion_reports_the_full_count(self):
@@ -178,17 +179,17 @@ class TestEventsCoverEveryTransition:
         events: list[Event] = []
         bus.subscribe(handler=lambda e: events.append(e))
 
-        graph = await Runner.run_to_completion(RunContext(
-            graph=_parallel_fan_graph(FAN_WIDTH),
-            mode=ExecutionMode.CONCURRENT,
-            observers=(pipeline_observer(bus, "fan"),),
-        ))
+        graph = await Runner.run_to_completion(
+            RunContext(
+                graph=_parallel_fan_graph(FAN_WIDTH),
+                mode=ExecutionMode.CONCURRENT,
+                observers=(pipeline_observer(bus, "fan"),),
+            )
+        )
 
         # Sanity: the fan really did fire as one batch (step jumps past 1).
         assert graph.step_count == FAN_WIDTH
-        fired = sorted(
-            e.transition_name for e in events if e.event_type == "transition_fired"
-        )
+        fired = sorted(e.transition_name for e in events if e.event_type == "transition_fired")
         assert fired == sorted(f"t{i}" for i in range(FAN_WIDTH))
 
 
@@ -234,16 +235,19 @@ class TestNetsAreAcyclicByConstruction:
     def test_a_cyclic_net_is_rejected_at_construction(self):
         # P0 → t0 → P1 → t1 → P0 is a token-flow cycle: it must not build.
         with pytest.raises(ValueError, match="cycle"):
-            ExecutableGraphOperations.construct_graph([
-                ListPlaceNode("P0", int, [0]),
-                ListPlaceNode("P1", int),
-                FunctionTransitionNode("t0", _increment),
-                ArgumentEdgeToTransition("P0", "t0", "x"),
-                ReturnedEdgeFromTransition("t0", "P1"),
-                FunctionTransitionNode("t1", _increment),
-                ArgumentEdgeToTransition("P1", "t1", "x"),
-                ReturnedEdgeFromTransition("t1", "P0"),
-            ], expect_acyclic=True)
+            ExecutableGraphOperations.construct_graph(
+                [
+                    ListPlaceNode("P0", int, [0]),
+                    ListPlaceNode("P1", int),
+                    FunctionTransitionNode("t0", _increment),
+                    ArgumentEdgeToTransition("P0", "t0", "x"),
+                    ReturnedEdgeFromTransition("t0", "P1"),
+                    FunctionTransitionNode("t1", _increment),
+                    ArgumentEdgeToTransition("P1", "t1", "x"),
+                    ReturnedEdgeFromTransition("t1", "P0"),
+                ],
+                expect_acyclic=True,
+            )
 
 
 # --- Smoke tests: every real net, driven the way production drives it ---
@@ -315,9 +319,7 @@ class TestEveryNetReachesQuiescence:
         assert graph.place_named("Segments").tokens
 
     async def test_edge_creation_net(self, decomposed):
-        graph, fired = await tools._run_net(
-            edge_creation_net(decomposed), "edge_creation", None
-        )
+        graph, fired = await tools._run_net(edge_creation_net(decomposed), "edge_creation", None)
 
         assert fired >= 1
         assert graph.place_named("Edges").tokens
@@ -343,9 +345,7 @@ class TestEveryNetReachesQuiescence:
         assert len(graph.place_named("QueryResult").tokens) == 1
 
     async def test_orchestration_net(self, storage, embedding_provider, config):
-        request = MemoryRequest(
-            action="segment", payload={"content": "Something to remember."}
-        )
+        request = MemoryRequest(action="segment", payload={"content": "Something to remember."})
         graph, fired = await tools._run_net(
             orchestration_net(request, storage, embedding_provider, config),
             "orchestration",

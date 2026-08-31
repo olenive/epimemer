@@ -1,7 +1,6 @@
 """Tests for the instrumented pipeline executor."""
 
 import pytest
-
 from petritype.core.executable_graph_components import (
     ArgumentEdgeToTransition,
     ExecutableGraph,
@@ -17,9 +16,6 @@ from epimemer.visualization.events import (
     PipelineCompleted,
     PipelineStarted,
     TokensUpdated,
-    TransitionCompleted,
-    TransitionEnabled,
-    TransitionFired,
 )
 from epimemer.visualization.instrumented_executor import execute_with_events
 
@@ -30,13 +26,15 @@ def _double(x: int) -> int:
 
 def _build_simple_graph() -> ExecutableGraph:
     """A trivial Petri net: [Input] → double → [Output]."""
-    return ExecutableGraphOperations.construct_graph([
-        ListPlaceNode("Input", int, [5]),
-        ListPlaceNode("Output", int),
-        FunctionTransitionNode("double", _double),
-        ArgumentEdgeToTransition("Input", "double", "x"),
-        ReturnedEdgeFromTransition("double", "Output"),
-    ])
+    return ExecutableGraphOperations.construct_graph(
+        [
+            ListPlaceNode("Input", int, [5]),
+            ListPlaceNode("Output", int),
+            FunctionTransitionNode("double", _double),
+            ArgumentEdgeToTransition("Input", "double", "x"),
+            ReturnedEdgeFromTransition("double", "Output"),
+        ]
+    )
 
 
 @pytest.mark.asyncio

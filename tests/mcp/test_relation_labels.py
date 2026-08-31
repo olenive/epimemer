@@ -16,6 +16,7 @@ Both backends via the `storage` fixture, because a record the two stores disagre
 about is the divergence `tests/conftest.py` exists for.
 """
 
+from epimemer.cli import _backfill_relations
 from epimemer.core.types import (
     EdgeType,
     JudgeRef,
@@ -23,9 +24,7 @@ from epimemer.core.types import (
     RelationLabel,
     Topic,
 )
-from epimemer.cli import _backfill_relations
 from epimemer.mcp import tools
-
 
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
 EDITOR = JudgeRef(agent_id="editor", digest="d2")
@@ -83,23 +82,15 @@ class TestCoiningALabelRecordsIt:
 
 
 class TestIdentityIsNameAndKindTogether:
-    async def test_the_same_name_under_a_different_kind_is_a_different_record(
-        self, storage
-    ):
+    async def test_the_same_name_under_a_different_kind_is_a_different_record(self, storage):
         # The kind decides whether retrieval follows the edge, so two labels
         # spelled alike but behaving differently are two vocabulary entries.
-        await storage.store_relation_label(
-            RelationLabel(name="published_by", kind="relationship")
-        )
-        await storage.store_relation_label(
-            RelationLabel(name="published_by", kind="attribution")
-        )
+        await storage.store_relation_label(RelationLabel(name="published_by", kind="relationship"))
+        await storage.store_relation_label(RelationLabel(name="published_by", kind="attribution"))
 
         assert len(await storage.query_relation_labels()) == 2
 
-    async def test_storing_the_same_pair_twice_updates_rather_than_duplicates(
-        self, storage
-    ):
+    async def test_storing_the_same_pair_twice_updates_rather_than_duplicates(self, storage):
         await storage.store_relation_label(RelationLabel(name="works_for"))
 
         await storage.store_relation_label(
@@ -127,9 +118,7 @@ class TestIdentityIsNameAndKindTogether:
         # The coiner, never the describer: describing a label is not a claim to
         # have introduced it, and the rule is structural rather than a
         # convention every caller has to remember.
-        await storage.store_relation_label(
-            RelationLabel(name="works_for", judged_by=CRITIC)
-        )
+        await storage.store_relation_label(RelationLabel(name="works_for", judged_by=CRITIC))
 
         await storage.store_relation_label(
             RelationLabel(name="works_for", description="employment", judged_by=EDITOR)
@@ -178,9 +167,9 @@ class TestTheBackfill:
     agent cannot run it at all."""
 
     async def _edge(self, storage, a, b, label, kind="relationship"):
-        await storage.store_edge(NodeEdge(
-            src_id=a.id, dst_id=b.id, type=EdgeType.RELATED, label=label, kind=kind
-        ))
+        await storage.store_edge(
+            NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.RELATED, label=label, kind=kind)
+        )
 
     async def test_it_records_one_label_per_distinct_pair(self, storage):
         a, b = await _pair(storage)
@@ -191,7 +180,7 @@ class TestTheBackfill:
 
         message = await _backfill_relations(storage)
 
-        recorded = {(l.name, l.kind) for l in await storage.query_relation_labels()}
+        recorded = {(label.name, label.kind) for label in await storage.query_relation_labels()}
         assert recorded == {
             ("capital_of", "relationship"),
             ("published_by", "attribution"),
@@ -200,9 +189,7 @@ class TestTheBackfill:
 
     async def test_it_records_nothing_for_engine_edges(self, storage):
         a, b = await _pair(storage)
-        await storage.store_edge(
-            NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.ABOUT)
-        )
+        await storage.store_edge(NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.ABOUT))
 
         await _backfill_relations(storage)
 
@@ -267,24 +254,23 @@ class TestTheCliIsNeverTheOnlyWayIn:
 
         assert await storage.get_relation_label("works_for", "relationship") is not None
 
-    async def test_describing_records_one_for_a_graph_that_predates_this(
-        self, storage
-    ):
+    async def test_describing_records_one_for_a_graph_that_predates_this(self, storage):
         """The second of the three write paths, arriving with stage 2. A graph
         written before any of this has edges and no records, and this is the
         in-memory store — exactly the backend where the CLI refuses."""
         a, b = await _pair(storage)
         await storage.store_edge(
             NodeEdge(
-                src_id=a.id, dst_id=b.id, type=EdgeType.RELATED,
-                label="works_for", kind="relationship",
+                src_id=a.id,
+                dst_id=b.id,
+                type=EdgeType.RELATED,
+                label="works_for",
+                kind="relationship",
             )
         )
         assert await storage.get_relation_label("works_for", "relationship") is None
 
-        await tools.describe_relation(
-            "works_for", storage, description="Employment, not retainer."
-        )
+        await tools.describe_relation("works_for", storage, description="Employment, not retainer.")
 
         record = await storage.get_relation_label("works_for", "relationship")
         assert record is not None and record.description == "Employment, not retainer."
@@ -303,8 +289,11 @@ class TestTheCliIsNeverTheOnlyWayIn:
         for src, dst, label in ((a, b, "works_for"), (c, d, "employed_by")):
             await storage.store_edge(
                 NodeEdge(
-                    src_id=src.id, dst_id=dst.id, type=EdgeType.RELATED,
-                    label=label, kind="relationship",
+                    src_id=src.id,
+                    dst_id=dst.id,
+                    type=EdgeType.RELATED,
+                    label=label,
+                    kind="relationship",
                 )
             )
         assert await storage.get_relation_label("works_for", "relationship") is None
@@ -312,12 +301,14 @@ class TestTheCliIsNeverTheOnlyWayIn:
         await tools.apply_reflection(
             storage,
             MockEmbeddingProvider(model_id="mock-embed", dimension=8),
-            relation_verdicts=[{
-                "pair": ["works_for", "employed_by"],
-                "kind": "relationship",
-                "verdict": "distinct",
-                "because": "A servant, not an employee.",
-            }],
+            relation_verdicts=[
+                {
+                    "pair": ["works_for", "employed_by"],
+                    "kind": "relationship",
+                    "verdict": "distinct",
+                    "because": "A servant, not an employee.",
+                }
+            ],
             judge=CRITIC,
         )
 

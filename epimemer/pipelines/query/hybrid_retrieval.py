@@ -34,8 +34,6 @@ walking out of a node that was about to be folded away.
 
 import time
 
-from pydantic import BaseModel, Field
-
 from petritype import petri_net
 from petritype.core.executable_graph_components import (
     ArgumentEdgeToTransition,
@@ -45,15 +43,16 @@ from petritype.core.executable_graph_components import (
     ListPlaceNode,
     ReturnedEdgeFromTransition,
 )
+from pydantic import BaseModel, Field
 
 from epimemer.core.temporal import ValidityVerdict
 from epimemer.core.types import (
+    SUPERSEDED_STATUSES,
     EpistemicNode,
     Fact,
     Inference,
     NodeEdge,
     NodeStatus,
-    SUPERSEDED_STATUSES,
     Topic,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
@@ -72,7 +71,6 @@ from epimemer.pipelines.query.validity import validity_for, verdict_for
 from epimemer.pipelines.query.vector_search import vector_search
 from epimemer.storage.protocol import StorageBackend
 
-
 # --- Intermediate token types ---
 
 
@@ -84,6 +82,7 @@ class LexicalQuery(BaseModel):
     the query text and earn nothing. Carrying the distinction as data keeps the
     two paths from being told apart by a heuristic further down.
     """
+
     request: QueryRequest
     terms: list[str] = Field(default_factory=list)
     declared: bool = False
@@ -91,6 +90,7 @@ class LexicalQuery(BaseModel):
 
 class VectorResults(BaseModel):
     """Intermediate result from vector search, carrying data for the next stage."""
+
     request: QueryRequest
     scored_nodes: list[tuple[str, float]] = Field(default_factory=list)
     nodes: list[EpistemicNode] = Field(default_factory=list)
@@ -106,6 +106,7 @@ class LexicalResults(BaseModel):
     be fused. Resolving ids to nodes happens once, after fusion has decided
     which ones survive.
     """
+
     request: QueryRequest
     rankings: list[list[str]] = Field(default_factory=list)
     protected: list[str] = Field(default_factory=list)
@@ -117,6 +118,7 @@ class LexicalResults(BaseModel):
 
 class Seeds(BaseModel):
     """The fused starting set, before graph expansion."""
+
     request: QueryRequest
     nodes: list[EpistemicNode] = Field(default_factory=list)
     provenance: dict[str, SeedProvenance] = Field(default_factory=dict)
@@ -135,6 +137,7 @@ class Seeds(BaseModel):
 
 class ExpandedResults(BaseModel):
     """Intermediate result from graph expansion, carrying all data for final assembly."""
+
     request: QueryRequest
     nodes: list[EpistemicNode] = Field(default_factory=list)
     edges: list[NodeEdge] = Field(default_factory=list)
@@ -168,7 +171,9 @@ async def run_vector_search(
     storage: StorageBackend,
 ) -> VectorResults:
     """Execute vector search and return intermediate results."""
-    node_type = request.node_types[0] if request.node_types and len(request.node_types) == 1 else None
+    node_type = (
+        request.node_types[0] if request.node_types and len(request.node_types) == 1 else None
+    )
 
     start = time.monotonic()
     results = await vector_search(
@@ -322,8 +327,7 @@ async def fuse_seeds(
         request=request,
         nodes=nodes,
         provenance={
-            node.id: seed_provenance(node.id, direct=direct, bridged=bridged)
-            for node in nodes
+            node.id: seed_provenance(node.id, direct=direct, bridged=bridged) for node in nodes
         },
         segments=lexical_results.segments,
         protected=list(lexical_results.protected),
@@ -385,21 +389,19 @@ async def collapse_lineage(seeds: Seeds, storage: StorageBackend) -> Seeds:
     nodes = survivors + rescued
 
     kept_ids = {node.id for node in nodes}
-    return seeds.model_copy(update={
-        "nodes": nodes,
-        "provenance": {
-            node_id: label
-            for node_id, label in seeds.provenance.items()
-            if node_id in kept_ids
-        },
-        # A fold whose host did not survive the cut is dropped with it: the
-        # history of a claim nobody is being shown is not an answer to anything.
-        "lineage": {
-            host_id: folded
-            for host_id, folded in lineage.items()
-            if host_id in kept_ids
-        },
-    })
+    return seeds.model_copy(
+        update={
+            "nodes": nodes,
+            "provenance": {
+                node_id: label for node_id, label in seeds.provenance.items() if node_id in kept_ids
+            },
+            # A fold whose host did not survive the cut is dropped with it: the
+            # history of a claim nobody is being shown is not an answer to anything.
+            "lineage": {
+                host_id: folded for host_id, folded in lineage.items() if host_id in kept_ids
+            },
+        }
+    )
 
 
 async def run_graph_expansion(
@@ -505,75 +507,71 @@ def hybrid_retrieval_net(
     Returns:
         An ExecutableGraph ready to execute.
     """
-    return ExecutableGraphOperations.construct_graph([
-        # Places
-        ListPlaceNode("QueryRequest", QueryRequest, [request]),
-        ListPlaceNode("VectorQuery", QueryRequest),
-        ListPlaceNode("LexicalQuery", LexicalQuery),
-        ListPlaceNode("VectorResults", VectorResults),
-        ListPlaceNode("LexicalResults", LexicalResults),
-        ListPlaceNode("Seeds", Seeds),
-        ListPlaceNode("CollapsedSeeds", Seeds),
-        ListPlaceNode("ExpandedResults", ExpandedResults),
-        ListPlaceNode("QueryResult", QueryResult),
-
-        # Transition 0: fork the request into the two arms
-        FunctionTransitionNode("plan_retrieval", plan_retrieval),
-        ArgumentEdgeToTransition("QueryRequest", "plan_retrieval", "request"),
-        ReturnedEdgeFromTransition("plan_retrieval", "VectorQuery", return_index=0),
-        ReturnedEdgeFromTransition("plan_retrieval", "LexicalQuery", return_index=1),
-
-        # Transition 1a: run_vector_search
-        FunctionTransitionNode(
-            "run_vector_search",
-            run_vector_search,
-            kwargs={
-                "embedding_provider": embedding_provider,
-                "storage": storage,
-            },
-        ),
-        ArgumentEdgeToTransition("VectorQuery", "run_vector_search", "request"),
-        ReturnedEdgeFromTransition("run_vector_search", "VectorResults"),
-
-        # Transition 1b: run_lexical_search
-        FunctionTransitionNode(
-            "run_lexical_search",
-            run_lexical_search,
-            kwargs={"storage": storage},
-        ),
-        ArgumentEdgeToTransition("LexicalQuery", "run_lexical_search", "lexical_query"),
-        ReturnedEdgeFromTransition("run_lexical_search", "LexicalResults"),
-
-        # Transition 2: fuse_seeds — the join. Both arms must have finished.
-        FunctionTransitionNode(
-            "fuse_seeds",
-            fuse_seeds,
-            kwargs={"storage": storage},
-        ),
-        ArgumentEdgeToTransition("VectorResults", "fuse_seeds", "vector_results"),
-        ArgumentEdgeToTransition("LexicalResults", "fuse_seeds", "lexical_results"),
-        ReturnedEdgeFromTransition("fuse_seeds", "Seeds"),
-
-        # Transition 3: collapse_lineage — the top-k cut, after the fold.
-        FunctionTransitionNode(
-            "collapse_lineage",
-            collapse_lineage,
-            kwargs={"storage": storage},
-        ),
-        ArgumentEdgeToTransition("Seeds", "collapse_lineage", "seeds"),
-        ReturnedEdgeFromTransition("collapse_lineage", "CollapsedSeeds"),
-
-        # Transition 4: run_graph_expansion
-        FunctionTransitionNode(
-            "run_graph_expansion",
-            run_graph_expansion,
-            kwargs={"storage": storage},
-        ),
-        ArgumentEdgeToTransition("CollapsedSeeds", "run_graph_expansion", "seeds"),
-        ReturnedEdgeFromTransition("run_graph_expansion", "ExpandedResults"),
-
-        # Transition 5: build_query_result
-        FunctionTransitionNode("build_query_result", build_query_result),
-        ArgumentEdgeToTransition("ExpandedResults", "build_query_result", "expanded_results"),
-        ReturnedEdgeFromTransition("build_query_result", "QueryResult"),
-    ], expect_acyclic=True)
+    return ExecutableGraphOperations.construct_graph(
+        [
+            # Places
+            ListPlaceNode("QueryRequest", QueryRequest, [request]),
+            ListPlaceNode("VectorQuery", QueryRequest),
+            ListPlaceNode("LexicalQuery", LexicalQuery),
+            ListPlaceNode("VectorResults", VectorResults),
+            ListPlaceNode("LexicalResults", LexicalResults),
+            ListPlaceNode("Seeds", Seeds),
+            ListPlaceNode("CollapsedSeeds", Seeds),
+            ListPlaceNode("ExpandedResults", ExpandedResults),
+            ListPlaceNode("QueryResult", QueryResult),
+            # Transition 0: fork the request into the two arms
+            FunctionTransitionNode("plan_retrieval", plan_retrieval),
+            ArgumentEdgeToTransition("QueryRequest", "plan_retrieval", "request"),
+            ReturnedEdgeFromTransition("plan_retrieval", "VectorQuery", return_index=0),
+            ReturnedEdgeFromTransition("plan_retrieval", "LexicalQuery", return_index=1),
+            # Transition 1a: run_vector_search
+            FunctionTransitionNode(
+                "run_vector_search",
+                run_vector_search,
+                kwargs={
+                    "embedding_provider": embedding_provider,
+                    "storage": storage,
+                },
+            ),
+            ArgumentEdgeToTransition("VectorQuery", "run_vector_search", "request"),
+            ReturnedEdgeFromTransition("run_vector_search", "VectorResults"),
+            # Transition 1b: run_lexical_search
+            FunctionTransitionNode(
+                "run_lexical_search",
+                run_lexical_search,
+                kwargs={"storage": storage},
+            ),
+            ArgumentEdgeToTransition("LexicalQuery", "run_lexical_search", "lexical_query"),
+            ReturnedEdgeFromTransition("run_lexical_search", "LexicalResults"),
+            # Transition 2: fuse_seeds — the join. Both arms must have finished.
+            FunctionTransitionNode(
+                "fuse_seeds",
+                fuse_seeds,
+                kwargs={"storage": storage},
+            ),
+            ArgumentEdgeToTransition("VectorResults", "fuse_seeds", "vector_results"),
+            ArgumentEdgeToTransition("LexicalResults", "fuse_seeds", "lexical_results"),
+            ReturnedEdgeFromTransition("fuse_seeds", "Seeds"),
+            # Transition 3: collapse_lineage — the top-k cut, after the fold.
+            FunctionTransitionNode(
+                "collapse_lineage",
+                collapse_lineage,
+                kwargs={"storage": storage},
+            ),
+            ArgumentEdgeToTransition("Seeds", "collapse_lineage", "seeds"),
+            ReturnedEdgeFromTransition("collapse_lineage", "CollapsedSeeds"),
+            # Transition 4: run_graph_expansion
+            FunctionTransitionNode(
+                "run_graph_expansion",
+                run_graph_expansion,
+                kwargs={"storage": storage},
+            ),
+            ArgumentEdgeToTransition("CollapsedSeeds", "run_graph_expansion", "seeds"),
+            ReturnedEdgeFromTransition("run_graph_expansion", "ExpandedResults"),
+            # Transition 5: build_query_result
+            FunctionTransitionNode("build_query_result", build_query_result),
+            ArgumentEdgeToTransition("ExpandedResults", "build_query_result", "expanded_results"),
+            ReturnedEdgeFromTransition("build_query_result", "QueryResult"),
+        ],
+        expect_acyclic=True,
+    )

@@ -44,13 +44,13 @@ configuration, and an agent cannot run it in any case. *A remedy the agent
 cannot issue, on a backend where it refuses, is not a remedy.*
 """
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from pydantic import BaseModel
 
 from epimemer.core.types import (
-    JudgeRef,
     RELATION_VERDICTS,
+    JudgeRef,
     RelationLabel,
     RelationVerdict,
     relation_pair_key,
@@ -225,14 +225,10 @@ async def apply_relation_verdict(
     record_b, created_b = await _label_record(storage, label_b, in_force, judge)
     label_ids = list(relation_pair_key(record_a.id, record_b.id))
     labels_created = [
-        name
-        for name, created in ((label_a, created_a), (label_b, created_b))
-        if created
+        name for name, created in ((label_a, created_a), (label_b, created_b)) if created
     ]
 
-    standing: Sequence[RelationVerdict] = await storage.relation_verdicts_for(
-        label_ids
-    )
+    standing: Sequence[RelationVerdict] = await storage.relation_verdicts_for(label_ids)
     agreeing = [v for v in standing if v.verdict == verdict]
     if any(_same_judge(v.judged_by, judge) for v in agreeing):
         return RelationVerdictRefused(
@@ -258,9 +254,7 @@ async def apply_relation_verdict(
             labels_created=labels_created,
         )
 
-    row = RelationVerdict(
-        label_ids=label_ids, verdict=verdict, because=because, judged_by=judge
-    )
+    row = RelationVerdict(label_ids=label_ids, verdict=verdict, because=because, judged_by=judge)
     verdict_id = await storage.record_relation_verdict(row)
     return RelationVerdictRecorded(
         pair=pair,

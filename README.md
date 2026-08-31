@@ -1,145 +1,99 @@
 # Epimemer
 
-A layered epistemic memory system for AI agents. Epimemer maintains an evolving dual-space architecture (vector + graph) where embeddings provide the semantic foundation and typed graph structure is derived on top.
+An epistemic memory server for AI agents, spoken over the
+[Model Context Protocol](https://modelcontextprotocol.io). An agent hands
+Epimemer what it has read; Epimemer keeps it as a typed graph of **topics**,
+**facts** and **inferences** that remembers where each claim came from, which
+world it is about, when it held, what contradicts it, and who decided what —
+and then nominates the graph's own weak points for the agent to review.
 
-For the full architectural design, see [SUMMARY.md](SUMMARY.md).
+Epimemer performs no extraction of its own. Reading a document and deciding
+what it claims is the calling agent's job; Epimemer's job is to hold those
+claims honestly and to keep asking whether they still stand.
 
-## Quickstart
+- **Provenance, not strings.** Every fact carries `sourced_from` edges to the
+  documents that assert it, and a merge keeps one per contributing source.
+- **Frames.** A claim states which world it is about — the real one, a novel, a
+  named source, a perspective — so fiction never corroborates fact and two
+  perspectives can disagree without either being wrong.
+- **Validity in time.** Each source records when it says a claim held, so a
+  fact read in 1997 and one read in 2024 can be the same condition with two
+  periods, or two events that must never merge.
+- **A review loop.** `reflect` nominates near-duplicates, contradictions, stale
+  evidence and never-retrieved nodes; `apply_reflection` records the agent's
+  verdict on each, and a verdict once recorded is never asked again.
+- **A decision journal.** Every judgment names the judge that made it. `review`
+  reads them back shakiest first, so a different agent — or a person — can
+  check what an earlier one decided.
 
-### Prerequisites
+Python 3.14+. MIT licensed.
 
-- Python 3.14+
-- [uv](https://docs.astral.sh/uv/)
-- [Petritype](../petritype) cloned as a sibling directory
-
-### Install
+## Install
 
 ```bash
-git clone <repo-url> epimemer
-cd epimemer
-uv sync
+uv tool install "epimemer[sentence-transformers]"
+# or: pip install "epimemer[sentence-transformers]"
 ```
 
-The marimo notebooks under `notebooks/` need an extra, and rendering the graph
-diagrams also needs the Graphviz system binaries, which no Python package can
-supply:
+| Extra | Adds | When you need it |
+|-------|------|------------------|
+| `sentence-transformers` | Local embeddings via [sentence-transformers](https://www.sbert.net) (pulls in PyTorch) | The default embedding provider. Without it, set `EPIMEMER_EMBEDDING_PROVIDER` to another provider, or the server refuses to start and says which extra to install |
+| `notebooks` | [marimo](https://marimo.io) and the Petri-net plotting stack | Only for the walkthrough notebooks in the repository |
+
+The embedding model (`all-MiniLM-L6-v2`, ~80 MB) downloads on first run.
+
+## Connect to Claude Code
 
 ```bash
-uv sync --extra notebooks
-brew install graphviz          # or your platform's equivalent
-uv run marimo edit notebooks/01_segmentation.py
+claude mcp add epimemer -- epimemer serve
 ```
 
-### Run tests
+Then run `/mcp` inside Claude Code to confirm the server is listed. This uses
+the defaults: local embeddings and **in-memory storage, lost when the server
+exits** — see [Persistence](#persistence) for the setup that keeps a graph.
+
+Any other MCP client works the same way: the server speaks stdio, and
+`epimemer serve` is the command. The
+[integration guide](https://github.com/olenive/epimemer/blob/main/INTEGRATION.md)
+has the full configuration, the system-prompt guidance that tells an agent how
+to use the tools well, and the canonical tool table.
+
+## Persistence
+
+Persistent storage is a [SurrealDB](https://surrealdb.com) server. **The
+storage path is the whole difference between persistent and not**: `surreal
+start` takes an optional `[PATH]` whose default is `memory`, so a server
+started without one keeps the entire graph in RAM and loses it on restart,
+with no error and no warning. Every command here passes an explicit
+`rocksdb:` path.
 
 ```bash
-uv run python -m pytest tests/ -q
-```
-
-The notebook dependency check skips without that extra; everything else runs on
-a plain `uv sync`.
-
-### Start the MCP server (in-memory, no persistence)
-
-```bash
-uv run python -m epimemer.mcp.server
-```
-
-This starts on stdio — designed to be called by Claude Code or another MCP client. Data is stored in memory and lost when the server exits.
-
-### Connect to Claude Code
-
-```bash
-claude mcp add epimemer -- uv run --directory /path/to/epimemer python -m epimemer.mcp.server
-```
-
-Then verify with `/mcp` in Claude Code. See [INTEGRATION.md](INTEGRATION.md) for full configuration options and system prompt guidance.
-
-## Persistent Setup (SurrealDB via Colima)
-
-For persistent storage across sessions, run SurrealDB in a container via [Colima](https://github.com/abiosoft/colima).
-
-### Prerequisites
-
-- [Colima](https://github.com/abiosoft/colima): `brew install colima`
-- [Docker CLI](https://docs.docker.com/engine/install/): `brew install docker`
-
-### Start SurrealDB
-
-```bash
-./scripts/start_local_surrealdb.sh
-```
-
-That script is how this project starts SurrealDB, and it is the only copy of
-those flags worth keeping. It starts Colima if it is not running, creates the
-container on-disk if it does not exist, waits for the health endpoint, and
-registers the MCP server with Claude Code. Safe to re-run.
-
-**The storage path is the whole difference between persistent and not.**
-`surreal start` takes an optional `[PATH]`, and its default is `memory` — so a
-container started without one keeps the entire graph in RAM and loses it on
-restart, with no error and no warning. Everything here that starts SurrealDB
-for real passes an explicit `rocksdb:` path.
-
-If you already have a container from an older version of these instructions,
-check it:
-
-```bash
-docker inspect surrealdb --format '{{json .Config.Cmd}}'
-```
-
-The output must contain `rocksdb:`. If it reads only `["start","--user",
-"root","--pass","root"]` the container is in-memory, and anything stored in it
-is already gone on the next restart. To migrate:
-
-```bash
-docker rm -f surrealdb && ./scripts/start_local_surrealdb.sh
-```
-
-### Register Epimemer with SurrealDB
-
-The script does this. To do it by hand:
-
-```bash
-claude mcp add epimemer \
-  -e EPIMEMER_STORAGE_BACKEND=surrealdb \
-  -e EPIMEMER_SURREALDB_URL=ws://localhost:8000/rpc \
-  -e EPIMEMER_LOG_FILE=/tmp/epimemer.log \
-  -- uv run --directory /path/to/epimemer python -m epimemer.mcp.server
-```
-
-### Managing the container runtime
-
-```bash
-# Stop colima when not needed (frees RAM)
-colima stop
-
-# Restart later. The data lives in the `surreal-data` volume rather than in
-# the container, so it survives both of these.
-colima start --memory 1
-docker start surrealdb
-```
-
-### SurrealDB without Colima
-
-If you have Docker Desktop or a native SurrealDB install, the script does not
-apply and you start it yourself. Note the explicit storage path in both — it is
-what the script exists to get right:
-
-```bash
-# Native install — on disk, relative to the working directory
-surreal start --user root --pass root rocksdb:epimemer.db
-
-# Or Docker Desktop — on disk, in a named volume that outlives the container.
+# Docker — on disk, in a named volume that outlives the container.
 # -u 0:0 because the image's non-root user cannot write the volume mount.
 docker run -d --name surrealdb -p 8000:8000 \
   --restart unless-stopped -u 0:0 \
   -v surreal-data:/data \
   surrealdb/surrealdb:latest \
   start --user root --pass root rocksdb:/data/epimemer.db
+
+# Or a native install — on disk, relative to the working directory
+surreal start --user root --pass root rocksdb:epimemer.db
 ```
 
-Then register the MCP server as above.
+Then register the server with the backend named:
+
+```bash
+claude mcp add epimemer \
+  -e EPIMEMER_STORAGE_BACKEND=surrealdb \
+  -e EPIMEMER_SURREALDB_URL=ws://localhost:8000/rpc \
+  -e EPIMEMER_GRAPH=default \
+  -- epimemer serve
+```
+
+`root`/`root` are SurrealDB's local-development credentials; set
+`EPIMEMER_SURREALDB_USER` and `EPIMEMER_SURREALDB_PASS` for anything else. Set
+`EPIMEMER_GRAPH` per server: the active graph is process state, so a client
+reconnect lands back on whatever the server opened.
 
 ## Configuration
 
@@ -153,7 +107,7 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_SURREALDB_PASS` | `root` | SurrealDB password |
 | `EPIMEMER_SURREALDB_NAMESPACE` | `epimemer` | SurrealDB namespace |
 | `EPIMEMER_SURREALDB_DATABASE` | `default` | SurrealDB database name — one database per graph. This is a *name*, not a storage mode: whether storage is in-memory is decided by `EPIMEMER_STORAGE_BACKEND` here and by the `[PATH]` argument on the server |
-| `EPIMEMER_GRAPH` | (empty) | The graph this server opens, overriding the database name above. **Set it per server.** The active graph is process state, so `use_graph` lasts only as long as the process and a client reconnect lands back here — see [INTEGRATION.md](INTEGRATION.md#which-graph-a-server-opens) |
+| `EPIMEMER_GRAPH` | (empty) | The graph this server opens, overriding the database name above. **Set it per server.** The active graph is process state, so `use_graph` lasts only as long as the process and a client reconnect lands back here — see the [integration guide](https://github.com/olenive/epimemer/blob/main/INTEGRATION.md#which-graph-a-server-opens) |
 | `EPIMEMER_EMBEDDING_PROVIDER` | `sentence-transformers` | `sentence-transformers` or `mock` |
 | `EPIMEMER_EMBEDDING_MODEL_ID` | `all-MiniLM-L6-v2` | Embedding model name |
 | `EPIMEMER_EMBEDDING_DIMENSION` | `384` | Embedding vector dimension |
@@ -163,7 +117,7 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_RECORD_RETRIEVAL` | `true` | Whether `search` stamps `retrieved_at` on what it returns. `false` disables it, at the cost of making `never_retrieved` blind; ranking is never affected either way |
 | `EPIMEMER_IMPORTANCE_STEP` | `0.25` | How much of the gap to its bound one `judge_importance` call closes, up or down. Nothing automatic moves it |
 | `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
-| `EPIMEMER_APPROVED_AGENTS` | (empty) | Comma-separated agent ids the user admits as judges in every graph this server opens. Read when the backend connects and when the server lands on a graph. The approval channel for clients that cannot elicit, and the only one that reaches an embedded store — see [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) |
+| `EPIMEMER_APPROVED_AGENTS` | (empty) | Comma-separated agent ids the user admits as judges in every graph this server opens. Read when the backend connects and when the server lands on a graph. The approval channel for clients that cannot elicit, and the only one that reaches an embedded store — see [ATTRIBUTION.md](https://github.com/olenive/epimemer/blob/main/docs/ATTRIBUTION.md) |
 | `EPIMEMER_REQUIRE_JUDGE` | `false` | Refuse any write that names no judge, on every graph this server opens. Off by default: a blank judge means *unknown*, and many graphs have no reason to care. Overridable per graph with `epimemer agents require`, and deliberately not settable by any MCP tool |
 | `EPIMEMER_VIZ_ENABLED` | `true` | Publish visualization events to the hub |
 | `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Visualization hub host |
@@ -195,65 +149,38 @@ Tools exposed via the Model Context Protocol (auto-prefixed as `mcp__epimemer__<
   asserting about when a claim held
 - **Visualization**: `viz_status`
 
-See [INTEGRATION.md](INTEGRATION.md#available-tools) for the canonical table with one-line descriptions and the authoritative tool count.
-
-## Architecture
-
-See [SUMMARY.md](SUMMARY.md) for the full design. Key concepts:
-
-- **Dual-space**: vector embeddings as primary representation, typed graph derived on top
-- **Three node types**: Topics (themes), Facts (atomic statements), Inferences (provisional derivations)
-- **Timelines**: ordered containers of timepoints for temporal relationships
-- **Metacontexts**: epistemic frames that disambiguate fiction from fact, sources, perspectives
-- **Petri nets**: all pipelines are executable, typed, visualizable Petri nets via [Petritype](../petritype)
-- **Immutable history**: a node's *content* is never mutated — updates create new versions with history edges (lifecycle metadata like `status` and value signals is mutated in place; see SUMMARY.md → Node History)
-- **Sources, tags, relations**: provenance and aboutness are nodes & edges (`sourced_from`, `tagged_with`), not strings; relationships are open-vocabulary user-labelled edges
-
-## Project Structure
-
-```
-epimemer/
-  core/           — Pydantic models (node types, edges, timelines, metacontexts)
-  storage/        — Storage protocol + InMemory + SurrealDB adapters
-  embeddings/     — Embedding protocol + sentence-transformers + mock
-  pipelines/
-    segmentation/     — Paragraph split, semantic similarity
-    graph_construction/ — Edge creation, node versioning
-    query/            — Vector search, graph expansion, hybrid retrieval
-    reflection/       — Topic consolidation, contradiction detection, review, archival
-    timeline/         — Pure functional timeline operations
-    orchestration/    — Top-level request routing Petri net
-  mcp/            — FastMCP server, tool implementations, config
-  logging/        — Structured JSON logging
-  visualization/ — Standalone viz hub, session client, and frontend
-tests/            — unit, pipeline, MCP, integration
-```
+The [integration guide](https://github.com/olenive/epimemer/blob/main/INTEGRATION.md#available-tools)
+has the canonical table with one-line descriptions and the authoritative tool count.
 
 ## Visualization
 
-The visualizer is a **standalone hub** that many MCP sessions publish to, rather
-than an HTTP server embedded in each MCP process. This resolves the port-contention
-failure where a stale MCP orphan would hold the port and serve the wrong (empty)
-graph.
+A browser dashboard showing the knowledge graph, pipeline execution and
+timelines, live. It is a **standalone hub** that many MCP sessions publish to,
+rather than a server embedded in each MCP process, so several agents can be
+watched from one page.
 
 - **The hub owns the port** (`EPIMEMER_VIZ_HOST:EPIMEMER_VIZ_PORT`, default
-  `127.0.0.1:8765`). Each MCP process dials out to it and registers as a *session*;
-  the browser picks a session from the header selector.
-- **Auto-spawn**: the first MCP process with `EPIMEMER_VIZ_ENABLED=true` spawns a
-  detached hub if none is running (disable with `EPIMEMER_VIZ_AUTOSPAWN=false`).
-- **CLI**: `uv run epimemer-viz [--status|--stop]` for explicit control.
-- **`viz_status` tool**: ask through the very session you are driving — it returns
-  the hub URL, whether the hub can see this session, and the `session_id` to pick
-  in the selector. The durable answer to "I opened the visualizer but can't find my
-  graph".
-- **Activity log** (the header's *Log* button): one entry per transaction — what
-  the agent stored, corrected, world-changed, merged, archived or restored —
-  filterable by verb, node id, text and time. Click an entry to highlight the
-  nodes it acted on; click a node to filter the log to it.
-- **Retrieval focus** (the header's *Retrieval* selector): pick a recent tool
-  call and everything it did *not* return desaturates, in both panels. Dimmed
-  nodes stay clickable — the interesting click is on one that did not come back
-  — and the drawer's **Response** tab shows exactly what epimemer returned.
+  `127.0.0.1:8765`). Each MCP process dials out to it and registers as a
+  *session*; the browser picks a session from the header selector.
+- **Auto-spawn**: the first MCP process with `EPIMEMER_VIZ_ENABLED=true` spawns
+  a detached hub if none is running (disable with `EPIMEMER_VIZ_AUTOSPAWN=false`).
+- **CLI**: `epimemer-viz [--status|--stop]` for explicit control.
+- **`viz_status` tool**: ask through the very session you are driving — it
+  returns the hub URL, whether the hub can see this session, and the
+  `session_id` to pick in the selector. The durable answer to "I opened the
+  visualizer but can't find my graph".
+- **Activity log**: one entry per transaction — what the agent stored,
+  corrected, world-changed, merged, archived or restored — filterable by verb,
+  node id, text and time. Click an entry to highlight the nodes it acted on;
+  click a node to filter the log to it.
+- **Retrieval focus**: pick a recent tool call and everything it did *not*
+  return desaturates. Dimmed nodes stay clickable — the interesting click is
+  on one that did not come back — and the drawer's **Response** tab shows
+  exactly what Epimemer returned.
+- **Timeline**: one timeline at a time on a vertical axis, in *record time*
+  (when the graph learned each node) or *content time* (when the described
+  events happened). Large gaps collapse to a labelled break; vague timepoints
+  sit in an *undated* tray rather than being given an invented date.
 
 > **`EPIMEMER_VIZ_HOST` is a privacy setting as well as a network one.** On the
 > default loopback bind the hub keeps whole retrieval records, so they survive
@@ -261,152 +188,53 @@ graph.
 > mirror **structural metadata only** — no query text, no response payloads —
 > and the payloads stay in the MCP process, reachable only while it is running.
 
-### Light and dark mode
-
-A toggle sits at the top right of the header. The choice persists in
-`localStorage`; with nothing stored the page follows the OS and keeps following
-it live, so a system change mid-session is picked up. An inline script in the
-document head applies the theme before first paint, so a dark-mode user never
-sees a white flash while the bundle loads.
-
-Page chrome uses Tailwind's `dark:` variants against a `dark` class on `<html>`.
-The three *drawn* surfaces — the cytoscape canvas, the timeline SVG and the
-graphviz Petri nets — cannot be reached by CSS variants, so they read a palette
-from `theme.ts` at render time and are repainted on toggle. `theme.ts` holds two
-palettes: the neutrals, and a **shared semantic palette** — the hues that say
-what kind of thing something is. Both vary by theme, and both panels read the
-same one, so a fact is the same colour wherever it is drawn.
-
-### Panels
-
-- **Knowledge graph** — nodes and edges, force or hierarchy layout.
-- **Pipelines** — Petri net execution, live.
-- **Timeline** — one timeline at a time on a vertical axis, past at the top,
-  read like a chat log. Facts and topics sit to the left of the line,
-  inferences to the right; selecting a mark expands its text in place. Two
-  modes:
-  - *record time*, the default: when the graph learned each node, drawn from
-    `created_at` out to `retrieved_at`, or a point when that is null.
-  - *content time*: `Timeline`/`Timepoint` data — when the described events
-    happened. Ingestion proposes timepoints from dates stated in the text, so
-    this is populated by default; `create_timeline`, `add_timepoint` and
-    `create_timelink` are how an agent curates one deliberately.
-
-  Where the data has a gap far larger than its local spacing — a graph idle
-  for days between bursts, or a timeline jumping centuries — the axis **breaks**
-  and collapses the gap to a labelled marker, so dense clusters stay legible.
-  Zooming into a cluster dissolves the break. Vague timepoints ("during the
-  Renaissance") have no coordinate and sit in an *undated* tray beside the axis
-  rather than being given an invented date.
-
-  Filter by linked node type, status, epistemic frame, date range, or free text.
-  Text supports `field:value` (`source:BBC`, `mc:fiction`, `type:fact`) and
-  quoted phrases; an unrecognised prefix is treated as literal text, so `12:30`
-  searches for a time rather than a field called `12`.
-
-**Migrating from the embedded server:** old MCP processes running pre-hub code may
-still hold `:8765` with the old embedded server. Run `pkill -f epimemer.mcp.server`
-once (or `uv run epimemer-viz --status` to see what holds the port), then reconnect.
-
-## Testing
-
-```bash
-# Default suite — embedded, no external services
-make test          # or: uv run python -m pytest tests/ -q
-```
-
-Most storage and MCP tests run against **both** backends (a `conftest.py` fixture
-parameterizes over `InMemoryStorage` and `SurrealDBStorage("mem://")`).
-
-Two things `mem://` cannot model — two real connections, and surviving a
-restart — have their own **opt-in** suites:
-
-- `tests/storage/test_surrealdb_integration.py` — real ws:// connection/auth and
-  cross-connection transaction atomicity, against an already-running server.
-  Skips itself when `EPIMEMER_SURREAL_WS_URL` is unset.
-- `tests/storage/test_surrealdb_persistence.py` — rocksdb-backed data surviving a
-  full server restart. Controls its own throwaway container, so it skips unless
-  `EPIMEMER_SURREAL_PERSIST_TEST=1`.
-
-Neither runs — nor signals that it exists — under a bare `pytest`. One target
-runs both, spinning up SurrealDB, waiting for it, and tearing it down:
-
-```bash
-make test-integration
-```
-
-**If port 8000 is taken**, the target stops before starting anything and names
-the process holding it. Re-run on another port:
-
-```bash
-make test-integration SURREAL_PORT=8123
-```
-
-That check is worth its keep. A process that *accepts* connections on the port
-without answering — another Colima/Docker profile forwarding it, or a wedged
-container — leaves Docker's publish silently unreachable, and the symptom is a
-target that hangs before the first test rather than one that fails.
-
-The visualization frontend has its own suite (vitest) covering the
-event-reduction logic — pipeline run state, the WebSocket event router, the hub
-API client — and the timeline panel's scale, break heuristic, filters and mark
-construction, which are pure and DOM-free. The timeline panel's own rendering
-and interaction are covered under jsdom; the cytoscape graph panel is covered by
-`tsc` rather than unit tests. `make test` stays Python-only, so Node is not a
-prerequisite for backend work:
-
-```bash
-make test-frontend      # npm run typecheck && npm test, in the frontend directory
-```
-
 ## Administration
 
-`uv run epimemer agents list` shows a graph's approved judges, whether it
-requires one, and what each has said about itself. `uv run epimemer agents
-confirm <name>` admits one, `uv run epimemer agents rename <handle> <name>`
-renames one (add `--same-judge` to consolidate two that are really one), and `uv run epimemer agents require on|off|default`
-decides whether writes to that graph must name one. These are acts no MCP tool may
-perform — a tool the agent calls cannot establish that the *user* called it, and
-a gate the agent can open is decoration.
+`epimemer agents list` shows a graph's approved judges, whether it requires
+one, and what each has said about itself. `epimemer agents confirm <name>`
+admits one, `epimemer agents rename <handle> <name>` renames one (add
+`--same-judge` to consolidate two that are really one), and `epimemer agents
+require on|off|default` decides whether writes to that graph must name one.
+These are acts no MCP tool may perform — a tool the agent calls cannot
+establish that the *user* called it, and a gate the agent can open is
+decoration.
 
-`uv run epimemer relations backfill` gives every relationship label already in
-use a record, in one go. It is idempotent, never touches a label that has one,
-and is a convenience rather than a precondition: every write path that names a
-label creates its record, so a graph's vocabulary fills in as it is used.
+`epimemer relations backfill` gives every relationship label already in use a
+record, in one go. It is idempotent and never touches a label that has one.
 
 All of these work only against a **served** SurrealDB: an embedded store lives
 inside the server process, so writing there would land in a store the running
 server never reads. Use `EPIMEMER_APPROVED_AGENTS` and `EPIMEMER_REQUIRE_JUDGE`
 instead for the two settings; the command says which one rather than appearing
-to succeed. The backfill has no substitute and needs none — its refusal says so.
+to succeed.
 
-## Not yet built
+## Architecture
 
-Proposed work — what it is, why, roughly what it costs, and what has to be true
-before it can start — lives in
-[dev-docs/PROPOSED_FEATURES.md](dev-docs/PROPOSED_FEATURES.md). Known bugs and
-deferred fixes are separate, in [dev-docs/ISSUES.md](dev-docs/ISSUES.md).
+- **Dual-space**: vector embeddings as primary representation, typed graph derived on top
+- **Three node types**: Topics (themes), Facts (atomic statements), Inferences (provisional derivations)
+- **Timelines**: ordered containers of timepoints for temporal relationships
+- **Metacontexts**: epistemic frames that disambiguate fiction from fact, sources, perspectives
+- **Petri nets**: all pipelines are executable, typed, visualizable Petri nets via [Petritype](https://github.com/olenive/petritype)
+- **Immutable history**: a node's *content* is never mutated — updates create new versions with history edges (lifecycle metadata like `status` and value signals is mutated in place)
+- **Sources, tags, relations**: provenance and aboutness are nodes & edges (`sourced_from`, `tagged_with`), not strings; relationships are open-vocabulary user-labelled edges
 
 ## Documentation
 
-**How the system works** — read these to understand the behaviour:
+- [SUMMARY.md](https://github.com/olenive/epimemer/blob/main/SUMMARY.md) — Architectural design: the concepts and their rationale
+- [INTEGRATION.md](https://github.com/olenive/epimemer/blob/main/INTEGRATION.md) — Claude Code integration guide, system-prompt guidance and the canonical tool table
+- [docs/RETRIEVAL.md](https://github.com/olenive/epimemer/blob/main/docs/RETRIEVAL.md) — How `search` is answered: the two arms, rank fusion, result provenance, lineage collapse
+- [docs/VALIDITY.md](https://github.com/olenive/epimemer/blob/main/docs/VALIDITY.md) — When a claim was true: intervals per source, correction vs world-change, recurrence, the soundness check
+- [docs/REFLECTION.md](https://github.com/olenive/epimemer/blob/main/docs/REFLECTION.md) — The review loop: verdicts, what `reflect` nominates, what `apply_reflection` writes
+- [docs/ATTRIBUTION.md](https://github.com/olenive/epimemer/blob/main/docs/ATTRIBUTION.md) — Who judged this: the agent registry, why the user assigns the id, how approval reaches them, the append-only journal of every decision, and reading it back with `review` / `apply_review` / `rejudge`
 
-- [SUMMARY.md](SUMMARY.md) — Architectural design: the concepts and their rationale
-- [docs/RETRIEVAL.md](docs/RETRIEVAL.md) — How `search` is answered: the two arms, rank fusion, result provenance, lineage collapse
-- [docs/VALIDITY.md](docs/VALIDITY.md) — When a claim was true: intervals per source, correction vs world-change, recurrence, the soundness check
-- [docs/REFLECTION.md](docs/REFLECTION.md) — The review loop: verdicts, what `reflect` nominates, what `apply_reflection` writes
-- [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md) — Who judged this: the agent registry, why the user assigns the id, how approval reaches them, the append-only journal of every decision, and reading it back with `review` / `apply_review` / `rejudge`
-- [INTEGRATION.md](INTEGRATION.md) — Claude Code integration guide and the canonical tool table
+## Contributing
 
-**How it got that way** — design history, appended to rather than rewritten:
+Development setup, the test suites, the frontend build and where the design
+history lives are in
+[CONTRIBUTING.md](https://github.com/olenive/epimemer/blob/main/CONTRIBUTING.md).
+Bugs and proposals go to the
+[issue tracker](https://github.com/olenive/epimemer/issues).
 
-- [dev-docs/ISSUES.md](dev-docs/ISSUES.md) — Known issues and deferred fixes
-- [dev-docs/PROPOSED_FEATURES.md](dev-docs/PROPOSED_FEATURES.md) — Backlog of work not yet built
-- [dev-docs/DEVELOPER_GUIDE.md](dev-docs/DEVELOPER_GUIDE.md) — Development and debugging guide
-- [dev-docs/BENCHMARKS.md](dev-docs/BENCHMARKS.md) — Measured scaling limits and where they come from
-- [dev-docs/REVIEW_EPISTEMIC.md](dev-docs/REVIEW_EPISTEMIC.md) — The review loop's design, including the validity model (§13)
-- [dev-docs/REVIEW_MODE.md](dev-docs/REVIEW_MODE.md) — Who judged this and can someone else check it: the agent registry, the decision journal, and the review modes over it (built, steps 0a–7)
-- [dev-docs/LEXICAL_SEARCH.md](dev-docs/LEXICAL_SEARCH.md), [dev-docs/RETRIEVAL_PROVENANCE.md](dev-docs/RETRIEVAL_PROVENANCE.md), [dev-docs/EVENT_LOG.md](dev-docs/EVENT_LOG.md) — Feature designs
-- [dev-docs/RELATION_LABELS.md](dev-docs/RELATION_LABELS.md) — Giving a relationship label a record, a description and a decline it can remember (designed, not built)
-- [dev-docs/WARNINGS_AND_SETTINGS.md](dev-docs/WARNINGS_AND_SETTINGS.md) — Advisories, per-graph warning policy, inference merge — what was decided and why
-- [dev-docs/VISUALISATION.md](dev-docs/VISUALISATION.md), [dev-docs/TIMELINE_VISUALISATION.md](dev-docs/TIMELINE_VISUALISATION.md) — Dashboard design
+## License
+
+[MIT](https://github.com/olenive/epimemer/blob/main/LICENSE).

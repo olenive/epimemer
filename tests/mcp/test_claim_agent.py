@@ -10,7 +10,7 @@ that forgot its approved ids on one backend would refuse every claim on that
 backend alone — the exact shape of divergence `tests/conftest.py` exists for.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from epimemer.core.types import (
     Agent,
@@ -20,9 +20,8 @@ from epimemer.core.types import (
 )
 from epimemer.mcp import tools
 
-
-AT = datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
-LATER = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
+AT = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
+LATER = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
 
 
 async def _approved(storage, *ids):
@@ -75,8 +74,11 @@ class TestTheIdIsTheUsersToAssign:
 
     async def test_an_unapproved_id_is_refused(self, storage):
         result, _ = await tools.claim_agent(
-            storage, agent_id="self-appointed", description="a critic",
-            approve_id=_silent, now=AT,
+            storage,
+            agent_id="self-appointed",
+            description="a critic",
+            approve_id=_silent,
+            now=AT,
         )
 
         assert result["status"] == "refused"
@@ -92,8 +94,11 @@ class TestTheIdIsTheUsersToAssign:
         await _approved(storage, "critic")
 
         result, _ = await tools.claim_agent(
-            storage, agent_id="editor", description="an editor",
-            approve_id=_silent, now=AT,
+            storage,
+            agent_id="editor",
+            description="an editor",
+            approve_id=_silent,
+            now=AT,
         )
 
         reason = result["reason"]
@@ -107,7 +112,10 @@ class TestTheIdIsTheUsersToAssign:
         await _approved(storage, "critic")
 
         result, meta = await tools.claim_agent(
-            storage, agent_id="critic", description="a critic", now=AT,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            now=AT,
         )
 
         assert result["status"] == "claimed"
@@ -124,8 +132,11 @@ class TestTheIdIsTheUsersToAssign:
         name free to change later.
         """
         result, _ = await tools.claim_agent(
-            storage, agent_id="claude", description="a critic",
-            approve_id=_accept("olegs-critic"), now=AT,
+            storage,
+            agent_id="claude",
+            description="a critic",
+            approve_id=_accept("olegs-critic"),
+            now=AT,
         )
 
         assert result["name"] == "olegs-critic"
@@ -137,14 +148,20 @@ class TestTheIdIsTheUsersToAssign:
 
     async def test_approval_from_the_user_admits_the_id_for_next_time(self, storage):
         await tools.claim_agent(
-            storage, agent_id="critic", description="a critic",
-            approve_id=_accept(), now=AT,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            approve_id=_accept(),
+            now=AT,
         )
 
         # The second claim goes through with no channel to the user at all.
         result, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a critic",
-            approve_id=_silent, now=LATER,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            approve_id=_silent,
+            now=LATER,
         )
         assert result["status"] == "claimed"
 
@@ -152,10 +169,16 @@ class TestTheIdIsTheUsersToAssign:
         await _approved(storage, "critic")
 
         blank_id, _ = await tools.claim_agent(
-            storage, agent_id="   ", description="a critic", now=AT,
+            storage,
+            agent_id="   ",
+            description="a critic",
+            now=AT,
         )
         blank_text, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="  ", now=AT,
+            storage,
+            agent_id="critic",
+            description="  ",
+            now=AT,
         )
 
         assert blank_id["status"] == "refused"
@@ -178,8 +201,11 @@ class TestTheGateGuardsAssumingAnIdNotOnlyMintingOne:
         asked: list[str] = []
 
         result, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a critic",
-            approve_id=_asked(asked), now=AT,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            approve_id=_asked(asked),
+            now=AT,
         )
 
         assert asked == ["critic"], "an approved id is asked about, not assumed"
@@ -191,8 +217,11 @@ class TestTheGateGuardsAssumingAnIdNotOnlyMintingOne:
         await _approved(storage, "critic")
 
         result, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a critic",
-            approve_id=_declined, now=AT,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            approve_id=_declined,
+            now=AT,
         )
 
         assert result["status"] == "refused"
@@ -204,16 +233,22 @@ class TestTheGateGuardsAssumingAnIdNotOnlyMintingOne:
         await _approved(storage, "critic")
 
         result, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a critic",
-            approve_id=_silent, now=AT,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            approve_id=_silent,
+            now=AT,
         )
 
         assert result["status"] == "claimed"
 
     async def test_no_channel_does_not_admit_an_unapproved_id(self, storage):
         result, _ = await tools.claim_agent(
-            storage, agent_id="self-appointed", description="a critic",
-            approve_id=_silent, now=AT,
+            storage,
+            agent_id="self-appointed",
+            description="a critic",
+            approve_id=_silent,
+            now=AT,
         )
 
         assert result["status"] == "refused"
@@ -235,8 +270,12 @@ class TestTheCadenceMemo:
         asked: list[str] = []
 
         result, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a critic",
-            approve_id=_asked(asked), confirmed_identity="critic", now=AT,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            approve_id=_asked(asked),
+            confirmed_identity="critic",
+            now=AT,
         )
 
         assert asked == [], "the memo answers for this identity in this graph"
@@ -248,8 +287,12 @@ class TestTheCadenceMemo:
         asked: list[str] = []
 
         result, _ = await tools.claim_agent(
-            storage, agent_id="never-approved", description="a critic",
-            approve_id=_asked(asked), confirmed_identity="never-approved", now=AT,
+            storage,
+            agent_id="never-approved",
+            description="a critic",
+            approve_id=_asked(asked),
+            confirmed_identity="never-approved",
+            now=AT,
         )
 
         assert asked == ["never-approved"]
@@ -260,8 +303,11 @@ class TestTheCadenceMemo:
         # itself mid-session is making a new claim about what it is.
         await _approved(storage, "critic")
         await tools.claim_agent(
-            storage, agent_id="critic", description="a critic",
-            approve_id=_accept(), now=AT,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            approve_id=_accept(),
+            now=AT,
         )
         shown: list[str] = []
 
@@ -270,9 +316,13 @@ class TestTheCadenceMemo:
             return True
 
         result, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a critic, and a reviewer",
-            approve_id=_asked([]), confirm_description=confirm,
-            confirmed_identity="critic", now=LATER,
+            storage,
+            agent_id="critic",
+            description="a critic, and a reviewer",
+            approve_id=_asked([]),
+            confirm_description=confirm,
+            confirmed_identity="critic",
+            now=LATER,
         )
 
         assert shown == ["a critic, and a reviewer"]
@@ -285,8 +335,11 @@ class TestTheResponseSaysWhetherTheJudgeIsNew:
 
     async def test_a_first_claim_reports_a_new_judge(self, storage):
         result, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a critic",
-            approve_id=_accept(), now=AT,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            approve_id=_accept(),
+            now=AT,
         )
 
         assert result["new_agent"] is True
@@ -294,13 +347,19 @@ class TestTheResponseSaysWhetherTheJudgeIsNew:
 
     async def test_a_second_claim_does_not(self, storage):
         await tools.claim_agent(
-            storage, agent_id="critic", description="a critic",
-            approve_id=_accept(), now=AT,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            approve_id=_accept(),
+            now=AT,
         )
 
         result, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a critic",
-            approve_id=_accept(), now=LATER,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            approve_id=_accept(),
+            now=LATER,
         )
 
         assert result["new_agent"] is False
@@ -311,12 +370,18 @@ class TestTheResponseSaysWhetherTheJudgeIsNew:
         # stops being a sentence — as it did on the day it shipped, reading
         # "Judging as 'Opus 5' The user confirmed this description."
         first, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a critic",
-            approve_id=_accept(), now=AT,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            approve_id=_accept(),
+            now=AT,
         )
         again, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a critic",
-            approve_id=_accept(), now=LATER,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            approve_id=_accept(),
+            now=LATER,
         )
 
         for message in (first["message"], again["message"]):
@@ -328,13 +393,19 @@ class TestTheResponseSaysWhetherTheJudgeIsNew:
         # newness is a fact about *that* judge.
         await _approved(storage, "critic")
         await tools.claim_agent(
-            storage, agent_id="critic", description="a critic",
-            approve_id=_accept(), now=AT,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            approve_id=_accept(),
+            now=AT,
         )
 
         result, _ = await tools.claim_agent(
-            storage, agent_id="something-else", description="a critic",
-            approve_id=_accept("critic"), now=LATER,
+            storage,
+            agent_id="something-else",
+            description="a critic",
+            approve_id=_accept("critic"),
+            now=LATER,
         )
 
         assert result["agent_id"] == "critic"
@@ -355,8 +426,11 @@ class TestTheRosterIsWhatTheUserPicksFrom:
         # withdrawn still has a history worth seeing.
         await _approved(storage, "configured-only")
         await tools.claim_agent(
-            storage, agent_id="critic", description="a critic",
-            approve_id=_accept(), now=AT,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            approve_id=_accept(),
+            now=AT,
         )
 
         roster = await tools.judge_roster(storage)
@@ -365,14 +439,15 @@ class TestTheRosterIsWhatTheUserPicksFrom:
         # Keyed on the key, never on the name: what the picker returns is what
         # `claim_agent` resolves, and a name the user is about to change would
         # be a poor thing to return.
-        assert {choice.key for choice in roster} == {
-            f"use:{choice.agent_id}" for choice in roster
-        }
+        assert {choice.key for choice in roster} == {f"use:{choice.agent_id}" for choice in roster}
 
     async def test_a_line_says_what_the_judge_was_for(self, storage):
         await tools.claim_agent(
-            storage, agent_id="critic", description="reviews merge decisions",
-            approve_id=_accept(), now=AT,
+            storage,
+            agent_id="critic",
+            description="reviews merge decisions",
+            approve_id=_accept(),
+            now=AT,
         )
 
         (choice,) = await tools.judge_roster(storage)
@@ -391,12 +466,18 @@ class TestTheRosterIsWhatTheUserPicksFrom:
         # answer the user wants is the first one offered.
         await _approved(storage, "older", "newer", "unused")
         await tools.claim_agent(
-            storage, agent_id="older", description="a critic",
-            approve_id=_accept(), now=AT,
+            storage,
+            agent_id="older",
+            description="a critic",
+            approve_id=_accept(),
+            now=AT,
         )
         await tools.claim_agent(
-            storage, agent_id="newer", description="a critic",
-            approve_id=_accept(), now=LATER,
+            storage,
+            agent_id="newer",
+            description="a critic",
+            approve_id=_accept(),
+            now=LATER,
         )
 
         order = [choice.agent_id for choice in await tools.judge_roster(storage)]
@@ -404,8 +485,11 @@ class TestTheRosterIsWhatTheUserPicksFrom:
 
     async def test_a_long_description_is_cut_and_the_id_never_is(self, storage):
         await tools.claim_agent(
-            storage, agent_id="a-judge-with-a-fairly-long-identifier",
-            description="x " * 200, approve_id=_accept(), now=AT,
+            storage,
+            agent_id="a-judge-with-a-fairly-long-identifier",
+            description="x " * 200,
+            approve_id=_accept(),
+            now=AT,
         )
 
         (choice,) = await tools.judge_roster(storage)
@@ -413,9 +497,7 @@ class TestTheRosterIsWhatTheUserPicksFrom:
         assert len(choice.title) <= 90
         assert choice.title.endswith("…")
 
-    async def test_a_choice_key_cannot_be_confused_with_the_new_judge_option(
-        self, storage
-    ):
+    async def test_a_choice_key_cannot_be_confused_with_the_new_judge_option(self, storage):
         # Agent ids are user-assigned free text, validated for emptiness and
         # nothing else, so a bare sentinel would be a string somebody could
         # legitimately be called.
@@ -439,7 +521,10 @@ class TestADescriptionIsAClaimNotACredential:
         await _approved(storage, "critic")
 
         result, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a rigorous critic", now=AT,
+            storage,
+            agent_id="critic",
+            description="a rigorous critic",
+            now=AT,
         )
 
         assert result["description_confirmed"] is False
@@ -447,13 +532,14 @@ class TestADescriptionIsAClaimNotACredential:
         assert agent.descriptions[-1].confirmed_at is None
         assert "unconfirmed" in result["message"]
 
-    async def test_approving_the_id_confirms_the_description_it_was_shown_with(
-        self, storage
-    ):
+    async def test_approving_the_id_confirms_the_description_it_was_shown_with(self, storage):
         """The user read that text when they approved the id, so it is theirs."""
         result, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a critic",
-            approve_id=_accept(), now=AT,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            approve_id=_accept(),
+            now=AT,
         )
 
         assert result["description_confirmed"] is True
@@ -463,7 +549,10 @@ class TestADescriptionIsAClaimNotACredential:
     async def test_a_new_description_under_a_known_id_is_asked_about(self, storage):
         await _approved(storage, "critic")
         await tools.claim_agent(
-            storage, agent_id="critic", description="a critic", now=AT,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            now=AT,
         )
 
         asked: list[str] = []
@@ -473,16 +562,17 @@ class TestADescriptionIsAClaimNotACredential:
             return True
 
         result, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a much stricter critic",
-            confirm_description=confirm, now=LATER,
+            storage,
+            agent_id="critic",
+            description="a much stricter critic",
+            confirm_description=confirm,
+            now=LATER,
         )
 
         assert asked == ["a much stricter critic"]
         assert result["description_confirmed"] is True
 
-    async def test_an_unanswered_description_question_still_records_the_version(
-        self, storage
-    ):
+    async def test_an_unanswered_description_question_still_records_the_version(self, storage):
         """Declining costs the confirmation, never the claim.
 
         *Self-described, unconfirmed* is a real epistemic object, so refusing
@@ -496,8 +586,11 @@ class TestADescriptionIsAClaimNotACredential:
             return False
 
         result, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a stricter critic",
-            confirm_description=declines, now=LATER,
+            storage,
+            agent_id="critic",
+            description="a stricter critic",
+            confirm_description=declines,
+            now=LATER,
         )
 
         agent = await storage.get_agent("critic")
@@ -515,7 +608,9 @@ class TestRedescribingAppendsAndNeverEdits:
         await tools.claim_agent(storage, agent_id="critic", description="a critic", now=AT)
 
         result, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a critic, sceptical of merges",
+            storage,
+            agent_id="critic",
+            description="a critic, sceptical of merges",
             now=LATER,
         )
 
@@ -532,7 +627,10 @@ class TestRedescribingAppendsAndNeverEdits:
         await tools.claim_agent(storage, agent_id="critic", description="a critic", now=AT)
 
         result, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a critic", now=LATER,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            now=LATER,
         )
 
         agent = await storage.get_agent("critic")
@@ -549,10 +647,16 @@ class TestRedescribingAppendsAndNeverEdits:
         """
         await _approved(storage, "critic", "second-critic")
         first, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a critic", now=AT,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            now=AT,
         )
         second, _ = await tools.claim_agent(
-            storage, agent_id="second-critic", description="a critic", now=AT,
+            storage,
+            agent_id="second-critic",
+            description="a critic",
+            now=AT,
         )
 
         assert first["digest"] == second["digest"] == description_digest("a critic")
@@ -563,7 +667,10 @@ class TestRedescribingAppendsAndNeverEdits:
         await tools.claim_agent(storage, agent_id="critic", description="a critic", now=AT)
 
         await tools.claim_agent(
-            storage, agent_id="critic", description="a critic", now=LATER,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            now=LATER,
         )
 
         agent = await storage.get_agent("critic")
@@ -588,21 +695,25 @@ class TestApprovalIsPerGraph:
         assert await storage.get_approved_agent_ids() == []
         assert await storage.get_agent("critic") is None
         result, _ = await tools.claim_agent(
-            storage, agent_id="critic", description="a critic",
-            approve_id=_silent, now=AT,
+            storage,
+            agent_id="critic",
+            description="a critic",
+            approve_id=_silent,
+            now=AT,
         )
         assert result["status"] == "refused"
 
-    async def test_use_graph_unbinds_a_judge_the_new_graph_never_approved(
-        self, storage
-    ):
+    async def test_use_graph_unbinds_a_judge_the_new_graph_never_approved(self, storage):
         """The session binds one judge; the approval that admitted it did not
         travel with the switch."""
         await _approved(storage, "critic")
         judge = JudgeRef(agent_id="critic", digest=description_digest("a critic"))
 
         result, _ = await tools.use_graph(
-            "elsewhere", storage, confirm=True, judge=judge,
+            "elsewhere",
+            storage,
+            confirm=True,
+            judge=judge,
         )
 
         assert result["judge_cleared"] == "critic"
@@ -633,7 +744,10 @@ class TestConfiguredApprovalsReachTheGraphYouLandOn:
 
     async def test_seeding_admits_ids_to_a_newly_created_graph(self, storage):
         await tools.use_graph(
-            "elsewhere", storage, confirm=True, seed_agent_ids=["critic", "editor"],
+            "elsewhere",
+            storage,
+            confirm=True,
+            seed_agent_ids=["critic", "editor"],
         )
 
         assert await storage.get_approved_agent_ids() == ["critic", "editor"]
@@ -643,7 +757,11 @@ class TestConfiguredApprovalsReachTheGraphYouLandOn:
         judge = JudgeRef(agent_id="critic", digest="whatever")
 
         result, _ = await tools.use_graph(
-            "elsewhere", storage, confirm=True, judge=judge, seed_agent_ids=["critic"],
+            "elsewhere",
+            storage,
+            confirm=True,
+            judge=judge,
+            seed_agent_ids=["critic"],
         )
 
         assert "judge_cleared" not in result

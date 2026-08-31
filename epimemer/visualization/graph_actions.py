@@ -7,8 +7,8 @@ so it can be read and tested without a storage backend behind it
 (EVENT_LOG.md §3.1).
 """
 
+from collections.abc import Iterator, Mapping, Sequence
 from itertools import count
-from typing import Iterator, Mapping, Sequence
 
 from epimemer.core.types import NodeStatus
 from epimemer.visualization.events import ActionVerb, GraphActionRecorded
@@ -63,7 +63,7 @@ def _short(node_id: str) -> str:
 
 
 def _swept(counts: Mapping[str, int]) -> str:
-    """"3 edges, 1 node" — what the act carried along, largest kind first."""
+    """ "3 edges, 1 node" — what the act carried along, largest kind first."""
     parts = [
         f"{n} {kind if n != 1 else kind.removesuffix('s')}"
         for kind, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))

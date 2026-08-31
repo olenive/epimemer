@@ -12,7 +12,7 @@ the caller asked about is *the* answer — hiding either under something later i
 the same defect this exists to prevent, arriving from another direction.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -33,9 +33,7 @@ def _fact(node_id: str, content: str, status: NodeStatus = NodeStatus.ACTIVE) ->
         source_id="seg-1",
         status=status,
         value=ValueSignal(),
-        superseded_at=(
-            None if status is NodeStatus.ACTIVE else datetime.now(timezone.utc)
-        ),
+        superseded_at=(None if status is NodeStatus.ACTIVE else datetime.now(UTC)),
     )
 
 
@@ -43,9 +41,7 @@ async def _store(storage, nodes, edges=()):
     for node in nodes:
         await storage.store_node(node)
     for src, dst, edge_type in edges:
-        await storage.store_edge(
-            NodeEdge(src_id=src, dst_id=dst, type=edge_type)
-        )
+        await storage.store_edge(NodeEdge(src_id=src, dst_id=dst, type=edge_type))
 
 
 @pytest.fixture
@@ -58,9 +54,7 @@ def petersburg() -> list[Fact]:
 
 
 class TestARetiredVersionGivesUpItsSlot:
-    async def test_it_folds_into_the_successor_that_also_matched(
-        self, storage, petersburg
-    ):
+    async def test_it_folds_into_the_successor_that_also_matched(self, storage, petersburg):
         old, current = petersburg
         await _store(
             storage,
@@ -73,9 +67,7 @@ class TestARetiredVersionGivesUpItsSlot:
         assert [node.id for node in kept] == [current.id]
         assert [node.id for node in lineage[current.id]] == [old.id]
 
-    async def test_a_successor_nobody_matched_leaves_it_where_it_was(
-        self, storage, petersburg
-    ):
+    async def test_a_successor_nobody_matched_leaves_it_where_it_was(self, storage, petersburg):
         """It matched on its own merits and nothing displaced it."""
         old, current = petersburg
         await _store(
@@ -93,9 +85,7 @@ class TestARetiredVersionGivesUpItsSlot:
         """Both retirements crowd a result; only the edge type differs."""
         wrong = _fact("wrong", "the release shipped in March", NodeStatus.CORRECTED)
         right = _fact("right", "the release shipped in May")
-        await _store(
-            storage, [wrong, right], [(wrong.id, right.id, EdgeType.SUPERSEDED_BY)]
-        )
+        await _store(storage, [wrong, right], [(wrong.id, right.id, EdgeType.SUPERSEDED_BY)])
 
         kept, lineage = await fold_lineage([wrong, right], storage)
 
@@ -126,9 +116,7 @@ class TestARetiredVersionGivesUpItsSlot:
 
 
 class TestWhatMustNeverFold:
-    async def test_two_active_claims_joined_by_a_lineage_edge_both_stay(
-        self, storage
-    ):
+    async def test_two_active_claims_joined_by_a_lineage_edge_both_stay(self, storage):
         """`restore` leaves exactly this shape, and `link` can write it by hand.
 
         The rule reads the status, not the edge: an ACTIVE node is a current
@@ -148,9 +136,7 @@ class TestWhatMustNeverFold:
         assert {node.id for node in kept} == {recurred.id, interim.id}
         assert lineage == {}
 
-    async def test_a_claim_the_caller_asked_about_keeps_its_slot(
-        self, storage, petersburg
-    ):
+    async def test_a_claim_the_caller_asked_about_keeps_its_slot(self, storage, petersburg):
         """What `valid_as_of` protects: the 1980 answer is not 1991's footnote."""
         old, current = petersburg
         await _store(
@@ -159,16 +145,12 @@ class TestWhatMustNeverFold:
             [(old.id, current.id, EdgeType.TEMPORALLY_FOLLOWED_BY)],
         )
 
-        kept, lineage = await fold_lineage(
-            [old, current], storage, unfoldable=[old.id]
-        )
+        kept, lineage = await fold_lineage([old, current], storage, unfoldable=[old.id])
 
         assert [node.id for node in kept] == [old.id, current.id]
         assert lineage == {}
 
-    async def test_history_stops_at_a_protected_node_rather_than_passing_it(
-        self, storage
-    ):
+    async def test_history_stops_at_a_protected_node_rather_than_passing_it(self, storage):
         """Otherwise the history hangs off a node the caller did not ask about."""
         oldest = _fact("oldest", "called Petrograd", NodeStatus.HISTORICAL)
         middle = _fact("middle", "called Leningrad", NodeStatus.HISTORICAL)
@@ -183,9 +165,7 @@ class TestWhatMustNeverFold:
             ],
         )
 
-        kept, lineage = await fold_lineage(
-            nodes, storage, unfoldable=[middle.id]
-        )
+        kept, lineage = await fold_lineage(nodes, storage, unfoldable=[middle.id])
 
         assert [node.id for node in kept] == [middle.id, current.id]
         assert [node.id for node in lineage[middle.id]] == [oldest.id]
@@ -220,9 +200,7 @@ class TestTheWalkTerminates:
 
     async def test_a_self_loop_is_not_a_fold(self, storage):
         alone = _fact("alone", "called Leningrad", NodeStatus.HISTORICAL)
-        await _store(
-            storage, [alone], [(alone.id, alone.id, EdgeType.TEMPORALLY_FOLLOWED_BY)]
-        )
+        await _store(storage, [alone], [(alone.id, alone.id, EdgeType.TEMPORALLY_FOLLOWED_BY)])
 
         kept, lineage = await fold_lineage([alone], storage)
 

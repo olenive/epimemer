@@ -103,19 +103,20 @@ response by accident.
 
 ```python
 class RetrievalRecord(BaseModel):
-    record_id: str            # monotonic, assigned here — not the hub's `seq`
+    record_id: str  # monotonic, assigned here — not the hub's `seq`
     at: datetime
-    tool: str                 # "epimemer.search", …
-    query: str                # the query text, or a rendering of the arguments
+    tool: str  # "epimemer.search", …
+    query: str  # the query text, or a rendering of the arguments
     graph: str
     retrieved: list[RetrievedNode]
-    response_text: str        # exactly what _build_response returned
-    truncated: bool           # response_text hit the size cap
+    response_text: str  # exactly what _build_response returned
+    truncated: bool  # response_text hit the size cap
+
 
 class RetrievedNode(BaseModel):
     node_id: str
     provenance: SeedProvenance
-    score: float | None       # similarity or BM25, where the tool has one
+    score: float | None  # similarity or BM25, where the tool has one
 ```
 
 `SeedProvenance` is the four-value enum from `LEXICAL_SEARCH.md` §6 —

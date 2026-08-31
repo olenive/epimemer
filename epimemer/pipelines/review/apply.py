@@ -238,9 +238,7 @@ async def review_decision(
         record_id=record.id,
         kind=kind.value,
         subjects=subjects,
-        reviewed_judge=(
-            reviewed.judged_by.agent_id if reviewed.judged_by is not None else None
-        ),
+        reviewed_judge=(reviewed.judged_by.agent_id if reviewed.judged_by is not None else None),
     )
 
 
@@ -364,22 +362,17 @@ async def rejudge_node(
     # `reviews` names the decision that made the original judgment, which is the
     # oldest originating row rather than the newest: a rejudgment revises the
     # decision, not a later confirmation of it (§10.5's rule for pair verdicts).
-    originating = await storage.query_decisions(
-        subject_id=node_id, kinds=list(ORIGINATING_KINDS)
-    )
+    originating = await storage.query_decisions(subject_id=node_id, kinds=list(ORIGINATING_KINDS))
     reviews = originating[-1].id if originating else None
 
     if "claim_kind" in changed:
         node.claim_kind = claim_kind
-    value_update = {
-        name: value for name, value in changed.items() if name == "confidence"
-    }
+    value_update = {name: value for name, value in changed.items() if name == "confidence"}
     if value_update:
         node.value = node.value.model_copy(update=value_update)
     node.metadata = {
         **node.metadata,
-        **({"confidence_basis": confidence_basis} if "confidence_basis" in changed
-           else {}),
+        **({"confidence_basis": confidence_basis} if "confidence_basis" in changed else {}),
         # Append-only, and the only place the prior value survives. One
         # chronological trail rather than a field per revision, on
         # `judge_importance`'s reasoning: a reviewer wants a judgment and its

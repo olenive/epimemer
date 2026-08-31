@@ -33,7 +33,7 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     exceed the comparisons it replaces. The graph-scaled loop that used to be
     here is now `similar_pairs`.
     """
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(x * x for x in b))
     if norm_a == 0 or norm_b == 0:
@@ -53,9 +53,7 @@ async def all_pairs_above_threshold(
     near-duplicates are collapsed. Returns False if any node lacks a stored
     embedding — if similarity cannot be verified, the merge is refused.
     """
-    by_item = await storage.get_embeddings_for_items(
-        [node.id for node in nodes], model_id=model_id
-    )
+    by_item = await storage.get_embeddings_for_items([node.id for node in nodes], model_id=model_id)
     vectors: list[list[float]] = []
     for node in nodes:
         embeddings = by_item[node.id]
@@ -115,9 +113,7 @@ async def find_similar_topic_pairs(
         [topic.id for topic in topics], model_id=effective_model_id
     )
     topic_vectors: dict[str, list[float]] = {
-        topic.id: by_item[topic.id][0].vector
-        for topic in topics
-        if by_item[topic.id]
+        topic.id: by_item[topic.id][0].vector for topic in topics if by_item[topic.id]
     }
 
     # Score every pair at once, over the topics whose vectors can form a matrix.
@@ -125,9 +121,7 @@ async def find_similar_topic_pairs(
     # stopped being the cost it was most of the wall clock: 71% on SurrealDB and
     # 88% in-memory at 1,200 nodes, against 9 ms of storage.
     by_id = {topic.id: topic for topic in topics}
-    kept_ids, vectors = stack_uniform_width(
-        [topic.id for topic in topics], topic_vectors
-    )
+    kept_ids, vectors = stack_uniform_width([topic.id for topic in topics], topic_vectors)
     if not kept_ids:
         return []
     topic_list = [by_id[topic_id] for topic_id in kept_ids]
@@ -177,9 +171,7 @@ async def merge_similar_topics(
     # between two pieces of text, and one of them has to lead. Two unrated
     # topics tie and the `>=` takes the first — honestly the *unrated* case
     # now, where before priors existed it was every case.
-    if rated_confidence(topic_a.value.confidence) >= rated_confidence(
-        topic_b.value.confidence
-    ):
+    if rated_confidence(topic_a.value.confidence) >= rated_confidence(topic_b.value.confidence):
         primary, secondary = topic_a, topic_b
     else:
         primary, secondary = topic_b, topic_a
@@ -213,5 +205,3 @@ async def merge_similar_topics(
     )
 
     return merged_topic
-
-

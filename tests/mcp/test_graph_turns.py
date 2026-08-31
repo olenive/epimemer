@@ -18,13 +18,14 @@ from contextlib import asynccontextmanager
 import pytest
 from fastmcp import FastMCP
 
+from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.server import MOVES_THE_GRAPH, _graph_turn
 from epimemer.mcp.server import mcp as epimemer_mcp
-from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.storage.memory import InMemoryStorage
+
 
 def _graph_with_the_real() -> InMemoryStorage:
     """An in-memory graph somebody has set up.
@@ -191,9 +192,15 @@ class TestABatchedSwitchDoesNotSplitAnIngest:
         server, storage = server_on
         started_on = storage.current_database
 
-        seg = _result(await server.call_tool("segment", {"expected_graph": "default", 
-            "content": "The first paragraph.\n\nThe second paragraph.",
-        }))
+        seg = _result(
+            await server.call_tool(
+                "segment",
+                {
+                    "expected_graph": "default",
+                    "content": "The first paragraph.\n\nThe second paragraph.",
+                },
+            )
+        )
         decomposition = [
             {
                 "segment_id": s["segment_id"],
@@ -205,11 +212,15 @@ class TestABatchedSwitchDoesNotSplitAnIngest:
         ]
 
         ingest, switch = await asyncio.gather(
-            server.call_tool("store_decomposition", {"expected_graph": "default", 
-        "metacontext_id": "the-real",
-                "document_id": seg["document_id"],
-                "segments": decomposition,
-            }),
+            server.call_tool(
+                "store_decomposition",
+                {
+                    "expected_graph": "default",
+                    "metacontext_id": "the-real",
+                    "document_id": seg["document_id"],
+                    "segments": decomposition,
+                },
+            ),
             server.call_tool("use_graph", {"name": "elsewhere", "confirm": True}),
         )
 

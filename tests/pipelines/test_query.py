@@ -14,10 +14,9 @@ Covers:
 - Temporal query: at_time excludes future nodes
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 import pytest
-
 from petritype.core.executable_graph_components import ExecutableGraphOperations
 
 from epimemer.core.types import (
@@ -38,7 +37,6 @@ from epimemer.pipelines.query.hybrid_retrieval import hybrid_retrieval_net
 from epimemer.pipelines.query.types import QueryRequest, QueryResult
 from epimemer.pipelines.query.vector_search import vector_search
 from epimemer.storage.memory import InMemoryStorage
-
 
 # --- Fixtures ---
 
@@ -197,7 +195,7 @@ async def test_graph_expansion_traverses_edges(populated_graph):
 
     node_ids = {n.id for n in nodes}
     assert "topic-1" in node_ids  # seed included
-    assert "fact-1" in node_ids   # connected via SUPPORTS
+    assert "fact-1" in node_ids  # connected via SUPPORTS
     assert "inference-1" in node_ids  # connected via ABSTRACTS
 
 
@@ -423,9 +421,9 @@ async def test_temporal_query_excludes_future_nodes(embedding_provider):
     """Temporal query with at_time excludes nodes created after that time."""
     storage = InMemoryStorage()
 
-    past_time = datetime(2025, 1, 1, tzinfo=timezone.utc)
-    future_time = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    query_time = datetime(2025, 6, 1, tzinfo=timezone.utc)
+    past_time = datetime(2025, 1, 1, tzinfo=UTC)
+    future_time = datetime(2026, 6, 1, tzinfo=UTC)
+    query_time = datetime(2025, 6, 1, tzinfo=UTC)
 
     # Create a past node and a future node
     past_topic = Topic(
@@ -479,9 +477,11 @@ async def ticket_graph(embedding_provider):
         fact = Fact(content=content, source_id="seg-1")
         await storage.store_node(fact)
         vectors = await embedding_provider.embed([content])
-        await storage.store_embedding(EmbeddingRecord(
-            item_id=fact.id, model_id=embedding_provider.model_id, vector=vectors[0]
-        ))
+        await storage.store_embedding(
+            EmbeddingRecord(
+                item_id=fact.id, model_id=embedding_provider.model_id, vector=vectors[0]
+            )
+        )
         facts.append(fact)
     return storage, embedding_provider, facts
 
@@ -552,9 +552,7 @@ async def test_a_prose_query_adds_no_lexical_seeds(ticket_graph):
 async def test_a_retired_node_is_not_a_lexical_seed(ticket_graph):
     """R7 through the net: both arms take the same view of what exists."""
     storage, provider, facts = ticket_graph
-    await storage.set_node_status_tx(
-        [facts[0]], status=NodeStatus.CORRECTED, at=datetime.now(timezone.utc)
-    )
+    await storage.set_node_status_tx([facts[0]], status=NodeStatus.CORRECTED, at=datetime.now(UTC))
     request = QueryRequest(query_text="JIRA-4417", k=5, graph_hops=0)
 
     result = await _run(request, provider, storage)
@@ -583,9 +581,7 @@ async def test_a_segment_hit_bridges_to_the_nodes_extracted_from_it(
     ]
     segments = []
     for index, text in enumerate(passages):
-        segment = Segment(
-            source_id="doc-1", text=text, span_start=index, span_end=index + 1
-        )
+        segment = Segment(source_id="doc-1", text=text, span_start=index, span_end=index + 1)
         await storage.store_segment(segment)
         segments.append(segment)
 
@@ -593,11 +589,13 @@ async def test_a_segment_hit_bridges_to_the_nodes_extracted_from_it(
     paraphrase = Fact(content="the deployment ticket was closed", source_id=segments[0].id)
     await storage.store_node(paraphrase)
     vectors = await embedding_provider.embed([paraphrase.content])
-    await storage.store_embedding(EmbeddingRecord(
-        item_id=paraphrase.id,
-        model_id=embedding_provider.model_id,
-        vector=vectors[0],
-    ))
+    await storage.store_embedding(
+        EmbeddingRecord(
+            item_id=paraphrase.id,
+            model_id=embedding_provider.model_id,
+            vector=vectors[0],
+        )
+    )
 
     request = QueryRequest(query_text="JIRA-4417", k=5, graph_hops=0)
     result = await _run(request, embedding_provider, storage)
@@ -634,11 +632,13 @@ async def test_the_last_node_type_is_still_a_lexical_seed_without_segments(
         inference = Inference(content=content, source_id="seg-1")
         await storage.store_node(inference)
         vectors = await embedding_provider.embed([content])
-        await storage.store_embedding(EmbeddingRecord(
-            item_id=inference.id,
-            model_id=embedding_provider.model_id,
-            vector=vectors[0],
-        ))
+        await storage.store_embedding(
+            EmbeddingRecord(
+                item_id=inference.id,
+                model_id=embedding_provider.model_id,
+                vector=vectors[0],
+            )
+        )
         inferences.append(inference)
 
     request = QueryRequest(query_text="JIRA-4417", k=5, graph_hops=0)

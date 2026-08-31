@@ -142,11 +142,17 @@ sweep reads without a journal query.
 nine that exist, carrying the verdict rather than a bare pair:
 
 ```python
-similarities=[
-    {"pair": [a_id, b_id], "verdict": "one_claim", "because": "same claim; "
-     "merge refused, both are events"},          # → similarity + assessed
-    {"pair": [c_id, d_id], "verdict": "distinct", "because": "both about "
-     "validity intervals, different assertions"},  # → assessed only
+similarities = [
+    {
+        "pair": [a_id, b_id],
+        "verdict": "one_claim",
+        "because": "same claim; merge refused, both are events",
+    },  # → similarity + assessed
+    {
+        "pair": [c_id, d_id],
+        "verdict": "distinct",
+        "because": "both about validity intervals, different assertions",
+    },  # → assessed only
 ]
 ```
 
@@ -195,6 +201,7 @@ class AgentDescription(BaseModel):
     decision made last week was made by whatever this agent claimed to be last
     week, and that claim has to stay readable after the agent changes its mind.
     """
+
     # sha256 of `text`, truncated. Identifies the *version*, so a decision that
     # records it pins what the judge claimed to be at the moment it decided —
     # no as-of query needed. Re-recording identical text is not a new version.
@@ -213,9 +220,10 @@ class Agent(BaseModel):
 
     Not a user account and not a credential. See §2.4.
     """
-    id: str                      # assigned by the user, not minted here
+
+    id: str  # assigned by the user, not minted here
     descriptions: list[AgentDescription] = Field(default_factory=list)
-    authorised_at: datetime      # when the user admitted this id
+    authorised_at: datetime  # when the user admitted this id
     first_seen_at: datetime | None = None
     last_seen_at: datetime | None = None
 ```
@@ -578,6 +586,7 @@ class DecisionRecord(BaseModel):
     both and the contradiction was load-bearing: a mutable field on this row
     also has to stay in sync with a copy on the node, across two backends.
     """
+
     id: str = Field(default_factory=_new_id)
     kind: DecisionKind
     subject_ids: list[str]
@@ -856,7 +865,11 @@ So the missing writer is narrow, and its narrowness is the design:
 
 ```python
 async def rejudge(
-    node_id: str, storage: StorageBackend, *, judge: JudgeRef, because: str,
+    node_id: str,
+    storage: StorageBackend,
+    *,
+    judge: JudgeRef,
+    because: str,
     claim_kind: ClaimKind | None = None,
     confidence: float | None = None,
     confidence_basis: str | None = None,
@@ -1274,7 +1287,8 @@ that episode with `restored_at`. So one completed cycle leaves one **closed
 def completed_merge_cycles(node: EpistemicNode) -> int:
     """How many times this node has been merged and then brought back."""
     return sum(
-        1 for episode in node.lifecycle
+        1
+        for episode in node.lifecycle
         if episode.because is NodeStatus.MERGED and episode.restored_at is not None
     )
 ```
@@ -1347,17 +1361,19 @@ class MergedEdge(BaseModel):
     copy branch already uses — so a field added to `NodeEdge` later is carried
     without anyone remembering to come back here.
     """
-    owner_id: str                 # which merging source it belonged to
-    edge: dict                    # NodeEdge.model_dump(exclude={"id"})
-    intra_set: bool = False       # §7.9, "the edge the merge deleted outright"
+
+    owner_id: str  # which merging source it belonged to
+    edge: dict  # NodeEdge.model_dump(exclude={"id"})
+    intra_set: bool = False  # §7.9, "the edge the merge deleted outright"
 
 
 class MergeUndo(BaseModel):
     """Everything needed to replay one merge backwards."""
+
     source_ids: list[str]
     edges: list[MergedEdge]
     merged_at: datetime
-    decision_id: str | None = None      # the DecisionRecord (§4)
+    decision_id: str | None = None  # the DecisionRecord (§4)
     # The survivor's wording, kept because `delete_node` removes the node that
     # held it. Without this a reversal cannot say what it withdrew, and the
     # contested text is unquotable the moment the reversal lands.
@@ -1784,8 +1800,7 @@ consulted first:
 # `migration_disposition` already makes for a world-change, which is just as
 # true of a correction. Anchored, never migrated, on any retirement.
 JUDGMENT_EDGE_TYPES: frozenset[EdgeType] = frozenset(
-    {EdgeType.SIMILARITY, EdgeType.CONTRADICTION,
-     EdgeType.VARIANT_OF, EdgeType.ASSESSED}
+    {EdgeType.SIMILARITY, EdgeType.CONTRADICTION, EdgeType.VARIANT_OF, EdgeType.ASSESSED}
 )
 ```
 
@@ -2007,7 +2022,7 @@ makes the first not a single point of failure.
 ```python
 class JudgeRef(BaseModel):
     agent_id: str
-    digest: str          # the AgentDescription version current at this call
+    digest: str  # the AgentDescription version current at this call
 ```
 
 Resolved once at the MCP boundary from session state, then passed explicitly —

@@ -14,7 +14,8 @@ keeps these in a dict it also iterates while fanning out. The cost is a copy of
 serializing the record that prompted it.
 """
 
-from typing import Sequence, TypeVar
+from collections.abc import Sequence
+from typing import TypeVar
 
 T = TypeVar("T")
 
@@ -34,7 +35,7 @@ LOG_RING_CAPACITY = 512
 RETRIEVAL_RING_CAPACITY = 20
 
 
-def remember(ring: Sequence[T], item: T, *, capacity: int) -> tuple[T, ...]:
+def remember[T](ring: Sequence[T], item: T, *, capacity: int) -> tuple[T, ...]:
     """`ring` with `item` appended, oldest dropped once it is full."""
     if capacity < 0:
         # `[-capacity:]` would read a negative bound as "all but the last n",
@@ -45,6 +46,6 @@ def remember(ring: Sequence[T], item: T, *, capacity: int) -> tuple[T, ...]:
     return (*ring, item)[-capacity:]
 
 
-def backfill(ring: Sequence[T]) -> list[T]:
+def backfill[T](ring: Sequence[T]) -> list[T]:
     """What a subscriber replays — oldest first, the order it happened in."""
     return list(ring)

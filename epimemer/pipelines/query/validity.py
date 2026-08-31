@@ -63,9 +63,7 @@ async def validity_for(
         for edge in node_edges:
             if not edge.validity:
                 continue
-            by_source[edge.dst_id] = merged_validity(
-                by_source.get(edge.dst_id, []), edge.validity
-            )
+            by_source[edge.dst_id] = merged_validity(by_source.get(edge.dst_id, []), edge.validity)
         if by_source:
             by_node[node_id] = [
                 SourceValidity(source_id=source_id, intervals=intervals)

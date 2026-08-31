@@ -1,6 +1,6 @@
 """Tests for core Pydantic types."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from petritype.core.executable_graph_components import ListPlaceNode
@@ -14,24 +14,24 @@ from epimemer.core.temporal import (
     ValidityInterval,
 )
 from epimemer.core.types import (
+    HISTORY_EDGE_TYPES,
+    JUDGMENT_EDGE_TYPES,
+    NON_KNOWLEDGE_EDGE_TYPES,
     EdgeType,
     EmbeddingRecord,
     Fact,
-    HISTORY_EDGE_TYPES,
     Inference,
-    JUDGMENT_EDGE_TYPES,
     LifecycleEpisode,
     Metacontext,
     NodeEdge,
     NodeStatus,
-    NON_KNOWLEDGE_EDGE_TYPES,
-    completed_merge_cycles,
     RawDocument,
     Segment,
     Timeline,
     Timepoint,
     Topic,
     ValueSignal,
+    completed_merge_cycles,
     lineage_edge_type_for,
     merged_value_signal,
     migration_disposition,
@@ -50,14 +50,16 @@ class TestEdgeBehaviour:
     """
 
     def test_relationship_edge_traversed_and_moved_by_a_correction(self):
-        e = NodeEdge(src_id="a", dst_id="b", type=EdgeType.RELATED,
-                     label="refuted_in", kind="relationship")
+        e = NodeEdge(
+            src_id="a", dst_id="b", type=EdgeType.RELATED, label="refuted_in", kind="relationship"
+        )
         assert not traversal_excluded(e)
         assert migration_disposition(e.type, NodeStatus.CORRECTED) == "move"
 
     def test_attribution_edge_not_traversed_but_moved_by_a_correction(self):
-        e = NodeEdge(src_id="a", dst_id="b", type=EdgeType.RELATED,
-                     label="published_by", kind="attribution")
+        e = NodeEdge(
+            src_id="a", dst_id="b", type=EdgeType.RELATED, label="published_by", kind="attribution"
+        )
         assert traversal_excluded(e)
         assert migration_disposition(e.type, NodeStatus.CORRECTED) == "move"
 
@@ -83,14 +85,15 @@ class TestWorldChangeMigrationPolicy:
     inherit assertions it never made."""
 
     def test_provenance_stays_with_the_claim_its_document_asserted(self):
-        assert migration_disposition(
-            EdgeType.SOURCED_FROM, NodeStatus.HISTORICAL
-        ) == "keep"
+        assert migration_disposition(EdgeType.SOURCED_FROM, NodeStatus.HISTORICAL) == "keep"
 
     def test_a_judgment_about_the_old_claim_stays_on_it(self):
         for edge_type in (
-            EdgeType.CONTRADICTION, EdgeType.VARIANT_OF, EdgeType.RELATED,
-            EdgeType.SUPPORTS, EdgeType.DERIVED_FROM,
+            EdgeType.CONTRADICTION,
+            EdgeType.VARIANT_OF,
+            EdgeType.RELATED,
+            EdgeType.SUPPORTS,
+            EdgeType.DERIVED_FROM,
         ):
             assert migration_disposition(edge_type, NodeStatus.HISTORICAL) == "keep"
 
@@ -123,17 +126,15 @@ class TestWorldChangeMigrationPolicy:
     def test_legacy_superseded_rows_behave_as_they_always_did(self):
         """Nothing writes `SUPERSEDED` any more, but old graphs still load and
         must not change meaning under a policy written after them."""
-        assert migration_disposition(
-            EdgeType.SOURCED_FROM, NodeStatus.SUPERSEDED
-        ) == "move"
+        assert migration_disposition(EdgeType.SOURCED_FROM, NodeStatus.SUPERSEDED) == "move"
 
 
 def _episode(because: NodeStatus, *, restored: bool) -> LifecycleEpisode:
     return LifecycleEpisode(
-        retired_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        retired_at=datetime(2026, 1, 1, tzinfo=UTC),
         because=because,
         counterpart="other",
-        restored_at=datetime(2026, 1, 2, tzinfo=timezone.utc) if restored else None,
+        restored_at=datetime(2026, 1, 2, tzinfo=UTC) if restored else None,
     )
 
 
@@ -143,27 +144,39 @@ class TestCountingMergeCycles:
     append-only and never trimmed."""
 
     def test_a_closed_merge_episode_is_one_cycle(self):
-        node = Fact(content="c", source_id="s", lifecycle=[
-            _episode(NodeStatus.MERGED, restored=True),
-            _episode(NodeStatus.MERGED, restored=True),
-        ])
+        node = Fact(
+            content="c",
+            source_id="s",
+            lifecycle=[
+                _episode(NodeStatus.MERGED, restored=True),
+                _episode(NodeStatus.MERGED, restored=True),
+            ],
+        )
         assert completed_merge_cycles(node) == 2
 
     def test_an_open_merge_episode_is_not_a_cycle(self):
         """The node is still merged. Counting it would refuse on the strength of
         the merge currently being reversed."""
-        node = Fact(content="c", source_id="s", lifecycle=[
-            _episode(NodeStatus.MERGED, restored=False),
-        ])
+        node = Fact(
+            content="c",
+            source_id="s",
+            lifecycle=[
+                _episode(NodeStatus.MERGED, restored=False),
+            ],
+        )
         assert completed_merge_cycles(node) == 0
 
     def test_a_recurrence_is_not_an_oscillation(self):
         """A claim that stepped aside for its period and came back is the validity model's
         recurrence — the case the lifecycle was built for, and not this one."""
-        node = Fact(content="c", source_id="s", lifecycle=[
-            _episode(NodeStatus.HISTORICAL, restored=True),
-            _episode(NodeStatus.CORRECTED, restored=True),
-        ])
+        node = Fact(
+            content="c",
+            source_id="s",
+            lifecycle=[
+                _episode(NodeStatus.HISTORICAL, restored=True),
+                _episode(NodeStatus.CORRECTED, restored=True),
+            ],
+        )
         assert completed_merge_cycles(node) == 0
 
     def test_a_node_that_never_left_has_no_cycles(self):
@@ -189,8 +202,10 @@ class TestAJudgmentIsAnchoredWhateverTheRetirement:
     def test_no_status_moves_a_judgment(self):
         for edge_type in JUDGMENT_EDGE_TYPES:
             for status in (
-                NodeStatus.CORRECTED, NodeStatus.HISTORICAL,
-                NodeStatus.MERGED, NodeStatus.SUPERSEDED,
+                NodeStatus.CORRECTED,
+                NodeStatus.HISTORICAL,
+                NodeStatus.MERGED,
+                NodeStatus.SUPERSEDED,
             ):
                 assert migration_disposition(edge_type, status) == "keep"
 
@@ -225,9 +240,7 @@ class TestTheLineageEdgeSplitsWithTheStatus:
     """
 
     def test_a_world_change_records_temporal_order(self):
-        assert lineage_edge_type_for(
-            NodeStatus.HISTORICAL
-        ) is EdgeType.TEMPORALLY_FOLLOWED_BY
+        assert lineage_edge_type_for(NodeStatus.HISTORICAL) is EdgeType.TEMPORALLY_FOLLOWED_BY
 
     def test_a_correction_records_replacement(self):
         assert lineage_edge_type_for(NodeStatus.CORRECTED) is EdgeType.SUPERSEDED_BY
@@ -264,7 +277,6 @@ class TestTheLineageEdgeSplitsWithTheStatus:
 
 
 class TestValueSignal:
-
     def test_default_values(self):
         v = ValueSignal()
         assert v.confidence is None
@@ -322,8 +334,9 @@ class TestValueSignal:
     def test_a_reloaded_signal_no_longer_carries_relevance(self):
         """It is dropped on the way out too, so a re-store cleans the row."""
         restored = ValueSignal.model_validate(
-            ValueSignal.model_validate({"confidence": 0.9, "relevance": 0.37})
-            .model_dump(mode="json")
+            ValueSignal.model_validate({"confidence": 0.9, "relevance": 0.37}).model_dump(
+                mode="json"
+            )
         )
         assert "relevance" not in restored.model_dump(mode="json")
 
@@ -343,9 +356,7 @@ class TestValueSignal:
         Asked at read time against the graph as it stands, the question is
         well-posed, and `vector_search` already answers it.
         """
-        v = ValueSignal.model_validate(
-            {"novelty": 0.3, "confidence": 0.9, "importance": 0.8}
-        )
+        v = ValueSignal.model_validate({"novelty": 0.3, "confidence": 0.9, "importance": 0.8})
 
         assert not hasattr(v, "novelty")
         assert v.confidence == 0.9
@@ -354,13 +365,12 @@ class TestValueSignal:
     def test_a_reloaded_signal_no_longer_carries_novelty(self):
         """Dropped on the way out too, so a re-store cleans the row."""
         restored = ValueSignal.model_validate(
-            ValueSignal.model_validate({"confidence": 0.9, "novelty": 0.3})
-            .model_dump(mode="json")
+            ValueSignal.model_validate({"confidence": 0.9, "novelty": 0.3}).model_dump(mode="json")
         )
         assert "novelty" not in restored.model_dump(mode="json")
 
     def test_both_clocks_start_unset(self):
-        """"Never retrieved" and "never judged" are real states, not fictions.
+        """ "Never retrieved" and "never judged" are real states, not fictions.
 
         Defaulting these to `now` would make a node that nothing has ever
         touched indistinguishable from one touched a moment ago — which is what
@@ -380,9 +390,7 @@ class TestValueSignal:
         from cleanup; `None` loads them as never touched, which merely proposes
         them for review.
         """
-        v = ValueSignal.model_validate(
-            {"novelty": 1.0, "confidence": 0.5, "importance": 0.5}
-        )
+        v = ValueSignal.model_validate({"novelty": 1.0, "confidence": 0.5, "importance": 0.5})
         assert v.retrieved_at is None
         assert v.importance_judged_at is None
 
@@ -392,9 +400,9 @@ class TestValueSignal:
         assert v.confidence == 0.9
 
     def test_bounds_validation(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             ValueSignal(importance=1.5)
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             ValueSignal(confidence=-0.1)
 
 
@@ -402,24 +410,28 @@ class TestMergedValueSignal:
     """The one place a merge decides what a combined signal says."""
 
     def _at(self, days_ago: int) -> datetime:
-        return datetime.now(timezone.utc) - timedelta(days=days_ago)
+        return datetime.now(UTC) - timedelta(days=days_ago)
 
     def test_a_real_timestamp_beats_never(self):
         """`None` means never happened, so it loses to anything that did."""
         judged, retrieved = self._at(200), self._at(5)
-        merged = merged_value_signal([
-            ValueSignal(importance_judged_at=judged, retrieved_at=retrieved),
-            ValueSignal(),
-        ])
+        merged = merged_value_signal(
+            [
+                ValueSignal(importance_judged_at=judged, retrieved_at=retrieved),
+                ValueSignal(),
+            ]
+        )
         assert merged.importance_judged_at == judged
         assert merged.retrieved_at == retrieved
 
     def test_the_later_of_two_real_timestamps_wins(self):
         older, newer = self._at(200), self._at(10)
-        merged = merged_value_signal([
-            ValueSignal(importance_judged_at=older),
-            ValueSignal(importance_judged_at=newer),
-        ])
+        merged = merged_value_signal(
+            [
+                ValueSignal(importance_judged_at=older),
+                ValueSignal(importance_judged_at=newer),
+            ]
+        )
         assert merged.importance_judged_at == newer
 
     def test_order_does_not_matter(self):
@@ -435,12 +447,14 @@ class TestMergedValueSignal:
         assert merged.retrieved_at is None
 
     def test_scalars_keep_the_behaviour_both_sites_already_had(self):
-        merged = merged_value_signal([
-            ValueSignal(confidence=0.8, importance=0.9),
-            ValueSignal(confidence=0.4, importance=0.2),
-        ])
-        assert merged.confidence == pytest.approx(0.8)   # max
-        assert merged.importance == pytest.approx(0.9)   # max
+        merged = merged_value_signal(
+            [
+                ValueSignal(confidence=0.8, importance=0.9),
+                ValueSignal(confidence=0.4, importance=0.2),
+            ]
+        )
+        assert merged.confidence == pytest.approx(0.8)  # max
+        assert merged.importance == pytest.approx(0.9)  # max
 
     def test_a_rated_confidence_beats_an_unrated_one(self):
         """Same rule the clocks use: `None` is "nobody said", so it loses.
@@ -462,7 +476,6 @@ class TestMergedValueSignal:
 
 
 class TestRawDocument:
-
     def test_creation(self):
         doc = RawDocument(content="Hello world")
         assert doc.content == "Hello world"
@@ -475,7 +488,6 @@ class TestRawDocument:
 
 
 class TestSegment:
-
     def test_creation(self):
         seg = Segment(source_id="doc1", text="Some text", span_start=0, span_end=9)
         assert seg.source_id == "doc1"
@@ -492,12 +504,11 @@ class TestSegment:
 
 
 class TestEpistemicNodes:
-
     def test_topic_defaults(self):
         t = Topic(content="A topic about ML", source_id="seg1")
         assert t.status == NodeStatus.ACTIVE
         assert t.superseded_at is None
-        assert t.value.confidence is None       # unrated until an agent says
+        assert t.value.confidence is None  # unrated until an agent says
         assert t.extraction_method == "unspecified"
 
     def test_fact_defaults(self):
@@ -522,7 +533,6 @@ class TestEpistemicNodes:
 
 
 class TestNodeEdge:
-
     def test_creation(self):
         e = NodeEdge(src_id="a", dst_id="b", type=EdgeType.SUPPORTS)
         assert e.src_id == "a"
@@ -538,7 +548,6 @@ class TestNodeEdge:
 
 
 class TestEmbeddingRecord:
-
     def test_creation(self):
         emb = EmbeddingRecord(item_id="node1", model_id="all-MiniLM-L6-v2", vector=[0.1, 0.2, 0.3])
         assert emb.item_id == "node1"
@@ -577,11 +586,10 @@ class TestPetritypeIntegration:
 
 
 class TestTimepoint:
-
     def test_creation_with_concrete_dates(self):
         tp = Timepoint(
-            start=datetime(2024, 1, 1, tzinfo=timezone.utc),
-            end=datetime(2024, 12, 31, tzinfo=timezone.utc),
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 12, 31, tzinfo=UTC),
             label="Year 2024",
         )
         assert tp.id
@@ -602,7 +610,6 @@ class TestTimepoint:
 
 
 class TestTimeline:
-
     def test_creation(self):
         tl = Timeline(name="History of AI", description="Key events in AI")
         assert tl.id
@@ -620,7 +627,6 @@ class TestTimeline:
 
 
 class TestMetacontext:
-
     def test_creation(self):
         mc = Metacontext(content="Real historical events")
         assert mc.id
@@ -643,7 +649,6 @@ class TestMetacontext:
 
 
 class TestNewEdgeTypes:
-
     def test_timelink_edge(self):
         e = NodeEdge(
             src_id="fact-1",
@@ -683,14 +688,16 @@ class TestValidityBelongsToASource:
 
     def _span(self) -> ValidityInterval:
         return ValidityInterval(
-            start=PreciseInstant(at=datetime(1997, 5, 2, tzinfo=timezone.utc)),
-            end=PreciseInstant(at=datetime(2010, 5, 11, tzinfo=timezone.utc)),
+            start=PreciseInstant(at=datetime(1997, 5, 2, tzinfo=UTC)),
+            end=PreciseInstant(at=datetime(2010, 5, 11, tzinfo=UTC)),
             basis=IntervalBasis.STATED,
         )
 
     def test_a_provenance_edge_carries_what_its_source_asserts(self):
         edge = NodeEdge(
-            src_id="fact-1", dst_id="doc-1", type=EdgeType.SOURCED_FROM,
+            src_id="fact-1",
+            dst_id="doc-1",
+            type=EdgeType.SOURCED_FROM,
             validity=[self._span()],
         )
 
@@ -699,11 +706,13 @@ class TestValidityBelongsToASource:
     def test_one_source_may_assert_several_separate_periods(self):
         """A party in government over two spans is one claim, not two."""
         edge = NodeEdge(
-            src_id="fact-1", dst_id="doc-1", type=EdgeType.SOURCED_FROM,
+            src_id="fact-1",
+            dst_id="doc-1",
+            type=EdgeType.SOURCED_FROM,
             validity=[
                 self._span(),
                 ValidityInterval(
-                    start=PreciseInstant(at=datetime(2024, 7, 5, tzinfo=timezone.utc)),
+                    start=PreciseInstant(at=datetime(2024, 7, 5, tzinfo=UTC)),
                     basis=IntervalBasis.STATED,
                 ),
             ],
@@ -724,7 +733,9 @@ class TestValidityBelongsToASource:
     def test_any_other_edge_refuses_them(self, edge_type):
         with pytest.raises(ValidationError, match="cannot carry validity"):
             NodeEdge(
-                src_id="fact-1", dst_id="other-1", type=edge_type,
+                src_id="fact-1",
+                dst_id="other-1",
+                type=edge_type,
                 validity=[self._span()],
             )
 
@@ -745,7 +756,7 @@ class TestDocumentsCarryTheirPublicationDate:
     def test_a_publication_date_is_kept_apart_from_the_ingest_time(self):
         doc = RawDocument(
             content="the city is called Leningrad",
-            published_at=PreciseInstant(at=datetime(1970, 6, 1, tzinfo=timezone.utc)),
+            published_at=PreciseInstant(at=datetime(1970, 6, 1, tzinfo=UTC)),
         )
 
         assert doc.published_at.at.year == 1970
@@ -760,7 +771,8 @@ class TestDocumentsCarryTheirPublicationDate:
 
     def test_a_publication_date_may_be_a_phrase_the_text_gives(self):
         doc = RawDocument(
-            content="spring edition", published_at=NamedInstant(label="spring 1970"),
+            content="spring edition",
+            published_at=NamedInstant(label="spring 1970"),
         )
 
         assert doc.published_at.label == "spring 1970"

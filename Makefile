@@ -2,55 +2,57 @@
 #
 #   make test              default suite — embedded, no external services
 #   make test-frontend     visualization frontend: vitest + tsc type-check
+#   make build-frontend    write the visualization bundle (never committed)
 #   make bench             scaling measurements (see dev-docs/BENCHMARKS.md)
-#   make test-integration  opt-in SurrealDB suites (real ws:// connection +
-#                          cross-connection concurrency, and on-disk durability
-#                          across a server restart) that mem:// can't cover.
-#                          Requires Docker; spins up throwaway servers, waits
-#                          for them, runs the suites, and always tears them down.
-#                          Refuses to start if the port is taken — re-run as
-#                          `make test-integration SURREAL_PORT=8123`.
+#   make test-integration  opt-in SurrealDB suites mem:// cannot cover: a real
+#                          ws:// connection with cross-connection concurrency,
+#                          and on-disk durability across a restart. Needs
+#                          Docker; spins up a throwaway server and always tears
+#                          it down. Stops if the port is taken.
 #
-# `make test` stays Python-only and deliberately does not chain the frontend
-# suite: Node is not a prerequisite for working on the backend, and a missing
-# npm should not make the Python suite look broken. Run both before touching
-# anything under visualization/.
+# `make test` stays Python-only: Node is a frontend prerequisite, not a backend
+# one, and a missing npm would make the Python suite look broken. Run both
+# before touching visualization/.
 #
-# Both SurrealDB suites skip themselves under a bare `pytest` (the ws:// suite
-# unless EPIMEMER_SURREAL_WS_URL is set; the durability suite unless
-# EPIMEMER_SURREAL_PERSIST_TEST is set), so neither runs — nor signals — by
-# default. That target is how you actually exercise them.
+# Both SurrealDB suites skip under a bare `pytest` — the ws:// one unless
+# EPIMEMER_SURREAL_WS_URL is set, the durability one unless
+# EPIMEMER_SURREAL_PERSIST_TEST is set — so they signal nothing by default.
+# `make test-integration` is how they run.
 
 SURREAL_IMAGE ?= surrealdb/surrealdb:latest
 SURREAL_CONTAINER ?= epimemer-surreal-it
 # Override when something already holds the port: `make test-integration
-# SURREAL_PORT=8123`. The URL follows the port unless you set it too.
+# SURREAL_PORT=8123`. SURREAL_WS_URL follows it unless set too.
 SURREAL_PORT ?= 8000
 SURREAL_WS_URL ?= ws://127.0.0.1:$(SURREAL_PORT)/rpc
 FRONTEND_DIR ?= epimemer/visualization/frontend
 BENCH_N ?= 100,1000
 
-.PHONY: test test-frontend test-integration bench
+.PHONY: test test-frontend build-frontend test-integration bench
 
 test:
 	uv run python -m pytest tests/ -q
 
-# Type-check as well as run: tsc covers the DOM/Cytoscape modules that the unit
-# tests deliberately leave alone, so together they cover the whole frontend.
+# tsc covers the DOM/Cytoscape modules the unit tests leave alone, so the two
+# together cover the whole frontend.
 test-frontend:
 	cd $(FRONTEND_DIR) && npm run typecheck && npm test
 
-# Run on demand, never in CI — these are measurements, not assertions. Set
+# Writes epimemer/visualization/static. The hub serves its API without the
+# bundle and says so at `/`; this is what puts the page there.
+build-frontend:
+	cd $(FRONTEND_DIR) && npm ci && npm run build
+
+# Measurements, not assertions: run on demand, never in CI. Set
 # EPIMEMER_BENCH_URL to add a real SurrealDB backend alongside mem://.
 # BENCH_N overrides the sizes, e.g. `make bench BENCH_N=100,1000,10000`.
 bench:
 	uv run python scripts/bench.py --n $(BENCH_N)
 
-# The port check is not paranoia. A process that *accepts* connections on the
-# port and then never replies — a stale colima/lima ssh forward is the usual
-# culprit — makes docker's publish silently useless, and a `curl` with no
-# timeout blocks forever on it rather than failing. The target then hangs
-# before running a single test, which reads as a broken test suite.
+# The port check earns its place: a process that accepts connections and never
+# replies — usually a stale colima/lima ssh forward — makes docker's publish
+# silently useless, and an untimed curl blocks on it forever. The target then
+# hangs before one test runs, which reads as a broken suite.
 test-integration:
 	@if lsof -nP -iTCP:$(SURREAL_PORT) -sTCP:LISTEN >/dev/null 2>&1; then \
 		echo "port $(SURREAL_PORT) is already in use:"; \

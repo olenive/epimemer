@@ -23,12 +23,10 @@ from epimemer.core.types import (
     EdgeType,
     JudgeRef,
     NodeEdge,
-    RelationLabel,
     Topic,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
-
 
 _MOCK_EMBEDDER = MockEmbeddingProvider(model_id="mock-embed", dimension=8)
 
@@ -90,8 +88,11 @@ class TestListRelationsCarriesTheDescription:
         a, b = await _pair(storage)
         await storage.store_edge(
             NodeEdge(
-                src_id=a.id, dst_id=b.id, type=EdgeType.RELATED,
-                label="capital_of", kind="relationship",
+                src_id=a.id,
+                dst_id=b.id,
+                type=EdgeType.RELATED,
+                label="capital_of",
+                kind="relationship",
             )
         )
         assert await storage.query_relation_labels() == []
@@ -103,7 +104,7 @@ class TestListRelationsCarriesTheDescription:
 
     async def test_the_count_stays_derived_from_the_edges(self, storage):
         """Not stored on the record, because counts are scoped to active nodes
-         and a stored one would drift the moment a node retired."""
+        and a stored one would drift the moment a node retired."""
         await _coin(storage, "advised")
         c, d = await _pair(storage, "Rome", "Italy")
         await tools.link(c.id, d.id, storage, relation="advised", judge=EDITOR)
@@ -124,22 +125,16 @@ class TestLinkTellsTheAgentWhatTheWordAlreadyMeans:
         )
         c, d = await _pair(storage, "Rome", "Italy")
 
-        result, _ = await tools.link(
-            c.id, d.id, storage, relation="advised", judge=EDITOR
-        )
+        result, _ = await tools.link(c.id, d.id, storage, relation="advised", judge=EDITOR)
 
-        assert result["relation_description"] == (
-            "Retained counsel, not employment."
-        )
+        assert result["relation_description"] == ("Retained counsel, not employment.")
 
     async def test_coining_a_new_label_returns_no_description(self, storage):
         """There is nothing to report and no key claiming there is. Reporting
         the empty string would read as *this graph means nothing by it*."""
         a, b = await _pair(storage)
 
-        result, _ = await tools.link(
-            a.id, b.id, storage, relation="capital_of", judge=CRITIC
-        )
+        result, _ = await tools.link(a.id, b.id, storage, relation="capital_of", judge=CRITIC)
 
         assert "relation_description" not in result
 
@@ -147,9 +142,7 @@ class TestLinkTellsTheAgentWhatTheWordAlreadyMeans:
         await _coin(storage, "advised")
         c, d = await _pair(storage, "Rome", "Italy")
 
-        result, _ = await tools.link(
-            c.id, d.id, storage, relation="advised", judge=EDITOR
-        )
+        result, _ = await tools.link(c.id, d.id, storage, relation="advised", judge=EDITOR)
 
         assert "relation_description" not in result
 
@@ -161,9 +154,7 @@ class TestLinkTellsTheAgentWhatTheWordAlreadyMeans:
         await tools.describe_relation("advised", storage, description="counsel")
         c, d = await _pair(storage, "Rome", "Italy")
 
-        result, _ = await tools.link(
-            c.id, d.id, storage, relation="employed_by", judge=EDITOR
-        )
+        result, _ = await tools.link(c.id, d.id, storage, relation="employed_by", judge=EDITOR)
 
         [edge] = await storage.get_edges_from(c.id)
         assert edge.id == result["edge_id"]
@@ -178,8 +169,11 @@ class TestDescribingCreatesTheRecordItNeeds:
         a, b = await _pair(storage)
         await storage.store_edge(
             NodeEdge(
-                src_id=a.id, dst_id=b.id, type=EdgeType.RELATED,
-                label="capital_of", kind="relationship",
+                src_id=a.id,
+                dst_id=b.id,
+                type=EdgeType.RELATED,
+                label="capital_of",
+                kind="relationship",
             )
         )
 
@@ -198,8 +192,11 @@ class TestDescribingCreatesTheRecordItNeeds:
         a, b = await _pair(storage)
         await storage.store_edge(
             NodeEdge(
-                src_id=a.id, dst_id=b.id, type=EdgeType.RELATED,
-                label="capital_of", kind="relationship",
+                src_id=a.id,
+                dst_id=b.id,
+                type=EdgeType.RELATED,
+                label="capital_of",
+                kind="relationship",
             )
         )
 
@@ -213,9 +210,7 @@ class TestDescribingCreatesTheRecordItNeeds:
     async def test_describing_a_coined_label_keeps_its_coiner(self, storage):
         await _coin(storage, "advised", judge=CRITIC)
 
-        await tools.describe_relation(
-            "advised", storage, description="counsel", judge=EDITOR
-        )
+        await tools.describe_relation("advised", storage, description="counsel", judge=EDITOR)
 
         [label] = await storage.query_relation_labels()
         assert label.judged_by == CRITIC
@@ -236,9 +231,7 @@ class TestWhatDescribingRefuses:
     async def test_a_refusal_writes_no_journal_row(self, storage):
         await tools.describe_relation("never_used", storage, description="prose")
 
-        assert await storage.query_decisions(
-            kinds=[DecisionKind.RELATION_DESCRIPTION]
-        ) == []
+        assert await storage.query_decisions(kinds=[DecisionKind.RELATION_DESCRIPTION]) == []
 
     async def test_a_kind_the_edges_do_not_carry(self, storage):
         """The kind decides whether retrieval follows the edge, so it is in
@@ -255,9 +248,7 @@ class TestWhatDescribingRefuses:
 
     async def test_a_refused_kind_change_leaves_the_record_alone(self, storage):
         await _coin(storage, "cited_by", kind="attribution")
-        await tools.describe_relation(
-            "cited_by", storage, description="first", kind="attribution"
-        )
+        await tools.describe_relation("cited_by", storage, description="first", kind="attribution")
 
         await tools.describe_relation(
             "cited_by", storage, description="second", kind="relationship"
@@ -282,16 +273,10 @@ class TestRedescribing:
         """The journal is append-only, which is what makes *who said this, and
         when* answerable at all."""
         await _coin(storage, "advised")
-        await tools.describe_relation(
-            "advised", storage, description="first", judge=CRITIC
-        )
-        await tools.describe_relation(
-            "advised", storage, description="second", judge=EDITOR
-        )
+        await tools.describe_relation("advised", storage, description="first", judge=CRITIC)
+        await tools.describe_relation("advised", storage, description="second", judge=EDITOR)
 
-        rows = await storage.query_decisions(
-            kinds=[DecisionKind.RELATION_DESCRIPTION]
-        )
+        rows = await storage.query_decisions(kinds=[DecisionKind.RELATION_DESCRIPTION])
 
         assert len(rows) == 2
         assert {r.judged_by.agent_id for r in rows} == {"critic", "editor"}
@@ -301,13 +286,9 @@ class TestRedescribing:
         keep resolving. A fresh `RelationLabel` minting a new id over the old is
         the label record's own defect one layer down."""
         await _coin(storage, "advised")
-        first, _ = await tools.describe_relation(
-            "advised", storage, description="first"
-        )
+        first, _ = await tools.describe_relation("advised", storage, description="first")
 
-        second, _ = await tools.describe_relation(
-            "advised", storage, description="second"
-        )
+        second, _ = await tools.describe_relation("advised", storage, description="second")
 
         assert second["relation_label_id"] == first["relation_label_id"]
         assert second["created"] is False
@@ -347,9 +328,7 @@ class TestVocabularyIsJudgedApartFromClaims:
             "advised", storage, description="counsel", judge=EDITOR
         )
 
-        [row] = await storage.query_decisions(
-            kinds=[DecisionKind.RELATION_DESCRIPTION]
-        )
+        [row] = await storage.query_decisions(kinds=[DecisionKind.RELATION_DESCRIPTION])
         assert row.subject_ids == [result["relation_label_id"]]
         assert row.judged_by == EDITOR
 
@@ -360,13 +339,9 @@ class TestVocabularyIsJudgedApartFromClaims:
         The first draft wrote `ENRICHMENT` because enriching is what it is:
         the right verb, the wrong side of the line."""
         topic = await _topic(storage, "Vienna")
-        await tools.journal(
-            storage, DecisionKind.ENRICHMENT, [topic.id], judge=CRITIC
-        )
+        await tools.journal(storage, DecisionKind.ENRICHMENT, [topic.id], judge=CRITIC)
         await _coin(storage, "advised")
-        await tools.describe_relation(
-            "advised", storage, description="counsel", judge=EDITOR
-        )
+        await tools.describe_relation("advised", storage, description="counsel", judge=EDITOR)
 
         enrichments = await storage.query_decisions(kinds=[DecisionKind.ENRICHMENT])
 
@@ -374,13 +349,9 @@ class TestVocabularyIsJudgedApartFromClaims:
 
     async def test_review_reads_both_back_and_keeps_them_apart(self, storage):
         topic = await _topic(storage, "Vienna")
-        await tools.journal(
-            storage, DecisionKind.ENRICHMENT, [topic.id], judge=CRITIC
-        )
+        await tools.journal(storage, DecisionKind.ENRICHMENT, [topic.id], judge=CRITIC)
         await _coin(storage, "advised")
-        await tools.describe_relation(
-            "advised", storage, description="counsel", judge=EDITOR
-        )
+        await tools.describe_relation("advised", storage, description="counsel", judge=EDITOR)
 
         result, _ = await tools.review(storage, mode="all")
 
@@ -396,13 +367,9 @@ class TestTheVizReadIsNeverAnAgentSurface:
 
         listed = await storage.viz_list_relation_labels(storage.current_database)
 
-        assert [(rl.name, rl.description) for rl in listed] == [
-            ("advised", "counsel")
-        ]
+        assert [(rl.name, rl.description) for rl in listed] == [("advised", "counsel")]
 
-    async def test_a_graph_that_does_not_exist_is_empty_rather_than_an_error(
-        self, storage
-    ):
+    async def test_a_graph_that_does_not_exist_is_empty_rather_than_an_error(self, storage):
         assert list(await storage.viz_list_relation_labels("no-such-graph")) == []
 
     async def test_it_is_not_registered_as_a_tool(self):
@@ -423,8 +390,7 @@ class TestTheVizReadIsNeverAnAgentSurface:
         import epimemer.mcp
 
         source = "\n".join(
-            path.read_text()
-            for path in pathlib.Path(epimemer.mcp.__file__).parent.rglob("*.py")
+            path.read_text() for path in pathlib.Path(epimemer.mcp.__file__).parent.rglob("*.py")
         )
 
         assert "viz_list_relation_labels" not in source

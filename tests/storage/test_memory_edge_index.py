@@ -22,16 +22,16 @@ Backend-internal, so this constructs its own store rather than taking the
 parameterized `storage` fixture.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from epimemer.core.types import (
-    NodeStatus,
     EdgeType,
     EmbeddingRecord,
     Fact,
     NodeEdge,
+    NodeStatus,
     Topic,
 )
 from epimemer.storage.memory import InMemoryStorage
@@ -59,9 +59,7 @@ def _brute_to(store, node_id: str, edge_type: EdgeType | None = None):
 
 
 async def _found_from(store, node_id: str, edge_type: EdgeType | None = None):
-    return sorted(
-        e.id for e in await store.get_edges_from(node_id, edge_type=edge_type)
-    )
+    return sorted(e.id for e in await store.get_edges_from(node_id, edge_type=edge_type))
 
 
 async def _found_to(store, node_id: str, edge_type: EdgeType | None = None):
@@ -89,9 +87,7 @@ def _assert_index_matches_edges(store, graph: str | None = None) -> None:
 
 async def _assert_lookups_match_brute_force(store) -> None:
     """Every endpoint in the graph, both directions, filtered and unfiltered."""
-    endpoints = {e.src_id for e in store.edges.values()} | {
-        e.dst_id for e in store.edges.values()
-    }
+    endpoints = {e.src_id for e in store.edges.values()} | {e.dst_id for e in store.edges.values()}
     types = {e.type for e in store.edges.values()}
     for node_id in endpoints:
         assert await _found_from(store, node_id) == _brute_from(store, node_id)
@@ -236,7 +232,6 @@ class TestLookupsDoNotScan:
 
 
 class TestTheIndexTracksEverySimpleWrite:
-
     async def test_store_edge_indexes_both_endpoints(self, store):
         await _a_small_graph(store)
         _assert_index_matches_edges(store)
@@ -275,6 +270,7 @@ class TestTheIndexTracksEverySimpleWrite:
         _assert_index_matches_edges(store)
         await _assert_lookups_match_brute_force(store)
 
+
 class TestTheIndexTracksTheCompoundTransactions:
     """The write paths that mutate edges directly rather than via `store_edge`."""
 
@@ -298,9 +294,7 @@ class TestTheIndexTracksTheCompoundTransactions:
             raise RuntimeError("injected failure")
 
         with pytest.raises(RuntimeError, match="injected failure"):
-            await store.write_batch_tx(
-                nodes=[topic], edges=[doomed], embeddings=boom_embeddings()
-            )
+            await store.write_batch_tx(nodes=[topic], edges=[doomed], embeddings=boom_embeddings())
 
         # The undone edge must be absent from the index, not merely from `edges`.
         assert await store.get_edges_to(topic.id) == []
@@ -325,9 +319,9 @@ class TestTheIndexTracksTheCompoundTransactions:
             new,
             EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.0, 1.0]),
             lineage,
-            superseded_at=datetime.now(timezone.utc),
-        status=NodeStatus.CORRECTED,
-    )
+            superseded_at=datetime.now(UTC),
+            status=NodeStatus.CORRECTED,
+        )
 
         assert await _found_to(store, new.id, EdgeType.SUPPORTS) == [supporting.id]
         assert await _found_to(store, old.id, EdgeType.SUPPORTS) == []
@@ -353,10 +347,10 @@ class TestTheIndexTracksTheCompoundTransactions:
             new,
             EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.0, 1.0]),
             NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY),
-            superseded_at=datetime.now(timezone.utc),
+            superseded_at=datetime.now(UTC),
             clear_edge_ids=[cleared.id],
-        status=NodeStatus.CORRECTED,
-    )
+            status=NodeStatus.CORRECTED,
+        )
 
         assert await store.get_edges_from(candidate.id) == []
         _assert_index_matches_edges(store)
@@ -381,9 +375,9 @@ class TestTheIndexTracksTheCompoundTransactions:
                 new,
                 EmbeddingRecord(item_id=new.id, model_id="m", vector=[0.0, 1.0]),
                 NodeEdge(src_id=old.id, dst_id=new.id, type=EdgeType.SUPERSEDED_BY),
-                superseded_at=datetime.now(timezone.utc),
-            status=NodeStatus.CORRECTED,
-        )
+                superseded_at=datetime.now(UTC),
+                status=NodeStatus.CORRECTED,
+            )
 
         assert store._g.by_src == before_src
         assert store._g.by_dst == before_dst
@@ -398,9 +392,11 @@ class TestTheIndexTracksTheCompoundTransactions:
 
         lineage = NodeEdge(src_id=old.id, dst_id=keeper.id, type=EdgeType.SUPERSEDED_BY)
         await store.supersede_by_existing_tx(
-            old, keeper.id, lineage,
+            old,
+            keeper.id,
+            lineage,
             status=NodeStatus.CORRECTED,
-            superseded_at=datetime.now(timezone.utc),
+            superseded_at=datetime.now(UTC),
         )
 
         assert await _found_to(store, keeper.id) == [lineage.id]
@@ -415,12 +411,8 @@ class TestTheIndexTracksTheCompoundTransactions:
         for node in (a, b, fact):
             await store.store_node(node)
         # Two edges that collapse into one after the merge...
-        await store.store_edge(
-            NodeEdge(src_id=fact.id, dst_id=a.id, type=EdgeType.SUPPORTS)
-        )
-        await store.store_edge(
-            NodeEdge(src_id=fact.id, dst_id=b.id, type=EdgeType.SUPPORTS)
-        )
+        await store.store_edge(NodeEdge(src_id=fact.id, dst_id=a.id, type=EdgeType.SUPPORTS))
+        await store.store_edge(NodeEdge(src_id=fact.id, dst_id=b.id, type=EdgeType.SUPPORTS))
         # ...and one that becomes a self-loop and is dropped.
         await store.store_edge(NodeEdge(src_id=a.id, dst_id=b.id, type=EdgeType.RELATED))
 
@@ -433,7 +425,7 @@ class TestTheIndexTracksTheCompoundTransactions:
                 NodeEdge(src_id=a.id, dst_id=merged.id, type=EdgeType.MERGED_INTO),
                 NodeEdge(src_id=b.id, dst_id=merged.id, type=EdgeType.MERGED_INTO),
             ],
-            merged_at=datetime.now(timezone.utc),
+            merged_at=datetime.now(UTC),
         )
 
         assert len(await _found_to(store, merged.id, EdgeType.SUPPORTS)) == 1
@@ -443,7 +435,6 @@ class TestTheIndexTracksTheCompoundTransactions:
 
 
 class TestIndexesAreConfinedToTheirGraph:
-
     async def test_each_graph_indexes_only_its_own_edges(self, store):
         _, _, first = await _a_small_graph(store)
 

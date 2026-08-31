@@ -79,9 +79,7 @@ def outstanding_reasons(
     archived — the archived facts themselves. Deduplicated and ordered, because
     it is compared as a set but shown to a person as a list.
     """
-    return list(dict.fromkeys(
-        [*labels.get("evidence_stale", ()), *archived_evidence]
-    ))
+    return list(dict.fromkeys([*labels.get("evidence_stale", ()), *archived_evidence]))
 
 
 async def confirmed_reasons_for(
@@ -101,9 +99,7 @@ async def confirmed_reasons_for(
     ids = list(node_ids)
     if not ids:
         return {}
-    found = await storage.get_edges_for(
-        ids, direction="to", edge_type=EdgeType.REVIEW_CONFIRMED
-    )
+    found = await storage.get_edges_for(ids, direction="to", edge_type=EdgeType.REVIEW_CONFIRMED)
     covered: dict[str, set[str]] = {}
     for node_id, edges in found.items():
         if edges:
@@ -111,9 +107,7 @@ async def confirmed_reasons_for(
     return covered
 
 
-def retention_covers(
-    node_id: str, reasons: Iterable[str], covered: dict[str, set[str]]
-) -> bool:
+def retention_covers(node_id: str, reasons: Iterable[str], covered: dict[str, set[str]]) -> bool:
     """Whether a standing retention answers every reason this node has *now*.
 
     Pure, and separate from the read for the reason the pair suppression keeps
@@ -162,10 +156,12 @@ async def record_retention(
         if missing:
             raise UnknownAnchors(node_id=node_id, missing=missing)
     for anchor in anchors:
-        await storage.store_edge(NodeEdge(
-            src_id=anchor,
-            dst_id=node_id,
-            type=EdgeType.REVIEW_CONFIRMED,
-            judged_by=judge,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=anchor,
+                dst_id=node_id,
+                type=EdgeType.REVIEW_CONFIRMED,
+                judged_by=judge,
+            )
+        )
     return anchors

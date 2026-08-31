@@ -7,7 +7,7 @@ These types serve double duty:
 
 import hashlib
 from collections.abc import Iterable, Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Literal
 from uuid import uuid4
@@ -18,7 +18,7 @@ from epimemer.core.temporal import ImpreciseInstant, ValidityInterval
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _new_id() -> str:
@@ -59,9 +59,13 @@ class NodeStatus(str, Enum):
 # that used `== NodeStatus.SUPERSEDED` must use this instead: the comparison
 # still runs, it simply stops seeing two thirds of the cases, which is the
 # quiet kind of regression.
-SUPERSEDED_STATUSES: frozenset[NodeStatus] = frozenset({
-    NodeStatus.SUPERSEDED, NodeStatus.CORRECTED, NodeStatus.HISTORICAL,
-})
+SUPERSEDED_STATUSES: frozenset[NodeStatus] = frozenset(
+    {
+        NodeStatus.SUPERSEDED,
+        NodeStatus.CORRECTED,
+        NodeStatus.HISTORICAL,
+    }
+)
 
 
 # Which statuses a claim can come back from, and it is the same question twice:
@@ -73,17 +77,23 @@ SUPERSEDED_STATUSES: frozenset[NodeStatus] = frozenset({
 # graph already ruled on. That was always `restore`'s stated reason; before the
 # status split it could only be enforced as "not superseded", which caught the
 # world-change case too.
-NOMINATED_STATUSES: frozenset[NodeStatus] = frozenset({
-    NodeStatus.ACTIVE, NodeStatus.HISTORICAL,
-})
+NOMINATED_STATUSES: frozenset[NodeStatus] = frozenset(
+    {
+        NodeStatus.ACTIVE,
+        NodeStatus.HISTORICAL,
+    }
+)
 
 # `ARCHIVED` joins it here and not above: archival retires a node for
 # triviality rather than for being wrong, so it is reversible — but a
 # similarity pass has no business nominating something the graph deliberately
 # set aside as not worth keeping.
-RESTORABLE_STATUSES: frozenset[NodeStatus] = frozenset({
-    NodeStatus.ARCHIVED, NodeStatus.HISTORICAL,
-})
+RESTORABLE_STATUSES: frozenset[NodeStatus] = frozenset(
+    {
+        NodeStatus.ARCHIVED,
+        NodeStatus.HISTORICAL,
+    }
+)
 
 
 def reachable_statuses(
@@ -186,21 +196,21 @@ class ClaimKind(str, Enum):
 
 class EdgeType(str, Enum):
     # Segment anchoring
-    ABOUT = "about"                  # segment → topic
-    CONTAINS = "contains"            # segment → fact
-    IMPLIES = "implies"              # segment → inference
+    ABOUT = "about"  # segment → topic
+    CONTAINS = "contains"  # segment → fact
+    IMPLIES = "implies"  # segment → inference
 
     # Semantic hierarchy
-    SUPPORTS = "supports"            # fact → topic, fact → inference
-    ABSTRACTS = "abstracts"          # inference → topic
-    DERIVED_FROM = "derived_from"    # inference → fact
+    SUPPORTS = "supports"  # fact → topic, fact → inference
+    ABSTRACTS = "abstracts"  # inference → topic
+    DERIVED_FROM = "derived_from"  # inference → fact
 
     # Cross-node linking
-    SIMILARITY = "similarity"        # topic ↔ topic, fact ↔ fact
+    SIMILARITY = "similarity"  # topic ↔ topic, fact ↔ fact
     CONTRADICTION = "contradiction"  # fact ↔ fact
 
     # Topic hierarchy (DAG — multiple parents allowed, cycles forbidden)
-    SUBTOPIC_OF = "subtopic_of"      # topic → parent topic
+    SUBTOPIC_OF = "subtopic_of"  # topic → parent topic
 
     # History
     SUPERSEDED_BY = "superseded_by"  # node → node (correction)
@@ -213,22 +223,22 @@ class EdgeType(str, Enum):
     # not gapless, cycles are legal, and two transitions the same way round
     # between one pair are two edges — never dedup these by (src, dst, type).
     TEMPORALLY_FOLLOWED_BY = "temporally_followed_by"
-    MERGED_INTO = "merged_into"      # node → node (merge)
+    MERGED_INTO = "merged_into"  # node → node (merge)
 
     # Temporal
-    TIMELINK = "timelink"                        # node → timeline (with timepoint_id in metadata)
+    TIMELINK = "timelink"  # node → timeline (with timepoint_id in metadata)
     ASSOCIATED_TIMELINE = "associated_timeline"  # topic → timeline
 
     # Epistemic framing
-    HAS_METACONTEXT = "has_metacontext"          # node → metacontext
+    HAS_METACONTEXT = "has_metacontext"  # node → metacontext
 
     # Aboutness & provenance (sources/tags are nodes; these connect to them)
-    TAGGED_WITH = "tagged_with"      # node → topic ("about / tagged with this concept")
-    SOURCED_FROM = "sourced_from"    # node → RawDocument (originating document)
+    TAGGED_WITH = "tagged_with"  # node → topic ("about / tagged with this concept")
+    SOURCED_FROM = "sourced_from"  # node → RawDocument (originating document)
 
     # Epistemic review (see REVIEW_EPISTEMIC.md)
     SUPERSESSION_CANDIDATE = "supersession_candidate"  # newer fact → older fact
-    EVIDENCE_SUPERSEDED = "evidence_superseded"        # superseded fact → dependent inference
+    EVIDENCE_SUPERSEDED = "evidence_superseded"  # superseded fact → dependent inference
     # merged fact → dependent inference. Its own type rather than a qualified
     # `evidence_superseded`, because the two events say opposite things about
     # the claim: a correction says it was wrong, a merge says two phrasings of
@@ -275,8 +285,8 @@ class EdgeType(str, Enum):
     # can change without removing it from the set anyway, so a self-anchored
     # edge is the honest degenerate case rather than a second mechanism.
     REVIEW_CONFIRMED = "review_confirmed"
-    VARIANT_OF = "variant_of"                          # fact ↔ fact, across frames
-    BASED_ON = "based_on"                              # metacontext → metacontext (association)
+    VARIANT_OF = "variant_of"  # fact ↔ fact, across frames
+    BASED_ON = "based_on"  # metacontext → metacontext (association)
 
     # User-defined relationship (open vocabulary): the descriptor lives in
     # NodeEdge.label, behaviour in NodeEdge.kind. The engine routes on the enum;
@@ -377,7 +387,7 @@ RELATIONSHIP_KIND = "relationship"
 ATTRIBUTION_KIND = "attribution"
 
 
-def traversal_excluded(edge: "NodeEdge") -> bool:
+def traversal_excluded(edge: NodeEdge) -> bool:
     """True when default retrieval should NOT expand through this edge.
 
     Excludes history + review (graph bookkeeping) and provenance/attribution edges
@@ -487,9 +497,8 @@ def moved_edge_types(status: NodeStatus) -> frozenset[EdgeType]:
     Derived from `migration_disposition` rather than restated, so a backend
     cannot answer this question differently from the rest of the system.
     """
-    return frozenset(
-        t for t in EdgeType if migration_disposition(t, status) == "move"
-    )
+    return frozenset(t for t in EdgeType if migration_disposition(t, status) == "move")
+
 
 # The conventional id for the frame holding claims about the real world. A
 # **convention, not a mechanism**: it is an ordinary metacontext that must exist
@@ -573,6 +582,7 @@ class ValueSignal(BaseModel):
     or — as it did — silently recorded only the passive one under a name that
     read like the other.
     """
+
     # How well the record would back this claim up if it were challenged —
     # supplied by the ingesting agent, which is the only party that has read the
     # material, and never computed. `None` is the unrated case and is
@@ -690,10 +700,11 @@ def merged_value_signal(signals: Sequence[ValueSignal]) -> ValueSignal:
 
 class RawDocument(BaseModel):
     """Input text before any processing."""
+
     id: str = Field(default_factory=_new_id)
     content: str
-    source: str | None = None         # human-meaningful origin, e.g. "ISSUES.md"
-    source_type: str | None = None    # free string; suggested: document|api|chat
+    source: str | None = None  # human-meaningful origin, e.g. "ISSUES.md"
+    source_type: str | None = None  # free string; suggested: document|api|chat
     # When the document was published, as against `created_at` below, which is
     # when it was ingested — a 1970 memoir read today carries `created_at =
     # 2026`. It bounds what this source could have known, and it is what anyone
@@ -710,11 +721,12 @@ class RawDocument(BaseModel):
 
 class Segment(BaseModel):
     """A non-overlapping section of a document aligned to semantic boundaries."""
+
     id: str = Field(default_factory=_new_id)
-    source_id: str                    # RawDocument.id
+    source_id: str  # RawDocument.id
     text: str
-    span_start: int                   # character offset in source
-    span_end: int                     # character offset in source
+    span_start: int  # character offset in source
+    span_end: int  # character offset in source
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
 
@@ -744,6 +756,7 @@ class LifecycleEpisode(BaseModel):
     that replaced, followed or absorbed this one, and is `None` where nothing
     did: archival retires a node without anything superseding it.
     """
+
     retired_at: datetime
     because: NodeStatus
     counterpart: str | None = None
@@ -762,13 +775,15 @@ def with_retirement(
     at: datetime,
     because: NodeStatus,
     counterpart: str | None = None,
-    judge: "JudgeRef | None" = None,
+    judge: JudgeRef | None = None,
 ) -> list[LifecycleEpisode]:
     """`episodes` plus the retirement that just happened. Never mutates its input."""
     return [
         *episodes,
         LifecycleEpisode(
-            retired_at=at, because=because, counterpart=counterpart,
+            retired_at=at,
+            because=because,
+            counterpart=counterpart,
             retired_by=judge,
         ),
     ]
@@ -778,7 +793,7 @@ def with_return(
     episodes: Sequence[LifecycleEpisode],
     *,
     at: datetime,
-    judge: "JudgeRef | None" = None,
+    judge: JudgeRef | None = None,
 ) -> list[LifecycleEpisode]:
     """`episodes` with the open one closed at `at`.
 
@@ -801,9 +816,10 @@ class Topic(BaseModel):
     Acts as a soft ontological node — embeds well, supports clustering,
     and can evolve over time.
     """
+
     id: str = Field(default_factory=_new_id)
-    content: str                      # paragraph-level description
-    source_id: str | None = None      # Segment.id, if extracted from text (entity/tag topics have none)
+    content: str  # paragraph-level description
+    source_id: str | None = None  # Segment.id, if extracted from text (entity/tag topics have none)
     status: NodeStatus = NodeStatus.ACTIVE
     superseded_at: datetime | None = None
     # Every spell this node has spent out of the active set. Append-only; the
@@ -824,9 +840,10 @@ class Fact(BaseModel):
 
     Tied to source material with minimal ambiguity.
     """
+
     id: str = Field(default_factory=_new_id)
     content: str
-    source_id: str                    # Segment.id that generated this
+    source_id: str  # Segment.id that generated this
     # Condition or occurrence, judged by the ingesting agent. `None` is
     # *unjudged* — the state every fact written before this field existed is in
     # — and never a third kind of claim. Dedup refuses on it rather than picking
@@ -862,9 +879,10 @@ class Inference(BaseModel):
     Explicitly provisional and revisable. Multiple competing inferences
     from the same evidence are permitted to coexist.
     """
+
     id: str = Field(default_factory=_new_id)
     content: str
-    source_id: str                    # Segment.id that generated this
+    source_id: str  # Segment.id that generated this
     status: NodeStatus = NodeStatus.ACTIVE
     superseded_at: datetime | None = None
     # Every spell this node has spent out of the active set. Append-only; the
@@ -898,9 +916,15 @@ class NodeChangeEvent(BaseModel):
     "by whom" of a supersession. It is `None` for births, returns, and
     retirements that had no counterpart (archival) or predate episodes.
     """
+
     kind: Literal[
-        "created", "superseded", "corrected", "historical", "merged",
-        "archived", "restored",
+        "created",
+        "superseded",
+        "corrected",
+        "historical",
+        "merged",
+        "archived",
+        "restored",
     ]
     at: datetime
     counterpart: str | None = None
@@ -917,6 +941,7 @@ class NodeEdge(BaseModel):
     descriptor (e.g. "published_by"), and `kind` selects behaviour
     (`relationship` follows in retrieval; `attribution` does not).
     """
+
     id: str = Field(default_factory=_new_id)
     src_id: str
     dst_id: str
@@ -945,7 +970,7 @@ class NodeEdge(BaseModel):
     created_at: datetime = Field(default_factory=_now)
 
     @model_validator(mode="after")
-    def _validity_needs_a_source(self) -> "NodeEdge":
+    def _validity_needs_a_source(self) -> NodeEdge:
         """Only a provenance edge can carry validity.
 
         An interval is what a source asserts, so it has to hang off the edge
@@ -986,7 +1011,7 @@ DEFAULT_MERGE_UNDO_DEPTH = 10
 DEFAULT_MERGE_CYCLE_LIMIT = 2
 
 
-def completed_merge_cycles(node: "EpistemicNode") -> int:
+def completed_merge_cycles(node: EpistemicNode) -> int:
     """How many times this node has been merged and then brought back.
 
     **The signal needs no new storage**, which is most of the case for having
@@ -1000,7 +1025,8 @@ def completed_merge_cycles(node: "EpistemicNode") -> int:
     data that is there either way.
     """
     return sum(
-        1 for episode in node.lifecycle
+        1
+        for episode in node.lifecycle
         if episode.because is NodeStatus.MERGED and episode.restored_at is not None
     )
 
@@ -1018,8 +1044,9 @@ class MergedEdge(BaseModel):
     Values rather than references, because migration collapses duplicates by
     `(src, dst, type)`: the row this was taken from may not exist afterwards.
     """
-    owner_id: str            # the merging source this edge belonged to
-    edge: dict               # NodeEdge.model_dump(exclude={"id"})
+
+    owner_id: str  # the merging source this edge belonged to
+    edge: dict  # NodeEdge.model_dump(exclude={"id"})
     # True when *both* endpoints were merging, which makes the edge a self-loop
     # the migration drops outright rather than re-points. It is the only class
     # that is gone immediately rather than moved, so it is the only one a
@@ -1037,17 +1064,18 @@ class MergeUndo(BaseModel):
     each, so a per-node bound evicts nothing a global ring of the same size
     would have kept.
     """
+
     source_ids: list[str]
     edges: list[MergedEdge] = Field(default_factory=list)
     merged_at: datetime
-    decision_id: str | None = None      # the DecisionRecord, once §4 exists
+    decision_id: str | None = None  # the DecisionRecord, once §4 exists
     # The survivor's wording, kept because reversal *deletes* the node holding
     # it. Without this a reversal cannot say what it withdrew, and the contested
     # text stops being quotable the moment the reversal lands.
     survivor_content: str = ""
 
 
-def read_merge_undo(node: "EpistemicNode") -> MergeUndo | None:
+def read_merge_undo(node: EpistemicNode) -> MergeUndo | None:
     """The merge payload on `node`, or None if it carries none.
 
     None is genuinely ambiguous here and the caller has to disambiguate it:
@@ -1074,6 +1102,7 @@ def with_merge_undo(metadata: dict, undo: MergeUndo | None) -> dict:
 
 class EmbeddingRecord(BaseModel):
     """An embedding vector associated with a specific item and model."""
+
     id: str = Field(default_factory=_new_id)
     # A node id, in practice always. This was written as "node or segment id",
     # but no path writes a segment: all 624 records across the real graphs point
@@ -1087,7 +1116,7 @@ class EmbeddingRecord(BaseModel):
     # segments would make a silent truncation real on the day it was added. It
     # is a precondition of doing so, not a detail.
     item_id: str
-    model_id: str                     # e.g. "all-mpnet-base-v2"
+    model_id: str  # e.g. "all-mpnet-base-v2"
     vector: list[float]
     created_at: datetime = Field(default_factory=_now)
 
@@ -1101,10 +1130,11 @@ class Timepoint(BaseModel):
     Can be concrete (with start/end datetimes), vague (label only),
     or a mix (concrete start with descriptive label).
     """
+
     id: str = Field(default_factory=_new_id)
-    start: datetime | None = None     # concrete start (optional)
-    end: datetime | None = None       # concrete end (optional, for intervals)
-    label: str | None = None          # free-text (e.g., "during the Renaissance")
+    start: datetime | None = None  # concrete start (optional)
+    end: datetime | None = None  # concrete end (optional, for intervals)
+    label: str | None = None  # free-text (e.g., "during the Renaissance")
     metadata: dict = Field(default_factory=dict)
 
 
@@ -1115,6 +1145,7 @@ class Timeline(BaseModel):
     Other nodes link to specific timepoints via TIMELINK edges that carry
     a timepoint_id in metadata.
     """
+
     id: str = Field(default_factory=_new_id)
     name: str
     description: str = ""
@@ -1146,9 +1177,10 @@ class Metacontext(BaseModel):
     Has value signals and status like epistemic nodes — supports
     consolidation/merge during reflection.
     """
+
     id: str = Field(default_factory=_new_id)
-    content: str                      # e.g., "Real historical events"
-    description: str = ""             # longer explanation
+    content: str  # e.g., "Real historical events"
+    description: str = ""  # longer explanation
     status: NodeStatus = NodeStatus.ACTIVE
     superseded_at: datetime | None = None
     value: ValueSignal = Field(default_factory=ValueSignal)
@@ -1226,10 +1258,12 @@ def recorded_relation_label(
     """
     if existing is None:
         return incoming
-    return existing.model_copy(update={
-        "description": incoming.description or existing.description,
-        "metadata": {**existing.metadata, **incoming.metadata},
-    })
+    return existing.model_copy(
+        update={
+            "description": incoming.description or existing.description,
+            "metadata": {**existing.metadata, **incoming.metadata},
+        }
+    )
 
 
 RELATION_VERDICTS: tuple[str, ...] = ("distinct", "synonymous")
@@ -1422,9 +1456,7 @@ def with_description(
         return list(descriptions)
     return [
         *descriptions,
-        AgentDescription(
-            digest=digest, text=text, recorded_at=at, confirmed_at=confirmed_at
-        ),
+        AgentDescription(digest=digest, text=text, recorded_at=at, confirmed_at=confirmed_at),
     ]
 
 
@@ -1463,12 +1495,7 @@ def absorbed_agent_ids(agents: Sequence[Agent]) -> set[str]:
     readable — so *absorbed* has to be derived, and this is the one place that
     derivation lives.
     """
-    return {
-        former
-        for agent in agents
-        for former in agent.former_ids
-        if former != agent.id
-    }
+    return {former for agent in agents for former in agent.former_ids if former != agent.id}
 
 
 def live_agents(agents: Sequence[Agent]) -> list[Agent]:
@@ -1508,9 +1535,7 @@ def resolve_agent(agents: Sequence[Agent], handle: str) -> Agent | None:
     return None
 
 
-def name_holder(
-    agents: Sequence[Agent], name: str, *, excluding: str = ""
-) -> Agent | None:
+def name_holder(agents: Sequence[Agent], name: str, *, excluding: str = "") -> Agent | None:
     """The live judge already called `name`, ignoring the one being renamed.
 
     Names must be unique per graph or `by_agent` stops being answerable after a
@@ -1520,7 +1545,8 @@ def name_holder(
     folded = name.strip().casefold()
     return next(
         (
-            agent for agent in live_agents(agents)
+            agent
+            for agent in live_agents(agents)
             if agent.id != excluding and agent_name(agent).casefold() == folded
         ),
         None,
@@ -1556,17 +1582,22 @@ def absorbing(survivor: Agent, absorbed: Agent) -> Agent:
         merged.setdefault(version.digest, version)
     seen = [survivor.first_seen_at, absorbed.first_seen_at]
     last = [survivor.last_seen_at, absorbed.last_seen_at]
-    return survivor.model_copy(update={
-        "former_ids": list(dict.fromkeys([
-            *survivor.former_ids,
-            *agent_aliases(absorbed),
-        ])),
-        "descriptions": list(merged.values()),
-        "authorised_at": min(survivor.authorised_at, absorbed.authorised_at),
-        "first_seen_at": min((s for s in seen if s), default=None),
-        "last_seen_at": max((s for s in last if s), default=None),
-    })
-
+    return survivor.model_copy(
+        update={
+            "former_ids": list(
+                dict.fromkeys(
+                    [
+                        *survivor.former_ids,
+                        *agent_aliases(absorbed),
+                    ]
+                )
+            ),
+            "descriptions": list(merged.values()),
+            "authorised_at": min(survivor.authorised_at, absorbed.authorised_at),
+            "first_seen_at": min((s for s in seen if s), default=None),
+            "last_seen_at": max((s for s in last if s), default=None),
+        }
+    )
 
 
 # --- The decision journal (REVIEW_MODE.md §4) ---

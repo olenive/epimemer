@@ -58,60 +58,91 @@ NO_IMPLEMENTATION: dict[str, str] = {
 # reason is the point: a bare list would accumulate entries nobody can defend,
 # and this is the file where "why is that not exposed?" has to have an answer.
 NOT_AGENT_SETTABLE: dict[tuple[str, str], str] = {
-    ("claim_agent", "approve_id"):
-        "approval is the user's, through elicitation or the CLI — an agent that "
-        "could set it would be approving itself",
-    ("claim_agent", "confirm_description"):
-        "same channel as approval: `confirmed_at` may only be set by a path "
-        "that terminates at the user",
-    ("claim_agent", "confirmed_identity"):
-        "the identity the user picked, supplied by the elicitation, never by "
-        "the caller proposing it",
-    ("claim_agent", "now"):
-        "the clock, injected for tests",
-    ("configure_warnings", "default_warning_policy"):
-        "the process default from ServerConfig; the agent sets the per-graph "
-        "override, not the default it falls back to",
-    ("judge_importance", "importance_step"):
-        "server configuration — how far one judgment moves a node is a policy, "
-        "not a per-call choice",
-    ("merge_facts", "similarity_threshold"):
-        "the nomination bar. The boundary passes nothing and the "
-        "implementation's own default applies, so a caller cannot lower the bar "
-        "its own merge is checked against",
-    ("merge_inferences", "similarity_threshold"):
-        "as merge_facts: a caller must not choose the bar it is judged by",
-    ("merge_inferences", "warning_policy"):
-        "the boundary passes the process default and the implementation "
-        "resolves the per-graph override from it; an agent choosing its own "
-        "advisory policy is a gate it can open",
+    (
+        "claim_agent",
+        "approve_id",
+    ): "approval is the user's, through elicitation or the CLI — an agent that "
+    "could set it would be approving itself",
+    (
+        "claim_agent",
+        "confirm_description",
+    ): "same channel as approval: `confirmed_at` may only be set by a path "
+    "that terminates at the user",
+    (
+        "claim_agent",
+        "confirmed_identity",
+    ): "the identity the user picked, supplied by the elicitation, never by "
+    "the caller proposing it",
+    ("claim_agent", "now"): "the clock, injected for tests",
+    (
+        "configure_warnings",
+        "default_warning_policy",
+    ): "the process default from ServerConfig; the agent sets the per-graph "
+    "override, not the default it falls back to",
+    (
+        "judge_importance",
+        "importance_step",
+    ): "server configuration — how far one judgment moves a node is a policy, "
+    "not a per-call choice",
+    (
+        "merge_facts",
+        "similarity_threshold",
+    ): "the nomination bar. The boundary passes nothing and the "
+    "implementation's own default applies, so a caller cannot lower the bar "
+    "its own merge is checked against",
+    (
+        "merge_inferences",
+        "similarity_threshold",
+    ): "as merge_facts: a caller must not choose the bar it is judged by",
+    (
+        "merge_inferences",
+        "warning_policy",
+    ): "the boundary passes the process default and the implementation "
+    "resolves the per-graph override from it; an agent choosing its own "
+    "advisory policy is a gate it can open",
     ("record_contradiction", "warning_policy"): "as merge_inferences",
     ("record_variant", "warning_policy"): "as merge_inferences",
-    ("search", "record_retrieval"):
-        "retrieval reinforcement is a property of a real read, not something a "
-        "caller may switch off for its own reads",
-    ("apply_reflection", "merge_similarity_threshold"):
-        "closed 2026-08-30 for the reason the merge bars above are closed, and "
-        "with more at stake: topic `merges` is the one consolidation that "
-        "retires nodes from the active graph, and an agent passing 0.0 could "
-        "retire arbitrary topics. It was the one open door beside a principle "
-        "the rest of this list already states",
-    ("use_graph", "seed_agent_ids"):
-        "judge approval seeding, from the environment at start-up — an agent "
-        "that could seed the approved list would be approving itself by another "
-        "route",
-    ("graph_stats", "default_reflect_threshold"):
-        "the process default from ServerConfig; the agent reads the resolved "
-        "value, it does not choose the fallback",
-    ("configure_reflection", "default_threshold"):
-        "as graph_stats: the agent sets the per-graph override, never the "
-        "default it falls back to",
+    (
+        "search",
+        "record_retrieval",
+    ): "retrieval reinforcement is a property of a real read, not something a "
+    "caller may switch off for its own reads",
+    (
+        "apply_reflection",
+        "merge_similarity_threshold",
+    ): "closed 2026-08-30 for the reason the merge bars above are closed, and "
+    "with more at stake: topic `merges` is the one consolidation that "
+    "retires nodes from the active graph, and an agent passing 0.0 could "
+    "retire arbitrary topics. It was the one open door beside a principle "
+    "the rest of this list already states",
+    (
+        "use_graph",
+        "seed_agent_ids",
+    ): "judge approval seeding, from the environment at start-up — an agent "
+    "that could seed the approved list would be approving itself by another "
+    "route",
+    (
+        "graph_stats",
+        "default_reflect_threshold",
+    ): "the process default from ServerConfig; the agent reads the resolved "
+    "value, it does not choose the fallback",
+    (
+        "configure_reflection",
+        "default_threshold",
+    ): "as graph_stats: the agent sets the per-graph override, never the default it falls back to",
 }
 
 # Supplied by the boundary for every tool, and never interesting here.
-_PLUMBING = frozenset({
-    "storage", "embedding_provider", "config", "judge", "event_bus", "ctx",
-})
+_PLUMBING = frozenset(
+    {
+        "storage",
+        "embedding_provider",
+        "config",
+        "judge",
+        "event_bus",
+        "ctx",
+    }
+)
 
 
 def _registered() -> list[str]:
@@ -155,7 +186,8 @@ def test_every_registered_tool_is_paired_or_classified():
     tools were invisible to the first version of this file.
     """
     unresolved = [
-        name for name in _registered()
+        name
+        for name in _registered()
         if name not in NO_IMPLEMENTATION and _implementation(name) is None
     ]
     assert unresolved == [], (
@@ -173,9 +205,7 @@ def test_the_derivation_finds_every_tool():
     assert len(registered) == len(set(registered)), "a tool matched twice"
     assert len(registered) > 40
     assert len(_pairs()) == len(registered) - len(NO_IMPLEMENTATION)
-    assert {"memory_apply_reflection", "epimemer_review", "memory_segment"} <= set(
-        registered
-    )
+    assert {"memory_apply_reflection", "epimemer_review", "memory_segment"} <= set(registered)
 
 
 def test_the_declared_exceptions_are_all_live():
@@ -185,13 +215,12 @@ def test_the_declared_exceptions_are_all_live():
     registered = set(_registered())
     assert set(IMPLEMENTATION_ALIASES) <= registered
     assert set(NO_IMPLEMENTATION) <= registered
-    assert all(
-        getattr(tools, stem, None) is not None
-        for stem in IMPLEMENTATION_ALIASES.values()
-    )
+    assert all(getattr(tools, stem, None) is not None for stem in IMPLEMENTATION_ALIASES.values())
 
 
-@pytest.mark.parametrize("name,boundary,implementation", _pairs(), ids=lambda v: v if isinstance(v, str) else "")
+@pytest.mark.parametrize(
+    "name,boundary,implementation", _pairs(), ids=lambda v: v if isinstance(v, str) else ""
+)
 def test_every_parameter_is_exposed_or_classified(name, boundary, implementation):
     tool = name.split("_", 1)[1]
     exposed = set(inspect.signature(boundary).parameters)
@@ -213,9 +242,7 @@ def test_every_parameter_is_exposed_or_classified(name, boundary, implementation
 def test_the_classification_has_no_stale_entries():
     """An entry naming a parameter that no longer exists is a reason nobody can
     check, and it is how a list of exceptions rots into a list of guesses."""
-    implementations = {
-        name.split("_", 1)[1]: impl for name, _, impl in _pairs()
-    }
+    implementations = {name.split("_", 1)[1]: impl for name, _, impl in _pairs()}
     stale = [
         (tool, parameter)
         for (tool, parameter) in NOT_AGENT_SETTABLE

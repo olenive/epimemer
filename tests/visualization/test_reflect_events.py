@@ -16,8 +16,8 @@ a pipeline must not change what it computes.
 
 import pytest
 
-from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.core.types import Fact, Topic
+from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.tools import reflect
 from epimemer.visualization.event_bus import create_event_bus
 from epimemer.visualization.events import (
@@ -66,7 +66,6 @@ async def _populate(storage, embedding_provider):
 
 
 class TestEmission:
-
     async def test_announces_its_topology_on_entry(self, storage, embedding_provider, bus):
         received = _recorder(bus)
         await _populate(storage, embedding_provider)
@@ -81,9 +80,7 @@ class TestEmission:
         assert len(started[0].place_names) == len(started[0].transition_names) + 1
         assert len(started[0].edges) == 2 * len(started[0].transition_names)
 
-    async def test_every_phase_fires_and_completes_in_order(
-        self, storage, embedding_provider, bus
-    ):
+    async def test_every_phase_fires_and_completes_in_order(self, storage, embedding_provider, bus):
         received = _recorder(bus)
         await _populate(storage, embedding_provider)
 
@@ -91,9 +88,7 @@ class TestEmission:
 
         started = next(e for e in received if isinstance(e, PipelineStarted))
         fired = [e.transition_name for e in received if isinstance(e, TransitionFired)]
-        completed = [
-            e.transition_name for e in received if isinstance(e, TransitionCompleted)
-        ]
+        completed = [e.transition_name for e in received if isinstance(e, TransitionCompleted)]
 
         assert fired == list(started.transition_names)
         assert completed == fired
@@ -117,14 +112,10 @@ class TestEmission:
 
         await reflect(storage, embedding_provider, event_bus=bus)
 
-        durations = [
-            e.duration_ms for e in received if isinstance(e, TransitionCompleted)
-        ]
+        durations = [e.duration_ms for e in received if isinstance(e, TransitionCompleted)]
         assert durations and all(d >= 0 for d in durations)
 
-    async def test_token_counts_accumulate_across_phases(
-        self, storage, embedding_provider, bus
-    ):
+    async def test_token_counts_accumulate_across_phases(self, storage, embedding_provider, bus):
         """The strip's token badges are what make a phase's *output* visible —
         without them a run is a row of lights with no findings attached."""
         received = _recorder(bus)
@@ -169,7 +160,6 @@ class TestEmission:
 
 
 class TestWatchingChangesNothing:
-
     async def test_no_events_without_a_bus(self, storage, embedding_provider, bus):
         received = _recorder(bus)
         await _populate(storage, embedding_provider)
@@ -178,14 +168,10 @@ class TestWatchingChangesNothing:
 
         assert received == []
 
-    async def test_the_result_is_identical_either_way(
-        self, storage, embedding_provider, bus
-    ):
+    async def test_the_result_is_identical_either_way(self, storage, embedding_provider, bus):
         await _populate(storage, embedding_provider)
 
-        watched, watched_meta = await reflect(
-            storage, embedding_provider, event_bus=bus
-        )
+        watched, watched_meta = await reflect(storage, embedding_provider, event_bus=bus)
         unwatched, unwatched_meta = await reflect(storage, embedding_provider)
 
         # `reflect` reads and proposes without writing, so two consecutive

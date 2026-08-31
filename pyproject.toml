@@ -1,30 +1,46 @@
 [project]
 name = "epimemer"
 version = "0.1.0"
-description = "Layered epistemic memory system"
-readme = "SUMMARY.md"
+description = "Epistemic memory for AI agents over MCP: a typed graph of claims with provenance, frames, validity in time, and a review loop"
+readme = "README.md"
 requires-python = ">=3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Oleg Lenive" }]
+keywords = ["mcp", "memory", "knowledge-graph", "agents", "epistemic", "claude"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Database",
+]
 dependencies = [
-    "petritype",
+    "petritype>=0.1.1",
     "numpy>=2.0",
     "pydantic>=2.12.5",
-    "pydantic-ai>=1.70.0",
     "surrealdb>=1.0.8",
-    "sentence-transformers>=5.3.0",
     "fastmcp>=3.1.0",
     "starlette>=0.46.0",
     "uvicorn>=0.34.0",
     "websockets>=13.0",
-    "aiohttp>=3.10.0",
 ]
 
 [project.optional-dependencies]
+# The default embedding provider, kept optional because it brings PyTorch with
+# it. Selecting it without this extra installed refuses at startup and names
+# the extra.
+sentence-transformers = [
+    "sentence-transformers>=5.3.0",
+]
 dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
+    "ruff>=0.16",
 ]
-# Everything the marimo notebooks under notebooks/ need (#50). `marimo` lived in
-# the runtime dependencies until nothing outside notebooks/ turned out to import
+# Everything the marimo notebooks under notebooks/ need. `marimo` lived in the
+# runtime dependencies until nothing outside notebooks/ turned out to import
 # it, which made it a demo dependency shipped to every install.
 # `petritype[examples]` rather than naming rustworkx and matplotlib directly:
 # those are petritype's requirements for its graph and plotting modules, so
@@ -37,19 +53,30 @@ notebooks = [
     "graphviz>=0.20",
 ]
 
+[project.urls]
+Homepage = "https://github.com/olenive/epimemer"
+Repository = "https://github.com/olenive/epimemer"
+Issues = "https://github.com/olenive/epimemer/issues"
+Changelog = "https://github.com/olenive/epimemer/blob/main/CHANGELOG.md"
+
 [project.scripts]
 epimemer = "epimemer.cli:main"
 epimemer-viz = "epimemer.visualization.hub:main"
 
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["epimemer"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["epimemer*"]
 
-[tool.uv.sources]
-petritype = { path = "../petritype", editable = true }
+# The visualization bundle is build output, produced by `npm run build` under
+# epimemer/visualization/frontend and never committed. The release workflow
+# builds it before `uv build`, so the wheel carries it; a wheel built from a
+# bare checkout serves the hub's API without the page.
+[tool.setuptools.package-data]
+"epimemer.visualization" = ["static/*", "static/assets/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -57,3 +84,26 @@ testpaths = ["tests"]
 
 [tool.marimo.display]
 theme = "dark"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+# Defaults plus import order, bugbear, and pyupgrade. Anything beyond these
+# has to earn its place by catching something real here.
+select = ["E", "F", "I", "B", "UP"]
+ignore = [
+    # `StrEnum` changes what `str()` and an f-string produce for a member —
+    # `EdgeType.SIMILARITY` becomes `similarity` — and the `(str, Enum)` mixin
+    # is what every serialised value and log line here was written against.
+    "UP042",
+    # A lambda bound to a name is the dispatch idiom in `cli.py`; a `def` for
+    # each one-line branch is longer and says nothing more.
+    "E731",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# A marimo cell displays its trailing expression; that is the output, not a
+# useless statement.
+"notebooks/*" = ["B018"]

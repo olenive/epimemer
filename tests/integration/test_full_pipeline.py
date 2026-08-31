@@ -5,14 +5,13 @@ reflect → update → timeline → metacontext → archive → restore,
 against every storage backend, with mock providers.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
     EdgeType,
-    Metacontext,
     NodeStatus,
     NodeType,
 )
@@ -22,8 +21,8 @@ from epimemer.mcp.tools import (
     add_timeline_timepoint,
     archive,
     create_metacontext,
-    create_timelink,
     create_timeline,
+    create_timelink,
     get_metacontexts_for_node,
     query_graph,
     query_timeline,
@@ -61,7 +60,10 @@ async def _two_step_ingest(
 ) -> tuple[dict, dict]:
     """Run the two-step ingest flow with dummy extraction."""
     seg_result, _ = await segment_text(
-        content, storage, embedding_provider, config,
+        content,
+        storage,
+        embedding_provider,
+        config,
     )
     segments = [
         {
@@ -83,49 +85,52 @@ async def _two_step_ingest(
 
 
 class TestFullPipeline:
-
-    async def test_ingest_search_cycle(
-        self, storage, embedding_provider, config
-    ):
+    async def test_ingest_search_cycle(self, storage, embedding_provider, config):
         """Ingest content via two-step flow, then search and find it."""
         _, store_result = await _two_step_ingest(
             "Machine learning models use gradient descent for optimization.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
         assert store_result["nodes_created"]["topics"] >= 1
 
         search_result, search_meta = await search(
             "Machine learning models use gradient descent for optimization.",
-            storage, embedding_provider,
-            k=5, graph_hops=1,
+            storage,
+            embedding_provider,
+            k=5,
+            graph_hops=1,
         )
         assert len(search_result["nodes"]) > 0
         assert search_meta.nodes_returned > 0
 
-    async def test_ingest_reflect_consolidation(
-        self, storage, embedding_provider, config
-    ):
+    async def test_ingest_reflect_consolidation(self, storage, embedding_provider, config):
         """Ingest multiple docs, run reflection."""
         await _two_step_ingest(
             "Deep learning uses neural networks.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
         await _two_step_ingest(
             "Artificial intelligence includes machine learning.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
 
         reflect_result, _ = await reflect(storage, embedding_provider)
         assert "similar_pairs" in reflect_result
         assert "contradictions" in reflect_result
 
-    async def test_update_creates_version_history(
-        self, storage, embedding_provider, config
-    ):
+    async def test_update_creates_version_history(self, storage, embedding_provider, config):
         """Ingest, find a node, update it, verify versioning."""
         await _two_step_ingest(
             "Python is a programming language.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
 
         topics = await storage.query_nodes(node_type=NodeType.TOPIC)
@@ -133,8 +138,12 @@ class TestFullPipeline:
         topic = topics[0]
 
         update_result, _ = await update(
-            topic.id, "Python is a versatile language", storage, embedding_provider
-        , because="it_was_wrong")
+            topic.id,
+            "Python is a versatile language",
+            storage,
+            embedding_provider,
+            because="it_was_wrong",
+        )
         assert update_result["old_node_id"] == topic.id
         assert update_result["new_node_id"] != topic.id
 
@@ -146,28 +155,30 @@ class TestFullPipeline:
         assert len(history_edges) == 1
         assert history_edges[0].dst_id == update_result["new_node_id"]
 
-    async def test_timeline_workflow(
-        self, storage, embedding_provider, config
-    ):
+    async def test_timeline_workflow(self, storage, embedding_provider, config):
         """Create timeline, add timepoints, link to nodes, query."""
         await _two_step_ingest(
             "GPT-4 was released in March 2023.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
 
         tl_result, _ = await create_timeline("AI Releases", storage)
         tl_id = tl_result["timeline_id"]
 
         tp_result, _ = await add_timeline_timepoint(
-            tl_id, storage,
-            start=datetime(2023, 3, 14, tzinfo=timezone.utc),
+            tl_id,
+            storage,
+            start=datetime(2023, 3, 14, tzinfo=UTC),
             label="GPT-4 release",
         )
         tp_id = tp_result["timepoint_id"]
 
         await add_timeline_timepoint(
-            tl_id, storage,
-            start=datetime(2024, 5, 13, tzinfo=timezone.utc),
+            tl_id,
+            storage,
+            start=datetime(2024, 5, 13, tzinfo=UTC),
             label="GPT-4o release",
         )
 
@@ -177,34 +188,39 @@ class TestFullPipeline:
             assert link_result["timepoint_id"] == tp_id
 
         query_result, _ = await query_timeline(
-            tl_id, storage,
-            target=datetime(2023, 6, 1, tzinfo=timezone.utc),
+            tl_id,
+            storage,
+            target=datetime(2023, 6, 1, tzinfo=UTC),
             k=1,
         )
         assert len(query_result["timepoints"]) == 1
 
-    async def test_metacontext_workflow(
-        self, storage, embedding_provider, config
-    ):
+    async def test_metacontext_workflow(self, storage, embedding_provider, config):
         """Create metacontexts, ingest with context, search with filter."""
         mc_real, _ = await create_metacontext("Real world", storage)
         mc_fiction, _ = await create_metacontext("Science fiction", storage)
 
         await _two_step_ingest(
             "Neural networks process information in layers.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
             metacontext_id=mc_real["metacontext_id"],
         )
         await _two_step_ingest(
             "The neural lace connects directly to the brain.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
             metacontext_id=mc_fiction["metacontext_id"],
         )
 
         real_results, _ = await search(
             "Neural",
-            storage, embedding_provider,
-            k=10, graph_hops=0,
+            storage,
+            embedding_provider,
+            k=10,
+            graph_hops=0,
             metacontexts=[mc_real["metacontext_id"]],
         )
 
@@ -217,20 +233,22 @@ class TestFullPipeline:
             mc_result, _ = await get_metacontexts_for_node(node_id, storage)
             assert len(mc_result["metacontexts"]) > 0
 
-    async def test_archive_restore_cycle(
-        self, storage, embedding_provider, config
-    ):
+    async def test_archive_restore_cycle(self, storage, embedding_provider, config):
         """Ingest, supersede, archive old nodes, restore them."""
         await _two_step_ingest(
             "Old information about computing.",
-            storage, embedding_provider, config,
+            storage,
+            embedding_provider,
+            config,
         )
 
         topics = await storage.query_nodes(node_type=NodeType.TOPIC)
         assert len(topics) > 0
-        old_time = datetime.now(timezone.utc) - timedelta(days=200)
+        old_time = datetime.now(UTC) - timedelta(days=200)
         await storage.set_node_status_tx(
-            [topics[0]], status=NodeStatus.SUPERSEDED, at=old_time,
+            [topics[0]],
+            status=NodeStatus.SUPERSEDED,
+            at=old_time,
         )
 
         archive_result, _ = await archive(storage, max_age_days=90)
@@ -241,9 +259,7 @@ class TestFullPipeline:
         restore_result, _ = await restore(fresh_storage, archive_data=archive_data)
         assert restore_result["nodes_restored"] >= 1
 
-    async def test_full_sequence(
-        self, storage, embedding_provider, config
-    ):
+    async def test_full_sequence(self, storage, embedding_provider, config):
         """Run a realistic sequence of operations."""
         mc, _ = await create_metacontext("Technical documentation", storage)
         mc_id = mc["metacontext_id"]
@@ -255,20 +271,34 @@ class TestFullPipeline:
         ]
         for doc in docs:
             await _two_step_ingest(
-                doc, storage, embedding_provider, config,
+                doc,
+                storage,
+                embedding_provider,
+                config,
                 metacontext_id=mc_id,
             )
 
         tl, _ = await create_timeline("Language Evolution", storage)
         tl_id = tl["timeline_id"]
-        await add_timeline_timepoint(tl_id, storage, start=datetime(1991, 1, 1, tzinfo=timezone.utc), label="Python created")
-        await add_timeline_timepoint(tl_id, storage, start=datetime(2010, 1, 1, tzinfo=timezone.utc), label="Rust created")
-        await add_timeline_timepoint(tl_id, storage, start=datetime(2012, 1, 1, tzinfo=timezone.utc), label="TypeScript created")
+        await add_timeline_timepoint(
+            tl_id, storage, start=datetime(1991, 1, 1, tzinfo=UTC), label="Python created"
+        )
+        await add_timeline_timepoint(
+            tl_id, storage, start=datetime(2010, 1, 1, tzinfo=UTC), label="Rust created"
+        )
+        await add_timeline_timepoint(
+            tl_id,
+            storage,
+            start=datetime(2012, 1, 1, tzinfo=UTC),
+            label="TypeScript created",
+        )
 
         results, meta = await search(
             "Programming languages",
-            storage, embedding_provider,
-            k=10, graph_hops=1,
+            storage,
+            embedding_provider,
+            k=10,
+            graph_hops=1,
         )
         assert meta.nodes_returned > 0
 

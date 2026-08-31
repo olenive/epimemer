@@ -690,7 +690,7 @@ When new data arrives:
 The system must not be a black box. A newcomer should be able to look at any part of the pipeline and understand what is happening, what state data is in, and how it flows through processing steps.
 
 ### Approach
-All key data processing steps are implemented as executable Petri nets using Petritype (`../petritype`, installed locally via uv). Petritype is a Python 3.14+ library that makes Petri nets executable and typed:
+All key data processing steps are implemented as executable Petri nets using Petritype (the `petritype` package on PyPI). Petritype is a Python 3.14+ library that makes Petri nets executable and typed:
 - **Places** are typed containers — each place declares a Python type and only holds tokens matching that type (enforced at runtime via typeguard)
 - **Transitions** are real Python functions — async supported, with typed inputs/outputs
 - **Tokens** are actual data (Pydantic models, primitives, etc.) flowing through the net
@@ -742,12 +742,17 @@ This applies across the system — segmentation, topic extraction, decomposition
 The `@petri_net` decorator supports this by tagging each strategy with metadata (name, description, mode), enabling discovery tooling to enumerate available strategies:
 
 ```python
-@petri_net(name="segmentation-semantic", mode="manual",
-           description="TextTiling-style semantic similarity segmentation")
+@petri_net(
+    name="segmentation-semantic",
+    mode="manual",
+    description="TextTiling-style semantic similarity segmentation",
+)
 def semantic_segmentation() -> ExecutableGraph: ...
 
-@petri_net(name="segmentation-paragraph", mode="manual",
-           description="Paragraph-boundary segmentation")
+
+@petri_net(
+    name="segmentation-paragraph", mode="manual", description="Paragraph-boundary segmentation"
+)
 def paragraph_segmentation() -> ExecutableGraph: ...
 ```
 

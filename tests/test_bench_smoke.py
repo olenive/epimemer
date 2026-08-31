@@ -53,7 +53,11 @@ def test_quick_run_emits_one_json_record_per_operation():
     operations = [r["operation"] for r in records]
 
     assert operations == [
-        "store_decomposition", "corpus", "embedding", "search", "list_sources",
+        "store_decomposition",
+        "corpus",
+        "embedding",
+        "search",
+        "list_sources",
         "annotations",
     ]
     assert all(r["backend"] == "memory" for r in records)
@@ -131,18 +135,14 @@ def test_every_record_names_the_corpus_it_was_taken_over():
     for record in records:
         assert record["corpus"] in ("templated", "diverse")
         assert record["embeddings"] in ("real", "mock-384")
-    assert next(r for r in records if r["operation"] == "annotations")[
-        "similarity_edges"
-    ] == 0
+    assert next(r for r in records if r["operation"] == "annotations")["similarity_edges"] == 0
 
 
 def test_the_corpus_flags_actually_change_the_corpus():
     """Otherwise the annotation timings would measure an empty walk and report
     it as a cost — the failure mode where a benchmark looks cheap because it
     benchmarks nothing."""
-    result = _run(
-        "--quick", "--n", "40", "--publishers", "4", "--similarity-degree", "3"
-    )
+    result = _run("--quick", "--n", "40", "--publishers", "4", "--similarity-degree", "3")
 
     assert result.returncode == 0, result.stderr
     records = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
@@ -182,7 +182,8 @@ def test_the_dated_corpus_dates_something():
 
     assert result.returncode == 0, result.stderr
     corpus = next(
-        json.loads(line) for line in result.stdout.splitlines()
+        json.loads(line)
+        for line in result.stdout.splitlines()
         if line.strip() and json.loads(line)["operation"] == "corpus"
     )
     assert corpus["dated_facts"] > 0
@@ -219,14 +220,12 @@ class TestPlantedDuplicates:
         planted = bench._fact_pool(
             random.Random("seed"), count=200, corpus="diverse", groups=4, size=5
         )
-        changed = [i for i, (a, b) in enumerate(zip(plain, planted)) if a != b]
+        changed = [i for i, (a, b) in enumerate(zip(plain, planted, strict=True)) if a != b]
 
         # Four clusters of five: the first of each keeps its original wording.
         assert len(changed) == 4 * 4
 
-    def test_the_templated_corpus_refuses_the_planting_rather_than_faking_it(
-        self, bench
-    ):
+    def test_the_templated_corpus_refuses_the_planting_rather_than_faking_it(self, bench):
         """It already survives at ~1% by accident, so clusters planted in it
         would be lost against a floor nobody chose."""
         plain = bench._fact_pool(
@@ -270,16 +269,19 @@ class TestPlantingLeavesTheRestOfTheCorpusAlone:
             await bench._seed(
                 storage,
                 MockEmbeddingProvider(model_id="bench-embed", dimension=384),
-                ServerConfig(
-                    embedding_provider="mock", segmentation_strategy="paragraph"
-                ),
-                docs=4, segments=3, publishers=0, corpus="diverse",
-                duplicate_groups=groups, duplicate_size=4, facts_per_segment=2,
-                rng=random.Random(1), fact_rng=random.Random("facts:1"),
+                ServerConfig(embedding_provider="mock", segmentation_strategy="paragraph"),
+                docs=4,
+                segments=3,
+                publishers=0,
+                corpus="diverse",
+                duplicate_groups=groups,
+                duplicate_size=4,
+                facts_per_segment=2,
+                rng=random.Random(1),
+                fact_rng=random.Random("facts:1"),
             )
             return sorted(
-                node.content
-                for node in await storage.query_nodes(node_type=NodeType.TOPIC)
+                node.content for node in await storage.query_nodes(node_type=NodeType.TOPIC)
             )
 
         assert await topics(0) == await topics(2)

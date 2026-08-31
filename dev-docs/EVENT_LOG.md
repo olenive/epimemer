@@ -115,13 +115,14 @@ event at the transaction boundary:
 ```python
 class GraphActionRecorded(Event):
     """One human-meaningful act, at the transaction boundary that performed it."""
+
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH  # see §10
     event_type: Literal["graph_action_recorded"] = "graph_action_recorded"
-    action_id: str              # monotonic, assigned at the source — see §4.1
-    verb: ActionVerb            # stored | corrected | world_changed | merged | archived | restored | …
-    subjects: list[str]         # node ids, primary first
-    counts: dict[str, int]      # {"edges": 3, "nodes": 1} — what it swept up
-    summary: str                # pre-rendered one-line text, for display and substring filter
+    action_id: str  # monotonic, assigned at the source — see §4.1
+    verb: ActionVerb  # stored | corrected | world_changed | merged | archived | restored | …
+    subjects: list[str]  # node ids, primary first
+    counts: dict[str, int]  # {"edges": 3, "nodes": 1} — what it swept up
+    summary: str  # pre-rendered one-line text, for display and substring filter
 ```
 
 `instrumented_storage.py` already sits exactly at the transaction boundary and

@@ -9,7 +9,6 @@ import asyncio
 import json
 from types import SimpleNamespace
 
-import pytest
 from websockets.asyncio.server import serve
 
 from epimemer.storage.memory import InMemoryStorage
@@ -65,7 +64,9 @@ async def test_client_registers_forwards_event_and_answers_rpc():
 
         # A bus event is forwarded verbatim as a PublishEvent.
         await bus.publish(
-            NodeStatusChanged(graph="g1", node_id="n1", old_status="active", new_status="superseded")
+            NodeStatusChanged(
+                graph="g1", node_id="n1", old_status="active", new_status="superseded"
+            )
         )
         fwd = await asyncio.wait_for(hub.received.get(), timeout=3)
         assert fwd["type"] == "event"

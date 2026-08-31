@@ -11,8 +11,6 @@ Petri net flow:
 
 import re
 
-from pydantic import BaseModel, Field
-
 from petritype import petri_net
 from petritype.core.executable_graph_components import (
     ArgumentEdgeToTransition,
@@ -22,16 +20,17 @@ from petritype.core.executable_graph_components import (
     ListPlaceNode,
     ReturnedEdgeFromTransition,
 )
+from pydantic import BaseModel, Field
 
 from epimemer.core.types import RawDocument, Segment
 from epimemer.embeddings.protocol import EmbeddingProvider
-
 
 # --- Intermediate token types ---
 
 
 class SentenceSpan(BaseModel):
     """A single sentence with its character offsets in the source document."""
+
     text: str
     start: int
     end: int
@@ -39,6 +38,7 @@ class SentenceSpan(BaseModel):
 
 class SentenceList(BaseModel):
     """List of sentences extracted from a document, preserving span information."""
+
     source_id: str
     source_content: str
     sentences: list[SentenceSpan] = Field(default_factory=list)
@@ -46,6 +46,7 @@ class SentenceList(BaseModel):
 
 class SimilarityScores(BaseModel):
     """Cosine similarity scores between adjacent sentences."""
+
     source_id: str
     source_content: str
     scores: list[float] = Field(default_factory=list)
@@ -62,7 +63,7 @@ def _split_into_sentences(text: str) -> list[tuple[str, int, int]]:
     punctuation followed by whitespace, preserving character offsets.
     """
     # Match sentence-ending punctuation followed by whitespace
-    pattern = r'(?<=[.!?])\s+'
+    pattern = r"(?<=[.!?])\s+"
     parts = re.split(pattern, text)
 
     sentences = []
@@ -85,10 +86,7 @@ def _split_into_sentences(text: str) -> list[tuple[str, int, int]]:
 async def split_sentences(doc: RawDocument) -> SentenceList:
     """Split a RawDocument into sentences with character offsets."""
     raw_sentences = _split_into_sentences(doc.content)
-    spans = [
-        SentenceSpan(text=text, start=start, end=end)
-        for text, start, end in raw_sentences
-    ]
+    spans = [SentenceSpan(text=text, start=start, end=end) for text, start, end in raw_sentences]
     return SentenceList(
         source_id=doc.id,
         source_content=doc.content,
@@ -98,7 +96,7 @@ async def split_sentences(doc: RawDocument) -> SentenceList:
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = sum(x * x for x in a) ** 0.5
     norm_b = sum(x * x for x in b) ** 0.5
     if norm_a == 0 or norm_b == 0:
@@ -147,7 +145,7 @@ def _detect_boundaries(scores: list[float], threshold_factor: float = 1.0) -> li
 
     mean = sum(scores) / len(scores)
     variance = sum((s - mean) ** 2 for s in scores) / len(scores)
-    std = variance ** 0.5
+    std = variance**0.5
 
     threshold = mean - threshold_factor * std
     boundaries = [i for i, s in enumerate(scores) if s < threshold]
@@ -187,7 +185,7 @@ async def detect_boundaries_and_form_segments(
     segment_starts = [0] + [b + 1 for b in boundaries]
     segment_ends = [b + 1 for b in boundaries] + [len(sentences)]
 
-    for start_idx, end_idx in zip(segment_starts, segment_ends):
+    for start_idx, end_idx in zip(segment_starts, segment_ends, strict=True):
         if start_idx >= end_idx:
             continue
         span_sentences = sentences[start_idx:end_idx]
@@ -212,7 +210,9 @@ async def detect_boundaries_and_form_segments(
 @petri_net(
     name="semantic-similarity-segmentation",
     mode="batch",
-    description="TextTiling-style segmentation using embedding similarity between adjacent sentences.",
+    description=(
+        "TextTiling-style segmentation using embedding similarity between adjacent sentences."
+    ),
 )
 def semantic_similarity_segmentation_net(
     document: RawDocument,
@@ -229,35 +229,35 @@ def semantic_similarity_segmentation_net(
     Returns:
         An ExecutableGraph ready to execute.
     """
-    return ExecutableGraphOperations.construct_graph([
-        # Places
-        ListPlaceNode("RawDocument", RawDocument, [document]),
-        ListPlaceNode("SentenceList", SentenceList),
-        ListPlaceNode("SimilarityScores", SimilarityScores),
-        ListPlaceNode("Segments", Segment),
-
-        # Transition 1: split_sentences
-        FunctionTransitionNode("split_sentences", split_sentences),
-        ArgumentEdgeToTransition("RawDocument", "split_sentences", "doc"),
-        ReturnedEdgeFromTransition("split_sentences", "SentenceList"),
-
-        # Transition 2: compute_similarities
-        FunctionTransitionNode(
-            "compute_similarities",
-            compute_similarities,
-            kwargs={"embedding_provider": embedding_provider},
-        ),
-        ArgumentEdgeToTransition("SentenceList", "compute_similarities", "sentence_list"),
-        ReturnedEdgeFromTransition("compute_similarities", "SimilarityScores"),
-
-        # Transition 3: detect_boundaries_and_form_segments
-        FunctionTransitionNode(
-            "detect_boundaries_and_form_segments",
-            detect_boundaries_and_form_segments,
-            kwargs={"threshold_factor": threshold_factor},
-        ),
-        ArgumentEdgeToTransition(
-            "SimilarityScores", "detect_boundaries_and_form_segments", "similarity_scores"
-        ),
-        ReturnedEdgeFromTransition("detect_boundaries_and_form_segments", "Segments"),
-    ], expect_acyclic=True)
+    return ExecutableGraphOperations.construct_graph(
+        [
+            # Places
+            ListPlaceNode("RawDocument", RawDocument, [document]),
+            ListPlaceNode("SentenceList", SentenceList),
+            ListPlaceNode("SimilarityScores", SimilarityScores),
+            ListPlaceNode("Segments", Segment),
+            # Transition 1: split_sentences
+            FunctionTransitionNode("split_sentences", split_sentences),
+            ArgumentEdgeToTransition("RawDocument", "split_sentences", "doc"),
+            ReturnedEdgeFromTransition("split_sentences", "SentenceList"),
+            # Transition 2: compute_similarities
+            FunctionTransitionNode(
+                "compute_similarities",
+                compute_similarities,
+                kwargs={"embedding_provider": embedding_provider},
+            ),
+            ArgumentEdgeToTransition("SentenceList", "compute_similarities", "sentence_list"),
+            ReturnedEdgeFromTransition("compute_similarities", "SimilarityScores"),
+            # Transition 3: detect_boundaries_and_form_segments
+            FunctionTransitionNode(
+                "detect_boundaries_and_form_segments",
+                detect_boundaries_and_form_segments,
+                kwargs={"threshold_factor": threshold_factor},
+            ),
+            ArgumentEdgeToTransition(
+                "SimilarityScores", "detect_boundaries_and_form_segments", "similarity_scores"
+            ),
+            ReturnedEdgeFromTransition("detect_boundaries_and_form_segments", "Segments"),
+        ],
+        expect_acyclic=True,
+    )

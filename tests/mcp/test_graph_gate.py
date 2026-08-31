@@ -35,14 +35,11 @@ from epimemer.mcp.server import NAMES_ITS_OWN_GRAPH
 from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.storage.memory import InMemoryStorage
 
-
 # Read from the server rather than restated here. A second copy would be free to
 # disagree with the one the gate consults, and the disagreement would look like
 # a passing test — which is the whole failure mode this file exists to close,
 # one level up.
-EXEMPT: frozenset[str] = frozenset(
-    name.removeprefix("epimemer.") for name in NAMES_ITS_OWN_GRAPH
-)
+EXEMPT: frozenset[str] = frozenset(name.removeprefix("epimemer.") for name in NAMES_ITS_OWN_GRAPH)
 
 ISO = "2026-08-23T12:00:00+00:00"
 
@@ -64,8 +61,7 @@ def _dummy(name: str, spec: dict):
         ):
             return ISO
         return "x"
-    return {"integer": 1, "number": 1.0, "boolean": False, "array": [],
-            "object": {}}.get(kind, "x")
+    return {"integer": 1, "number": 1.0, "boolean": False, "array": [], "object": {}}.get(kind, "x")
 
 
 def _required_args(tool) -> dict:
@@ -119,8 +115,7 @@ class TestTheGateItself:
     async def test_a_mismatch_refuses(self, server):
         srv, _ = server
 
-        result = await _call(srv, "segment", content="A report.",
-                             expected_graph="field-notes")
+        result = await _call(srv, "segment", content="A report.", expected_graph="field-notes")
 
         assert "refused" in result
         assert result["expected_graph"] == "field-notes"
@@ -146,8 +141,7 @@ class TestTheGateItself:
         """
         srv, _ = server
 
-        result = await _call(srv, "segment", content="A report.",
-                             expected_graph="field-notes")
+        result = await _call(srv, "segment", content="A report.", expected_graph="field-notes")
 
         assert "error" not in result
         assert "use_graph('field-notes')" in result["refused"]
@@ -156,8 +150,7 @@ class TestTheGateItself:
     async def test_a_match_proceeds(self, server):
         srv, _ = server
 
-        result = await _call(srv, "segment", content="A report.",
-                             expected_graph="default")
+        result = await _call(srv, "segment", content="A report.", expected_graph="default")
 
         assert "refused" not in result
         assert result["document_id"]
@@ -204,8 +197,7 @@ class TestTheGateItself:
         srv, _ = server
         await _call(srv, "use_graph", name="elsewhere", confirm=True)
 
-        result = await _call(srv, "segment", content="A report.",
-                             expected_graph="elsewhere")
+        result = await _call(srv, "segment", content="A report.", expected_graph="elsewhere")
 
         assert "refused" not in result
 
@@ -225,7 +217,8 @@ class TestEveryContentToolIsGated:
         srv, _ = server
 
         missing = sorted(
-            tool.name for tool in await srv.list_tools()
+            tool.name
+            for tool in await srv.list_tools()
             if tool.name not in EXEMPT
             and "expected_graph" not in tool.parameters.get("properties", {})
         )
@@ -244,8 +237,10 @@ class TestEveryContentToolIsGated:
             if tool.name in EXEMPT:
                 continue
             result = await _call(
-                srv, tool.name,
-                **_required_args(tool), expected_graph="somewhere-else",
+                srv,
+                tool.name,
+                **_required_args(tool),
+                expected_graph="somewhere-else",
             )
             if result.get("expected_graph") != "somewhere-else":
                 ungated.append((tool.name, result))
@@ -279,8 +274,7 @@ class TestEveryContentToolIsGated:
         for tool in await srv.list_tools():
             if tool.name in EXEMPT:
                 continue
-            await _call(srv, tool.name, **_required_args(tool),
-                        expected_graph="somewhere-else")
+            await _call(srv, tool.name, **_required_args(tool), expected_graph="somewhere-else")
 
         assert await storage.query_nodes() == []
         assert await storage.query_decisions() == []
@@ -307,15 +301,12 @@ class TestTheReconnectThatCausedThis:
         # the agent's belief does not.
         await deps["storage"].switch_database("default")
 
-        result = await _call(srv, "segment", content="A project report.",
-                             expected_graph="field-notes")
+        result = await _call(srv, "segment", content="A project report.", expected_graph="field-notes")
 
         assert "refused" in result
         assert result["active_graph"] == "default"
 
-    async def test_the_same_write_without_the_parameter_cannot_happen_now(
-        self, server
-    ):
+    async def test_the_same_write_without_the_parameter_cannot_happen_now(self, server):
         """The incident itself, and it no longer has a path.
 
         This is the call that put 61 nodes of one project into another's: an
@@ -340,8 +331,7 @@ class TestTheReconnectThatCausedThis:
         await _call(srv, "use_graph", name="field-notes", confirm=True)
         await deps["storage"].switch_database("default")
 
-        result = await _call(srv, "search", query="the project",
-                             expected_graph="field-notes")
+        result = await _call(srv, "search", query="the project", expected_graph="field-notes")
 
         assert "refused" in result
         assert "nodes" not in result

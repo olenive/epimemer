@@ -21,7 +21,6 @@ from epimemer.core.types import (
     BASE_METACONTEXT_ID,
     EmbeddingRecord,
     Fact,
-    NodeStatus,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
@@ -32,9 +31,9 @@ async def _fact(storage, embedder, content: str) -> Fact:
     node = Fact(content=content, source_id="seg1")
     await storage.store_node(node)
     vectors = await embedder.embed([content])
-    await storage.store_embedding(EmbeddingRecord(
-        item_id=node.id, model_id=embedder.model_id, vector=vectors[0]
-    ))
+    await storage.store_embedding(
+        EmbeddingRecord(item_id=node.id, model_id=embedder.model_id, vector=vectors[0])
+    )
     return node
 
 
@@ -61,9 +60,7 @@ class TestWhichGraphAServerOpens:
         assert ServerConfig().surrealdb_database == "default"
 
     def test_epimemer_graph_wins(self):
-        storage = create_storage(
-            ServerConfig(storage_backend="surrealdb", graph="field-notes")
-        )
+        storage = create_storage(ServerConfig(storage_backend="surrealdb", graph="field-notes"))
 
         assert storage.current_database == "field-notes"
 
@@ -78,9 +75,7 @@ class TestWhichGraphAServerOpens:
         """Not a graph named "". The two would be indistinguishable in an
         environment variable, and one of them is a typo."""
         storage = create_storage(
-            ServerConfig(
-                storage_backend="surrealdb", graph="", surrealdb_database="archive"
-            )
+            ServerConfig(storage_backend="surrealdb", graph="", surrealdb_database="archive")
         )
 
         assert storage.current_database == "archive"
@@ -101,24 +96,29 @@ class TestIngestSaysWhereItLanded:
     async def test_segment_names_the_active_graph(self, storage, embedder, config):
         """The earliest place it can be said: before anything is decomposed."""
         result, _ = await tools.segment_text(
-            "A report.", storage, embedder, config,
+            "A report.",
+            storage,
+            embedder,
+            config,
         )
 
         assert result["active_graph"] == storage.current_database
 
-    async def test_store_decomposition_names_it_again(
-        self, storage, embedder, config
-    ):
+    async def test_store_decomposition_names_it_again(self, storage, embedder, config):
         """Repeated rather than assumed unchanged — the two calls are separate
         requests, and a reconnect can land between them."""
         seg, _ = await tools.segment_text("A report.", storage, embedder, config)
 
         result, _ = await tools.store_decomposition(
             document_id=seg["document_id"],
-            segments=[{
-                "segment_id": seg["segments"][0]["segment_id"],
-                "topics": ["a topic"], "facts": [], "inferences": [],
-            }],
+            segments=[
+                {
+                    "segment_id": seg["segments"][0]["segment_id"],
+                    "topics": ["a topic"],
+                    "facts": [],
+                    "inferences": [],
+                }
+            ],
             storage=storage,
             embedding_provider=embedder,
             metacontext_id=BASE_METACONTEXT_ID,
@@ -130,7 +130,10 @@ class TestIngestSaysWhereItLanded:
         await tools.use_graph("elsewhere", storage, confirm=True)
 
         result, _ = await tools.segment_text(
-            "A report.", storage, embedder, config,
+            "A report.",
+            storage,
+            embedder,
+            config,
         )
 
         assert result["active_graph"] == "elsewhere"
@@ -187,9 +190,7 @@ class TestWhyAnIdThatDoesNotResolveIsNotEnough:
 
         assert "graph" not in str(raised.value).lower()
 
-    async def test_linking_across_a_switch_raises_the_same_way(
-        self, storage, embedder
-    ):
+    async def test_linking_across_a_switch_raises_the_same_way(self, storage, embedder):
         a = await _fact(storage, embedder, "one")
         b = await _fact(storage, embedder, "two")
         await tools.use_graph("elsewhere", storage, confirm=True)
@@ -205,22 +206,25 @@ class TestWhyAnIdThatDoesNotResolveIsNotEnough:
         await tools.use_graph("elsewhere", storage, confirm=True)
 
         result, _ = await tools.apply_reflection(
-            storage, embedder, archivals=[node.id],
+            storage,
+            embedder,
+            archivals=[node.id],
         )
 
         assert result["nodes_archived"] == 0
         assert "refused" not in result, "no refusal, no error — just nothing"
 
-    async def test_a_read_in_the_wrong_graph_answers_rather_than_failing(
-        self, storage, embedder
-    ):
+    async def test_a_read_in_the_wrong_graph_answers_rather_than_failing(self, storage, embedder):
         """No id to fail on. The agent asked a question and got an answer, and
         nothing anywhere records that it came from the wrong place."""
         await _fact(storage, embedder, "the deployment rolled back")
         await tools.use_graph("elsewhere", storage, confirm=True)
 
         result, _ = await tools.search(
-            "deployment", storage, embedder, k=5,
+            "deployment",
+            storage,
+            embedder,
+            k=5,
         )
 
         assert result["nodes"] == [] and result["segments"] == []

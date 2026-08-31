@@ -6,7 +6,7 @@ reader does not have to reconstruct "superseded 123 → 124, +3 evidence edges"
 by grouping a stream that has no correlation id in it.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -46,21 +46,20 @@ async def _supersede(bus, *, status: NodeStatus, evidence: int = 0):
     await wrapped.store_node(old)
     actions, everything = _recorder(bus)
     await wrapped.supersede_node_tx(
-        old, new,
+        old,
+        new,
         EmbeddingRecord(item_id=new.id, model_id="test", vector=[1.0, 0.0]),
         NodeEdge(src_id=old.id, dst_id=new.id, type=lineage_edge_type_for(status)),
         status=status,
-        superseded_at=datetime.now(timezone.utc),
+        superseded_at=datetime.now(UTC),
         evidence_edges=[
-            NodeEdge(src_id=new.id, dst_id=old.id, type=EdgeType.SUPPORTS)
-            for _ in range(evidence)
+            NodeEdge(src_id=new.id, dst_id=old.id, type=EdgeType.SUPPORTS) for _ in range(evidence)
         ],
     )
     return old, new, actions, everything
 
 
 class TestOneActionPerTransaction:
-
     async def test_supersede_publishes_one_action_for_four_events(self, bus):
         """§3.1: the coarse event is emitted once per transaction, not once per
         write. `supersede_node_tx` publishes four fine-grained events and one
@@ -133,14 +132,10 @@ class TestVocabulary:
         wrapped = instrument_storage(InMemoryStorage(), bus)
         node = Fact(content="Labour is in government", source_id="s1")
         await wrapped.store_node(node)
-        await wrapped.set_node_status_tx(
-            [node], status=NodeStatus.HISTORICAL, at=datetime.now(timezone.utc)
-        )
+        await wrapped.set_node_status_tx([node], status=NodeStatus.HISTORICAL, at=datetime.now(UTC))
         actions, _ = _recorder(bus)
 
-        await wrapped.set_node_status_tx(
-            [node], status=NodeStatus.ACTIVE, at=datetime.now(timezone.utc)
-        )
+        await wrapped.set_node_status_tx([node], status=NodeStatus.ACTIVE, at=datetime.now(UTC))
         await wrapped.write_batch_tx(
             edges=[NodeEdge(src_id=node.id, dst_id="doc1", type=EdgeType.SOURCED_FROM)]
         )
@@ -167,9 +162,7 @@ class TestSummary:
         assert "corrected" not in actions[0].summary
 
     async def test_the_evidence_it_swept_up_is_in_the_line(self, bus):
-        _, _, actions, _ = await _supersede(
-            bus, status=NodeStatus.CORRECTED, evidence=3
-        )
+        _, _, actions, _ = await _supersede(bus, status=NodeStatus.CORRECTED, evidence=3)
         assert "4 edges" in actions[0].summary
 
     async def test_a_merge_names_where_the_content_went(self, bus):
@@ -181,11 +174,11 @@ class TestSummary:
         actions, _ = _recorder(bus)
 
         await wrapped.merge_nodes_tx(
-            sources, merged,
+            sources,
+            merged,
             EmbeddingRecord(item_id=merged.id, model_id="test", vector=[1.0, 0.0]),
-            [NodeEdge(src_id=s.id, dst_id=merged.id, type=EdgeType.MERGED_INTO)
-             for s in sources],
-            merged_at=datetime.now(timezone.utc),
+            [NodeEdge(src_id=s.id, dst_id=merged.id, type=EdgeType.MERGED_INTO) for s in sources],
+            merged_at=datetime.now(UTC),
         )
 
         assert actions[0].verb is ActionVerb.MERGED
@@ -194,7 +187,6 @@ class TestSummary:
 
 
 class TestActionIds:
-
     async def test_action_ids_rise_within_a_session(self, bus):
         """§4.1: the id is assigned by the process that emits the act, so it is
         a position in a stream. The hub's `seq` is neither — it restarts at 0
@@ -203,9 +195,7 @@ class TestActionIds:
         actions, _ = _recorder(bus)
 
         for i in range(3):
-            await wrapped.write_batch_tx(
-                nodes=[Fact(content=f"claim {i}", source_id="s1")]
-            )
+            await wrapped.write_batch_tx(nodes=[Fact(content=f"claim {i}", source_id="s1")])
 
         ids = [a.action_id for a in actions]
         assert ids == sorted(ids)

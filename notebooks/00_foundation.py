@@ -31,8 +31,9 @@ def _(mo):
 
 @app.cell
 def _():
-    import marimo as mo
     import graphviz
+    import marimo as mo
+
     from epimemer.core.types import (
         ClaimKind,
         EdgeType,
@@ -65,8 +66,15 @@ def _():
 @app.cell
 def _(graphviz, mo):
     _types = graphviz.Digraph(graph_attr={"rankdir": "LR", "bgcolor": "transparent"})
-    _types.attr("node", shape="box", style="rounded,filled", fillcolor="#eef2ff",
-                color="#4338ca", fontname="Helvetica", fontsize="11")
+    _types.attr(
+        "node",
+        shape="box",
+        style="rounded,filled",
+        fillcolor="#eef2ff",
+        color="#4338ca",
+        fontname="Helvetica",
+        fontsize="11",
+    )
     _types.node("Topic", "Topic\nwhat text is about")
     _types.node("Fact", "Fact\nan atomic claim\nclaim_kind, validity")
     _types.node("Inference", "Inference\nderived, provisional")
@@ -81,7 +89,10 @@ def _(graphviz, mo):
     _types.edge("Topic", "Topic", label="subtopic_of")
 
     type_diagram = _types.pipe(format="png")
-    mo.md("### The type model\nEdges are one enum, `EdgeType`; behaviour is finite and the vocabulary of user relations is open.")
+    mo.md(
+        "### The type model\nEdges are one enum, `EdgeType`; behaviour is finite "
+        "and the vocabulary of user relations is open."
+    )
     return (type_diagram,)
 
 
@@ -127,12 +138,21 @@ async def _(
 
     _topic = Topic(content="Early computing", source_id="doc-1")
     _facts = [
-        Fact(content="Ada Lovelace wrote the first published algorithm.",
-             source_id="doc-1", claim_kind=ClaimKind.EVENT),
-        Fact(content="The analytical engine was never completed.",
-             source_id="doc-1", claim_kind=ClaimKind.STATE),
-        Fact(content="Charles Babbage designed the analytical engine.",
-             source_id="doc-1", claim_kind=ClaimKind.EVENT),
+        Fact(
+            content="Ada Lovelace wrote the first published algorithm.",
+            source_id="doc-1",
+            claim_kind=ClaimKind.EVENT,
+        ),
+        Fact(
+            content="The analytical engine was never completed.",
+            source_id="doc-1",
+            claim_kind=ClaimKind.STATE,
+        ),
+        Fact(
+            content="Charles Babbage designed the analytical engine.",
+            source_id="doc-1",
+            claim_kind=ClaimKind.EVENT,
+        ),
     ]
     _inference = Inference(
         content="Lovelace's algorithm was written for a machine that never ran.",
@@ -143,19 +163,31 @@ async def _(
     for _node in _nodes:
         await store.store_node(_node)
         _vector = (await embedder.embed([_node.content]))[0]
-        await store.store_embedding(EmbeddingRecord(
-            item_id=_node.id, model_id=embedder.model_id, vector=_vector,
-        ))
+        await store.store_embedding(
+            EmbeddingRecord(
+                item_id=_node.id,
+                model_id=embedder.model_id,
+                vector=_vector,
+            )
+        )
 
     # The two edges that make this a graph rather than a list.
     for _fact in _facts:
-        await store.store_edge(NodeEdge(
-            src_id=_fact.id, dst_id=_topic.id, type=EdgeType.ABOUT,
-        ))
+        await store.store_edge(
+            NodeEdge(
+                src_id=_fact.id,
+                dst_id=_topic.id,
+                type=EdgeType.ABOUT,
+            )
+        )
     for _fact in _facts[:2]:
-        await store.store_edge(NodeEdge(
-            src_id=_inference.id, dst_id=_fact.id, type=EdgeType.DERIVED_FROM,
-        ))
+        await store.store_edge(
+            NodeEdge(
+                src_id=_inference.id,
+                dst_id=_fact.id,
+                type=EdgeType.DERIVED_FROM,
+            )
+        )
 
     mo.md(f"**Stored:** {len(_nodes)} nodes — 1 topic, {len(_facts)} facts, 1 inference.")
     return embedder, store
@@ -164,9 +196,7 @@ async def _(
 @app.cell
 async def _(embedder, k, mo, query, store):
     _query_vector = (await embedder.embed([query.value]))[0]
-    _hits = await store.vector_search(
-        _query_vector, model_id=embedder.model_id, k=k.value
-    )
+    _hits = await store.vector_search(_query_vector, model_id=embedder.model_id, k=k.value)
 
     _lines = [f"### Vector search — top {k.value}", ""]
     if _hits:

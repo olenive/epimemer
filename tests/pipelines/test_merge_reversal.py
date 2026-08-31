@@ -43,22 +43,32 @@ def embedding_provider() -> MockEmbeddingProvider:
 
 async def _fact(storage, embedding_provider, content: str) -> Fact:
     node = Fact(
-        content=content, source_id="seg-1", claim_kind=ClaimKind.STATE,
+        content=content,
+        source_id="seg-1",
+        claim_kind=ClaimKind.STATE,
         value=ValueSignal(),
     )
     await storage.store_node(node)
     vector = (await embedding_provider.embed([content]))[0]
-    await storage.store_embedding(EmbeddingRecord(
-        item_id=node.id, model_id=embedding_provider.model_id, vector=vector,
-    ))
+    await storage.store_embedding(
+        EmbeddingRecord(
+            item_id=node.id,
+            model_id=embedding_provider.model_id,
+            vector=vector,
+        )
+    )
     return node
 
 
-async def _merge(storage, embedding_provider, sources, content="Bonn is the capital city.",
-                 **kwargs) -> Fact:
+async def _merge(
+    storage, embedding_provider, sources, content="Bonn is the capital city.", **kwargs
+) -> Fact:
     survivor = Fact(
-        content=content, source_id="seg-1", claim_kind=ClaimKind.STATE,
-        value=ValueSignal(), extraction_method="agent:merge",
+        content=content,
+        source_id="seg-1",
+        claim_kind=ClaimKind.STATE,
+        value=ValueSignal(),
+        extraction_method="agent:merge",
         metadata={"merged_from": [s.id for s in sources]},
     )
     await merge_nodes(list(sources), survivor, storage, embedding_provider, **kwargs)
@@ -87,12 +97,20 @@ class TestTheGraphComesBack:
         self, storage, embedding_provider
     ):
         a, b = await _pair(storage, embedding_provider)
-        await storage.store_edge(NodeEdge(
-            src_id=a.id, dst_id="doc-a", type=EdgeType.SOURCED_FROM,
-        ))
-        await storage.store_edge(NodeEdge(
-            src_id=b.id, dst_id="doc-b", type=EdgeType.SOURCED_FROM,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=a.id,
+                dst_id="doc-a",
+                type=EdgeType.SOURCED_FROM,
+            )
+        )
+        await storage.store_edge(
+            NodeEdge(
+                src_id=b.id,
+                dst_id="doc-b",
+                type=EdgeType.SOURCED_FROM,
+            )
+        )
         survivor = await _merge(storage, embedding_provider, [a, b])
 
         result = await reverse_merge(survivor.id, storage)
@@ -103,9 +121,7 @@ class TestTheGraphComesBack:
             node = await storage.get_node(source.id)
             assert node.status is NodeStatus.ACTIVE
             assert node.superseded_at is None
-            edges = await storage.get_edges_from(
-                source.id, edge_type=EdgeType.SOURCED_FROM
-            )
+            edges = await storage.get_edges_from(source.id, edge_type=EdgeType.SOURCED_FROM)
             assert [e.dst_id for e in edges] == [document]
 
     async def test_an_edge_the_merge_collapsed_is_split_back_in_two(
@@ -116,30 +132,35 @@ class TestTheGraphComesBack:
         sources cited the document — and nothing but the payload can."""
         a, b = await _pair(storage, embedding_provider)
         for source in (a, b):
-            await storage.store_edge(NodeEdge(
-                src_id=source.id, dst_id="doc-shared", type=EdgeType.SOURCED_FROM,
-            ))
+            await storage.store_edge(
+                NodeEdge(
+                    src_id=source.id,
+                    dst_id="doc-shared",
+                    type=EdgeType.SOURCED_FROM,
+                )
+            )
         survivor = await _merge(storage, embedding_provider, [a, b])
-        assert len(await storage.get_edges_from(
-            survivor.id, edge_type=EdgeType.SOURCED_FROM
-        )) == 1
+        assert len(await storage.get_edges_from(survivor.id, edge_type=EdgeType.SOURCED_FROM)) == 1
 
         await reverse_merge(survivor.id, storage)
 
         for source in (a, b):
-            edges = await storage.get_edges_from(
-                source.id, edge_type=EdgeType.SOURCED_FROM
-            )
+            edges = await storage.get_edges_from(source.id, edge_type=EdgeType.SOURCED_FROM)
             assert [e.dst_id for e in edges] == ["doc-shared"]
 
     async def test_an_intra_set_edge_comes_back(self, storage, embedding_provider):
         """The merge deletes this one outright rather than re-pointing it, so
         nothing else in this file would notice its loss."""
         a, b = await _pair(storage, embedding_provider)
-        await storage.store_edge(NodeEdge(
-            src_id=a.id, dst_id=b.id, type=EdgeType.RELATED,
-            label="restates", kind="relationship",
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=a.id,
+                dst_id=b.id,
+                type=EdgeType.RELATED,
+                label="restates",
+                kind="relationship",
+            )
+        )
         survivor = await _merge(storage, embedding_provider, [a, b])
 
         await reverse_merge(survivor.id, storage)
@@ -147,15 +168,15 @@ class TestTheGraphComesBack:
         edges = await storage.get_edges_from(a.id, edge_type=EdgeType.RELATED)
         assert [e.dst_id for e in edges] == [b.id]
 
-    async def test_edge_metadata_and_dates_survive_the_cycle(
-        self, storage, embedding_provider
-    ):
+    async def test_edge_metadata_and_dates_survive_the_cycle(self, storage, embedding_provider):
         """`judged_by` will live in edge metadata, so a reversal that replayed
         edges from a partial copy would delete the judge — in the feature whose
         whole purpose is recording one."""
         a, b = await _pair(storage, embedding_provider)
         original = NodeEdge(
-            src_id=a.id, dst_id="topic-capitals", type=EdgeType.TAGGED_WITH,
+            src_id=a.id,
+            dst_id="topic-capitals",
+            type=EdgeType.TAGGED_WITH,
             metadata={"judged_by": "agent-1"},
         )
         await storage.store_edge(original)
@@ -163,15 +184,11 @@ class TestTheGraphComesBack:
 
         await reverse_merge(survivor.id, storage)
 
-        restored = (await storage.get_edges_from(
-            a.id, edge_type=EdgeType.TAGGED_WITH
-        ))[0]
+        restored = (await storage.get_edges_from(a.id, edge_type=EdgeType.TAGGED_WITH))[0]
         assert restored.metadata == {"judged_by": "agent-1"}
         assert restored.created_at == original.created_at
 
-    async def test_the_survivor_and_its_vector_are_gone(
-        self, storage, embedding_provider
-    ):
+    async def test_the_survivor_and_its_vector_are_gone(self, storage, embedding_provider):
         """The vector is stored per item, so deleting the node alone would
         strand an entry the index still returns."""
         a, b = await _pair(storage, embedding_provider)
@@ -193,36 +210,30 @@ class TestTheGraphComesBack:
         a, b = await _pair(storage, embedding_provider)
         drawn = Inference(content="So Bonn is in West Germany.", source_id="seg-1")
         await storage.store_node(drawn)
-        await storage.store_edge(NodeEdge(
-            src_id=drawn.id, dst_id=a.id, type=EdgeType.DERIVED_FROM,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=drawn.id,
+                dst_id=a.id,
+                type=EdgeType.DERIVED_FROM,
+            )
+        )
         survivor = await _merge(storage, embedding_provider, [a, b])
-        assert len(await storage.get_edges_from(
-            a.id, edge_type=EdgeType.EVIDENCE_MERGED
-        )) == 1
+        assert len(await storage.get_edges_from(a.id, edge_type=EdgeType.EVIDENCE_MERGED)) == 1
 
         await reverse_merge(survivor.id, storage)
 
-        premises = await storage.get_edges_from(
-            drawn.id, edge_type=EdgeType.DERIVED_FROM
-        )
+        premises = await storage.get_edges_from(drawn.id, edge_type=EdgeType.DERIVED_FROM)
         assert [e.dst_id for e in premises] == [a.id]
-        assert await storage.get_edges_from(
-            a.id, edge_type=EdgeType.EVIDENCE_MERGED
-        ) == []
+        assert await storage.get_edges_from(a.id, edge_type=EdgeType.EVIDENCE_MERGED) == []
 
-    async def test_the_lineage_edges_the_merge_wrote_are_removed(
-        self, storage, embedding_provider
-    ):
+    async def test_the_lineage_edges_the_merge_wrote_are_removed(self, storage, embedding_provider):
         a, b = await _pair(storage, embedding_provider)
         survivor = await _merge(storage, embedding_provider, [a, b])
 
         await reverse_merge(survivor.id, storage)
 
         for source in (a, b):
-            assert await storage.get_edges_from(
-                source.id, edge_type=EdgeType.MERGED_INTO
-            ) == []
+            assert await storage.get_edges_from(source.id, edge_type=EdgeType.MERGED_INTO) == []
 
 
 class TestNCyclesEqualOne:
@@ -234,13 +245,15 @@ class TestNCyclesEqualOne:
         survivor = await _merge(storage, embedding_provider, sources)
         await reverse_merge(survivor.id, storage)
 
-    async def test_two_cycles_leave_the_same_active_graph_as_one(
-        self, storage, embedding_provider
-    ):
+    async def test_two_cycles_leave_the_same_active_graph_as_one(self, storage, embedding_provider):
         a, b = await _pair(storage, embedding_provider)
-        await storage.store_edge(NodeEdge(
-            src_id=a.id, dst_id="doc-a", type=EdgeType.SOURCED_FROM,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=a.id,
+                dst_id="doc-a",
+                type=EdgeType.SOURCED_FROM,
+            )
+        )
 
         await self._cycle(storage, embedding_provider, [a, b])
         after_one = _signatures(await _all_edges(storage, a.id))
@@ -252,9 +265,7 @@ class TestNCyclesEqualOne:
         assert node.status is NodeStatus.ACTIVE
         assert node.superseded_at is None
 
-    async def test_each_cycle_appends_one_closed_episode(
-        self, storage, embedding_provider
-    ):
+    async def test_each_cycle_appends_one_closed_episode(self, storage, embedding_provider):
         """The record that it happened, which is not a flag and is not
         returned — and is what `merge_cycle_limit` reads."""
         a, b = await _pair(storage, embedding_provider)
@@ -279,8 +290,10 @@ class TestNCyclesEqualOne:
         await self._cycle(storage, embedding_provider, [a, b])
 
         result, _ = await tools.merge_facts(
-            source_ids=[a.id, b.id], content="Bonn is the capital city.",
-            storage=storage, embedding_provider=embedding_provider,
+            source_ids=[a.id, b.id],
+            content="Bonn is the capital city.",
+            storage=storage,
+            embedding_provider=embedding_provider,
         )
 
         assert result["merged"] is False
@@ -308,8 +321,11 @@ class TestTheGuardRefusesRatherThanDestroys:
         first = await _merge(storage, embedding_provider, [a, b], undo_depth=1)
         c = await _fact(storage, embedding_provider, "The capital city is Bonn.")
         await _merge(
-            storage, embedding_provider, [first, c],
-            content="Bonn is the capital city of West Germany.", undo_depth=1,
+            storage,
+            embedding_provider,
+            [first, c],
+            content="Bonn is the capital city of West Germany.",
+            undo_depth=1,
         )
 
         refusal = await reverse_merge(first.id, storage)
@@ -317,14 +333,14 @@ class TestTheGuardRefusesRatherThanDestroys:
         assert isinstance(refusal, ReverseRefused)
         assert "permanent" in refusal.reason
 
-    async def test_a_survivor_merged_again_is_refused(
-        self, storage, embedding_provider
-    ):
+    async def test_a_survivor_merged_again_is_refused(self, storage, embedding_provider):
         a, b = await _pair(storage, embedding_provider)
         first = await _merge(storage, embedding_provider, [a, b])
         c = await _fact(storage, embedding_provider, "The capital city is Bonn.")
         await _merge(
-            storage, embedding_provider, [first, c],
+            storage,
+            embedding_provider,
+            [first, c],
             content="Bonn is the capital city of West Germany.",
         )
 
@@ -334,10 +350,16 @@ class TestTheGuardRefusesRatherThanDestroys:
         assert "merged into" in refusal.reason
         assert "Reverse that merge first" in refusal.reason
 
-    @pytest.mark.parametrize("edge_type", [
-        EdgeType.CONTRADICTION, EdgeType.SIMILARITY, EdgeType.VARIANT_OF,
-        EdgeType.TAGGED_WITH, EdgeType.RELATED,
-    ])
+    @pytest.mark.parametrize(
+        "edge_type",
+        [
+            EdgeType.CONTRADICTION,
+            EdgeType.SIMILARITY,
+            EdgeType.VARIANT_OF,
+            EdgeType.TAGGED_WITH,
+            EdgeType.RELATED,
+        ],
+    )
     async def test_anything_added_since_the_merge_refuses_rather_than_being_deleted(
         self, storage, embedding_provider, edge_type
     ):
@@ -349,9 +371,14 @@ class TestTheGuardRefusesRatherThanDestroys:
         survivor = await _merge(storage, embedding_provider, [a, b])
         later = await _fact(storage, embedding_provider, "Berlin is the capital.")
         added = NodeEdge(
-            src_id=survivor.id, dst_id=later.id, type=edge_type,
-            **({"label": "disputes", "kind": "relationship"}
-               if edge_type is EdgeType.RELATED else {}),
+            src_id=survivor.id,
+            dst_id=later.id,
+            type=edge_type,
+            **(
+                {"label": "disputes", "kind": "relationship"}
+                if edge_type is EdgeType.RELATED
+                else {}
+            ),
         )
         await storage.store_edge(added)
 
@@ -371,9 +398,13 @@ class TestTheGuardRefusesRatherThanDestroys:
         survivor = await _merge(storage, embedding_provider, [a, b])
         later = Inference(content="So the capital moved.", source_id="seg-1")
         await storage.store_node(later)
-        await storage.store_edge(NodeEdge(
-            src_id=later.id, dst_id=survivor.id, type=EdgeType.DERIVED_FROM,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=later.id,
+                dst_id=survivor.id,
+                type=EdgeType.DERIVED_FROM,
+            )
+        )
 
         refusal = await reverse_merge(survivor.id, storage)
 
@@ -384,9 +415,11 @@ class TestTheGuardRefusesRatherThanDestroys:
         a, b = await _pair(storage, embedding_provider)
         survivor = await _merge(storage, embedding_provider, [a, b])
         await tools.update(
-            node_id=survivor.id, new_content="Bonn was the capital city.",
+            node_id=survivor.id,
+            new_content="Bonn was the capital city.",
             because="the_world_changed",
-            storage=storage, embedding_provider=embedding_provider,
+            storage=storage,
+            embedding_provider=embedding_provider,
         )
 
         refusal = await reverse_merge(survivor.id, storage)
@@ -402,9 +435,7 @@ class TestTheGuardRefusesRatherThanDestroys:
 
 
 class TestTheToolSurface:
-    async def test_a_refusal_comes_back_rather_than_raising(
-        self, storage, embedding_provider
-    ):
+    async def test_a_refusal_comes_back_rather_than_raising(self, storage, embedding_provider):
         plain = await _fact(storage, embedding_provider, "Bonn is the capital.")
 
         result, _ = await tools.reverse_merge(survivor_id=plain.id, storage=storage)
@@ -421,7 +452,8 @@ class TestTheToolSurface:
         survivor = await _merge(storage, embedding_provider, [a, b])
 
         result, meta = await tools.reverse_merge(
-            survivor_id=survivor.id, storage=storage,
+            survivor_id=survivor.id,
+            storage=storage,
         )
 
         assert result["survivor_content"] == "Bonn is the capital city."
@@ -430,9 +462,7 @@ class TestTheToolSurface:
 
 
 class TestTheSettingsAreReal:
-    async def test_the_graphs_undo_depth_is_what_a_merge_applies(
-        self, storage, embedding_provider
-    ):
+    async def test_the_graphs_undo_depth_is_what_a_merge_applies(self, storage, embedding_provider):
         """Resolved inside `merge_nodes` rather than at each call site, so a new
         merge path cannot ship with the bound quietly missing."""
         await storage.set_merge_overrides(MergeOverrides(undo_depth=1))
@@ -440,15 +470,15 @@ class TestTheSettingsAreReal:
         first = await _merge(storage, embedding_provider, [a, b])
         c = await _fact(storage, embedding_provider, "The capital city is Bonn.")
         await _merge(
-            storage, embedding_provider, [first, c],
+            storage,
+            embedding_provider,
+            [first, c],
             content="Bonn is the capital city of West Germany.",
         )
 
         assert read_merge_undo(await storage.get_node(first.id)) is None
 
-    async def test_configure_merge_reports_what_is_in_force(
-        self, storage, embedding_provider
-    ):
+    async def test_configure_merge_reports_what_is_in_force(self, storage, embedding_provider):
         result, _ = await tools.configure_merge(storage=storage, cycle_limit=4)
 
         assert result["merge_cycle_limit"] == 4
@@ -464,9 +494,13 @@ class TestTheSettingsAreReal:
         assert result["merge_cycle_limit"] == 2
         assert result["merge_undo_depth"] == 10
 
-    @pytest.mark.parametrize("kwargs", [
-        {"undo_depth": 0}, {"cycle_limit": 0},
-    ])
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"undo_depth": 0},
+            {"cycle_limit": 0},
+        ],
+    )
     async def test_a_setting_below_one_is_refused(self, storage, kwargs):
         """Zero undo depth captures and discards in one breath; zero cycle limit
         refuses the first ordinary correction."""

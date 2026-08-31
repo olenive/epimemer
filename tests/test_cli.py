@@ -7,7 +7,7 @@ an approval that reports success into a store the server never reads is worse
 than a refusal, because the user then believes they have done it.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from epimemer.cli import _confirm, _list, _rename, main, unreachable_store
 from epimemer.core.types import (
@@ -18,8 +18,7 @@ from epimemer.core.types import (
 )
 from epimemer.mcp.config import ServerConfig
 
-
-AT = datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
+AT = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
 
 
 class TestWhereThisCommandCannotReach:
@@ -36,14 +35,10 @@ class TestWhereThisCommandCannotReach:
             assert unreachable_store(config) is not None, url
 
     def test_a_served_surrealdb_is_reachable(self):
-        config = ServerConfig(
-            storage_backend="surrealdb", surrealdb_url="ws://localhost:8000/rpc"
-        )
+        config = ServerConfig(storage_backend="surrealdb", surrealdb_url="ws://localhost:8000/rpc")
         assert unreachable_store(config) is None
 
-    def test_confirm_refuses_rather_than_writing_where_nobody_reads(
-        self, capsys, monkeypatch
-    ):
+    def test_confirm_refuses_rather_than_writing_where_nobody_reads(self, capsys, monkeypatch):
         monkeypatch.setenv("EPIMEMER_STORAGE_BACKEND", "memory")
 
         code = main(["agents", "confirm", "critic"])
@@ -57,7 +52,7 @@ class TestWhereThisCommandCannotReach:
     def test_listing_an_unreachable_store_says_so_before_printing_nothing(
         self, capsys, monkeypatch
     ):
-        """"(none)" from the wrong store reads exactly like "(none)" from the
+        """ "(none)" from the wrong store reads exactly like "(none)" from the
         right one."""
         monkeypatch.setenv("EPIMEMER_STORAGE_BACKEND", "memory")
 
@@ -106,9 +101,7 @@ class TestRenamingAJudge:
         message = await _rename(storage, "Opus 5 Judge", "Opus 5", True)
 
         assert "one judge" in message
-        assert [agent_name(a) for a in live_agents(await storage.list_agents())] == [
-            "Opus 5"
-        ]
+        assert [agent_name(a) for a in live_agents(await storage.list_agents())] == ["Opus 5"]
         assert await storage.get_agent("k1") is not None, "kept, not deleted"
 
     async def test_a_handle_naming_nobody_is_refused(self, storage):
@@ -125,14 +118,14 @@ class TestConfirmingAnId:
         assert await storage.get_approved_agent_ids() == ["critic"]
         assert "No judge here answers to it yet" in message
 
-    async def test_confirming_stamps_the_description_in_front_of_the_user(
-        self, storage
-    ):
-        await storage.upsert_agent(Agent(
-            id="critic",
-            descriptions=with_description([], text="a critic", at=AT),
-            authorised_at=AT,
-        ))
+    async def test_confirming_stamps_the_description_in_front_of_the_user(self, storage):
+        await storage.upsert_agent(
+            Agent(
+                id="critic",
+                descriptions=with_description([], text="a critic", at=AT),
+                authorised_at=AT,
+            )
+        )
 
         message = await _confirm(storage, "critic")
 
@@ -143,14 +136,17 @@ class TestConfirmingAnId:
     async def test_only_the_current_version_is_confirmed(self, storage):
         """A user vouches for the wording they were shown, not for every claim
         the agent has ever made about itself."""
-        await storage.upsert_agent(Agent(
-            id="critic",
-            descriptions=with_description(
-                with_description([], text="an early critic", at=AT),
-                text="a stricter critic", at=AT,
-            ),
-            authorised_at=AT,
-        ))
+        await storage.upsert_agent(
+            Agent(
+                id="critic",
+                descriptions=with_description(
+                    with_description([], text="an early critic", at=AT),
+                    text="a stricter critic",
+                    at=AT,
+                ),
+                authorised_at=AT,
+            )
+        )
 
         await _confirm(storage, "critic")
 
@@ -159,11 +155,13 @@ class TestConfirmingAnId:
         assert agent.descriptions[1].confirmed_at is not None
 
     async def test_confirming_twice_leaves_the_first_confirmation_alone(self, storage):
-        await storage.upsert_agent(Agent(
-            id="critic",
-            descriptions=with_description([], text="a critic", at=AT, confirmed_at=AT),
-            authorised_at=AT,
-        ))
+        await storage.upsert_agent(
+            Agent(
+                id="critic",
+                descriptions=with_description([], text="a critic", at=AT, confirmed_at=AT),
+                authorised_at=AT,
+            )
+        )
 
         await _confirm(storage, "critic")
 
@@ -176,12 +174,14 @@ class TestListing:
         """Said plainly wherever the prose appears: it is the agent's own
         assertion, and the listing is where a human decides what to trust."""
         await storage.set_approved_agent_ids(["critic"])
-        await storage.upsert_agent(Agent(
-            id="critic",
-            descriptions=with_description([], text="a rigorous critic", at=AT),
-            authorised_at=AT,
-            last_seen_at=AT,
-        ))
+        await storage.upsert_agent(
+            Agent(
+                id="critic",
+                descriptions=with_description([], text="a rigorous critic", at=AT),
+                authorised_at=AT,
+                last_seen_at=AT,
+            )
+        )
 
         out = await _list(storage)
 
@@ -247,9 +247,7 @@ class TestRequiringAJudge:
 
         assert "requires a judge: yes" in await _list(storage)
 
-    def test_the_refusal_names_the_right_environment_variable(
-        self, capsys, monkeypatch
-    ):
+    def test_the_refusal_names_the_right_environment_variable(self, capsys, monkeypatch):
         monkeypatch.setenv("EPIMEMER_STORAGE_BACKEND", "memory")
 
         code = main(["agents", "require", "on"])
@@ -277,13 +275,9 @@ class TestDeclaringAFrame:
 
         await storage.store_node(Topic(content="Vienna", source_id="s1"))
         asked: list[str] = []
-        monkeypatch.setattr(
-            "builtins.input", lambda prompt: asked.append(prompt) or "n"
-        )
+        monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt) or "n")
 
-        message = await _declare_frames(
-            storage, BASE_METACONTEXT_ID, None, False
-        )
+        message = await _declare_frames(storage, BASE_METACONTEXT_ID, None, False)
 
         assert "1 unframed node(s)" in asked[0]
         assert "Nothing declared" in message
@@ -295,9 +289,7 @@ class TestDeclaringAFrame:
 
         await storage.store_node(Topic(content="Vienna", source_id="s1"))
 
-        message = await _declare_frames(
-            storage, BASE_METACONTEXT_ID, "the-user", True
-        )
+        message = await _declare_frames(storage, BASE_METACONTEXT_ID, "the-user", True)
 
         assert "declared 1 node(s)" in message
         assert await storage.count_nodes_without_frame() == 0
@@ -326,15 +318,11 @@ class TestDeclaringAFrame:
         from epimemer.cli import _declare_frames
         from epimemer.core.types import BASE_METACONTEXT_ID
 
-        message = await _declare_frames(
-            storage, BASE_METACONTEXT_ID, None, False
-        )
+        message = await _declare_frames(storage, BASE_METACONTEXT_ID, None, False)
 
         assert "Nothing to declare" in message
 
-    def test_it_refuses_a_store_the_server_will_never_read(
-        self, capsys, monkeypatch
-    ):
+    def test_it_refuses_a_store_the_server_will_never_read(self, capsys, monkeypatch):
         """And the refusal has to say the graph is not stuck — an embedded
         graph is rebuilt rather than declared."""
         monkeypatch.setenv("EPIMEMER_STORAGE_BACKEND", "memory")
@@ -345,3 +333,22 @@ class TestDeclaringAFrame:
         assert code == 2
         assert "rebuilt rather than declared" in err
         assert "EPIMEMER_APPROVED_AGENTS" not in err
+
+
+class TestServe:
+    """`epimemer serve` is the launch command an MCP client is given. It is
+    not administration: it opens no store of its own, so the reachability
+    check that guards every other command must not apply to it."""
+
+    def test_serve_runs_the_mcp_server_and_nothing_else(self, monkeypatch):
+        import epimemer.mcp.server as server
+
+        calls: list[tuple] = []
+        monkeypatch.setattr(server.mcp, "run", lambda *a, **k: calls.append((a, k)))
+        monkeypatch.setattr(
+            "epimemer.cli.load_config",
+            lambda: (_ for _ in ()).throw(AssertionError("serve must not load a config")),
+        )
+
+        assert main(["serve"]) == 0
+        assert calls == [((), {})]

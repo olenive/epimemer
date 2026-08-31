@@ -94,26 +94,40 @@ async def _fact(
     # Every fact states a frame, as every ingested one has since the frame requirement — absence
     # names no frame, so two frameless facts share none and nothing here would
     # be nominated at all.
-    await storage.store_edge(NodeEdge(
-        src_id=fact.id, dst_id=BASE_METACONTEXT_ID,
-        type=EdgeType.HAS_METACONTEXT,
-    ))
-    await storage.store_embedding(EmbeddingRecord(
-        item_id=fact.id,
-        model_id=embedding_provider.model_id,
-        vector=vector or _TWIN,
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=fact.id,
+            dst_id=BASE_METACONTEXT_ID,
+            type=EdgeType.HAS_METACONTEXT,
+        )
+    )
+    await storage.store_embedding(
+        EmbeddingRecord(
+            item_id=fact.id,
+            model_id=embedding_provider.model_id,
+            vector=vector or _TWIN,
+        )
+    )
     if publisher is not None:
         document = RawDocument(content=f"the text from {publisher}", source=publisher)
         await storage.store_document(document)
         entity = await _publisher(storage, publisher)
-        await storage.store_edge(NodeEdge(
-            src_id=document.id, dst_id=entity.id, type=EdgeType.RELATED,
-            label="published_by", kind="attribution",
-        ))
-        await storage.store_edge(NodeEdge(
-            src_id=fact.id, dst_id=document.id, type=EdgeType.SOURCED_FROM,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=document.id,
+                dst_id=entity.id,
+                type=EdgeType.RELATED,
+                label="published_by",
+                kind="attribution",
+            )
+        )
+        await storage.store_edge(
+            NodeEdge(
+                src_id=fact.id,
+                dst_id=document.id,
+                type=EdgeType.SOURCED_FROM,
+            )
+        )
     return fact
 
 
@@ -126,13 +140,15 @@ async def _framed(storage, fact: Fact, label: str) -> str:
     """
     frame = Metacontext(content=label)
     await storage.store_metacontext(frame)
-    for edge in await storage.get_edges_from(
-        fact.id, edge_type=EdgeType.HAS_METACONTEXT
-    ):
+    for edge in await storage.get_edges_from(fact.id, edge_type=EdgeType.HAS_METACONTEXT):
         await storage.delete_edge(edge.id)
-    await storage.store_edge(NodeEdge(
-        src_id=fact.id, dst_id=frame.id, type=EdgeType.HAS_METACONTEXT,
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=fact.id,
+            dst_id=frame.id,
+            type=EdgeType.HAS_METACONTEXT,
+        )
+    )
     return frame.id
 
 
@@ -162,13 +178,9 @@ class TestBothVerdictsSuppressAndOnlyOneCorroborates:
     Every other test in this file is a boundary case around these four.
     """
 
-    async def test_one_claim_writes_similarity_and_assessed(
-        self, storage, embedding_provider
-    ):
+    async def test_one_claim_writes_similarity_and_assessed(self, storage, embedding_provider):
         a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
-        b = await _fact(
-            storage, embedding_provider, "the deployment failed", publisher="Reuters"
-        )
+        b = await _fact(storage, embedding_provider, "the deployment failed", publisher="Reuters")
 
         outcome = await _decide(storage, a, b, "one_claim", "same claim; both events")
 
@@ -180,9 +192,7 @@ class TestBothVerdictsSuppressAndOnlyOneCorroborates:
         """The load-bearing half. A `similarity` edge here would have the graph
         counting *"these are different claims"* as a second source."""
         a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
-        b = await _fact(
-            storage, embedding_provider, "the rollback failed", publisher="Reuters"
-        )
+        b = await _fact(storage, embedding_provider, "the rollback failed", publisher="Reuters")
 
         outcome = await _decide(storage, a, b, "distinct", "different runs")
 
@@ -196,9 +206,7 @@ class TestBothVerdictsSuppressAndOnlyOneCorroborates:
         """Two publishers saying one thing is two independent witnesses — the
         number `merge_facts` refusing an event would otherwise have cost."""
         a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
-        b = await _fact(
-            storage, embedding_provider, "the deployment failed", publisher="Reuters"
-        )
+        b = await _fact(storage, embedding_provider, "the deployment failed", publisher="Reuters")
         assert await _count(storage, a) == 1
 
         await _decide(storage, a, b, "one_claim")
@@ -206,13 +214,9 @@ class TestBothVerdictsSuppressAndOnlyOneCorroborates:
         assert await _count(storage, a) == 2
         assert await _count(storage, b) == 2
 
-    async def test_distinct_leaves_corroboration_alone(
-        self, storage, embedding_provider
-    ):
+    async def test_distinct_leaves_corroboration_alone(self, storage, embedding_provider):
         a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
-        b = await _fact(
-            storage, embedding_provider, "the rollback failed", publisher="Reuters"
-        )
+        b = await _fact(storage, embedding_provider, "the rollback failed", publisher="Reuters")
 
         await _decide(storage, a, b, "distinct")
 
@@ -231,8 +235,8 @@ class TestThePairStopsComingBack:
     async def test_an_unjudged_pair_is_nominated(self, storage, embedding_provider):
         """The control. Without it the two below prove only that something
         broke nomination generally."""
-        a = await _fact(storage, embedding_provider, "the deploy failed")
-        b = await _fact(storage, embedding_provider, "the deployment failed")
+        await _fact(storage, embedding_provider, "the deploy failed")
+        await _fact(storage, embedding_provider, "the deployment failed")
 
         assert len(await self._nominations(storage, embedding_provider)) == 1
 
@@ -245,9 +249,7 @@ class TestThePairStopsComingBack:
 
         assert await self._nominations(storage, embedding_provider) == []
 
-    async def test_a_third_unjudged_fact_is_still_nominated(
-        self, storage, embedding_provider
-    ):
+    async def test_a_third_unjudged_fact_is_still_nominated(self, storage, embedding_provider):
         """Suppression is per pair, not per node. A node that has been judged
         once must not go quiet about everything else it resembles."""
         a = await _fact(storage, embedding_provider, "the deploy failed")
@@ -258,7 +260,8 @@ class TestThePairStopsComingBack:
 
         pairs = await self._nominations(storage, embedding_provider)
         assert {frozenset({x.id, y.id}) for x, y, _ in pairs} == {
-            frozenset({a.id, c.id}), frozenset({b.id, c.id})
+            frozenset({a.id, c.id}),
+            frozenset({b.id, c.id}),
         }
 
     async def test_a_variant_pair_was_already_suppressed_and_still_is(
@@ -268,9 +271,13 @@ class TestThePairStopsComingBack:
         always been a judgment about a pair; it simply was not read as one."""
         a = await _fact(storage, embedding_provider, "the ring was destroyed")
         b = await _fact(storage, embedding_provider, "the ring was destroyed")
-        await storage.store_edge(NodeEdge(
-            src_id=a.id, dst_id=b.id, type=EdgeType.VARIANT_OF,
-        ))
+        await storage.store_edge(
+            NodeEdge(
+                src_id=a.id,
+                dst_id=b.id,
+                type=EdgeType.VARIANT_OF,
+            )
+        )
 
         assert await self._nominations(storage, embedding_provider) == []
 
@@ -294,16 +301,10 @@ class TestAJudgmentIsAnchoredToTheWordingItWasMadeAgainst:
         not a relationship to follow out of a node during retrieval."""
         from epimemer.core.types import traversal_excluded
 
-        assert traversal_excluded(
-            NodeEdge(src_id="a", dst_id="b", type=EdgeType.ASSESSED)
-        )
-        assert not traversal_excluded(
-            NodeEdge(src_id="a", dst_id="b", type=EdgeType.SIMILARITY)
-        )
+        assert traversal_excluded(NodeEdge(src_id="a", dst_id="b", type=EdgeType.ASSESSED))
+        assert not traversal_excluded(NodeEdge(src_id="a", dst_id="b", type=EdgeType.SIMILARITY))
 
-    async def test_it_is_not_counted_as_structural_support(
-        self, storage, embedding_provider
-    ):
+    async def test_it_is_not_counted_as_structural_support(self, storage, embedding_provider):
         """Archival reads in-degree as *what depends on this*. Somebody having
         looked at a pair is not something depending on either node."""
         from epimemer.pipelines.reflection.archival import knowledge_in_degree_for
@@ -321,9 +322,7 @@ class TestWhatIsRefusedRatherThanGuessedAt:
     silently not recorded is the whole of the `assessed` edge, so this module does not have the
     option of failing that way."""
 
-    async def test_an_unknown_verdict_is_reported_not_defaulted(
-        self, storage, embedding_provider
-    ):
+    async def test_an_unknown_verdict_is_reported_not_defaulted(self, storage, embedding_provider):
         """Defaulting would pick one of two writes that differ in exactly the
         way this module exists to keep apart, for an agent that said neither."""
         a = await _fact(storage, embedding_provider, "the deploy failed")
@@ -345,9 +344,7 @@ class TestWhatIsRefusedRatherThanGuessedAt:
         assert "because" in outcome.reason
         assert await _edge_types_between(storage, a, b) == set()
 
-    async def test_a_node_paired_with_itself_is_refused(
-        self, storage, embedding_provider
-    ):
+    async def test_a_node_paired_with_itself_is_refused(self, storage, embedding_provider):
         a = await _fact(storage, embedding_provider, "the deploy failed")
 
         outcome = await apply_similarity_decision(
@@ -378,7 +375,9 @@ class TestWhichNodesMayCarryAJudgment:
         graph is offering a claim beside its own predecessor."""
         a = await _fact(storage, embedding_provider, "the city is Saint Petersburg")
         b = await _fact(
-            storage, embedding_provider, "the city is Leningrad",
+            storage,
+            embedding_provider,
+            "the city is Leningrad",
             status=NodeStatus.HISTORICAL,
         )
 
@@ -389,15 +388,11 @@ class TestWhichNodesMayCarryAJudgment:
     @pytest.mark.parametrize(
         "status", [NodeStatus.CORRECTED, NodeStatus.ARCHIVED, NodeStatus.MERGED]
     )
-    async def test_anything_never_nominated_is_refused(
-        self, storage, embedding_provider, status
-    ):
+    async def test_anything_never_nominated_is_refused(self, storage, embedding_provider, status):
         """A judgment recorded here suppresses nothing that could have been
         offered — and a `similarity` edge would still be counted as support."""
         a = await _fact(storage, embedding_provider, "the deploy failed")
-        b = await _fact(
-            storage, embedding_provider, "the deployment failed", status=status
-        )
+        b = await _fact(storage, embedding_provider, "the deployment failed", status=status)
 
         outcome = await _decide(storage, a, b, "distinct")
 
@@ -411,9 +406,7 @@ class TestTheCrossFrameCase:
     which is the difference between the two being kept apart and them being kept
     apart *and counted*."""
 
-    async def test_one_claim_across_frames_is_refused(
-        self, storage, embedding_provider
-    ):
+    async def test_one_claim_across_frames_is_refused(self, storage, embedding_provider):
         a = await _fact(storage, embedding_provider, "the ring was destroyed")
         b = await _fact(storage, embedding_provider, "the ring was destroyed")
         await _framed(storage, a, "Tolkien")
@@ -425,9 +418,7 @@ class TestTheCrossFrameCase:
         assert "record_variant" in outcome.reason
         assert await _edge_types_between(storage, a, b) == set()
 
-    async def test_distinct_across_frames_is_recorded(
-        self, storage, embedding_provider
-    ):
+    async def test_distinct_across_frames_is_recorded(self, storage, embedding_provider):
         """`assessed` corroborates nothing, so there is no reason to make the
         agent choose between recording its judgment and being accurate."""
         a = await _fact(storage, embedding_provider, "the ring was destroyed")
@@ -450,31 +441,23 @@ class TestReplayAndReversal:
     writer, and the direction it can travel is deliberately one-way.
     """
 
-    async def test_replaying_a_decision_writes_nothing_new(
-        self, storage, embedding_provider
-    ):
+    async def test_replaying_a_decision_writes_nothing_new(self, storage, embedding_provider):
         a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
-        b = await _fact(
-            storage, embedding_provider, "the deployment failed", publisher="Reuters"
-        )
+        b = await _fact(storage, embedding_provider, "the deployment failed", publisher="Reuters")
         await _decide(storage, a, b, "one_claim")
 
         again = await _decide(storage, a, b, "one_claim")
 
         assert isinstance(again, SimilarityRecorded)
         assert again.edges_created == 0
-        assert await _count(storage, a) == 2      # not 3: one edge, not two
+        assert await _count(storage, a) == 2  # not 3: one edge, not two
 
-    async def test_distinct_after_one_claim_withdraws_it(
-        self, storage, embedding_provider
-    ):
+    async def test_distinct_after_one_claim_withdraws_it(self, storage, embedding_provider):
         """Nothing in this system deletes, this call included — so the
         `similarity` edge stays and a second edge stops it counting. The
         same shape `contradiction` already has, one judgment along."""
         a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
-        b = await _fact(
-            storage, embedding_provider, "the deployment failed", publisher="Reuters"
-        )
+        b = await _fact(storage, embedding_provider, "the deployment failed", publisher="Reuters")
         await _decide(storage, a, b, "one_claim")
 
         outcome = await _decide(storage, a, b, "distinct", "on reflection, different")
@@ -482,18 +465,16 @@ class TestReplayAndReversal:
         assert isinstance(outcome, SimilarityRecorded)
         assert outcome.retracted is True
         assert await _edge_types_between(storage, a, b) == {
-            "similarity", "assessed", "retracted_similarity",
+            "similarity",
+            "assessed",
+            "retracted_similarity",
         }
 
-    async def test_the_count_comes_back_to_where_it_started(
-        self, storage, embedding_provider
-    ):
+    async def test_the_count_comes_back_to_where_it_started(self, storage, embedding_provider):
         """The number is the point. A verdict that could not be walked back left
         a count nobody could explain and nothing could correct."""
         a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
-        b = await _fact(
-            storage, embedding_provider, "the deployment failed", publisher="Reuters"
-        )
+        b = await _fact(storage, embedding_provider, "the deployment failed", publisher="Reuters")
         assert await _count(storage, a) == 1
 
         await _decide(storage, a, b, "one_claim")
@@ -503,30 +484,22 @@ class TestReplayAndReversal:
 
         assert await _count(storage, a) == 1
 
-    async def test_a_withdrawal_leaves_the_pair_suppressed(
-        self, storage, embedding_provider
-    ):
+    async def test_a_withdrawal_leaves_the_pair_suppressed(self, storage, embedding_provider):
         """A retraction changes what corroboration counts and nothing else. The
         agent has now judged this pair twice; re-offering it would restart the
         treadmill the `assessed` edge closed."""
         a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
-        b = await _fact(
-            storage, embedding_provider, "the deployment failed", publisher="Reuters"
-        )
+        b = await _fact(storage, embedding_provider, "the deployment failed", publisher="Reuters")
         await _decide(storage, a, b, "one_claim")
         await _decide(storage, a, b, "distinct", "on reflection, different")
 
         assert "assessed" in await _edge_types_between(storage, a, b)
 
-    async def test_repeating_a_withdrawal_decides_nothing_new(
-        self, storage, embedding_provider
-    ):
+    async def test_repeating_a_withdrawal_decides_nothing_new(self, storage, embedding_provider):
         """Otherwise a retried batch journals a second withdrawal, and the
         record reads as two agents disowning the pair on separate occasions."""
         a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
-        b = await _fact(
-            storage, embedding_provider, "the deployment failed", publisher="Reuters"
-        )
+        b = await _fact(storage, embedding_provider, "the deployment failed", publisher="Reuters")
         await _decide(storage, a, b, "one_claim")
         await _decide(storage, a, b, "distinct", "on reflection, different")
 
@@ -542,9 +515,7 @@ class TestReplayAndReversal:
         one over a withdrawal **invents agreement**, which does not lose
         information — it inverts the quantity corroboration measures."""
         a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
-        b = await _fact(
-            storage, embedding_provider, "the deployment failed", publisher="Reuters"
-        )
+        b = await _fact(storage, embedding_provider, "the deployment failed", publisher="Reuters")
         await _decide(storage, a, b, "one_claim")
         await _decide(storage, a, b, "distinct", "on reflection, different")
 
@@ -555,16 +526,12 @@ class TestReplayAndReversal:
         assert "merge_facts" in outcome.reason
         assert await _count(storage, a) == 1
 
-    async def test_one_claim_after_distinct_upgrades_the_pair(
-        self, storage, embedding_provider
-    ):
+    async def test_one_claim_after_distinct_upgrades_the_pair(self, storage, embedding_provider):
         """The direction that *is* additive: `assessed` already says the pair
         was judged, and `similarity` is added beside it. Append-only, so the
         two records never disagree about what happened, only about when."""
         a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
-        b = await _fact(
-            storage, embedding_provider, "the deployment failed", publisher="Reuters"
-        )
+        b = await _fact(storage, embedding_provider, "the deployment failed", publisher="Reuters")
         await _decide(storage, a, b, "distinct")
 
         outcome = await _decide(storage, a, b, "one_claim", "they are the same run")
@@ -578,9 +545,7 @@ class TestTheEdgeCarriesWhyItWasWritten:
     """Until the decision journal lands (step 5) this is the only record of the
     reasoning, and it is immutable, so §3.4 permits the denormalisation."""
 
-    async def test_the_verdict_and_reason_ride_on_the_edge(
-        self, storage, embedding_provider
-    ):
+    async def test_the_verdict_and_reason_ride_on_the_edge(self, storage, embedding_provider):
         a = await _fact(storage, embedding_provider, "the deploy failed")
         b = await _fact(storage, embedding_provider, "the rollback failed")
 
@@ -588,7 +553,8 @@ class TestTheEdgeCarriesWhyItWasWritten:
 
         edges = await storage.get_edges_from(a.id, edge_type=EdgeType.ASSESSED)
         assert edges[0].metadata == {
-            "verdict": "distinct", "because": "different runs of the pipeline"
+            "verdict": "distinct",
+            "because": "different runs of the pipeline",
         }
 
 
@@ -599,13 +565,12 @@ class TestTheToolSurface:
 
     async def test_a_batch_records_and_reports(self, storage, embedding_provider):
         a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
-        b = await _fact(
-            storage, embedding_provider, "the deployment failed", publisher="Reuters"
-        )
+        b = await _fact(storage, embedding_provider, "the deployment failed", publisher="Reuters")
         c = await _fact(storage, embedding_provider, "unrelated")
 
         result, meta = await tools.apply_reflection(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             similarities=[
                 {"pair": [a.id, b.id], "verdict": "one_claim", "because": "same run"},
                 {"pair": [a.id, c.id], "verdict": "sort_of", "because": "hmm"},
@@ -624,7 +589,8 @@ class TestTheToolSurface:
         b = await _fact(storage, embedding_provider, "the rollback failed")
 
         result, _ = await tools.apply_reflection(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             similarities=[
                 {"pair": [a.id, "nope"], "verdict": "distinct", "because": "x"},
                 {"pair": [a.id, b.id], "verdict": "distinct", "because": "different"},
@@ -645,7 +611,8 @@ class TestTheToolSurface:
         winner = await _fact(storage, embedding_provider, "the deploy was cancelled")
 
         result, _ = await tools.apply_reflection(
-            storage, embedding_provider,
+            storage,
+            embedding_provider,
             similarities=[
                 {"pair": [a.id, b.id], "verdict": "distinct", "because": "different"},
             ],
@@ -662,18 +629,26 @@ class TestTheToolSurface:
         assert await _edge_types_between(storage, winner, b) == set()
 
 
-async def _topic(storage, embedding_provider, content: str,
-                 *, vector: list[float] | None = None) -> Topic:
+async def _topic(
+    storage, embedding_provider, content: str, *, vector: list[float] | None = None
+) -> Topic:
     """One stored, embedded topic. Vector supplied for the reason `_fact` gives."""
     topic = Topic(content=content, source_id="seg-1", value=ValueSignal())
     await storage.store_node(topic)
-    await storage.store_edge(NodeEdge(
-        src_id=topic.id, dst_id=BASE_METACONTEXT_ID, type=EdgeType.HAS_METACONTEXT,
-    ))
-    await storage.store_embedding(EmbeddingRecord(
-        item_id=topic.id, model_id=embedding_provider.model_id,
-        vector=vector or _TWIN,
-    ))
+    await storage.store_edge(
+        NodeEdge(
+            src_id=topic.id,
+            dst_id=BASE_METACONTEXT_ID,
+            type=EdgeType.HAS_METACONTEXT,
+        )
+    )
+    await storage.store_embedding(
+        EmbeddingRecord(
+            item_id=topic.id,
+            model_id=embedding_provider.model_id,
+            vector=vector or _TWIN,
+        )
+    )
     return topic
 
 
@@ -694,13 +669,13 @@ class TestATopicPairStopsComingBackToo:
 
     async def _nominations(self, storage, embedding_provider):
         return await find_similar_topic_pairs(
-            storage, embedding_provider, model_id=embedding_provider.model_id,
+            storage,
+            embedding_provider,
+            model_id=embedding_provider.model_id,
             similarity_threshold=0.85,
         )
 
-    async def test_an_unjudged_topic_pair_is_nominated(
-        self, storage, embedding_provider
-    ):
+    async def test_an_unjudged_topic_pair_is_nominated(self, storage, embedding_provider):
         """The control, for the reason the fact-pair control exists."""
         await _topic(storage, embedding_provider, "design-decisions")
         await _topic(storage, embedding_provider, "design decisions")
@@ -708,9 +683,7 @@ class TestATopicPairStopsComingBackToo:
         assert len(await self._nominations(storage, embedding_provider)) == 1
 
     @pytest.mark.parametrize("verdict", ["one_claim", "distinct"])
-    async def test_a_judged_topic_pair_is_not(
-        self, storage, embedding_provider, verdict
-    ):
+    async def test_a_judged_topic_pair_is_not(self, storage, embedding_provider, verdict):
         a = await _topic(storage, embedding_provider, "design-decisions")
         b = await _topic(storage, embedding_provider, "design decisions")
 
@@ -720,9 +693,7 @@ class TestATopicPairStopsComingBackToo:
 
         assert await self._nominations(storage, embedding_provider) == []
 
-    async def test_a_third_unjudged_topic_is_still_nominated(
-        self, storage, embedding_provider
-    ):
+    async def test_a_third_unjudged_topic_is_still_nominated(self, storage, embedding_provider):
         """Suppression is per pair here as well. A tag judged against one
         spelling must not go quiet about every other topic it resembles."""
         a = await _topic(storage, embedding_provider, "design-decisions")
@@ -735,7 +706,8 @@ class TestATopicPairStopsComingBackToo:
 
         pairs = await self._nominations(storage, embedding_provider)
         assert {frozenset({x.id, y.id}) for x, y, _ in pairs} == {
-            frozenset({a.id, c.id}), frozenset({b.id, c.id})
+            frozenset({a.id, c.id}),
+            frozenset({b.id, c.id}),
         }
 
 
@@ -767,8 +739,7 @@ def _pair_nominating_sweeps() -> dict[str, str]:
     sweep written later — was the one thing it could not do.
     """
     return {
-        name: source for name, source in _reflection_sources().items()
-        if "pair_scoring" in source
+        name: source for name, source in _reflection_sources().items() if "pair_scoring" in source
     }
 
 
@@ -790,12 +761,15 @@ class TestEverySweepReadsTheOneSuppression:
         assertion below vacuously true — which is the failure mode of deriving
         rather than listing, and the reason it is checked."""
         assert set(_pair_nominating_sweeps()) == {
-            "contradiction_detection", "inference_dedup", "topic_consolidation"
+            "contradiction_detection",
+            "inference_dedup",
+            "topic_consolidation",
         }
 
     def test_every_one_of_them_calls_the_shared_read(self):
         missing = [
-            name for name, source in _pair_nominating_sweeps().items()
+            name
+            for name, source in _pair_nominating_sweeps().items()
             if "already_judged_pairs" not in source
         ]
         assert missing == [], (
@@ -811,7 +785,8 @@ class TestEverySweepReadsTheOneSuppression:
         a third time. Scans the whole package, not the sweeps: a copy is just as
         harmful wherever it is put."""
         defining = sorted(
-            name for name, source in _reflection_sources().items()
+            name
+            for name, source in _reflection_sources().items()
             if "ALREADY_JUDGED_EDGE_TYPES: tuple" in source
         )
         assert defining == ["similarity_decisions"]

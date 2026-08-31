@@ -25,12 +25,11 @@ than re-derived at every call site.
 """
 
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-
 
 # --- Endpoints ---
 #
@@ -78,7 +77,7 @@ class PreciseInstant(BaseModel):
         already makes, and making it at construction beats making it in every
         consumer.
         """
-        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 class NamedInstant(BaseModel):
@@ -139,7 +138,7 @@ class IntervalBasis(str, Enum):
     marked: a value for it would make it storable.
     """
 
-    STATED = "stated"      # dates present in the text
+    STATED = "stated"  # dates present in the text
     INFERRED = "inferred"  # from tense, context, or two sources read together
 
 
@@ -189,7 +188,7 @@ class ValidityInterval(BaseModel):
     basis: IntervalBasis
 
     @model_validator(mode="after")
-    def _reject_self_contradiction(self) -> "ValidityInterval":
+    def _reject_self_contradiction(self) -> ValidityInterval:
         problem = interval_inconsistency(self)
         if problem is not None:
             raise ValueError(problem)
@@ -357,7 +356,7 @@ def validity_at(
     grounds.
     """
     if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
+        moment = moment.replace(tzinfo=UTC)
     return (
         ValidityVerdict.VALID
         if any(
@@ -369,9 +368,7 @@ def validity_at(
     )
 
 
-def assertions_are_disjoint(
-    a: Sequence[ValidityInterval], b: Sequence[ValidityInterval]
-) -> bool:
+def assertions_are_disjoint(a: Sequence[ValidityInterval], b: Sequence[ValidityInterval]) -> bool:
     """Whether every period asserted of `a` provably falls clear of every one of `b`.
 
     The rule behind T1 §11's soundness check, and the reason it is written here
@@ -403,8 +400,7 @@ def assertions_are_disjoint(
     if not a or not b:
         return False
     return all(
-        compare_intervals(one, other)
-        in (TemporalRelation.BEFORE, TemporalRelation.AFTER)
+        compare_intervals(one, other) in (TemporalRelation.BEFORE, TemporalRelation.AFTER)
         for one in a
         for other in b
     )
@@ -418,8 +414,8 @@ def assertions_are_disjoint(
 # unbounded end is the end of it. Sentinels rather than infinities because
 # datetimes and floats do not compare, and no arithmetic is ever done on them.
 
-_BEGINNING_OF_TIME = datetime.min.replace(tzinfo=timezone.utc)
-_END_OF_TIME = datetime.max.replace(tzinfo=timezone.utc)
+_BEGINNING_OF_TIME = datetime.min.replace(tzinfo=UTC)
+_END_OF_TIME = datetime.max.replace(tzinfo=UTC)
 
 
 def _start_position(instant: ImpreciseInstant) -> datetime | None:
@@ -500,9 +496,9 @@ def _reaches_no_later_than(earlier: datetime | None, later: datetime | None) -> 
 
 def _definitely_contains(interval: ValidityInterval, moment: datetime) -> bool:
     """Whether the interval's own endpoints put `moment` inside it, half-open."""
-    return _reaches_no_later_than(
-        _start_position(interval.start), moment
-    ) and _strictly_earlier(moment, _end_position(interval.end))
+    return _reaches_no_later_than(_start_position(interval.start), moment) and _strictly_earlier(
+        moment, _end_position(interval.end)
+    )
 
 
 def _definitely_holds_at(interval: ValidityInterval, moment: datetime) -> bool:
@@ -522,9 +518,9 @@ def _definitely_holds_at(interval: ValidityInterval, moment: datetime) -> bool:
     unknown, and this is the reach of an inside bound rather than a new endpoint.
     """
     witness = located(interval.witnessed_at)
-    at_or_after_start = _reaches_no_later_than(
-        _start_position(interval.start), moment
-    ) or (witness is not None and witness <= moment)
+    at_or_after_start = _reaches_no_later_than(_start_position(interval.start), moment) or (
+        witness is not None and witness <= moment
+    )
     before_end = _strictly_earlier(moment, _end_position(interval.end)) or (
         witness is not None and moment <= witness
     )
@@ -544,9 +540,9 @@ def _definitely_overlap(a: ValidityInterval, b: ValidityInterval) -> bool:
     one endpoint from the inside, and an inside bound can show a period reaches a
     moment but never that it stops before one.
     """
-    if _strictly_earlier(
-        _start_position(a.start), _end_position(b.end)
-    ) and _strictly_earlier(_start_position(b.start), _end_position(a.end)):
+    if _strictly_earlier(_start_position(a.start), _end_position(b.end)) and _strictly_earlier(
+        _start_position(b.start), _end_position(a.end)
+    ):
         return True
 
     witness_a, witness_b = located(a.witnessed_at), located(b.witnessed_at)

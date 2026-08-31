@@ -9,15 +9,14 @@ from collections.abc import Awaitable, Callable, Sequence
 from pydantic import BaseModel
 
 from epimemer.core.types import (
+    SUPERSEDED_STATUSES,
     EdgeType,
     EpistemicNode,
     Inference,
     NodeEdge,
     NodeStatus,
-    SUPERSEDED_STATUSES,
 )
 from epimemer.storage.protocol import StorageBackend
-
 
 # How similar two facts must be before the loop will offer them to each other as
 # candidates (§5.1). **Every nomination path and the merge gate read this one
@@ -68,7 +67,7 @@ async def review_labels_for(
     nodes: Sequence[EpistemicNode],
     storage: StorageBackend,
     *,
-    resolve_frames: "FrameResolver | None" = None,
+    resolve_frames: FrameResolver | None = None,
 ) -> dict[str, dict[str, list[str]]]:
     """Review labels for many nodes at once, keyed by node id (§4.1).
 
@@ -158,9 +157,7 @@ async def review_labels_for(
         labels: dict[str, list[str]] = {}
 
         if candidates[node.id]:
-            labels["superseded_candidate"] = _unique(
-                [e.src_id for e in candidates[node.id]]
-            )
+            labels["superseded_candidate"] = _unique([e.src_id for e in candidates[node.id]])
 
         if isinstance(node, Inference):
             stale_sources = [e.src_id for e in flagged_stale[node.id]]
@@ -174,9 +171,7 @@ async def review_labels_for(
             if stale_sources:
                 labels["evidence_stale"] = _unique(stale_sources)
             if flagged_merged[node.id]:
-                labels["evidence_merged"] = _unique(
-                    [e.src_id for e in flagged_merged[node.id]]
-                )
+                labels["evidence_merged"] = _unique([e.src_id for e in flagged_merged[node.id]])
 
         contesting: list[str] = []
         for edge in list(contradicts_from[node.id]) + list(contradicts_to[node.id]):
@@ -199,7 +194,7 @@ async def review_labels(
     node: EpistemicNode,
     storage: StorageBackend,
     *,
-    resolve_frames: "FrameResolver | None" = None,
+    resolve_frames: FrameResolver | None = None,
 ) -> dict[str, list[str]]:
     """Epistemic review labels for one active node (REVIEW_EPISTEMIC.md §4.1).
 
@@ -209,14 +204,12 @@ async def review_labels(
     the rules and which this is the one-node spelling of; prefer that one when
     labelling a set, so the queries are shared across it.
     """
-    return (
-        await review_labels_for([node], storage, resolve_frames=resolve_frames)
-    ).get(node.id, {})
+    return (await review_labels_for([node], storage, resolve_frames=resolve_frames)).get(
+        node.id, {}
+    )
 
 
-async def frames_for(
-    node_ids: Sequence[str], storage: StorageBackend
-) -> dict[str, set[str]]:
+async def frames_for(node_ids: Sequence[str], storage: StorageBackend) -> dict[str, set[str]]:
     """`frames_of` for many nodes at once, keyed by node id.
 
     **This got materially more expensive when frames became explicit**,
@@ -235,10 +228,7 @@ async def frames_for(
     tagged = await storage.get_edges_for(
         node_ids, direction="from", edge_type=EdgeType.HAS_METACONTEXT
     )
-    return {
-        node_id: {edge.dst_id for edge in edges}
-        for node_id, edges in tagged.items()
-    }
+    return {node_id: {edge.dst_id for edge in edges} for node_id, edges in tagged.items()}
 
 
 async def frames_of(node_id: str, storage: StorageBackend) -> set[str]:
@@ -267,7 +257,7 @@ async def frames_of(node_id: str, storage: StorageBackend) -> set[str]:
 
 def frame_resolver(
     storage: StorageBackend, *, seed: dict[str, set[str]] | None = None
-) -> "FrameResolver":
+) -> FrameResolver:
     """A `frames_of` that answers each node once.
 
     Frame checks are made per *pair* — of contradiction candidates, of
@@ -301,7 +291,7 @@ async def same_frame(
     b_id: str,
     storage: StorageBackend,
     *,
-    resolve: "FrameResolver | None" = None,
+    resolve: FrameResolver | None = None,
 ) -> bool:
     """Whether two nodes share at least one stated metacontext frame.
 
@@ -457,7 +447,5 @@ async def find_candidate_edge_ids_into(
     These are cleared when the node is resolved (superseded) — the candidacy has
     been decided.
     """
-    edges = await storage.get_edges_to(
-        node_id, edge_type=EdgeType.SUPERSESSION_CANDIDATE
-    )
+    edges = await storage.get_edges_to(node_id, edge_type=EdgeType.SUPERSESSION_CANDIDATE)
     return [edge.id for edge in edges]

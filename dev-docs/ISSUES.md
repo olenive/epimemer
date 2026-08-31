@@ -266,13 +266,13 @@ whole corpus on every invocation or stands up a database server to avoid it.
 Re-ingest is not a fallback here: ingest is LLM-driven, so the cost is a model
 call per document *every time*, not just the first.
 
-**Why it is being raised now.** a client task (see
-`~/Documents/notes/`) would use Epimemer's retrieval for
-a developer command-line tool. Two things follow. A tool that requires a
-database server to be stood up is a worse tool than one that does not, and
-would be marked as such. And SurrealDB's *server* is distributed under the
-Business Source License — source-available rather than OSI-approved — which is
-an awkward runtime dependency to hand over inside a deliverable delivered under contract. Neither problem exists if the local store can write to a file.
+**Why it matters.** A developer command-line tool built on Epimemer's
+retrieval runs as a command and exits. Two things follow. A tool that requires
+a database server to be stood up is a worse tool than one that does not. And
+SurrealDB's *server* is distributed under the Business Source License —
+source-available rather than OSI-approved — which is an awkward runtime
+dependency to hand over inside a deliverable. Neither problem exists if the
+local store can write to a file.
 
 **Smallest fix: serialise `_GraphStore` and reload it.** This is persistence
 for an existing backend, not a new backend, so the rule about implementing the
@@ -295,12 +295,6 @@ more work.
    schema change, which matters because a stale snapshot silently loading into
    a newer type is the failure mode that is hardest to notice.
 
-**Timing has a consequence beyond the schedule.** Built before any a client
-contract starts, this is our own prior work and stays ours. Built during one,
-it would be a contract deliverable, and
-publishing it back to our own repository would need the client's consent. That is a reason to do it early rather than a
-reason to hurry it.
-
 #### The licence premise did not survive checking — 2026-08-26
 
 **Corrected: nothing shipped is BSL, so the second reason above does not hold.**
@@ -318,6 +312,9 @@ permissive and ubiquitous, while the Business Source License is
 | Mixed, GPL-flagged | 1 | `docutils` — "Public Domain; BSD; GPL", predominantly public domain, and a docs tool |
 | No metadata | 5 | `caio`, `loro`, `mistralai` (all via `pydantic-ai`), plus `epimemer` itself |
 | **Source-available / restricted (BSL, SSPL, Elastic)** | **0** | **none** |
+
+`pydantic-ai` left the dependencies on 2026-08-30 — nothing imported it — and
+took the three unlabelled packages with it.
 
 **The BSL applies to the SurrealDB server binary, which is not a Python package
 and is not shipped.** Connecting over `ws://` means *running* BSL software,
