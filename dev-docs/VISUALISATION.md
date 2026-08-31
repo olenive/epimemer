@@ -360,45 +360,15 @@ graph": the tool names the session to select in the UI dropdown.
   hold :8765 — `pkill -f epimemer.mcp.server` once, or `epimemer-viz --status`
   will report the stranger on the port.
 
-## A.9 Tests (write first, per ISSUES.md workflow)
+## A.9 Tests
 
-`tests/visualization/test_hub.py`:
-- register → session appears in `/api/sessions`; disconnect → `connected:
-  false`.
-- event published on ingest socket fans out to a browser ws with `session_id`
-  injected and per-connection `seq`.
-- browser subscribed to session A receives nothing from session B.
-- RPC round-trip: hub `/api/snapshot?session=X` → `RpcRequest` on ingest →
-  canned `RpcResponse` → HTTP body; timeout → 504.
-- bind-race: second hub run against an occupied port with a healthy hub exits
-  0; against a non-hub listener exits 1.
+Built with the hub: `tests/visualization/test_hub.py`, `test_hub_client.py`,
+and the `viz_status` / `backend_name` coverage in `tests/mcp/` and the
+storage suite (parameterised over both backends).
 
-`tests/visualization/test_hub_client.py`:
-- client connects to a fake hub (in-test websocket server), registers, forwards
-  a bus event, answers a `list_graphs` RPC from `InMemoryStorage`.
-- reconnect: kill the fake hub, restart it, client re-registers.
-- unreachable hub: exactly one stderr/error line, then silence at debug level.
+## A.10 Commit sequence
 
-`tests/mcp/`:
-- `viz_status` tool returns session/backend/graph with a live fake hub and
-  `hub_reachable: false` without one.
-- `backend_name` present on both storage backends (parameterized `storage`
-  fixture, per the backend-parity rule in ISSUES.md).
-
-Manual QA: start two MCP servers (one surrealdb, one default mem://) →
-`epimemer-viz --status` shows both sessions → browser selector switches between
-them; kill one → greys out; `pkill` the hub → next tool call on either server
-respawns it (autospawn) and sessions reconnect.
-
-## A.10 Suggested commit sequence
-
-1. `protocol.py` + `backend_name` on the storage protocol (+ tests).
-2. Hub server + CLI + pidfile (+ tests).
-3. Hub client + reconnect (+ tests).
-4. MCP lifespan rewire + autospawn + `viz_status` tool; delete embedded path
-   and `ws_server.py`; migrate its tests.
-5. Frontend session selector + rebuild static bundle.
-6. Docs + ISSUES.md updates.
+Landed in six steps, protocol first, frontend last. `git log` has it.
 
 ---
 
@@ -538,34 +508,13 @@ glyph is a genuine miniature of what clicking reveals:
 
 ## B.6 Tests / verification
 
-> **Superseded 2026-07-28.** This section said "there is no frontend test
-> harness; keep it that way for now" — that was the state when the plan was
-> written, and the pure-function shape it prescribed is exactly what made the
-> harness cheap to add later. There is now a vitest suite (`make test-frontend`)
-> over `pipeline-store.ts`, `events.ts` and `api.ts`; the rendering modules are
-> still covered by `tsc` and the manual QA script below.
+State transitions live in `pipeline-store.ts` as pure functions and are
+covered by the vitest suite (`make test-frontend`); the rendering modules are
+covered by `tsc` and manual QA against a live server.
 
-Keep logic testable-by-inspection:
+## B.7 Commit sequence
 
-- All state transitions live in `pipeline-store.ts` as pure functions
-  (event in → new state out), separated from DOM code.
-- `make test-frontend` (type-check + vitest) must pass.
-- Manual QA script (run against a live server): call `segment` on a multi-
-  paragraph text → segmentation tile animates, counter increments, ends
-  "1 run"; call `store_decomposition` → edge_creation tile animates while
-  segmentation tile stays; call `search` → retrieval tile; click each tile →
-  detail matches today's full rendering incl. token badges; press Esc; load a
-  different graph snapshot → tiles unchanged; kill/restart hub (if Part A) →
-  tiles grey-pulse then resume.
-
-## B.7 Suggested commit sequence
-
-1. `pipeline-store.ts` + pure event application (incl. itemsProcessed).
-2. Layout swap in `index.html`/`main.ts` (graph on top, empty strip, split-pane
-   deleted) — UI still builds and graph panel works.
-3. Tiles + mini glyph rendering + live overlay.
-4. Detail view refactor (`pipeline-detail.ts`) + click/Esc wiring.
-5. Polish: collapse toggle, gap-staleness, failed-run styling; rebuild bundle.
+Landed in five steps: store, layout swap, tiles, detail view, polish.
 
 ---
 

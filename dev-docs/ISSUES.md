@@ -151,11 +151,10 @@ catches a class the suite structurally cannot.
 🟡 **Open**, waiting on a real case. The dual of the rule that made declines
 recordable in the first place; `RELATION_LABELS.md` §4.2 states the label half.
 
-**Filed because the reasoning already exists in three places and has no number
-of its own**, which is the state that loses it. `RELATION_LABELS.md` §4.2 states
-it, `RELATION_LABELS.md` states it, and `similarity_decisions.py` states the
-fact-layer half in as many words — but those entries are pruned when their
-stages finish, and the argument would go with it.
+**Filed because the reasoning was scattered and had no entry of its own**,
+which is the state that loses it: `RELATION_LABELS.md` §4.2 states the label
+half and `similarity_decisions.py` the fact half, but those notes are pruned
+as stages finish, and the argument would go with them.
 
 **The rule and its dual.** The lesson that produced verdicts is *a sweep recomputed from current
 state that records no declines is a futile cycle by construction*: it re-offers
@@ -400,7 +399,8 @@ and nothing outside the standard library and numpy is needed.
   fabricated, every prior derived from it overstates and nothing can sweep per
   source, because support levels live on the node rather than on the
   `sourced_from` edge. Accepted and recorded rather than built; the provenance
-  edge is where it would go. Also stated in `SUMMARY.md`.
+  edge is where it would go (see `PROPOSED_FEATURES.md` → *Per-source support
+  levels*).
 
 **Guidance produces a `confidence_basis` without being enforced.** Measured
 2026-08-21 over both real graphs: 163 of 163 rated non-default nodes carry one,

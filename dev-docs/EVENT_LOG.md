@@ -337,57 +337,21 @@ one.
 
 ## 8. Tests, written first
 
-Per the `ISSUES.md` workflow — each named test failing for its stated reason
-before the code that satisfies it.
-
-- `test_node_status_changed_names_the_superseding_node` — §2, on the live event.
-  Must be shown failing first; it is the whole reason the example does not work.
-  **Built with counterpart ids (2026-08-17), as was the durable one below and §6's
-  N-cycle episode test.**
-- `test_query_changes_names_the_superseding_node` — §2, durable path.
-- `test_supersede_publishes_one_action_for_four_events` — §3.1: the coarse event
-  is emitted once per transaction, not once per write. **Built 2026-08-18**
-  (`tests/visualization/test_graph_actions.py`).
-- `test_action_ids_are_monotonic_across_browser_reconnects` — §4.1. A
-  `seq`-based implementation passes every other test here and fails this one.
-  **Built 2026-08-18** (`tests/visualization/test_hub.py`, where two browser
-  sockets make the claim checkable).
-- `test_ring_evicts_oldest_and_backfills_on_subscribe` — §4.2, bounded and
-  replayable. **Built 2026-08-18**; the pure ring has its own module tests in
-  `tests/visualization/test_ring.py`.
-- `test_log_filters_by_verb_and_substring` — §5, pure, no DOM. **Built
-  2026-08-18** (`log-store.test.ts`).
-- `test_query_changes_reports_every_episode_of_a_recurring_node` — §6 revised:
-  retire a node as HISTORICAL, restore it, retire it again; windows spanning
-  each transition report all three events with the right kinds. A scalar
-  `(superseded_at, status)` implementation — or a scalar `restored_at` —
-  loses one of them and fails.
-- `test_highlight_reports_an_id_absent_from_the_graph` — §7.1. **Built
-  2026-08-18** (`graph-panel.test.ts`).
-- `test_highlight_clears_a_conflicting_type_filter` — §7.2. **Built 2026-08-18**
-  (same file). Both are written against pure functions rather than a live
-  cytoscape instance — see §11.6.
-
-Storage is untouched, so the unit suite covers this; no integration run needed
-beyond what §2's durable-path change requires.
+Written failing-first; built 2026-08-17/18 across
+`tests/visualization/test_graph_actions.py`, `test_hub.py`, `test_ring.py`,
+`log-store.test.ts` and `graph-panel.test.ts`. Two are worth naming:
+`test_action_ids_are_monotonic_across_browser_reconnects`, which a
+`seq`-based implementation passes every other test here and fails (§4.1);
+and `test_query_changes_reports_every_episode_of_a_recurring_node`, which a
+scalar `(superseded_at, status)` implementation fails by losing an episode
+(§6).
 
 ---
 
 ## 9. Commit sequence
 
-1. Counterpart id on `NodeStatusChanged` and `events_in_window` (§2).
-   Independent of everything else here, and worth landing alone.
-   **Done — counterpart ids, 2026-08-17.**
-2. `GraphActionRecorded` + emission at the transaction boundaries (§3.1).
-   **Done 2026-08-18.**
-3. The bounded ring module, pure, with tests. **Done 2026-08-18.**
-4. Hub-side instance + backfill on subscribe (§4.2). **Done 2026-08-18.**
-5. Log panel: rendering and filters (§5). **Done 2026-08-18.**
-6. Click-to-highlight, both silent-failure fixes, bidirectional selection (§7).
-   **Done 2026-08-18.**
-
-Steps 1–3 change nothing a user sees. Step 4 is where the panel becomes
-possible.
+Landed 2026-08-17/18 in six commits; the first three changed nothing a user
+sees. `git log` has the sequence.
 
 ---
 

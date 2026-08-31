@@ -430,106 +430,16 @@ human-in-the-loop; no metacontext association; inferences never revisited.
 
 ## 10. Phased plan
 
-**Phase 1 — Full atomicity (foundation; resume in-progress work)**
-- `write_batch_tx(*, nodes, edges, embeddings)` primitive — pure-insert,
-  all-or-nothing. Protocol + InMemory (snapshot/restore) + SurrealDB (one
-  `BEGIN…COMMIT`) + InstrumentedStorage (delegate + events). Rollback tests both
-  backends.
-- `store_decomposition` → accumulate the whole document, write once (atomic per
-  document).
-- `apply_reflection parents`/`splits` → plan then batch-write atomically.
-
-**Phase 2 — Unified review loop**
-- 2a. ✅ **Done.** Vocabulary: edge types `supersession_candidate`,
-  `evidence_superseded`, `variant_of`, `based_on` added; edge categories
-  `REVIEW_EDGE_TYPES` / `NON_KNOWLEDGE_EDGE_TYPES` defined and wired into edge
-  migration (both backends) + default traversal exclusion; reserved base
-  metacontext (`BASE_METACONTEXT_ID` + `ensure_base_metacontext`). (`contradiction`
-  edge type already existed; it gets *created* in 2b.)
-- 2b.1. ✅ **Done.** Resolution backbone: `supersede(old, by=existing)` (storage
-  `supersede_by_existing_tx` both backends + wrapper, domain `supersede_by_existing`,
-  tool `supersede_by`, MCP); **Case B** propagation (`evidence_superseded` flags on
-  direct dependent inferences) folded atomically into *both* supersede paths;
-  candidate-edge clearing on supersession. Helpers in
-  `pipelines/reflection/review.py` (`plan_evidence_stale_edges`,
-  `find_candidate_edge_ids_into`). **Merge joined them 2026-08-21** with
-  its own flag — `plan_evidence_merged_edges`, carried into `merge_nodes_tx` on
-  both backends and the wrapper. Both planners now share
-  `dependent_inference_ids`, so "what depends on this fact" is answered in one
-  place; the two events differ only in the edge they write.
-- 2b.2. ✅ **Done.** Detection & recording tools (all opt-in, agent-driven):
-  - `frames_of(node_id, storage)` / `same_frame(a, b, storage)` in `review.py` —
-    metacontexts of a node, treating untagged as `BASE_METACONTEXT_ID`; two nodes
-    share a frame if their frame sets overlap (untagged⇒base, so two untagged are
-    same-frame; disjoint frames are not).
-  - `check_conflicts(fact_ids, storage, embedding_provider, *,
-    threshold=SIMILARITY_NOMINATION_THRESHOLD, k=5)` — per fact, vector-search
-    active facts (exclude self) above threshold;
-    returns candidates with score + the candidate's metacontext labels + same-frame
-    flag. Tool + MCP. Opt-in; the agent calls it on freshly-ingested facts.
-    *(The threshold was a literal 0.83 here and 0.80 in reflect's sweeps until
-    2026-08-21; it is one constant at 0.80 now, the single nomination bar.)*
-  - `record_contradiction(a_id, b_id, storage)` — idempotent `contradiction` edge
-    (one per pair, either direction); both stay active; returns `notify_user`
-    (= same-frame) and a warning when cross-frame. Tool + MCP.
-  - `record_variant(a_id, b_id, storage)` — idempotent `variant_of` edge; warns
-    when the pair shares a frame. Tool + MCP.
-  - `reflect` frame-aware sweep: `detect_contradictions` output filtered to keep
-    only same-frame pairs (safety net for anything ingest missed).
-  - Edge dedup helper `_ensure_symmetric_edge`; `_metacontext_labels` factored out
-    of `search`. Tests: frame helpers + `check_conflicts` + both record tools +
-    frame-aware `reflect` (382 passing).
-- 2c. ✅ **Done.** Retrieval visibility: `review_labels(node, storage)` in
-  `review.py` derives `superseded_candidate` (incoming `supersession_candidate`),
-  `evidence_stale` (inference with `evidence_superseded` flag and/or `derived_from`
-  a SUPERSEDED fact), and `contested` (a `contradiction` to an ACTIVE same-frame
-  node — cleared once the partner is retired or if cross-frame), each mapped to
-  the related node ids. Surfaced as a `review` field on `search` and `query_graph`
-  results, alongside `metacontexts`. `search` is now frame-scoped: a
-  `metacontext_id` returns that frame **plus** untagged base-reality nodes, with
-  `cross_frame=True` to opt out (MCP exposes it). `_metacontext_labels` reused.
-- 2d. ✅ **Done.** Resolution: `supersede_by`/`record_contradiction` (2b) plus
-  `gather_pending_review(storage)` in `review.py` (active nodes carrying review
-  labels) surfaced as `reflect`'s `pending_review` worklist, and a batch
-  resolution action `apply_reflection(supersessions=[{old_id, by_id}])` that calls
-  `supersede_by_existing` per pair (atomic; Case-B flagging + candidate clearing;
-  missing/self pairs skipped). Resolving the loser auto-clears the winner's
-  `contested`/`superseded_candidate` labels (computed from active partners). MCP
-  exposes both.
-- 2e. ✅ **Done.** Agent guidance rewritten in `epimemer_prompts/DEFAULT.md`:
-  current ingest flow (`segment`→`store_decomposition`), the detect→classify→record
-  loop (`check_conflicts` + verdict→tool table), review labels at retrieval,
-  `reflect`'s `pending_review` + `apply_reflection supersessions`, frame-scoped
-  search/`cross_frame`, and human-in-the-loop (notify on same-frame contradictions,
-  propose-and-approve on frame-crossing). Prose only; the file is not loaded by
-  code or tests.
-
-**Phase 3 — Integration tests (opt-in, low priority) ✅**
-- `tests/storage/test_surrealdb_integration.py`: real `ws://` SurrealDB run,
-  skipped unless `EPIMEMER_SURREAL_WS_URL` points at a reachable server (no
-  connection attempted by default — not a CI gate). Covers connection/auth and
-  transaction atomicity under genuine concurrency (separate ws connections):
-  concurrent write-batches all commit, a colliding batch rolls back fully while
-  good ones commit, concurrent supersedes on distinct nodes apply cleanly. Each
-  test uses a unique throwaway database, dropped on teardown. Verified green
-  against `surrealdb/surrealdb:latest` in Docker.
-
-**Phase 4 — Refresh `epimemer-docs` graph ✅**
-- The review-loop design (this document, distilled to grounded prose) ingested
-  into `epimemer-docs` via `segment` → `store_decomposition`, tagged with the
-  existing `epimemer-repo-docs` metacontext: 15 topics, 55 facts, 2 inferences,
-  207 edges (graph now 420 nodes / 1097 edges). The graph previously held only the
-  pre-review-loop design (it still listed "contradictions" as an *open* question);
-  it now carries the unified loop, verdict taxonomy, review labels, edge types,
-  metacontext/"The Real" model, detection (Case A/B), resolution, and decisions.
-- Note: the *running* MCP server predates the review-loop code, so the new tools
-  (`check_conflicts`, `supersede_by`, frame-scoped `search`) aren't live until it
-  is restarted. Once restarted, running `check_conflicts` on the new design facts
-  would surface (and `supersede_by` could resolve) the now-stale "open question"
-  nodes about contradiction handling — the review loop applied to its own memory.
-
-Checkpoints: the suite stays green and the user commits at each phase boundary;
-each step is independently reviewable.
+All four phases are built: atomic `write_batch_tx` on both backends; the
+unified review loop (the vocabulary and edge types, `supersede_by` with
+evidential-staleness propagation, the detection and recording tools, review
+labels on retrieval, `pending_review` with batch `supersessions`, and the
+agent guidance); the opt-in `ws://` integration suite; and the
+`epimemer-docs` graph refresh. The detection thresholds were later unified
+into the single nomination bar (0.80). Note that some details in this
+document's earlier sections predate later decisions — in particular, an
+untagged node no longer reads as base reality (absence names no frame) — and
+the current behaviour is stated in `docs/`.
 
 ---
 

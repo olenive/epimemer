@@ -341,91 +341,18 @@ the focus panel exists to show.
 
 ## 7. Tests, written first
 
-Per the `ISSUES.md` workflow — each named test failing for its stated reason
-before the code that satisfies it.
+Written failing-first per the ISSUES.md workflow; they live in
+`tests/storage/test_bm25.py`, `tests/mcp/` and the integration suite. Two
+assertion corrections from review are worth keeping:
 
-**The headline test, and it should be written first of all:**
-
-```
-test_search_finds_an_identifier_vector_search_cannot
-```
-
-Store facts containing `JIRA-4417` and `JIRA-4418` plus filler; search
-`"JIRA-4417"`; assert the right one is returned and the near-miss is not. This
-must be shown failing on today's vector-only path — it is the whole reason the
-feature exists, and a version of it that passes before the change is testing
-nothing.
-
-> **Revised (2026-08-17, review): the assertion is about seeds, not the whole
-> result.** Both ticket facts share a source document, so at `graph_hops ≥ 2`
-> the near-miss is *legitimately* reachable from the right seed (fact →
-> document → sibling fact) — that is expansion doing its job, and "the
-> near-miss is not returned" would fail against correct behaviour. Exact
-> match and related-by-connection are different provenances (§6), so assert
-> in those terms: `JIRA-4417`'s fact is present **as a lexical seed**;
-> `JIRA-4418`'s fact is **not a seed of any kind** (it may appear only as
-> `expanded`). True at every hop count, and it pins the actual claim —
-> lexical discriminates 4417 from 4418 — rather than a side effect.
->
-> **Corrected again at construction (2026-08-18):** "not a seed of any kind"
-> was still too strong — the *vector* arm may legitimately seed the near-miss
-> (they embed alike; lexical does not control the vector top-k, and on the
-> test corpus the vector ranking included both tickets). The assertion as
-> built: 4417 **is** a lexical seed, 4418 **is not** — shown failing on the
-> vector-only tree. §11.8.
-
-Then:
-
-- `test_bm25_idf_is_zero_for_a_term_in_most_of_the_corpus` — the §2.5 rule, on
-  the memory backend, as a pure-function test of the scorer.
-- `test_text_search_agrees_across_backends_on_a_rare_term` — set parity (§4).
-  Integration, gated on `SURREAL_PORT`.
-- `test_rrf_promotes_a_rank_one_lexical_hit` — pure, no storage.
-- `test_text_search_is_or_across_terms` — guards the §2.4 trap. *(Revised
-  2026-08-17: was `test_lexical_terms_are_or_not_and`, which as written could
-  assert through fused `search` and pass vacuously — the vector arm supplies
-  results even when a conjunctive lexical arm returns `[]`.)* Integration,
-  against **`text_search` directly**, parametrized over both backends
-  (SurrealDB gated on `SURREAL_PORT`): seed facts containing `deployment` and
-  none containing `zzzznotpresent`; `terms=["deployment", "zzzznotpresent"]`
-  returns the deployment docs (a single-`@@` implementation returns `[]` and
-  fails), **and** each doc's score equals its score for
-  `terms=["deployment"]` alone — an absent term contributes zero rather than
-  blocking. Never route this test through `search`.
-- `test_segment_hit_bridges_to_its_extracted_nodes` — the §1.1 paraphrase case:
-  the ID exists only in the segment, and the node is still returned.
-- `test_search_response_labels_seed_provenance` — §6.
-- `test_fts_index_is_defined_for_every_node_table` — schema guard, integration.
-- `test_zero_scored_matches_never_reach_fusion` — §10 R1: a term above the IDF
-  clamp matches rows but contributes nothing to the fused result. Pure on the
-  memory scorer; integration on the adapter.
-- `test_declared_term_top_hit_survives_overlapping_lists` — §10 R2: identifier
-  at lexical rank 1, a vector list of `k` nodes that all also appear in the
-  lexical list; the identifier's node is still returned. Pure RRF fails this
-  test — that is the point of it.
-- `test_prose_query_without_terms_adds_no_lexical_noise` — §10 R3: a query of
-  only common words, no `terms`; the result set equals the vector-only result.
-- `test_same_term_clamps_in_one_table_and_scores_in_another` — §10 R5: a term
-  in more than half the facts but few topics scores `0.0` in the fact list and
-  positively in the topic list, on both backends. Pins the per-type zero rule;
-  a single-corpus memory implementation fails it.
-- `test_a_corrected_node_is_not_a_lexical_seed` — §10 R7: a CORRECTED node
-  containing the searched identifier is not returned, by either arm, on either
-  backend. The index-only implementation (no status clause) fails it.
-- `test_segment_bridge_respects_the_status_gate` — §10 R7: a segment hit whose
-  only extracted node is CORRECTED bridges to nothing (the segment itself may
-  still be reported).
-- `test_an_exact_containing_hit_survives_zero_scored_tokens` — §10 R8, the
-  §11.2 rescue: a corpus where every document says `JIRA`; declared term
-  `JIRA-4417`; the exact document returns even where the term's BM25 score
-  is ≤ 0. Asserted at the fusion level, both backends — the engine-level
-  divergence test stays as the pin of engine truth beneath it.
-- `test_exact_containment_outranks_scattered_cooccurrence` — §10 R8: a
-  document containing the literal `JIRA-4417` outranks one containing `JIRA`
-  and `4417` apart, for the declared term.
-- `test_a_longer_identifier_is_not_a_containment_match` — §10 R8's boundary
-  half: `JIRA-44170` is not returned for declared `JIRA-4417` — the token
-  match excludes it from candidacy before containment is ever checked.
+- The headline test (`test_search_finds_an_identifier_vector_search_cannot`)
+  asserts in provenance terms — `JIRA-4417`'s fact is present **as a lexical
+  seed** and `JIRA-4418`'s is **not a lexical seed** — because at
+  `graph_hops ≥ 2` the near-miss is legitimately reachable by expansion, and
+  the vector arm may legitimately seed it too (§11.8).
+- OR-across-terms is asserted against `text_search` directly, never through
+  fused `search`, where the vector arm would let a conjunctive implementation
+  pass vacuously.
 
 Storage protocol changes mean `make test-integration SURREAL_PORT=8123` runs
 alongside the unit suite.
@@ -434,17 +361,9 @@ alongside the unit suite.
 
 ## 8. Commit sequence
 
-1. `text_search` on the protocol + memory backend BM25 + pure-function tests.
-2. `text_search` on the SurrealDB adapter + analyzer/index schema + parity
-   tests.
-3. `get_nodes_by_source` on both backends.
-4. RRF fusion helper, pure, with tests.
-5. The lexical transition and fusion in the query net; `SeedProvenance` carried
-   through to `QueryResult`.
-6. `search` wiring: segment corpus, `segments` key in the response, docstring.
-
-Each is independently green. Nothing before step 5 changes what `search`
-returns, so the first four can land without touching agent-visible behaviour.
+Landed 2026-08-18 in six commits, each independently green; nothing before
+the query-net wiring changed what `search` returns. `git log` has the
+sequence.
 
 ---
 

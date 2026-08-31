@@ -38,222 +38,27 @@ Claim an entry by name in your commit message.
 
 ## Built and merged
 
-Kept here, reduced to a pointer, until the next backlog review — the design
-documents they name are the record.
+Each of these shipped; the named design document is the record.
 
-### Retrieval provenance — built
-
-**Built 2026-08-18**, merged to `main` the same day.
-`RETRIEVAL_PROVENANCE.md` §10 holds the construction notes — the five further
-tools the coverage oracle found, the producer-side payload guard, the
-desaturation rule shared by both panels; what follows is the original rationale.
-
-**What.** A focus mode that desaturates everything the last retrieval did *not*
-return — in both panels, with the dimmed nodes still clickable — plus the
-response text the agent received, reachable from a list of recent retrievals.
-
-**Fully designed already** — `RETRIEVAL_PROVENANCE.md`. Read that rather than
-this paragraph.
-
-**Why.** The dashboard shows what is in the graph. It cannot show what the agent
-was given, which is the question you have when a search disappoints. The
-non-returned nodes stay on screen because half the value is seeing what was
-*missed*.
-
-**Cost.** One recording site (`_run_with_timeout` covers every tool, which
-turned out to be **fourteen** carrying node ids rather than six), a bounded ring
-plus an RPC, and two panels learning one appearance rule. Six commits; the first
-three change nothing a user sees.
-
-**Blockers.** None, but two ordering constraints: `LEXICAL_SEARCH.md` should
-land first (it turns the provenance enum from two values into four), and the
-bounded-ring module is shared with the event log, which is the simpler consumer
-and validates it.
-
----
-
-### Event log — built
-
-**Built 2026-08-18**, merged to `main` the same day. `EVENT_LOG.md` §11
-holds the construction notes — the seventh verb the no-`superseded` rule forced,
-the rail-not-a-column layout ruling, the ring sizing; what follows is the
-original rationale.
-
-**What.** A filterable log panel of what the agent changed, whose entries
-highlight their nodes in the graph on click.
-
-**Fully designed already** — `EVENT_LOG.md`. Read that rather than this
-paragraph.
-
-**Why.** Supersession is a destructive-looking act performed invisibly: a belief
-the graph held becomes historical, the agent decided it, and nothing shows. This
-is the queued feature with the clearest epistemic justification.
-
-**It started with a defect, now fixed.** `NodeStatusChanged` did not name the
-superseding node, and neither did `query_changes`. Filed as counterpart ids and
-**resolved 2026-08-17**: Counterpart ids on both surfaces, with the append-only
-lifecycle-episode list from `EVENT_LOG.md` §6. The panel itself
-(`EVENT_LOG.md` §9 steps 2–6) followed on 2026-08-18.
-
-**Cost.** A coarse per-transaction event, a bounded ring in the hub, a panel.
-Six commits; the first three change nothing a user sees. No storage work, and
-the filtering is client-side — deliberately not BM25, for the reason in
-`EVENT_LOG.md` §5.
-
-**Blockers.** None. Shares its bounded-ring module with retrieval provenance
-(`RETRIEVAL_PROVENANCE.md`), which is the argument for building this one
-first — it is the simpler consumer and it validates the ring.
-
----
-
-### Lexical search — built
-
-**Built 2026-08-18**, merged to `main` the same day. `LEXICAL_SEARCH.md`
-§11 holds the construction notes — engine-dialect negotiation, the
-embedded-core IDF divergence, the no-stemming ruling; what follows is the
-original rationale.
-
-**What.** BM25 keyword retrieval over nodes *and* segments, fused into `search`
-alongside the existing vector path by Reciprocal Rank Fusion.
-
-**Fully designed already** — `LEXICAL_SEARCH.md`, including the SurrealDB 3.0
-syntax and BM25 scoring behaviour verified against the running engine. Read that
-rather than this paragraph.
-
-**Why.** `search` is vector-only, and sentence embeddings cannot find an
-arbitrary identifier: `JIRA-4417` and `JIRA-4418` embed to nearly the same
-point. There is no substring or token match anywhere in the storage protocol, so
-a node reachable only by a rare token is unreachable. Indexing segments as well
-as nodes covers the case where extraction paraphrased the identifier away
-before it ever reached a node.
-
-**Cost.** One new protocol method on both backends (SurrealDB uses native FTS;
-the memory backend needs BM25 in Python), a second for the segment→node bridge,
-a new transition and a fusion step in the query net. Six commits, each green
-alone; the first four change nothing agent-visible.
-
-**Sequencing.** Should land *before* retrieval provenance
-(`RETRIEVAL_PROVENANCE.md`). That feature's record distinguishes two seed
-tiers today and four once lexical exists; designing it as a boolean first
-means rebuilding it after.
-
-**Blockers.** None.
-### Review mode and agent attribution — built
-
-**Built 2026-08-22 and 2026-08-23**, every step. `REVIEW_MODE.md` is the design
-and the record; §10's build order is ✅ throughout and §12.1 states that no
-design question remains open.
-
-**What.** An agent registry, a judge recorded on every decision the system
-makes, a decision journal, and a `review()` loop whose modes run from *the
-uncertain ones* to *all of them*. The use case is a second agent auditing a
-first agent's work — and it is what makes *"a different agent reviewed this"*
-something a graph can show rather than something an agent asserts.
-
-**What shipped, in one line each:** merge reversal with its pre-merge partition
-capture and cycle limit; `apply_reflection(similarities=…)` and the `assessed`
-edge, which stopped the re-nomination treadmill; the agent registry with
-approval reaching a person rather than the agent; the judge threaded through
-every reflect-side and ingest write path, with a per-graph requirement setting
-that ships default-off; the decision journal; and `review()` with its modes,
-ordering, filters, `apply_review` and `rejudge`.
-
-**Two things were scoped out here and built later** as `reframe` and
-`correct_interval`: a metacontext assignment that could not be withdrawn, and a
-validity interval that could not be corrected. Both were kept out of `rejudge`,
-on the grounds that the split is about **addressing** rather than naming.
-### Inference merge, advisories and warning settings — built
-
-**Built 2026-08-28.** `WARNINGS_AND_SETTINGS.md` is the record, reduced to what
-the code cannot say for itself.
-
-What shipped: `merge_inferences(source_ids, content)` beside `merge_facts`;
-`reflect`'s eleventh nominee list, `inference_merge_candidates`, scoped to
-inferences sharing a premise; a general `Advisory` facility with a per-graph
-`WarningPolicy` and the `configure_warnings` tool; and
-`DecisionKind.PROCEEDED_DESPITE_ADVISORY` with `review(mode="advisory")` reading
-it back — which is what turned that mode from a refusal into a selection.
-
-**Two things the entry got wrong before it was built, both recorded because they
-changed the design.** The first reading treated a merge's premise union as a
-*fabrication* and concluded inferences must never merge; it is not, because the
-agent writes fresh content over the combined premises, so disjoint premises make
-the result genuinely unsound rather than falsely flagged — which is what made a
-pre-decision warning the right shape instead of a refusal. And the measured
-*"zero pairs at the nomination bar"* was a fact about a corpus with no merges in
-it: the population appeared the same day facts started merging.
-
-**Two pieces are deliberately still unbuilt** and are below: similar-inference
-edges, and getting advisories onto the dashboard.
-
----
-
-### The missing notebooks — built
-
-**Built 2026-08-28.** `00_foundation.py` (the three node types, the store,
-vector search, and a type diagram) and `07_timelines_metacontext.py` (frames
-against periods — which world a claim is about, versus when it held).
-
-**`08_orchestration.py` was not written, and should not be.** `06_orchestration`
-already covers the orchestration net; a second notebook on the same subject
-would duplicate it. What it needed was fixing, not doubling — it offered an
-`ingest` action the net has never had and looked for an `IngestInput` place that
-does not exist, so it raised on load. Fixed in the same visit.
-
-**That defect is why `test_every_notebook_runs` exists.** `test_notebooks.py`
-had named this class as out of reach — *"a notebook whose imports are fine but
-whose body reads something gone still passes"* — on the grounds that catching it
-needs execution, and execution needs providers, storage and a runtime. It turns
-out to need none of those: marimo compiles the dataflow into each cell's
-signature and final `return`, so running the cells in file order with a stub for
-the UI reproduces what marimo does, and the notebooks build their own in-memory
-store. The check caught two bugs in `00_foundation.py` as it was written.
-
-**The remaining gaps are 02 and 05** — decomposition and reflection — deleted
-when they broke rather than repaired. Reflection is the larger loss: it is the
-subsystem hardest to understand from the code, and it now has no notebook at
-all. Not filed as work here until somebody wants it.
-
----
-
-
----
-
-### Benchmark coverage — built
-
-**Built 2026-08-29.** `BENCHMARKS.md` is the record; what follows is only what
-the measurements changed about the entry that asked for them.
-
-What shipped, all on `scripts/bench.py`: a `diverse` corpus with planted
-restatement clusters (`--corpus`, `--duplicate-groups`, `--duplicate-size`), a
-dating pass (`--dated-share`) and a premises-per-inference dial
-(`--facts-per-segment`), embedding throughput measured on its own, a per-phase
-breakdown of `reflect` (`--reflect-phases`), and a `corpus` record emitted on
-every run so a cost figure never again stands without the corpus it was taken
-over.
-
-**The entry asked for a diverse corpus and the obvious build would have been
-wrong.** Widening the vocabulary does not reach real prose: survival steps from
-1.13% to 0.0% between a 17-word bag and a 200-word one with nothing in between,
-because what survives a pair scorer is shared phrasing and a random generator
-never restates anything. Duplicates have to be **planted**, which makes the
-surviving-pair population an input rather than a property of the generator that
-nobody chose — and that is what let the near-duplicate worst case named in
-`BENCHMARKS.md` finally be measured. It moves `reflect` by 5%.
-
-**Two of the gaps turned out to be answered by the measurement rather than
-confirmed by it.** The soundness phase's share was expected not to survive the
-move to a networked backend; it falls from 8.3% to 6.6%, because everything
-around it pays round-trips too, and `contradiction_detection` is what grows.
-And the soundness check's quadratic part, flagged as unmeasured with a warning
-that *"small in every case described" is how a ceiling gets missed*, buys 1.7×
-the cost for 39× the comparisons — the per-premise fetch dominates it until an
-inference rests on a couple of hundred dated premises.
-
-**One gap is left and it is a deployment, not code**: a remote, non-loopback
-SurrealDB. Two others were *added* by the work — a claim-duplicate corpus that
-was ingested rather than planted, and whether the surviving-pair rate moves with
-graph size — both in `BENCHMARKS.md` → *Not yet measured*.
+- **Retrieval provenance** (2026-08-18) — focus mode, response records, the
+  `retrievals` RPC. `RETRIEVAL_PROVENANCE.md`.
+- **Event log** (2026-08-18) — the per-transaction activity log with
+  click-to-highlight. `EVENT_LOG.md`.
+- **Lexical search** (2026-08-18) — BM25 beside the vector arm, RRF fusion,
+  the segment corpus. `LEXICAL_SEARCH.md`.
+- **Review mode and agent attribution** (2026-08-22/23) — registry, judges,
+  the decision journal, `review` / `apply_review` / `rejudge`; `reframe` and
+  `correct_interval` followed on 2026-08-27. `REVIEW_MODE.md`.
+- **Inference merge, advisories and warning settings** (2026-08-28) —
+  `WARNINGS_AND_SETTINGS.md`.
+- **The missing notebooks** (2026-08-28) — `00_foundation.py`,
+  `07_timelines_metacontext.py`, and `test_every_notebook_runs`, which
+  executes every notebook's cells in order. Notebooks 02 and 05
+  (decomposition, reflection) remain deleted; reflection is the larger loss,
+  not filed as work until somebody wants it.
+- **Benchmark coverage** (2026-08-29) — the diverse corpus with planted
+  duplicates, the dating pass, per-phase `reflect` breakdown, embedding
+  throughput on its own. `BENCHMARKS.md`.
 
 ---
 
@@ -292,8 +97,8 @@ the timeline axis separately from the chrome.
 
 ### Specialized timelines
 
-**What.** Only the base `Timeline` / `Timepoint` model exists. SUMMARY.md →
-*Timelines* → *Multiple Implementations* describes three that do not:
+**What.** Only the base `Timeline` / `Timepoint` model exists. Three
+specialised backing structures are envisaged and do not:
 
 - **`PreciseTimeline`** — a datetime interval index supporting range and
   proximity queries.
@@ -327,6 +132,33 @@ lifecycle, and their occurrences are separate event facts.
 ---
 
 ## Needs a decision before it needs code
+
+### Serving the agent guidance over MCP
+
+**The state.** `epimemer_prompts/DEFAULT.md` holds the full guidance on using
+the tools well, and `INTEGRATION.md` tells users to copy it into their
+agent's instructions. The server's own MCP `instructions` string is three
+sentences.
+
+**What.** Serve the guidance through MCP itself, so nothing needs copying:
+expose `DEFAULT.md` as an MCP prompt (FastMCP supports prompt registration,
+and clients such as Claude Code surface prompts to the user), and keep the
+server `instructions` string as the short orientation it is. The file stays
+the single source; the prompt reads it.
+
+**Why.** A copy pasted into a project's CLAUDE.md goes stale the day the
+guidance changes, and the MCP protocol already has a channel for exactly
+this.
+
+**Cost.** Small: one prompt registration reading the file, a test that it
+matches the file, and the `INTEGRATION.md` section updated to name the
+prompt.
+
+**Blockers.** None. One decision worth making at the same time: whether a
+shorter always-loaded variant (the per-call rules only) should be offered
+beside the full guide, since 43 KB is a lot to hold in every context window.
+
+---
 
 ### Advisories on the dashboard
 
@@ -402,6 +234,40 @@ turns out to be impossible that way. The no-LLM-calls property is worth more
 than the convenience, and it is far easier to give up later than to win back.
 
 **Blockers.** The decision above. No code should be written before it.
+
+---
+
+### Design questions carried from the architecture summary
+
+Open questions SUMMARY.md used to hold, kept here because this file is where
+unbuilt work lives. Each is a question, not a design; whichever is picked up
+gets its own document first.
+
+- **Incremental clustering.** Online HDBSCAN, centroid drift detection,
+  split heuristics for topic evolution.
+- **Topic evolution.** The input a split wants is *surprise*: how unlike a
+  topic's existing material a new member is. That is a read-time question
+  over embeddings, not a stored field, and it is nearly free where it would
+  be asked — `reflect` already builds the block-wise similarity matrix over
+  every topic and fact, and a per-row max over that matrix is one reduction
+  on data already in hand.
+- **Value-driven consolidation thresholds.** Archival thresholds are settled
+  (importance ceiling, judgment age); merge and split still key off embedding
+  similarity alone.
+- **Contradiction resolution strategy.** Contradictions surface and are
+  recorded; whether and how the system should help resolve rather than
+  merely hold them needs design.
+- **Per-source support levels.** Confidence today is one prior on the node;
+  a per-source level on the `sourced_from` edge would let a level die with
+  the source it describes, and is also what a source-discredit sweep needs
+  (see `ISSUES.md` → *Older carry-overs*).
+- **Metacontext inheritance scope.** If a frame is inherited from a
+  document, do inferences derived from those facts inherit it too? Probably
+  yes, but the edge cases need thought.
+- **Cross-frame retrieval composition.** When a query straddles frames
+  ("compare real AI with sci-fi AI"), how should results from several
+  frames compose? Search takes a list of frames today; composition beyond
+  the union is undesigned.
 
 ---
 

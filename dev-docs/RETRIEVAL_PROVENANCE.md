@@ -317,81 +317,22 @@ grew with its text would re-lay out the panel under the cursor.
 
 ## 7. Tests, written first
 
-- `test_any_node_id_in_a_response_is_declared` — the §2 oracle (revised
-  2026-08-17; replaces `test_every_node_returning_tool_records_its_ids`, which
-  enumerated six tools and so could not catch a seventh): parametrised over
-  **all registered tools**, seeds a known graph, calls each, asserts every
-  known node id appearing in the serialized response also appears in
-  `retrieved`. Catches new tools and census omissions alike. **Built
-  2026-08-18** (`tests/mcp/test_retrieval_declaration.py`) — and it earned its
-  keep immediately: it found five more tools the corrected census had missed
-  (§10.1).
-- `test_an_undeclared_tool_is_flagged_not_silent` — §2.1's `None` vs `[]`:
-  a tool that never sets `retrieved` yields a record marked undeclared, not an
-  indistinguishable empty one. **Built 2026-08-18**
-  (`tests/mcp/test_retrieval_declaration.py`).
-- `test_rpc_hands_the_frontend_exactly_what_the_agent_saw` — integration
-  (added 2026-08-17): a seeded test graph, real tool calls (`search`,
-  `check_conflicts`, `reflect`), then fetch the records over the `retrievals`
-  RPC as a browser would; assert each record's id set equals the node ids in
-  that tool's serialized response. This is the feature's core invariant —
-  *what the agent saw is what the frontend is told* — asserted through the
-  surface the frontend actually uses, not through internals. A reflect record
-  here also pins the §2 semantics: nominees only, not everything scanned.
-  **Built 2026-08-18** (`tests/mcp/test_retrieval_rpc.py`), over a live hub, a
-  live session client and the real HTTP endpoint.
-- `test_retrieved_ids_are_not_serialized_to_the_agent` — §2.1's `exclude=True`.
-  Guards a token-cost regression that no other test would notice. **Built
-  2026-08-18.**
-- `test_focus_mode_leaves_status_opacity_alone` — §4.1. A retired-and-retrieved
-  node and an active-not-retrieved node must remain distinguishable. This is
-  The drifted lookup tables's guard extended, and an opacity-based implementation fails it. **Built
-  2026-08-18** (`focus.test.ts`).
-- `test_theme_toggle_preserves_focus_desaturation` — §4.1. The failure mode the
-  `nodeFill` signature exists to prevent, and the one an implementation that
-  mutates `data("color")` after the fact will hit. **Built 2026-08-18**, against
-  `refreshedFill` — see §10.10 for why the rule had to become a named function.
-- `test_focus_mode_applies_to_both_panels` — §4.2. **Built 2026-08-18.**
-- `test_dimmed_node_stays_clickable_and_says_it_was_not_retrieved` — §4.3.
-  **Built 2026-08-18** (`drawer.test.ts`). Clickability is structural: focus
-  writes colour only, and no hit-testing changed.
-- `test_a_new_record_does_not_change_the_open_drawer` — §5.2, the whole
-  interaction rule in one assertion. **Built 2026-08-18** (`drawer.test.ts`).
-- `test_response_tab_and_node_tab_keep_separate_content` — §5.1. **Built
-  2026-08-18.**
-- `test_records_ring_is_bounded_and_caps_response_text` — §3.2. **Built
-  2026-08-18** (`tests/mcp/test_retrieval_records.py`).
-- `test_records_survive_session_death_in_the_hub_ring` — §3.2 revised: kill
-  the session, subscribe a browser, the selector still lists its records.
-  **Built 2026-08-18** (`tests/visualization/test_hub.py`).
-- `test_payloads_stay_session_side_on_nonloopback_bind` — §3.2's guard: with
-  a non-loopback viz host, the hub ring holds structural metadata only. **Built
-  2026-08-18** (`tests/mcp/test_retrieval_recording.py`) — asserted at the
-  producer, which is where §10.3 put the strip.
-- `test_records_never_mix_across_sessions` — two sessions, interleaved
-  retrievals; each browser subscription sees only its session's records.
-  Pins the per-session keying as a contract rather than an accident of
-  placement. **Built 2026-08-18** (`tests/visualization/test_hub.py`).
+Built 2026-08-18 across `tests/mcp/test_retrieval_declaration.py`,
+`test_retrieval_rpc.py`, `test_retrieval_records.py`,
+`test_retrieval_recording.py`, `tests/visualization/test_hub.py`, and the
+frontend suites (`focus.test.ts`, `drawer.test.ts`). Two are load-bearing:
+the §2 oracle (`test_any_node_id_in_a_response_is_declared`) is parametrised
+over **all registered tools** rather than an enumerated list, which is what
+let it find five tools the census had missed; and
+`test_rpc_hands_the_frontend_exactly_what_the_agent_saw` asserts the
+feature's core invariant through the HTTP surface the frontend actually uses.
 
 ---
 
 ## 8. Commit sequence
 
-1. `RetrievalRecord` / `RetrievedNode` / `SeedProvenance`, and the ring (shared
-   module with `EVENT_LOG.md` §4). **Done 2026-08-18.**
-2. `ResponseMeta.retrieved` + every tool populating it (§2.1).
-   **Done 2026-08-18.**
-3. Recording at `_run_with_timeout`, plus the `retrievals` RPC (§2, §3.2).
-   **Done 2026-08-18.**
-4. `nodeAppearance` and the two silent-failure fixes in `highlightNodes`
-   (§4.1, §4.4) — no UI yet, both panels ready. **Done 2026-08-18**; the
-   `highlightNodes` half landed with the event log, which got there first.
-5. Record selector in the header; focus mode across both panels.
-   **Done 2026-08-18.**
-6. Drawer tabs and the interaction rule (§5). **Done 2026-08-18.**
-
-Steps 1–3 change nothing a user sees. Step 4 is shared with the event log and
-should land whichever feature gets there first.
+Landed 2026-08-18 in six commits; the first three changed nothing a user
+sees. `git log` has the sequence.
 
 ---
 

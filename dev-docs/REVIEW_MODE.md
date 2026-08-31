@@ -1700,50 +1700,16 @@ sits in the refusal ordering, and the eight tests.
 > because it is immutable), and the four-type `already_linked` read cost nothing
 > measurable — the phase was already batched over the whole fact set.
 
-**The edge type.** Add `ASSESSED = "assessed"` to `EdgeType`
-(`core/types.py`) and put it in **`REVIEW_EDGE_TYPES`**, widening that set's
-docstring: the operative property is *anchored to a node version, not migrated
-on supersession or merge*, and `ASSESSED` is the first member with no retrieval
-label. It must not migrate — *"A and B are different claims"* is a judgment
-about those two nodes, and carrying it onto a later survivor `S = A + C` would
-assert something nobody decided.
-
-**`SIMILARITY` stays a knowledge edge and is traversed, but it does not
-migrate either.** An earlier draft of this section said it did, on the grounds
-that `S` contains `A`'s claim, so if `A` and `B` were one claim then `S` and `B`
-still are. §10.2.1 reversed that, and §10.2.1 is right: a merge *synthesises*
-the survivor's content, so `S` is not the wording anybody judged `A` against.
-The two records still differ, but in traversal rather than migration —
-`SIMILARITY` is knowledge to follow, `ASSESSED` is a suppression index.
-
-> **Corrected 2026-08-22, on building the anchoring rule.** The two subsections gave opposite
-> answers for `SIMILARITY` on a merge, four pages apart — the same failure this
-> document names as a pattern, in a new place. The costs are asymmetric, which
-> is what settles it: anchoring costs one re-nomination of `S` against `B`,
-> which is correct, since nobody has judged that pair; migrating can manufacture
-> corroboration in silence.
-
-**The argument.** `apply_reflection` (`mcp/tools.py:2347`) gains
-`similarities: list[dict] | None = None`, each
-`{"pair": [str, str], "verdict": "one_claim" | "distinct", "because": str}`.
-`because` is required — the same rule `supersessions` already applies, for the
-same reason. An unknown verdict is rejected and reported rather than defaulted;
-an unknown or retired id is **skipped**, matching how the other nine arguments
-already treat them.
-
-Writes, per §1.2: `one_claim` → a `SIMILARITY` **and** an `ASSESSED` edge;
-`distinct` → `ASSESSED` only.
-
-**The reader.** `contradiction_detection.py`'s `already_linked` loop
-(lines ~93–102) iterates `(EdgeType.SIMILARITY, EdgeType.CONTRADICTION)`.
-Extend to `(SIMILARITY, CONTRADICTION, VARIANT_OF, ASSESSED)`. This is four
-typed queries becoming eight, on a phase already batched over the whole fact
-set — measure before assuming it matters, and if it does, the lever is one
-untyped `get_edges_for` per direction.
-
-**Corroboration is untouched.** `corroboration.py` reads `SIMILARITY` only, and
-must keep doing so — that is the entire point of the split, and a test should
-assert that an `ASSESSED`-only pair does not corroborate.
+What shipped: `ASSESSED` in `REVIEW_EDGE_TYPES` (anchored, never migrated,
+no retrieval label); `similarities` entries `{pair, verdict, because}` with
+unknown ids skipped; `already_linked` reading all four judged-edge types; and
+corroboration untouched — it reads `SIMILARITY` only, with a test that an
+`assessed`-only pair does not corroborate. Neither `SIMILARITY` nor
+`ASSESSED` migrates on any retirement: a merge synthesises the survivor's
+wording, so a judgment about a source's wording asserts nothing about the
+survivor (corrected 2026-08-22 — two subsections had given opposite answers
+for `SIMILARITY` on a merge, and anchoring costs one correct re-nomination
+where migrating can manufacture corroboration in silence).
 
 #### 10.2.1 A precondition: judgment edges must stop migrating on a correction
 
@@ -1758,79 +1724,21 @@ assert that an `ASSESSED`-only pair does not corroborate.
 > `NON_KNOWLEDGE_EDGE_TYPES` is consulted first, so listing it twice would be
 > redundant.
 
-**This has to land before step 1, not after, and it is a change to existing
-code rather than to this design.**
+The defect: `migration_disposition` returned `"move"` for judgment edges on
+a `CORRECTED` retirement, so a `one_claim` similarity re-pointed onto the
+replacement — asserting a judgment about wording nobody assessed, and letting
+`corroboration.py` count the counterpart's publisher as backing the new
+figure. `JUDGMENT_EDGE_TYPES` (`core/types.py`, with the rule as its comment)
+anchors them on every retirement instead; traversal is unaffected, and the
+replacement starts with no judgments and is correctly re-nominated.
 
-`migration_disposition(edge_type, status)` (`core/types.py:351`) returns
-`"move"` for every knowledge edge on a `CORRECTED` retirement, and `SIMILARITY`,
-`CONTRADICTION` and `VARIANT_OF` are deliberately **not** in
-`NON_KNOWLEDGE_EDGE_TYPES` — the set's own comment says so, because they are
-real edges to follow. So:
-
-> `A` carries a `one_claim` similarity to `B`. `A` is corrected to `A′`. The
-> edge re-points, asserting **`A′` and `B` are one claim** — a judgment about
-> wording nobody assessed — and `corroboration.py` counts `B`'s publisher as
-> backing `A′`.
-
-That is **manufactured corroboration arriving through migration**, with §1.2's
-split entirely correct. It is the failure `fact_dedup.py`'s header calls the
-worst available, reached by a route neither the split nor the merge gate can
-see.
-
-**The document already states the principle and the code applies it too
-narrowly.** `migration_disposition`'s own docstring, for the world-change case:
-*"a contradiction or a variant is a judgment made **about the old claim**, and
-re-pointing one asserts it of a claim nobody assessed."* Exactly right — and
-scoped to `HISTORICAL` only. A correction is not a different situation in this
-respect: the claim is the same, the **wording** changed, and the judgment was
-about the wording.
-
-`CONTRADICTION` carries the same latent fault, with an extra sting: **a
-correction may be precisely what resolved the contradiction**, so re-pointing it
-asserts a conflict the correction just settled.
-
-**The fix, and why not the obvious one.** Adding these types to
-`NON_KNOWLEDGE_EDGE_TYPES` would also drop them from default graph traversal,
-which is a second behaviour change nobody asked for. Instead a separate set,
-consulted first:
-
-```python
-# A judgment is about the wording it was made against. Re-pointing one onto a
-# replacement asserts it of a claim nobody assessed — the argument
-# `migration_disposition` already makes for a world-change, which is just as
-# true of a correction. Anchored, never migrated, on any retirement.
-JUDGMENT_EDGE_TYPES: frozenset[EdgeType] = frozenset(
-    {EdgeType.SIMILARITY, EdgeType.CONTRADICTION, EdgeType.VARIANT_OF, EdgeType.ASSESSED}
-)
-```
-
-`migration_disposition` returns `"keep"` for these regardless of status.
-Traversal is unaffected. `A′` starts with no judgments and gets re-nominated,
-which is correct — `A′` against `B` is a pair nobody has judged.
-
-> **On building it, the reasoning above needed one correction.** This section
-> argues that a correction changes the wording and not the claim. But
-> `migration_disposition`'s own docstring holds that a correction preserves the
-> claim — which is exactly why the sources follow it — so a *one-claim* judgment
-> would survive that reading intact, and the argument does not land on its own
-> terms. What carries it is the **substantive** correction: "the population is
-> 500,000" → "5,000,000" leaves a counterpart judged one claim against a number
-> that is no longer there, and `corroboration.py` would count that counterpart's
-> publisher as backing the new figure. Same verdict, load-bearing for a
-> different reason — and the reason matters, because it is what shows a *merge*
-> belongs in the same rule.
-
-**Why it is latent today and stops being so at step 1**: both real graphs carry
-zero `similarity`, `contradiction` and `variant_of` edges, so nothing has
-ever migrated. Step 1 is the change that starts writing them. **File it as its
-own issue** — it is a defect in shipped code, not a design note.
-
-**Tests** (`tests/pipelines/test_similarity_decisions.py`): a `one_claim`
-verdict raises corroboration for both nodes from 1 to 2 where the publishers
-differ; a `distinct` verdict does not; both suppress re-nomination on the next
-`detect_contradictions`; neither `ASSESSED` nor `SIMILARITY`
-migrates through a merge (the anchoring rule, built — the earlier draft had `SIMILARITY`
-migrating); an unknown verdict is reported, not applied.
+> **On building it, the reasoning needed one correction.** A correction
+> preserves the claim — that is why the sources follow it — so "the wording
+> changed" does not carry the argument alone. What carries it is the
+> substantive correction: "the population is 500,000" → "5,000,000" leaves a
+> counterpart judged one-claim against a number that is no longer there.
+> Same verdict, load-bearing for a different reason, and the reason is what
+> shows a *merge* belongs in the same rule.
 
 ### 10.3 Step 2 — the registry
 
@@ -1881,72 +1789,9 @@ migrating); an unknown verdict is reported, not applied.
 > counts as embedded* is exactly how the CLI ends up writing approvals into a
 > store nobody reads.
 
-**Storage protocol** (`storage/protocol.py`), implemented in full on both
-`memory.py` and `surrealdb_adapter.py` — the standing rule, no flags and no
-`hasattr`:
-
-```python
-async def get_agent(self, agent_id: str) -> Agent | None: ...
-async def upsert_agent(self, agent: Agent) -> None: ...
-async def list_agents(self) -> list[Agent]: ...
-async def get_approved_agent_ids(self) -> list[str]: ...
-async def set_approved_agent_ids(self, ids: list[str]) -> None: ...
-```
-
-The approved-id list is per-graph settings, stored **exactly** the way
-`get_reflect_threshold_override` / `set_reflect_threshold_override` already are
-(`protocol.py:747-761`) — beside the reflect counter, scoped per graph,
-surviving restarts. SurrealDB gets an `agent` table beside `fact` / `topic` /
-`inference`; in-memory gets a dict on the store.
-
-**`claim_agent(agent_id, description)`** (MCP). Refuses an id not in the
-approved list, with prose the agent puts to the user (§2.2). On success:
-upserts the `Agent`, appends an `AgentDescription` if `text` differs from the
-current one, updates `last_seen_at`, and binds `(agent_id, digest)` to the
-session via `ctx.set_state`.
-
-**Approval** goes over `ctx.elicit` where the client supports it (§2.3).
-
-**The CLI fallback does not work for every backend, and the gap matters as soon
-as anyone requires a judge.** Approved ids live in per-graph settings *inside the
-storage backend*.
-
-> **Revised 2026-08-23.** This subsection previously said the gap was
-> load-bearing *at step 4*, because step 4 was a dated cutover that would turn
-> an approval-less server into one refusing every write. §3.3 has replaced the
-> cutover with a per-graph setting that ships off, so nothing is bricked by
-> upgrading. The gap is real for anyone who turns the setting **on** with a
-> client that cannot elicit and an embedded store — which is the same failure,
-> now reached by choice rather than by release date, and still worth closing
-> here. `epimemer agents confirm <id>` is a separate process — and the active-graph guard records that **a second `mem://` connection is a separate store**. So
-against an embedded backend the CLI writes approvals into a store the running
-server will never read. Combine that with an elicitation-less client and there
-is **no approval path at all** — which step 4's cutover then turns into a server
-that refuses every write.
-
-So the fallback has to be a transport the server itself reads at startup:
-
-| Backend | Elicitation | Fallback that works |
-|---|---|---|
-| SurrealDB | `ctx.elicit` | `epimemer agents confirm` — same store, different process |
-| embedded `mem://` | `ctx.elicit` | **config file or env, read at connect time** |
-
-Read the configured ids when the backend connects and seed the per-graph list
-from them. `epimemer agents confirm` stays the convenience for server backends;
-it must **refuse loudly against an embedded store** rather than appear to
-succeed. Nothing here may be reachable by the agent — that is still the rule
-(§2.3) — but *unreachable by the agent* and *unreachable by the user* are
-different failures, and the first draft shipped the second one.
-
-**Session detection** uses `ctx.session_id` and `ctx.client_id`, both already
-on FastMCP's `Context`, which `server.py` already threads into every tool.
-Neither identifies the *model* (§2.2) — do not try to infer one.
-
-**Re-validate the judge on `use_graph`.** The session binds one
-`(agent_id, digest)`, but approval is **per graph**. Switching graphs mid-session
-would otherwise carry a judge approved for graph A into every write on graph B.
-Check at `use_graph`, and again at write time — the second is cheap and is what
-makes the first not a single point of failure.
+The mechanics — the five protocol methods, the elicitation flow, the
+per-backend approval channels, and the `use_graph` re-check — are current
+behaviour, stated in `docs/ATTRIBUTION.md`.
 
 ### 10.4 Steps 3–4 — threading the judge
 
@@ -2019,18 +1864,6 @@ makes the first not a single point of failure.
 > the claim, a missing judge says only that this graph does not record one,
 > which is true of every node in it.
 
-```python
-class JudgeRef(BaseModel):
-    agent_id: str
-    digest: str  # the AgentDescription version current at this call
-```
-
-Resolved once at the MCP boundary from session state, then passed explicitly —
-never read from a module global (§3.2). Step 3 covers the reflect-side writers
-(`apply_reflection`, `merge_facts`, `supersede_by`, `record_contradiction`,
-`record_variant`, `judge_importance`, `archive`, `restore`); step 4 covers
-`store_decomposition` and `segment`.
-
 > **✅ STEP 4 BUILT 2026-08-23.** Ingest attributed (`segment`,
 > `store_decomposition`), `require_judge` as a per-graph setting on both
 > backends with `EPIMEMER_REQUIRE_JUDGE` behind it and `epimemer agents require`
@@ -2075,36 +1908,10 @@ never read from a module global (§3.2). Step 3 covers the reflect-side writers
 > settings live behind that wall and they have different environment variables,
 > so one generic message would send half its readers to the wrong one.
 
-**Step 4 carries the setting, and there is no cutover** (§3.3, revised
-2026-08-23). `judge` is optional in every signature; one shared check at the
-tool boundary refuses a blank **only where the graph requires one**, and the
-setting ships off, so an upgraded server keeps writing exactly as it did. The
-release note says what turning it on requires — approved ids first — rather than
-warning about an upgrade that changes nothing by itself.
-
-**What step 4 must also carry, if the setting is to be usable**: a way for a
-write to name its judge where the session cannot hold one. `claim_agent` binds
-the identity to the MCP session, and a caller without one gets
-`session_bound: false` (§10.3, built) — which is harmless while blanks are
-allowed and total once they are not. An explicit `agent_id` on the write is no
-weaker than the binding, because approving the id is the actual gate and the
-binding was only ever ergonomics.
-
 ### 10.5 Step 5 — the journal
 
-A `decision` table on both backends, with `DecisionRecord` as §4 defines it.
-Reads needed: by `judged_by`, by `decided_at` range, by `subject_ids` contains,
-and *"is there a record whose `reviews` is this id"* — the last is what makes
-`unreviewed` derived rather than stored (§3.4), so it wants an index on
-`reviews` and on `judged_by`.
-
-**Append-only in the strict sense**: no update path exists on this table. A
-reversal, a confirmation and an overturn are all new rows.
-
-**Fold the node notes here** (§9): `NodeNote` never ships; `node.notes` becomes
-a derived read over records whose `subject_ids` contains the node, and the
-contested-decisions worklist becomes `review(mode="advisory")`. **Both landed on
-2026-08-28** with the advisories that write the kind.
+`NodeNote` never shipped: node notes are a derived read over the journal
+(§9), and the contested-decisions worklist is `review(mode="advisory")`.
 
 > **Built 2026-08-23.** The table, the five reads, and a row at every writer:
 > ingest, both supersession readings, contradiction, variant, similarity, merge,
@@ -2192,37 +1999,11 @@ contested-decisions worklist becomes `review(mode="advisory")`. **Both landed on
 
 ### 10.6 Steps 6–7 — `review()`
 
-```python
-async def review(
-    storage: StorageBackend,
-    *,
-    mode: ReviewMode = "all",
-    agent_id: str | None = None,
-    since: datetime | None = None,
-    between: tuple[datetime, datetime] | None = None,
-    certainty_ceiling: float | None = None,
-    include_pre_attribution: bool = False,
-    max_results: int = 200,
-) -> tuple[dict, ResponseMeta]:
-```
-
-Read-only, like `reflect`. Ordering per §6.2 — tier 1 (declared `certainty`
-ascending) before tier 2 (unrated, ordered by count of §5's derived signals
-descending). Capped at `max_results` with `truncated` named in the response,
-The nomination cap's treatment. The response always reports `unrated_count` and
-`pre_attribution_excluded`, and — when `certainty_ceiling` was supplied — the
-value **this call** used (§6.3, the single nomination bar).
-
-**`apply_review(confirmations=[…], reversals=[…])`** is the only writer;
-`review()` never writes.
-
-**No `graphs=` parameter, and every response names the graph it answered from**
-(§6.6). Cross-graph review is `list_graphs` → `use_graph` → `review()` per
-graph — safer than a fan-out rather than merely equivalent, since each switch is
-the active state instead of one borrowed mid-call. The locator that would tell a
-reviewer *where else to look* is `review`'s `elsewhere`, gated on the guard. **Built 2026-08-23 as
-`elsewhere`; see §6.6's amendment, including what it cost — `review` is a mover
-now.**
+`review()` is read-only like `reflect`, `apply_review` is the only writer,
+and cross-graph review is `use_graph` per graph with the `elsewhere` locator
+(built 2026-08-23; it made `review` a mover — §6.6). The modes, ordering,
+filters and response fields are current behaviour, stated in
+`docs/ATTRIBUTION.md`.
 
 > **Amended 2026-08-23, on building it.** Five things.
 >
@@ -2271,9 +2052,6 @@ now.**
 > that re-sorts has to fetch enough rows to sort"*. `decisions_scanned` is in
 > every response so the cost is visible rather than inferred; the bound arrives
 > with step 7's `since`.
-
-**Step 6 ships before any decision has a judge**, and works: the whole existing
-corpus is tier 2, so the ordering is entirely derived and still useful (§6.2).
 
 > **Amended 2026-08-23, on building step 7.** Nine things, and the first changed
 > what one of the two writers *does*.

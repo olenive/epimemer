@@ -680,25 +680,14 @@ write only on a label's first use.
 precondition (§2.3): it inherits the CLI's embedded-backend refusal, and no
 stage may depend on it.
 
-**Tests** (both backends via the `storage` fixture):
-
-1. Coining a new label creates exactly one record, carrying the coining judge.
-2. Coining an existing label creates no second record and does not restamp the
-   judge — step 3's re-recorded-edge rule.
-3. `(name, kind)` is unique; the same name under a different kind is a
-   different record.
-4. Backfill over a graph written before this creates one record per distinct
-   `(label, kind)` and none for engine-tier edges.
-5. Backfill is idempotent.
-6. Backfill writes no judge, and a later `link` does not adopt one either.
-7. A graph with no records answers `get_relation_label` with `None` and nothing
-   raises.
-8. Records are per graph: a label in one graph is invisible from another.
-9. Every record a label can acquire is reachable without the CLI — a test that
-   coins, describes and judges on an in-memory store, since that backend is
-   exactly where the CLI refuses. Three paths: this test is what found the
-   fourth (`relation_merges`, §2.3's correction of 2026-08-27), and it is also
-   what shows the count back down after §5 removed it on 2026-08-28.
+**Tests** (both backends via the `storage` fixture): coining creates exactly
+one record carrying the coining judge and never restamps it; `(name, kind)`
+is unique; backfill is idempotent, writes no judge, and skips engine-tier
+edges; records are per graph; and every record a label can acquire is
+reachable without the CLI — asserted on the in-memory store, where the CLI
+refuses. That last test is what found the fourth write path
+(`relation_merges`), and it is what shows the count back down after §5
+removed it.
 
 ### 7.2 Stage 2
 
@@ -750,20 +739,12 @@ until an edge inspector exists, which is a UI feature rather than a row.
 `EDGE_MEANINGS` untouched: this adds no `EdgeType`, which is what the drifted lookup tables keeps
 catching.
 
-**Tests:**
-
-1. `list_relations` returns the description; empty for an undescribed label.
-2. `list_relations` still answers correctly on a graph with no records at all.
-3. `link` reusing a label returns its description.
-4. `describe_relation` on a label with no record creates one, carrying **no**
-   judge, and refuses only a label no edge in this graph carries.
-5. `describe_relation` refuses a `kind` change.
-6. Re-describing replaces the text and journals a second row; the first is not
-   edited. The record's `judged_by` is unchanged by any of it.
-7. A description journals `RELATION_DESCRIPTION`, and `review(mode="all")`
-   over a graph with both shows it does not arrive under `ENRICHMENT`.
-8. The viz read never appears in `list_tools()` — the never-expose guard, in
-   the shape the existing viz guard test uses.
+**Tests:** descriptions surface on `list_relations` and on `link` reuse; a
+description on a recordless label creates the record judge-less and refuses
+only a label no edge carries; a `kind` change is refused; re-describing
+replaces the text and journals a second row without editing the first; the
+journal kind is `RELATION_DESCRIPTION`, not `ENRICHMENT`; and the viz read
+never appears in `list_tools()`.
 
 ### 7.3 Stage 3
 
@@ -788,37 +769,14 @@ a `judge` it deliberately does not write onto a label record it creates — the
 argument is accepted and dropped at the one call site most likely to reach for
 it, which is where the coiner-never-the-judger rule needed to be visible.
 
-**Tests:**
-
-1. A declined pair is not nominated again by the next `reflect` — **the
-   regression test for FC1**, and it must be shown to fail without the filter.
-2. A `synonymous` verdict suppresses too.
-3. A verdict on a pair whose labels have no records **creates them**,
-   judge-less, and suppresses — run on the in-memory backend, because that is
-   where the CLI cannot reach and where an earlier draft of this design left
-   FC1 unfixable.
-4. `(a, b)` and `(b, a)` are one pair.
-5. `because` is required; a blank one is refused per entry, with the rest of the
-   batch applied.
-6. An identical verdict from the **same** judge is refused as a retry, not
-   stored as a second opinion.
-6b. An identical verdict from a **different** judge writes a confirmation row
-   citing the oldest decision for that pair, per `_journal_pair_judgment` —
-   the established shape, not a new one.
-7. The journal row names both label ids, and `review()` dereferences them.
-8. Verdicts are per graph.
-9. A verdict on a label pair does not appear in any node's notes.
-10. Suppression survives everything: a pair judged `distinct` is never
-    nominated again, including after either label is described or re-used.
-    **Permanent by design** (§4.2), and the test says so rather than leaving a
-    later reader to decide it is a bug.
-11. `list_relations` carries the verdict, its direction, its `because` and its
-    judge — mirrored onto both labels of the pair, disagreements as two rows,
-    an unattributed judge as null.
-12. `reflect` reports `relation_pairs_suppressed`, distinguishing a settled
-    graph from an unexamined one.
-13. An entry omitting `kind` is refused per entry, names the missing field,
-    and suppresses nothing.
+**Tests:** the FC1 regression (a declined pair is never re-nominated, shown
+failing without the filter); both verdicts suppress; `(a, b)` and `(b, a)`
+are one pair; `because` and `kind` are required per entry; a same-judge
+retry is refused where a different judge writes a confirmation row; verdicts
+are per graph and journal both label ids; suppression is **permanent by
+design** and survives describing or re-using either label; and `reflect`
+reports `relation_pairs_suppressed`, distinguishing a settled graph from an
+unexamined one.
 
 ---
 

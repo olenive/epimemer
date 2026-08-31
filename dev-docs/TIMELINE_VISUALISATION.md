@@ -455,50 +455,19 @@ The panel itself is covered separately under jsdom.
 
 ## 9. Order of work
 
-1. ✅ **Record-time panel** — scale module, break heuristic, zoom, hover,
-   node-type and status filters.
-2. ✅ **Free-text, metacontext and date-range filters** — pure modules.
-3. ✅ **Content-time read path** — `viz_list_timelines` on both backends,
-   `viz_list_metacontexts` alongside it (§6.3), snapshot fields, frontend types.
-4. ✅ **Timeline events** — `TimelineStored` through `instrumented_storage`;
-   live updates without a refresh.
-5. ✅ **Graph-panel cross-highlighting** — `highlightNodes` on the graph panel
-   handle, driven by the selected mark's linked node ids.
-6. ✅ **Extraction proposes timepoints** — `write_batch_tx` carries timelines,
-   a pure detector over node content, one shared timeline per graph (§7).
+All six steps built: the record-time panel, the filter modules, the
+content-time read path, timeline events, graph-panel cross-highlighting, and
+extraction proposing timepoints (§7).
 
 ## 10. Testing
 
-Following existing project conventions:
-
-- **Failing test first**, then the scoped fix.
-- Storage additions go through the parameterised `storage` fixture in
-  `tests/conftest.py`, so `viz_list_timelines` is verified identically on
-  `InMemoryStorage` and `SurrealDBStorage(url="mem://")`. Backend-specific
-  internals go in the per-backend files.
-- Frontend pure modules under vitest. Cases worth pinning explicitly:
-  - a gap that is large in absolute terms but not relative to spacing → no break
-  - a gap that is relatively large but costs few pixels → no break
-  - more than `MAX_BREAKS` candidates → the largest five, in order
-  - zoom anchored at the pointer keeps the anchored time fixed
-  - hysteresis: a break already present survives a small zoom-out
-  - vague points never receive an x coordinate
-  - `field:value` parsing, including quoted phrases and unknown field names
-- **Mutation-test the heuristic.** It is exactly the shape of code where a
-  behavioural test passes while the logic is wrong — an inverted comparison or a
-  dropped clause still produces *an* axis. Verify that removing each condition
-  in step 3 of §5.2 fails a test.
-
-  The sweep run against the built module covered both thresholds, the break cap,
-  hysteresis in both directions, the ordering, the interval-overlap rule, break
-  pixel reservation, proportional segment widths, collapsed-time pinning, the
-  zoom anchor, and every clamp — plus the filter module's facet semantics, query
-  parsing, and each clause of the composed predicate. It found three real gaps
-  the behavioural tests had missed, and two guards that were dead code because
-  `clampToExtent` and the median arithmetic already enforced them; both were
-  removed rather than left untestable.
-- Full suite (`uv run python -m pytest tests/ -q`) plus `make test-frontend`;
-  `make test-integration` when storage is touched.
+Standard conventions: failing test first, storage additions through the
+parameterised `storage` fixture, frontend pure modules under vitest. The
+break heuristic was **mutation-tested**, because it is exactly the shape of
+code where a behavioural test passes while the logic is wrong — an inverted
+comparison still produces *an* axis. The sweep found three real gaps the
+behavioural tests had missed, and two guards that were dead code; both were
+removed rather than left untestable.
 
 ## 11. Open risks
 
