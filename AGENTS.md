@@ -1,60 +1,41 @@
-Prefer a functional programming style.
-Minimise the use of inheritence.
-Use type annotations in Python where possible but don't overcomplicate the code in an attempt to have perfect type hints.
-Avoid making classes that use `self` or `@staticmethod`.
-However, using Pydantic BaseModel for data structures is encouraged.
-Prefer uv over pip.
-Use the Petritype library (the `petritype` package on PyPI) for complex processes and data pipelines.
-Epimemer depends on released Petritype only. A change that needs new Petritype code is a Petritype release first, then a bump of the `petritype>=` pin here. For local iteration, `uv pip install -e ../petritype` into the venv — never a committed path source.
-When using Marimo notebooks remember to not re-define variables in different cells, that cells correspond to functions and these funcitons need to return values.
-When writing documentation, prefer commas, colons, or a second sentence over em-dashes.
-Say what is true rather than what is not. Open with a negation only when correcting a misreading the reader would otherwise make.
+# Coding
+Prefer a functional style; minimise inheritance; avoid classes with `self` or
+`@staticmethod`; Pydantic BaseModel for data structures is encouraged. Type
+annotations where helpful, simple beats exhaustive. Prefer uv over pip. Use
+Petritype (the `petritype` package on PyPI) for complex processes and
+pipelines; depend on released versions only: release Petritype first, then
+bump the pin (locally, `uv pip install -e ../petritype`, never a committed
+path source). Marimo notebooks: a cell is a function, so return values rather
+than redefining a variable in another cell. We are building a robust, secure
+system, not a prototype.
 
-Our goal is to build a robust and secure system, not simply a prototype. We don't want to trade speed for technical debt.
+# Documentation
+Prefer commas, colons, or a second sentence over em-dashes. Say what is true
+rather than what is not; open with a negation only when correcting a
+misreading the reader would otherwise make. Plain English with the user:
+technical terms yes, dense jargon no. Name the thing, never the issue number:
+a bare `#63` goes stale, so describe what it was. Delete comments that only
+cite; keep ones that explain.
 
-When writing documentation, avoid using em-dashes. Avoid starting an explanation with a negation, instead say what is true rather than pointing out what something is not.
+# Design Rules
+**Never design a singleton.** No module-level mutable state, no
+`get_settings()`, no import-time construction; pass configuration as a value,
+the way `ServerConfig` travels through `deps["config"]`. Per-graph settings
+copy the `reflect_threshold` pattern: process default on `ServerConfig`,
+persisted override on the backend, one pure `resolve_*`. First ask whether it
+needs a setting at all: `expected_graph` is mandatory because a guard must not
+be configured by the state it guards against.
 
-When talking to the user use plain English where possible. Do not shy away from technical terms but too much jargon can be hard to parse. Treat the user as an expert in the field but not someone who enjoy cryptic langauge.
+**Every backend implements the full `StorageBackend` protocol** and callers
+invoke it unconditionally: no `hasattr`, no proxies, no capability flags. Ship
+a no-op where nothing-to-do is a valid answer; reserve `NotImplementedError`
+for what a backend genuinely cannot do. Guard tests compare signatures, not
+names.
 
-**Name the thing, never the issue number.** Do not write `#63` in code, a
-comment, a docstring or a document. A number costs every reader a lookup, and it
-goes stale the moment the entry is deleted — which is the normal end of an
-entry, since `ISSUES.md` holds live issues only and resolved ones are removed.
-Write what it was instead: *the nomination bar that was two numbers*, *the
-verdict that had no writer*, *the frame requirement*. The reference then
-survives the entry and needs no lookup at all.
-
-The same goes for a comment whose only content is a citation. If a comment says
-nothing but *this fixes issue 5*, delete it; if it explains something, keep the
-explanation and drop the number. Assume every numbered entry will be deleted,
-and do not write anything that depends on one still existing.
-
-Never design a singleton. No module-level mutable global, no `get_settings()`
-accessor, no import-time construction — pass configuration as an explicit value,
-the way `ServerConfig` travels through `deps["config"]`. Tests parameterise over
-two storage backends and many graphs in one process, so a process-wide mutable
-instance makes any test that writes a setting order-dependent with any test that
-reads one; and settings here are per graph, so one instance cannot answer *what
-is the policy here* after a `use_graph`. Where a setting needs a per-graph
-override, copy the `reflect_threshold` pattern: a process default on
-`ServerConfig`, a persisted override on the backend, and a pure
-`resolve_*(override, default)` as the only place the fallback lives. **First ask
-whether it needs a setting at all** — the mandatory `expected_graph` is the
-counter-case, where
-a guard must not be configured by the state it is guarding against.
-
-Every backend implements the **full** `StorageBackend` protocol, and callers
-invoke it unconditionally. No `hasattr` checks, no `__getattr__` proxies, and no
-capability flags either — `supports_multi_graph` was removed for the same reason
-the duck-typing was. Where an operation does not apply, ship a no-op:
-`connect`/`close` are no-ops on `InMemoryStorage` and are called unconditionally,
-which is what let the `hasattr(storage, "connect")` check go. Reserve
-`NotImplementedError` for what a backend genuinely cannot do; prefer a no-op
-where *nothing to do* is a valid answer. `InstrumentedStorage` is the sharp
-edge: its guard test compares **signatures**, not method names, because
-presence-only checking let a renamed protocol keyword drift through undetected.
-
-Never compare two timestamps naively in a backend query. They are stored as ISO-8601 text, and `>=` on text is only chronologically correct while both sides render identically — which nothing guarantees. Use `instant()` in `surrealdb_adapter.py`, or make the writer pad where an index rules that out. `dev-docs/DEVELOPER_GUIDE.md` has the rule and the measurements behind it.
+**Never compare timestamps as text in a backend query**: ISO-8601 strings sort
+chronologically only while both sides render identically. Use `instant()` in
+`surrealdb_adapter.py` or pad on write; `dev-docs/DEVELOPER_GUIDE.md` has the
+measurements.
 
 # Git Usage
 - Do not merge into the main branch without asking.
