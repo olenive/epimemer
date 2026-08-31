@@ -45,12 +45,6 @@ uv tool install "epimemer[sentence-transformers]"
 # or: pip install "epimemer[sentence-transformers]"
 ```
 
-PyPI release imminent; until then, install from the repository:
-
-```bash
-pip install "epimemer[sentence-transformers] @ git+https://github.com/olenive/epimemer"
-```
-
 | Extra | Adds | When you need it |
 |-------|------|------------------|
 | `sentence-transformers` | Local embeddings via [sentence-transformers](https://www.sbert.net) (pulls in PyTorch) | The default embedding provider. Without it, set `EPIMEMER_EMBEDDING_PROVIDER` to another provider, or the server refuses to start and says which extra to install |
