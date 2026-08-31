@@ -4,6 +4,15 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] — 2026-08-31
+
+### Fixed
+
+- The wheel now carries `epimemer_prompts/DEFAULT.md`. `INTEGRATION.md` tells a
+  reader to open the agent guidance and add it to their agent's instructions,
+  and 0.1.0 shipped without the file, so anyone installing from PyPI was
+  pointed at something they did not have.
+
 ## [0.1.0] — 2026-08-31
 
 First public release.

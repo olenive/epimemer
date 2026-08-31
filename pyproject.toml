@@ -1,6 +1,6 @@
 [project]
 name = "epimemer"
-version = "0.1.0"
+version = "0.1.1"
 description = "Epistemic memory for AI agents over MCP: a typed graph of claims with provenance, frames, validity in time, and a review loop"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -77,6 +77,10 @@ include = ["epimemer*"]
 # bare checkout serves the hub's API without the page.
 [tool.setuptools.package-data]
 "epimemer.visualization" = ["static/*", "static/assets/*"]
+# The agent guidance ships with the package: INTEGRATION.md tells a reader
+# to open it, and 0.1.0 shipped without it. The directory is already found
+# by packages.find; without this line it contributes no files.
+epimemer_prompts = ["*.md"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
