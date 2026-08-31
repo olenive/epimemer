@@ -225,9 +225,18 @@ MCP tool can change it. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 `epimemer_prompts/DEFAULT.md` is the full guide to using these tools well:
 when to ingest, search and reflect, and how to record verdicts. Add its
 contents to your agent's instructions (for Claude Code, the project's
-CLAUDE.md), or point the agent at the file. Serving it over MCP itself, so
-that nothing needs copying, is on the backlog in
-`dev-docs/PROPOSED_FEATURES.md`.
+CLAUDE.md), or point the agent at the file.
+
+It ships with the package from 0.1.1 onwards, so an installed copy has it too.
+To print the path:
+
+```bash
+python -c "import importlib.resources as r; print(r.files('epimemer_prompts') / 'DEFAULT.md')"
+```
+
+Version 0.1.0 was built without it, and is yanked on PyPI: install 0.1.1 or
+later. Serving the guide over MCP itself, so that nothing needs copying, is on
+the backlog in `dev-docs/PROPOSED_FEATURES.md`.
 
 ## Response Format
 
