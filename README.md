@@ -1,11 +1,19 @@
 # Epimemer
 
+## Motivation
+LLMs store general knowledge in their weights and specific or episodic
+facts, inferences or background information in their context. However,
+as specific details accumulate over time, they eventually exhaust the
+available context window.
+Epimemer is a tool for context engineering with the goal of providing
+necessary information without flooding the context window with details
+that are irrelevant to the task at hand.
+
+## Outline
 An epistemic memory server for AI agents, speaking the
-[Model Context Protocol](https://modelcontextprotocol.io). An agent
-accumulates specific facts and episodic detail faster than its context window
-can hold them; Epimemer is where it puts them. The agent hands over what it
-has read, and Epimemer keeps it as a typed graph of **topics**, **facts** and
-**inferences** that remembers where each claim came from, which world it is
+[Model Context Protocol](https://modelcontextprotocol.io). The agent hands
+over what it has read, and Epimemer keeps it as a typed graph of **topics**,
+**facts** and **inferences** that remembers where each claim came from, which world it is
 about, when it held, what contradicts it, and who decided what. It then
 nominates the graph's own weak points for the agent to review.
 
