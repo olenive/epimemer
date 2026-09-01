@@ -125,6 +125,8 @@ describe("elements the panels bind to", () => {
     "record-unread",
     "tab-node",
     "tab-response",
+    "btn-palette",
+    "palette-panel",
   ];
 
   // `main.ts` throws on a missing id, so a rename here is a blank dashboard.
@@ -138,5 +140,60 @@ describe("the timeline half", () => {
     // `flex-1 min-h-0` is what stops a tall SVG from growing its own container.
     expect(byId("timeline-body").className).toContain("flex-1");
     expect(byId("timeline-body").className).toContain("min-h-0");
+  });
+});
+
+/**
+ * The token migration, guarded.
+ *
+ * A panel written the old way would still *look* right in both themes, because
+ * a `gray-300 dark:gray-900` pair says the same thing the token does. It would
+ * ignore the viewer's colour settings entirely, and nothing about its
+ * appearance would say so. This is the check that a reviewer cannot forget to
+ * make, and it is why the migration was worth finishing rather than leaving
+ * half the chrome on raw greys.
+ *
+ * `white` counts: it was the light half of every form control's pair.
+ */
+describe("colour tokens", () => {
+  // Vite inlines these at build time, so the suite stays a browser target.
+  const modules = import.meta.glob("./*.ts", { query: "?raw", import: "default", eager: true }) as Record<
+    string,
+    string
+  >;
+
+  const RAW_COLOUR = /(?:^|\s|")((?:[a-z-]+:)*(?:bg|text|border)-(?:gray-\d+|white))\b/g;
+
+  const offenders = (source: string): string[] => [
+    ...new Set([...source.matchAll(RAW_COLOUR)].map((m) => m[1])),
+  ];
+
+  it("leaves no raw grey in the markup", () => {
+    expect(offenders(indexHtml)).toEqual([]);
+  });
+
+  it.each(
+    Object.keys(modules).filter((name) => !name.endsWith(".test.ts")),
+  )("leaves no raw grey in %s", (name) => {
+    expect(offenders(modules[name])).toEqual([]);
+  });
+
+  it("finds the modules it claims to check", () => {
+    // A glob matching nothing would make every assertion above vacuous, which
+    // is the failure mode of deriving a population rather than listing it.
+    const checked = Object.keys(modules).filter((n) => !n.endsWith(".test.ts"));
+    expect(checked.length).toBeGreaterThan(15);
+    expect(checked).toContain("./theme.ts");
+    expect(checked).toContain("./timeline-panel.ts");
+  });
+
+  it("still catches a raw grey when there is one", () => {
+    // The regex is the guard; a typo in it would pass everything silently.
+    expect(offenders('class="bg-gray-300 dark:bg-gray-900"')).toEqual([
+      "bg-gray-300",
+      "dark:bg-gray-900",
+    ]);
+    expect(offenders('class="bg-white"')).toEqual(["bg-white"]);
+    expect(offenders('class="bg-surface-chrome text-content-muted"')).toEqual([]);
   });
 });

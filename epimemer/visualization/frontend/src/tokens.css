@@ -1,0 +1,43 @@
+/*
+ * The dashboard's neutral colours, in one place.
+ *
+ * Every grey the chrome uses resolves here, and so do the chrome-adjacent
+ * fields of the runtime `Palette` in `theme.ts`. Before this file the two were
+ * written out separately and had already drifted: the light-mode darkening pass
+ * had to fix the timeline axis apart from the header it sits under.
+ *
+ * Values are **space-separated sRGB channels**, not hex, so that Tailwind can
+ * compose them with an alpha modifier: `rgb(var(--surface-page) / 95%)` is what
+ * `bg-surface-page/95` compiles to, and a hex custom property cannot be given
+ * an alpha that way. `theme.ts` converts back to hex for the drawn panels.
+ *
+ * The nine tokens are the light and dark halves of the same ideas, so the dark
+ * theme is a second set of values rather than a second set of classes. Two
+ * tokens share a light value and differ only in dark, which is not a mistake:
+ * `--text-secondary` and `--text-muted` are both gray-600 in light, and the
+ * distinction the markup draws between them only exists in the dark theme.
+ */
+
+:root {
+  --surface-page: 229 231 235; /* gray-200 */
+  --surface-chrome: 209 213 219; /* gray-300 */
+  --surface-raised: 243 244 246; /* gray-100 */
+  --surface-raised-hover: 249 250 251; /* gray-50 */
+  --border: 156 163 175; /* gray-400 */
+  --text-strong: 31 41 55; /* gray-800 */
+  --text-primary: 55 65 81; /* gray-700 */
+  --text-secondary: 75 85 99; /* gray-600 */
+  --text-muted: 75 85 99; /* gray-600 */
+}
+
+.dark {
+  --surface-page: 3 7 18; /* gray-950 */
+  --surface-chrome: 17 24 39; /* gray-900 */
+  --surface-raised: 31 41 55; /* gray-800 */
+  --surface-raised-hover: 55 65 81; /* gray-700 */
+  --border: 55 65 81; /* gray-700 */
+  --text-strong: 229 231 235; /* gray-200 */
+  --text-primary: 209 213 219; /* gray-300 */
+  --text-secondary: 156 163 175; /* gray-400 */
+  --text-muted: 107 114 128; /* gray-500 */
+}

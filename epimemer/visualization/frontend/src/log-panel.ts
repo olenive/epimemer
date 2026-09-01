@@ -70,8 +70,7 @@ const VERB_CHIP =
   "px-1.5 py-0.5 rounded text-[10px] border transition-colors cursor-pointer";
 const CHIP_ON =
   "bg-blue-100 text-blue-700 border-blue-400 dark:bg-blue-900/50 dark:text-blue-300 dark:border-blue-700";
-const CHIP_OFF =
-  "bg-gray-100 text-gray-600 border-gray-400 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700";
+const CHIP_OFF = "bg-surface-raised text-content-secondary border-line";
 
 /**
  * Wire the log rail up.
@@ -153,15 +152,15 @@ export const initLogPanel = (
         "w-full text-left px-2 py-1 rounded text-xs transition-colors " +
         (entry.actionId === selectedId
           ? "bg-blue-100 dark:bg-blue-900/40"
-          : "hover:bg-gray-200 dark:hover:bg-gray-800");
+          : "hover:bg-surface-raised-hover");
       row.title = entry.subjects.join("\n") || "no nodes";
 
       const line = document.createElement("div");
-      line.className = "text-gray-700 dark:text-gray-300 break-words";
+      line.className = "text-content-primary break-words";
       line.textContent = entry.summary;
 
       const meta = document.createElement("div");
-      meta.className = "text-[10px] text-gray-600 dark:text-gray-500";
+      meta.className = "text-[10px] text-content-muted";
       meta.textContent = timeLabel(entry.at);
 
       row.append(line, meta);

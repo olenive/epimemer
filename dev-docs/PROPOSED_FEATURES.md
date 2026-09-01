@@ -26,13 +26,11 @@ difference in kind: an issue must say what breaks, and an entry here must say
 what does not exist — an entry that can only be justified as "this is currently
 wrong" belongs in `ISSUES.md` instead.
 
-**Running two of these in parallel.** The ready-to-build set below touches
-disjoint trees, which is what makes it parallelisable — *Colour customisation*
-is `epimemer/visualization/frontend/` and *Specialized timelines* is
-`epimemer/core/` and both storage backends. The second is the one that collides
-with ordinary backend work, and it is also the one asked to settle a modelling
-question first.
 Claim an entry by name in your commit message.
+
+**One entry is ready to build.** *Specialized timelines* touches `epimemer/core/`
+and both storage backends, so it collides with ordinary backend work, and it is
+asked to settle a modelling question before any of it is written.
 
 ---
 
@@ -59,41 +57,13 @@ Each of these shipped; the named design document is the record.
 - **Benchmark coverage** (2026-08-29) — the diverse corpus with planted
   duplicates, the dating pass, per-phase `reflect` breakdown, embedding
   throughput on its own. `BENCHMARKS.md`.
+- **Colour customisation** (2026-09-01) — the token migration, the per-theme
+  store and the picker. `VISUALISATION.md` Part C, phases C1–C3. **C4 remains**:
+  export/import, preset themes, and making the semantic hues settable.
 
 ---
 
 ## Ready to build
-
-### Colour customisation — designed, not built
-
-**What.** A dropdown of colour pickers for the parts of the dashboard the user
-actually looks at: timeline text, detail text, and every background, with the
-choices persisted per theme in `localStorage`.
-
-**Fully designed already** — `VISUALISATION.md` Part C, phased C1→C4, including
-the token model, the contrast-ratio guard, and what is deliberately *not*
-customisable. This entry exists only so the backlog is complete; read Part C
-rather than this paragraph.
-
-**One piece is already built.** C.6's semantic palette shipped 2026-08-12 as
-`SemanticPalette` in `theme.ts` — not as picker work, but
-because the graph and timeline panels disagreed about what colour a fact is.
-The hues now have a single per-theme home, which is a small down-payment on C1's
-"one source of truth for colour". Everything else in Part C is unbuilt.
-
-**Cost.** C1 (the Tailwind token migration) is the bulk of it: ~230 grey class
-occurrences collapse to nine CSS-variable-backed semantic tokens. Large but
-mechanical, and it ends with a structural test that stops the migration rotting
-back. C2 and C3 (store, picker) are a few hundred lines on top.
-
-**Why it is worth doing even without the picker.** C1 gives `theme.ts` and the
-markup a single source of truth for colour. They currently duplicate those
-values and have already drifted once — the light-mode darkening pass had to fix
-the timeline axis separately from the chrome.
-
-**Blockers.** None.
-
----
 
 ### Specialized timelines
 

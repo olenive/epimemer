@@ -31,6 +31,16 @@ import {
   type Theme,
 } from "./theme";
 import {
+  type StoredPalette,
+  applyPalette,
+  clearStoredPalette,
+  noOverrides,
+  persistPalette,
+  readStoredPalette,
+  resetRequested,
+} from "./palette-store";
+import { initPalettePicker } from "./palette-picker";
+import {
   applyReflectCounterEvent,
   reflectBadgeClass,
   reflectBadgeLabel,
@@ -270,19 +280,69 @@ const recordSelector = initRetrievalSelector(
 
 const themeButton = $("btn-toggle-theme");
 
+// The escape hatch, taken before anything is drawn: a palette that has painted
+// its own reset control shut is unreachable from inside the page.
+if (resetRequested(location.search)) clearStoredPalette();
+
+let palette = readStoredPalette();
+
 /**
  * Put a theme on the page.
  *
  * The class is what Tailwind reads, but the graph canvas and the timeline SVG
  * are drawn rather than styled, so each has to be told separately.
+ *
+ * The viewer's overrides are re-applied on every switch because they are stored
+ * per theme: the colours light mode resolves to are not the ones dark mode
+ * does, and the inline properties left behind would otherwise be the previous
+ * theme's.
  */
 const useTheme = (theme: Theme): void => {
   applyTheme(theme);
+  applyPalette(theme, palette);
   themeButton.textContent = themeToggleIcon(theme);
   themeButton.title = themeToggleTitle(theme);
   graphPanel.applyTheme();
   timelinePanel.refresh();
   pipelineStrip.repaintDetail();
+};
+
+// --- Colours ---
+
+/**
+ * Take a changed set of overrides.
+ *
+ * `persist` is false while a swatch is still being dragged: the page follows
+ * every frame, storage records where the drag stopped.
+ */
+const usePalette = (next: StoredPalette, persist: boolean): void => {
+  palette = next;
+  if (persist) persistPalette(next);
+  useTheme(currentTheme());
+};
+
+const palettePicker = initPalettePicker({
+  button: $("btn-palette"),
+  panel: $("palette-panel"),
+  theme: () => currentTheme(),
+  read: () => palette,
+  write: usePalette,
+  reset: () => {
+    clearStoredPalette();
+    usePalette(noOverrides(), false);
+  },
+});
+
+/**
+ * Switch theme, and rebuild the picker if it is open.
+ *
+ * The swatches show the colours of the theme being edited, and the overrides
+ * behind them are stored per theme, so an open panel left alone across a switch
+ * would offer the other theme's values as this one's.
+ */
+const switchTheme = (theme: Theme): void => {
+  useTheme(theme);
+  if (palettePicker.isOpen()) palettePicker.render();
 };
 
 // The inline script in index.html already set the class before first paint, so
@@ -292,13 +352,13 @@ useTheme(currentTheme());
 themeButton.addEventListener("click", () => {
   const theme = nextTheme(currentTheme());
   persistTheme(theme);
-  useTheme(theme);
+  switchTheme(theme);
 });
 
 // Follow the OS while the user has expressed no preference of their own.
 if (typeof matchMedia === "function") {
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
-    if (storedTheme() === null) useTheme(e.matches ? "dark" : "light");
+    if (storedTheme() === null) switchTheme(e.matches ? "dark" : "light");
   });
 }
 
@@ -309,7 +369,7 @@ const updateModeBadge = (): void => {
   viewModeBadge.textContent = isLive ? "Live" : "Snapshot";
   viewModeBadge.className = isLive
     ? "px-1.5 py-0.5 rounded text-xs bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-400"
-    : "px-1.5 py-0.5 rounded text-xs bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-400";
+    : "px-1.5 py-0.5 rounded text-xs bg-surface-raised text-content-secondary";
 };
 
 let reflectState = unknownReflectState();
@@ -412,7 +472,7 @@ const populateSessionSelector = (): void => {
     // A disconnected session has nothing to say. An unreachable one stays
     // selectable: it may recover, and picking it is how its reason is shown.
     opt.disabled = !s.connected;
-    if (!s.connected) opt.className = "text-gray-400 dark:text-gray-600";
+    if (!s.connected) opt.className = "text-content-muted";
     else if (unreachable.has(s.session_id)) {
       opt.className = "text-amber-700 dark:text-amber-500";
     }

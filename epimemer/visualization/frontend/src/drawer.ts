@@ -46,9 +46,9 @@ const EMPTY: Record<DrawerTab, string> = {
 };
 
 const TAB_ON =
-  "px-2 py-0.5 text-xs rounded-t border-b-2 border-blue-500 text-gray-800 dark:text-gray-200";
+  "px-2 py-0.5 text-xs rounded-t border-b-2 border-blue-500 text-content-strong";
 const TAB_OFF =
-  "px-2 py-0.5 text-xs rounded-t border-b-2 border-transparent text-gray-600 dark:text-gray-500 hover:text-gray-800 dark:hover:text-gray-300";
+  "px-2 py-0.5 text-xs rounded-t border-b-2 border-transparent text-content-muted hover:text-content-strong";
 
 /**
  * The line a dimmed node's detail carries.

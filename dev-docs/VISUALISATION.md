@@ -1,15 +1,15 @@
 # Visualization: Hub Architecture, Pipeline Strip, Colour Customisation
 
-Implementation plans. **Parts A and B are built and merged** (written
-2026-07-24) and are kept as the design record. **Part C — colour
-customisation — is designed and not built** (written 2026-08-08); it starts
-below Part B.
+Implementation plans, kept as the design record. **Parts A and B are built and
+merged** (written 2026-07-24). **Part C — colour customisation — is built
+through C3** (designed 2026-08-08, built 2026-09-01); it starts below Part B.
 
-One piece of Part C went in ahead of the rest: **C.6's semantic palette is
-built** (2026-08-12, the drifted lookup tables). It was not a picker feature — the two
-panels disagreed about what colour a fact is, and fixing that meant giving the
-hues a single per-theme home. C.1's token migration, the store and the picker are all
-still unbuilt.
+Part C shipped in two instalments. C.6's semantic palette went first
+(2026-08-12, the drifted lookup tables): not a picker feature, but the fix for
+the two panels disagreeing about what colour a fact is, which meant giving the
+hues a single per-theme home. C1, C2 and C3 followed on 2026-09-01 — the token
+migration, the per-theme store, and the picker itself. **C4 is the remaining
+phase**: export/import, preset themes, and making the semantic hues settable.
 
 The failure this was written to kill: a stale MCP process holds the fixed viz
 port, so the browser shows *its* empty in-memory store while the session the
@@ -520,7 +520,8 @@ Landed in five steps: store, layout swap, tiles, detail view, polish.
 
 # Part C — Colour customisation
 
-Designed 2026-08-08. **Not built.**
+Designed 2026-08-08. **C.6's shared semantic palette shipped 2026-08-12; C1,
+C2 and C3 shipped 2026-09-01. C4 is not built.**
 
 Goal: a dropdown of colour pickers for the parts of the dashboard the user
 actually looks at — timeline text, detail text, and every background — with the
@@ -662,12 +663,12 @@ table in C.1:
 │   Headings      ▢ #111827   ⟲  AA 12.6:1  │
 │   Body          ▢ #374151   ⟲  AA  8.9:1  │
 │   Captions      ▢ #4b5563   ⟲  ⚠ 3.2:1    │
-│ Graph & timeline                          │
-│   Topic / Fact / Inference   ▢ ▢ ▢        │
-│ ───────────────────────────────────────── │
-│ [Export]  [Import]                        │
 └───────────────────────────────────────────┘
 ```
+
+A *Graph & timeline* group with the semantic hues, and Export/Import buttons,
+would sit below these — both are C4 (see C.6 and C.9), so C3's dropdown ends
+at the text group.
 
 Each row: a native `<input type="color">`, the hex, a per-token reset, and for
 text tokens a **live contrast ratio** against the surface it is drawn on.
@@ -791,16 +792,26 @@ Structural, in `layout.test.ts` (which already guards markup):
 
 Each phase is shippable on its own.
 
-1. **C1 — Token migration.** No UI, no behaviour change: the dashboard looks
-   identical afterwards. The largest and riskiest diff, done alone so a
-   regression is unambiguous. Ends with the structural test in C.8.
-2. **C2 — Store and apply.** `palette-store.ts`, `contrast.ts`, persistence,
-   and applying overrides to `:root` at startup. Still no UI — verified by
-   tests and by setting `localStorage` by hand.
-3. **C3 — The picker.** The dropdown, live preview, contrast badges, resets.
-   This is where the user's original request is satisfied.
+1. **C1 — Token migration.** ✅ Built 2026-09-01. No UI, no behaviour change.
+   The largest and riskiest diff, done alone so a regression is unambiguous.
+   Ends with the structural test in C.8.
+2. **C2 — Store and apply.** ✅ Built 2026-09-01. `palette-store.ts`,
+   `contrast.ts`, persistence, and applying overrides to `:root` at startup.
+   Still no UI — verified by tests and by setting `localStorage` by hand.
+3. **C3 — The picker.** ✅ Built 2026-09-01. The dropdown, live preview,
+   contrast badges, resets.
 4. **C4 — Later, if wanted.** Export/import, preset themes (high contrast,
    solarized), and semantic hues (C.6).
+
+**What the build settled that the design left open.** Tokens hold sRGB channels
+rather than hex, because six class occurrences carry an alpha modifier and
+`rgb(var(--token) / <alpha-value>)` is the only form Tailwind can compose one
+with. The nine defaults are written in `tokens.css` and again in `theme.ts`,
+which needs values where no stylesheet is loaded; a test parses the stylesheet
+and asserts the pair agrees, so that duplication cannot drift. Every text ratio
+is measured against `--surface-chrome`, the pairing C.5's own worked example
+uses. And C1 was not quite pixel-identical: about 25 occurrences moved a step,
+mostly the dark borders written `gray-800` joining the `gray-700` group.
 
 Doing C1 first is the point: it is what makes the timeline text, the detail
 text and every background settable *at all*, and it is worth landing even if

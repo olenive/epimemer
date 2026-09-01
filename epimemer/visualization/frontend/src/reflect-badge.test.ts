@@ -103,7 +103,7 @@ describe("rendering", () => {
     const state = unknownReflectState();
 
     expect(reflectBadgeLabel(state)).toBe("reflect —");
-    expect(reflectBadgeClass(state)).toContain("text-gray-600");
+    expect(reflectBadgeClass(state)).toContain("text-content-muted");
     expect(reflectBadgeTitle(state)).toContain("not yet known");
   });
 
@@ -111,7 +111,10 @@ describe("rendering", () => {
     const state = seedReflectState({ count: 7, threshold: 10, suggested: false });
 
     expect(reflectBadgeLabel(state)).toBe("reflect 7/10");
-    expect(reflectBadgeClass(state)).toContain("bg-gray-700");
+    expect(reflectBadgeClass(state)).toContain("bg-surface-raised");
+    // A step brighter than the unknown badge, which is the whole distinction
+    // now that both sit on the same surface.
+    expect(reflectBadgeClass(state)).toContain("text-content-secondary");
     expect(reflectBadgeClass(state)).not.toContain("amber");
   });
 

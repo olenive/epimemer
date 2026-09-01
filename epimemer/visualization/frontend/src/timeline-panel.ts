@@ -859,7 +859,7 @@ export const initTimelinePanel = (
 
     const caption = document.createElement("span");
     caption.className =
-      "text-[10px] uppercase tracking-wider text-gray-600 dark:text-gray-500 pr-1";
+      "text-[10px] uppercase tracking-wider text-content-muted pr-1";
     caption.textContent = "undated";
     controls.undated.appendChild(caption);
 
@@ -869,8 +869,8 @@ export const initTimelinePanel = (
         mark.id === state.selectedMarkId
           ? "px-1.5 py-0.5 text-[10px] rounded border bg-pink-100 text-pink-800 border-pink-300 " +
             "dark:bg-pink-900/60 dark:text-pink-200 dark:border-pink-700"
-          : "px-1.5 py-0.5 text-[10px] rounded border bg-gray-100 text-gray-600 border-gray-400 hover:bg-gray-50 " +
-            "dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700 dark:hover:bg-gray-700";
+          : "px-1.5 py-0.5 text-[10px] rounded border bg-surface-raised text-content-secondary " +
+            "border-line hover:bg-surface-raised-hover";
       chip.textContent = truncate(mark.title, 34);
       chip.title = mark.detail;
       chip.addEventListener("mouseenter", () => onSelect(mark));

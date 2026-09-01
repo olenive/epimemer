@@ -1,9 +1,16 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import tokensCss from "./tokens.css?inline";
 import {
   THEME_STORAGE_KEY,
+  TOKEN_DEFAULTS,
+  TOKEN_NAMES,
+  type Theme,
   applyTheme,
+  channelsToHex,
+  currentPalette,
+  invalidatePalette,
   currentTheme,
   nextTheme,
   paletteFor,
@@ -132,5 +139,99 @@ describe("persistence", () => {
       Storage.prototype.getItem = getItem;
       Storage.prototype.setItem = setItem;
     }
+  });
+});
+
+/**
+ * The two halves of the token table, held together.
+ *
+ * `tokens.css` is what the browser reads and `TOKEN_DEFAULTS` is what a module
+ * with no stylesheet falls back to. They are the same nine colours written
+ * twice, which is exactly the arrangement that let the timeline axis drift away
+ * from the header it sits under. This is the test that makes the drift
+ * impossible rather than merely unlikely.
+ */
+describe("the token defaults", () => {
+  const block = (name: string): Record<string, string> => {
+    const match = tokensCss.match(new RegExp(`${name}\\s*\\{([^}]*)\\}`));
+    if (match === null) throw new Error(`tokens.css has no ${name} block`);
+    return Object.fromEntries(
+      [...match[1].matchAll(/(--[a-z-]+):\s*([^;]+);/g)].map(([, token, value]) => [
+        token,
+        channelsToHex(value.replace(/\/\*.*?\*\//g, "")) ?? value.trim(),
+      ]),
+    );
+  };
+
+  it.each([
+    ["light", ":root"],
+    ["dark", "\\.dark"],
+  ])("matches the stylesheet for %s", (theme, selector) => {
+    expect(block(selector)).toEqual(TOKEN_DEFAULTS[theme as Theme]);
+  });
+
+  it("declares every token the palette derives from", () => {
+    for (const name of TOKEN_NAMES) {
+      expect(TOKEN_DEFAULTS.light[name]).toMatch(/^#[0-9a-f]{6}$/);
+      expect(TOKEN_DEFAULTS.dark[name]).toMatch(/^#[0-9a-f]{6}$/);
+    }
+  });
+});
+
+describe("channelsToHex", () => {
+  it("reads the form a token holds", () => {
+    expect(channelsToHex("209 213 219")).toBe("#d1d5db");
+    expect(channelsToHex("  3 7 18  ")).toBe("#030712");
+    expect(channelsToHex("229, 231, 235")).toBe("#e5e7eb");
+  });
+
+  it("refuses anything it cannot read, so the caller falls back", () => {
+    // An empty string is the ordinary case: no stylesheet has loaded yet.
+    expect(channelsToHex("")).toBeNull();
+    expect(channelsToHex("209 213")).toBeNull();
+    expect(channelsToHex("209 213 300")).toBeNull();
+    expect(channelsToHex("#d1d5db")).toBeNull();
+  });
+});
+
+describe("currentPalette caching", () => {
+  const root = () => document.documentElement;
+
+  beforeEach(() => {
+    applyTheme("light");
+    invalidatePalette();
+  });
+
+  it("reads the custom properties once, not once per render", () => {
+    // The timeline re-renders on every frame of a pan. Nine getComputedStyle
+    // reads in that loop is a forced reflow per frame, which is the one
+    // performance trap this design names.
+    const spy = vi.spyOn(window, "getComputedStyle");
+    currentPalette();
+    const afterFirst = spy.mock.calls.length;
+    for (let i = 0; i < 20; i += 1) currentPalette();
+    expect(spy.mock.calls.length).toBe(afterFirst);
+    spy.mockRestore();
+  });
+
+  it("invalidates when the theme changes", () => {
+    expect(currentPalette().surfaceChrome).toBe(TOKEN_DEFAULTS.light["--surface-chrome"]);
+    applyTheme("dark");
+    expect(currentPalette().surfaceChrome).toBe(TOKEN_DEFAULTS.dark["--surface-chrome"]);
+  });
+
+  it("picks up an override once told to", () => {
+    // What C2 will do: set the variable, then invalidate.
+    root().style.setProperty("--surface-chrome", "0 128 0");
+    invalidatePalette();
+    expect(currentPalette().surfaceChrome).toBe("#008000");
+    root().style.removeProperty("--surface-chrome");
+    invalidatePalette();
+  });
+
+  it("falls back to the defaults where no stylesheet resolves the token", () => {
+    // jsdom loads no CSS, so this is the ordinary path here — and the one that
+    // keeps the drawn panels coloured before the stylesheet arrives.
+    expect(currentPalette().nodeLabel).toBe(TOKEN_DEFAULTS.light["--text-primary"]);
   });
 });

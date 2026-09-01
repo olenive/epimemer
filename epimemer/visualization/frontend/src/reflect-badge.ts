@@ -64,12 +64,12 @@ const BADGE_BASE = "px-1.5 py-0.5 rounded text-xs";
 /** Amber once a reflect is due; muted otherwise, and dimmer still when unknown. */
 export const reflectBadgeClass = (state: ReflectBadgeState): string => {
   if (!state.known) {
-    return `${BADGE_BASE} bg-gray-200 text-gray-600 dark:bg-gray-800 dark:text-gray-600`;
+    return `${BADGE_BASE} bg-surface-raised text-content-muted`;
   }
   if (state.suggested) {
     return `${BADGE_BASE} bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400`;
   }
-  return `${BADGE_BASE} bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-400`;
+  return `${BADGE_BASE} bg-surface-raised text-content-secondary`;
 };
 
 export const reflectBadgeTitle = (state: ReflectBadgeState): string =>

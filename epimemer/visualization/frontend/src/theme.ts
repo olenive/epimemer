@@ -6,6 +6,13 @@
  * the cytoscape canvas, the timeline SVG, the graphviz DOT — so those read a
  * palette from here instead.
  *
+ * Since the token migration the neutrals are not written here twice. The
+ * chrome-adjacent fields of `Palette` read the same custom properties the
+ * Tailwind classes do (`src/tokens.css`), which is what stops the two drifting:
+ * the light-mode darkening pass previously had to fix the timeline axis apart
+ * from the header it sits under. Only the genuinely draw-only fields, the
+ * graphviz set, still carry literals.
+ *
  * Two palettes live here. `Palette` is the **neutrals** for the drawn panels.
  * `SemanticPalette` is the hues that say *what kind of thing* something is, and
  * it is shared by every panel that draws one — which it had to become: the
@@ -70,19 +77,81 @@ export interface Palette {
   dotEdgeLabel: string;
 }
 
-const DARK: Palette = {
-  nodeLabel: "#d1d5db",
-  nodeBorder: "#1f2937",
-  axis: "#374151",
-  tick: "#4b5563",
+/**
+ * The nine neutral tokens, and the defaults `src/tokens.css` declares.
+ *
+ * Written twice, in two languages, because a stylesheet cannot be imported by a
+ * module that has to run without one — jsdom loads no CSS, and the drawn panels
+ * must still have colours before the stylesheet arrives. `theme.test.ts` parses
+ * `tokens.css` and asserts these agree, so the pair cannot drift the way the
+ * values they replaced did.
+ */
+export const TOKEN_NAMES = [
+  "--surface-page",
+  "--surface-chrome",
+  "--surface-raised",
+  "--surface-raised-hover",
+  "--border",
+  "--text-strong",
+  "--text-primary",
+  "--text-secondary",
+  "--text-muted",
+] as const;
+
+export type TokenName = (typeof TOKEN_NAMES)[number];
+
+export const TOKEN_DEFAULTS: Record<Theme, Record<TokenName, string>> = {
+  light: {
+    "--surface-page": "#e5e7eb",
+    "--surface-chrome": "#d1d5db",
+    "--surface-raised": "#f3f4f6",
+    "--surface-raised-hover": "#f9fafb",
+    "--border": "#9ca3af",
+    "--text-strong": "#1f2937",
+    "--text-primary": "#374151",
+    "--text-secondary": "#4b5563",
+    "--text-muted": "#4b5563",
+  },
+  dark: {
+    "--surface-page": "#030712",
+    "--surface-chrome": "#111827",
+    "--surface-raised": "#1f2937",
+    "--surface-raised-hover": "#374151",
+    "--border": "#374151",
+    "--text-strong": "#e5e7eb",
+    "--text-primary": "#d1d5db",
+    "--text-secondary": "#9ca3af",
+    "--text-muted": "#6b7280",
+  },
+};
+
+/** `"209 213 219"` — the form a token holds — to `"#d1d5db"`. */
+export const channelsToHex = (channels: string): string | null => {
+  const parts = channels.trim().split(/[\s,]+/);
+  if (parts.length !== 3) return null;
+  const bytes = parts.map((part) => Number(part));
+  if (bytes.some((b) => !Number.isInteger(b) || b < 0 || b > 255)) return null;
+  return "#" + bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
+};
+
+/** Fields that are the same colour as the chrome, and which token each takes. */
+const DERIVED: Record<string, TokenName> = {
+  nodeLabel: "--text-primary",
+  nodeBorder: "--border",
+  axis: "--border",
+  tick: "--text-muted",
   // A step brighter than `tick`: the label sits on a plate in the mark column,
-  // and gray-500 on gray-900 is only ~3.9:1.
-  tickLabel: "#9ca3af",
-  surfaceChrome: "#111827",
-  breakSlash: "#6b7280",
-  breakLabel: "#9ca3af",
-  referenceLine: "#6b7280",
-  referenceLabel: "#9ca3af",
+  // and the muted token on the chrome is only ~3.9:1.
+  tickLabel: "--text-secondary",
+  surfaceChrome: "--surface-chrome",
+  breakSlash: "--text-muted",
+  breakLabel: "--text-secondary",
+  referenceLine: "--text-muted",
+  referenceLabel: "--text-secondary",
+};
+
+/** The graphviz set: drawn only, with no counterpart in the chrome. */
+const DARK_DRAWN = {
   placeFill: "#1e293b",
   placeStroke: "#475569",
   placeText: "#94a3b8",
@@ -93,17 +162,7 @@ const DARK: Palette = {
   dotEdgeLabel: "#64748b",
 };
 
-const LIGHT: Palette = {
-  nodeLabel: "#374151",
-  nodeBorder: "#9ca3af",
-  axis: "#6b7280",
-  tick: "#6b7280",
-  tickLabel: "#4b5563",
-  surfaceChrome: "#d1d5db",
-  breakSlash: "#4b5563",
-  breakLabel: "#374151",
-  referenceLine: "#4b5563",
-  referenceLabel: "#374151",
+const LIGHT_DRAWN = {
   placeFill: "#f1f5f9",
   placeStroke: "#94a3b8",
   placeText: "#475569",
@@ -114,7 +173,21 @@ const LIGHT: Palette = {
   dotEdgeLabel: "#64748b",
 };
 
-export const paletteFor = (theme: Theme): Palette => (theme === "dark" ? DARK : LIGHT);
+/** Build a palette from a set of token values plus the theme's drawn literals. */
+const assemble = (theme: Theme, tokens: Record<TokenName, string>): Palette => {
+  const derived = Object.fromEntries(
+    Object.entries(DERIVED).map(([field, token]) => [field, tokens[token]]),
+  );
+  return { ...derived, ...(theme === "dark" ? DARK_DRAWN : LIGHT_DRAWN) } as Palette;
+};
+
+/**
+ * The palette a theme has with nothing overridden.
+ *
+ * Pure, and the answer callers want when there is no document to read: the
+ * defaults rather than whatever the viewer has since chosen.
+ */
+export const paletteFor = (theme: Theme): Palette => assemble(theme, TOKEN_DEFAULTS[theme]);
 
 // --- Semantic hues ---
 
@@ -228,7 +301,41 @@ export const themeToggleTitle = (theme: Theme): string =>
 export const currentTheme = (root: HTMLElement = document.documentElement): Theme =>
   root.classList.contains("dark") ? "dark" : "light";
 
-export const currentPalette = (): Palette => paletteFor(currentTheme());
+/**
+ * The palette as the document currently resolves it, cached.
+ *
+ * **Never read the custom properties per render.** `currentPalette()` is called
+ * on every frame of a timeline pan, and nine `getComputedStyle` reads in that
+ * loop is a forced reflow per frame. The values only change when the theme
+ * changes or the viewer overrides one, so they are read once and held until
+ * something says otherwise.
+ *
+ * A token the document does not resolve falls back to its default, which is
+ * what happens wherever no stylesheet is loaded.
+ */
+let cached: { theme: Theme; palette: Palette } | null = null;
+
+/** Drop the cached palette. Call after anything that changes a token's value. */
+export const invalidatePalette = (): void => {
+  cached = null;
+};
+
+const readTokens = (theme: Theme, root: HTMLElement): Record<TokenName, string> => {
+  const computed = getComputedStyle(root);
+  const entries = TOKEN_NAMES.map((name) => {
+    const hex = channelsToHex(computed.getPropertyValue(name));
+    return [name, hex ?? TOKEN_DEFAULTS[theme][name]];
+  });
+  return Object.fromEntries(entries) as Record<TokenName, string>;
+};
+
+export const currentPalette = (root: HTMLElement = document.documentElement): Palette => {
+  const theme = currentTheme(root);
+  if (cached !== null && cached.theme === theme) return cached.palette;
+  const palette = assemble(theme, readTokens(theme, root));
+  cached = { theme, palette };
+  return palette;
+};
 
 export const currentSemanticPalette = (): SemanticPalette =>
   semanticPaletteFor(currentTheme());
@@ -240,6 +347,9 @@ export const applyTheme = (
   root.classList.toggle("dark", theme === "dark");
   // Lets the browser theme form controls and scrollbars to match.
   root.style.colorScheme = theme;
+  // The tokens now resolve to the other theme's values, so anything drawn from
+  // the cache would be a frame behind.
+  invalidatePalette();
 };
 
 /** Read the persisted choice, tolerating storage being unavailable. */
