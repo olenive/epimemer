@@ -92,7 +92,8 @@ async def review_labels_for(
       wording under the inference changed while the claim did not; ids are the
       facts that were absorbed. Deliberately *not* folded into
       ``evidence_stale`` — nothing was overturned, and that label is what
-      archival nominates on.
+      archival nominates on. A re-read is recorded the same way as for
+      ``evidence_stale``: a retention anchored to these ids.
     - ``contested`` — node has a ``contradiction`` edge (either direction) to a
       node that is still ACTIVE and in the same frame (an unresolved same-frame
       conflict); ids are the contesting nodes.
@@ -326,18 +327,22 @@ async def gather_pending_review(
     contested pair to the human). Reads only; resolution is a separate, explicit
     act.
 
-    **A node whose stale evidence somebody has already re-read and kept is not
-    listed**, on the same terms as the archival nominator: the worklist is what
-    is *outstanding*, and re-offering a resolved item to an agent who cannot see
-    it was resolved is the treadmill the retention verdict exists to end. The
-    label itself stays — `review_labels_for` reports what is true of the node,
-    and it remains true that this inference rests on evidence that changed.
-    Being true and being outstanding are different questions, and only the
-    second is a worklist.
+    **A node whose stale or merged evidence somebody has already re-read and
+    kept is not listed**, on the same terms as the archival nominator: the
+    worklist is what is *outstanding*, and re-offering a resolved item to an
+    agent who cannot see it was resolved is the treadmill the retention verdict
+    exists to end. The label itself stays — `review_labels_for` reports what is
+    true of the node, and it remains true that this inference rests on evidence
+    that changed. Being true and being outstanding are different questions, and
+    only the second is a worklist.
+
+    The subtraction is per id, so a node kept against one premise and later
+    handed another is listed with the new reason alone — and what is listed is
+    exactly what `apply_reflection(retained=...)` will accept as `covers`.
     """
     from epimemer.pipelines.reflection.retention import (
         confirmed_reasons_for,
-        retention_covers,
+        uncovered_reasons,
     )
 
     nodes = list(await storage.query_nodes())
@@ -350,10 +355,14 @@ async def gather_pending_review(
     outstanding = []
     for node in flagged:
         labels = dict(labels_by_node[node.id])
-        if "evidence_stale" in labels and retention_covers(
-            node.id, labels["evidence_stale"], retained
-        ):
-            del labels["evidence_stale"]
+        for label in ("evidence_stale", "evidence_merged"):
+            if label not in labels:
+                continue
+            still_open = uncovered_reasons(node.id, labels[label], retained)
+            if still_open:
+                labels[label] = still_open
+            else:
+                del labels[label]
         if labels:
             outstanding.append((node, labels))
     return outstanding

@@ -35,9 +35,12 @@ from epimemer.core.types import (
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.pipelines.reflection.archival import nominate_archival_candidates
 from epimemer.pipelines.reflection.retention import (
+    archival_reasons,
     confirmed_reasons_for,
+    outstanding_reasons,
     record_retention,
     retention_covers,
+    uncovered_reasons,
 )
 
 
@@ -95,6 +98,26 @@ async def _inference_on(storage, content: str, premises) -> Inference:
     return inference
 
 
+async def _absorbed_under(storage, inference: Inference, content: str) -> Fact:
+    """A premise of `inference` that a merge has absorbed: the phrasing is
+    MERGED and the inference carries the `evidence_merged` flag naming it."""
+    absorbed = await _fact(storage, content, status=NodeStatus.MERGED)
+    await storage.store_edge(
+        NodeEdge(
+            src_id=absorbed.id,
+            dst_id=inference.id,
+            type=EdgeType.EVIDENCE_MERGED,
+        )
+    )
+    return absorbed
+
+
+async def _worklist(storage) -> dict[str, dict[str, list[str]]]:
+    from epimemer.pipelines.reflection.review import gather_pending_review
+
+    return {node.id: labels for node, labels in await gather_pending_review(storage)}
+
+
 async def _reasons(storage, node_id: str) -> set[str]:
     return (await confirmed_reasons_for([node_id], storage)).get(node_id, set())
 
@@ -124,6 +147,19 @@ class TestTheRuleWithoutAStore:
         something else does not."""
         assert retention_covers("n", (), {"n": {"n"}}) is True
         assert retention_covers("n", (), {"n": {"other"}}) is False
+
+    def test_a_re_read_covers_absorbed_premises_and_archival_ignores_them(self):
+        """The two definitions, side by side, because the gap between them is
+        the design: a merge is a reason to re-read and never a reason to
+        archive."""
+        labels = {"evidence_stale": ["s"], "evidence_merged": ["m"]}
+        assert outstanding_reasons(labels, ["g"]) == ["s", "m", "g"]
+        assert archival_reasons(labels, ["g"]) == ["s", "g"]
+
+    def test_only_what_is_still_open_is_asked_for(self):
+        assert uncovered_reasons("n", ["a", "b"], {"n": {"a"}}) == ["b"]
+        assert uncovered_reasons("n", ["a", "b"], {}) == ["a", "b"]
+        assert uncovered_reasons("n", ["a"], {"n": {"a"}}) == []
 
 
 class TestAConfirmedInferenceIsNotRenominated:
@@ -437,6 +473,160 @@ class TestTheDocumentedFlowActuallyWorks:
         assert result["retentions_recorded"] == 0
         assert [row["node_id"] for row in result["retained_skipped"]] == [fact.id]
         assert "archivals" in result["retained_skipped"][0]["why"]
+
+
+class TestARereadOfAMergedPremiseHasSomewhereToGo:
+    """`evidence_merged` was the one label with no writer.
+
+    Its docstrings said *re-read it*, and an agent that did had nowhere to say
+    so: `outstanding_reasons` did not count the absorbed ids and the worklist
+    never subtracted a keep from that label, so twelve inferences on this
+    project's own graph came back on every reflect for a week. The verdict
+    already existed; it only had to be allowed to cover this reason.
+    """
+
+    async def test_it_is_listed_until_the_re_read_is_recorded(self, storage):
+        premise = await _fact(storage, "the deploy failed")
+        inference = await _inference_on(storage, "the release was rushed", [premise])
+        absorbed = await _absorbed_under(storage, inference, "the deployment failed")
+
+        assert (await _worklist(storage))[inference.id] == {"evidence_merged": [absorbed.id]}
+
+        await record_retention(storage, node_id=inference.id, reasons=[absorbed.id])
+
+        assert inference.id not in await _worklist(storage)
+
+    async def test_the_tool_accepts_the_absorbed_ids_as_covers(self, storage, embedding_provider):
+        """Through the boundary, with the ids exactly as `reflect` shows them,
+        because that is the call an agent following the guidance makes."""
+        from epimemer.mcp import tools
+
+        premise = await _fact(storage, "the deploy failed")
+        inference = await _inference_on(storage, "the release was rushed", [premise])
+        absorbed = await _absorbed_under(storage, inference, "the deployment failed")
+
+        result, _ = await tools.apply_reflection(
+            storage,
+            embedding_provider,
+            retained=[
+                {
+                    "node_id": inference.id,
+                    "because": "re-read against the survivor's wording; it holds",
+                    "covers": [absorbed.id],
+                }
+            ],
+        )
+
+        assert result["retentions_recorded"] == 1
+        assert result["retained_skipped"] == []
+        assert await _reasons(storage, inference.id) == {absorbed.id}
+        assert inference.id not in await _worklist(storage)
+
+    async def test_archival_never_nominates_on_it_before_or_after(self, storage):
+        """The deliberate exclusion, guarded on both sides of the keep. A merge
+        gives a premise provenance rather than taking its basis away, so a
+        nominator reading the label would have every merge propose discarding
+        its own dependents."""
+        premise = await _fact(storage, "the deploy failed")
+        inference = await _inference_on(storage, "the release was rushed", [premise])
+        absorbed = await _absorbed_under(storage, inference, "the deployment failed")
+
+        assert not _nominated(await nominate_archival_candidates(storage), inference.id)
+
+        await record_retention(storage, node_id=inference.id, reasons=[absorbed.id])
+
+        assert not _nominated(await nominate_archival_candidates(storage), inference.id)
+
+    async def test_a_later_absorption_is_a_reason_nobody_covered(self, storage):
+        """Anchored, not permanent: the same rule as a second supersession."""
+        premise = await _fact(storage, "the deploy failed")
+        inference = await _inference_on(storage, "the release was rushed", [premise])
+        first = await _absorbed_under(storage, inference, "the deployment failed")
+        await record_retention(storage, node_id=inference.id, reasons=[first.id])
+
+        second = await _absorbed_under(storage, inference, "the rollout failed")
+
+        assert (await _worklist(storage))[inference.id] == {"evidence_merged": [second.id]}
+
+
+class TestCoversIsMeasuredAgainstWhatIsOutstanding:
+    """The second half of the same defect: the tool compared `covers` with every
+    reason the node had ever carried, while the worklist showed only what was
+    still open. A node kept against a superseded premise and later flagged on
+    an absorbed one was told to name the superseded premise again — and doing
+    so wrote a second anchor that said nothing new.
+    """
+
+    async def _kept_on_stale_then_merged(self, storage):
+        stale = await _fact(storage, "the deploy failed", status=NodeStatus.SUPERSEDED)
+        inference = await _inference_on(storage, "the release was rushed", [stale])
+        await record_retention(storage, node_id=inference.id, reasons=[stale.id])
+        absorbed = await _absorbed_under(storage, inference, "the deployment failed")
+        return stale, inference, absorbed
+
+    async def test_the_worklist_and_the_tool_ask_the_same_question(
+        self, storage, embedding_provider
+    ):
+        from epimemer.mcp import tools
+
+        stale, inference, absorbed = await self._kept_on_stale_then_merged(storage)
+        assert (await _worklist(storage))[inference.id] == {"evidence_merged": [absorbed.id]}
+
+        result, _ = await tools.apply_reflection(
+            storage,
+            embedding_provider,
+            retained=[{"node_id": inference.id, "because": "re-read", "covers": [absorbed.id]}],
+        )
+
+        assert result["retentions_recorded"] == 1
+        assert result["retained_skipped"] == []
+        assert await _reasons(storage, inference.id) == {stale.id, absorbed.id}
+        assert inference.id not in await _worklist(storage)
+
+    async def test_naming_an_answered_reason_again_is_refused_and_says_why(
+        self, storage, embedding_provider
+    ):
+        """Refused as *already covered*, which is a different message from
+        *not nominated on*: the caller did read the right node, and what it
+        got wrong is worth telling it precisely."""
+        from epimemer.mcp import tools
+
+        stale, inference, absorbed = await self._kept_on_stale_then_merged(storage)
+
+        result, _ = await tools.apply_reflection(
+            storage,
+            embedding_provider,
+            retained=[
+                {
+                    "node_id": inference.id,
+                    "because": "re-read",
+                    "covers": [stale.id, absorbed.id],
+                }
+            ],
+        )
+
+        assert result["retentions_recorded"] == 0
+        why = result["retained_skipped"][0]["why"]
+        assert stale.id in why and "already covers" in why
+        assert await _reasons(storage, inference.id) == {stale.id}
+
+    async def test_a_node_with_nothing_open_is_skipped_rather_than_re_anchored(
+        self, storage, embedding_provider
+    ):
+        from epimemer.mcp import tools
+
+        stale = await _fact(storage, "the deploy failed", status=NodeStatus.SUPERSEDED)
+        inference = await _inference_on(storage, "the release was rushed", [stale])
+        await record_retention(storage, node_id=inference.id, reasons=[stale.id])
+
+        result, _ = await tools.apply_reflection(
+            storage,
+            embedding_provider,
+            retained=[{"node_id": inference.id, "because": "still fine", "covers": [stale.id]}],
+        )
+
+        assert result["retentions_recorded"] == 0
+        assert "nothing is outstanding" in result["retained_skipped"][0]["why"]
 
 
 class TestArchivedEvidenceIsAnchoredToo:

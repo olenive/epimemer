@@ -293,7 +293,9 @@ async def nominate_archival_candidates(
        **`evidence_merged` is deliberately not read here**: a premise that
        absorbed another claim gained provenance rather than losing its basis, so
        nominating on it would have every merge propose discarding its own
-       dependents. That label asks the agent for a re-read, not for a verdict.
+       dependents. That label asks the agent for a re-read, which is recorded
+       as a keep anchored to the absorbed ids; `archival_reasons` is the
+       narrower set this class reads.
     3. **never_retrieved** — active facts never returned by a search, not judged
        important, and with nothing depending on them.
     4. **stale_judgment** — active nodes held above the ceiling by an upward
@@ -307,8 +309,8 @@ async def nominate_archival_candidates(
     proposal, not a verdict.
     """
     from epimemer.pipelines.reflection.retention import (
+        archival_reasons,
         confirmed_reasons_for,
-        outstanding_reasons,
         retention_covers,
     )
     from epimemer.pipelines.reflection.review import review_labels_for
@@ -350,7 +352,7 @@ async def nominate_archival_candidates(
 
     for node in active:
         if isinstance(node, Inference):
-            reasons = outstanding_reasons(labels_by_node.get(node.id, {}), gone_by_node[node.id])
+            reasons = archival_reasons(labels_by_node.get(node.id, {}), gone_by_node[node.id])
             if reasons and not retention_covers(node.id, reasons, retained):
                 candidates["evidence_stale"].append(_candidate(node, "evidence_stale"))
             continue

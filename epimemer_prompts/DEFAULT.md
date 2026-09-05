@@ -325,7 +325,8 @@ useful:
   basis changed and it may need re-deriving.
 - `evidence_merged` → an inference whose premise absorbed another claim. Nothing
   was overturned and the premise gained provenance, so this asks for a re-read,
-  not a re-derivation; the ids name the phrasings that went away.
+  not a re-derivation; the ids name the phrasings that went away. Record the
+  re-read with `apply_reflection(retained=[...])`, `covers` naming those ids.
 - `contested` → an unresolved same-frame contradiction; do not trust it blindly.
 
 ### Recording that something matters (judge_importance)
@@ -466,6 +467,18 @@ the same loop: nomination proposes, you judge, the **user approves**.
   `restore` puts them back.
 - Never archive an inference on your own initiative. A stale inference is a
   prompt to re-derive it, and inferences are the expensive layer to recreate.
+- **A nominee you looked at and kept is a verdict too**, and it has a writer:
+  `apply_reflection(retained=[{node_id, because, covers}])`. Left unrecorded,
+  the node comes back on every reflect to an agent who cannot see it was
+  already kept. `covers` is exactly the ids `pending_review` lists beside the
+  node under `evidence_stale` and `evidence_merged`; omit it for a
+  `never_retrieved` nominee, which names no reason. A reason a standing keep
+  already covers is neither listed nor accepted again, and a premise that
+  changes later is a new reason the old keep does not cover.
+- `evidence_merged` in `pending_review` asks for a re-read, not a
+  re-derivation: the premise absorbed another claim, so check the inference
+  still says what the survivor's wording supports, then record the re-read
+  with `retained`, `covers` naming the absorbed ids.
 
 ### Timelines (when things happened)
 Distinct from record time — a timeline is about the *content*, not about when the

@@ -3681,8 +3681,10 @@ async def apply_reflection(
         is the one thing anchoring exists to prevent. Naming every premise to be
         safe is the failure mode, not the safe option. The ids are the ones
         `reflect` shows beside the node in `pending_review` under
-        `evidence_stale` — `archival_candidates` carries the nomination but not
-        the ids, so take them from there.
+        `evidence_stale` and `evidence_merged` — `archival_candidates` carries
+        the nomination but not the ids, so take them from there. What is shown
+        there is what is still open: a reason a standing keep already covers is
+        neither listed nor accepted again.
         **Omit `covers` only where the nomination names no reason** — a node
         nothing links to and nothing has retrieved (`never_retrieved`). Then the
         node is its own anchor, which is sound because nothing about that
@@ -4175,8 +4177,10 @@ async def apply_reflection(
     from epimemer.pipelines.reflection.archival import evidence_gone_for
     from epimemer.pipelines.reflection.retention import (
         UnknownAnchors,
+        confirmed_reasons_for,
         outstanding_reasons,
         record_retention,
+        uncovered_reasons,
     )
     from epimemer.pipelines.reflection.review import review_labels_for
 
@@ -4198,6 +4202,7 @@ async def apply_reflection(
     gone_for_retained = await evidence_gone_for(
         [node for node in live if isinstance(node, Inference)], storage
     )
+    confirmed_for_retained = await confirmed_reasons_for([node.id for node in live], storage)
 
     for entry in retained or []:
         node_id = (entry.get("node_id") or "").strip()
@@ -4224,9 +4229,11 @@ async def apply_reflection(
             _skip(node_id, "unknown here, or not active")
             continue
 
-        # `covers` must be **exactly** the reasons the node carries, read the way
-        # the nominator reads them. Both directions are refusals, and each closes
-        # a way of reporting success while suppressing nothing or too much:
+        # `covers` must be **exactly** the reasons still open on the node, read
+        # the way the worklist reads them: everything the node carries, less
+        # what a standing keep already anchors to. Both directions are refusals,
+        # and each closes a way of reporting success while suppressing nothing
+        # or too much:
         #
         # - missing ids write a verdict that does not cover the nomination, so
         #   the node returns on the next reflect having been reported kept;
@@ -4245,19 +4252,39 @@ async def apply_reflection(
         # and the verdict is refused — right, because an anchor written on the
         # restored fact is the restore-then-re-archive hole with a head start.
         covers = list(entry.get("covers") or [])
-        reasons = outstanding_reasons(
+        carried = outstanding_reasons(
             labels_for_retained.get(node_id, {}),
             gone_for_retained.get(node_id, []),
         )
+        reasons = uncovered_reasons(node_id, carried, confirmed_for_retained)
+        if carried and not reasons:
+            # Not the self-anchor case: the node has reasons, and every one is
+            # answered. Writing anything here would record a second look nobody
+            # asked for, on a node the worklist no longer shows.
+            _skip(
+                node_id,
+                "every reason this node carries is already covered by a "
+                "standing keep; nothing is outstanding to record",
+            )
+            continue
         if set(covers) != set(reasons):
+            already = confirmed_for_retained.get(node_id, set())
             missing = sorted(set(reasons) - set(covers))
             surplus = sorted(set(covers) - set(reasons))
+            answered = [anchor for anchor in surplus if anchor in already]
+            unasked = [anchor for anchor in surplus if anchor not in already]
             said = []
             if missing:
                 said.append(f"does not cover {', '.join(missing)} — re-read it and name it")
-            if surplus:
+            if answered:
                 said.append(
-                    f"covers {', '.join(surplus)}, which this node is not "
+                    f"covers {', '.join(answered)}, which a standing keep "
+                    f"already covers: the question was answered, and a second "
+                    f"anchor would say nothing new"
+                )
+            if unasked:
+                said.append(
+                    f"covers {', '.join(unasked)}, which this node is not "
                     f"nominated on: a verdict cannot answer a question nobody "
                     f"has asked yet"
                 )

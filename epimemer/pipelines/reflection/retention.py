@@ -29,7 +29,23 @@ survives it when the node's current reasons are not all covered:
 | Nomination | Anchored to |
 |---|---|
 | `evidence_stale` | the changed facts named in the label, one edge each |
+| `evidence_merged` | the absorbed phrasings named in the label, one edge each |
 | `never_retrieved` | the node itself — the nomination names no reason |
+
+`evidence_merged` joined the table on 2026-09-03. It had been the one label
+with no writer: the docstrings said *re-read it*, and an agent that did had
+nowhere to say so, which put twelve inferences on this project's own graph back
+on every reflect for a week — the treadmill this module was written to end,
+reintroduced one label over. A re-read is a keep, anchored to the wording that
+went away, and a later absorption is a reason nobody covered, exactly as a
+later supersession is.
+
+**Archival still never reads `evidence_merged`**, and the two definitions below
+are the record of that: `outstanding_reasons` is what a re-read must cover, and
+`archival_reasons` is the narrower set the archival nominator proposes on. A
+merge gives a premise provenance rather than taking its basis away, so a
+nominator that read the label would have every merge propose discarding its own
+dependents.
 
 The self-anchor is the degenerate case rather than a second mechanism. Nothing
 about *nothing links to this and nothing retrieved it* can change without
@@ -67,19 +83,59 @@ class UnknownAnchors(Exception):
 def outstanding_reasons(
     labels: dict[str, list[str]], archived_evidence: Sequence[str]
 ) -> list[str]:
-    """The reasons this node is nominated on, as ids a verdict can cover.
+    """Every reason this node carries, as ids a keep verdict can cover.
 
-    **One definition, read by the nominator and by the tool that refuses an
+    **One definition, read by the worklist and by the tool that refuses an
     uncovered verdict.** Two definitions is how the last defect in this area
     happened: a verdict was written against one notion of *the reasons* and read
     against another, and the call reported success either way.
 
-    The union of the two paths that nominate an inference: the facts named by
-    the `evidence_stale` label, and — where the whole evidence set has been
-    archived — the archived facts themselves. Deduplicated and ordered, because
-    it is compared as a set but shown to a person as a list.
+    The union of the three paths that put an inference in front of a reviewer:
+    the facts named by the `evidence_stale` label, the absorbed phrasings named
+    by `evidence_merged`, and — where the whole evidence set has been archived —
+    the archived facts themselves. Deduplicated and ordered, because it is
+    compared as a set but shown to a person as a list.
+
+    Every reason the node *carries*, not every reason still open: subtract what
+    a standing retention covers with `uncovered_reasons` before asking a caller
+    to name them.
+    """
+    return list(
+        dict.fromkeys(
+            [
+                *labels.get("evidence_stale", ()),
+                *labels.get("evidence_merged", ()),
+                *archived_evidence,
+            ]
+        )
+    )
+
+
+def archival_reasons(labels: dict[str, list[str]], archived_evidence: Sequence[str]) -> list[str]:
+    """The reasons the archival nominator proposes on: `outstanding_reasons`
+    without `evidence_merged`.
+
+    A separate name rather than a flag, so the exclusion reads as a decision at
+    the call site. A premise that absorbed another claim gained provenance
+    rather than losing its basis; nominating on it would have every merge
+    propose discarding its own dependents.
     """
     return list(dict.fromkeys([*labels.get("evidence_stale", ()), *archived_evidence]))
+
+
+def uncovered_reasons(
+    node_id: str, reasons: Iterable[str], covered: dict[str, set[str]]
+) -> list[str]:
+    """The reasons still open on this node: `reasons` less what a standing
+    retention already anchors to.
+
+    What the worklist shows and what a keep must cover are the same set, and
+    this is where it is computed. Measuring a verdict against every reason the
+    node carries instead asked a caller to re-name a premise somebody had
+    already re-read, and complying wrote a second anchor that said nothing new.
+    """
+    confirmed = covered.get(node_id, set())
+    return [reason for reason in reasons if reason not in confirmed]
 
 
 async def confirmed_reasons_for(

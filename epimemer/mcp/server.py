@@ -1593,7 +1593,9 @@ async def memory_reflect(
       with the related ids to act on via apply_reflection supersessions /
       supersede_by. evidence_merged asks for a re-read rather than a
       resolution: the premise absorbed another claim, so check the inference
-      still says what the survivor's wording supports
+      still says what the survivor's wording supports, then record the
+      re-read with apply_reflection retained, covers naming the absorbed ids
+      it lists. Unrecorded, it comes back on every reflect
     - similar_relations: likely-synonymous user relationship labels. Judge each
       one with apply_reflection relation_verdicts, recording
       "distinct"/"synonymous". Nothing rewrites an edge either way — a label is

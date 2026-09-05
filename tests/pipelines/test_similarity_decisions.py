@@ -25,6 +25,7 @@ from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
     Fact,
+    JudgeRef,
     Metacontext,
     NodeEdge,
     NodeStatus,
@@ -152,20 +153,36 @@ async def _framed(storage, fact: Fact, label: str) -> str:
     return frame.id
 
 
-async def _decide(storage, a: Fact, b: Fact, verdict: str, because: str = "judged"):
+async def _decide(
+    storage,
+    a: Fact,
+    b: Fact,
+    verdict: str,
+    because: str = "judged",
+    judge: JudgeRef | None = None,
+):
     return await apply_similarity_decision(
-        storage, a_id=a.id, b_id=b.id, verdict=verdict, because=because
+        storage, a_id=a.id, b_id=b.id, verdict=verdict, because=because, judge=judge
     )
+
+
+async def _edges_between(storage, a: Fact, b: Fact) -> dict[str, NodeEdge]:
+    """Every edge joining a and b, in either direction, keyed by type.
+
+    One edge per type is the invariant `apply_similarity_decision` maintains, so
+    a dict loses nothing and lets a test ask what a named edge recorded.
+    """
+    found = {}
+    for src, dst in ((a.id, b.id), (b.id, a.id)):
+        for edge in await storage.get_edges_from(src):
+            if edge.dst_id == dst:
+                found[edge.type.value] = edge
+    return found
 
 
 async def _edge_types_between(storage, a: Fact, b: Fact) -> set[str]:
     """Every edge type joining a and b, in either direction."""
-    found = set()
-    for src, dst in ((a.id, b.id), (b.id, a.id)):
-        for edge in await storage.get_edges_from(src):
-            if edge.dst_id == dst:
-                found.add(edge.type.value)
-    return found
+    return set(await _edges_between(storage, a, b))
 
 
 async def _count(storage, fact: Fact) -> int:
@@ -558,6 +575,70 @@ class TestTheEdgeCarriesWhyItWasWritten:
         }
 
 
+class TestTheEdgeNamesWhoDecided:
+    """`judged_by`, on every edge a verdict writes.
+
+    The reason it is asserted here rather than trusted: the `memory` graph
+    carries verdicts recorded with no judge, and reading the code cannot tell a
+    session that claimed nobody from a threading bug that dropped the judge on
+    the way. Only an assertion at the write separates the two, and this file had
+    none — the same gap the boundary tests were written for after `retained`.
+
+    A judged decision is readable years later because the digest pins what the
+    agent claimed to be at the time; an unjudged one records `None`, which means
+    unknown and nothing more (§3.3).
+    """
+
+    JUDGE = JudgeRef(agent_id="Opus 5", digest="deadbeef")
+
+    async def test_one_claim_names_the_judge_on_both_edges(self, storage, embedding_provider):
+        """Both, because either edge alone is a record someone will read. A
+        `similarity` edge with no judge corroborates on nobody's authority."""
+        a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
+        b = await _fact(storage, embedding_provider, "the deployment failed", publisher="Reuters")
+
+        await _decide(storage, a, b, "one_claim", "same run", judge=self.JUDGE)
+
+        edges = await _edges_between(storage, a, b)
+        assert edges["similarity"].judged_by == self.JUDGE
+        assert edges["assessed"].judged_by == self.JUDGE
+
+    async def test_distinct_names_the_judge(self, storage, embedding_provider):
+        a = await _fact(storage, embedding_provider, "the deploy failed")
+        b = await _fact(storage, embedding_provider, "the rollback failed")
+
+        await _decide(storage, a, b, "distinct", "different runs", judge=self.JUDGE)
+
+        assert (await _edges_between(storage, a, b))["assessed"].judged_by == self.JUDGE
+
+    async def test_a_withdrawal_names_the_judge_that_made_it(self, storage, embedding_provider):
+        """The retraction is its own decision and carries its own judge. A
+        second agent walking back the first one's `one_claim` is exactly the
+        case this field exists to make readable."""
+        a = await _fact(storage, embedding_provider, "the deploy failed", publisher="BBC")
+        b = await _fact(storage, embedding_provider, "the deployment failed", publisher="Reuters")
+        await _decide(storage, a, b, "one_claim", judge=JudgeRef(agent_id="first", digest="aaa"))
+
+        await _decide(storage, a, b, "distinct", "on reflection, different", judge=self.JUDGE)
+
+        edges = await _edges_between(storage, a, b)
+        assert edges["retracted_similarity"].judged_by == self.JUDGE
+        # And the withdrawn edge still names whoever wrote it: nothing here
+        # deletes, and nothing here rewrites the record of an earlier decision.
+        assert edges["similarity"].judged_by == JudgeRef(agent_id="first", digest="aaa")
+
+    async def test_an_unclaimed_session_records_no_judge(self, storage, embedding_provider):
+        """The control, and the case the `memory` graph is in. Blank has always
+        meant unknown, so the write goes through — but it must be blank because
+        nobody was named, not because the name was dropped."""
+        a = await _fact(storage, embedding_provider, "the deploy failed")
+        b = await _fact(storage, embedding_provider, "the rollback failed")
+
+        await _decide(storage, a, b, "distinct", "different runs")
+
+        assert (await _edges_between(storage, a, b))["assessed"].judged_by is None
+
+
 class TestTheToolSurface:
     """`apply_reflection` is where the agent already is when it makes these
     judgments — declining becomes an outcome in the same batch rather than a
@@ -627,6 +708,25 @@ class TestTheToolSurface:
         # And the judgment stays on the wording that was judged, rather than
         # arriving on a winner nobody assessed against b.
         assert await _edge_types_between(storage, winner, b) == set()
+
+    async def test_the_judge_reaches_the_edge_through_the_tool(self, storage, embedding_provider):
+        """The boundary resolves the judge once and every writer below is passed
+        it; this asserts the similarity writer is one of them. Without it the
+        threading is only ever checked by reading."""
+        judge = JudgeRef(agent_id="Opus 5", digest="deadbeef")
+        a = await _fact(storage, embedding_provider, "the deploy failed")
+        b = await _fact(storage, embedding_provider, "the rollback failed")
+
+        await tools.apply_reflection(
+            storage,
+            embedding_provider,
+            similarities=[
+                {"pair": [a.id, b.id], "verdict": "distinct", "because": "different"},
+            ],
+            judge=judge,
+        )
+
+        assert (await _edges_between(storage, a, b))["assessed"].judged_by == judge
 
 
 async def _topic(
