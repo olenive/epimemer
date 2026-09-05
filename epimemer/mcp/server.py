@@ -1745,7 +1745,9 @@ async def memory_apply_reflection(
             nobody named would pre-cover a change nobody has seen, which is the
             one thing anchoring exists to prevent. The ids are the ones
             `reflect` shows beside the node in `pending_review` under
-            `evidence_stale`.
+            `evidence_stale` or `evidence_merged`, and only the ones still
+            listed: a reason a standing keep already anchors to is dropped
+            from the worklist and refused here.
             **Omit `covers` where the nomination names no reason** — a node
             nothing links to and nothing has retrieved. The node is then its own
             anchor, implied and never spelled: passing any id for such a node is

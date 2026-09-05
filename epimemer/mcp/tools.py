@@ -891,6 +891,7 @@ async def store_decomposition(
     rather than being guessed into a date. Pass `propose_timepoints=False` to
     skip it entirely.
     """
+    from epimemer.pipelines.frames import TAG_EXTRACTION_METHOD
     from epimemer.pipelines.graph_construction.edge_creation import (
         edge_creation_net,
     )
@@ -933,7 +934,7 @@ async def store_decomposition(
         topic = Topic(
             content=name,
             source_id=None,
-            extraction_method="agent:tag",
+            extraction_method=TAG_EXTRACTION_METHOD,
             judged_by=judge,
         )
         tag_cache[name] = topic
@@ -3752,7 +3753,12 @@ async def apply_reflection(
     graph can evaluate is still refused on its own, into the matching
     ``*_refused`` list, so one already-judged pair never costs a batch.
     """
-    from epimemer.pipelines.frames import frame_edges, shared_frame_set
+    from epimemer.pipelines.frames import (
+        TAG_EXTRACTION_METHOD,
+        frame_edges,
+        is_tag_topic,
+        shared_frame_set,
+    )
     from epimemer.pipelines.graph_construction.versioning import (
         merge_nodes,
         plan_subtopic_edges,
@@ -4082,7 +4088,9 @@ async def apply_reflection(
         # onto the survivor, `has_metacontext` among them, so merging across
         # frames leaves one topic asserted in both worlds. Exact set equality,
         # not overlap — `shared_frame_set` carries the reasoning.
-        if await shared_frame_set(source_ids, storage) is None:
+        # Tags are exempt: `is_tag_topic` says why a tag stands in no frame.
+        merging_tags = all(is_tag_topic(s) for s in sources)
+        if not merging_tags and (await shared_frame_set(source_ids, storage) is None):
             topic_merges_refused.append(
                 {
                     "source_ids": source_ids,
@@ -4104,7 +4112,9 @@ async def apply_reflection(
             content=content,
             source_id=sources[0].source_id,
             value=merged_value,
-            extraction_method="agent:merge",
+            # Merging names yields a name, so the survivor of an all-tag merge
+            # is a tag: `is_tag_topic` must still recognise it next time.
+            extraction_method=TAG_EXTRACTION_METHOD if merging_tags else "agent:merge",
             judged_by=judge,
             metadata={"merged_from": source_ids},
         )

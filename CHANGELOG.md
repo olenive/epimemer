@@ -23,6 +23,12 @@ All notable changes to this project are recorded here. The format follows
   the `assessed` edge that records the decline. **A caller comparing this
   number across versions will see it change**: one `one_claim` reports 1 where
   it reported 2.
+- Tag Topics merge with one another whatever frame stamps they carry. A tag
+  names something rather than asserting it, so it stands in no frame, and the
+  frame-equality gate on topic merge left a tag written before
+  `epimemer frames declare` permanently unmergeable with one written after.
+  The gate still applies wherever any source is a statement, and the survivor
+  of an all-tag merge stays a tag.
 
 ## [0.1.1] — 2026-08-31
 

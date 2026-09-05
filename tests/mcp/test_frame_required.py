@@ -29,11 +29,13 @@ from epimemer.core.types import (
     EmbeddingRecord,
     JudgeRef,
     NodeEdge,
+    NodeType,
     Topic,
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
+from epimemer.pipelines.frames import TAG_EXTRACTION_METHOD, is_tag_topic
 from epimemer.pipelines.reflection.review import frames_of
 
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
@@ -49,7 +51,7 @@ def config():
     return ServerConfig(storage_backend="memory", embedding_provider="mock")
 
 
-async def _topic(storage, embedder, content, *, vector=None, frames=()):
+async def _topic(storage, embedder, content, *, vector=None, frames=(), tag=False):
     """A stored Topic, optionally framed and given an exact embedding.
 
     `vector` is supplied rather than derived where a test needs two topics to
@@ -57,7 +59,11 @@ async def _topic(storage, embedder, content, *, vector=None, frames=()):
     identical vectors are the only way to be sure the *frame* gate is what
     refused a merge and not the similarity one.
     """
-    topic = Topic(content=content, source_id="seg1")
+    topic = Topic(
+        content=content,
+        source_id="seg1",
+        **({"extraction_method": TAG_EXTRACTION_METHOD} if tag else {}),
+    )
     await storage.store_node(topic)
     vectors = await embedder.embed([content])
     await storage.store_embedding(
@@ -443,6 +449,99 @@ class TestTopicMergeGetsTheGateFactsAlreadyHad:
 
         assert result["topics_merged"] == 1
         assert result["topic_merges_refused"] == []
+
+    async def test_tags_are_exempt_from_the_gate(self, storage, embedder):
+        """A tag asserts nothing, so the gate has no question to ask of it.
+
+        A tag and its own plural merge even where one carries a frame stamp.
+        """
+        twin = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        a = await _topic(storage, embedder, "metacontext", vector=twin, tag=True)
+        b = await _topic(
+            storage,
+            embedder,
+            "metacontexts",
+            vector=twin,
+            frames=[BASE_METACONTEXT_ID],
+            tag=True,
+        )
+
+        result, _ = await tools.apply_reflection(
+            storage,
+            embedder,
+            merges=[{"source_ids": [a.id, b.id], "content": "metacontext"}],
+            judge=CRITIC,
+        )
+
+        assert result["topics_merged"] == 1
+        assert result["topic_merges_refused"] == []
+
+    async def test_a_merged_tag_is_still_a_tag(self, storage, embedder):
+        """Merging names yields a name, so the survivor merges again.
+
+        The survivor carries the frame stamp of whichever source had one. It
+        has to stay recognisable as a tag, or that stamp is compared against
+        the next bare tag and the merge is refused.
+        """
+        twin = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        a = await _topic(storage, embedder, "metacontext", vector=twin, tag=True)
+        b = await _topic(
+            storage,
+            embedder,
+            "metacontexts",
+            vector=twin,
+            frames=[BASE_METACONTEXT_ID],
+            tag=True,
+        )
+        await tools.apply_reflection(
+            storage,
+            embedder,
+            merges=[{"source_ids": [a.id, b.id], "content": "metacontext"}],
+            judge=CRITIC,
+        )
+        survivor = await storage.get_node_by_content("metacontext", node_type=NodeType.TOPIC)
+        assert survivor is not None and survivor.id not in (a.id, b.id)
+        assert is_tag_topic(survivor)
+
+        # The survivor's embedding comes from its merged content, so a third
+        # tag has to match *that* to clear the similarity bar and leave the
+        # frame gate as the only thing that could refuse.
+        stored = await storage.get_embeddings_for_item(survivor.id)
+        c = await _topic(storage, embedder, "meta-context", vector=stored[0].vector, tag=True)
+        result, _ = await tools.apply_reflection(
+            storage,
+            embedder,
+            merges=[{"source_ids": [survivor.id, c.id], "content": "metacontext"}],
+            judge=CRITIC,
+        )
+
+        assert result["topics_merged"] == 1
+        assert result["topic_merges_refused"] == []
+
+    async def test_a_tag_and_a_statement_are_still_gated(self, storage, embedder):
+        """The exemption needs *every* source to be a tag.
+
+        A tag mixed with a framed statement is the case the gate exists for.
+        """
+        twin = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        a = await _topic(storage, embedder, "the council", vector=twin, tag=True)
+        b = await _topic(
+            storage,
+            embedder,
+            "the councils",
+            vector=twin,
+            frames=[BASE_METACONTEXT_ID],
+        )
+
+        result, _ = await tools.apply_reflection(
+            storage,
+            embedder,
+            merges=[{"source_ids": [a.id, b.id], "content": "councils"}],
+            judge=CRITIC,
+        )
+
+        assert result["topics_merged"] == 0
+        assert len(result["topic_merges_refused"]) == 1
 
 
 class TestTheReadSideStaysOptional:

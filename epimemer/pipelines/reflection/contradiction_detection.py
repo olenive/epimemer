@@ -18,19 +18,12 @@ from epimemer.core.types import (
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.pipelines.reflection.pair_scoring import (
-    SCORE_BLOCK,
     similar_pairs,
     stack_uniform_width,
 )
 from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
 from epimemer.pipelines.reflection.similarity_decisions import already_judged_pairs
 from epimemer.storage.protocol import StorageBackend
-
-__all__ = [
-    "SCORE_BLOCK",
-    "detect_contradictions",
-    "similar_pairs",
-]
 
 
 async def detect_contradictions(

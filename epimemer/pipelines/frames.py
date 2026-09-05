@@ -49,6 +49,7 @@ from epimemer.core.types import (
     EdgeType,
     JudgeRef,
     NodeEdge,
+    Topic,
 )
 from epimemer.pipelines.reflection.review import frames_for
 from epimemer.storage.protocol import StorageBackend
@@ -242,6 +243,21 @@ async def shared_frame_set(node_ids: Sequence[str], storage: StorageBackend) -> 
     return set(next(iter(distinct))) if len(distinct) == 1 else None
 
 
+TAG_EXTRACTION_METHOD = "agent:tag"
+"""What `store_decomposition` stamps on a Topic it creates to carry a tag."""
+
+
+def is_tag_topic(node: Topic) -> bool:
+    """Whether this Topic is a tag rather than a statement about a world.
+
+    A tag is a name. It asserts nothing, so there is no world for it to be
+    about, and `store_decomposition` creates one with no `has_metacontext`
+    edge. `_tag_topic` resolves by content, so one tag serves every frame at
+    once. The topic-merge gate exempts tags.
+    """
+    return node.extraction_method == TAG_EXTRACTION_METHOD
+
+
 def frame_edges(
     node_id: str, frames: Sequence[str] | set[str], *, judge: JudgeRef | None = None
 ) -> list[NodeEdge]:
@@ -347,14 +363,3 @@ async def declare_frames(
         already_framed=len(node_ids) - len(unframed),
         node_ids=unframed,
     )
-
-
-__all__ = [
-    "FrameDeclaration",
-    "Reframed",
-    "ReframeRefused",
-    "declare_frames",
-    "frame_edges",
-    "reframe_node",
-    "shared_frame_set",
-]

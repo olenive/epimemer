@@ -386,6 +386,26 @@ and nothing outside the standard library and numpy is needed.
 
 ---
 
+### Parent synthesis gates an all-tag child set the way topic merge used to
+
+🟡 **Open**, found while exempting tags from the topic-merge gate. Parent
+synthesis calls `shared_frame_set` over its children, so a stamped tag and a
+bare tag as children land in `parents_refused`. Same shape as the merge fix:
+test whether every child `is_tag_topic`, and let an all-tag parent inherit the
+empty frame set. Left undone because no synthesis over tags has been wanted
+yet, and the gate refusing is the safe direction to be wrong in.
+
+### Frame stamps on tags survive a merge, so a cleanup has to reach survivors
+
+🟡 **Open**, and the reason it matters is a sweep nobody has run yet. 67 tag
+Topics carry a `the-real` stamp from `epimemer frames declare`, which framed
+every unframed node it found; tags written since carry none. `merge_nodes`
+migrates a stamped source's `has_metacontext` edge onto the survivor, so a
+stamp outlives the tag it was on. Harmless while the merge gate exempts tags,
+but it means stripping the 67 leaves stamps behind on anything already merged.
+Either drop frame edges from migration when every source is a tag, or scope any
+cleanup to survivors as well as originals.
+
 ## Older carry-overs (open, low priority)
 
 - **No retroactive repair of old graphs.** Fixes apply to new operations;

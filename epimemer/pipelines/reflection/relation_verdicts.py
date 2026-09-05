@@ -265,10 +265,3 @@ async def apply_relation_verdict(
         created=True,
         labels_created=labels_created,
     )
-
-
-__all__ = [
-    "RelationVerdictRecorded",
-    "RelationVerdictRefused",
-    "apply_relation_verdict",
-]
