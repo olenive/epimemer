@@ -1709,8 +1709,13 @@ async def memory_apply_reflection(
             Each: {topic_id: str, subtopics: [str]}
             subtopics = list of subtopic description strings. Each subtopic
             inherits the parent's frame — same content, refined.
-        enrichments: Improve a topic's description using its associated material.
-            Each: {topic_id: str, new_content: str}
+        enrichments: Rewrite a topic's own wording using its associated
+            material. Each: {topic_id: str, new_content: str}.
+            **This replaces the topic's content, which is the name tags and
+            `find_nodes` resolve by.** Rewriting the name of a tag splits it:
+            the next document carrying that tag mints a second hub, and
+            `find_nodes(tagged_with=...)` returns nothing for the old name.
+            Enrich a topic that states something; leave a tag's name alone.
         merges: Fuse near-duplicate topics into one combined topic; the sources
             are retired as MERGED history. Each: {source_ids: [str], content: str}.
             A merge is applied only if every pair of sources is at least

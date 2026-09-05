@@ -4048,8 +4048,11 @@ async def apply_reflection(
             metadata={**old_topic.metadata, "enriched_from": topic_id},
         )
         # supersede_node embeds the replacement and migrates edges.
-        # Enrichment rewrites a topic's own description; the earlier wording
-        # was never true-of-a-period, so this is a correction.
+        # Enrichment rewrites the topic's content; the earlier wording was never
+        # true-of-a-period, so this is a correction. Content is also the name
+        # `_tag_topic` and `_resolve_hub_id` resolve by, and both stop at
+        # ACTIVE, so rewriting a tag's name splits it in two.
+        # `dev-docs/TOPIC_DESCRIPTIONS.md` is the fix.
         await supersede_node(
             old_topic,
             enriched,
