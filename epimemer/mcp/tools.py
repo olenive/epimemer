@@ -3836,7 +3836,7 @@ async def apply_reflection(
             similarities_refused.append(outcome.model_dump(mode="json"))
         else:
             similarities_recorded += 1
-            similarity_edges_written += outcome.edges_created
+            similarity_edges_written += outcome.similarity_edges_created
             if outcome.retracted:
                 similarities_retracted += 1
                 # A withdrawal cites what it withdrew, the way a merge reversal

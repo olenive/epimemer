@@ -154,6 +154,12 @@ class SimilarityRecorded(BaseModel):
     replayed after a timeout reports zero rather than claiming to have written
     what was already there.
 
+    `similarity_edges_created` counts the `similarity` edges among them, and it
+    is the only one of the two a caller should report as what corroboration
+    gained. A `distinct` writes `assessed` alone, so it must come back as zero:
+    a decline reported as a similarity is the graph manufacturing its own
+    support, which is what recording the decline was meant to avoid.
+
     `retracted` says **this call** withdrew a standing `one_claim` rather than
     judging a fresh pair. The caller needs it because the two are
     different decisions to journal — a verdict and the withdrawal of one — and
@@ -166,6 +172,7 @@ class SimilarityRecorded(BaseModel):
     verdict: str
     edge_ids: dict[str, str]
     edges_created: int
+    similarity_edges_created: int
     retracted: bool = False
 
 
@@ -300,6 +307,7 @@ async def apply_similarity_decision(
 
     edge_ids: dict[str, str] = {}
     edges_created = 0
+    similarity_edges_created = 0
     for edge_type in edge_types:
         existing = (
             standing_similarity
@@ -326,11 +334,14 @@ async def apply_similarity_decision(
         await storage.store_edge(edge)
         edge_ids[edge_type.value] = edge.id
         edges_created += 1
+        if edge_type is EdgeType.SIMILARITY:
+            similarity_edges_created += 1
 
     return SimilarityRecorded(
         pair=pair,
         verdict=verdict,
         edge_ids=edge_ids,
         edges_created=edges_created,
+        similarity_edges_created=similarity_edges_created,
         retracted=retracting,
     )

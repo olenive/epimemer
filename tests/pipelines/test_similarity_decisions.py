@@ -659,10 +659,31 @@ class TestTheToolSurface:
         )
 
         assert result["similarities_recorded"] == 1
-        assert result["similarity_edges_written"] == 2
+        assert result["similarity_edges_written"] == 1
         assert len(result["similarities_refused"]) == 1
         assert result["similarities_refused"][0]["pair"] == [a.id, c.id]
         assert meta.nodes_returned == 1
+
+    async def test_a_decline_reports_no_similarity_edge(self, storage, embedding_provider):
+        """The count says what corroboration gained, so a `distinct` reports zero.
+
+        It writes an `assessed` edge and nothing else. Counting that edge here
+        would tell an agent its decline had been recorded as support, which is
+        the outcome declining exists to avoid.
+        """
+        a = await _fact(storage, embedding_provider, "the deploy failed")
+        b = await _fact(storage, embedding_provider, "the rollback failed")
+
+        result, _ = await tools.apply_reflection(
+            storage,
+            embedding_provider,
+            similarities=[
+                {"pair": [a.id, b.id], "verdict": "distinct", "because": "different runs"}
+            ],
+        )
+
+        assert result["similarities_recorded"] == 1
+        assert result["similarity_edges_written"] == 0
 
     async def test_a_refusal_does_not_stop_the_batch(self, storage, embedding_provider):
         """Partial application, as every other argument to this tool does it."""
