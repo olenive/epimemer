@@ -32,13 +32,12 @@ survives it when the node's current reasons are not all covered:
 | `evidence_merged` | the absorbed phrasings named in the label, one edge each |
 | `never_retrieved` | the node itself — the nomination names no reason |
 
-`evidence_merged` joined the table on 2026-09-03. It had been the one label
+`evidence_merged` joined the table on 2026-09-05. It had been the one label
 with no writer: the docstrings said *re-read it*, and an agent that did had
-nowhere to say so, which put twelve inferences on this project's own graph back
-on every reflect for a week — the treadmill this module was written to end,
-reintroduced one label over. A re-read is a keep, anchored to the wording that
-went away, and a later absorption is a reason nobody covered, exactly as a
-later supersession is.
+nowhere to say so, so the treadmill this module was written to end came back
+one label over. A re-read is a keep, anchored to the wording that went away,
+and a later absorption is a reason nobody covered, exactly as a later
+supersession is.
 
 **Archival still never reads `evidence_merged`**, and the two definitions below
 are the record of that: `outstanding_reasons` is what a re-read must cover, and
@@ -92,7 +91,7 @@ def outstanding_reasons(
 
     The union of the three paths that put an inference in front of a reviewer:
     the facts named by the `evidence_stale` label, the absorbed phrasings named
-    by `evidence_merged`, and — where the whole evidence set has been archived —
+    by `evidence_merged`, and, where the whole evidence set has been archived,
     the archived facts themselves. Deduplicated and ordered, because it is
     compared as a set but shown to a person as a list.
 
