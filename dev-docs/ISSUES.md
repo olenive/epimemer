@@ -406,6 +406,44 @@ but it means stripping the 67 leaves stamps behind on anything already merged.
 Either drop frame edges from migration when every source is a tag, or scope any
 cleanup to survivors as well as originals.
 
+### A tag name resolves only while its node is active, so a merge splits the tag
+
+🔴 **Open, and the same defect arrived twice.** `_tag_topic` and
+`_resolve_hub_id` both resolve a tag through `get_node_by_content`, which
+filters to ACTIVE. A tag whose node has been retired therefore resolves to
+nothing, whatever retired it, and the next document carrying that name mints a
+second hub while `find_nodes(tagged_with=...)` returns an empty list for the
+old one.
+
+Enrichment did this to six tags on 2026-09-03. Topic merge can do it too, and
+that door is still open: a merge retires its sources as `MERGED` and names the
+survivor whatever the agent chose, so merging `design decisions` into
+`design-decisions` strands the first name. Exempting tags from the merge frame
+gate made such a merge easier to perform.
+
+The fix is on the read side, and it closes both doors plus any rename written
+later: resolve a `MERGED` or `CORRECTED` hit forward through `merged_into` or
+`superseded_by` to the live successor. `dev-docs/TOPIC_DESCRIPTIONS.md` §2.2
+carries the reasoning and §6 has it as Stage 0.
+
+### Tag names embed so alike that reflect can nominate two unrelated tags
+
+🔴 **Open, and live on the `memory` graph today.** A tag is embedded on its name
+alone, so tags built from one template score as near-duplicates however
+different their subjects. Scoring all 86 active tags pairwise, ten pairs reach
+0.75 cosine and every one of the ten is at or above the 0.80 nomination bar
+(`pipelines/reflection/review.py`). Six of those are `dev-session-<date>` pairs
+at 0.97 to 0.99: different days of work, and a merge would fuse their hubs.
+Four are one tag spelled two ways and genuinely should merge. **The bare names
+score the pairs that must not merge higher than the pairs that should**, so a
+reviewer working from the nomination list has no signal to tell them apart.
+
+The nominations are proposals rather than merges, so nothing has been lost yet;
+what is exposed is any run that accepts one without checking the dates.
+`dev-docs/TOPIC_DESCRIPTIONS.md` proposes the fix, embedding a description
+alongside the name, and its §1.2 carries the measurements. Until that ships,
+treat any nominated pair of `dev-session` tags as a false positive.
+
 ## Older carry-overs (open, low priority)
 
 - **No retroactive repair of old graphs.** Fixes apply to new operations;
