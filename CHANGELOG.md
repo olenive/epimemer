@@ -6,6 +6,14 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-09-06
+
+A patch release rather than a minor one, on purpose: no feature changes, and
+an existing graph opens under this version and updates itself. Two things to
+know before upgrading are in the **Changed** entries below: one tool argument
+is renamed, and a graph this version has opened cannot be read by 0.1.1
+without a manual step.
+
 ### Changed
 
 - `tagged_with` is now `tagged_with_topic`. The old name read as a string stuck
@@ -13,7 +21,9 @@ All notable changes to this project are recorded here. The format follows
   with it: a *tag* is the name passed in `tags=`, a *tag topic* is the Topic it
   becomes. **`find_nodes(tagged_with=...)` is now
   `find_nodes(tagged_with_topic=...)`**, and a call using the old argument name
-  is refused.
+  is refused. An agent picks the new name up from the tool schema and from the
+  guidance shipped in the wheel; only a script or a custom prompt that spells
+  out the old argument needs editing.
 - The fact → topic reading of `supports` is now its own edge type,
   `extracted_under_topic`. `supports` means fact → inference and nothing else,
   which is what corroboration and the soundness check already took it for; the
@@ -27,6 +37,12 @@ All notable changes to this project are recorded here. The format follows
   (`mem://`, `rocksdb:`) and remote (`ws://`) alike, on connect and on every
   graph switch. There is nothing to run by hand, and the migration can be
   deleted from the code once no graph older than this release is expected.
+  **It is one-way.** 0.1.1 does not know the new names, so a graph this
+  version has opened will not load its renamed edges under the old version.
+  To go back, run these against the graph's database first:
+  `UPDATE node_edge SET type = 'tagged_with' WHERE type = 'tagged_with_topic';`
+  and `UPDATE node_edge SET type = 'supports' WHERE type = 'extracted_under_topic';`,
+  then `DELETE schema_version;` so the next upgrade migrates again.
 
 ### Removed
 
