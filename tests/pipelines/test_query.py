@@ -51,10 +51,10 @@ async def populated_graph(embedding_provider: MockEmbeddingProvider):
     """Create an InMemoryStorage with several nodes, embeddings, and edges.
 
     Graph structure:
-        topic1 -- SUPPORTS -- fact1
+        topic1 -- EXTRACTED_UNDER_TOPIC -- fact1
         topic1 -- ABSTRACTS -- inference1
         fact1 -- DERIVED_FROM -- inference1
-        topic2 -- SUPPORTS -- fact2
+        topic2 -- EXTRACTED_UNDER_TOPIC -- fact2
         fact1 -- SUPERSEDED_BY -- fact3  (history edge)
 
     All nodes have embeddings stored.
@@ -108,10 +108,14 @@ async def populated_graph(embedding_provider: MockEmbeddingProvider):
 
     # Create edges
     edges = [
-        NodeEdge(id="edge-1", src_id="fact-1", dst_id="topic-1", type=EdgeType.SUPPORTS),
+        NodeEdge(
+            id="edge-1", src_id="fact-1", dst_id="topic-1", type=EdgeType.EXTRACTED_UNDER_TOPIC
+        ),
         NodeEdge(id="edge-2", src_id="inference-1", dst_id="topic-1", type=EdgeType.ABSTRACTS),
         NodeEdge(id="edge-3", src_id="inference-1", dst_id="fact-1", type=EdgeType.DERIVED_FROM),
-        NodeEdge(id="edge-4", src_id="fact-2", dst_id="topic-2", type=EdgeType.SUPPORTS),
+        NodeEdge(
+            id="edge-4", src_id="fact-2", dst_id="topic-2", type=EdgeType.EXTRACTED_UNDER_TOPIC
+        ),
         NodeEdge(id="edge-5", src_id="fact-1", dst_id="fact-3", type=EdgeType.SUPERSEDED_BY),
     ]
     for edge in edges:
@@ -195,7 +199,7 @@ async def test_graph_expansion_traverses_edges(populated_graph):
 
     node_ids = {n.id for n in nodes}
     assert "topic-1" in node_ids  # seed included
-    assert "fact-1" in node_ids  # connected via SUPPORTS
+    assert "fact-1" in node_ids  # connected via EXTRACTED_UNDER_TOPIC
     assert "inference-1" in node_ids  # connected via ABSTRACTS
 
 

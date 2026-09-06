@@ -51,6 +51,10 @@ const NODE_MEANINGS: Record<string, keyof SemanticPalette> = {
 // the palette moved, belonged to a *different* kind.
 const EDGE_MEANINGS: Record<string, keyof SemanticPalette> = {
   supports: "fact",
+  // The fact → topic half of what `supports` used to mean, split out when the
+  // two readings were separated. It runs from a fact, so it takes the same hue
+  // as the half that kept the old name.
+  extracted_under_topic: "fact",
   abstracts: "abstracts",
   subtopic_of: "topic",
   similarity: "similarity",

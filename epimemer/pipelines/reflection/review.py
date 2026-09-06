@@ -382,12 +382,13 @@ async def dependent_inference_ids(
     dependent_ids: list[str] = []
     seen: set[str] = set()
 
-    # fact --supports--> inference
+    # fact --supports--> inference. The destination is an inference by
+    # construction: the fact → topic reading of this edge is now
+    # `extracted_under_topic`, so no node fetch is needed to tell them apart.
     for edge in await storage.get_edges_from(fact_id, edge_type=EdgeType.SUPPORTS):
-        node = await storage.get_node(edge.dst_id)
-        if isinstance(node, Inference) and node.id not in seen:
-            seen.add(node.id)
-            dependent_ids.append(node.id)
+        if edge.dst_id not in seen:
+            seen.add(edge.dst_id)
+            dependent_ids.append(edge.dst_id)
 
     # inference --derived_from--> fact
     for edge in await storage.get_edges_to(fact_id, edge_type=EdgeType.DERIVED_FROM):

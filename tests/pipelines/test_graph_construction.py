@@ -130,16 +130,25 @@ class TestEdgeCreation:
         assert implies_edges[0].src_id == decomposed.segment.id
         assert implies_edges[0].dst_id == decomposed.inferences[0].id
 
-    def test_fact_to_topic_supports_edge(self, decomposed: DecomposedSegment) -> None:
+    def test_fact_to_topic_extracted_under_topic_edge(self, decomposed: DecomposedSegment) -> None:
         edges = create_edges(decomposed)
-        supports_edges = [
+        extracted_edges = [
             e
             for e in edges
-            if e.type == EdgeType.SUPPORTS
+            if e.type == EdgeType.EXTRACTED_UNDER_TOPIC
             and e.src_id == decomposed.facts[0].id
             and e.dst_id == decomposed.topics[0].id
         ]
-        assert len(supports_edges) == 1
+        assert len(extracted_edges) == 1
+
+    def test_no_supports_edge_ends_on_a_topic(self, decomposed: DecomposedSegment) -> None:
+        """`supports` is fact → inference only, so no topic is ever its target."""
+        topic_ids = {t.id for t in decomposed.topics}
+        assert not [
+            e
+            for e in create_edges(decomposed)
+            if e.type == EdgeType.SUPPORTS and e.dst_id in topic_ids
+        ]
 
     def test_inference_to_topic_abstracts_edge(self, decomposed: DecomposedSegment) -> None:
         edges = create_edges(decomposed)
@@ -252,6 +261,7 @@ class TestEdgeCreationPetriNet:
         assert EdgeType.CONTAINS in edge_types
         assert EdgeType.IMPLIES in edge_types
         assert EdgeType.SUPPORTS in edge_types
+        assert EdgeType.EXTRACTED_UNDER_TOPIC in edge_types
         assert EdgeType.ABSTRACTS in edge_types
 
 
@@ -596,7 +606,7 @@ class TestStorageRoundTrip:
         assert len(seg_edges) == 3
 
         fact_edges = await storage.get_edges_from("rt-fact")
-        # fact -> topic (SUPPORTS) + fact -> inference (SUPPORTS)
+        # fact -> topic (EXTRACTED_UNDER_TOPIC) + fact -> inference (SUPPORTS)
         assert len(fact_edges) == 2
 
         inf_edges = await storage.get_edges_from("rt-inf")

@@ -364,8 +364,8 @@ class TestMaterialIsGatheredOnce:
         material. Gathering it twice doubles the read for nothing.
 
         Now that the read is batched the count to watch is per edge type
-        across the whole topic set, not per topic: one `SUPPORTS` query and one
-        `ABSTRACTS` query serve both phases.
+        across the whole topic set, not per topic: one `EXTRACTED_UNDER_TOPIC`
+        query and one `ABSTRACTS` query serve both phases.
         """
         topic = Topic(content="Weather", source_id="s1")
         await storage.store_node(topic)
@@ -373,14 +373,14 @@ class TestMaterialIsGatheredOnce:
             fact = Fact(content=f"Observation {i}", source_id="s1")
             await storage.store_node(fact)
             await storage.store_edge(
-                NodeEdge(src_id=fact.id, dst_id=topic.id, type=EdgeType.SUPPORTS)
+                NodeEdge(src_id=fact.id, dst_id=topic.id, type=EdgeType.EXTRACTED_UNDER_TOPIC)
             )
 
         counts: dict[EdgeType, int] = {}
         original = storage.get_edges_for
 
         async def counted(node_ids, *, direction, edge_type=None):
-            if edge_type in (EdgeType.SUPPORTS, EdgeType.ABSTRACTS):
+            if edge_type in (EdgeType.EXTRACTED_UNDER_TOPIC, EdgeType.ABSTRACTS):
                 counts[edge_type] = counts.get(edge_type, 0) + 1
             return await original(node_ids, direction=direction, edge_type=edge_type)
 

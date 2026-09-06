@@ -7,9 +7,9 @@ Edge rules:
 - segment -> topic:     EdgeType.ABOUT
 - segment -> fact:      EdgeType.CONTAINS
 - segment -> inference: EdgeType.IMPLIES
-- fact -> topic:        EdgeType.SUPPORTS     (same source segment)
-- inference -> topic:   EdgeType.ABSTRACTS    (same source segment)
-- fact -> inference:    EdgeType.SUPPORTS     (same source segment)
+- fact -> topic:        EdgeType.EXTRACTED_UNDER_TOPIC  (same source segment)
+- inference -> topic:   EdgeType.ABSTRACTS              (same source segment)
+- fact -> inference:    EdgeType.SUPPORTS               (same source segment)
 
 Petri net flow:
     [DecomposedSegment] -> create_edges -> [list[NodeEdge]]
@@ -84,14 +84,14 @@ def create_edges(decomposed: DecomposedSegment) -> list[NodeEdge]:
             )
         )
 
-    # fact -> topic: SUPPORTS (same source segment)
+    # fact -> topic: EXTRACTED_UNDER_TOPIC (same source segment)
     for fact in decomposed.facts:
         for topic in decomposed.topics:
             edges.append(
                 NodeEdge(
                     src_id=fact.id,
                     dst_id=topic.id,
-                    type=EdgeType.SUPPORTS,
+                    type=EdgeType.EXTRACTED_UNDER_TOPIC,
                 )
             )
 

@@ -1932,7 +1932,9 @@ class TestQueryGraph:
         f = Fact(content="fact", source_id="s1")
         await storage.store_node(t)
         await storage.store_node(f)
-        await storage.store_edge(NodeEdge(src_id=f.id, dst_id=t.id, type=EdgeType.SUPPORTS))
+        await storage.store_edge(
+            NodeEdge(src_id=f.id, dst_id=t.id, type=EdgeType.EXTRACTED_UNDER_TOPIC)
+        )
 
         result, meta = await query_graph(t.id, storage, hops=1)
         node_ids = {n["id"] for n in result["nodes"]}
@@ -1948,8 +1950,12 @@ class TestQueryGraph:
         await storage.store_node(t1)
         await storage.store_node(t2)
         await storage.store_node(f)
-        await storage.store_edge(NodeEdge(src_id=f.id, dst_id=t1.id, type=EdgeType.SUPPORTS))
-        await storage.store_edge(NodeEdge(src_id=f.id, dst_id=t2.id, type=EdgeType.SUPPORTS))
+        await storage.store_edge(
+            NodeEdge(src_id=f.id, dst_id=t1.id, type=EdgeType.EXTRACTED_UNDER_TOPIC)
+        )
+        await storage.store_edge(
+            NodeEdge(src_id=f.id, dst_id=t2.id, type=EdgeType.EXTRACTED_UNDER_TOPIC)
+        )
 
         result, _ = await query_graph(t1.id, storage, hops=0)
         assert len(result["nodes"]) == 1
@@ -3308,10 +3314,10 @@ class TestGraphStats:
         for node in (topic, fact_a, fact_b, inference):
             await storage.store_node(node)
         await storage.store_edge(
-            NodeEdge(src_id=fact_a.id, dst_id=topic.id, type=EdgeType.SUPPORTS)
+            NodeEdge(src_id=fact_a.id, dst_id=topic.id, type=EdgeType.EXTRACTED_UNDER_TOPIC)
         )
         await storage.store_edge(
-            NodeEdge(src_id=fact_b.id, dst_id=topic.id, type=EdgeType.SUPPORTS)
+            NodeEdge(src_id=fact_b.id, dst_id=topic.id, type=EdgeType.EXTRACTED_UNDER_TOPIC)
         )
         await storage.store_edge(
             NodeEdge(src_id=inference.id, dst_id=fact_a.id, type=EdgeType.DERIVED_FROM)
@@ -3321,7 +3327,7 @@ class TestGraphStats:
         assert result["total_nodes"] == 4
         assert result["nodes_by_type"] == {"topic": 1, "fact": 2, "inference": 1}
         assert result["total_edges"] == 3
-        assert result["edges_by_type"] == {"supports": 2, "derived_from": 1}
+        assert result["edges_by_type"] == {"extracted_under_topic": 2, "derived_from": 1}
         assert result["empty"] is False
         assert meta.nodes_returned == 4
 

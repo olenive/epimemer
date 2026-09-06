@@ -70,7 +70,8 @@ epistemic clarity.
 ### Graph space (structural)
 - Derived from, but not dependent on, a specific embedding model.
 - Relationships are typed: `about`, `contains`, `implies`, `supports`,
-  `derived_from`, `similarity`, `contradiction`, and so on.
+  `extracted_under_topic`, `derived_from`, `similarity`, `contradiction`, and so
+  on.
 - Edges carry a `weight` and a free-form `metadata` dict.
 - Structure is contextual and interpretive, not ground truth.
 
@@ -374,7 +375,8 @@ edges (
                  -- source* asserts the claim held: per source, never unioned
                  -- onto the node, so one careful source and one sloppy one
                  -- cannot produce a period neither claims
-  -- engine types: about, contains, implies, supports, abstracts, derived_from,
+  -- engine types: about, contains, implies, supports, extracted_under_topic,
+  --   abstracts, derived_from,
   --   similarity, contradiction, subtopic_of, superseded_by,
   --   temporally_followed_by, merged_into,
   --   timelink, associated_timeline, has_metacontext, tagged_with_topic, sourced_from

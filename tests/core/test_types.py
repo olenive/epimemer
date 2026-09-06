@@ -741,7 +741,7 @@ class TestValidityBelongsToASource:
 
     def test_an_edge_without_intervals_is_unaffected(self):
         """Absence is the overwhelming case and must stay free of ceremony."""
-        edge = NodeEdge(src_id="fact-1", dst_id="topic-1", type=EdgeType.SUPPORTS)
+        edge = NodeEdge(src_id="fact-1", dst_id="topic-1", type=EdgeType.EXTRACTED_UNDER_TOPIC)
 
         assert edge.validity == []
 

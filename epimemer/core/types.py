@@ -201,7 +201,14 @@ class EdgeType(str, Enum):
     IMPLIES = "implies"  # segment → inference
 
     # Semantic hierarchy
-    SUPPORTS = "supports"  # fact → topic, fact → inference
+    SUPPORTS = "supports"  # fact → inference (evidential support)
+    # fact → topic: the fact was extracted from a segment about this topic. Its
+    # own type rather than a second meaning on `supports`, because the readers
+    # want opposite things: corroboration and the soundness check weigh
+    # evidential support, `topic_enrichment` wants the material filed under a
+    # topic. One type serving both made every reader of `supports` filter its
+    # destinations by node kind to find out which meaning it had.
+    EXTRACTED_UNDER_TOPIC = "extracted_under_topic"
     ABSTRACTS = "abstracts"  # inference → topic
     DERIVED_FROM = "derived_from"  # inference → fact
 
