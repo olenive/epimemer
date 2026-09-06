@@ -22,12 +22,14 @@ To drive it by hand, start a server and point the env var at it:
 
 If ``EPIMEMER_SURREAL_WS_URL`` is unset or the server is unreachable, the whole
 module is skipped (no connection is attempted by default) — and pytest reports
-skips as success, so check for ``13 passed`` rather than trusting the exit code.
+skips as success, so check that every test in the module ran rather than
+trusting the exit code.
 A server that accepts connections without answering (another Docker/Colima
 profile holding the port, or a wedged container) reads as unreachable here.
 """
 
 import asyncio
+import contextlib
 import os
 import uuid
 from datetime import UTC, datetime
@@ -53,6 +55,9 @@ from epimemer.core.types import (
     Topic,
 )
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
+from tests.storage.test_edge_type_migration import (
+    assert_a_pre_split_graph_migrates_itself,
+)
 
 WS_URL = os.environ.get("EPIMEMER_SURREAL_WS_URL")
 WS_USER = os.environ.get("EPIMEMER_SURREAL_USER", "root")
@@ -671,3 +676,34 @@ async def test_a_snapshot_borrow_waits_for_a_write_in_flight(surreal, db_name):
 
     await elsewhere.delete_database(f"{db_name}_elsewhere")
     await elsewhere.close()
+
+
+# --- Self-migration over a real connection ---
+
+
+async def test_a_pre_split_graph_migrates_itself_over_ws(db_name):
+    """The ws:// copy of the embedded migration test.
+
+    Embedded and remote both reach `_setup_schema`, so both migrate; this is
+    what proves the second half of that sentence. The script is shared rather
+    than restated, so the two deployments cannot be checked against different
+    expectations.
+    """
+    opened: list[SurrealDBStorage] = []
+
+    async def open_store() -> SurrealDBStorage:
+        store = _make_store(db_name)
+        await store.connect()
+        opened.append(store)
+        return store
+
+    try:
+        await assert_a_pre_split_graph_migrates_itself(open_store)
+    finally:
+        cleaner = _make_store(db_name)
+        await cleaner.connect()
+        await cleaner.delete_database(db_name)
+        await cleaner.close()
+        for store in opened:
+            with contextlib.suppress(Exception):
+                await store.close()

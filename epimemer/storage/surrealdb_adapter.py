@@ -9,6 +9,7 @@ with SurrealDB's built-in 'id' field (which uses RecordID type).
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -62,6 +63,8 @@ from epimemer.storage.protocol import (
 # has no socket to lose, so this guard is belt-and-braces — but the failure it
 # prevents is silent data loss.)
 _EMBEDDED_SCHEMES = ("mem://", "memory", "file://", "surrealkv://")
+
+logger = logging.getLogger(__name__)
 
 
 def is_embedded_url(url: str) -> bool:
@@ -380,6 +383,67 @@ def _upsert(table: str, *, data: str = "data", uid: str = "uid") -> str:
     of one table in a single transaction can give each statement its own.
     """
     return f"UPSERT {table} CONTENT ${data} WHERE uid = ${uid}"
+
+
+# --- Schema version and edge-type migration ---
+#
+# Written 2026-09-06, and deletable once no graph older than that release is
+# expected to be opened: the two statements below rename edge types that were
+# split apart, and a graph written after this ships already carries the new
+# names.
+#
+# `dst_id` holds a bare application uid, and the table a node lives in is known
+# only from which table holds the row, so the topic test reads `uid` rather than
+# `id`: `SELECT VALUE id FROM topic` yields RecordIDs, which match no `dst_id`
+# and would leave the second statement a silent no-op.
+_SCHEMA_VERSION_RECORD = "schema_version:current"
+_SCHEMA_VERSION = 2
+
+_SCHEMA_VERSION_GET = f"SELECT VALUE version FROM {_SCHEMA_VERSION_RECORD};"
+_SCHEMA_VERSION_SET = f"UPSERT {_SCHEMA_VERSION_RECORD} SET version = $version;"
+
+# `RETURN VALUE uid` so the count costs a list of ids rather than a list of rows.
+_RENAME_TAGGED_WITH = (
+    "UPDATE node_edge SET type = 'tagged_with_topic' WHERE type = 'tagged_with' RETURN VALUE uid;"
+)
+_RENAME_SUPPORTS_ONTO_TOPIC = (
+    "UPDATE node_edge SET type = 'extracted_under_topic' "
+    "WHERE type = 'supports' AND dst_id IN (SELECT VALUE uid FROM topic) "
+    "RETURN VALUE uid;"
+)
+
+
+async def _migrate_edge_type_names(query: Callable[..., Awaitable[Any]], database: str) -> None:
+    """Bring one graph's edge type names up to `_SCHEMA_VERSION`.
+
+    Gated on the version marker rather than on the absence of old rows: this
+    runs on every `connect()` and every `switch_database()`, so an ungated
+    migration would pay two table scans on every graph open, for ever.
+
+    Two server processes may open the same graph at once. Both statements are
+    idempotent, so the second run rewrites nothing and the repeated marker write
+    stores the same number; a race costs work, not correctness, and needs no
+    lock.
+    """
+    stored = await query(_SCHEMA_VERSION_GET)
+    version = int(stored[0]) if stored and stored[0] is not None else 0
+    if version >= _SCHEMA_VERSION:
+        return
+
+    tagged = await query(_RENAME_TAGGED_WITH)
+    extracted = await query(_RENAME_SUPPORTS_ONTO_TOPIC)
+    await query(_SCHEMA_VERSION_SET, {"version": _SCHEMA_VERSION})
+
+    # One line, and only where rows moved: every graph created from here on
+    # reaches this point once with nothing to do, and saying so would be noise.
+    if tagged or extracted:
+        logger.info(
+            "graph %s: renamed %d edges from tagged_with to tagged_with_topic and "
+            "%d edges onto topics from supports to extracted_under_topic",
+            database,
+            len(tagged or []),
+            len(extracted or []),
+        )
 
 
 # --- Reflection bookkeeping ---
@@ -1012,10 +1076,21 @@ class SurrealDBStorage:
             DEFINE TABLE IF NOT EXISTS graph_state SCHEMALESS;
         """)
 
+        # One row saying which edge-type vocabulary this graph is written in.
+        # Same shape and same reason as `graph_state`: a fixed record id, so no
+        # uid index.
+        await query("""
+            DEFINE TABLE IF NOT EXISTS schema_version SCHEMALESS;
+        """)
+
         # Full-text search over node content and segment text. Last, because
         # every table it indexes has to exist first.
         await query(_ANALYZER_DDL)
         await _define_fts_indexes(query)
+
+        # `_selected` rather than `_database`: it names the graph the connection
+        # is actually pointed at, which is what these statements will hit.
+        await _migrate_edge_type_names(query, self._selected)
 
     @property
     def db(self) -> AsyncSurreal:

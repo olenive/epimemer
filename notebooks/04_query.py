@@ -72,7 +72,9 @@ async def _(
             EmbeddingRecord(item_id=node.id, model_id="mock", vector=vecs[0])
         )
 
-    await storage.store_edge(NodeEdge(src_id=fact.id, dst_id=topic.id, type=EdgeType.SUPPORTS))
+    await storage.store_edge(
+        NodeEdge(src_id=fact.id, dst_id=topic.id, type=EdgeType.EXTRACTED_UNDER_TOPIC)
+    )
     await storage.store_edge(
         NodeEdge(src_id=inference.id, dst_id=topic.id, type=EdgeType.ABSTRACTS)
     )

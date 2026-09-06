@@ -6,6 +6,33 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `tagged_with` is now `tagged_with_topic`. The old name read as a string stuck
+  on the node; the new one says what is at the far end. The vocabulary that goes
+  with it: a *tag* is the name passed in `tags=`, a *tag topic* is the Topic it
+  becomes. **`find_nodes(tagged_with=...)` is now
+  `find_nodes(tagged_with_topic=...)`**, and a call using the old argument name
+  is refused.
+- The fact → topic reading of `supports` is now its own edge type,
+  `extracted_under_topic`. `supports` means fact → inference and nothing else,
+  which is what corroboration and the soundness check already took it for; the
+  new type is what `reflect` reads when it gathers a topic's material. Nothing
+  in the API changes, and a caller writing `link(..., edge_type="supports")`
+  between a fact and a topic should now write `extracted_under_topic`.
+- **Graphs migrate themselves.** Opening a graph written before this release
+  renames both edge types in place, once, and stamps a `schema_version` record
+  so later opens skip the work. It runs wherever a graph is opened: embedded
+  (`mem://`, `rocksdb:`) and remote (`ws://`) alike, on connect and on every
+  graph switch. There is nothing to run by hand, and the migration can be
+  deleted from the code once no graph older than this release is expected.
+
+### Removed
+
+- The `associated_timeline` edge type. Nothing wrote it and nothing read it; a
+  node reaches its timeline through the `timelink` edge, which points at the
+  timeline and names the timepoint in its metadata.
+
 ### Fixed
 
 - An inference flagged `evidence_merged` can now be kept. The flag asked for a
