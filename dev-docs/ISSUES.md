@@ -412,7 +412,7 @@ cleanup to survivors as well as originals.
 `_resolve_hub_id` both resolve a tag through `get_node_by_content`, which
 filters to ACTIVE. A tag whose node has been retired therefore resolves to
 nothing, whatever retired it, and the next document carrying that name mints a
-second hub while `find_nodes(tagged_with=...)` returns an empty list for the
+second hub while `find_nodes(tagged_with_topic=...)` returns an empty list for the
 old one.
 
 Enrichment did this to six tags on 2026-09-03. Topic merge can do it too, and

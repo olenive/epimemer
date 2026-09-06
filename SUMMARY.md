@@ -103,16 +103,19 @@ Ingestion is append-only with minimal processing. Expensive restructuring
 `reflect` operation. This avoids latency spikes and premature structural
 commitment.
 
-### Sources, tags, and relations are nodes and edges
+### Sources, tag topics, and relations are nodes and edges
 Where knowledge came from, and what it is about, are modelled as graph
-structure rather than string fields, so a source or tag can carry its own
-facts, relate to siblings, and sit in a frame:
+structure rather than string fields, so a source or a tag topic can carry its
+own facts, relate to siblings, and sit in a frame:
 
 - **Source**: every node gets a `sourced_from` edge to its originating
   `RawDocument`; a named publisher or author (`published_by`) is an entity
   **Topic**. "Which nodes came from X" is a traversal (see `find_nodes`).
-- **Tags are Topics**: a tag name resolves, by exact name, to a Topic linked
-  by a `tagged_with` edge, so tag consolidation *is* topic merge.
+- **A tag becomes a tag topic**: a *tag* is the name passed in `tags=`; it
+  resolves, by exact name, to a Topic, the *tag topic*, and a
+  `tagged_with_topic` edge links the node to it. Tag consolidation *is* topic
+  merge. That edge is a retrieval index and carries no evidential weight:
+  `supports` is the edge corroboration reads, and nothing weighs this one.
 - **Relations are open vocabulary**: engine edges are a typed enum; user
   relations use one `RELATED` sentinel with a free `label` and a `kind`
   (`relationship`, followed in retrieval, or `attribution`, not followed).
@@ -354,8 +357,8 @@ nodes (
   importance,      -- 0.0–1.0, moved only by judgment      (mutated in place)
   retrieved_at          -- timestamp, null until first retrieval
   importance_judged_at  -- timestamp, null until an agent judges it
-  -- source_id is the Segment for text-derived nodes; entity/tag Topics have none.
-  -- Sources and tags are NOT fields — they are Topics/RawDocuments reached by edges.
+  -- source_id is the Segment for text-derived nodes; entity and tag Topics have none.
+  -- Sources and tag topics are NOT fields: they are Topics/RawDocuments reached by edges.
 )
 
 documents (
@@ -374,7 +377,7 @@ edges (
   -- engine types: about, contains, implies, supports, abstracts, derived_from,
   --   similarity, contradiction, subtopic_of, superseded_by,
   --   temporally_followed_by, merged_into,
-  --   timelink, associated_timeline, has_metacontext, tagged_with, sourced_from
+  --   timelink, associated_timeline, has_metacontext, tagged_with_topic, sourced_from
   -- user relations: type = related, with a free `label` and a `kind`
   --   (relationship | attribution)
 )
@@ -414,7 +417,7 @@ consolidation creates a new node linked to its predecessor via typed edges:
   as an error is how a graph forgets its own history.
   - The status also decides **which edges follow the replacement**. A
     correction hands over everything but history and review edges; a
-    world-change hands over the frame and the tags only, because the
+    world-change hands over the frame and the tag topics only, because the
     historical node is still true of its period and its own sources are what
     say so. Judgment edges (`similarity`, `contradiction`, `variant_of`)
     stay on the node they were made about under every retirement: the claim

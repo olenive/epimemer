@@ -150,7 +150,7 @@ default:
   `kind` is `attribution`. Expanding into these would return the publisher of
   everything that matched.
 
-`tagged_with` and relationship-kind user edges *are* followed, alongside `about`
+`tagged_with_topic` and relationship-kind user edges *are* followed, alongside `about`
 and `supports`: they say what a node is about, which is the thing expansion is
 for.
 

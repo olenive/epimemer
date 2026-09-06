@@ -181,7 +181,7 @@ class TestThePartitionIsCaptured:
         stamped = NodeEdge(
             src_id=a.id,
             dst_id="topic-capitals",
-            type=EdgeType.TAGGED_WITH,
+            type=EdgeType.TAGGED_WITH_TOPIC,
             metadata={"judged_by": "agent-1"},
         )
         await storage.store_edge(stamped)

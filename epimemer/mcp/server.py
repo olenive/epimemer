@@ -633,7 +633,7 @@ async def memory_store_decomposition(
             every frame-scoped search including the frame you meant. A wrong id
             is refused, and the refusal lists the frames that do exist.
         tags: Optional document-level tag names applied to every node. Each tag
-            becomes (or reuses) a Topic linked by a tagged_with edge. Every node
+            becomes (or reuses) a Topic linked by a tagged_with_topic edge. Every node
             also gets a sourced_from edge to the document.
         timeline_id: Optional timeline to propose timepoints onto — use it when
             the document belongs to a timeline you have already created (a
@@ -1714,7 +1714,7 @@ async def memory_apply_reflection(
             **This replaces the topic's content, which is the name tags and
             `find_nodes` resolve by.** Rewriting the name of a tag splits it:
             the next document carrying that tag mints a second hub, and
-            `find_nodes(tagged_with=...)` returns nothing for the old name.
+            `find_nodes(tagged_with_topic=...)` returns nothing for the old name.
             Enrich a topic that states something; leave a tag's name alone.
         merges: Fuse near-duplicate topics into one combined topic; the sources
             are retired as MERGED history. Each: {source_ids: [str], content: str}.
@@ -2415,7 +2415,7 @@ async def memory_query_changes(
 async def memory_find_nodes(
     ctx: Context,
     sourced_from: str | None = None,
-    tagged_with: str | None = None,
+    tagged_with_topic: str | None = None,
     node_types: list[str] | None = None,
     status: str = "active",
     limit: int = 50,
@@ -2425,12 +2425,12 @@ async def memory_find_nodes(
 
     Unlike search (vector similarity), this returns exactly the nodes linked to a
     hub — e.g. find_nodes(sourced_from="ISSUES.md") returns everything that came
-    from that document; find_nodes(tagged_with="billing") returns nodes about
+    from that document; find_nodes(tagged_with_topic="billing") returns nodes about
     billing.
 
     Args:
         sourced_from: A document/entity id or name — return its `sourced_from` nodes.
-        tagged_with: A Topic id or name — return nodes tagged with that concept.
+        tagged_with_topic: A Topic id or name — return nodes tagged with that concept.
         node_types: Filter to "topic"/"fact"/"inference".
         status: Node status to list (default "active").
         limit: Maximum nodes to return.
@@ -2445,13 +2445,13 @@ async def memory_find_nodes(
         lambda: tools.find_nodes(
             storage=deps["storage"],
             sourced_from=sourced_from,
-            tagged_with=tagged_with,
+            tagged_with_topic=tagged_with_topic,
             node_types=node_types,
             status=status,
             limit=limit,
         ),
         ctx,
-        f"sourced_from={sourced_from} tagged_with={tagged_with}",
+        f"sourced_from={sourced_from} tagged_with_topic={tagged_with_topic}",
         lambda r, m: f"nodes={m.nodes_returned}",
         expected_graph=expected_graph,
     )

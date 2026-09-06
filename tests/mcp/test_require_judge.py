@@ -95,7 +95,7 @@ class TestIngestRecordsWhoReadTheMaterial:
         edges = [e for f in facts for e in await storage.get_edges_from(f.id)]
         assert {e.type for e in edges} >= {
             EdgeType.SOURCED_FROM,
-            EdgeType.TAGGED_WITH,
+            EdgeType.TAGGED_WITH_TOPIC,
         }
         assert all(e.judged_by == CRITIC for e in edges)
 

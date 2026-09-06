@@ -66,24 +66,26 @@ nothing.
 Four tools take no `expected_graph`, because each is *about* graphs rather than
 in one: `list_graphs`, `use_graph`, `delete_graph`, `viz_status`.
 
-### Sources, tags, and relations (all nodes & edges, not strings)
+### Sources, tag topics, and relations (all nodes & edges, not strings)
 
 Provenance and "aboutness" are modelled as **nodes and edges**, not string fields —
-so a source or tag can carry its own facts, relate to siblings, and sit in a frame.
-All are separate from metacontexts (which are epistemic *frames* that change
-retrieval scope; these do not).
+so a source or a tag topic can carry its own facts, relate to siblings, and sit in
+a frame. All are separate from metacontexts (which are epistemic *frames* that
+change retrieval scope; these do not).
 
 - **Source** — *where* knowledge came from. Pass `source`/`source_type` to
   `segment`; every node decomposed from it gets a `sourced_from` edge to the
   document. Name a publisher/author with `published_by="BBC"` — it becomes (or
   reuses) an entity **Topic** linked by an attribution edge, and can itself accrue
   facts.
-- **Tags = Topics.** Pass `tags=[...]` to `store_decomposition` (doc-level) or per
-  node via `{"content": ..., "tags": [...]}`. Each tag name becomes (or reuses, by
-  exact name) a **Topic** linked by a `tagged_with` edge — so tag consolidation is
-  just topic-merge. There are no `key=value` tags: a relationship dimension is an
-  **edge** (`link(a, b, relation="spoken_by")`); a scalar like sensitivity belongs
-  in node metadata.
+- **A tag becomes a tag topic.** Pass `tags=[...]` to `store_decomposition`
+  (doc-level) or per node via `{"content": ..., "tags": [...]}`. A *tag* is the name
+  you pass; it becomes (or reuses, by exact name) a **Topic**, the *tag topic*, and a
+  `tagged_with_topic` edge links the node to it — so tag topic consolidation is just
+  topic-merge. The edge is a retrieval index for `find_nodes` and carries no
+  evidential weight: `supports` is the edge corroboration reads. There are no
+  `key=value` tags: a relationship dimension is an **edge** (`link(a, b,
+  relation="spoken_by")`); a scalar like sensitivity belongs in node metadata.
 - **Relations are open vocabulary.** `link(src, dst, relation="published_by",
   kind="attribution")` coins any relationship you need. `kind` is `relationship`
   (followed in retrieval) or `attribution` (where it came from / who said it — not
@@ -100,7 +102,7 @@ retrieval scope; these do not).
   edges do not carry — the kind is set by use.
 
 Discovery & lookup:
-- **`find_nodes(sourced_from=…)` / `find_nodes(tagged_with=…)`** — exactly the nodes
+- **`find_nodes(sourced_from=…)` / `find_nodes(tagged_with_topic=…)`** — exactly the nodes
   linked to a document/source or a concept (id or name). The graph-native "which
   nodes came from ISSUES.md / are about billing". Use instead of `search` when you
   want provenance/aboutness, not similarity.
@@ -357,7 +359,7 @@ useful:
   configured threshold), when asked to consolidate, or periodically in long
   sessions.
 - `reflect` returns consolidation candidates (similar pairs, splits, enrichments —
-  similar pairs also surface duplicate source/tag/entity Topics), same-frame
+  similar pairs also surface duplicate source, tag and entity Topics), same-frame
   contradiction candidates, `recurrences`, `boundary_proposals` and
   `unsound_inferences` (both below), `inference_merge_candidates`,
   `pending_review` — the worklist of nodes
@@ -426,8 +428,8 @@ useful:
   re-asserts `one_claim` afterwards, because a wrong withdrawal only withholds
   support while a wrong re-assertion invents it. If they really are one claim,
   `merge_facts` is the call.
-- **Source/tag/entity consolidation** is ordinary topic-merge — they're Topics, so
-  pass `merges=[...]` for synonymous ones.
+- **Source, tag topic and entity consolidation** is ordinary topic-merge — they're
+  Topics, so pass `merges=[...]` for synonymous ones.
 - **Judge every relation pair you are shown, including the ones you decline.**
   `relation_verdicts=[{pair: [a, b], kind, verdict: "distinct" | "synonymous",
   because}]` — `distinct` for two different relationships that look alike (a

@@ -226,7 +226,7 @@ refuses and names the right variable rather than appearing to succeed.
 - **Metacontexts**: epistemic frames that disambiguate fiction from fact, sources, perspectives
 - **Petri nets**: all pipelines are executable, typed, visualizable Petri nets via [Petritype](https://github.com/olenive/petritype)
 - **Immutable history**: a node's *content* is never mutated — updates create new versions with history edges (lifecycle metadata like `status` and value signals is mutated in place)
-- **Sources, tags, relations**: provenance and aboutness are nodes & edges (`sourced_from`, `tagged_with`), not strings; relationships are open-vocabulary user-labelled edges
+- **Sources, tag topics, relations**: provenance and aboutness are nodes & edges (`sourced_from`, `tagged_with_topic`), not strings; a tag name in the request resolves to a **tag topic**, and the edge naming it is a retrieval index carrying no evidential weight, unlike `supports`; relationships are open-vocabulary user-labelled edges
 
 ## Documentation
 

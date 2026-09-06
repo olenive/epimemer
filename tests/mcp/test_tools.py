@@ -3692,12 +3692,12 @@ class TestIngestSourcesAndTags:
         )
         billing = await storage.get_node_by_content("billing", node_type=NodeType.TOPIC)
         assert billing is not None
-        # Exactly one billing Topic, with a tagged_with edge from each fact.
+        # Exactly one billing Topic, with a tagged_with_topic edge from each fact.
         topics = [
             t for t in await storage.query_nodes(node_type=NodeType.TOPIC) if t.content == "billing"
         ]
         assert len(topics) == 1
-        taggers = await storage.get_edges_to(billing.id, edge_type=EdgeType.TAGGED_WITH)
+        taggers = await storage.get_edges_to(billing.id, edge_type=EdgeType.TAGGED_WITH_TOPIC)
         assert len(taggers) == 2
 
     async def test_published_by_entity_edge(self, storage, embedding_provider, config):
@@ -3744,7 +3744,7 @@ class TestFindNodesTraversal:
 
     async def test_find_by_tagged_with_name(self, storage, embedding_provider, config):
         await self._two(storage, embedding_provider, config)
-        result, _ = await find_nodes(storage, tagged_with="billing")
+        result, _ = await find_nodes(storage, tagged_with_topic="billing")
         assert {n["content"] for n in result["nodes"]} == {"af"}
 
     async def test_requires_a_hub(self, storage):

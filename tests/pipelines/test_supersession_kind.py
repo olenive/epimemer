@@ -430,14 +430,14 @@ class TestWorldChangeKeepsTheHistoricalNodesEdges:
             NodeEdge(
                 src_id=old.id,
                 dst_id="topic-cities",
-                type=EdgeType.TAGGED_WITH,
+                type=EdgeType.TAGGED_WITH_TOPIC,
             )
         )
 
         new = await self._world_change(storage, embedding_provider, old)
 
-        old_tags = await storage.get_edges_from(old.id, edge_type=EdgeType.TAGGED_WITH)
-        new_tags = await storage.get_edges_from(new.id, edge_type=EdgeType.TAGGED_WITH)
+        old_tags = await storage.get_edges_from(old.id, edge_type=EdgeType.TAGGED_WITH_TOPIC)
+        new_tags = await storage.get_edges_from(new.id, edge_type=EdgeType.TAGGED_WITH_TOPIC)
         assert [e.dst_id for e in old_tags] == ["topic-cities"]
         assert [e.dst_id for e in new_tags] == ["topic-cities"]
 
@@ -469,7 +469,7 @@ class TestWorldChangeKeepsTheHistoricalNodesEdges:
         for dst, edge_type in (
             ("doc-1", EdgeType.SOURCED_FROM),
             ("mc-fiction", EdgeType.HAS_METACONTEXT),
-            ("topic-capitals", EdgeType.TAGGED_WITH),
+            ("topic-capitals", EdgeType.TAGGED_WITH_TOPIC),
         ):
             await storage.store_edge(NodeEdge(src_id=old.id, dst_id=dst, type=edge_type))
 
@@ -486,7 +486,7 @@ class TestWorldChangeKeepsTheHistoricalNodesEdges:
         for edge_type in (
             EdgeType.SOURCED_FROM,
             EdgeType.HAS_METACONTEXT,
-            EdgeType.TAGGED_WITH,
+            EdgeType.TAGGED_WITH_TOPIC,
         ):
             assert len(await storage.get_edges_from(old.id, edge_type=edge_type)) == 0
             assert len(await storage.get_edges_from(new_id, edge_type=edge_type)) == 1

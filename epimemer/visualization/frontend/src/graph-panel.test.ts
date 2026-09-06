@@ -89,7 +89,7 @@ describe("edgeColor", () => {
       // The family where colour carries the meaning: each of these says
       // something different about the *same two nodes*, and the panel draws
       // them on top of each other. Grey is a fine default for a structural
-      // edge — `sourced_from`, `tagged_with` and eleven others take it — but a
+      // edge — `sourced_from`, `tagged_with_topic` and eleven others take it — but a
       // judgment that falls through is the #55 failure: an assertion reaching
       // the browser and drawing as an anonymous neutral nobody reads.
       //

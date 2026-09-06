@@ -232,8 +232,11 @@ class EdgeType(str, Enum):
     # Epistemic framing
     HAS_METACONTEXT = "has_metacontext"  # node → metacontext
 
-    # Aboutness & provenance (sources/tags are nodes; these connect to them)
-    TAGGED_WITH = "tagged_with"  # node → topic ("about / tagged with this concept")
+    # Aboutness & provenance (sources and tag topics are nodes; these connect to
+    # them). A tag is the name the caller passed; the Topic it resolves to is the
+    # tag topic, and this edge names it. It is a retrieval index: `find_nodes` is
+    # its only reader, and nothing weighs it as evidence.
+    TAGGED_WITH_TOPIC = "tagged_with_topic"  # node → topic (the tag topic)
     SOURCED_FROM = "sourced_from"  # node → RawDocument (originating document)
 
     # Epistemic review (see REVIEW_EPISTEMIC.md)
@@ -391,7 +394,7 @@ def traversal_excluded(edge: NodeEdge) -> bool:
     """True when default retrieval should NOT expand through this edge.
 
     Excludes history + review (graph bookkeeping) and provenance/attribution edges
-    (don't fan out from a version/source hub). `tagged_with` and relationship-kind
+    (don't fan out from a version/source hub). `tagged_with_topic` and relationship-kind
     edges are followed, like `about`/`supports`.
     """
     if edge.type in NON_KNOWLEDGE_EDGE_TYPES or edge.type in PROVENANCE_EDGE_TYPES:
@@ -428,7 +431,7 @@ JUDGMENT_EDGE_TYPES: frozenset[EdgeType] = frozenset(
 # predecessor — and dropping the frame would move a fiction-frame claim into
 # base reality, which is the one thing CLAUDE.md forbids outright.
 WORLD_CHANGE_COPIED_EDGE_TYPES: frozenset[EdgeType] = frozenset(
-    {EdgeType.HAS_METACONTEXT, EdgeType.TAGGED_WITH}
+    {EdgeType.HAS_METACONTEXT, EdgeType.TAGGED_WITH_TOPIC}
 )
 
 # What happens to an edge when the node it touches is replaced.
@@ -974,7 +977,7 @@ class NodeEdge(BaseModel):
         """Only a provenance edge can carry validity.
 
         An interval is what a source asserts, so it has to hang off the edge
-        naming that source. On a `similarity` or `tagged_with` edge it would be
+        naming that source. On a `similarity` or `tagged_with_topic` edge it would be
         a period attributed to nobody — unfalsifiable, unmergeable, and exactly
         the node-level set this design rejected, reached by accident.
         """

@@ -176,7 +176,7 @@ class TestTheGraphComesBack:
         original = NodeEdge(
             src_id=a.id,
             dst_id="topic-capitals",
-            type=EdgeType.TAGGED_WITH,
+            type=EdgeType.TAGGED_WITH_TOPIC,
             metadata={"judged_by": "agent-1"},
         )
         await storage.store_edge(original)
@@ -184,7 +184,7 @@ class TestTheGraphComesBack:
 
         await reverse_merge(survivor.id, storage)
 
-        restored = (await storage.get_edges_from(a.id, edge_type=EdgeType.TAGGED_WITH))[0]
+        restored = (await storage.get_edges_from(a.id, edge_type=EdgeType.TAGGED_WITH_TOPIC))[0]
         assert restored.metadata == {"judged_by": "agent-1"}
         assert restored.created_at == original.created_at
 
@@ -356,7 +356,7 @@ class TestTheGuardRefusesRatherThanDestroys:
             EdgeType.CONTRADICTION,
             EdgeType.SIMILARITY,
             EdgeType.VARIANT_OF,
-            EdgeType.TAGGED_WITH,
+            EdgeType.TAGGED_WITH_TOPIC,
             EdgeType.RELATED,
         ],
     )

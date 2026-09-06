@@ -78,7 +78,7 @@ async def supersede_node(
     now = datetime.now(UTC)
 
     # Sources, tags, and relationships ride along via edge migration below
-    # (sourced_from / tagged_with / user edges are migrated, not version-anchored).
+    # (sourced_from / tagged_with_topic / user edges are migrated, not version-anchored).
     vectors = await embedding_provider.embed([new_node.content])
     new_embedding = EmbeddingRecord(
         item_id=new_node.id,
@@ -343,7 +343,7 @@ async def merge_nodes(
     now = datetime.now(UTC)
 
     # The merged node inherits its sources' sources/tags/relationships via edge
-    # migration below (sourced_from / tagged_with / user edges are migrated).
+    # migration below (sourced_from / tagged_with_topic / user edges are migrated).
     # Its **frame** is the exception and is re-stated rather than migrated.
     vectors = await embedding_provider.embed([merged_node.content])
     merged_embedding = EmbeddingRecord(

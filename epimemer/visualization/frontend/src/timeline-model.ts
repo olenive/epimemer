@@ -92,7 +92,7 @@ export interface SnapshotLike {
 const EDGE_TIMELINK = "timelink";
 const EDGE_METACONTEXT = "has_metacontext";
 /** Both answer "where did this come from?", so they feed one `source` facet. */
-const PROVENANCE_EDGES = new Set(["sourced_from", "tagged_with"]);
+const PROVENANCE_EDGES = new Set(["sourced_from", "tagged_with_topic"]);
 
 const parseTime = (iso: string | null): number | null => {
   if (!iso) return null;

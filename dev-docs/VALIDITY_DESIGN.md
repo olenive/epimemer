@@ -54,7 +54,7 @@ a hand-typed historical date is naive far more often than not, and mixing it
 with an aware one raises from inside a comparison rather than answering.
 
 **Only a `sourced_from` edge may carry an interval.** On a `similarity` or
-`tagged_with` edge it would be a period attributed to nobody, which is the
+`tagged_with_topic` edge it would be a period attributed to nobody, which is the
 node-level set this design rejected, reintroduced through a side door.
 
 **`instant_kind` is read in exactly two files** — `core/temporal.py`, which

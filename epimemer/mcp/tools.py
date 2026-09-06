@@ -882,7 +882,7 @@ async def store_decomposition(
     Every node gets a `sourced_from` edge to the originating document, and a
     `has_metacontext` edge to the frame. `tags` (document-level) and per-node
     tags are resolved-or-created (by exact name) as Topics linked by
-    `tagged_with` edges, so a repeated tag reuses one Topic. Everything is
+    `tagged_with_topic` edges, so a repeated tag reuses one Topic. Everything is
     persisted in one atomic write.
 
     Temporal expressions in node content become timepoints on a timeline
@@ -1032,7 +1032,7 @@ async def store_decomposition(
                     validity=validity_by_node.get(node.id, []),
                 )
             )
-        # Tags: each becomes (or reuses) a Topic linked by tagged_with.
+        # Tags: each becomes (or reuses) a Topic linked by tagged_with_topic.
         for node, names in tag_assignments:
             for name in names:
                 topic = await _tag_topic(name)
@@ -1040,7 +1040,7 @@ async def store_decomposition(
                     NodeEdge(
                         src_id=node.id,
                         dst_id=topic.id,
-                        type=EdgeType.TAGGED_WITH,
+                        type=EdgeType.TAGGED_WITH_TOPIC,
                     )
                 )
         # The frame, written explicitly — including for `the-real`, which is
@@ -1863,7 +1863,7 @@ async def find_nodes(
     storage: StorageBackend,
     *,
     sourced_from: str | None = None,
-    tagged_with: str | None = None,
+    tagged_with_topic: str | None = None,
     node_types: list[str] | None = None,
     status: str = "active",
     limit: int = 50,
@@ -1871,18 +1871,18 @@ async def find_nodes(
     """Find nodes connected to a source or topic hub by graph traversal.
 
     `sourced_from` (a document/entity id or name) returns the nodes with a
-    `sourced_from` edge to it — "which nodes came from X". `tagged_with` (a Topic
+    `sourced_from` edge to it — "which nodes came from X". `tagged_with_topic` (a Topic
     id or name) returns the nodes tagged with that concept. A native graph query,
     replacing the old string-filter listing.
     """
-    if tagged_with is not None:
-        hub_id = await _resolve_hub_id(tagged_with, storage)
-        edge_type = EdgeType.TAGGED_WITH
+    if tagged_with_topic is not None:
+        hub_id = await _resolve_hub_id(tagged_with_topic, storage)
+        edge_type = EdgeType.TAGGED_WITH_TOPIC
     elif sourced_from is not None:
         hub_id = await _resolve_hub_id(sourced_from, storage)
         edge_type = EdgeType.SOURCED_FROM
     else:
-        raise ValueError("find_nodes requires sourced_from or tagged_with")
+        raise ValueError("find_nodes requires sourced_from or tagged_with_topic")
 
     st = NodeStatus(status)
     allowed = set(node_types) if node_types else None

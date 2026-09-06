@@ -69,7 +69,7 @@ class TestEdgeBehaviour:
         assert migration_disposition(e.type, NodeStatus.CORRECTED) == "move"
 
     def test_tagged_with_traversed_and_moved_by_a_correction(self):
-        e = NodeEdge(src_id="a", dst_id="t", type=EdgeType.TAGGED_WITH)
+        e = NodeEdge(src_id="a", dst_id="t", type=EdgeType.TAGGED_WITH_TOPIC)
         assert not traversal_excluded(e)
         assert migration_disposition(e.type, NodeStatus.CORRECTED) == "move"
 
@@ -101,7 +101,7 @@ class TestWorldChangeMigrationPolicy:
         """A frame says which world, a tag says what about — neither asserts the
         claim, and losing the frame would move a fiction claim into base
         reality."""
-        for edge_type in (EdgeType.HAS_METACONTEXT, EdgeType.TAGGED_WITH):
+        for edge_type in (EdgeType.HAS_METACONTEXT, EdgeType.TAGGED_WITH_TOPIC):
             assert migration_disposition(edge_type, NodeStatus.HISTORICAL) == "copy"
 
     def test_a_world_change_moves_nothing(self):
@@ -725,7 +725,7 @@ class TestValidityBelongsToASource:
         "edge_type",
         [
             EdgeType.SIMILARITY,
-            EdgeType.TAGGED_WITH,
+            EdgeType.TAGGED_WITH_TOPIC,
             EdgeType.SUPPORTS,
             EdgeType.HAS_METACONTEXT,
         ],

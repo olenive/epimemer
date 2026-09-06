@@ -229,7 +229,7 @@ describe("buildContentRows", () => {
       ],
       edges: [
         edge({ src_id: "n1", dst_id: "t1", metadata: { timepoint_id: "p1" } }),
-        edge({ src_id: "n1", dst_id: "tag1", edge_type: "tagged_with" }),
+        edge({ src_id: "n1", dst_id: "tag1", edge_type: "tagged_with_topic" }),
         // A document id, which is not a graph node — a bare uuid helps nobody.
         edge({ src_id: "n1", dst_id: "doc-42", edge_type: "sourced_from" }),
       ],

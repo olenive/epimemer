@@ -801,7 +801,7 @@ and that damage accrued in data while the design was pending. Migration is now
 **per edge type**, via `migration_disposition(edge_type, status)`: a correction
 moves everything but history and review; a world-change moves nothing, keeps
 provenance and the judgments made about the old claim on the old node, and
-copies only `has_metacontext` and `tagged_with`. Both blanket answers were tried
+copies only `has_metacontext` and `tagged_with_topic`. Both blanket answers were tried
 and withdrawn — copying everything fabricates attribution, and migrating nothing
 drops the frame, which would move a fiction-frame replacement into base reality.
 The *validity* half still waits for the interval model, but it waits safely: the
@@ -1095,7 +1095,7 @@ similarity nomination **including `HISTORICAL` candidates**, resolved by the
 source's edge. And a world-change migrates **per edge type**: `sourced_from`
 (which carries validity once T1 is built) neither moves nor copies, because
 putting it on a different claim fabricates attribution — while `has_metacontext`
-and `tagged_with` *are* copied, because a frame and a topic are not claims about
+and `tagged_with_topic` *are* copied, because a frame and a topic are not claims about
 the world. The blanket answer in either direction was wrong, and "migrate
 nothing" was wrong dangerously: it moves a fiction-frame replacement into base
 reality. **per-edge-type migration** carries the table.

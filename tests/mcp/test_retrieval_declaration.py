@@ -414,7 +414,7 @@ async def test_declaring_nothing_is_not_the_same_as_not_declaring(server, captur
     captured.clear()
 
     await server.call_tool(
-        "find_nodes", {"expected_graph": "default", "tagged_with": "no-such-tag", "limit": 5}
+        "find_nodes", {"expected_graph": "default", "tagged_with_topic": "no-such-tag", "limit": 5}
     )
 
     _, meta = captured[-1]

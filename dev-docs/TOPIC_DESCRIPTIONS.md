@@ -31,7 +31,7 @@ Topics are joined by exact string match on `content`, in two places:
 - **Write.** `_tag_topic` (`mcp/tools.py:926`) resolves or creates a tag by
   looking up an active Topic whose content is exactly the tag name.
 - **Read.** `_resolve_hub_id` (`mcp/tools.py:1853`) resolves a name the same
-  way for `find_nodes(tagged_with=...)`.
+  way for `find_nodes(tagged_with_topic=...)`.
 
 Both go through `get_node_by_content`, which filters to `ACTIVE`.
 
@@ -43,7 +43,7 @@ join key, and the two paths then fail in opposite directions:
   Nodes tagged before the enrichment point at the old node, nodes tagged after
   point at the new one, and neither knows about the other.
 - The read path misses, falls back to the raw string, and returns an empty list.
-  There is no error. `find_nodes(tagged_with="issue-46")` answered `{"nodes":
+  There is no error. `find_nodes(tagged_with_topic="issue-46")` answered `{"nodes":
   []}` for two days.
 
 The retired node is left `CORRECTED`, the one status `restore` refuses by
@@ -52,7 +52,7 @@ design, so no designed path walks any of this back.
 **This happened.** On 2026-09-03 an enrichment pass rewrote six tags into
 sentences: `issue-16`, `issue-46`, `issue-52`, `issue-53`, `issue-61`,
 `issue-62`. `issue-46` was repaired by hand on 2026-09-05, recreating the tag
-and moving its 31 `tagged_with` edges onto it. Five are still broken.
+and moving its 31 `tagged_with_topic` edges onto it. Five are still broken.
 
 The agent that did it was following the tool's own documentation.
 `apply_reflection`'s docstring (`mcp/server.py:1712`) read *"enrichments:
@@ -276,7 +276,7 @@ places need a decision rather than nothing:
 
 `issue-16`, `issue-52`, `issue-53`, `issue-61` and `issue-62` are still
 sentences holding their tags' edges. The repair is the one already run for
-`issue-46`: create the bare tag, move its `tagged_with` edges onto it keeping
+`issue-46`: create the bare tag, move its `tagged_with_topic` edges onto it keeping
 their original `created_at` and `judged_by`, and prune the moved edges from any
 merge-undo record that would otherwise restore a duplicate.
 
@@ -327,7 +327,7 @@ regression test, tagging a document, enriching the tag, and tagging again,
 asserting one hub.
 
 **Stage 3, repair.** The five tags, with descriptions seeded per §9.6.
-Verification is `find_nodes(tagged_with=...)` returning the expected count for
+Verification is `find_nodes(tagged_with_topic=...)` returning the expected count for
 each.
 
 ---
@@ -346,7 +346,7 @@ nodes it describes, and this proposal has one object where that has two.
 kind of association alongside the only one the graph has, plus 4,107 edges and
 94 topics migrated, plus every read path that treats a tag as a topic.
 
-**A description on the `tagged_with` edge**, saying why this node carries this
+**A description on the `tagged_with_topic` edge**, saying why this node carries this
 tag. Rejected on three counts: it is per (node, tag) pair, so a document with
 30 nodes and 4 tags costs 120 sentences at ingest; nothing reads it, and an
 unread field drifts; and most entries would restate the tag, which the
