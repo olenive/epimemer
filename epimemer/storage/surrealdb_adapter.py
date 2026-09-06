@@ -10,6 +10,7 @@ with SurrealDB's built-in 'id' field (which uses RecordID type).
 import asyncio
 import contextlib
 import logging
+import re
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -385,23 +386,25 @@ def _upsert(table: str, *, data: str = "data", uid: str = "uid") -> str:
     return f"UPSERT {table} CONTENT ${data} WHERE uid = ${uid}"
 
 
-# --- Schema version and edge-type migration ---
+# --- Schema version and migrations ---
 #
-# Written 2026-09-06, and deletable once no graph older than that release is
-# expected to be opened: the two statements below rename edge types that were
-# split apart, and a graph written after this ships already carries the new
-# names.
+# One marker per graph, and one step per version it has to pass through. A step
+# is deletable once no graph older than the release that added it is expected to
+# be opened.
+_SCHEMA_VERSION_RECORD = "schema_version:current"
+_SCHEMA_VERSION = 3
+
+_SCHEMA_VERSION_GET = f"SELECT VALUE version FROM {_SCHEMA_VERSION_RECORD};"
+_SCHEMA_VERSION_SET = f"UPSERT {_SCHEMA_VERSION_RECORD} SET version = $version;"
+
+# Version 2, written 2026-09-06: rename the two edge types that were split
+# apart, so a graph written before the split reads under the current names.
 #
 # `dst_id` holds a bare application uid, and the table a node lives in is known
 # only from which table holds the row, so the topic test reads `uid` rather than
 # `id`: `SELECT VALUE id FROM topic` yields RecordIDs, which match no `dst_id`
 # and would leave the second statement a silent no-op.
-_SCHEMA_VERSION_RECORD = "schema_version:current"
-_SCHEMA_VERSION = 2
-
-_SCHEMA_VERSION_GET = f"SELECT VALUE version FROM {_SCHEMA_VERSION_RECORD};"
-_SCHEMA_VERSION_SET = f"UPSERT {_SCHEMA_VERSION_RECORD} SET version = $version;"
-
+#
 # `RETURN VALUE uid` so the count costs a list of ids rather than a list of rows.
 _RENAME_TAGGED_WITH = (
     "UPDATE node_edge SET type = 'tagged_with_topic' WHERE type = 'tagged_with' RETURN VALUE uid;"
@@ -412,15 +415,114 @@ _RENAME_SUPPORTS_ONTO_TOPIC = (
     "RETURN VALUE uid;"
 )
 
+# Version 3: the keep verdict becomes a `retention` journal row and nothing
+# else. It used to be written twice, as a row whose anchors were prose inside
+# `certainty_basis` and as one `review_confirmed` edge per anchor, with the
+# shape that has no anchor faked as an edge from the node to itself. The prose
+# moves into `covers`, edges with no row of their own are recovered as rows, and
+# the edges go.
+_COVERS_PROSE = re.compile(r"\[covers:([^\]]*)\]\s*\Z")
 
-async def _migrate_edge_type_names(query: Callable[..., Awaitable[Any]], database: str) -> None:
-    """Bring one graph's edge type names up to `_SCHEMA_VERSION`.
+_RETENTION_ROWS = (
+    "SELECT uid, subject_ids, covers, certainty_basis FROM decision WHERE kind = 'retention';"
+)
+_SET_COVERS = "UPDATE decision SET covers = $covers WHERE uid = $uid;"
+_CONFIRMED_EDGES = (
+    "SELECT src_id, dst_id, judged_by, created_at FROM node_edge WHERE type = 'review_confirmed';"
+)
+_DROP_CONFIRMED_EDGES = "DELETE node_edge WHERE type = 'review_confirmed';"
+
+_RECOVERED_BASIS = "retention recovered from review_confirmed edges during migration"
+
+
+def _covers_from_prose(basis: str | None, subject: str | None) -> list[str]:
+    """The anchors a pre-`covers` retention row spelled into its own prose.
+
+    `subject` is dropped from the answer: the self-anchor was written as the
+    node's own id, and `covers` says what the verdict *answers*, which for a
+    node kept for its own sake is nothing.
+    """
+    match = _COVERS_PROSE.search(basis or "")
+    if match is None:
+        return []
+    named = [anchor.strip() for anchor in match.group(1).split(",")]
+    return [anchor for anchor in dict.fromkeys(named) if anchor and anchor != subject]
+
+
+async def _fill_retention_covers(query: Callable[..., Awaitable[Any]]) -> int:
+    """Move each retention row's anchors out of its prose and into `covers`.
+
+    `certainty_basis` is left as it was: it is what the agent wrote, and the
+    journal is append-only in spirit even where a migration has to touch it.
+
+    A row that already has anchors is left alone, so a second run over a
+    half-migrated graph cannot overwrite what the first one wrote.
+    """
+    filled = 0
+    for row in await query(_RETENTION_ROWS) or []:
+        stored = row.get("covers")
+        if stored:
+            continue
+        subjects = row.get("subject_ids") or []
+        covers = _covers_from_prose(row.get("certainty_basis"), subjects[0] if subjects else None)
+        if not covers and isinstance(stored, list):
+            continue
+        await query(_SET_COVERS, {"covers": covers, "uid": row["uid"]})
+        filled += 1
+    return filled
+
+
+async def _recover_retentions_from_edges(query: Callable[..., Awaitable[Any]]) -> int:
+    """Write a retention row for every node kept only by `review_confirmed` edges.
+
+    The two writes could always disagree, and on a graph where they do the edges
+    are the record that survives: a keep whose row never landed still suppressed
+    the nomination, so dropping the edges without recovering it would put the
+    node back in front of a reviewer who had already answered.
+    """
+    edges = await query(_CONFIRMED_EDGES) or []
+    if not edges:
+        return 0
+
+    rows = await query(_RETENTION_ROWS) or []
+    already = {subject for row in rows for subject in (row.get("subject_ids") or [])}
+
+    anchors: dict[str, list[str]] = {}
+    written: dict[str, dict] = {}
+    for edge in edges:
+        node_id = edge["dst_id"]
+        if node_id in already:
+            continue
+        anchors.setdefault(node_id, []).append(edge["src_id"])
+        written.setdefault(node_id, edge)
+
+    for node_id, srcs in anchors.items():
+        edge = written[node_id]
+        record = DecisionRecord(
+            kind=DecisionKind.RETENTION,
+            subject_ids=[node_id],
+            covers=[src for src in dict.fromkeys(srcs) if src != node_id],
+            judged_by=edge.get("judged_by"),
+            decided_at=datetime.fromisoformat(edge["created_at"]),
+            certainty_basis=_RECOVERED_BASIS,
+        )
+        await query(_upsert("decision"), {"data": _decision_row(record), "uid": record.id})
+
+    await query(_DROP_CONFIRMED_EDGES)
+    return len(anchors)
+
+
+async def _migrate_schema(query: Callable[..., Awaitable[Any]], database: str) -> None:
+    """Bring one graph up to `_SCHEMA_VERSION`, a step at a time.
 
     Gated on the version marker rather than on the absence of old rows: this
     runs on every `connect()` and every `switch_database()`, so an ungated
-    migration would pay two table scans on every graph open, for ever.
+    migration would pay a table scan per step on every graph open, for ever.
+    The steps run in order and the marker is stamped once at the end, so a graph
+    that stops halfway is reopened at the version it came in at and starts
+    again.
 
-    Two server processes may open the same graph at once. Both statements are
+    Two server processes may open the same graph at once. Every step is
     idempotent, so the second run rewrites nothing and the repeated marker write
     stores the same number; a race costs work, not correctness, and needs no
     lock.
@@ -430,20 +532,33 @@ async def _migrate_edge_type_names(query: Callable[..., Awaitable[Any]], databas
     if version >= _SCHEMA_VERSION:
         return
 
-    tagged = await query(_RENAME_TAGGED_WITH)
-    extracted = await query(_RENAME_SUPPORTS_ONTO_TOPIC)
-    await query(_SCHEMA_VERSION_SET, {"version": _SCHEMA_VERSION})
+    if version < 2:
+        tagged = await query(_RENAME_TAGGED_WITH)
+        extracted = await query(_RENAME_SUPPORTS_ONTO_TOPIC)
+        # One line, and only where rows moved: every graph created from here on
+        # reaches this point once with nothing to do, and saying so would be noise.
+        if tagged or extracted:
+            logger.info(
+                "graph %s: renamed %d edges from tagged_with to tagged_with_topic and "
+                "%d edges onto topics from supports to extracted_under_topic",
+                database,
+                len(tagged or []),
+                len(extracted or []),
+            )
 
-    # One line, and only where rows moved: every graph created from here on
-    # reaches this point once with nothing to do, and saying so would be noise.
-    if tagged or extracted:
-        logger.info(
-            "graph %s: renamed %d edges from tagged_with to tagged_with_topic and "
-            "%d edges onto topics from supports to extracted_under_topic",
-            database,
-            len(tagged or []),
-            len(extracted or []),
-        )
+    if version < 3:
+        filled = await _fill_retention_covers(query)
+        recovered = await _recover_retentions_from_edges(query)
+        if filled or recovered:
+            logger.info(
+                "graph %s: moved %d keep verdicts into the journal's covers field and "
+                "recovered %d from review_confirmed edges, which are now removed",
+                database,
+                filled,
+                recovered,
+            )
+
+    await query(_SCHEMA_VERSION_SET, {"version": _SCHEMA_VERSION})
 
 
 # --- Reflection bookkeeping ---
@@ -628,6 +743,7 @@ def _decision_clauses(
     agent_ids: Sequence[str] | None = None,
     kinds: Sequence[DecisionKind] | None = None,
     subject_id: str | None = None,
+    subject_ids: Sequence[str] | None = None,
     reviews: str | None = None,
     since: datetime | None = None,
     until: datetime | None = None,
@@ -656,6 +772,13 @@ def _decision_clauses(
     if subject_id is not None:
         clauses.append("$subject_id IN subject_ids")
         params["subject_id"] = subject_id
+    if subject_ids is not None:
+        # `CONTAINSANY` rather than a loop of `IN`s, so one statement serves a
+        # whole candidate population and the index on `subject_ids.*` still
+        # serves it. An empty list contains none of them, which is what a caller
+        # naming an empty set of subjects means.
+        clauses.append("subject_ids CONTAINSANY $subject_ids")
+        params["subject_ids"] = list(subject_ids)
     if reviews is not None:
         clauses.append("reviews = $reviews")
         params["reviews"] = reviews
@@ -1090,7 +1213,7 @@ class SurrealDBStorage:
 
         # `_selected` rather than `_database`: it names the graph the connection
         # is actually pointed at, which is what these statements will hit.
-        await _migrate_edge_type_names(query, self._selected)
+        await _migrate_schema(query, self._selected)
 
     @property
     def db(self) -> AsyncSurreal:
@@ -2345,6 +2468,7 @@ class SurrealDBStorage:
         agent_ids: Sequence[str] | None = None,
         kinds: Sequence[DecisionKind] | None = None,
         subject_id: str | None = None,
+        subject_ids: Sequence[str] | None = None,
         reviews: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
@@ -2354,6 +2478,7 @@ class SurrealDBStorage:
             agent_ids=agent_ids,
             kinds=kinds,
             subject_id=subject_id,
+            subject_ids=subject_ids,
             reviews=reviews,
             since=since,
             until=until,

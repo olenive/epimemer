@@ -4304,26 +4304,27 @@ async def apply_reflection(
             _skip(node_id, "; ".join(said))
             continue
 
+        # The journal row is the verdict, so `record_retention` writes it: one
+        # row per node rather than one for the batch, unlike archival, because a
+        # keep is a judgment about this node's own reasons.
         try:
-            anchors = await record_retention(
+            await record_retention(
                 storage,
                 node_id=node_id,
+                because=because,
                 reasons=covers,
                 judge=judge,
             )
         except UnknownAnchors as refused:
             _skip(node_id, str(refused))
             continue
-        # One row per node rather than one for the batch, unlike archival: a
-        # keep is a judgment about this node's own reasons, and the anchors are
-        # what a later reviewer needs to see the verdict's scope.
-        await journal(
-            storage,
-            DecisionKind.RETENTION,
-            [node_id],
-            judge=judge,
-            certainty_basis=f"{because} [covers: {', '.join(anchors)}]",
-        )
+        except Exception as failed:
+            # The row is the verdict, so a store failure means the keep did not
+            # happen. Reported per node rather than failing the call: the merges
+            # and archivals above have already landed, and the agent can retry
+            # this node alone.
+            _skip(node_id, f"the keep verdict was not stored ({failed}); retry this node")
+            continue
         retentions_recorded += 1
 
     # 8. Re-judge importance. Separate from archivals on purpose: archiving is a

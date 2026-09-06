@@ -276,24 +276,6 @@ class EdgeType(str, Enum):
     # one under-counts. Under-counting is the direction fact dedup already chose when
     # it left the pre-`claim_kind` corpus unmergeable.
     RETRACTED_SIMILARITY = "retracted_similarity"
-    # anchor → node: *somebody re-read this node and it stands*. The single-node
-    # counterpart of `assessed`, and it exists for the same reason: a nominator
-    # recomputed from current state that records no *keep* verdict re-offers
-    # what was already kept, and cannot know it.
-    #
-    # **The `src` is the reason the verdict covers, and that is the whole
-    # design.** An inference flagged on superseded evidence is confirmed against
-    # the facts that changed, one edge each, so a *further* supersession is a
-    # reason no confirmation covers and the node is nominated again. Anchoring
-    # rather than a flag, because a node's neighbourhood keeps moving while a
-    # judged pair's wording does not: a permanent keep would silence the next
-    # change as well as this one.
-    #
-    # Where the nomination names no reason — a node nothing links to and nothing
-    # has retrieved — the node is its own anchor. Nothing about that nomination
-    # can change without removing it from the set anyway, so a self-anchored
-    # edge is the honest degenerate case rather than a second mechanism.
-    REVIEW_CONFIRMED = "review_confirmed"
     VARIANT_OF = "variant_of"  # fact ↔ fact, across frames
     BASED_ON = "based_on"  # metacontext → metacontext (association)
 
@@ -350,16 +332,19 @@ def lineage_edge_type_for(status: NodeStatus) -> EdgeType:
 #
 # Three of them are also computed into retrieval labels
 # (superseded_candidate / evidence_stale / evidence_merged). `assessed` is the
-# first member with no label at all: nothing downstream should treat "a pair was
+# member with no label at all: nothing downstream should treat "a pair was
 # looked at" as a flag on either node. It is read by one caller, the nomination
 # sweep, and read there as a suppression index.
+#
+# The single-node counterpart of `assessed` is not here and is deliberately not
+# an edge: a keep verdict is a `retention` row in the decision journal, and the
+# reasons it answers are that row's `covers` field.
 REVIEW_EDGE_TYPES: frozenset[EdgeType] = frozenset(
     {
         EdgeType.SUPERSESSION_CANDIDATE,
         EdgeType.EVIDENCE_SUPERSEDED,
         EdgeType.EVIDENCE_MERGED,
         EdgeType.ASSESSED,
-        EdgeType.REVIEW_CONFIRMED,
         # Here rather than in `JUDGMENT_EDGE_TYPES` for `assessed`'s reason: it
         # needs the same anchoring *and* exclusion from traversal, being a
         # record about a judgment rather than a claim about the world.
@@ -1767,6 +1752,19 @@ class DecisionRecord(BaseModel):
     # the inline form regardless, and two rules for one relation is worse than a
     # scan (§3.5).
     subject_ids: list[str] = Field(default_factory=list)
+    # The questions this judgment answers, where the judgment answers a set of
+    # them. Only `RETENTION` uses it today: a keep verdict names the reasons the
+    # node was nominated on, so a reason that arrives *later* is one no verdict
+    # covers and the node is nominated again. Empty means the node was kept for
+    # its own sake, which is the `never_retrieved` shape — the nomination named
+    # no reason, so there is none to cover.
+    #
+    # Here rather than as edges because the anchors are part of the verdict
+    # rather than a claim about the world: an index built out of edges beside
+    # the row that records the same act is a second copy to keep in step, and
+    # the one shape with no anchor had to be faked as an edge from the node to
+    # itself.
+    covers: list[str] = Field(default_factory=list)
     # Absent means **unknown**, and nothing more (§3.3). A graph that does not
     # require a judge still journals: the row carries when it was decided and
     # whether anyone has since checked it, and both are worth having from an

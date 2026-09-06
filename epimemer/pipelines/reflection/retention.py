@@ -8,6 +8,10 @@ flagged inference and concluded it still holds had nowhere to put that, so the
 node came back on the next reflect and the one after, to an agent who could not
 see the work had been done.
 
+**The verdict is a `retention` row in the decision journal, and nothing else.**
+Its `covers` field holds the reasons it answers, so the row a reviewer reads and
+the index a nominator reads are one object rather than two that can drift.
+
 **The workaround this replaces is the reason it is a separate verdict.** The
 only way to keep a `never_retrieved` node was to raise its `importance` above
 the nomination ceiling — which made one field carry two meanings, *how
@@ -23,14 +27,14 @@ premise superseded last week may be superseded again next month by something
 new, and a keep verdict that silenced the second change as well as the first
 would be a worse defect than the treadmill it replaced.
 
-So a confirmation carries the reasons it covers, one edge each, and a nomination
-survives it when the node's current reasons are not all covered:
+So a confirmation carries the reasons it covers, and a nomination survives it
+when the node's current reasons are not all covered:
 
 | Nomination | Anchored to |
 |---|---|
-| `evidence_stale` | the changed facts named in the label, one edge each |
-| `evidence_merged` | the absorbed phrasings named in the label, one edge each |
-| `never_retrieved` | the node itself — the nomination names no reason |
+| `evidence_stale` | the changed facts named in the label |
+| `evidence_merged` | the absorbed phrasings named in the label |
+| `never_retrieved` | nothing: `covers` is empty |
 
 `evidence_merged` joined the table on 2026-09-05. It had been the one label
 with no writer: the docstrings said *re-read it*, and an agent that did had
@@ -46,10 +50,13 @@ merge gives a premise provenance rather than taking its basis away, so a
 nominator that read the label would have every merge propose discarding its own
 dependents.
 
-The self-anchor is the degenerate case rather than a second mechanism. Nothing
-about *nothing links to this and nothing retrieved it* can change without
-removing the node from the set anyway, so there is no later reason for a
-confirmation to fail to cover.
+**This writer raises where every other journal write swallows its errors, and
+the difference is what the row is.** Elsewhere the row records a graph write
+that already happened, so losing it costs the journal an entry and nothing else.
+Here the row *is* the act: a keep that failed to store and was reported as a
+success would put the node back on every reflect, in front of an agent told the
+work was done. So the exception propagates, and the caller reports the node as
+skipped.
 
 **Nothing here retires, archives, or moves a value.** A retention says a node
 was looked at. That is all it says, and keeping it to that is what stops it
@@ -58,7 +65,7 @@ becoming the next field with two meanings.
 
 from collections.abc import Iterable, Sequence
 
-from epimemer.core.types import EdgeType, JudgeRef, NodeEdge
+from epimemer.core.types import DecisionKind, DecisionRecord, JudgeRef
 from epimemer.storage.protocol import StorageBackend
 
 
@@ -66,8 +73,8 @@ class UnknownAnchors(Exception):
     """A verdict named reasons that are not nodes in this graph.
 
     Raised rather than returned because every caller has to stop: writing the
-    edges anyway produces a keep that covers nothing, which is worse than not
-    writing them at all.
+    row anyway produces a keep that covers nothing, which is worse than not
+    writing it at all.
     """
 
     def __init__(self, *, node_id: str, missing: Sequence[str]) -> None:
@@ -143,22 +150,29 @@ async def confirmed_reasons_for(
     """For each node, the reasons a retention already covers.
 
     One batched query for the whole set, on `already_judged_pairs`' terms: the
-    edge type is part of the query rather than a filter over every edge each
-    node has, and a nominator walks its entire candidate population.
+    kind is part of the query rather than a filter over every row each node has,
+    and a nominator walks its entire candidate population.
 
     A node with no retention is absent rather than mapped to an empty set, so a
     caller can filter by membership — *nobody has confirmed this* and *somebody
     confirmed it against nothing* are different answers, and only the second is
-    a self-anchor.
+    a keep for the node's own sake.
+
+    A row with empty `covers` is that second answer, and it is read back as the
+    node's own id: the pure predicates below then compare like with like, and
+    `retention_covers` needs no branch for the shape with no reasons.
     """
     ids = list(node_ids)
     if not ids:
         return {}
-    found = await storage.get_edges_for(ids, direction="to", edge_type=EdgeType.REVIEW_CONFIRMED)
+    wanted = set(ids)
+    rows = await storage.query_decisions(kinds=[DecisionKind.RETENTION], subject_ids=ids)
     covered: dict[str, set[str]] = {}
-    for node_id, edges in found.items():
-        if edges:
-            covered[node_id] = {edge.src_id for edge in edges}
+    for row in rows:
+        for node_id in row.subject_ids:
+            if node_id not in wanted:
+                continue
+            covered.setdefault(node_id, set()).update(row.covers or [node_id])
     return covered
 
 
@@ -170,8 +184,8 @@ def retention_covers(node_id: str, reasons: Iterable[str], covered: dict[str, se
     whole design, and it belongs somewhere a test can state it without a store.
 
     An empty `reasons` is the `never_retrieved` shape: the nomination names none,
-    so the node's own id is the reason, and a self-anchored confirmation covers
-    it.
+    so the node's own id is the reason, and a verdict that covered nothing else
+    covers it.
     """
     confirmed = covered.get(node_id)
     if confirmed is None:
@@ -184,39 +198,47 @@ async def record_retention(
     storage: StorageBackend,
     *,
     node_id: str,
+    because: str,
     reasons: Sequence[str],
     judge: JudgeRef | None = None,
 ) -> list[str]:
     """Write the keep verdict for one node. Returns the anchors it now covers.
 
-    Append-only and immutable, as `assessed` is, which is what lets a nominator
-    read these edges instead of querying the decision journal: an edge that is
-    never edited cannot drift from the row that records the same act.
+    One `retention` row, append-only and never edited, whose `covers` field is
+    the anchors. `because` is the agent's prose and goes in `certainty_basis`,
+    which is where a reviewer reads why the node was kept.
 
-    `reasons` empty means the node is its own anchor. The caller decides that,
-    rather than this function inferring it from the node type, because *which
-    reasons a nomination named* is knowledge the nominator has and the store
-    does not.
+    `reasons` empty means the node was kept for its own sake, and the row's
+    `covers` is then empty: the node's own id is never written into it, because
+    a verdict covering a node with itself is a claim about the node rather than
+    about a question. The caller decides which case this is, rather than this
+    function inferring it from the node type, because *which reasons a
+    nomination named* is knowledge the nominator has and the store does not.
 
     **An anchor that names nothing is refused rather than written.** A typo'd id
-    writes an edge that permanently fails to cover anything, and the node then
+    writes a verdict that permanently fails to cover anything, and the node then
     comes back on every reflect while the call that was supposed to keep it
     reported success — the failure this verdict exists to end, reintroduced
     through its own write path.
+
+    **A failed write raises**, unlike every other journal write in this
+    codebase: the module docstring has the argument, and it comes down to the
+    row being the act rather than a note about one.
     """
     anchors = list(dict.fromkeys(reasons)) or [node_id]
-    if anchors != [node_id]:
-        found = await storage.get_nodes(anchors)
-        missing = [anchor for anchor in anchors if anchor not in found]
+    covers = [] if anchors == [node_id] else anchors
+    if covers:
+        found = await storage.get_nodes(covers)
+        missing = [anchor for anchor in covers if anchor not in found]
         if missing:
             raise UnknownAnchors(node_id=node_id, missing=missing)
-    for anchor in anchors:
-        await storage.store_edge(
-            NodeEdge(
-                src_id=anchor,
-                dst_id=node_id,
-                type=EdgeType.REVIEW_CONFIRMED,
-                judged_by=judge,
-            )
+    await storage.record_decision(
+        DecisionRecord(
+            kind=DecisionKind.RETENTION,
+            subject_ids=[node_id],
+            covers=covers,
+            judged_by=judge,
+            certainty_basis=because,
         )
+    )
     return anchors

@@ -1174,6 +1174,7 @@ class StorageBackend(Protocol):
         agent_ids: Sequence[str] | None = None,
         kinds: Sequence[DecisionKind] | None = None,
         subject_id: str | None = None,
+        subject_ids: Sequence[str] | None = None,
         reviews: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
@@ -1199,6 +1200,14 @@ class StorageBackend(Protocol):
         through the list — so *this judge's decisions* is a query over
         `agent_aliases`, which is a single id for every judge that has never
         been consolidated.
+
+        `subject_ids` is the batched form of `subject_id`: a row matches when
+        its subjects include **any** of them. It exists because a nominator
+        reads the verdicts on its whole candidate population, and one query per
+        node is the round trip already measured out of `gather_pending_review`.
+        An empty list matches nothing, on `agent_ids`' rule: it is a caller that
+        named a set of subjects and the set was empty. Given with `subject_id`,
+        both have to hold.
 
         `since` is inclusive and `until` exclusive, the half-open convention
         `query_changes` already uses, so adjacent windows neither overlap nor

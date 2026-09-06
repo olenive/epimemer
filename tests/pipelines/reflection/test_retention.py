@@ -25,6 +25,8 @@ import pytest
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
     ClaimKind,
+    DecisionKind,
+    DecisionRecord,
     EdgeType,
     Fact,
     Inference,
@@ -35,6 +37,7 @@ from epimemer.core.types import (
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.pipelines.reflection.archival import nominate_archival_candidates
 from epimemer.pipelines.reflection.retention import (
+    UnknownAnchors,
     archival_reasons,
     confirmed_reasons_for,
     outstanding_reasons,
@@ -122,6 +125,13 @@ async def _reasons(storage, node_id: str) -> set[str]:
     return (await confirmed_reasons_for([node_id], storage)).get(node_id, set())
 
 
+async def _row(storage, node_id: str) -> DecisionRecord:
+    """The one `retention` row naming this node."""
+    rows = await storage.query_decisions(kinds=[DecisionKind.RETENTION], subject_ids=[node_id])
+    assert len(rows) == 1
+    return rows[0]
+
+
 def _nominated(candidates, node_id: str) -> bool:
     return any(c.node_id == node_id for c in candidates)
 
@@ -143,7 +153,7 @@ class TestTheRuleWithoutAStore:
 
     def test_no_reasons_means_the_node_is_its_own(self):
         """The `never_retrieved` shape. The nomination names no reason, so a
-        self-anchored confirmation is what covers it — and an anchor to
+        verdict covering nothing else is what covers it, and one anchored to
         something else does not."""
         assert retention_covers("n", (), {"n": {"n"}}) is True
         assert retention_covers("n", (), {"n": {"other"}}) is False
@@ -175,7 +185,9 @@ class TestAConfirmedInferenceIsNotRenominated:
         premise = await _fact(storage, "the deploy failed", status=NodeStatus.SUPERSEDED)
         inference = await _inference_on(storage, "the release was rushed", [premise])
 
-        await record_retention(storage, node_id=inference.id, reasons=[premise.id])
+        await record_retention(
+            storage, node_id=inference.id, because="re-read; it stands", reasons=[premise.id]
+        )
 
         assert not _nominated(await nominate_archival_candidates(storage), inference.id)
 
@@ -186,7 +198,9 @@ class TestAConfirmedInferenceIsNotRenominated:
         first = await _fact(storage, "the deploy failed", status=NodeStatus.SUPERSEDED)
         second = await _fact(storage, "the rollback held", status=NodeStatus.ACTIVE)
         inference = await _inference_on(storage, "the release was rushed", [first, second])
-        await record_retention(storage, node_id=inference.id, reasons=[first.id])
+        await record_retention(
+            storage, node_id=inference.id, because="re-read; it stands", reasons=[first.id]
+        )
 
         assert not _nominated(await nominate_archival_candidates(storage), inference.id)
 
@@ -220,7 +234,7 @@ class TestAConfirmedNodeKeepsItsImportance:
 
         assert _nominated(await nominate_archival_candidates(storage), fact.id)
 
-        await record_retention(storage, node_id=fact.id, reasons=[])
+        await record_retention(storage, node_id=fact.id, because="re-read; it stands", reasons=[])
 
         assert not _nominated(await nominate_archival_candidates(storage), fact.id)
         after = await storage.get_node(fact.id)
@@ -234,21 +248,72 @@ class TestAConfirmedNodeKeepsItsImportance:
         kept = await _fact(storage, "the licence file lists MPL-2.0")
         other = await _fact(storage, "five distributions carry no licence metadata")
 
-        await record_retention(storage, node_id=kept.id, reasons=[])
+        await record_retention(storage, node_id=kept.id, because="re-read; it stands", reasons=[])
 
         candidates = await nominate_archival_candidates(storage)
         assert not _nominated(candidates, kept.id)
         assert _nominated(candidates, other.id)
 
 
-class TestWhatTheEdgeRecords:
-    async def test_an_unanchored_verdict_anchors_to_the_node_itself(self, storage):
+class TestWhatTheRowRecords:
+    """The verdict is one `retention` row, and `covers` is what it answers."""
+
+    async def test_the_anchors_are_the_row_and_the_prose_comes_back_with_them(self, storage):
+        premise = await _fact(storage, "the deploy failed", status=NodeStatus.SUPERSEDED)
+        inference = await _inference_on(storage, "the release was rushed", [premise])
+
+        anchors = await record_retention(
+            storage,
+            node_id=inference.id,
+            because="re-read against the superseding fact; it holds",
+            reasons=[premise.id],
+        )
+
+        assert anchors == [premise.id]
+        assert await _reasons(storage, inference.id) == {premise.id}
+        row = await _row(storage, inference.id)
+        assert row.covers == [premise.id]
+        assert row.certainty_basis == "re-read against the superseding fact; it holds"
+
+    async def test_a_verdict_for_the_nodes_own_sake_covers_nothing(self, storage):
+        """The `never_retrieved` shape. `covers` is empty rather than naming the
+        node itself: a verdict covering a node with itself is a claim about the
+        node rather than about a question anyone asked."""
         fact = await _fact(storage, "the licence file lists MPL-2.0")
 
-        anchors = await record_retention(storage, node_id=fact.id, reasons=[])
+        anchors = await record_retention(
+            storage, node_id=fact.id, because="worth keeping", reasons=[]
+        )
 
         assert anchors == [fact.id]
-        assert await _reasons(storage, fact.id) == {fact.id}
+        assert (await _row(storage, fact.id)).covers == []
+        # And it is read back as the node's own id, so the pure predicate holds.
+        covered = await confirmed_reasons_for([fact.id], storage)
+        assert covered == {fact.id: {fact.id}}
+        assert retention_covers(fact.id, [], covered) is True
+
+    async def test_an_anchor_naming_no_node_is_refused_and_nothing_is_written(self, storage):
+        fact = await _fact(storage, "the licence file lists MPL-2.0")
+
+        with pytest.raises(UnknownAnchors):
+            await record_retention(storage, node_id=fact.id, because="re-read", reasons=["typo-id"])
+
+        assert await confirmed_reasons_for([fact.id], storage) == {}
+
+    async def test_a_failed_write_propagates_rather_than_reporting_success(self, storage):
+        """The one journal write that raises. Elsewhere the row records a graph
+        write that already happened; here the row *is* the keep, and swallowing
+        the error would put the node back on every reflect while the caller was
+        told the work was done."""
+        fact = await _fact(storage, "the licence file lists MPL-2.0")
+
+        async def _refuse(record):
+            raise RuntimeError("the journal is unavailable")
+
+        storage.record_decision = _refuse
+
+        with pytest.raises(RuntimeError):
+            await record_retention(storage, node_id=fact.id, because="re-read", reasons=[])
 
     async def test_repeated_anchors_collapse(self, storage):
         """Two sources naming the same changed premise is one reason, not two."""
@@ -256,7 +321,10 @@ class TestWhatTheEdgeRecords:
         inference = await _inference_on(storage, "the release was rushed", [premise])
 
         anchors = await record_retention(
-            storage, node_id=inference.id, reasons=[premise.id, premise.id]
+            storage,
+            node_id=inference.id,
+            because="re-read; it stands",
+            reasons=[premise.id, premise.id],
         )
 
         assert anchors == [premise.id]
@@ -268,13 +336,13 @@ class TestWhatTheEdgeRecords:
         from epimemer.pipelines.reflection.archival import knowledge_in_degree_for
 
         fact = await _fact(storage, "the licence file lists MPL-2.0")
-        await record_retention(storage, node_id=fact.id, reasons=[])
+        await record_retention(storage, node_id=fact.id, because="re-read; it stands", reasons=[])
 
         assert (await knowledge_in_degree_for([fact.id], storage))[fact.id] == 0
 
     async def test_a_node_with_no_verdict_is_absent_rather_than_empty(self, storage):
         """*Nobody has confirmed this* and *somebody confirmed it against
-        nothing* are different answers, and only the second is a self-anchor."""
+        nothing* are different answers, and only the second has a row."""
         fact = await _fact(storage, "the licence file lists MPL-2.0")
 
         assert await confirmed_reasons_for([fact.id], storage) == {}
@@ -292,7 +360,9 @@ class TestTheWorklistDropsWhatWasKept:
         listed = [node.id for node, _ in await gather_pending_review(storage)]
         assert inference.id in listed
 
-        await record_retention(storage, node_id=inference.id, reasons=[premise.id])
+        await record_retention(
+            storage, node_id=inference.id, because="re-read; it stands", reasons=[premise.id]
+        )
 
         listed = [node.id for node, _ in await gather_pending_review(storage)]
         assert inference.id not in listed
@@ -305,7 +375,9 @@ class TestTheWorklistDropsWhatWasKept:
 
         premise = await _fact(storage, "the deploy failed", status=NodeStatus.SUPERSEDED)
         inference = await _inference_on(storage, "the release was rushed", [premise])
-        await record_retention(storage, node_id=inference.id, reasons=[premise.id])
+        await record_retention(
+            storage, node_id=inference.id, because="re-read; it stands", reasons=[premise.id]
+        )
 
         node = await storage.get_node(inference.id)
         labels = await review_labels_for([node], storage)
@@ -348,6 +420,26 @@ class TestTheToolPath:
         result, _ = await tools.apply_reflection(storage, embedding_provider, retained=[entry])
 
         assert result["retentions_recorded"] == 0
+
+    async def test_a_store_failure_skips_the_node_and_says_so(self, storage, embedding_provider):
+        """The keep did not happen, and the tool says so per node rather than
+        failing the call: the merges and archivals before it have landed."""
+        from epimemer.mcp import tools
+
+        fact = await _fact(storage, "the licence file lists MPL-2.0")
+
+        async def _refuse(record):
+            raise RuntimeError("the journal is unavailable")
+
+        storage.record_decision = _refuse
+
+        result, _ = await tools.apply_reflection(
+            storage, embedding_provider, retained=[{"node_id": fact.id, "because": "re-read"}]
+        )
+
+        assert result["retentions_recorded"] == 0
+        assert [entry["node_id"] for entry in result["retained_skipped"]] == [fact.id]
+        assert "not stored" in result["retained_skipped"][0]["why"]
 
     async def test_a_verdict_with_no_reason_is_skipped(self, storage, embedding_provider):
         """`because` is required for the reason it is required on a review
@@ -492,7 +584,9 @@ class TestARereadOfAMergedPremiseHasSomewhereToGo:
 
         assert (await _worklist(storage))[inference.id] == {"evidence_merged": [absorbed.id]}
 
-        await record_retention(storage, node_id=inference.id, reasons=[absorbed.id])
+        await record_retention(
+            storage, node_id=inference.id, because="re-read; it stands", reasons=[absorbed.id]
+        )
 
         assert inference.id not in await _worklist(storage)
 
@@ -533,7 +627,9 @@ class TestARereadOfAMergedPremiseHasSomewhereToGo:
 
         assert not _nominated(await nominate_archival_candidates(storage), inference.id)
 
-        await record_retention(storage, node_id=inference.id, reasons=[absorbed.id])
+        await record_retention(
+            storage, node_id=inference.id, because="re-read; it stands", reasons=[absorbed.id]
+        )
 
         assert not _nominated(await nominate_archival_candidates(storage), inference.id)
 
@@ -542,7 +638,9 @@ class TestARereadOfAMergedPremiseHasSomewhereToGo:
         premise = await _fact(storage, "the deploy failed")
         inference = await _inference_on(storage, "the release was rushed", [premise])
         first = await _absorbed_under(storage, inference, "the deployment failed")
-        await record_retention(storage, node_id=inference.id, reasons=[first.id])
+        await record_retention(
+            storage, node_id=inference.id, because="re-read; it stands", reasons=[first.id]
+        )
 
         second = await _absorbed_under(storage, inference, "the rollout failed")
 
@@ -560,7 +658,9 @@ class TestCoversIsMeasuredAgainstWhatIsOutstanding:
     async def _kept_on_stale_then_merged(self, storage):
         stale = await _fact(storage, "the deploy failed", status=NodeStatus.SUPERSEDED)
         inference = await _inference_on(storage, "the release was rushed", [stale])
-        await record_retention(storage, node_id=inference.id, reasons=[stale.id])
+        await record_retention(
+            storage, node_id=inference.id, because="re-read; it stands", reasons=[stale.id]
+        )
         absorbed = await _absorbed_under(storage, inference, "the deployment failed")
         return stale, inference, absorbed
 
@@ -617,7 +717,9 @@ class TestCoversIsMeasuredAgainstWhatIsOutstanding:
 
         stale = await _fact(storage, "the deploy failed", status=NodeStatus.SUPERSEDED)
         inference = await _inference_on(storage, "the release was rushed", [stale])
-        await record_retention(storage, node_id=inference.id, reasons=[stale.id])
+        await record_retention(
+            storage, node_id=inference.id, because="re-read; it stands", reasons=[stale.id]
+        )
 
         result, _ = await tools.apply_reflection(
             storage,
@@ -648,13 +750,17 @@ class TestArchivedEvidenceIsAnchoredToo:
         gone = await evidence_gone_for([inference], storage)
         assert gone[inference.id] == [premise.id]
 
-        await record_retention(storage, node_id=inference.id, reasons=[premise.id])
+        await record_retention(
+            storage, node_id=inference.id, because="re-read; it stands", reasons=[premise.id]
+        )
         assert not _nominated(await nominate_archival_candidates(storage), inference.id)
 
     async def test_a_second_archived_premise_is_a_reason_nobody_covered(self, storage):
         first = await _fact(storage, "the deploy failed", status=NodeStatus.ARCHIVED)
         inference = await _inference_on(storage, "the release was rushed", [first])
-        await record_retention(storage, node_id=inference.id, reasons=[first.id])
+        await record_retention(
+            storage, node_id=inference.id, because="re-read; it stands", reasons=[first.id]
+        )
 
         second = await _fact(storage, "the rollback held", status=NodeStatus.ARCHIVED)
         await storage.store_edge(

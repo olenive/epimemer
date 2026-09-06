@@ -186,6 +186,60 @@ class TestTheOtherThreeReads:
         assert [r.id for r in found] == [wanted.id]
 
 
+class TestTheBatchedSubjectFilter:
+    """`subject_ids` is what a nominator reads its whole candidate population
+    with, and one query per node is the round trip already measured out of
+    `gather_pending_review`."""
+
+    async def test_a_row_matches_when_it_names_any_of_them(self, storage):
+        first = _record(subject_ids=["a"])
+        second = _record(subject_ids=["b", "c"])
+        await storage.record_decision(first)
+        await storage.record_decision(second)
+        await storage.record_decision(_record(subject_ids=["elsewhere"]))
+
+        found = await storage.query_decisions(subject_ids=["a", "c"])
+
+        assert {r.id for r in found} == {first.id, second.id}
+
+    async def test_an_empty_list_matches_nothing(self, storage):
+        """`agent_ids`' rule: a caller that named a set of subjects and the set
+        was empty is not a caller that named none."""
+        await storage.record_decision(_record(subject_ids=["a"]))
+
+        assert await storage.query_decisions(subject_ids=[]) == []
+
+    async def test_naming_no_subjects_at_all_still_matches_everything(self, storage):
+        await storage.record_decision(_record(subject_ids=["a"]))
+
+        assert len(await storage.query_decisions()) == 1
+
+    async def test_it_composes_with_the_kind(self, storage):
+        kept = _record(kind=DecisionKind.RETENTION, subject_ids=["a"])
+        await storage.record_decision(kept)
+        await storage.record_decision(_record(kind=DecisionKind.ARCHIVAL, subject_ids=["a"]))
+        await storage.record_decision(_record(kind=DecisionKind.RETENTION, subject_ids=["z"]))
+
+        found = await storage.query_decisions(
+            kinds=[DecisionKind.RETENTION], subject_ids=["a", "b"]
+        )
+
+        assert [r.id for r in found] == [kept.id]
+
+    async def test_covers_survives_the_round_trip(self, storage):
+        """The field the keep verdict lives in. Empty means the node was kept
+        for its own sake, so both shapes have to come back as they went in."""
+        anchored = _record(kind=DecisionKind.RETENTION, subject_ids=["a"], covers=["x", "y"])
+        for_its_own_sake = _record(kind=DecisionKind.RETENTION, subject_ids=["b"])
+        await storage.record_decision(anchored)
+        await storage.record_decision(for_its_own_sake)
+
+        assert (await storage.get_decision(anchored.id)).covers == ["x", "y"]
+        assert (await storage.get_decision(for_its_own_sake.id)).covers == []
+        found = await storage.query_decisions(subject_ids=["a", "b"])
+        assert {r.id: r.covers for r in found} == {anchored.id: ["x", "y"], for_its_own_sake.id: []}
+
+
 class TestTheWindow:
     async def test_since_is_inclusive_and_until_exclusive(self, storage):
         """The half-open convention `query_changes` already uses, so adjacent

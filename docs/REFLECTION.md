@@ -399,14 +399,14 @@ and decided to keep it. Each entry is `{node_id, because, covers}`.
 
 `covers` must name exactly the reasons still open on the node: the ids
 `reflect` lists beside it in `pending_review` under `evidence_stale` or
-`evidence_merged`. One edge is written per id, so a later change to the
+`evidence_merged`. They are stored on the verdict, so a later change to the
 evidence is a new reason no keep covers, and the node is nominated again.
 Missing ids are refused (the keep would not cover the nomination) and
 surplus ids are refused too (an anchor on a reason nobody named would
 pre-cover a change nobody has seen). A reason a standing keep already anchors
 to is dropped from the worklist, and naming it again is refused as already
 covered. Omit `covers` where the nomination names no reason, such as
-`never_retrieved`; the node is then its own anchor.
+`never_retrieved`; the node is then kept for its own sake.
 
 Use `judgments` where the importance was wrong; use `retained` where the
 importance is right and the node has been re-read. Raising importance to stop

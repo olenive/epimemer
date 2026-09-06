@@ -6,6 +6,35 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- A keep verdict now lives only in the decision journal. It used to be written
+  twice, as a `retention` row whose anchors were prose at the end of
+  `certainty_basis` and as one edge per anchor; the anchors are now a `covers`
+  field on the row, and an empty `covers` means the node was kept for its own
+  sake. Nothing changes in the `apply_reflection(retained=...)` call: the same
+  `covers` goes in, and a later change to the evidence is still a reason the old
+  keep does not cover.
+- `query_decisions` takes `subject_ids`, matching rows that name any of them.
+  One query serves a whole population of nodes, which is what reading keep
+  verdicts back needs.
+- **Graphs migrate themselves to schema version 3 on open**, wherever a graph is
+  opened: embedded and remote alike, on connect and on every graph switch. The
+  step parses each retention row's anchors out of its prose into `covers`,
+  writes a row for any keep that existed only as edges, and deletes the edges.
+  There is nothing to run by hand. **It is one-way**: 0.1.2 reads the anchors
+  from the edges, which are gone. To go back, re-derive one
+  `review_confirmed` edge from each retention row's `covers` (`src_id` the
+  anchor, `dst_id` the subject, and the subject's own id where `covers` is
+  empty), then `DELETE schema_version;` so the next upgrade migrates again.
+
+### Removed
+
+- The `review_confirmed` edge type. It was a hand-built index over verdicts the
+  journal could not be queried for, and the shape with no anchor had to be faked
+  as an edge from a node to itself, which drew as a self-loop in the visualiser
+  and was indistinguishable from a real relation.
+
 ## [0.1.2] — 2026-09-06
 
 A patch release rather than a minor one, on purpose: no feature changes, and

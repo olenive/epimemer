@@ -192,10 +192,10 @@ constraint with no justification at this layer.
 
 **A third instance shipped 2026-08-29**, and naming it here is the point of
 this paragraph: the keep verdict's *unanchored* branch. A node nominated
-`never_retrieved` is confirmed against itself, and nothing can invalidate a
-self-anchor, so a wrong keep there is permanent exactly as a wrong `distinct`
-is. It is the **mildest** of the three and does not move this entry's priority:
-a wrong decline at the pair layer withholds a merge that should have happened,
+`never_retrieved` is kept for its own sake, its verdict covering nothing, and no
+later reason can fail to be covered, so a wrong keep there is permanent exactly
+as a wrong `distinct` is. It is the **mildest** of the three and does not move
+this entry's priority: a wrong decline at the pair layer withholds a merge that should have happened,
 while a wrong keep here costs one idle node lingering in storage — permanence in
 the safe direction. There is a residual case on the anchored branch too, noted
 rather than built: the same facts archived, restored and re-archived still match

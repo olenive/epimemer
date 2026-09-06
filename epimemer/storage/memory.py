@@ -253,6 +253,7 @@ def _decision_matches(
     agent_ids: Collection[str] | None,
     kinds: set[DecisionKind] | None,
     subject_id: str | None,
+    subject_ids: Collection[str] | None,
     reviews: str | None,
     since: datetime | None,
     until: datetime | None,
@@ -272,6 +273,7 @@ def _decision_matches(
         )
         and (kinds is None or record.kind in kinds)
         and (subject_id is None or subject_id in record.subject_ids)
+        and (subject_ids is None or any(subject in subject_ids for subject in record.subject_ids))
         and (reviews is None or record.reviews == reviews)
         and (since is None or record.decided_at >= since)
         and (until is None or record.decided_at < until)
@@ -1111,6 +1113,7 @@ class InMemoryStorage:
         agent_ids: Sequence[str] | None = None,
         kinds: Sequence[DecisionKind] | None = None,
         subject_id: str | None = None,
+        subject_ids: Sequence[str] | None = None,
         reviews: str | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
@@ -1118,6 +1121,7 @@ class InMemoryStorage:
     ) -> list[DecisionRecord]:
         wanted = set(kinds) if kinds is not None else None
         judges = None if agent_ids is None else set(agent_ids)
+        subjects = None if subject_ids is None else set(subject_ids)
         matches = [
             record
             for record in self._g.decisions.values()
@@ -1126,6 +1130,7 @@ class InMemoryStorage:
                 agent_ids=judges,
                 kinds=wanted,
                 subject_id=subject_id,
+                subject_ids=subjects,
                 reviews=reviews,
                 since=since,
                 until=until,
@@ -1174,6 +1179,7 @@ class InMemoryStorage:
                     agent_ids=judges,
                     kinds=None,
                     subject_id=None,
+                    subject_ids=None,
                     reviews=None,
                     since=since,
                     until=until,

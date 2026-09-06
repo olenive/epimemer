@@ -89,7 +89,7 @@ async def assert_a_pre_split_graph_migrates_itself(open_store) -> None:
     assert types[ids["extracted"]] == "extracted_under_topic"
     # Evidential support is untouched: its destination is an inference.
     assert types[ids["supports"]] == "supports"
-    assert await _schema_version(reopened) == 2
+    assert await _schema_version(reopened) == 3
 
     # The edges are reachable under the new names, not merely relabelled in place.
     tagged_edges = await reopened.get_edges_from(ids["fact"], edge_type=EdgeType.TAGGED_WITH_TOPIC)
@@ -104,7 +104,7 @@ async def assert_a_pre_split_graph_migrates_itself(open_store) -> None:
     # and they would rewrite nothing if they did.
     again = await open_store()
     assert await _types_by_uid(again) == types
-    assert await _schema_version(again) == 2
+    assert await _schema_version(again) == 3
     await again.close()
 
 
@@ -142,7 +142,7 @@ async def test_switching_to_a_pre_split_graph_migrates_it(embedded_url):
     assert types[ids["tagged"]] == "tagged_with_topic"
     assert types[ids["extracted"]] == "extracted_under_topic"
     assert types[ids["supports"]] == "supports"
-    assert await _schema_version(store) == 2
+    assert await _schema_version(store) == 3
     await store.close()
 
 
@@ -150,6 +150,6 @@ async def test_a_fresh_graph_is_stamped_and_left_alone(embedded_url):
     """Nothing to migrate still records the version, so the next open skips it."""
     store = SurrealDBStorage(url=embedded_url)
     await store.connect()
-    assert await _schema_version(store) == 2
+    assert await _schema_version(store) == 3
     assert await _types_by_uid(store) == {}
     await store.close()
