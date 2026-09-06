@@ -14,7 +14,7 @@ The latest release is the supported version.
 Epimemer is an MCP server that talks to one client over stdio. It trusts that
 client completely: every tool an agent can call is available to whatever
 process launched the server, and the tools deliberately cannot do the things
-reserved for a person — approving a judge, renaming one, requiring one — which
+reserved for a person (approving a judge, renaming one, requiring one), which
 live in the `epimemer` CLI and in the client's elicitation prompts instead.
 
 Storage credentials are the deployer's. The `root`/`root` defaults are

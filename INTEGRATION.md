@@ -11,7 +11,7 @@ uv tool install "epimemer[sentence-transformers]"
 claude mcp add epimemer -- epimemer serve
 ```
 
-Or add directly to `~/.claude.json`:
+Or add it directly to `~/.claude.json`:
 
 ```json
 {
@@ -31,16 +31,17 @@ From a checkout, `uv run --directory /path/to/epimemer epimemer serve` is the
 equivalent command.
 
 This uses the defaults: sentence-transformers for embeddings and in-memory
-storage. The embedding model (`all-MiniLM-L6-v2`, ~80MB) downloads on first
-run. The provider itself is the `sentence-transformers` extra; selecting it
-without that extra installed refuses at startup and names it.
+storage. The embedding model (`all-MiniLM-L6-v2`, about 80 MB) downloads on
+first run. The provider comes from the `sentence-transformers` extra; if it is
+selected without that extra installed, the server refuses to start and names
+the extra.
 
-Epimemer performs no decomposition of its own — extracting topics, facts, and
-inferences from text is the calling agent's job, via the `segment` →
-`store_decomposition` two-step ingest (see *Available Tools*).
+Epimemer does no decomposition of its own. Extracting topics, facts and
+inferences from text is the agent's job, done through the two-step ingest
+`segment` then `store_decomposition` (see *Available Tools*).
 
 With visualization enabled, open http://127.0.0.1:8765 in your browser to see
-the knowledge graph and pipeline execution in real time.
+the knowledge graph and pipeline execution as they happen.
 
 ### Configuration
 
@@ -55,8 +56,8 @@ In Claude Code, run `/mcp` to check the server status. You should see `epimemer`
 
 ## Available Tools
 
-Tools are auto-prefixed as `mcp__epimemer__<name>` by Claude Code. This table is
-the canonical list of the 46 tools — other docs should link here rather than
+Claude Code prefixes each tool as `mcp__epimemer__<name>`. This table is
+the canonical list of the 46 tools; other docs link here rather than
 restate the count.
 
 ### Core Memory Operations
@@ -64,90 +65,90 @@ restate the count.
 | Tool | Purpose |
 |------|---------|
 | `segment` | Split text into chunks (step 1 of ingest) |
-| `store_decomposition` | Store agent-extracted topics/facts/inferences (step 2 of ingest). `metacontext_id` is required — `the-real` for base reality |
-| `search` | Hybrid retrieval — embedding similarity **and** keyword matching, fused, then graph expansion. Pass exact identifiers as `terms`; `include_corroboration=True` adds how many independent publishers back each result. See [docs/RETRIEVAL.md](docs/RETRIEVAL.md) |
-| `link` | Create typed edges between nodes |
-| `update` | Create a new node version (immutable history). `because` is required — `"it_was_wrong"` or `"the_world_changed"` |
-| `supersede_by` | Retire a node in favour of an already-existing one. `because` as above; if you cannot tell which happened, `record_contradiction` instead of guessing |
-| `judge_importance` | Raise or lower a node's importance and record why (importance protects it from archival) |
+| `store_decomposition` | Store the topics, facts and inferences you extracted (step 2 of ingest). `metacontext_id` is required: `the-real` for base reality |
+| `search` | Hybrid retrieval: embedding similarity and keyword matching run separately, their rankings are fused, then graph expansion adds what the winners connect to. Pass exact identifiers as `terms`. `include_corroboration=True` adds how many independent publishers back each result. See [docs/RETRIEVAL.md](docs/RETRIEVAL.md) |
+| `link` | Create a typed edge between two nodes |
+| `update` | Create a new version of a node; the old one is kept as history. `because` is required: `"it_was_wrong"` or `"the_world_changed"` |
+| `supersede_by` | Retire a node in favour of one that already exists. `because` as above. If you cannot tell which happened, use `record_contradiction` instead of guessing |
+| `judge_importance` | Raise or lower a node's importance and record why. Importance protects a node from archival |
 
 ### Discovery & Stats
 
 | Tool | Purpose |
 |------|---------|
 | `query_graph` | Traverse the graph from a starting node |
-| `topic_tree` | Drill into a topic hierarchy — ancestors and subtopics, previews only |
-| `find_nodes` | Return nodes linked to a source or topic hub (traversal, not similarity) |
-| `list_sources` | List the distinct source/origin nodes, with reference counts |
+| `topic_tree` | Walk a topic hierarchy: ancestors and subtopics, previews only |
+| `find_nodes` | Return the nodes linked to a source document or a tag topic, by following edges rather than by similarity |
+| `list_sources` | List the distinct source nodes, with reference counts |
 | `list_relations` | List the distinct user-defined relationship labels, with usage counts and descriptions |
-| `describe_relation` | Say what one of this graph's relationship labels means here — advisory prose the next agent reads before coining |
-| `graph_stats` | Node/edge counts, type breakdown, and reflection pressure for the active graph |
+| `describe_relation` | Say what one of this graph's relationship labels means here: advisory prose the next agent reads before coining a label |
+| `graph_stats` | Node and edge counts, type breakdown, and reflection pressure for the active graph |
 
 ### Conflict Handling
 
 | Tool | Purpose |
 |------|---------|
-| `check_conflicts` | Find active facts that may conflict with the given facts (you judge each) |
-| `record_contradiction` | Record a same-frame contradiction between two facts (both stay active) |
+| `check_conflicts` | Find active facts that may conflict with the given facts. You judge each pair |
+| `record_contradiction` | Record a same-frame contradiction between two facts. Both stay active |
 | `record_variant` | Record two facts as cross-frame variants of one proposition |
 | `merge_facts` | Collapse facts that restate one claim into a single node, keeping every source. Refuses events, cross-frame pairs, and facts ingested without a `claim_kind` |
-| `reverse_merge` | Undo a merge: restore the sources with their own edges and destroy the survivor. The only tool that deletes a node. Refuses when anything has been added to the survivor since |
-| `merge_inferences` | Collapse inferences that state one conclusion into a single node. The survivor rests on the union of the sources' premises; where those premises are dated and fall clear of each other the response says so in `warnings` rather than refusing |
-| `configure_merge` | Read or set this graph's `merge_undo_depth` (how far back a merge stays reversible) and `merge_cycle_limit` (how many merge/un-merge rounds before a merge refuses) |
-| `configure_warnings` | Read or set what this graph does about advisories: per-kind `proceed` / `flag`, and `surface` — the global mute, which governs whether you are *shown* them and never whether they are recorded. A kind explicitly set to `flag` outranks the mute; one following the default does not |
+| `reverse_merge` | Undo a merge: restore the sources with their own edges and destroy the survivor. The only tool that deletes a node. Refuses when anything has been added to the survivor since the merge |
+| `merge_inferences` | Collapse inferences that state one conclusion into a single node. The survivor rests on the union of the sources' premises. Where those premises are dated and fall clear of each other, the response says so in `warnings` rather than refusing |
+| `configure_merge` | Read or set this graph's `merge_undo_depth` (how far back a merge stays reversible) and `merge_cycle_limit` (how many merge and un-merge rounds before a merge refuses) |
+| `configure_warnings` | Read or set what this graph does about advisories: per-kind `proceed` or `flag`, and `surface`, the global mute. The mute governs whether you are *shown* advisories, never whether they are recorded. A kind explicitly set to `flag` outranks the mute; one following the default does not |
 
 ### Reflection
 
 | Tool | Purpose |
 |------|---------|
-| `reflect` | Analyse the graph for consolidation/cleanup candidates (reads only) |
-| `configure_reflection` | Set (or clear) this graph's store threshold for suggesting a reflect |
-| `apply_reflection` | Apply agent decisions from a reflection (including user-approved archivals) |
+| `reflect` | Analyse the graph for consolidation and cleanup candidates. Reads only |
+| `configure_reflection` | Set or clear this graph's store threshold for suggesting a reflect |
+| `apply_reflection` | Apply your decisions from a reflection, including user-approved archivals |
 
 ### Review
 
 Reading the decision journal back, and recording that somebody checked it.
-Every judgment the graph records — who decided, about what, and when — see
-[docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
+The journal holds every judgment the graph records: who decided, about what,
+and when. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 
 | Tool | Purpose |
 |------|---------|
-| `review` | This graph's decisions, shakiest first: a declared low `certainty` before anything unrated, then by derived difficulty (thin sources, wide merges, open contradictions, ground that moved since). Modes `all` / `by_agent` / `since` / `unreviewed` / `advisory` (operations that completed against an objecting advisory — an advisory that merely escalates a correct call writes no row), narrowed by `agent_id` (a handle: a judge's name, its key, or a key it used to be recorded under), `since`/`until` and `certainty_ceiling`. Read-only, capped, and one graph wide — `graph` names which, and `elsewhere` counts the journal in every other graph so a reviewer is told where else to look |
-| `apply_review` | Record that you checked decisions and what you concluded — `confirmations` and `dissents`, each with a required `because`. Neither changes the graph: a dissent records the finding, and the undo is `reverse_merge` / `restore` / `apply_reflection` / `rejudge` |
-| `reframe` | Withdraw a frame from a node, or move it to another in one call — a metacontext assignment was one-way |
+| `review` | This graph's decisions, least certain first: a declared low `certainty` before anything unrated, then by derived difficulty (thin sources, wide merges, open contradictions, ground that moved since). Modes: `all`, `by_agent`, `since`, `unreviewed`, `advisory` (operations that completed against an objecting advisory; an advisory that only escalated a correct call writes no row). Narrow by `agent_id` (a judge's name, its key, or a key it used to be recorded under), by `since` and `until`, and by `certainty_ceiling`. Read-only, capped, and one graph wide: `graph` names which, and `elsewhere` counts the journal in every other graph so a reviewer knows where else to look |
+| `apply_review` | Record that you checked decisions and what you concluded: `confirmations` and `dissents`, each with a required `because`. Neither changes the graph. A dissent records the finding; the undo is `reverse_merge`, `restore`, `apply_reflection` or `rejudge` |
+| `reframe` | Withdraw a frame from a node, or move it to another frame in one call |
 | `correct_interval` | Replace what one source is recorded as asserting about when a claim held |
-| `rejudge` | Revise a judgment made at ingest — `claim_kind`, `confidence`, `confidence_basis` — without touching the claim. Not a supersession: nothing is retired, no edge moves, and the value replaced is kept on the node |
+| `rejudge` | Revise a judgment made at ingest (`claim_kind`, `confidence`, `confidence_basis`) without touching the claim. Not a supersession: nothing is retired, no edge moves, and the value replaced is kept on the node |
 
 ### Temporal Access
 
 | Tool | Purpose |
 |------|---------|
-| `graph_as_of` | Snapshot what the graph *held* at a past instant (transaction time; for what was *true* then, `search(valid_as_of=…)`) |
-| `query_changes` | Node births + retirements across one or more time windows |
+| `graph_as_of` | Snapshot what the graph *held* at a past instant (transaction time). For what was *true* then, use `search(valid_as_of=…)` |
+| `query_changes` | Node births and retirements across one or more time windows |
 
 ### Archival
 
 | Tool | Purpose |
 |------|---------|
-| `archive` | Export old superseded nodes for cold storage |
-| `restore` | Reimport archived nodes, and return archived ones to active |
+| `archive` | Export old superseded and merged nodes for cold storage. Deletes nothing |
+| `restore` | Reimport archived nodes, or return a retired claim to active when a new source says it is true again |
 
 ### Timeline Operations
 
 | Tool | Purpose |
 |------|---------|
-| `create_timeline` | Create a named timeline (optionally anchored to its own "now") |
-| `set_reference_time` | Set or clear a timeline's "now" — what past and future are measured against |
-| `add_timepoint` | Add a timepoint (concrete or vague) to a timeline |
-| `query_timeline` | Find nearest timepoints or query a time range |
+| `create_timeline` | Create a named timeline, optionally anchored to its own "now" |
+| `set_reference_time` | Set or clear a timeline's "now", which past and future are measured against |
+| `add_timepoint` | Add a timepoint, concrete or vague, to a timeline |
+| `query_timeline` | Find the nearest timepoints, or query a time range |
 | `create_timelink` | Link a node to a specific timepoint on a timeline |
 
 ### Metacontext Operations
 
 | Tool | Purpose |
 |------|---------|
-| `create_metacontext` | Create an epistemic frame (e.g., "Real world", "Fiction") |
-| `get_metacontexts` | Get metacontexts associated with a node |
+| `create_metacontext` | Create an epistemic frame (for example "Real world" or "Fiction") |
+| `get_metacontexts` | Get the metacontexts a node is in |
 
 ### Graph Management (knowledge graphs)
 
@@ -155,8 +156,8 @@ Both storage backends support multiple named graphs.
 
 | Tool | Purpose |
 |------|---------|
-| `list_graphs` | List available knowledge graphs and show the active one |
-| `use_graph` | Switch to or create a knowledge graph |
+| `list_graphs` | List the available knowledge graphs and show the active one |
+| `use_graph` | Switch to a knowledge graph, creating it if needed |
 | `delete_graph` | Delete a knowledge graph permanently |
 
 #### Which graph a server opens
@@ -168,7 +169,7 @@ EPIMEMER_GRAPH  →  else EPIMEMER_SURREALDB_DATABASE  →  else "default"
 ```
 
 **The active graph is process state.** `use_graph` switches it for the life of
-the process only: a client reconnect (`/mcp`, a restart, a crash) starts a
+the process only. A client reconnect (`/mcp`, a restart, a crash) starts a
 fresh server that lands back on whatever that rule resolves to, silently. So
 give every server an explicit `EPIMEMER_GRAPH`. One MCP server entry per
 project, each naming its graph, is the configuration this is built for.
@@ -181,15 +182,15 @@ graphs rather than in one: `list_graphs` asks which exist, `use_graph` and
 `delete_graph` take the graph as their argument, and `viz_status` is
 server-level.
 
-State the graph you meant, worked out from the user's request or from your own
-`use_graph`. Do not copy the name out of a refusal: the check works only while
-your expectation and the server's state are arrived at independently, and the
-refusal names the active graph so you can recover, not so you can echo it.
+State the graph you meant, worked out from the user's request or from your
+own `use_graph`. Do not copy the name out of a refusal: the check works only
+while your expectation and the server's state are arrived at independently.
+The refusal names the active graph so you can recover, not so you can echo it.
 
-The requirement is unconditional, with no setting to relax it. Concurrent tool
-calls cannot move the graph out from under each other: a `use_graph` batched
-alongside other calls waits for them to finish, so a batched ingest cannot be
-split across two graphs.
+There is no setting to relax the requirement. Concurrent tool calls cannot
+move the graph out from under each other: a `use_graph` batched alongside
+other calls waits for them to finish, so a batched ingest cannot be split
+across two graphs.
 
 ### Agents
 
@@ -211,14 +212,14 @@ called it.
 Every write records the claimed identity, and every decision is also appended
 to a journal, so *what did this agent judge* is one query. A graph can be set
 to refuse writes that name no judge (`epimemer agents require on`, or
-`EPIMEMER_REQUIRE_JUDGE` for the whole server); that is off by default, and no
+`EPIMEMER_REQUIRE_JUDGE` for the whole server). That is off by default, and no
 MCP tool can change it. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 
 ### Visualization
 
 | Tool | Purpose |
 |------|---------|
-| `viz_status` | Report this session's visualization hub URL, reachability, and the session id to select in the viewer |
+| `viz_status` | Report this session's visualization hub URL, whether the hub can see the session, and the session id to select in the viewer |
 
 ## Agent Guidance
 
@@ -227,15 +228,11 @@ when to ingest, search and reflect, and how to record verdicts. Add its
 contents to your agent's instructions (for Claude Code, the project's
 CLAUDE.md), or point the agent at the file.
 
-It ships with the package from 0.1.1 onwards, so an installed copy has it too.
-To print the path:
+It ships with the package, so an installed copy has it too. To print the path:
 
 ```bash
 python -c "import importlib.resources as r; print(r.files('epimemer_prompts') / 'DEFAULT.md')"
 ```
-
-Version 0.1.0 was built without it and has been removed from PyPI, so 0.1.1 is
-the earliest release you can install.
 
 Serving the guide over MCP itself, so that nothing needs copying, is on the
 backlog in `dev-docs/PROPOSED_FEATURES.md`.

@@ -31,14 +31,14 @@ make test          # or: uv run python -m pytest tests/ -q
 Most storage and MCP tests run against **both** backends: a `conftest.py`
 fixture parameterises over `InMemoryStorage` and `SurrealDBStorage("mem://")`.
 
-Two things `mem://` cannot model — two real connections, and surviving a
-restart — have their own **opt-in** suites, which skip themselves under a bare
+Two things `mem://` cannot model, two real connections and surviving a
+restart, have their own **opt-in** suites, which skip themselves under a bare
 `pytest`:
 
-- `tests/storage/test_surrealdb_integration.py` — real `ws://` connection and
+- `tests/storage/test_surrealdb_integration.py`: real `ws://` connection and
   cross-connection transaction atomicity, against an already-running server.
   Runs when `EPIMEMER_SURREAL_WS_URL` is set.
-- `tests/storage/test_surrealdb_persistence.py` — rocksdb-backed data
+- `tests/storage/test_surrealdb_persistence.py`: rocksdb-backed data
   surviving a full server restart. Controls its own throwaway container; runs
   when `EPIMEMER_SURREAL_PERSIST_TEST=1`.
 
@@ -82,7 +82,7 @@ that causes them to go stale.
 ## Conventions
 
 [AGENTS.md](AGENTS.md) holds the coding rules and is checked in so that they
-are reviewed beside the code — functional style, Pydantic for data, no
+are reviewed beside the code: functional style, Pydantic for data, no
 singletons, every backend implementing the full storage protocol, and the
 rule against citing issue numbers in code or prose. Read it before a first
 change.
@@ -98,41 +98,44 @@ the other.
 
 ```
 epimemer/
-  core/           — Pydantic models (node types, edges, timelines, metacontexts)
-  storage/        — Storage protocol + InMemory + SurrealDB adapters
-  embeddings/     — Embedding protocol + sentence-transformers + mock
+  core/: Pydantic models (node types, edges, timelines, metacontexts)
+  storage/: Storage protocol + InMemory + SurrealDB adapters
+  embeddings/: Embedding protocol + sentence-transformers + mock
   pipelines/
-    segmentation/     — Paragraph split, semantic similarity
-    graph_construction/ — Edge creation, node versioning
-    query/            — Vector search, graph expansion, hybrid retrieval
-    reflection/       — Topic consolidation, contradiction detection, review, archival
-    timeline/         — Pure functional timeline operations
-    orchestration/    — Top-level request routing Petri net
-  mcp/            — FastMCP server, tool implementations, config
-  logging/        — Structured JSON logging
-  visualization/  — Standalone viz hub, session client, and frontend
-tests/            — unit, pipeline, MCP, integration
-scripts/          — benchmarks, corpus measurement, prose lint, local SurrealDB
-notebooks/        — marimo walkthroughs of each pipeline stage
+    segmentation/: Paragraph split, semantic similarity
+    graph_construction/: Edge creation, node versioning
+    query/: Vector search, graph expansion, hybrid retrieval
+    reflection/: Topic consolidation, contradiction detection, review, archival
+    timeline/: Pure functional timeline operations
+    orchestration/: Top-level request routing Petri net
+  mcp/: FastMCP server, tool implementations, config
+  logging/: Structured JSON logging
+  visualization/: Standalone viz hub, session client, and frontend
+tests/: unit, pipeline, MCP, integration
+scripts/: benchmarks, corpus measurement, prose lint, local SurrealDB
+notebooks/: marimo walkthroughs of each pipeline stage
 ```
 
 ## Where the design lives
 
 **How the system works** is in the user documentation linked from the
-[README](README.md#documentation). **How it got that way** — what was decided,
-measured and deferred — is under `dev-docs/`:
+[README](README.md#documentation). **How each part is designed, and why**, is
+under `dev-docs/`:
 
-- [DEVELOPER_GUIDE.md](dev-docs/DEVELOPER_GUIDE.md) — debugging each layer in
+- [DEVELOPER_GUIDE.md](dev-docs/DEVELOPER_GUIDE.md): debugging each layer in
   isolation, timestamp comparison rules, adding a pipeline or a backend
-- [ISSUES.md](dev-docs/ISSUES.md) — live issues only; resolved ones are removed
-- [PROPOSED_FEATURES.md](dev-docs/PROPOSED_FEATURES.md) — work not yet built:
+- [ISSUES.md](dev-docs/ISSUES.md): open issues only; a resolved one is removed
+- [PROPOSED_FEATURES.md](dev-docs/PROPOSED_FEATURES.md): work not yet built:
   what, why, rough cost, and what has to be true before it can start
-- [BENCHMARKS.md](dev-docs/BENCHMARKS.md) — measured scaling limits and where
+- [BENCHMARKS.md](dev-docs/BENCHMARKS.md): measured scaling limits and where
   they come from
-- The remaining files are feature designs and the reasoning behind them
+- The remaining files are the design of one subsystem each, with the
+  alternatives that were rejected and the measurements behind the choices
 
-These documents shrink over time except where they describe current
-architecture — they are not a changelog.
+These documents describe the current design and are rewritten when it
+changes. They are not a changelog: a resolved issue or a superseded plan is
+deleted rather than kept for the record, and the git history is where the
+record lives.
 
 ## Reporting
 
