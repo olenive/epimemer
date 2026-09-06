@@ -659,14 +659,6 @@ class TestNewEdgeTypes:
         assert e.type == EdgeType.TIMELINK
         assert e.metadata["timepoint_id"] == "tp-1"
 
-    def test_associated_timeline_edge(self):
-        e = NodeEdge(
-            src_id="topic-1",
-            dst_id="timeline-1",
-            type=EdgeType.ASSOCIATED_TIMELINE,
-        )
-        assert e.type == EdgeType.ASSOCIATED_TIMELINE
-
     def test_has_metacontext_edge(self):
         e = NodeEdge(
             src_id="fact-1",

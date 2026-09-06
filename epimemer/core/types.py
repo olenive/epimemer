@@ -234,7 +234,6 @@ class EdgeType(str, Enum):
 
     # Temporal
     TIMELINK = "timelink"  # node → timeline (with timepoint_id in metadata)
-    ASSOCIATED_TIMELINE = "associated_timeline"  # topic → timeline
 
     # Epistemic framing
     HAS_METACONTEXT = "has_metacontext"  # node → metacontext

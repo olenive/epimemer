@@ -209,9 +209,9 @@ A `Timeline` is a node type acting as an ordered container of embedded
   `start`/`end`), a free-text label ("during the Renaissance"), or both.
 - **A position**, managed by the timeline's ordering, not by the timepoint.
 
-Other nodes link to specific timepoints via `TIMELINK` edges; nodes connect
-to their timelines via `ASSOCIATED_TIMELINE` edges, and a node can have
-several.
+Other nodes link to specific timepoints via `TIMELINK` edges: the edge points at
+the timeline and names the timepoint in its metadata, so it says which moment on
+which timeline in one hop. A node can have several.
 
 A timeline also carries an optional **`reference_time`**: that clock's own
 *now*, set via `set_reference_time`. It is what makes "current" answerable on
@@ -379,7 +379,7 @@ edges (
   --   abstracts, derived_from,
   --   similarity, contradiction, subtopic_of, superseded_by,
   --   temporally_followed_by, merged_into,
-  --   timelink, associated_timeline, has_metacontext, tagged_with_topic, sourced_from
+  --   timelink, has_metacontext, tagged_with_topic, sourced_from
   -- user relations: type = related, with a free `label` and a `kind`
   --   (relationship | attribution)
 )
