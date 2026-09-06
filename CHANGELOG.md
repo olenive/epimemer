@@ -18,8 +18,9 @@ All notable changes to this project are recorded here. The format follows
   `extracted_under_topic`. `supports` means fact → inference and nothing else,
   which is what corroboration and the soundness check already took it for; the
   new type is what `reflect` reads when it gathers a topic's material. Nothing
-  in the API changes, and a caller writing `link(..., edge_type="supports")`
-  between a fact and a topic should now write `extracted_under_topic`.
+  in the API changes: a caller writing `link(..., edge_type="supports")` between
+  a fact and a topic is still accepted, and should now write
+  `extracted_under_topic`, which is what the readers of that pair look for.
 - **Graphs migrate themselves.** Opening a graph written before this release
   renames both edge types in place, once, and stamps a `schema_version` record
   so later opens skip the work. It runs wherever a graph is opened: embedded

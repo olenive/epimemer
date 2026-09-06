@@ -444,6 +444,31 @@ what is exposed is any run that accepts one without checking the dates.
 alongside the name, and its §1.2 carries the measurements. Until that ships,
 treat any nominated pair of `dev-session` tags as a false positive.
 
+### `link` writes any engine edge type between any two node kinds
+
+🟡 **Open**, found while splitting `supports` into evidential support and
+extraction. `link` validates the edge type against the enum and validates that
+both endpoints exist. It says nothing about what they are, so
+`link(fact, topic, edge_type="supports")` is accepted, and so is a
+`derived_from` from a topic, a `subtopic_of` between two facts, an
+`extracted_under_topic` onto an inference. Every reader that assumes a shape
+has to defend itself: `dependent_inference_ids` fetches its `supports`
+destinations and keeps the inferences precisely because the edge alone does not
+say. A reader that forgets, and there is nothing stopping one, is simply wrong
+about the graph.
+
+The fix is a declared shape per engine edge type, source kind and destination
+kind, that `link` refuses to violate. It belongs beside the enum, where the
+comments already state each shape in prose that nothing reads. Whether coining
+should be refused outright or recorded as an override is the decision to make
+first, so this is written down rather than built.
+
+Worth knowing when reading old graphs: the edge-type migration renamed a
+mis-shaped `supports` edge into `extracted_under_topic` wherever its
+destination was a topic, hand-written ones included. It matched on the shape,
+which is all a stored edge carries, so an agent that meant evidential support
+between a fact and a topic no longer has a record saying so.
+
 ## Older carry-overs (open, low priority)
 
 - **No retroactive repair of old graphs.** Fixes apply to new operations;
