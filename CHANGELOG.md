@@ -6,6 +6,11 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-09-06
+
+A patch release on the same reasoning as 0.1.2: no feature changes, and
+existing graphs migrate themselves when opened.
+
 ### Changed
 
 - A keep verdict now lives only in the decision journal. It used to be written
