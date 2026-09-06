@@ -1,15 +1,12 @@
 # Retrieval provenance: seeing what the agent was actually given
 
-Design for a focus mode over the graph and timeline that dims everything the
-last retrieval did *not* return, plus a record of the response text the agent
+A focus mode over the graph and timeline that dims everything the last
+retrieval did *not* return, plus a record of the response text the agent
 received, reachable from a list of recent retrievals.
 
-Decided 2026-08-17. **Built and merged to `main` 2026-08-18**, §8 steps
-1–6 — see §10 for the construction notes and what they settled.
-
 The question it answers is not "what is in the graph" but **"what did the agent
-see, and what did it miss?"** — and the second half is why the non-returned
-nodes stay on screen rather than being filtered away.
+see, and what did it miss?"** The second half is why the non-returned nodes
+stay on screen rather than being filtered away.
 
 ---
 
@@ -17,69 +14,61 @@ nodes stay on screen rather than being filtered away.
 
 | # | Decision | Why |
 |---|---|---|
-| 1 | Cover **every** node-returning tool, not just `search` | A panel that greys a node the agent read via `topic_tree` a minute ago, labelled "not retrieved", teaches a false belief — in a system whose point is epistemic honesty |
+| 1 | Cover **every** tool whose response carries node ids, not just `search` | A panel that greys a node the agent read via `topic_tree` a minute ago, labelled "not retrieved", teaches a false belief, in a system whose point is epistemic honesty |
 | 2 | Focus mode dims by **desaturation**, never opacity | Opacity already encodes node status (§4.1) |
 | 3 | Dimmed nodes stay **clickable** | The interesting click is on a dimmed node: *why didn't this come back?* |
 | 4 | Response text lives in the **detail drawer**, as a second tab | §5 |
-| 5 | Records live in the **session process**, fetched by RPC | Payloads are the largest and most sensitive thing the system holds |
-
-Decision 5 was **revised on 2026-08-17** — records mirror into a hub-side ring
-so they survive session death, with a non-loopback guard keeping payloads
-session-side in the one configuration where exposure is real. See §3.2.
+| 5 | Records live in the **session process** and mirror into the hub, with the mirror stripped to metadata on a non-loopback bind | Payloads are the largest and most sensitive thing the system holds, and the dashboard is usually opened *after* the retrieval looked wrong (§3.2) |
 
 ---
 
-## 2. Coverage: one choke point, not six wrappers
+## 2. Coverage: one choke point, not a wrapper per tool
 
-Six tools put node identity or content into the agent's context:
+**The rule is semantic, not an enumeration: `retrieved` is the set of node ids
+present in the response.** What the agent saw, uniformly. Any census of "the
+retrieval tools" drifts: write tools such as `update`, `supersede_by`,
+`judge_importance`, `create_timelink` and `merge_facts` all put node ids where
+the agent can read them, and a refusal declares too (`merge_facts` names its
+sources whether or not it merges them), because the rule is about what the
+agent can read, not about whether the call changed the graph. `reflect` scans
+the whole active graph but the agent sees only the nominees, so a reflect
+record dims everything except them, which is accurate and no special case.
 
-| Tool | Serializer |
-|---|---|
-| `search`, `graph_as_of`, `query_changes`, `find_nodes`, `query_graph` | `_node_to_dict` |
-| `topic_tree` | `_content_preview` (id + preview — still "the agent saw this node") |
+Every tool passes through `_run_with_timeout` in `mcp/server.py`, which holds
+the tool name, the complete result dict, the meta and the latency, and is the
+last thing to touch a response before `_build_response` serialises it. That is
+where the record is written: one insertion, every tool, and any future tool
+covered by construction.
 
-> **Corrected (2026-08-17, review): the census above counted serializer call
-> sites, not tools.** The six are exactly the callers of `_node_to_dict` /
-> `_content_preview` — but `check_conflicts` serializes candidate
-> `{id, content, similarity}` dicts through its own path, `reflect` returns
-> `pending_review` and similar-pair ids, and `list_sources` returns source ids
-> and names. By decision 1's own rationale, a node the agent just examined via
-> `check_conflicts` — the review loop's front door — would get the same false
-> grey the decision exists to prevent. **Coverage is every tool whose response
-> carries node ids**: the six above plus `check_conflicts`, `reflect`,
-> `list_sources`. The rule that keeps this from drifting again is semantic,
-> not an enumeration: `retrieved` is the set of node ids present in the
-> response — what the agent saw, uniformly, per §3.1's response-not-context
-> principle. `reflect` **scans** the whole active graph but the agent sees
-> only the nominees, so a reflect record dims everything except them — which
-> is accurate, and no special case.
+Only the *record* is by construction. The *ids* are by declaration (§2.1), and
+a tool that never declares would produce a silently empty record. Two things
+close that gap:
 
-Wrapping each one would be six insertions that drift. **Every tool already
-passes through `_run_with_timeout` (`mcp/server.py:203-232`)**, which holds the
-tool name, the complete result dict, the meta and the latency, and which is the
-last thing to touch a response before `_build_response` serializes it.
+- `retrieved: list[RetrievedNode] | None = None` on `ResponseMeta`. `None`
+  means "this tool has not declared", and the wrapper flags the record as
+  undeclared; `[]` means "declared: nothing returned". A forgotten declaration
+  is visible rather than silent.
+- The coverage test is an **oracle**, not a list:
+  `test_any_node_id_in_a_response_is_declared` is parametrised over all
+  registered tools, seeds a known graph, calls each, and asserts that any known
+  node id appearing in the serialised response also appears in `retrieved`.
+  Walking a result for id-shaped keys is wrong in the wrapper (§2.1) and safe
+  in a test, where a miss merely under-checks. This test is what finds the next
+  tool; it has done so every time a new tool has shipped.
 
-That is where the record is written. One insertion, all six tools, and any
-future tool covered by construction.
-
-> **Corrected (2026-08-17, review): only the *record* is by construction; the
-> *ids* are by declaration (§2.1), and a tool that never declares produces a
-> silently-empty record.** Two changes close the gap. First,
-> `retrieved: list[RetrievedNode] | None = None` — `None` means "this tool
-> has not declared" (the wrapper flags the record undeclared), `[]` means
-> "declared: nothing returned". Silent gaps become visible ones. Second, the
-> §7 coverage test stops enumerating tools and becomes an **oracle**:
-> parametrised over *all registered tools*, it seeds a known graph, calls
-> each, and asserts any known node id appearing in the serialized response
-> also appears in `retrieved`. Walking results for id shapes was rightly
-> rejected in the wrapper — in a test the guess is safe (a miss merely
-> under-checks), and the oracle is what actually catches the seventh tool.
+`reflect` declares by walking its own result. Its nominee lists have as many
+shapes as there are nominators, and a hand-written list of key paths is how the
+next one would go undeclared. §2.1's objection to walking is about the choke
+point guessing across tools it knows nothing about; a tool reading the
+structure it built three lines earlier is the opposite case.
+`test_a_reflect_record_names_its_nominees_not_its_scan` pins the semantics:
+nominees, never the scan.
 
 ### 2.1 Tools declare their ids; the wrapper does not guess
 
-The alternative — walking an arbitrary result dict looking for id-shaped keys —
-would guess differently per tool and break silently when a shape changes. Each
-tool states its own instead, on the `ResponseMeta` it already returns:
+Walking an arbitrary result dict looking for id-shaped keys would guess
+differently per tool and break silently when a shape changes. Each tool states
+its own instead, on the `ResponseMeta` it already returns:
 
 ```python
 class ResponseMeta(BaseModel):
@@ -87,15 +76,11 @@ class ResponseMeta(BaseModel):
     # In-process only. `exclude=True` keeps these out of the `_meta` the agent
     # sees: ids are for the dashboard, and putting them on the wire would cost
     # the agent tokens to read a list it has no use for.
-    # None = the tool never declared (flagged undeclared at the choke point);
-    # [] = declared, nothing returned. The distinction is what makes a
-    # forgotten declaration visible rather than silent (§2, corrected).
     retrieved: list[RetrievedNode] | None = Field(default=None, exclude=True)
 ```
 
-`_build_response` serializes with `model_dump_json(by_alias=True)`
-(`server.py:172`), which honours `exclude`, so this cannot leak into the
-response by accident.
+`_build_response` serialises with `model_dump_json(by_alias=True)`, which
+honours `exclude`, so this cannot leak into the response by accident.
 
 ---
 
@@ -103,7 +88,7 @@ response by accident.
 
 ```python
 class RetrievalRecord(BaseModel):
-    record_id: str  # monotonic, assigned here — not the hub's `seq`
+    record_id: str  # monotonic, assigned here, not the hub's `seq`
     at: datetime
     tool: str  # "epimemer.search", …
     query: str  # the query text, or a rendering of the arguments
@@ -119,27 +104,31 @@ class RetrievedNode(BaseModel):
     score: float | None  # similarity or BM25, where the tool has one
 ```
 
-`SeedProvenance` is the four-value enum from `LEXICAL_SEARCH.md` §6 —
-`vector` / `lexical` / `segment` / `expanded` — plus `direct` for tools that
-return nodes without ranking them (`find_nodes`, `graph_as_of`, `query_changes`,
-`topic_tree`).
-
-> **Amended (2026-08-17, review), with the §2 census fix:** `check_conflicts`
-> candidates are tagged `vector` with the cosine similarity as `score` — they
-> genuinely are vector-similarity results, and no new enum value is needed.
-> `reflect` and `list_sources` ids are `direct`. Records are made for every
-> covered tool and every record appears in the selector — deciding which
-> records are "real" retrievals would be a second census, drifting like the
-> first. One sizing consequence for §3.2: a `reflect` record can carry
-> hundreds of ids, so the ring's cap covers `retrieved` as well as
-> `response_text`.
+`SeedProvenance` is the enum from `LEXICAL_SEARCH.md` §6 (`vector`,
+`lexical`, `segment`, `expanded`) plus `direct` for tools that return nodes
+without ranking them (`find_nodes`, `graph_as_of`, `query_changes`,
+`topic_tree`, `reflect`, `list_sources`, and the write tools). `check_conflicts`
+candidates are `vector` with the cosine similarity as `score`: they genuinely
+are vector-similarity results.
 
 **Why an enum and not a boolean.** A flat "retrieved" set throws away the most
 useful thing the feature produces. *This matched at 0.82; that one was dragged
-in by an edge from it; this third one came back on an exact token match* is the
-question you are actually asking when a search disappoints. Two tiers today,
-four once lexical search lands — designing it as a boolean now means rebuilding
-it later.
+in by an edge from it; this third one came back on an exact token match* is
+the question you are actually asking when a search disappoints.
+
+**`score` is blank for `search` today.** `QueryResult` carries `provenance` and
+no fused score, and a fused RRF number is not a similarity, so exposing one
+would need its own explanation before it was worth showing. `check_conflicts`
+is the one tool that declares a score. The field is there for whoever wants
+the "matched at 0.82" line on a `search` record.
+
+**Failed calls write no record.** There is no response to record, and the
+selector lists what the agent was handed. The opposite is defensible (a failed
+retrieval is interesting), so this is stated rather than left to be inferred.
+
+**One call, one record.** The record is written at `_run_with_timeout`, which
+sees the tool call and not the frame-widening loop inside `search`, so the
+loop cannot appear as several records.
 
 ### 3.1 It is *our* response, not *the agent's context*
 
@@ -147,122 +136,115 @@ it later.
 the MCP client's rendering of that, possibly truncated by the client, inside a
 tool-result block we never see.
 
-The panel is therefore labelled **"Response"**, not "Context". This is a small
-wording decision and it is load-bearing: a panel captioned "what the agent saw"
-would be making a claim the system cannot verify.
+The panel is therefore labelled **"Response"**, not "Context". A panel
+captioned "what the agent saw" would be making a claim the system cannot
+verify.
 
 ### 3.2 Where records live, and retention
 
-A bounded ring in the session process — the same module as `EVENT_LOG.md` §4,
-different instance and different placement. Log entries are small and structural
-and live in the hub; these carry response payloads and stay in the process that
-produced them, fetched by a `retrievals` RPC alongside `snapshot` and
-`list_graphs` (`visualization/protocol.py:75`).
+A bounded ring in the session process (`visualization/ring.py`, capacity 20,
+with a per-record size cap on `response_text` that `truncated` reports and a
+cap on `retrieved`, since a `reflect` record can carry hundreds of ids),
+served by a `retrievals` RPC alongside `snapshot` and `list_graphs`. Uncapped,
+this would be a copy of the graph held in memory and served to any browser
+that connects.
 
-Backfill matters here for the same reason it does for the log: the normal case
-is opening the dashboard *after* a retrieval looked wrong. A live-only stream is
-empty exactly when you want it.
+Records also mirror into a hub-side ring hanging off the session, so they
+survive session death: the normal case is opening the dashboard *after* a
+retrieval looked wrong, and a session-only store is empty exactly then. The
+guard is the bind, not the process:
 
-Bounded at ~20 records with a per-record size cap on `response_text`
-(`truncated` says when it bit). Uncapped, this is a copy of the graph held in
-memory and served to any browser that connects. The hub binds `127.0.0.1` by
-default but `EPIMEMER_VIZ_HOST` overrides it (`visualization/hub.py:333`), so
-the cap is a deliberate decision rather than an optimisation.
+- **Loopback bind (the default): full records mirror**, query and
+  `response_text` included, under the same caps. Selector, focus mode and the
+  Response tab all survive session death.
+- **Non-loopback bind (`EPIMEMER_VIZ_HOST` set): structural metadata only.**
+  `record_id`, `tool`, `at`, `graph`, counts and ids; no query text, no
+  payload. The Response tab for a dead session then says so plainly. While the
+  session lives, the `retrievals` RPC serves the payload as before.
 
-> **Revised (2026-08-17, review): records mirror into a hub-side ring, and
-> the guard is the bind, not the process.** Session-side-only placement made
-> records unreachable the moment the MCP process exited — the hub keeps
-> disconnected sessions but raises on RPC to them (hub.py:139-140,
-> `_mark_disconnected` at 222) — which is exactly the "open the dashboard
-> after noticing" case this section calls normal. So:
->
-> - **Loopback bind (the default): full records mirror to a hub ring hanging
->   off `sessions[sid]`** — query and `response_text` included, each under
->   the per-record caps above, the ring bounded as before, and the cap
->   covering `retrieved` too (§3). Selector, focus mode and the Response tab
->   all survive session death.
-> - **Non-loopback bind: structural metadata only** — `record_id`, `tool`,
->   `at`, `graph`, counts and ids; no query text, no payload. The Response
->   tab for a dead session then says so plainly. While the session lives, the
->   `retrievals` RPC serves the payload as originally designed.
-> - **Keying:** the hub stamps `session_id` at ingest (hub.py:197-200) and
->   ring placement is per-session by construction, so records from different
->   sessions cannot mix; records also carry `graph` (§6).
->
-> **Stated assumptions, not built:** the identity unit is the MCP *process* —
-> one process per conversation. A future shared deployment (one Epimemer
-> serving multiple agents, e.g. cooperative KG access) breaks that: many
-> conversations inside one session means `session_id` no longer identifies
-> the caller. That deployment requires a per-caller principal on the record
-> and hub authentication, neither of which exists; both are prerequisites to
-> revisit *then*, per the design-when-picked-up rule, not fields to add now.
+The strip happens at the producer: the session reads `config.viz_host`, the
+same setting the hub binds, so a payload never leaves the process by that
+route rather than travelling and being discarded on arrival.
+
+Records travel as events carried opaquely. `RetrievalRecorded.record` is a
+plain dict rather than a typed field, because `visualization/` sits below
+`mcp/` and importing the record type upward would invert the layering, the
+same reason `PublishEvent.payload` is opaque to the hub.
+
+The hub stamps `session_id` at ingest and ring placement is per session, so
+records from different sessions cannot mix; records also carry `graph` (§6).
+
+**Stated assumption:** the identity unit is the MCP *process*, one per
+conversation. A shared deployment (one Epimemer serving several agents) breaks
+that: many conversations inside one session means `session_id` no longer
+identifies the caller. That deployment needs a per-caller principal on the
+record and hub authentication, neither of which exists, and both are things to
+design then rather than fields to add now.
 
 ---
 
 ## 4. Focus mode
 
-Selecting a record dims every node it did not return, in **both** panels, while
+Selecting a record dims every node it did not return, in both panels, while
 leaving them drawn, hoverable and clickable.
 
 ### 4.1 Desaturation, because opacity is taken
 
-`statusOpacity` (`frontend/src/graph-panel.ts:89`) maps `active` → full and
-every retired status → faded. The comment above it exists because two retired
-states once drew as live.
+`statusOpacity` maps `active` to full and every retired status to faded. If
+focus mode also dimmed by opacity, *retired + retrieved* and *active +
+not-retrieved* would land at the same alpha: one channel carrying two meanings,
+decided in two files. So focus mode owns **saturation**; status keeps
+**opacity**.
 
-If focus mode also dimmed by opacity, *retired + retrieved* and *active +
-not-retrieved* would land at the same alpha — one channel carrying two meanings,
-decided in two files, and the drifted lookup tables silently re-opened in one mode. That is the
-pattern this codebase keeps producing.
-
-So focus mode owns **saturation**; status keeps **opacity**.
-
-**Cytoscape has no saturation property.** Nodes draw as
-`background-color: data(color)` and `opacity: data(opacity)`
-(`graph-panel.ts:141-142`), so desaturation is a *computed colour* written into
-`data("color")`, not a separate channel the renderer blends for us.
-
-That matters more than it sounds, because `applyTheme` recomputes `color` from
-node type and theme **alone** (`graph-panel.ts:409-411`). Left as it is,
-toggling the theme while focus mode is on restores every node to full
-saturation and silently exits the mode — colour decided in two places, which is
-the drifted-lookup-table failure exactly.
-
-So the colour has one origin, and focus is an argument to it rather than a
-later mutation:
+Cytoscape has no saturation property. Nodes draw as `background-color:
+data(color)`, so desaturation is a computed colour written into `data("color")`,
+not a separate channel the renderer blends. That matters because `applyTheme`
+recomputes `color` from node type and theme; left alone, toggling the theme
+while focus mode is on would restore every node to full saturation and
+silently exit the mode. So the colour has one origin, and focus is an argument
+to it rather than a later mutation:
 
 ```ts
-/** The colour a node draws in. Every caller goes through here — including
- *  `applyTheme`, which is where focus state was previously lost. */
+/** The colour a node draws in. Every caller goes through here, including
+ *  `applyTheme`. */
 export const nodeFill = (nodeType: string, theme: Theme, inFocus: boolean): string =>
   inFocus ? nodeColor(nodeType, theme) : desaturate(nodeColor(nodeType, theme));
 ```
 
-`statusOpacity` is untouched. The two channels never meet in a caller.
+`desaturate` lives in `theme.ts`, not in a panel, because both panels dim and
+a second implementation is how they would come to disagree. It mixes each
+channel toward the grey of the same luminance, so lightness is untouched: a
+desaturation that also darkened would be an opacity change wearing another
+name.
+
+`setFocus(null)` leaves the mode; `setFocus([])` dims everything, which is the
+honest picture of a search that returned nothing. The distinction is the same
+as `retrieved` being `None` versus `[]`, one layer up. Focus survives a
+snapshot reload: nodes are re-added through `nodeFill(…, inFocus(id))`, ids no
+longer in the graph are simply absent, and the selector keeps its records.
 
 ### 4.2 Both panels, or the dashboard lies
 
-Timeline marks are the same nodes (`timeline-model.ts` builds them from nodes).
-Dim only the graph and the two panels disagree about what came back — the class
-of bug the drifted lookup tables fixed for colour.
-
-Focus state therefore lives above both panels in `main.ts`, like the theme does,
-and both are told on change.
+Timeline marks are the same nodes (`timeline-model.ts` builds them from
+nodes). Dim only the graph and the two panels disagree about what came back.
+Focus state therefore lives above both panels in `main.ts`, like the theme
+does, and both are told on change.
 
 ### 4.3 Dimmed nodes stay live
 
 Making them inert would remove the answer to the question the mode exists to
-ask. Clicking a dimmed node opens its detail with a **"not in this retrieval"**
-marker, so the absence is stated rather than merely implied by the colour.
+ask. Clicking a dimmed node opens its detail with a **"not in this
+retrieval"** marker, so the absence is stated rather than implied by the
+colour. `notRetrievedMarker(inFocus, focusOn)` is empty unless focus mode is on
+*and* the node was absent: outside focus mode there is no retrieval to be
+absent from. This is also cheaper: no hit-testing changes, no second
+interaction model.
 
-This is also cheaper: no hit-testing changes, no second interaction model.
+### 4.4 Highlight's two silent failures
 
-### 4.4 Highlight has two silent failures to close first
-
-Shared with `EVENT_LOG.md` §7, and they must be fixed once rather than twice:
-`highlightNodes` no-ops on an unknown id, and the type filter sets
-`display: none` (`graph-panel.ts:431-437`) so a highlight can land on something
-invisible.
+Shared with `EVENT_LOG.md` §7, and fixed once rather than twice:
+`highlightNodes` must not no-op on an unknown id, and the type filter's
+`display: none` must not let a highlight land on something invisible.
 
 ---
 
@@ -270,38 +252,32 @@ invisible.
 
 ### 5.1 Two tabs in the drawer, not one pane
 
-The drawer (`index.html:153-159`) currently serves one thing: the selected
-node's detail. Response text is a second thing with a **different driver and a
-different lifetime** — node detail follows your selection, a response follows
-the selected record.
-
+Node detail follows your selection; a response follows the selected record.
 In focus mode you want both at once: *here is what the agent got, and here is
 the node I just clicked from inside it.* A single pane forces them to clobber
-each other, so the drawer gets two tabs — **Node** and **Response** — each
+each other, so the drawer has two tabs, **Node** and **Response**, each
 holding its own content.
 
-### 5.2 The answer to "when is it shown": never pushed
+### 5.2 Never pushed
 
 The rule the codebase already follows, from the pipeline strip: **ambient
 signal, deliberate detail.** Tiles glow and counters tick on their own, but the
-detail overlay opens only when you click a tile (`pipeline-strip.ts:1-9`).
-
-Applied here:
+detail overlay opens only on a click.
 
 | Event | What happens |
 |---|---|
-| A retrieval occurs | The header's record selector gains an entry, with an unread count. **Nothing else moves.** |
+| A retrieval occurs | The header's record selector gains an entry, with an unread count. Nothing else moves. |
 | You select a record | Focus mode engages, the Response tab fills, the drawer opens if hidden and shows that tab |
 | You click a node | The Node tab fills and becomes active. The Response tab keeps its content |
 | A retrieval occurs *while you are reading* | Selector updates. Drawer, active tab and focus mode are untouched |
 
-A retrieval must never steal the drawer. The agent fires on the order of ten per
-task, and a drawer that flipped content underneath you would be unreadable — and
-would clobber a node detail you deliberately opened.
+A retrieval must never steal the drawer. The agent fires on the order of ten
+per task, and a drawer that flipped content underneath you would be
+unreadable, and would clobber a node detail you deliberately opened.
 
-The drawer stays fixed-height (`h-40`). The Response tab scrolls internally and
-never resizes it, for the reason already recorded in the markup: a drawer that
-grew with its text would re-lay out the panel under the cursor.
+The drawer stays fixed-height. The Response tab scrolls internally and never
+resizes it: a drawer that grew with its text would re-lay out the panel under
+the cursor.
 
 ---
 
@@ -309,140 +285,41 @@ grew with its text would re-lay out the panel under the cursor.
 
 - Records belong to a session **and** a graph. A record from graph A must not
   highlight into graph B.
-- A session switch clears the selector, following the pipeline strip's existing
-  rule (`main.ts:339`).
+- A session switch clears the selector, following the pipeline strip's rule.
 - Leaving focus mode restores both panels; switching graphs leaves it.
 
 ---
 
-## 7. Tests, written first
+## 7. Tests
 
-Built 2026-08-18 across `tests/mcp/test_retrieval_declaration.py`,
-`test_retrieval_rpc.py`, `test_retrieval_records.py`,
-`test_retrieval_recording.py`, `tests/visualization/test_hub.py`, and the
-frontend suites (`focus.test.ts`, `drawer.test.ts`). Two are load-bearing:
-the §2 oracle (`test_any_node_id_in_a_response_is_declared`) is parametrised
-over **all registered tools** rather than an enumerated list, which is what
-let it find five tools the census had missed; and
-`test_rpc_hands_the_frontend_exactly_what_the_agent_saw` asserts the
-feature's core invariant through the HTTP surface the frontend actually uses.
+`tests/mcp/test_retrieval_declaration.py`, `test_retrieval_rpc.py`,
+`test_retrieval_records.py`, `test_retrieval_recording.py`,
+`tests/visualization/test_hub.py`, and the frontend suites `focus.test.ts`
+and `drawer.test.ts`. Three are load-bearing:
 
----
+- The §2 oracle, `test_any_node_id_in_a_response_is_declared`, parametrised
+  over all registered tools.
+- `test_rpc_hands_the_frontend_exactly_what_the_agent_saw` runs a live hub, a
+  live session client and real tool calls, then fetches over `/api/retrievals`
+  as a browser does.
+- `test_records_survive_session_death_in_the_hub_ring` kills the session and
+  subscribes a browser. Neither of the last two alone would catch a record
+  stored on the wrong side.
 
-## 8. Commit sequence
-
-Landed 2026-08-18 in six commits; the first three changed nothing a user
-sees. `git log` has the sequence.
-
----
-
-## 9. Resolved while building (was: Open)
-
-- **Scores for unranked tools — blank, as leaned.** `score: float | None`, and
-  `None` for every `direct` result. **What construction added:** `search` has no
-  score to report either. `QueryResult` carries `provenance` and no fused score
-  (`pipelines/query/types.py`), so exposing one means a new field on the query
-  pipeline's own contract — outside §8's steps, and a fused RRF number is not a
-  similarity, so it would need its own explanation before it was worth showing.
-  `check_conflicts` is the one tool that declares a score today, and its cosine
-  is exactly the number §3's motivating sentence asks for. **Left for whoever
-  wants the "matched at 0.82" line on a `search` record**; the field is already
-  there to fill.
-- **"The last query" for frame-scoped search — one call, one record, by
-  construction.** The record is written at `_run_with_timeout`, which sees the
-  tool call and not the widening loop inside it, so the loop cannot appear as
-  several records without someone deliberately making it.
-- **Focus mode survives a snapshot reload.** Nodes are re-added through
-  `nodeFill(…, inFocus(id))`, so a reload redraws the same dimming; ids no
-  longer in the graph are simply absent, which is the honest picture. The
-  selector keeps its records across the reload, so the choice is still on
-  screen and still means what it said.
-- **Splitting `lexical` into exact-vs-token provenance — considered and
-  deferred (ruled 2026-08-18).** R8 gives the lexical arm a real internal
-  distinction: a hit whose evidence is literal containment is a different kind
-  of result from one that merely shares tokens, and §3's own argument ("*this
-  third one came back on an exact token match*") is the case for showing it.
-  It stays one value. Provenance is the vocabulary the tool response already
-  speaks — `search` puts `provenance: "lexical"` on every node dict — and a
-  sixth enum member would have to be added there too, changing what the *agent*
-  reads to serve a dashboard label. That is a bigger decision than a colour, and
-  it belongs to whoever revisits `LEXICAL_SEARCH.md` §6 rather than to this
-  feature. Recorded so it is not re-derived as a fresh idea.
+Cytoscape cannot be instantiated under jsdom (no canvas), so the graph panel's
+rules are tested as pure functions (`nodeFill`, `refreshedFill`) and the
+drawer's through real DOM.
 
 ---
 
-## 10. Construction notes (2026-08-18)
+## 8. Rejected
 
-Built and merged to `main`, §8 steps 1–6. Unit, integration and frontend
-suites green. **Where these conflict with earlier sections, these win.**
+**Splitting `lexical` into exact-match and token-match provenance.** The
+lexical arm has that distinction internally, and §3's own argument is the case
+for showing it. It stays one value: provenance is the vocabulary the tool
+response already speaks (`search` puts `provenance: "lexical"` on every node
+dict), so a new member would change what the agent reads to serve a dashboard
+label. That belongs to whoever revisits `LEXICAL_SEARCH.md` §6.
 
-1. **The §2 census was wrong a third time, and the oracle is why we know.**
-   The corrected census named nine tools. Parametrising
-   `test_any_node_id_in_a_response_is_declared` over *all thirty-four* found
-   five more that put node ids where the agent can read them: **`update`**
-   (old and new), **`supersede_by`**, **`judge_importance`**,
-   **`create_timelink`** and **`get_metacontexts`**. Every one is a *write* tool,
-   which is what the census kept missing — it was looking for retrieval, and the
-   rule is not "retrieval" but "ids in the response". They all declare now, with
-   `direct` provenance. This is the third correction, and the last one that
-   needed a person: the oracle catches the next.
-2. **`reflect` declares by walking its own result.** Its seven nominee lists
-   have seven shapes, and a hand-written list of key paths is how the eighth
-   would go undeclared. §2.1's objection to id-shaped-key walking is about the
-   *choke point* guessing across tools it knows nothing about; a tool reading
-   the structure it built three lines earlier is the opposite case.
-   `test_a_reflect_record_names_its_nominees_not_its_scan` pins the semantics
-   from the other side: nominees, never the scan.
-
-   > **The oracle caught the next one, as promised (2026-08-21).** `merge_facts`
-   > was written returning `source_ids` and a survivor id with no
-   > declaration, and the parametrised test failed on it before the tool was ever
-   > run by hand — the thirty-fifth tool, found the way §10 said the fourteenth
-   > would be. Worth recording because it is the first time the census cost
-   > nobody anything: the rule was enforced by a test rather than remembered.
-   > It also settled a question the rule does not spell out — **a refusal
-   > declares too.** `merge_facts` names its sources whether or not it merges
-   > them, and the rule is about what the agent can read, not about whether the
-   > call changed the graph.
-3. **The guard is applied at the producer, keyed on the bind.** §3.2 says the
-   hub's mirror holds structural metadata only on a non-loopback bind. It is
-   the *session* that strips, reading `config.viz_host` — the same env var the
-   hub binds — so a payload never leaves the process by that route at all,
-   rather than travelling and being discarded on arrival. The `retrievals` RPC
-   is untouched and still serves the payload while the session lives, exactly
-   as the section describes.
-4. **Records are events, carried opaquely.** `RetrievalRecorded.record` is a
-   plain dict rather than a typed field, because `visualization/` sits below
-   `mcp/` and importing the record type upward would invert the layering — the
-   same reason `PublishEvent.payload` is opaque to the hub. The hub client
-   takes a `records()` callable rather than the log, for the same reason.
-5. **Failed calls write no record.** There is no response to record, and the
-   selector lists what the agent was handed. Stated because the opposite is
-   defensible — a failed retrieval is interesting — and because nothing in the
-   design said either way.
-6. **Both routes are exercised together.**
-   `test_rpc_hands_the_frontend_exactly_what_the_agent_saw` runs a live hub, a
-   live session client and real tool calls, then fetches over `/api/retrievals`
-   as a browser does. The complementary half —
-   `test_records_survive_session_death_in_the_hub_ring` — kills the session and
-   subscribes a browser. Neither alone would have caught the placement mistake
-   §3.2's revision corrected.
-7. **`desaturate` lives in `theme.ts`, not in a panel.** Both panels dim, and a
-   second implementation is how they would come to disagree — the drifted lookup tables exactly. It
-   mixes each channel toward the grey of the *same luminance*, so lightness is
-   untouched: a desaturation that also darkened would be an opacity change
-   wearing another name, and retired-and-retrieved would land on
-   active-and-not-retrieved again.
-8. **`null` focus is not an empty focus.** `setFocus(null)` leaves the mode;
-   `setFocus([])` dims everything, which is the honest picture of a search that
-   returned nothing. Keeping them apart is the same distinction as `retrieved`
-   being `None` versus `[]`, one layer up.
-9. **The Node tab's dimmed-node marker is a function, not a branch in the
-   drawer.** `notRetrievedMarker(inFocus, focusOn)` is empty unless focus mode
-   is on *and* the node was absent — outside focus mode there is no retrieval
-   to be absent from, and a marker would be a claim about one nobody selected.
-10. **Cytoscape cannot be instantiated under jsdom** (no canvas), so the graph
-    panel's rules are tested as pure functions and the drawer's through real
-    DOM. That constraint shaped `refreshedFill` into an exported function
-    rather than a line inside `applyTheme` — which is the better shape anyway,
-    since it is the rule the drifted-lookup-table failure broke.
+**A typed `retrieved` on the wire.** Ids are for the dashboard; putting them
+in `_meta` costs the agent tokens for a list it has no use for (§2.1).

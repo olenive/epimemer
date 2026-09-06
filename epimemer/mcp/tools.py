@@ -3688,12 +3688,12 @@ async def apply_reflection(
         neither listed nor accepted again.
         **Omit `covers` only where the nomination names no reason** — a node
         nothing links to and nothing has retrieved (`never_retrieved`). Then the
-        node is its own anchor, which is sound because nothing about that
-        nomination can change without removing it from the set anyway. The
-        self-anchor is implied and never spelled: passing any id for such a node
-        is refused, since the reader will only ever ask about the node itself.
+        node is kept for its own sake and the verdict's `covers` is empty, which
+        is sound because nothing about that nomination can change without
+        removing it from the set anyway. Passing any id for such a node is
+        refused, since the reader will only ever ask about the node itself.
         Omitting `covers` on a node that *does* carry reasons is refused the
-        other way, naming them: a self-anchor there covers nothing, so the node
+        other way, naming them: an empty keep there covers nothing, so the node
         returns on the next reflect while this call reported success. The ids are
         not filled in for you, deliberately — that would record you as having
         re-read a supersession you may never have seen.

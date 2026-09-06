@@ -17,7 +17,7 @@ A pair already judged — `distinct` or `synonymous`, via
 That suppression is **permanent by design**, inherited from the fact-pair layer
 in as many words rather than by accident, so a wrong `distinct` silences a pair
 for good; `RELATION_LABELS.md` §4.2 states it beside its dual, and `ISSUES.md`
-`ISSUES.md` is where a retraction would be argued.
+is where a retraction would be argued.
 """
 
 import math

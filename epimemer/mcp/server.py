@@ -1743,8 +1743,8 @@ async def memory_apply_reflection(
         retained: *Reviewed, and it stands* — the verdict opposite to
             `archivals`, for a nominee you looked at and decided to keep. Each:
             {node_id: str, because: str, covers: [str] | None}.
-            **`covers` must be exactly the node's outstanding reasons.** One
-            edge is written per id, so a later change is a reason no
+            **`covers` must be exactly the node's outstanding reasons.** They
+            are stored on the verdict, so a later change is a reason no
             confirmation covers and the node is nominated again. Missing ids
             are refused, and surplus ids are refused too: an anchor on a reason
             nobody named would pre-cover a change nobody has seen, which is the
@@ -1753,10 +1753,9 @@ async def memory_apply_reflection(
             `evidence_stale` or `evidence_merged`, and only the ones still
             listed: a reason a standing keep already anchors to is dropped
             from the worklist and refused here.
-            **Omit `covers` where the nomination names no reason** — a node
-            nothing links to and nothing has retrieved. The node is then its own
-            anchor, implied and never spelled: passing any id for such a node is
-            refused.
+            **Omit `covers` where the nomination names no reason**, a node
+            nothing links to and nothing has retrieved. The node is then kept
+            for its own sake, and passing any id for such a node is refused.
             **Not `judgments`.** Use that where the importance was wrong; use
             this where the importance is right and the node has simply been
             re-read. Raising importance to stop a nomination is how one field

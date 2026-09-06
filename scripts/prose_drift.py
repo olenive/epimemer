@@ -93,11 +93,11 @@ SUBJECTS: dict[str, tuple[int, str, str]] = {
 # roughly — the subject is usually named in the sentence before.
 WINDOW = 240
 
-# `dev-docs/` is deliberately out of scope. Those documents are dated records of
-# what was decided when, so a number in one is evidence of the state at that
-# date rather than a claim about the state now — the same reason a measurement
-# is never reported here.
-DOCS = ("*.md", "docs/*.md", "epimemer_prompts/*.md")
+# `dev-docs/` is in scope: those documents describe the current design and are
+# rewritten when it changes, so a live count there rots exactly as one in
+# `docs/` does. Dated measurements in them are evidence, not counts, and are
+# skipped for the same reason measurements are skipped everywhere.
+DOCS = ("*.md", "docs/*.md", "dev-docs/*.md", "epimemer_prompts/*.md")
 SOURCE = (
     "epimemer/core/*.py",
     "epimemer/mcp/*.py",

@@ -1,153 +1,104 @@
 # Event log: a readable record of what the agent did
 
-Design for a log panel in the dashboard — a list of what the agent changed,
-filterable, with entries that highlight their nodes in the graph on click.
-
-Decided 2026-08-17. **Built and merged to `main` 2026-08-18**, §9 steps
-1–6 — see §11 for the construction notes and what they settled.
+A log panel in the dashboard: a list of what the agent changed, filterable,
+with entries that highlight their nodes in the graph on click.
 
 The motivating case, in the user's words: *"if the log entry is node 123 is
 being superseded by node 124, it would be handy if I could click on the log
-and have the nodes highlighted in the graph."*
-
-That exact sentence **cannot be rendered from anything the system currently
-emits**. Working out why is most of this design.
+and have the nodes highlighted in the graph."* Most of this design is about
+why that sentence could not be rendered from the fine-grained event stream,
+and what had to exist instead.
 
 ---
 
-## 1. Why it is worth building
+## 1. Why it is worth having
 
 Supersession is a destructive-looking act. A belief the graph held is now
-historical, the agent decided it, and there is no visible trace. Ten tool calls
-in response to "update the graph with recent information" is normal, and all of
-it is invisible.
+historical, the agent decided it, and without a log there is no visible trace.
+Ten tool calls in response to "update the graph with recent information" is
+normal, and all of it would be invisible.
 
-An audit trail of status changes is the difference between a memory system and a
-black box. Of the features currently queued it has the clearest epistemic
-justification — it is the one that makes the system accountable to its user
-rather than merely useful to its agent.
+An audit trail of status changes is the difference between a memory system
+and a black box. It is the feature that makes the system accountable to its
+user rather than merely useful to its agent.
 
 ---
 
-## 2. The defect to fix first, which is not the log
+## 2. Counterpart ids live on the lifecycle episode
 
-`NodeStatusChanged` (`visualization/events.py:215-221`) carries `node_id`,
-`old_status`, `new_status`. It does **not** carry the superseding node.
+"123 superseded by 124" needs both ids in one place. The fine-grained stream
+does not offer that: `NodeStatusChanged` carries `node_id`, `old_status` and
+`new_status`, and the relation is a separate lineage edge (`superseded_by` or
+`temporally_followed_by`) published as its own `EdgeStored` a moment later.
+Joining the two by adjacency in the stream breaks the moment anything
+interleaves.
 
-The relation lives in a separate lineage edge — `SUPERSEDED_BY` or, since
-2026-08-19, `TEMPORALLY_FOLLOWED_BY` for a world-change — published as its own
-`EdgeStored` a moment later (`visualization/instrumented_storage.py:234-243`).
-Rendering "123 superseded by 124" therefore means joining two events by their
-adjacency in the stream, which breaks the moment anything interleaves.
-
-**The same gap exists in the durable path.** `events_in_window`
-(`mcp/tools.py:764-782`) emits `created` plus the node's terminal status —
-`corrected` / `historical` / `merged` — from node timestamps, also with no
-counterpart. *(Corrected 2026-08-17: this originally said "`created` /
-`superseded` / `merged`" — stale vocabulary; the code already mirrors the validity model
-status split, with a comment saying retiring-as-historical and
-retiring-as-corrected are different things to report.)* So "superseded by whom" exists nowhere in
-this system except the edge itself — not in the live event, not in
-`query_changes`, not in any tool response.
-
-Fix: carry the counterpart id on both surfaces. Both already hold it —
-`supersede_node_tx` is handed `old_node`, `new_node` and `lineage_edge`
-together, and `query_changes` can join the edge it already has access to.
-
-**This landed first, on its own — counterpart ids, resolved 2026-08-17.** It
-was a defect in the event contract, not a missing feature: Counterpart ids now
-ride on both surfaces, via the append-only lifecycle-episode list of §6. §8's
-first two tests and §9's commit 1 are done; everything below builds on top.
-One known gap, ruled on separately: `update_node_status` bypassed the episode
-path (zero production callers at resolution time). **Closed 2026-08-18 by
-deletion** — the method is gone from the protocol and both backends, and its
-test callers moved to `set_node_status_tx`, so every status flip now writes an
-episode by construction rather than by discipline. The scalar-pair fallback in
-`events_in_window` stays for graphs written before episodes existed.
+So the counterpart id rides on the node itself, in its append-only lifecycle
+episode list (§6), and both surfaces read it from there: the live act
+(`GraphActionRecorded`, §3.1) and the durable history (`query_changes`). Every
+status flip goes through `set_node_status_tx` or one of the other transaction
+boundaries, so every flip writes an episode by construction rather than by
+discipline. `events_in_window` keeps a fallback that reads the scalar
+`(status, superseded_at)` pair for graphs written before episodes existed.
 
 ---
 
 ## 3. Granularity: the transaction, not the write
 
-Measured by instrumenting a real ingest (2026-08-17: `InMemoryStorage` behind
-`instrument_storage`, a counting subscriber on the bus, mock embeddings — every
-published event tallied):
+Measured by instrumenting a real ingest (`InMemoryStorage` behind
+`instrument_storage`, a counting subscriber on the bus, mock embeddings):
 
-| Act | Events emitted (measured) |
+| Act | Events emitted |
 |---|---|
-| One node stored, fresh ingest | 7.0 (`NodeStored` + `EmbeddingStored` + ~3.6 `EdgeStored` + pipeline share) |
-| One `store_decomposition` (25 nodes) | **176** — 141 storage (25+25+90 `EdgeStored`+1 `TimelineStored`) + 35 pipeline |
+| One node stored, fresh ingest | about 7 (`NodeStored` + `EmbeddingStored` + about 3.6 `EdgeStored` + pipeline share) |
+| One `store_decomposition` (25 nodes) | 176 to 309 depending on segment layout; **one** act |
 | One `search` | 40 |
-| One `update` (a supersede) | **4** — which directly confirms §3.1's "four or more" |
-| A ten-call task | hundreds to ~2,000 by mix; only ingest-heavy tasks reach the top |
-| Building the current graph | 1,700+ storage events (200 nodes + 200 embeddings + 1,299 edges) |
+| One `update` (a supersede) | 4 |
+| A ten-call task | hundreds to about 2,000 by mix |
 
-> **Corrected (2026-08-17, review).** This section originally claimed ~8.5
-> events per node, ~200 per `store_decomposition` and 2,000–4,000 per
-> ten-call task, extrapolated from `graph_stats` (6.5 edges/node). That edge
-> density is the *mature* graph's — reflection adds edges after the fact; a
-> fresh ingest creates ~3.6 per node — so the estimates ran ~25–50% high.
-> The conclusion is untouched: even measured, one ingest emits two orders of
-> magnitude more events than "on the order of ten readable entries". But the
-> **ring bound and any batching thresholds must trace to the measured
-> numbers**, not the withdrawn ones.
+Fresh-ingest edge density (about 3.6 per node) is lower than a mature graph's
+(about 6.5), because reflection adds edges after the fact; any ring bound or
+batching threshold should trace to the measured numbers above rather than to
+`graph_stats` on an old graph.
 
-The estimate that prompted this feature was "on the order of ten". That is right
-about *tool calls* and two orders of magnitude below the *event* count,
-because events are emitted at storage-write granularity.
+The estimate that prompted this feature was "on the order of ten". That is
+right about *tool calls* and two orders of magnitude below the *event* count,
+because events are emitted at storage-write granularity. A raw event log is a
+firehose. `VISUALISATION.md` B.0 replaced raw per-event pipeline rendering
+with aggregate tiles for exactly this reason, and a raw log would
+re-introduce what B.0 removed.
 
-**A raw event log is a firehose, and shipping one would repeat a mistake this
-codebase has already corrected.** `VISUALISATION.md` B.0 replaced raw
-per-event pipeline rendering with aggregate tiles for exactly this reason. A raw
-log re-introduces what B.0 removed.
-
-### 3.1 The readable unit already exists in the code
+### 3.1 The readable unit is the transaction
 
 `supersede_node_tx` is one act that publishes four or more events. So do
-`merge_nodes_tx` and `write_batch_tx`. The entry a person wants to read —
-*"superseded 123 → 124, +3 evidence edges"* — corresponds to the
-**transaction**, and no single event represents it.
-
-Reconstructing that by grouping in the frontend needs a correlation id that does
-not exist, and would guess wrong under concurrency. Instead, publish a coarse
-event at the transaction boundary:
+`merge_nodes_tx` and `write_batch_tx`. The entry a person wants to read,
+*"corrected 123 → 124, +3 evidence edges"*, corresponds to the transaction,
+and no single fine-grained event represents it. Reconstructing it by grouping
+in the frontend would need a correlation id that does not exist and would
+guess wrong under concurrency. Instead, a coarse event is published at the
+transaction boundary:
 
 ```python
 class GraphActionRecorded(Event):
     """One human-meaningful act, at the transaction boundary that performed it."""
 
-    category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH  # see §10
+    category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH  # §10
     event_type: Literal["graph_action_recorded"] = "graph_action_recorded"
-    action_id: str  # monotonic, assigned at the source — see §4.1
-    verb: ActionVerb  # stored | corrected | world_changed | merged | archived | restored | …
+    action_id: str  # monotonic, assigned at the source (§4.1)
+    verb: ActionVerb  # §11
     subjects: list[str]  # node ids, primary first
-    counts: dict[str, int]  # {"edges": 3, "nodes": 1} — what it swept up
+    counts: dict[str, int]  # {"edges": 3, "nodes": 1}: what it swept up
     summary: str  # pre-rendered one-line text, for display and substring filter
 ```
 
-`instrumented_storage.py` already sits exactly at the transaction boundary and
-already holds every id involved. Fine-grained events keep flowing untouched —
-the graph panel needs them, and nothing about it changes. The log consumes only
-the coarse stream.
+`instrumented_storage.py` already sits at the transaction boundary and holds
+every id involved. Fine-grained events keep flowing untouched; the graph panel
+needs them. The log consumes only the coarse stream.
 
-**`summary` is pre-rendered on the emitting side deliberately.** A log line that
-the frontend assembles from parts is a second place where the vocabulary of the
-system gets decided, and it would drift from the tool responses that use the
-same words.
-
-> **Revised (2026-08-17, review): there is no `superseded` verb.** The validity model decided
-> supersession is two opposite acts — a correction (`it_was_wrong` →
-> CORRECTED, `superseded_by`, terminal) and a world-change
-> (`the_world_changed` → HISTORICAL, `temporally_followed_by`, restorable) —
-> and a log line reading "superseded 123 → 124" flattens exactly the
-> distinction the graph records. By this section's own drift rule, the verbs
-> are **`corrected`** and **`world_changed`**, matching the terminal statuses
-> and what `events_in_window` already emits, so the live log and the durable
-> history speak one vocabulary. Summaries render accordingly
-> ("corrected 123 → 124" vs "world-change: 123 → 124"). Recurrence needs no
-> new verb: The edge split's `recurs` verdict resolves as *restore + new source
-> edge*, which is `restored` with the edge in `counts` — recorded here so
-> nobody mints a `recurs` verb later and splits the vocabulary again.
+`summary` is pre-rendered on the emitting side deliberately. A log line the
+frontend assembles from parts is a second place where the system's vocabulary
+gets decided, and it would drift from the tool responses that use the same
+words.
 
 ---
 
@@ -155,337 +106,242 @@ same words.
 
 ### 4.1 Sequencing: `seq` cannot carry this
 
-`seq` is assigned per browser connection by the hub at send time
-(`hub.py:99-101`), starts at 0 for each socket (`hub.py:252`), and resets on
-reconnect (`frontend/src/events.ts:94`). Two browsers see different numbers for
-the same event.
+`seq` is assigned per browser connection by the hub at send time, starts at 0
+for each socket, and resets on reconnect. Two browsers see different numbers
+for the same event. It is a drop detector, not a position in a stream: a log
+cannot use it to dedup across a reconnect, to request "everything after N", or
+to guarantee stable order. Hence `action_id`, assigned by the session process
+that emits the action.
 
-It is a **drop detector, not a position in a stream**. A log cannot use it to
-dedup across a reconnect, to request "everything after N", or to guarantee
-stable order. Hence `action_id`, assigned by the session process that emits the
-action.
+`action_id` is a process-wide counter, zero-padded. One process is one session
+(`session_id` is a fresh uuid4 per process), so the process is the right
+scope, and the padding makes the lexical order a JSON consumer gets for free
+the numeric one, so the frontend can sort and dedup on it without parsing.
+`test_action_ids_are_monotonic_across_browser_reconnects` is the test a
+`seq`-based implementation fails.
 
 ### 4.2 Placement: hub-side, at the existing choke point
 
-Every event already passes through one line — `hub.py:197-200`, where the hub
-stamps `session_id` before fan-out. `sessions[sid]` is already a per-session
-dict. The ring hangs off it, and the append is one statement at a place that
-already exists.
+Every event passes through one line in `hub.py`, where the hub stamps
+`session_id` before fan-out, and `sessions[sid]` is already a per-session
+dict. The ring hangs off it (`visualization/ring.py`, `LOG_RING_CAPACITY =
+512`) and selects on `event_type == "graph_action_recorded"`, not on category
+(§10). A browser receives backfill on subscribe, with no RPC round-trip and
+without waking a session process. `_replay_actions` runs the same
+`_subscribed(payload)` predicate the live path runs, so a replayed entry can
+never reach a browser a live one would not have.
 
-A browser then receives backfill on subscribe, with no RPC round-trip and
-without waking a session process. The ring selects on
-`event_type == "graph_action_recorded"` — not on category, which nothing in
-the pipeline consumes (§10).
+The ring is values, not a buffer: `remember` returns a new tuple. The hub
+iterates its per-session dict while fanning out, and a ring that mutated in
+place would have every reader sharing one buffer.
 
-**Stated honestly, because it is easy to oversell:** this survives browser
-reloads — the common case, and the one that matters, since you open the
-dashboard *after* noticing the agent did something. It does **not** survive an
-MCP restart: `session_id` is a fresh uuid4 per process (`protocol.py:27`), so a
-restarted server registers as a different session and its ring starts empty.
-Neither placement fixes that; only §6's durable path does.
+**512, not configurable.** A 25-node `store_decomposition` emits hundreds of
+fine-grained events and one act, so the coarse stream is two orders of
+magnitude smaller than the firehose §3 refused, and 512 entries is a long
+working session. A knob here would be one more number nobody has measured,
+and the ring is bounded either way.
 
-### 4.3 Retrieval records go in the session process instead
+**What it survives, stated plainly:** browser reloads, which is the common
+case (you open the dashboard *after* noticing the agent did something), and
+an MCP exit, because the hub keeps disconnected sessions. It does not survive
+a hub restart, and a restarted MCP server is a different session with its own
+ring and its own numbering. Only §6's durable path outlives that.
 
-The retrieval-provenance feature (`RETRIEVAL_PROVENANCE.md`) wants a
-structurally identical ring, and the reuse argument for one implementation
-stands. But its records carry **response
-payloads** — the largest and most sensitive thing the system holds — and those
-should stay in the process that produced them, fetched by RPC on demand
-(`protocol.py:75`).
+### 4.3 Retrieval records share the module
 
-So: one generic bounded-ring module, two instances, placed by payload size and
-sensitivity rather than by symmetry. Same sequencing discipline in both.
-
-> **Revised (2026-08-17, review): both rings are hub-side; the boundary moves
-> from "which process" to "which bind".** The split above silently gave up
-> the feature's own normal case: the hub *keeps* disconnected sessions
-> (`_mark_disconnected` marks, never pops — hub.py:222), so this log ring
-> survives an MCP exit — but RPC to a disconnected session raises
-> (hub.py:139-140), so retrieval records died with the session exactly when
-> "open the dashboard after noticing" needs them. Decision: retrieval records
-> mirror into a hub-side ring off `sessions[sid]` too (session-keyed by
-> placement; the hub already stamps `session_id` at ingest, hub.py:197-200),
-> with the §3.2 per-record caps. The sensitivity argument is kept where it is
-> real: **when the hub is bound to a non-loopback host, sessions mirror
-> structural metadata only** — no query text, no payloads — and the RPC path
-> remains for guarded-mode fetch while the session lives. Details, caps and
-> the stated multi-agent assumptions: `RETRIEVAL_PROVENANCE.md` §3.2.
+Retrieval provenance (`RETRIEVAL_PROVENANCE.md`) uses the same ring module,
+a second instance, also hub-side, with the same sequencing discipline. Its
+records carry response payloads, so the sensitivity boundary is the bind
+rather than the process: on a non-loopback bind sessions mirror structural
+metadata only. Details and caps are in `RETRIEVAL_PROVENANCE.md` §3.2.
 
 ---
 
 ## 5. Filtering
 
-Structured filters, not search. Three of the four things you would look for are
-filters over fields:
+Structured filters, not search. Three of the four things you would look for
+are filters over fields:
 
-- **verb** — chips, multi-select
-- **node id** — text box, exact
-- **time range** — its own two date inputs, sharing the timeline's `TimeRange`
-- **free text** — plain substring over `summary`
-
-> **Amended 2026-08-19 (review).** This bullet read "reuses the timeline panel's
-> range inputs", and construction did not take it literally — see §11.8. Those
-> inputs are also written by shift-drag zoom on the axis, so sharing the
-> *controls* would let scrubbing the timeline silently filter the log: a filter
-> nobody set, whose cause is in another panel. The log keeps its own two date
-> inputs; what is shared is the *rule* — `TimeRange` and the half-open
-> comparison, both from `timeline-filter.ts`. Ruled on and kept as built.
+- **verb**: chips, multi-select
+- **node id**: text box, exact
+- **time range**: the log's own two date inputs, sharing the timeline's
+  `TimeRange` rule (half-open, from `timeline-filter.ts`) but not its
+  controls. The timeline's inputs are also written by shift-drag zoom on the
+  axis, so sharing the controls would let scrubbing the timeline silently
+  filter the log: a filter nobody set, whose cause is in another panel.
+- **free text**: plain substring over `summary`
 
 **Not BM25, and not because it is expensive.** Log vocabulary is a dozen verbs
-repeated thousands of times, and SurrealDB's BM25 clamps IDF to zero above 50%
-document frequency (measured — see `LEXICAL_SEARCH.md` §2.5). Every verb term
-would sit far above that threshold and every match would tie at `0.0`: a ranking
-function returning a constant. The property that makes BM25 right for the graph
-corpus makes it wrong for this one.
-
-Node ids *would* score well, being maximally rare — but for an id you want exact
-match, which is a lookup, not ranked retrieval.
+repeated thousands of times, and SurrealDB's BM25 clamps IDF to zero above
+50% document frequency (`LEXICAL_SEARCH.md` §2.5). Every verb term would sit
+far above that threshold and every match would tie at `0.0`: a ranking
+function returning a constant. Node ids would score well, being maximally
+rare, but for an id you want exact match, which is a lookup.
 
 **This is a frontend feature.** The ring is a few hundred entries in memory;
-filtering is `Array.prototype.filter`. No protocol method, no storage schema, no
-cross-backend parity problem. It must not be routed through `text_search`.
+filtering is `Array.prototype.filter`. No protocol method, no storage schema,
+no cross-backend parity problem. It must not be routed through `text_search`.
 
 ### 5.1 The genuinely textual query is a graph search, not a log search
 
-*"What happened to the fact about deployment rollbacks?"* is unanswerable from
-the log, whose entries hold ids rather than content. It is a **graph** lexical
-search whose hit ids then filter the log — free once `LEXICAL_SEARCH.md` lands,
-and needing nothing on the log side.
+*"What happened to the fact about deployment rollbacks?"* is unanswerable
+from the log, whose entries hold ids rather than content. It is a graph
+lexical search whose hit ids then filter the log, and it needs nothing on the
+log side.
 
 ---
 
-## 6. Live log vs history — two features, one UI
+## 6. Live log and history: two features, one UI
 
-`query_changes` (`storage/protocol.py:234`, tool at `mcp/tools.py:817`) already
-answers "what was born or retired in `[start, end)`" for all time, persisted, on
-both backends, with per-node lifecycle events. **That is a durable audit trail,
-it is already implemented, and the dashboard does not surface it at all.**
+`query_changes` answers "what was born or retired in `[start, end)`" for all
+time, persisted, on both backends, with per-node lifecycle events. That is a
+durable audit trail.
 
 | | Source | Lifetime | Filtering |
 |---|---|---|---|
 | **Live log** | hub ring (§4.2) | session | client-side (§5) |
-| **History** | `query_changes` | forever, already persisted | time window + node type |
+| **History** | `query_changes` | as long as the graph | time window + node type |
 
-Present them as one timeline in the UI if that reads better. **Design them as
-two.** Collapsing them is how a bounded ring quietly becomes a database with a
+Present them as one timeline in the UI if that reads better. Design them as
+two. Collapsing them is how a bounded ring quietly becomes a database with a
 retention policy nobody chose.
 
-Caveat, so this is not oversold: `query_changes` is node-only. No edge changes,
-no pipeline runs, no retrievals. It is a node-lifecycle history, not a full
-audit trail.
+**History is a reading of node fields, not a second store.** Nothing is
+ring-buffered and nothing grows on its own: the trail's size is the graph's
+size, bounded by archival, and its durability is the backend's. It is
+node-only: no edge changes, no pipeline runs, no retrievals.
 
-> **Revised (2026-08-17, review): what "forever" means, and the episode fix.**
->
-> First, sizing, so nobody reads "durable, forever" as a growing log:
-> **history here is a reading of node fields, not a second store.** There is
-> nothing to ring-buffer and nothing that grows on its own — the trail's size
-> *is* the graph's size, bounded by the existing archival system, and its
-> durability is the backend's (on `InMemoryStorage` it lives exactly as long
-> as the graph does).
->
-> Second, a correctness collision with the edge split, found by asking what happens
-> when the `recurs` verdict restores a `HISTORICAL` node. The derivation
-> reads `(superseded_at, status)`, and that pair cannot represent *retired,
-> then came back*: clear `superseded_at` on restore and the retirement
-> vanishes from every window; keep it and the event's kind — which is just
-> `node.status.value` — reads `"active"` at the retirement timestamp.
-> And since T2 legalised cycles, a scalar `restored_at` only defers the same
-> overwrite to the second retirement.
->
-> **Resolution: an append-only lifecycle episode list on the node** — each
-> episode `{retired_at, because, restored_at | None}` — with
-> `(status, superseded_at)` kept as the current-state snapshot for fast
-> paths. `events_in_window` derives from the episodes, so every retirement
-> and every return stays reportable, with the right kinds, through any number
-> of cycles. Episodes are append-only: nothing is ever cleared or
-> overwritten. The counterpart ids counterpart id lives on the episode, which lands both
-> changes in one shape. It grows only on actual transitions — most nodes
-> never have more than one episode.
->
-> For completeness, since the examples that motivated this were "when was
-> Labour in power" and "the Christmas holiday period": neither is answered
-> here. The first is **valid time** — T1's per-source interval lists, already
-> open-ended in count. The second is a **recurrence rule** — the
-> `CyclicalTimeline` case, no lifecycle at all; see the T2 constraint in
-> `VALIDITY_DESIGN.md`. This section is transaction time only: what *the graph*
-> did, and when.
+**Lifecycle episodes.** A scalar `(status, superseded_at)` pair cannot
+represent *retired, then came back*: clear `superseded_at` on restore and the
+retirement vanishes from every window; keep it and the event's kind reads
+`"active"` at the retirement timestamp. Since the validity model allows
+cycles, a scalar `restored_at` only defers the same overwrite to the second
+retirement. So each node carries an append-only list of episodes, each
+`{retired_at, because, counterpart, restored_at | None}`, with `(status,
+superseded_at)` kept as the current-state snapshot for fast paths.
+`events_in_window` derives from the episodes, so every retirement and every
+return stays reportable, with the right kinds, through any number of cycles.
+Episodes grow only on actual transitions; most nodes never have more than
+one. `test_query_changes_reports_every_episode_of_a_recurring_node` is the
+test a scalar implementation fails.
+
+This section is transaction time only: what the graph did, and when. "When
+was Labour in power" is valid time (per-source intervals,
+`VALIDITY_DESIGN.md`), and "the Christmas holiday period" is a recurrence rule
+with no lifecycle at all.
 
 ---
 
 ## 7. Click to highlight
 
-`highlightNodes` (`frontend/src/graph-panel.ts:391`) exists and is already used
-by the timeline bridge. Two silent-failure modes have to be closed before it is
-driven from the log:
+`highlightNodes` in `graph-panel.ts` returns a report, and the caller says
+what happened. Two silent failures are closed:
 
-1. **Unknown id** — `cy.getElementById(id)` returns an empty collection and
-   `.addClass` is a no-op. Click, nothing happens, no explanation.
-2. **Filtered-out node** — the type filter sets `display: none`
-   (`graph-panel.ts:431-437`), so the class lands on something invisible. Same
-   symptom, different cause.
+1. **Unknown id.** `cy.getElementById(id)` returns an empty collection and
+   `.addClass` is a no-op. The report names the ids not in the current graph.
+2. **Filtered-out node.** The type filter sets `display: none`, so the class
+   would land on something invisible. The filter is cleared only when it
+   would hide something being highlighted; clearing unconditionally would
+   undo a filter the user set every time they clicked an entry about a node
+   that filter already showed.
 
-Both need the same treatment: report when the id is not in the current graph,
-and clear a conflicting type filter rather than highlighting into nothing.
+Both are pure functions (`missingFrom`, `filterAfterHighlight`,
+`highlightNote`) because cytoscape cannot be instantiated under jsdom, so the
+rule had to be extractable to be testable at all. The same two failures are
+shared with focus mode (`RETRIEVAL_PROVENANCE.md` §4.4) and fixed once.
 
-Selection is bidirectional — click a node, filter the log to it.
+Selection is bidirectional, and clicking a node does not reveal the rail: it
+sets the log's node-id filter and stops there. Opening a panel on every node
+click is the drawer-stealing behaviour `RETRIEVAL_PROVENANCE.md` §5.2 rules
+out; the filter is simply there when you open the log.
 
-Scoping follows the pipeline strip's existing rule (`main.ts:339`): a session
-switch clears, and entries from another graph never highlight into the viewed
-one.
+Scoping follows the pipeline strip's rule: a session switch clears, and
+entries from another graph never highlight into the viewed one.
 
 ---
 
-## 8. Tests, written first
+## 8. Tests
 
-Written failing-first; built 2026-08-17/18 across
 `tests/visualization/test_graph_actions.py`, `test_hub.py`, `test_ring.py`,
-`log-store.test.ts` and `graph-panel.test.ts`. Two are worth naming:
-`test_action_ids_are_monotonic_across_browser_reconnects`, which a
-`seq`-based implementation passes every other test here and fails (§4.1);
-and `test_query_changes_reports_every_episode_of_a_recurring_node`, which a
-scalar `(superseded_at, status)` implementation fails by losing an episode
-(§6).
+`log-store.test.ts` and `graph-panel.test.ts`. The two load-bearing ones are
+named in §4.1 and §6.
 
 ---
 
-## 9. Commit sequence
+## 9. Where acts are emitted
 
-Landed 2026-08-17/18 in six commits; the first three changed nothing a user
-sees. `git log` has the sequence.
-
----
-
-## 10. Resolved while building (was: Open)
-
-- **Event category — resolved (2026-08-17, review), and the premise was
-  wrong.** Nothing filters by category anywhere: hub subscription filtering
-  keys off **session and graphs** (`hub.py:114-125`, subscribe handling at
-  `hub.py:261-266`), and the frontend router dispatches by `event_type`,
-  silently ignoring types with no registered handler (`events.ts:69`).
-  `EventCategory` is currently load-free. Existing clients therefore receive
-  the coarse stream regardless of its category and drop it on the floor; the
-  only cost is wire bytes. Decision: `GraphActionRecorded` carries
-  `category: GRAPH` — it is a graph-mutation summary, which is what GRAPH
-  means, and if category filtering ever becomes real, "coarse actions are
-  GRAPH events" is the reading that keeps old subscribers working.
-- **Ring size — resolved 2026-08-18: 512, not configurable.** The measurement
-  that decides it is the one §3 already took, read at the right granularity: a
-  25-node `store_decomposition` emits 176 fine-grained events and **one** act,
-  because it is one transaction. Re-measured while building, with a heavier
-  25-node ingest (every node on one segment): 309 events, still one act. So the
-  coarse stream is two orders of magnitude smaller than the firehose §3 refused,
-  and 512 entries is a long working session rather than a few seconds of one.
-  Not configurable: a knob here is one more number nobody has measured, and the
-  ring is bounded either way.
-- **Where the panel lives — resolved 2026-08-18: a rail.** Not the drawer,
-  which retrieval provenance is about to split into Node and Response tabs
-  (`RETRIEVAL_PROVENANCE.md` §5.1); a third tab there would put three unrelated
-  drivers in one pane. The rail is a fixed-width (`w-80 shrink-0`) sibling of
-  the split container, hidden until the header's **Log** button asks for it, so
-  the graph keeps its width by default. **Structural, not stylistic:** an
-  earlier draft put it *inside* `#split-container` and
-  `layout.test.ts::has exactly the two halves and the divider as children`
-  caught it immediately — that guard exists because the detail drawer made the
-  same mistake and every hover resized the timeline. The rail is now guarded the
-  same way.
+At the five `_tx` boundaries and nowhere else: `supersede_node_tx`,
+`supersede_by_existing_tx`, `merge_nodes_tx`, `set_node_status_tx`,
+`write_batch_tx`. Single writes (`store_node`, `store_edge`) emit no act: they
+are writes, not transactions, and the production callers of `store_node` are
+source and tag upserts that nobody wants a log line for. Consequence, stated
+rather than hidden: an act performed entirely through single writes would not
+appear in the log. Nothing on the production path does.
 
 ---
 
-## 11. Construction notes (2026-08-18)
+## 10. Placement and category
 
-Built and merged to `main`, §9 steps 2–6 (step 1 was counterpart ids, 2026-08-17).
-Unit, integration and frontend suites green. **Where these conflict with
-earlier sections, these win.**
+**The panel is a rail, not a drawer tab.** The drawer holds Node and Response
+tabs (`RETRIEVAL_PROVENANCE.md` §5.1); a third tab would put three unrelated
+drivers in one pane. The rail is a fixed-width sibling of the split container,
+hidden until the header's **Log** button asks for it, so the graph keeps its
+width by default. It sits *beside* `#split-container`, not inside it:
+`layout.test.ts` guards that the container has exactly two halves and the
+divider as children, because the detail drawer once sat inside it and every
+hover resized the timeline.
 
-1. **The verb list needed a seventh entry, and §3.1's rule is why.** "There is
-   no `superseded` verb" is binding, but `NodeStatus.SUPERSEDED` still exists —
-   The validity model kept it for rows that genuinely do not record which act they were. It
-   maps to the unclassified verb, not to a sixth kind of act. Mapping it to
-   `corrected` would have been the invented answer the validity model refused to give, and
-   mapping it to `superseded` is what the rule forbids. Guarded by
-   `test_there_is_no_superseded_verb`.
+**`GraphActionRecorded` is category `GRAPH`.** Nothing filters by category:
+hub subscription filtering keys off session and graphs, and the frontend
+router dispatches by `event_type`, silently ignoring types with no registered
+handler. So existing clients receive the coarse stream regardless and drop it
+on the floor; the only cost is wire bytes. It is a graph-mutation summary,
+which is what GRAPH means, and if category filtering ever becomes real,
+"coarse actions are GRAPH events" is the reading that keeps old subscribers
+working.
 
-   > **Renamed 2026-08-19 (review): `retired` → `undetermined`.** As built, the
-   > verb was `retired`, and `verb_for_status` also used it as the fall-through
-   > for a status the module has never heard of, on the reasoning that "it left
-   > the active set" is the only part that can be relied on. **That reasoning
-   > was wrong.** It is an assumption, not a fact: `ACTIVE → restored` is
-   > already a non-retirement flowing through `set_node_status_tx`, so a status
-   > added later need not be a retirement either, and the default would then
-   > state something false about what the agent did. `undetermined` names the
-   > absence of a determination, which is exactly what both cases have in
-   > common — the legacy row whose kind was never recorded, and the status this
-   > module cannot classify. Two consequences worth keeping:
-   >
-   > - **The two defaults now point opposite ways on purpose.** The frontend's
-   >   `statusOpacity` fades an unlisted status; this fall-through refuses to
-   >   claim one. Fading a live node is cosmetic; a log line asserting a
-   >   retirement that did not happen is a false statement about the agent.
-   > - **The verb names a state, so it cannot carry a line alone.**
-   >   "undetermined 1 node" says nothing happened to anything; `summarise`
-   >   renders **"status undetermined: N nodes"**. Guarded by
-   >   `test_an_unrecognised_status_does_not_claim_the_node_was_retired` and
-   >   `test_an_undetermined_act_still_reads_as_a_line`.
-   >
-   > No migration: the ring is in-memory and per session, so no stored
-   > vocabulary carries the old name.
-   >
-   > **Sunset condition (2026-08-19).** The two users of `UNDETERMINED` retire
-   > on different schedules, and only one of them ever retires:
-   >
-   > - **The map entry** `NodeStatus.SUPERSEDED: ActionVerb.UNDETERMINED` is
-   >   dead code the day `NodeStatus.SUPERSEDED` leaves `NodeStatus` in
-   >   `epimemer/core/types.py`, and it should be deleted in that same change —
-   >   not before it, and not as a tidy-up of its own. Hanging the condition on
-   >   the enum member is deliberate: "no graph anywhere still holds such a row"
-   >   is not a thing this repository can observe, and nothing in `epimemer/`
-   >   writes the status, so the enum member is the whole remaining supply.
-   >   Whoever removes it owns the read-side question too — a stored row still
-   >   carrying the string would then fail at the Pydantic boundary, which is
-   >   The validity model's problem to answer, not this module's.
-   > - **The fall-through** `_STATUS_VERBS.get(status, ActionVerb.UNDETERMINED)`
-   >   has no sunset. It answers for statuses that do not exist yet, so it is
-   >   never spent. `ActionVerb.UNDETERMINED` therefore outlives the legacy
-   >   status it was first written for, and removing the verb along with the map
-   >   entry would be the wrong half to delete.
-2. **Emission is at the five `_tx` boundaries and nowhere else.**
-   `supersede_node_tx`, `supersede_by_existing_tx`, `merge_nodes_tx`,
-   `set_node_status_tx`, `write_batch_tx`. Single writes (`store_node`,
-   `store_edge`) emit no act: they are writes, not transactions, and the three
-   production callers of `store_node` are source/tag upserts that nobody wants a
-   log line for. Consequence, stated rather than hidden: an act performed
-   entirely through single writes would not appear in the log. Nothing on the
-   production path does.
-3. **`action_id` is a process-wide counter, zero-padded.** One process is one
-   session (`session_id` is a fresh uuid4 per process), so the process is the
-   right scope; the padding makes the lexical order a JSON consumer gets for
-   free the numeric one, which is what lets the frontend sort and dedup on it
-   without parsing. A restarted server is a different session with its own ring
-   and its own numbering — §4.2's stated limit, unchanged.
-4. **The ring is values, not a buffer.** `remember` returns a new tuple. The
-   hub keeps a ring per session in a dict it also iterates while fanning out,
-   and a ring that mutated in place would have every reader sharing one buffer.
-   Cost is a copy of `capacity` references per act — nothing next to
-   serializing the act that prompted it.
-5. **Backfill reuses the live subscription test.** `_replay_actions` runs the
-   same `_subscribed(payload)` predicate the live path runs, so a replayed entry
-   can never reach a browser a live one would not have. Writing the graph check
-   out a second time is exactly the shape of bug this project keeps finding.
-6. **`highlightNodes` now returns a report, and the caller says so.** The two
-   silent failures are closed in `graph-panel.ts` as three pure functions —
-   `missingFrom`, `filterAfterHighlight`, `highlightNote` — because cytoscape
-   cannot be instantiated under jsdom (no canvas), so the panel's own tests are
-   pure by necessity and the rule had to be extractable to be testable at all.
-   The filter is cleared **only** when it would hide something being
-   highlighted; clearing unconditionally would undo a filter the user set, every
-   time they clicked an entry about a node that filter already showed.
-7. **Bidirectional selection does not reveal the rail.** Clicking a node sets
-   the log's node-id filter and stops there. Opening a panel on every node click
-   is the drawer-stealing behaviour `RETRIEVAL_PROVENANCE.md` §5.2 rules out;
-   the filter is simply there when you open the log.
-8. **§5's "time range reuses the timeline panel's range inputs" was not taken
-   literally.** The log has its own two date inputs. The timeline's are also
-   driven by shift-drag zoom on the axis, so sharing them would make scrubbing
-   the timeline silently filter the log — a filter nobody set. The *rule* is
-   shared (`TimeRange`, half-open, from `timeline-filter.ts`); the controls are
-   not. **Reviewed 2026-08-19: kept as built, and §5's bullet amended to match.**
+---
+
+## 11. Verbs
+
+`ActionVerb` is `stored`, `corrected`, `world_changed`, `merged`, `archived`,
+`restored`, `undetermined`. **There is no `superseded` verb.** The validity
+model made supersession two opposite acts, a correction (`it_was_wrong`,
+CORRECTED, `superseded_by`, terminal) and a world change
+(`the_world_changed`, HISTORICAL, `temporally_followed_by`, restorable), and a
+log line reading "superseded 123 → 124" would flatten exactly the distinction
+the graph records. The verbs match the terminal statuses and what
+`events_in_window` emits, so the live log and the durable history speak one
+vocabulary. Recurrence needs no verb of its own: the `recurs` verdict resolves
+as restore plus a new source edge, which is `restored` with the edge in
+`counts`. `test_there_is_no_superseded_verb` guards this.
+
+### 11.1 `undetermined`, and when it goes
+
+`NodeStatus.SUPERSEDED` still exists, kept for rows that predate the split and
+genuinely do not record which act they were. It maps to `undetermined`, not
+to `corrected` (an invented answer) and not to `superseded` (what §11
+forbids). `verb_for_status` also falls through to `undetermined` for a status
+the module has never heard of, because "it left the active set" is an
+assumption, not a fact: `ACTIVE → restored` is already a non-retirement, so a
+status added later need not be a retirement either, and a default that
+claimed one would state something false about what the agent did.
+
+The two defaults in the system point opposite ways on purpose. The frontend's
+`statusOpacity` fades an unlisted status; this fall-through refuses to claim
+one. Fading a live node is cosmetic; a log line asserting a retirement that
+did not happen is a false statement about the agent. Because the verb names a
+state rather than an act, `summarise` renders it as "status undetermined: N
+nodes". Guarded by
+`test_an_unrecognised_status_does_not_claim_the_node_was_retired` and
+`test_an_undetermined_act_still_reads_as_a_line`.
+
+**Sunset.** The map entry `NodeStatus.SUPERSEDED: ActionVerb.UNDETERMINED` is
+dead code the day `NodeStatus.SUPERSEDED` leaves the enum, and should be
+deleted in that same change, not before and not as a tidy-up of its own:
+"no graph anywhere still holds such a row" is not something this repository
+can observe, and the enum member is the whole remaining supply. Whoever
+removes it owns the read-side question too, since a stored row still carrying
+the string would then fail at the Pydantic boundary. The fall-through has no
+sunset: it answers for statuses that do not exist yet, so
+`ActionVerb.UNDETERMINED` outlives the legacy status it was first written for.
