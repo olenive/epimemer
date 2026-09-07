@@ -54,10 +54,16 @@ records the decision. `already_linked` reads
 
 ```python
 similarities = [
-    {"pair": [a_id, b_id], "verdict": "one_claim",
-     "because": "same claim; merge refused, both are events"},  # similarity + assessed
-    {"pair": [c_id, d_id], "verdict": "distinct",
-     "because": "both about validity intervals, different assertions"},  # assessed only
+    {
+        "pair": [a_id, b_id],
+        "verdict": "one_claim",
+        "because": "same claim; merge refused, both are events",
+    },  # similarity + assessed
+    {
+        "pair": [c_id, d_id],
+        "verdict": "distinct",
+        "because": "both about validity intervals, different assertions",
+    },  # assessed only
 ]
 ```
 
@@ -776,7 +782,8 @@ each source, in a list that is never trimmed.
 ```python
 def completed_merge_cycles(node: EpistemicNode) -> int:
     return sum(
-        1 for episode in node.lifecycle
+        1
+        for episode in node.lifecycle
         if episode.because is NodeStatus.MERGED and episode.restored_at is not None
     )
 ```
