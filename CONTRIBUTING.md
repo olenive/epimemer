@@ -79,6 +79,24 @@ documentation drift that keeps recurring here. It is a lint you run rather
 than a test: pinning the numbers in the suite would lock in the duplication
 that causes them to go stale.
 
+### Before changing a dependency
+
+```bash
+uv run python scripts/audit_dependencies.py
+```
+
+It asks OSV whether anything installed here has a published advisory. A weekly
+CI job runs the same command, because it is the only thing watching this
+project's Python dependencies: Dependabot's `pip` ecosystem does not read
+`uv.lock` and neither does GitHub's dependency graph, so no alert fires however
+old the lock gets. A finding names a package and a severity and stops there,
+since OSV says a version is affected rather than that this code reaches the
+affected path.
+
+The scheduled run files what it finds as an issue and closes it when the
+finding is gone. It opens no pull request and edits no lock file: updating is
+`uv lock --upgrade`, run the suite, one commit.
+
 ## Conventions
 
 [AGENTS.md](AGENTS.md) holds the coding rules and is checked in so that they
@@ -112,7 +130,7 @@ epimemer/
   logging/: Structured JSON logging
   visualization/: Standalone viz hub, session client, and frontend
 tests/: unit, pipeline, MCP, integration
-scripts/: benchmarks, corpus measurement, prose lint, local SurrealDB
+scripts/: benchmarks, corpus measurement, prose lint, advisory check, local SurrealDB
 notebooks/: marimo walkthroughs of each pipeline stage
 ```
 

@@ -1,6 +1,53 @@
+# Two ecosystems, because those are the two Dependabot can see here.
+#
+# **Python is deliberately absent.** Dependabot's `pip` ecosystem covers pip,
+# pipenv, pip-compile and poetry, and the dependency graph reads
+# `requirements.txt` and `pipfile.lock`. Neither understands `uv.lock`, so
+# adding an entry here would leave the lock file stale and `uv sync --locked`
+# would fail on the mismatch. It also means no Dependabot alert ever fires for
+# a Python package: `.github/workflows/audit.yml` is what covers that gap.
+#
+# Version updates are grouped and slowed on purpose. Security updates are a
+# separate feature, enabled in the repository settings rather than here: they
+# are not scheduled, they ignore `open-pull-requests-limit`, and `cooldown`
+# does not apply to them, so a vulnerability still arrives immediately and on
+# its own.
 version: 2
+
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    # One PR for the routine bumps and one for the majors, so a major is
+    # visible without being buried in a batch that is otherwise safe to merge.
+    groups:
+      actions-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      actions-major:
+        patterns: ["*"]
+        update-types: ["major"]
+    # Majors are not ignored here, and that is the lesson of the drift this
+    # replaced: every action was three or four majors behind, so ignoring
+    # majors would have hidden the whole gap.
+    open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
+      semver-major-days: 21
+
+  - package-ecosystem: npm
+    directory: /epimemer/visualization/frontend
+    schedule:
+      interval: monthly
+    groups:
+      frontend-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      frontend-major:
+        patterns: ["*"]
+        update-types: ["major"]
+    open-pull-requests-limit: 2
+    cooldown:
+      default-days: 14
+      semver-major-days: 30

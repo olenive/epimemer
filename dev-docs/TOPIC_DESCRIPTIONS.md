@@ -1,7 +1,8 @@
 # Topic descriptions: a name that does not move
 
-**Status: proposal. Nothing is built.** §6 breaks it into stages with the
-types, call sites and tests each one needs; §9 lists what is still open.
+**Status: stage 0 built; the description field itself is not.** §6 breaks the
+rest into stages with the types, call sites and tests each one needs; §9 lists
+what is still open. Where an unbuilt section says "does", read "would".
 
 `Topic` has one text field. It carries two jobs: the name the graph joins on,
 and the prose that explains what the topic is. This proposes splitting them,
@@ -237,11 +238,12 @@ after a person has read the five once.
 
 ## 6. Stages
 
-**Stage 0, name resolution follows a retired node forward** (§2.2).
-`_tag_topic` and `_resolve_hub_id` resolve a `MERGED` or `CORRECTED` hit
-through `merged_into` or `superseded_by` to the live successor. Independent of
-the description field and worth shipping first, because it closes the merge
-door that is open right now. Tests: a tag whose node was merged away resolves
+**Stage 0, name resolution follows a retired node forward** (§2.2). **Built**,
+in `pipelines/name_resolution.py`, alongside stage 1 of `TAG_IDENTITY.md`, which
+edits the same two functions. `_tag_topic` and `_resolve_hub_id` resolve a
+`MERGED` or `CORRECTED` hit through `merged_into` or `superseded_by` to the live
+successor. A `HISTORICAL` node is deliberately not followed: its claim is still
+right of its period, so its name has not moved. Tests: a tag whose node was merged away resolves
 to the survivor and mints no second hub; the same for a tag whose node was
 superseded; a name that never existed still resolves to nothing; a chain of
 two hops resolves to the end of it.

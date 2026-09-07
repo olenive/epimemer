@@ -6,6 +6,44 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- Every dependency is updated to a version with no published advisory. The
+  installed set went from 19 packages carrying advisories to none. The ones
+  reachable from this code were `starlette`, whose `StaticFiles` served the
+  visualization hub, and `aiohttp`, which `surrealdb` uses for every graph
+  operation. The rest sat behind FastMCP's OAuth and OpenAPI features, which
+  this server does not use, or behind the `notebooks` extra.
+- The `fastmcp` and `starlette` floors rise to the releases that fixed those
+  advisories, so an install resolving to the oldest permitted version no longer
+  gets a vulnerable one.
+
+### Fixed
+
+- **A tag resolves to one node however its name is spelled.** `claim_kind` and
+  `claim-kind` were two hubs, and so were `design-decisions` and `design
+  decisions`, because a tag was matched on its exact content. Names are now
+  compared with case and separators collapsed, at ingest and at
+  `find_nodes(tagged_with_topic=...)`. Dates are untouched, which is the point:
+  the similarity bar cannot separate `claim-kind` from `claim_kind` at 0.9196
+  without also fusing two different days of work at 0.9935. Where the spelling
+  asked for is not the one stored, `store_decomposition` reports it under
+  `tags_resolved_to` rather than resolving it silently.
+- **A tag name whose node was retired now resolves to the node carrying its
+  content.** Enrichment rewrites a topic's content and retires the old node, and
+  a merge retires its sources; either left the old name resolving to nothing, so
+  the next document carrying it created a second hub while
+  `find_nodes(tagged_with_topic=...)` returned an empty list rather than an
+  error. Resolution follows `merged_into` and `superseded_by` forward. A
+  historical node is deliberately not followed: its claim is still right of its
+  period and its name has not moved.
+- Two tags whose names are equal once spelling is collapsed may be merged
+  without clearing the topic similarity threshold. An identical normalised name
+  is a stronger proof that two tags are one tag than a cosine between their
+  spellings, which is what let `claim-kind` and `claim_kind` sit below the bar
+  at 0.9196 while pairs that must never merge sat above it. The exemption is
+  narrow: every source must be a tag, and every key must match.
+
 ## [0.1.3] — 2026-09-06
 
 A patch release on the same reasoning as 0.1.2: no feature changes, and

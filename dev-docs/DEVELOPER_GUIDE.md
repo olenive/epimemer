@@ -32,6 +32,38 @@ uv run python -m pytest tests/mcp/test_tools.py::TestIngest -v
 uv run python -m pytest tests/pipelines/test_orchestration.py -v -s
 ```
 
+### Dependencies: `scripts/audit_dependencies.py`
+
+```bash
+uv run python scripts/audit_dependencies.py
+```
+
+**Dependabot cannot see the Python dependencies here.** Its `pip` ecosystem
+covers pip, pipenv, pip-compile and poetry, and the dependency graph reads
+`requirements.txt` and `pipfile.lock`. Nothing in either list understands
+`uv.lock`, so no alert fires and no pull request is opened whatever is in the
+resolved environment. Measured once, on 2026-09-07: 19 of 132 installed
+packages carried an advisory, one of them critical.
+
+`.github/workflows/audit.yml` runs the same command weekly and files what it
+finds as an issue, refreshing the standing one rather than opening a second and
+closing it once nothing is affected. An issue rather than a failed run because
+a failed scheduled job is an email that ages out of an inbox. The run
+distinguishes three outcomes, which is why the script has three exit codes: a
+clean environment, an affected package, and the check itself failing, and only
+the middle one is a finding.
+
+`.github/dependabot.yml` covers the two ecosystems Dependabot can see, GitHub
+Actions and the frontend's npm tree, grouped and slowed so the routine churn
+arrives monthly in one pull request per ecosystem; security updates are a
+separate feature that bypasses that schedule entirely. Majors are grouped
+separately rather than ignored: the drift this replaced was **entirely**
+majors, every action three or four behind, so ignoring them would have hidden
+the whole gap.
+
+Routine Python updates are deliberate rather than automated: `uv lock
+--upgrade`, run the suite, one commit.
+
 ### Before asking for a review: `scripts/prose_drift.py`
 
 ```bash

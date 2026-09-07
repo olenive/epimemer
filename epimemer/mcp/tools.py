@@ -895,6 +895,7 @@ async def store_decomposition(
     from epimemer.pipelines.graph_construction.edge_creation import (
         edge_creation_net,
     )
+    from epimemer.pipelines.name_resolution import resolve_name, tag_by_key, tag_key
 
     # Imported as a module: the `propose_timepoints` flag above would otherwise
     # shadow the function of the same name.
@@ -917,19 +918,54 @@ async def store_decomposition(
 
     total_topics = total_facts = total_inferences = 0
     doc_tag_names = list(tags or [])
+    # Keyed by `tag_key`, not by the name as typed. The cache answers before the
+    # store does, so a raw key would let one document tagging `claim_kind` and
+    # `claim-kind` miss twice and mint the pair this resolution exists to
+    # prevent.
     tag_cache: dict[str, Topic] = {}
+    # Fetched once, on the first tag that misses, and only where a node was
+    # about to be written anyway. One real graph holds 88 tags among 306 active
+    # topics, so the scan is cheaper than the write it replaces.
+    active_topics: list[Topic] | None = None
+    # Where the spelling asked for is not the spelling the graph holds. Reported
+    # rather than silently applied: a caller that named `claim-kind` and got
+    # `claim_kind` should learn this graph's spelling.
+    tags_resolved_to: dict[str, str] = {}
     # Tag Topics are excluded: a tag is a name, not a statement, and a tag that
     # happens to read as a date would put a mark on the timeline for every node
     # carrying it.
     datable: list[tuple[str, str]] = []
 
     async def _tag_topic(name: str) -> Topic:
-        """Resolve-or-create a tag Topic, adding new ones to the batch."""
-        if name in tag_cache:
-            return tag_cache[name]
-        existing = await storage.get_node_by_content(name, node_type=NodeType.TOPIC)
+        """Resolve-or-create a tag Topic, adding new ones to the batch.
+
+        Three questions in order, cheapest first: has this call already resolved
+        the name, does the store hold it as written, and does the store hold it
+        under another spelling. Only the third reads more than one node, and only
+        where the answer would otherwise have been to write one.
+        """
+        nonlocal active_topics
+        key = tag_key(name)
+        if key in tag_cache:
+            resolved = tag_cache[key]
+            if resolved.content != name:
+                tags_resolved_to[name] = resolved.content
+            return resolved
+        # `resolve_name` follows a retirement forward, so a tag whose node was
+        # merged away or rewritten still names whatever carries its content now.
+        existing = await resolve_name(name, storage)
+        if not isinstance(existing, Topic):
+            if active_topics is None:
+                active_topics = [
+                    node
+                    for node in await storage.query_nodes(node_type=NodeType.TOPIC)
+                    if isinstance(node, Topic)
+                ]
+            existing = tag_by_key(name, active_topics)
         if isinstance(existing, Topic):
-            tag_cache[name] = existing
+            tag_cache[key] = existing
+            if existing.content != name:
+                tags_resolved_to[name] = existing.content
             return existing
         topic = Topic(
             content=name,
@@ -937,7 +973,7 @@ async def store_decomposition(
             extraction_method=TAG_EXTRACTION_METHOD,
             judged_by=judge,
         )
-        tag_cache[name] = topic
+        tag_cache[key] = topic
         batch_nodes.append(topic)
         vec = (await embedding_provider.embed([name]))[0]
         batch_embeddings.append(
@@ -1128,6 +1164,12 @@ async def store_decomposition(
         "timepoints_proposed": timepoints_proposed,
         "historical_twins": await _historical_twins(batch_nodes, storage),
     }
+    if tags_resolved_to:
+        # Said rather than done silently: a caller that asked for `claim-kind`
+        # and got the hub written as `claim_kind` has learned this graph's
+        # spelling, and can use it next time instead of finding out from a
+        # search that returns nothing.
+        result["tags_resolved_to"] = dict(sorted(tags_resolved_to.items()))
     meta = ResponseMeta(
         nodes_returned=total_topics + total_facts + total_inferences,
         source_types={k: v for k, v in nodes_created.items() if v > 0},
@@ -1847,12 +1889,24 @@ async def query_changes(
 async def _resolve_hub_id(value: str, storage: StorageBackend) -> str:
     """Resolve a hub reference to an id: a node id, a Topic name, or a document's
     source name (e.g. "ISSUES.md"). Falls back to the raw value if none match.
+
+    The Topic branch resolves the way `_tag_topic` writes, so a name reaches the
+    hub it made: a retirement is followed forward, and a tag is then matched up
+    to spelling. Neither applies to the branches either side of it. A node id is
+    already an id, and normalising a document's source name would have
+    `ISSUES.md` answer to `issuesmd`, which nothing asked for.
     """
+    from epimemer.pipelines.name_resolution import resolve_name, tag_by_key
+
     if await storage.get_node(value) is not None:
         return value
-    topic = await storage.get_node_by_content(value, node_type=NodeType.TOPIC)
+    topic = await resolve_name(value, storage)
     if isinstance(topic, Topic):
         return topic.id
+    topics = await storage.query_nodes(node_type=NodeType.TOPIC)
+    tag = tag_by_key(value, [node for node in topics if isinstance(node, Topic)])
+    if tag is not None:
+        return tag.id
     doc = await storage.get_document_by_source(value)
     if doc is not None:
         return doc.id
@@ -3765,6 +3819,7 @@ async def apply_reflection(
         supersede_by_existing,
         supersede_node,
     )
+    from epimemer.pipelines.name_resolution import tag_key
     from epimemer.pipelines.reflection.batch_validation import (
         malformed_entries,
         refusal_message,
@@ -4078,9 +4133,18 @@ async def apply_reflection(
         if len(sources) < 2:
             continue
 
+        merging_tags = all(is_tag_topic(s) for s in sources)
+        # One normalised name across every source is a stronger proof that these
+        # are one tag than any cosine between their spellings, and the bar cannot
+        # make that call: `claim-kind` and `claim_kind` score 0.9196 while two
+        # different days of work score 0.9935. `dev-docs/TAG_IDENTITY.md` has the
+        # measurements. Narrow on purpose: tags only, and only where the keys are
+        # equal.
+        same_tag_key = merging_tags and len({tag_key(s.content) for s in sources}) == 1
+
         # Only collapse genuine duplicates: every pair must clear the bar, or
         # the merge is refused (distinct-but-related topics are left untouched).
-        if not await all_pairs_above_threshold(
+        if not same_tag_key and not await all_pairs_above_threshold(
             sources, storage, model_id, merge_similarity_threshold
         ):
             merges_rejected += 1
@@ -4092,7 +4156,6 @@ async def apply_reflection(
         # frames leaves one topic asserted in both worlds. Exact set equality,
         # not overlap — `shared_frame_set` carries the reasoning.
         # Tags are exempt: `is_tag_topic` says why a tag stands in no frame.
-        merging_tags = all(is_tag_topic(s) for s in sources)
         if not merging_tags and (await shared_frame_set(source_ids, storage) is None):
             topic_merges_refused.append(
                 {
