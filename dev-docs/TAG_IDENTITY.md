@@ -1,6 +1,6 @@
 # Tag identity: separators are spelling, not meaning
 
-**Status: stage 1 built; stage 2 outstanding (§5).** §7 records what review
+**Status: built, both stages (§5).** §7 records what review
 settled. Where an unbuilt section says "does", read "would".
 
 Two tags in one real graph name the same thing twice: `claim-kind` beside
@@ -218,8 +218,8 @@ whose sources share a key passes the similarity bar, and one whose sources do
 not is still refused; `tag_key` collapses case, spaces, hyphens and underscores
 and nothing else.
 
-**Stage 2, clean up the two existing duplicates**, through
-`apply_reflection(merges=[...])` rather than a script of its own. `merge_nodes`
+**Stage 2, clean up the two existing duplicates.** **Done** on 2026-09-07,
+through `apply_reflection(merges=[...])` rather than a script of its own. `merge_nodes`
 already migrates every source's edges onto a fresh survivor and retires the
 sources, and tags are already exempt from the frame gate, so the only thing that
 stood in the way was the similarity bar that §2.3 opens. Survivors: `claim_kind`,
