@@ -1,7 +1,7 @@
 # The epistemic review loop
 
 How Epimemer reviews and reconciles knowledge over time: outdated facts, stale
-inferences, contradictions, frame-relative truth, trivial knowledge, and
+inferences, contradictions, metacontext-relative truth, trivial knowledge, and
 claims true of a period. One loop, several verdicts, and a division of labour
 between the agent and the human. `docs/REFLECTION.md` and `docs/VALIDITY.md`
 describe the behaviour a caller sees; this document holds the model and the
@@ -29,16 +29,16 @@ matters, agentic.
    anything reading them knows. Retirement is a deliberate act with history
    preserved; archival is export plus a status flip, never a delete.
 3. **Two-tier epistemic responsibility.** The agent handles mechanical,
-   clear-cut calls (dedup, obvious supersession, same-frame routing). It
+   clear-cut calls (dedup, obvious supersession, same-metacontext routing). It
    escalates the epistemically consequential ones to the human (genuine
-   contradictions, crossing frame boundaries, archival). Human-in-the-loop
+   contradictions, crossing metacontext boundaries, archival). Human-in-the-loop
    is in-conversation.
 
 ---
 
 ## 2. The unified review loop
 
-Contradictions, staleness, frame coexistence, temporal succession and
+Contradictions, staleness, metacontext coexistence, temporal succession and
 triviality are not separate subsystems. They are outcomes of one loop:
 
 ```
@@ -54,8 +54,8 @@ new/changed knowledge
         ├─ supersedes       → correction: superseded_by, old → CORRECTED
         ├─ succeeds         → world moved: temporally_followed_by, old → HISTORICAL
         ├─ recurs           → historical twin true again: restore + new source
-        ├─ contradicts      → record CONTRADICTION (same frame) → resolve
-        ├─ cross-frame      → not a conflict; coexist; (optional) variant_of
+        ├─ contradicts      → record CONTRADICTION (same metacontext) → resolve
+        ├─ cross-metacontext      → not a conflict; coexist; (optional) variant_of
         └─ compatible       → nothing
         │
         ▼
@@ -84,13 +84,13 @@ classifies the pair:
 | **supersedes** | the new claim corrects the old; the old was wrong | `superseded_by`, old → `CORRECTED`, terminal |
 | **succeeds** | both true, over different periods; the world moved | `temporally_followed_by` (old → new), old → `HISTORICAL`, restorable |
 | **recurs** | the same claim, previously retired `HISTORICAL`, is true again | explicit reactivation: `restore` plus a new `sourced_from` edge carrying the new document's interval, in one transaction |
-| **contradicts** | conflicting claims, same frame, unclear which holds | record `CONTRADICTION`; resolve (agent or human) |
-| **cross-frame** | a "conflict" only because the frames differ | not a conflict; both coexist; optional `variant_of` |
+| **contradicts** | conflicting claims, same metacontext, unclear which holds | record `CONTRADICTION`; resolve (agent or human) |
+| **cross-metacontext** | a "conflict" only because the metacontexts differ | not a conflict; both coexist; optional `variant_of` |
 | **compatible** | no conflict | nothing |
 
 `supersedes` and `succeeds` are the two halves of what a single "supersede"
 used to conflate: *we were wrong* against *the world moved*. `succeeds` is
-the temporal sibling of `cross-frame`: one says the *frame* differs, the
+the temporal sibling of `cross-metacontext`: one says the *metacontext* differs, the
 other says the *period* differs. `recurs` exists because without it a
 recurrence is forced into `redundant` (which assumes an active twin) or
 `succeeds` (which assumes a different claim following). It can only fire
@@ -98,8 +98,8 @@ because nomination includes `HISTORICAL` candidates (§5.1).
 
 **`merge_facts` refuses, out loud and with a reason, whenever the graph
 cannot vouch for the merge**: a retired twin (that is `recurs`, and
-`restore`); a pair not standing in exactly the same frames (that is
-`cross-frame`, and `record_variant`); a pair below the nomination bar; or a
+`restore`); a pair not standing in exactly the same metacontexts (that is
+`cross-metacontext`, and `record_variant`); a pair below the nomination bar; or a
 claim that is an **event** rather than a state, or one ingested before anyone
 judged which it was. Every refusal leaves the agent where it was: two nodes,
 one `similarity` edge, corroboration reading the neighbourhood.
@@ -129,7 +129,7 @@ Edges are the source of truth; retrieval computes a label per returned node:
 | `superseded_candidate` | node has an incoming `supersession_candidate` edge | A, temporal |
 | `evidence_stale` | inference has an `evidence_superseded` edge, or is `derived_from` a retired fact | B, evidential |
 | `evidence_merged` | inference has an `evidence_merged` edge | B, evidential |
-| `contested` | node has a `contradiction` edge unresolved in its own frame | contradiction |
+| `contested` | node has a `contradiction` edge unresolved in its own metacontext | contradiction |
 
 The node stays `ACTIVE`. Labels are surfaced on search results alongside the
 contesting or retired node id, so the caller can hop to it.
@@ -151,12 +151,12 @@ onto the survivor, which is `ACTIVE`), so the flag edge written in
 | `supersession_candidate` | newer fact → older fact | "this may replace that; review" (Case A) |
 | `evidence_superseded` | retired fact → dependent inference | "this inference's basis changed" (Case B) |
 | `evidence_merged` | absorbed fact → dependent inference | "the premise you were drawn from absorbed another claim". The source is the fact that went away: which wording is gone is the whole content of the flag |
-| `contradiction` | fact ↔ fact | genuine same-frame conflict |
-| `variant_of` | fact ↔ fact (across frames) | "same proposition, resolved differently per frame"; makes divergence queryable |
+| `contradiction` | fact ↔ fact | genuine same-metacontext conflict |
+| `variant_of` | fact ↔ fact (across metacontexts) | "same proposition, resolved differently per metacontext"; makes divergence queryable |
 | `similarity` | fact ↔ fact | judged one claim, kept as two nodes; read by corroboration |
 | `assessed` | fact ↔ fact | a pair was judged, whatever the verdict; the suppression index the nomination sweep reads, and never a flag on either node |
 | `temporally_followed_by` | older fact → newer fact | "both true, over different periods": order, not replacement, so it survives recurrence |
-| `based_on` / `associated_with` | metacontext → metacontext | frames relate (association, not inheritance) |
+| `based_on` / `associated_with` | metacontext → metacontext | metacontexts relate (association, not inheritance) |
 
 `supersession_candidate`, `evidence_superseded`, `evidence_merged`,
 `assessed` and the history edges are excluded from default graph traversal
@@ -189,29 +189,30 @@ consequential this is*; use `judgments` where the importance was wrong and
 
 ### 4.3 Metacontext model
 
-- **Every ingested node names its frame.** `metacontext_id` is required on
+- **Every ingested node names its metacontext.** `metacontext_id` is required on
   `store_decomposition`, and synthesis and splits inherit their sources'
-  frames. `the-real` is the conventional id for the frame holding real-world
+  metacontexts. `the-real` is the conventional id for the metacontext holding real-world
   claims; nothing reads it specially.
-- **Absence names no frame.** A node with no `has_metacontext` edge is a node
+- **Absence names no metacontext.** A node with no `has_metacontext` edge is a node
   nobody said anything about, consistent with every other absence in the
   model (an omitted `confidence` is unrated, an absent `judged_by` is
-  unknown). Such a node shares a frame with nothing, so it is never nominated
+  unknown). Such a node shares a metacontext with nothing, so it is never nominated
   as contradicting anything, never merged, and never returned by a scoped
   search. It is reachable only on a graph written before the requirement,
-  and `epimemer frames declare` is how a person states which frame those
+  and `epimemer metacontexts declare` is how a person states which metacontext those
   nodes were always in.
-- **Contradiction is frame-relative.** Same frame: a genuine contradiction,
-  to resolve. Disjoint frames: not a contradiction; both coexist, framed.
-- **Association, not inheritance.** Frames are linked by association edges;
-  facts never flow automatically between frames. Reaching into an associated
-  frame is an explicit, agentic and often human-gated choice, never an
+- **Contradiction is metacontext-relative.** Same metacontext: a genuine contradiction,
+  to resolve. Disjoint metacontexts: not a contradiction; both coexist, each in
+  its own.
+- **Association, not inheritance.** Metacontexts are linked by association edges;
+  facts never flow automatically between metacontexts. Reaching into an associated
+  metacontext is an explicit, agentic and often human-gated choice, never an
   inheritance walk, which is what keeps the diamond problem out of the
   knowledge layer.
-- **Search takes a list of frames**, returning nodes standing in any of them,
-  and no frame inherits another. Omitting the list searches every frame,
+- **Search takes a list of metacontexts**, returning nodes standing in any of them,
+  and no metacontext inherits another. Omitting the list searches every metacontext,
   which is a coherent question rather than an unstated assumption, the reason
-  it is optional at search where the frame on ingest is not.
+  it is optional at search where the metacontext on ingest is not.
 
 ---
 
@@ -270,8 +271,9 @@ A flagged or contested node is resolved by one of:
    marks an existing node as replacing another, with the status and edge
    chosen by `because`; `apply_reflection(supersessions=[…])` does it in
    batch from the `pending_review` worklist.
-2. **Coexist via metacontexts**: re-classify as cross-frame; ensure both
-   facts are framed; optionally add a `variant_of` link. Often the right
+2. **Coexist via metacontexts**: re-classify as cross-metacontext; ensure both
+   facts stand in a metacontext; optionally add a `variant_of` link. Often the
+   right
    answer.
 3. **Escalate to the human**: surfaced in conversation; the user decides;
    the agent applies the outcome.
@@ -287,14 +289,14 @@ against (§4.2).
 ## 7. Human-in-the-loop
 
 - **In conversation**, not a separate UI.
-- **Notify on genuine same-frame contradictions**: "new fact conflicts with
-  existing fact X in the same context; how should I resolve it?" Cross-frame
-  "conflicts" do not interrupt the user; at most a quiet "framed as Y". The
+- **Notify on genuine same-metacontext contradictions**: "new fact conflicts with
+  existing fact X in the same context; how should I resolve it?" Cross-metacontext
+  "conflicts" do not interrupt the user; at most a quiet "stated in Y". The
   advisory policy (`WARNINGS_AND_SETTINGS.md`) is what makes this a setting a
   graph can change rather than a hard-coding.
-- **Frame-crossing consultation**: when a frame-scoped answer looks thin or
-  an associated frame may be relevant, the agent proposes consulting it and
-  the user approves, with borrowed knowledge always labelled with its frame.
+- **Metacontext-crossing consultation**: when a metacontext-scoped answer looks thin or
+  an associated metacontext may be relevant, the agent proposes consulting it and
+  the user approves, with borrowed knowledge always labelled with its metacontext.
   Ask when the crossing is significant (fiction against real, or genuine
   uncertainty); just do it with provenance for expected pulls.
 - **Archival approval** (§12.3) reuses the same channel: `reflect` surfaces
@@ -302,20 +304,20 @@ against (§4.2).
   approves in conversation, `apply_reflection(archivals=[…])` applies.
 
 Most of this is agent guidance (`epimemer_prompts/DEFAULT.md`) plus the
-visibility the data model provides: provenance on every node, frames on
+visibility the data model provides: provenance on every node, metacontexts on
 search, association edges.
 
 ---
 
-## 8. Worked example: frame coexistence
+## 8. Worked example: metacontext coexistence
 
 - Base reality (`the-real`): *"Napoleon lost at Waterloo"*.
-- Novel-X frame: *"Napoleon won at Waterloo"*.
+- Novel-X metacontext: *"Napoleon won at Waterloo"*.
 
-These do not contradict: different frames, both kept. An optional
+These do not contradict: different metacontexts, both kept. An optional
 `variant_of` edge between them records "same proposition, diverges here", so
 *"where does Novel-X depart from reality?"* is a graph traversal rather than
-a re-derivation. `Novel-X --based_on--> the-real` records the frame
+a re-derivation. `Novel-X --based_on--> the-real` records the metacontext
 relationship without inheriting any facts.
 
 ---
@@ -337,12 +339,12 @@ relationship without inheriting any facts.
 ## 10. Decisions
 
 - Contradiction handling is unified into the review loop, not separate.
-- Fact merging exists, gated on `claim_kind`, frames and the nomination bar
+- Fact merging exists, gated on `claim_kind`, metacontexts and the nomination bar
   (§3); topic merging remains the default consolidation.
 - `variant_of` is in the vocabulary, so divergences are queryable.
 - Association, not inheritance, for metacontexts.
 - Human-in-the-loop is in conversation, with notification on genuine
-  same-frame contradictions and on frame-crossing.
+  same-metacontext contradictions and on metacontext-crossing.
 - Ingest-time detection (`check_conflicts`) is opt-in, with `reflect` as the
   safety net; one nomination bar (0.80) serves contradiction, recurrence and
   merge gating.
@@ -359,8 +361,8 @@ relationship without inheriting any facts.
 - **A single "supersede" for corrections and world-changes.** It files
   historical truth as error (`VALIDITY_DESIGN.md`).
 - **Untagged nodes reading as base reality.** Silence became an assertion
-  about the real world; the frame is required at ingest instead.
-- **Inheritance between frames.** The diamond problem, imported into
+  about the real world; the metacontext is required at ingest instead.
+- **Inheritance between metacontexts.** The diamond problem, imported into
   knowledge.
 - **A qualified `evidence_stale` for merges** (§4.1).
 - **Importance as the way to keep a nominated node** (§4.2).

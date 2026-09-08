@@ -23,10 +23,10 @@ async def expand_via_graph(
 ) -> tuple[list[EpistemicNode], list[NodeEdge]]:
     """Expand from seed nodes by traversing graph edges.
 
-    By default skips edges that are not knowledge to follow — history, review, and
-    provenance/attribution edges (via ``traversal_excluded``) — so a search does not
-    fan out from version or source hubs. An explicit ``exclude_edge_types`` set
-    overrides that with plain type membership.
+    By default skips edges that are not knowledge to follow: history, review,
+    and provenance/attribution edges (via ``traversal_excluded``), so a search
+    does not fan out from version or source nodes. An explicit
+    ``exclude_edge_types`` set overrides that with plain type membership.
 
     Only ACTIVE neighbours are traversed; edges leading to superseded, merged or
     missing nodes are dropped along with the node. Seed nodes are the caller's

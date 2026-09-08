@@ -1,14 +1,14 @@
 """`reflect` must not re-read the same thing once per candidate pair.
 
 Profiling `reflect` on a 1,500-node graph put **88% of the wall clock** in
-`same_frame` → `frames_of` → `get_edges_from`: 105k calls to resolve the frames
+`same_metacontext` → `metacontexts_of` → `get_edges_from`: 105k calls to resolve the metacontexts
 of at most 1,500 distinct nodes, each one a full scan of the edge set. Candidate
 pairs grow quadratically with facts and the scan is linear in edges, so the
 product is cubic — which is what the benchmarks measured.
 
 These tests pin the shape of the work rather than its duration. A wall-clock
 assertion in the suite would be a flake; the timing belongs in `make bench`.
-What matters here is that frame resolution is proportional to *nodes*, not to
+What matters here is that metacontext resolution is proportional to *nodes*, not to
 *pairs*, and that nothing about the answer changed.
 """
 
@@ -34,7 +34,7 @@ from epimemer.core.types import (
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.tools import reflect
 from epimemer.pipelines.reflection import contradiction_detection, topic_consolidation
-from epimemer.pipelines.reflection.review import frames_of, same_frame
+from epimemer.pipelines.reflection.review import metacontexts_of, same_metacontext
 
 
 @pytest.fixture
@@ -44,9 +44,9 @@ def embedding_provider() -> MockEmbeddingProvider:
 
 @contextlib.contextmanager
 def _counting(storage, requests: list):
-    """Record each frame-resolution request, as the ids it asked about.
+    """Record each metacontext-resolution request, as the ids it asked about.
 
-    Frames are read in bulk now, so what a per-pair implementation would
+    Metacontexts are read in bulk now, so what a per-pair implementation would
     inflate is the number of *requests*, not the number of ids in them: a
     resolver that fell back to answering pairs one at a time would show up here
     as many single-id requests rather than one request naming the whole set.
@@ -73,15 +73,15 @@ async def _facts_that_look_alike(storage, provider, count: int):
     """Facts sharing one embedding, so every pair is a contradiction candidate.
 
     That is the load that exposes the defect: the pair count is quadratic while
-    the number of distinct nodes to resolve frames for stays linear.
+    the number of distinct nodes to resolve metacontexts for stays linear.
     """
     vector = (await provider.embed(["shared"]))[0]
     facts = []
     for i in range(count):
         fact = Fact(content=f"Claim number {i}", source_id="s1")
         await storage.store_node(fact)
-        # States a frame, as every ingested node has since the frame requirement — absence names
-        # none, so frameless nodes are never paired at all.
+        # States a metacontext, as every ingested node has since the metacontext requirement —
+        # absence names none, so nodes without a metacontext are never paired at all.
         await storage.store_edge(
             NodeEdge(
                 src_id=fact.id,
@@ -96,18 +96,20 @@ async def _facts_that_look_alike(storage, provider, count: int):
     return facts
 
 
-class TestFrameResolutionScales:
-    async def test_frames_are_resolved_for_the_whole_set_at_once(self, storage, embedding_provider):
+class TestMetacontextResolutionScales:
+    async def test_metacontexts_are_resolved_for_the_whole_set_at_once(
+        self, storage, embedding_provider
+    ):
         """With 12 mutually-similar facts there are 66 candidate pairs. Resolving
-        frames once per pair means 132 lookups for 12 nodes."""
+        metacontexts once per pair means 132 lookups for 12 nodes."""
         facts = await _facts_that_look_alike(storage, embedding_provider, 12)
         requests: list[list[str]] = []
         with _counting(storage, requests):
             await reflect(storage, embedding_provider)
 
-        assert requests, "no frame lookups happened at all — test no longer exercises this"
+        assert requests, "no metacontext lookups happened at all — test no longer exercises this"
         assert max(len(ids) for ids in requests) == len(facts), (
-            "no request named the whole candidate set; frames are being resolved "
+            "no request named the whole candidate set; metacontexts are being resolved "
             "in smaller groups than the pass already knows about"
         )
 
@@ -126,7 +128,7 @@ class TestFrameResolutionScales:
         # 8 → 16 facts: pairs go 28 → 120. A per-pair implementation would grow
         # ~4×, a per-node one 2×; one request for the set does not grow at all.
         assert len(large) == len(small), (
-            f"frame requests grew {len(small)} → {len(large)} when the pair count quadrupled"
+            f"metacontext requests grew {len(small)} → {len(large)} when the pair count quadrupled"
         )
 
 
@@ -200,8 +202,8 @@ async def _topics_that_look_alike(storage, provider, count: int):
     for i in range(count):
         topic = Topic(content=f"Subject number {i}", source_id="s1")
         await storage.store_node(topic)
-        # States a frame, as every ingested node has since the frame requirement — absence names
-        # none, so frameless nodes are never paired at all.
+        # States a metacontext, as every ingested node has since the metacontext requirement —
+        # absence names none, so nodes without a metacontext are never paired at all.
         await storage.store_edge(
             NodeEdge(
                 src_id=topic.id,
@@ -394,10 +396,10 @@ class TestMaterialIsGatheredOnce:
 
 
 class TestAnswersAreUnchanged:
-    async def test_disjoint_frames_still_suppress_a_contradiction(
+    async def test_disjoint_metacontexts_still_suppress_a_contradiction(
         self, storage, embedding_provider
     ):
-        """The caching must not flatten the frame check it is caching."""
+        """The caching must not flatten the metacontext check it is caching."""
         fiction = Metacontext(content="Fiction")
         await storage.store_metacontext(fiction)
         vector = (await embedding_provider.embed(["shared"]))[0]
@@ -413,25 +415,25 @@ class TestAnswersAreUnchanged:
                     vector=vector,
                 )
             )
-        # `a` lives in the fiction frame; `b` is untagged, so base reality.
+        # `a` lives in the fiction metacontext; `b` is untagged, so base reality.
         await storage.store_edge(
             __import__("epimemer.core.types", fromlist=["NodeEdge"]).NodeEdge(
                 src_id=a.id, dst_id=fiction.id, type=EdgeType.HAS_METACONTEXT
             )
         )
 
-        assert await frames_of(a.id, storage) == {fiction.id}
-        assert await same_frame(a.id, b.id, storage) is False
+        assert await metacontexts_of(a.id, storage) == {fiction.id}
+        assert await same_metacontext(a.id, b.id, storage) is False
 
         result, _ = await reflect(storage, embedding_provider)
         assert result["contradictions"] == []
 
-    async def test_same_frame_facts_still_surface(self, storage, embedding_provider):
+    async def test_same_metacontext_facts_still_surface(self, storage, embedding_provider):
         await _facts_that_look_alike(storage, embedding_provider, 3)
 
         result, _ = await reflect(storage, embedding_provider)
 
-        assert result["contradictions"], "same-frame candidates must still be reported"
+        assert result["contradictions"], "same-metacontext candidates must still be reported"
 
     async def test_topics_and_facts_are_unaffected(self, storage, embedding_provider):
         """A smoke check that the other phases still return what they did."""

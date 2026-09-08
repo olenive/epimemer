@@ -557,26 +557,26 @@ async def test_archive_nodes_exports_correctly(storage_with_archival_candidates)
         assert "status" in node_dict
 
 
-# --- Frame helpers (metacontext-relative judgment) ---
+# --- Metacontext helpers (metacontext-relative judgment) ---
 
 
-async def test_frames_of_untagged_names_nothing():
-    """A node with no metacontext edges states no frame, and that is all it
-    means. It used to resolve to base reality — the one place in this system
-    where absence became a positive claim, which the frame requirement removed once the frame was
-    required at ingest. The consequence is deliberate: such a node shares a
-    frame with nothing and is reachable only by an unscoped search."""
-    from epimemer.pipelines.reflection.review import frames_of
+async def test_metacontexts_of_untagged_names_nothing():
+    """A node with no metacontext edges states no metacontext, and that is all
+    it means. It used to resolve to base reality, the one place in this system
+    where absence became a positive claim, which requiring a metacontext at
+    ingest removed. The consequence is deliberate: such a node shares a
+    metacontext with nothing and is reachable only by an unscoped search."""
+    from epimemer.pipelines.reflection.review import metacontexts_of
 
     storage = InMemoryStorage()
     f = Fact(content="untagged", source_id="s1")
     await storage.store_node(f)
-    assert await frames_of(f.id, storage) == set()
+    assert await metacontexts_of(f.id, storage) == set()
 
 
-async def test_frames_of_returns_tagged_frames():
+async def test_metacontexts_of_returns_tagged_metacontexts():
     """A tagged node reports the metacontexts it is tagged with."""
-    from epimemer.pipelines.reflection.review import frames_of
+    from epimemer.pipelines.reflection.review import metacontexts_of
 
     storage = InMemoryStorage()
     mc = Metacontext(content="Fiction")
@@ -584,30 +584,30 @@ async def test_frames_of_returns_tagged_frames():
     f = Fact(content="tagged", source_id="s1")
     await storage.store_node(f)
     await storage.store_edge(NodeEdge(src_id=f.id, dst_id=mc.id, type=EdgeType.HAS_METACONTEXT))
-    assert await frames_of(f.id, storage) == {mc.id}
+    assert await metacontexts_of(f.id, storage) == {mc.id}
 
 
-async def test_same_frame_two_untagged_share_nothing():
+async def test_same_metacontext_two_untagged_share_nothing():
     """Nothing said cannot make a conflict real.
 
-    `same_frame` asks about *overlap*, and two nodes stating no frame overlap
+    `same_metacontext` asks about *overlap*, and two nodes stating no metacontext overlap
     nowhere. That diverges from the equality test a merge uses, where two empty
     sets are equal — the questions differ, and both answers are right. The
     divergence is visible only on a graph that has not been declared.
     """
-    from epimemer.pipelines.reflection.review import same_frame
+    from epimemer.pipelines.reflection.review import same_metacontext
 
     storage = InMemoryStorage()
     a = Fact(content="a", source_id="s1")
     b = Fact(content="b", source_id="s1")
     await storage.store_node(a)
     await storage.store_node(b)
-    assert await same_frame(a.id, b.id, storage) is False
+    assert await same_metacontext(a.id, b.id, storage) is False
 
 
-async def test_same_frame_disjoint_frames_not_same():
-    """A base-reality node and a fiction-tagged node do not share a frame."""
-    from epimemer.pipelines.reflection.review import same_frame
+async def test_same_metacontext_disjoint_metacontexts_not_same():
+    """A base-reality node and a fiction-tagged node do not share a metacontext."""
+    from epimemer.pipelines.reflection.review import same_metacontext
 
     storage = InMemoryStorage()
     mc = Metacontext(content="Fiction")
@@ -617,7 +617,7 @@ async def test_same_frame_disjoint_frames_not_same():
     await storage.store_node(real)
     await storage.store_node(fic)
     await storage.store_edge(NodeEdge(src_id=fic.id, dst_id=mc.id, type=EdgeType.HAS_METACONTEXT))
-    assert await same_frame(real.id, fic.id, storage) is False
+    assert await same_metacontext(real.id, fic.id, storage) is False
 
 
 # --- Review labels (computed retrieval visibility, REVIEW_EPISTEMIC.md §4.1) ---
@@ -696,8 +696,8 @@ async def test_review_labels_evidence_stale_via_superseded_evidence():
     assert labels["evidence_stale"] == [fact.id]
 
 
-async def test_review_labels_contested_same_frame():
-    """A contradiction to an active same-frame node marks both contested."""
+async def test_review_labels_contested_same_metacontext():
+    """A contradiction to an active same-metacontext node marks both contested."""
     from epimemer.pipelines.reflection.review import review_labels
 
     storage = InMemoryStorage()
@@ -734,8 +734,8 @@ async def test_review_labels_contested_cleared_when_partner_retired():
     assert "contested" not in await review_labels(a, storage)
 
 
-async def test_review_labels_contested_excludes_cross_frame():
-    """A cross-frame contradiction is coexistence, not a contest — no label."""
+async def test_review_labels_contested_excludes_cross_metacontext():
+    """A cross-metacontext contradiction is coexistence, not a contest — no label."""
     from epimemer.pipelines.reflection.review import review_labels
 
     storage = InMemoryStorage()

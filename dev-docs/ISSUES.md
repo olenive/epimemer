@@ -282,39 +282,46 @@ existing backend, not a new backend, so the full-protocol rule does not apply.
 
 ### Parent synthesis gates an all-tag child set the way topic merge used to
 
-🟡 **Open.** Parent synthesis calls `shared_frame_set` over its children, so a
-stamped tag topic and a bare tag topic as children land in `parents_refused`.
-Same shape as the merge fix: test whether every child `is_tag_topic`, and let
-an all-tag parent inherit the empty frame set. Left undone because no synthesis
-over tag topics has been wanted yet, and the gate refusing is the safe
+🟡 **Open.** Parent synthesis calls `shared_metacontext_set` over its children, so a
+stamped topic node created from a tag and a bare one as children land in
+`parents_refused`.
+Same shape as the merge fix: test whether every child `created_from_tag`, and let
+an all-tag parent inherit the empty metacontext set. Left undone because no synthesis
+over topic nodes created from tags has been wanted yet, and the gate refusing is
+the safe
 direction to be wrong in.
 
-### Frame stamps on tag topics survive a merge, so a cleanup has to reach survivors
+### Metacontext stamps on tag-named topic nodes survive a merge
 
-🟡 **Open**, and the reason it matters is a sweep nobody has run yet. Tag topics
-written before tags were exempt from framing carry a `the-real` stamp from
-`epimemer frames declare`, which framed every unframed node it found; tag
+🟡 **Open**, and the reason it matters is a sweep nobody has run yet. Topic nodes
+created from tags
+written before tags were exempt carry a `the-real` stamp from
+`epimemer metacontexts declare`, which stamped every node it found holding
+none; tag
 topics written since carry none. `merge_nodes` migrates a stamped source's
 `has_metacontext` edge onto the survivor, so a stamp outlives the node it was
-on. Harmless while the merge gate exempts tag topics, but it means stripping
+on. Harmless while the merge gate exempts them, but it means stripping
 the stamped originals leaves stamps behind on anything already merged. Either
-drop frame edges from migration when every source is a tag topic, or scope any
+drop metacontext edges from migration when every source was created from a tag,
+or scope any
 cleanup to survivors as well as originals.
 
 ### A tag name resolves only while its node is active, so a merge splits the tag
 
 🔴 **Open, and the same defect has arrived twice.** `_tag_topic` and
-`_resolve_hub_id` both resolve a tag through `get_node_by_content`, which
+`_resolve_node_reference` both resolve a tag through `get_node_by_content`, which
 filters to ACTIVE. A tag whose node has been retired therefore resolves to
 nothing, whatever retired it, and the next document carrying that name mints a
-second hub while `find_nodes(tagged_with_topic=...)` returns an empty list for
+second topic node while `find_nodes(tagged_with_topic=...)` returns an empty list for
 the old one.
 
-Enrichment has done this (it supersedes the tag topic with an enriched copy).
+Enrichment has done this (it supersedes the tag's topic node with an enriched
+copy).
 Topic merge can do it too: a merge retires its sources as `MERGED` and names
 the survivor whatever the agent chose, so merging `design decisions` into
-`design-decisions` strands the first name. Exempting tag topics from the merge
-frame gate made such a merge easier to perform.
+`design-decisions` strands the first name. Exempting tag-named topic nodes from
+the merge
+metacontext gate made such a merge easier to perform.
 
 The fix is on the read side, and it closes both doors plus any rename written
 later: resolve a `MERGED` or `CORRECTED` hit forward through `merged_into` or
@@ -323,12 +330,13 @@ reasoning and §6 has it as Stage 0.
 
 ### Tag names embed so alike that reflect can nominate two unrelated tags
 
-🔴 **Open, and live on real graphs.** A tag topic is embedded on its name
+🔴 **Open, and live on real graphs.** A topic node created from a tag is embedded
+on its name
 alone, so tags built from one template score as near-duplicates however
 different their subjects. On one real graph, every pair above 0.75 cosine was
 also above the 0.80 nomination bar (`pipelines/reflection/review.py`), and most
 of them were `dev-session-<date>` pairs at 0.97 to 0.99: different days of
-work, and a merge would fuse their hubs. The rest were one tag spelled two ways
+work, and a merge would fuse their topic nodes. The rest were one tag spelled two ways
 and genuinely should merge. The bare names score the pairs that must not merge
 higher than the pairs that should, so a reviewer working from the nomination
 list has no signal to tell them apart.

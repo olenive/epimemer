@@ -145,7 +145,7 @@ by default:
 
 - **History and review edges**: `superseded_by`, `temporally_followed_by`,
   `merged_into`, and the review bookkeeping. These are graph plumbing, and
-  fanning out from a version hub returns a claim's ancestry instead of its
+  fanning out from a version node returns a claim's ancestry instead of its
   subject matter. (Lineage is still reported, by the fold in §6, which is a
   different mechanism answering a different question.)
 - **Provenance and attribution**: `sourced_from`, and user relations whose
@@ -309,30 +309,80 @@ leaves the `similarity` edge in place (nothing here deletes) and a
 withdrawal is final: nothing re-asserts the verdict afterwards, because
 getting *that* wrong manufactures support rather than merely withholding it.
 
-### Frame scoping
+### Metacontext scoping
 
-`metacontexts` is a list of frame ids, and results are the nodes standing in
-**any** of them: a set union the caller states per query. **No frame inherits
-another**, and there is no base-reality background a frame is read against.
+`metacontexts` is a list of metacontext ids, and results are the nodes standing in
+**any** of them: a set union the caller states per query. **No metacontext inherits
+another**, and there is no base-reality background a metacontext is read against.
 A question about a novel's world read against real history names both
 (`["world-of-anarres", "the-real"]`), and one about only what the novel says
 names one. An inheritance rule fixed in the code could express exactly one of
 those and hide that it was choosing.
 
-Omitting the list searches every frame. **It is optional here and required on
+Omitting the list searches every metacontext. **It is optional here and required on
 ingest, and the asymmetry is deliberate**: an omitted filter on the read side
 is a coherent question, *anything about this, wherever it was claimed*, while
-an omitted frame on the write side would say nothing about which world the
+an omitted metacontext on the write side would say nothing about which world the
 claim was in.
 
 **Every id must resolve in the active graph**, not just the first.
 Metacontext ids are per graph, and one that names nothing here is refused
-rather than silently narrowing the search to the frames that do exist and
-answering as though that were the question. A node stating no frame at all
+rather than silently narrowing the search to the metacontexts that do exist and
+answering as though that were the question. A node stating no metacontext at all
 matches nothing scoped and appears only in an unscoped search;
-`epimemer frames declare` assigns such nodes a frame. Frame-scoped retrieval
-**over-fetches**, so an in-frame node ranked below the raw vector top-k is
+`epimemer metacontexts declare` assigns such nodes a metacontext.
+Metacontext-scoped retrieval
+**over-fetches**, so an in-metacontext node ranked below the raw vector top-k is
 still found rather than lost to a filter applied after the cut.
+
+#### A scoped search scopes the whole response
+
+A topic node created from a tag asserts nothing, so it stands in no
+metacontext, and every node tagged with that name points at the same one
+whatever world it was claimed in. That makes it a bridge: a fact from a novel
+and a fact about real history sit one hop apart, through a node neither is a
+claim about. Filtering the node list alone leaves the bridge in the response.
+
+| Key | Scoped | Unscoped |
+|---|---|---|
+| `nodes` | nodes standing in a named metacontext | every node retrieval reached |
+| `edges` | edges whose **both** endpoints are returned nodes | every edge between returned nodes |
+| `segments` | passages with something extracted from them standing in a named metacontext | every passage that matched |
+
+An edge naming a node the filter removed is a live reference into the
+metacontext the caller scoped away, one `query_graph` from the material itself.
+A segment is a passage rather than a claim, so it stands in no metacontext of
+its own and is judged by what was concluded from it: a node's `source_id` is
+its segment's id, so a passage is in a metacontext exactly when a node
+extracted from it is. A passage nothing was extracted from is therefore dropped
+from a scoped search and kept in an unscoped one, where *where did I read
+that?* is answered for every passage that matched.
+
+### Scoping the other read tools
+
+`find_nodes`, `query_graph` and `topic_tree` take the same `metacontexts` list,
+with the same meaning: a union the caller states, no metacontext inheriting
+another, and every id refused unless it resolves in the active graph. They need
+it for the same reason `search` does, and `query_graph` most of all — a walk
+from a topic node created from a tag reaches every world that tag was ever
+applied in.
+
+- **`find_nodes`** returns the nodes standing in a named metacontext. The
+  filter runs before the `limit` cut, so a page is a full page of what was
+  asked for rather than whatever survived a truncation taken first.
+- **`query_graph`** returns the seed whether or not it stands in a named
+  metacontext, because the caller named it by id: that is what makes a topic
+  node created from a tag usable as a starting point. Its neighbours are
+  filtered, and the edges returned are only those between nodes that survived.
+- **`topic_tree`** returns the topic that was named the same way. An ancestor
+  outside the scope is left out and the rest are still ancestors, since a
+  parent's parent is one too; a subtopic outside it takes its branch with it,
+  because what hangs below a topic the caller will not be shown is a shape they
+  cannot read.
+
+All three label every node they return with the `metacontexts` it stands in,
+as `search` does. Without that, `query_graph` answered *here is what this
+connects to* while leaving out which world each answer was a claim about.
 
 ---
 

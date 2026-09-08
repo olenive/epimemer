@@ -2,7 +2,7 @@
 
 An advisory is a typed message a tool attaches to its response when the graph
 can compute something the agent cannot: that two premises never held together,
-that a contradiction was recorded across frames, and so on. A warning policy,
+that a contradiction was recorded across metacontexts, and so on. A warning policy,
 per process with per-graph overrides, decides which advisories are surfaced and
 whether they ask for a person. This document holds the reasoning behind that
 design. The mechanics live in code and are not repeated here:
@@ -76,26 +76,26 @@ nothing and reads as a clean graph.
 | Kind | Raised by | Stance |
 |---|---|---|
 | `disjoint_premises` | inference-merge nomination and `merge_inferences` | objects |
-| `cross_frame` | `record_contradiction` across frames | objects |
-| `same_frame_variant` | `record_variant` within one frame | objects |
-| `same_frame_contradiction` | `record_contradiction` within one frame | escalates |
+| `cross_metacontext` | `record_contradiction` across metacontexts | objects |
+| `same_metacontext_variant` | `record_variant` within one metacontext | objects |
+| `same_metacontext_contradiction` | `record_contradiction` within one metacontext | escalates |
 
 `ADVISORY_STANCE` says whether a kind argues with the call (*objects*) or
 reports that the call was right and the result wants a person (*escalates*).
-`same_frame_contradiction` is the only escalating kind: a real conflict in one
+`same_metacontext_contradiction` is the only escalating kind: a real conflict in one
 world is exactly what is worth putting to a person, and the tool that recorded
 it was the right tool.
 
 The stance decides the journal row. `proceeded_despite_advisory` is written only
 where an advisory objects, because *despite* means something argued against the
-call. Without the split, a correct same-frame contradiction would write a row
+call. Without the split, a correct same-metacontext contradiction would write a row
 claiming the agent had overridden advice it never received, doubling the journal
 on the commonest path and degrading the review the kind exists for. Two
 situations that give opposite advice are two kinds, not one kind with an "or" in
 its description.
 
 The map is total rather than a set of objecting kinds: a set makes absence mean
-*escalates*, and silence quietly becoming a claim is what the frame requirement
+*escalates*, and silence quietly becoming a claim is what the metacontext requirement
 exists to prevent. A test asserts both directions.
 
 ---
@@ -110,14 +110,14 @@ produce is worse than no value at all, because a caller writes a branch for it
 and the branch is dead. It lands when something wants it, with its refusal path
 and its tests.
 
-**`same_frame_contradiction` defaults to `flag`, for compatibility.**
-`record_contradiction` has always returned `notify_user` for a same-frame pair.
+**`same_metacontext_contradiction` defaults to `flag`, for compatibility.**
+`record_contradiction` has always returned `notify_user` for a same-metacontext pair.
 Under an empty `by_kind` and a `proceed` default, the same call would return
 `notify_user: false`, the key surviving with its trigger quietly changed. A user
 can still set that kind to `proceed`; the point is that turning the notification
 off is somebody's decision rather than a side effect of the representation.
 Exempting the tool from policy entirely was rejected: `notify_user` would then
-mean *policy said flag* on one tool and *frames overlap* on another, and a
+mean *policy said flag* on one tool and *metacontexts overlap* on another, and a
 caller could not tell which.
 
 **Recording is unconditional; surfacing is the setting.** `surface` gates the

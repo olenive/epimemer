@@ -52,7 +52,7 @@ _TWIN = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
 
 async def _twin_facts(storage, embedding_provider) -> tuple[Fact, Fact]:
-    """Two facts a reflect pass would nominate, in the one frame the graph has."""
+    """Two facts a reflect pass would nominate, in the one metacontext the graph has."""
     facts = [
         Fact(
             content="Ada Lovelace wrote the first algorithm.",

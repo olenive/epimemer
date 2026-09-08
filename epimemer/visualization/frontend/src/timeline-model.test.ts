@@ -203,7 +203,7 @@ describe("buildContentRows", () => {
 
   it("falls back to the metacontext id when it is not in the snapshot", () => {
     // Losing the association entirely would silently drop the mark from a
-    // frame filter it genuinely belongs to.
+    // metacontext filter it genuinely belongs to.
     const snapshot: SnapshotLike = {
       nodes: [node({ node_id: "n1" })],
       edges: [

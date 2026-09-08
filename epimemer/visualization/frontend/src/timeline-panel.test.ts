@@ -481,7 +481,7 @@ describe("filtering", () => {
     expect(marks()).toHaveLength(1);
   });
 
-  it("offers the frames present in the data as options", () => {
+  it("offers the metacontexts present in the data as options", () => {
     panel.loadSnapshot({
       nodes: [node({ node_id: "n1" })],
       edges: [edge({ src_id: "n1", dst_id: "mc1", edge_type: "has_metacontext" })],

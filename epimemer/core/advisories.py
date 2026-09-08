@@ -42,24 +42,24 @@ class AdvisoryKind(str, Enum):
     # puts in one period. Produced by inference-merge nomination and by
     # `merge_inferences` itself.
     DISJOINT_PREMISES = "disjoint_premises"
-    # A contradiction recorded across frames. Two claims about different worlds
+    # A contradiction recorded across metacontexts. Two claims about different worlds
     # do not conflict, so the tool reached for was the wrong one.
-    CROSS_FRAME = "cross_frame"
-    # A variant recorded within one frame. `variant_of` is for a proposition one
-    # world resolves differently from another, so same-frame is again the wrong
+    CROSS_METACONTEXT = "cross_metacontext"
+    # A variant recorded within one metacontext. `variant_of` is for a proposition one
+    # world resolves differently from another, so same-metacontext is again the wrong
     # tool — and what is being described is probably a contradiction.
-    SAME_FRAME_VARIANT = "same_frame_variant"
-    # A contradiction recorded within one frame. **The only kind here that says
+    SAME_METACONTEXT_VARIANT = "same_metacontext_variant"
+    # A contradiction recorded within one metacontext. **The only kind here that says
     # the call was right**: the conflict is real rather than a divergence of
     # worlds, which is exactly what makes it worth putting to a person.
-    SAME_FRAME_CONTRADICTION = "same_frame_contradiction"
+    SAME_METACONTEXT_CONTRADICTION = "same_metacontext_contradiction"
 
 
 class AdvisoryStance(str, Enum):
     """Whether an advisory argues with the operation or reports on it.
 
     **Two situations wore one kind until 2026-08-29, and they gave opposite
-    advice.** `SAME_FRAME_CONTRADICTION` was raised both by
+    advice.** `SAME_METACONTEXT_CONTRADICTION` was raised both by
     `record_contradiction` — where it means *you are right, and a person should
     see this* — and by `record_variant`, where it means *this is the wrong
     tool*. One field needing "or" to describe it is the tell this codebase has
@@ -81,14 +81,14 @@ class AdvisoryStance(str, Enum):
 
 # Every kind, classified. A **total** map rather than a set of objecting kinds,
 # because a set makes absence mean *escalates* — and silence quietly becoming a
-# claim is the failure the frame requirement exists to prevent. A test asserts
+# claim is the failure the metacontext requirement exists to prevent. A test asserts
 # both directions, so a kind added without a stance fails rather than defaulting
 # to the safer-sounding half.
 ADVISORY_STANCE: dict[AdvisoryKind, AdvisoryStance] = {
     AdvisoryKind.DISJOINT_PREMISES: AdvisoryStance.OBJECTS,
-    AdvisoryKind.CROSS_FRAME: AdvisoryStance.OBJECTS,
-    AdvisoryKind.SAME_FRAME_VARIANT: AdvisoryStance.OBJECTS,
-    AdvisoryKind.SAME_FRAME_CONTRADICTION: AdvisoryStance.ESCALATES,
+    AdvisoryKind.CROSS_METACONTEXT: AdvisoryStance.OBJECTS,
+    AdvisoryKind.SAME_METACONTEXT_VARIANT: AdvisoryStance.OBJECTS,
+    AdvisoryKind.SAME_METACONTEXT_CONTRADICTION: AdvisoryStance.ESCALATES,
 }
 
 
@@ -125,16 +125,16 @@ class Advisory(BaseModel):
 
 # The one kind named by default, and it is a compatibility requirement rather
 # than a preference: `record_contradiction` has always returned `notify_user`
-# for a same-frame pair, and a policy defaulting it to `proceed` would keep the
+# for a same-metacontext pair, and a policy defaulting it to `proceed` would keep the
 # key while quietly changing its trigger. Turning the notification off stays
 # available — it just has to be somebody's decision rather than a side effect.
 #
-# `SAME_FRAME_VARIANT` is deliberately **not** here. `record_variant` returned a
-# quiet note for a same-frame pair and still does; making it escalate would have
+# `SAME_METACONTEXT_VARIANT` is deliberately **not** here. `record_variant` returned a
+# quiet note for a same-metacontext pair and still does; making it escalate would have
 # been an unasked-for change to a tool nobody was reviewing. A graph that wants
 # it louder names it.
 DEFAULT_BY_KIND: dict[AdvisoryKind, AdvisoryAction] = {
-    AdvisoryKind.SAME_FRAME_CONTRADICTION: AdvisoryAction.FLAG,
+    AdvisoryKind.SAME_METACONTEXT_CONTRADICTION: AdvisoryAction.FLAG,
 }
 
 

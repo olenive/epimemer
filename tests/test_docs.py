@@ -51,8 +51,104 @@ DOCUMENTS_LISTING_TOOLS = (INTEGRATION, README, SUMMARY)
 SURREAL_START = re.compile(r"start\s+--user\s+root\s+--pass\s+root([^\n]*)")
 
 
+# terminology-guard: off — from here to the end of the file, naming the retired
+# words is the job.
+#
+# The words the 0.2.0 rename removed. They read as general graph vocabulary —
+# one as a loose synonym for context, the other as any well-connected node — so
+# users, agents and tool descriptions drifted into using them loosely and the
+# concepts blurred. Removing the words is the fix, and a document or a docstring
+# that reintroduces one undoes it silently.
+RETIRED_TERMS = re.compile(
+    r"\b(frames?|framed|unframed|frameless|reframe\w*|hubs?)\b|tag topic",
+    re.IGNORECASE,
+)
+
+# The one surviving hub: the websocket relay the dashboard connects to, which is
+# a process rather than a node and predates the vocabulary this guards.
+VISUALISATION_HUB = re.compile(r"hubs?", re.IGNORECASE)
+
+# Where that process is discussed. Directories first, then the files outside
+# them that dial into it or document it. `hub` is allowed in these; "frame" and
+# "tag topic" are refused here exactly as they are anywhere else.
+HUB_DIRECTORIES = ("epimemer/visualization/", "tests/visualization/")
+HUB_FILES = frozenset(
+    {
+        "README.md",
+        "dev-docs/EVENT_LOG.md",
+        "dev-docs/ISSUES.md",
+        "dev-docs/RETRIEVAL_PROVENANCE.md",
+        "dev-docs/TIMELINE_VISUALISATION.md",
+        "dev-docs/VISUALISATION.md",
+        "epimemer/mcp/retrieval_records.py",
+        "epimemer/mcp/server.py",
+        "epimemer/storage/protocol.py",
+        "tests/mcp/test_retrieval_recording.py",
+        "tests/mcp/test_retrieval_records.py",
+        "tests/mcp/test_retrieval_rpc.py",
+        "tests/mcp/test_viz_status.py",
+        "tests/storage/test_storage_parity.py",
+    }
+)
+
+# CHANGELOG.md is deliberately absent: entries for 0.1.x and earlier are history,
+# and rewriting what a released version was called would make the record wrong.
+
+# A few places have to write the retired words down: the migration that rewrites
+# the stored ones, its test, this guard, and the two Terminology sections that
+# say the words are not used. Each opens a region rather than being listed here,
+# so the exemption is visible where it applies and ends where it stops applying.
+# Only a comment opens or closes one, in either language, so a string holding the
+# marker is data rather than an instruction.
+GUARD_MARKER = re.compile(r"^\s*(?:#|<!--)\s*terminology-guard:\s*(off|on)\b")
+
+
 def _folded(text: str) -> str:
     return text.replace("\\\n", " ")
+
+
+def _scanned_for_terminology() -> list[Path]:
+    """Every page and module the vocabulary has to hold across."""
+    found = [README]
+    for pattern in ("docs/*.md", "dev-docs/*.md", "epimemer_prompts/*.md"):
+        found += sorted(ROOT.glob(pattern))
+    for pattern in ("epimemer/**/*.py", "tests/**/*.py"):
+        found += sorted(p for p in ROOT.glob(pattern) if "node_modules" not in p.parts)
+    return found
+
+
+def _hub_is_allowed(relative: str) -> bool:
+    return relative in HUB_FILES or relative.startswith(HUB_DIRECTORIES)
+
+
+def test_no_retired_terminology_survives_in_the_docs_or_the_code():
+    """The rename holds, or it was not worth doing.
+
+    A word removed once comes back one docstring at a time, and every one of
+    them teaches the next agent that both words are in play. Checked per line so
+    the failure names the place rather than the file.
+    """
+    offenders: list[str] = []
+    for path in _scanned_for_terminology():
+        relative = path.relative_to(ROOT).as_posix()
+        hub_allowed = _hub_is_allowed(relative)
+        guarded = True
+        for number, line in enumerate(path.read_text().splitlines(), start=1):
+            marker = GUARD_MARKER.match(line)
+            if marker is not None:
+                guarded = marker.group(1) == "on"
+                continue
+            if not guarded:
+                continue
+            for found in RETIRED_TERMS.finditer(line):
+                if hub_allowed and VISUALISATION_HUB.fullmatch(found.group(0)):
+                    continue
+                offenders.append(f"{relative}:{number}: {found.group(0)!r} in {line.strip()!r}")
+
+    assert not offenders, (
+        "the 0.2.0 vocabulary is back: say metacontext for a frame, and topic "
+        "node or source node for a hub.\n" + "\n".join(offenders)
+    )
 
 
 def test_every_documented_surrealdb_start_names_an_on_disk_path():

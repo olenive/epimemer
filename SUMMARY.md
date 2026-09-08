@@ -41,9 +41,9 @@ Every ingested text is decomposed into three types of node.
 ### Topics
 An extracted topic is a paragraph-length summary of a theme, not a keyword.
 Written that way it embeds well, clusters well, and can be refined later
-without losing nuance. A **tag topic** is the other kind: a Topic created from
-a name the caller passed in `tags=`, used as a hub that gathers nodes for
-retrieval (see *Sources, tag topics, and relations* below).
+without losing nuance. The other kind is a **topic node created from a tag**: a
+Topic created from a name the caller passed in `tags=`, which gathers nodes for
+retrieval (see *Source nodes, topic nodes, and relations* below).
 
 ### Facts
 Atomic, verifiable, grounded statements tied to source material. Each fact
@@ -106,17 +106,17 @@ Ingestion is append-only with minimal processing. Expensive restructuring
 `reflect` operation. This avoids latency spikes and premature structural
 commitment.
 
-### Sources, tag topics, and relations are nodes and edges
+### Source nodes, topic nodes, and relations are nodes and edges
 Where knowledge came from, and what it is about, are modelled as graph
-structure rather than string fields, so a source or a tag topic can carry its
-own facts, relate to siblings, and sit in a frame:
+structure rather than string fields, so a source node or a topic node can carry
+its own facts, relate to siblings, and sit in a metacontext:
 
 - **Source**: every node gets a `sourced_from` edge to its originating
   `RawDocument`; a named publisher or author (`published_by`) is an entity
   **Topic**. "Which nodes came from X" is a traversal (see `find_nodes`).
-- **A tag becomes a tag topic**: a *tag* is the name passed in `tags=`. It
-  resolves, by exact name, to a Topic, the *tag topic*, and a
-  `tagged_with_topic` edge links the node to it. Consolidating tags *is*
+- **A tag becomes a topic node**: a *tag* is the name passed in `tags=`. It
+  resolves, by exact name, to a Topic, the topic node created from that tag,
+  and a `tagged_with_topic` edge links the node to it. Consolidating tags *is*
   topic merge. That edge is a retrieval index and carries no evidential
   weight: `supports` is the edge corroboration reads, and nothing weighs this
   one.
@@ -130,8 +130,8 @@ own facts, relate to siblings, and sit in a frame:
   pair. **Nothing rewrites a label**: edges are not versioned, so a bulk
   relabel would be the one irreversible operation in the system.
 
-These are separate from metacontexts. Metacontexts are epistemic frames that
-change retrieval scope; sources, tag topics and relations are structure, and
+These are separate from metacontexts. A metacontext changes retrieval scope;
+source nodes, topic nodes and relations are structure, and
 provenance and attribution edges are deliberately not expanded in default
 retrieval.
 
@@ -169,9 +169,9 @@ judgment cannot, and use is an event rather than either.
   absence, not 0.5**: "nobody assessed this" and "assessed, and ordinary" are
   different states. Ranking code reads absence as 0.5 via `rated_confidence`;
   display code passes the absence through. The scale is the same in every
-  frame, measured against that frame's own record: a fictional fact can
+  metacontext, measured against that metacontext's own record: a fictional fact can
   honestly score 0.9 if the fiction's material backs it, because confidence
-  answers "does the frame's record support this claim", not "is this real".
+  answers "does the metacontext's record support this claim", not "is this real".
 - **Importance** (0.0–1.0): does this matter? Moved only by the
   `judge_importance` tool, in either direction, asymptotically toward its
   bound, and every move records a reason. Nothing automatic touches it: a
@@ -237,9 +237,8 @@ Specialised timeline types (precise, vague, cyclical) are a backlog item:
 
 ## Metacontext
 
-A metacontext is the epistemic frame that separates different takes,
-sources, or interpretations of the same information. It answers: *in what
-context is this true?*
+A metacontext separates different takes, sources, or interpretations of the same
+information. It answers: *in what context is this true?*
 
 ### Structure
 
@@ -253,36 +252,40 @@ take part in search like other nodes.
 
 - Nodes link to their metacontexts via `HAS_METACONTEXT` edges.
 - **Inheritance**: a document is ingested *with* a metacontext, and every
-  node extracted from it inherits that metacontext. There is no
-  frame-inherits-frame machinery; a reader who wants two frames names two.
+  node extracted from it inherits that metacontext. One metacontext never
+  inherits from another; a reader who wants two names two.
 - **Several metacontexts per node**: something can be "propaganda" and also
   "true as far as we know"; those are different axes.
 - **No predefined axes**: metacontexts are created, split, and merged
   dynamically, the same way Topics are managed.
-- **Absence names no frame**: a node with no `has_metacontext` edge is a node
+- **Absence names no metacontext**: a node with no `has_metacontext` edge is a node
   nobody said anything about, which is what absence means everywhere here (an
   omitted `confidence` is unrated, an absent `judged_by` is unknown). Nothing
-  is inferred from silence. So a frameless node is never compared, never
-  merged, and returned by no scoped search. `graph_stats.nodes_without_frame`
-  counts them and `epimemer frames declare` assigns them a frame in bulk.
+  is inferred from silence. So a node without a metacontext is never compared,
+  never merged, and returned by no scoped search.
+  `graph_stats.nodes_without_metacontext` counts them and
+  `epimemer metacontexts declare` assigns them a metacontext in bulk.
 - **`the-real` is a convention, not a mechanism**: the id every graph should
-  use for the frame holding real-world claims, so two graphs do not end up
-  with one frame under two strings. Nothing reads it specially, and it must
-  exist like any other frame; `create_metacontext` takes a chosen id for
+  use for the metacontext holding real-world claims, so two graphs do not end up
+  with one metacontext under two strings. Nothing reads it specially, and it must
+  exist like any other metacontext; `create_metacontext` takes a chosen id for
   exactly this.
-- **The frame is required at ingest**: `store_decomposition` takes
-  `metacontext_id` as a required argument. It cannot prevent a wrong frame,
-  but it makes the error recoverable: the frame is an edge carrying the judge
+- **The metacontext is required at ingest**: `store_decomposition` takes
+  `metacontext_id` as a required argument. It cannot prevent a wrong metacontext,
+  but it makes the error recoverable: the metacontext is an edge carrying the judge
   who wrote it and a journal row naming it, so `review` finds it and
-  `reframe` fixes it. One frame per call, so a mixed document is two calls.
-- **Search names the frames it wants, as a list**: results are nodes standing
-  in **any** of them. Omitting the list searches every frame, which is a
-  coherent question; that is why the read side is optional where ingest is
-  not.
-- **Nothing invents a frame on a node's behalf**: splits inherit what the
+  `reassign_metacontext` fixes it. One metacontext per call, so a mixed document is two calls.
+- **A read names the metacontexts it wants, as a list**: `search`,
+  `find_nodes`, `query_graph` and `topic_tree` each take `metacontexts`, and
+  results are nodes standing in **any** of them. Omitting the list reads every
+  metacontext, which is a coherent question; that is why the read side is
+  optional where ingest is not. A scoped read scopes the whole response, edges
+  and matched passages included, because a topic node created from a tag
+  stands in no metacontext and bridges every world it was applied in.
+- **Nothing invents a metacontext on a node's behalf**: splits inherit what the
   parent states; a synthesised parent inherits the one set its children all
   stand in and is refused when they differ; a merge re-states the survivor's
-  frame under the merging agent's judge, because the survivor's content is
+  metacontext under the merging agent's judge, because the survivor's content is
   synthesised and no source's framing was made about that wording. Union is
   never the answer: one node asserted in two worlds is the worst outcome
   available.
@@ -292,7 +295,7 @@ take part in search like other nodes.
 
 ### Why this matters
 
-The "Fall of Carthage" means different things in a historical frame and in a
+The "Fall of Carthage" means different things in a historical metacontext and in a
 fictional universe. AI capabilities described in a novel are not real-world
 research. Political events described by opposing parties carry different
 framing. Without metacontext the memory would conflate these and silently
@@ -360,8 +363,9 @@ nodes (
   importance,      -- 0.0–1.0, moved only by judgment      (mutated in place)
   retrieved_at          -- timestamp, null until first retrieval
   importance_judged_at  -- timestamp, null until an agent judges it
-  -- source_id is the Segment for text-derived nodes; entity and tag Topics have none.
-  -- Sources and tag topics are NOT fields: they are Topics/RawDocuments reached by edges.
+  -- source_id is the Segment for text-derived nodes; entity and tag-named
+  -- Topics have none. Source and topic nodes are NOT fields: they are
+  -- Topics/RawDocuments reached by edges.
 )
 
 documents (
@@ -421,7 +425,7 @@ consolidation creates a new node linked to its predecessor via typed edges:
   as an error is how a graph forgets its own history.
   - The status also decides **which edges follow the replacement**. A
     correction hands over everything but history and review edges; a
-    world-change hands over the frame and the tag topics only, because the
+    world-change hands over the metacontext and the topic-node edges only, because the
     historical node is still true of its period and its own sources are what
     say so. Judgment edges (`similarity`, `contradiction`, `variant_of`) stay
     on the node they were made about under every retirement: the claim may
@@ -531,8 +535,8 @@ coexist?* So `reflect` returns pairs with their scores rather than verdicts.
 One phase per worklist, and `REFLECT_PHASES` in `mcp/tools.py` names them in
 execution order. Two separations in that list matter: recurrences are
 reported apart from contradictions, because a claim standing beside its own
-successor is not in conflict with it; and cross-frame pairs are dropped
-rather than reported, because high similarity across disjoint frames is
+successor is not in conflict with it; and cross-metacontext pairs are dropped
+rather than reported, because high similarity across disjoint metacontexts is
 coexistence.
 
 `apply_reflection` writes every kind of reflect decision. Its `merges` are
@@ -570,7 +574,7 @@ The tools group into: **core memory** (`segment`, `store_decomposition`,
 `apply_reflection`); **temporal access** (`graph_as_of`, `query_changes`);
 **archival** (`archive`, `restore`); **timelines** (`create_timeline`,
 `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`);
-**metacontexts** (`create_metacontext`, `get_metacontexts`, `reframe`);
+**metacontexts** (`create_metacontext`, `get_metacontexts`, `reassign_metacontext`);
 **graph management** (`list_graphs`, `use_graph`, `delete_graph`);
 **agents** (`claim_agent`); **review** (`review`, `apply_review`, `rejudge`,
 `correct_interval`); and **visualization** (`viz_status`).

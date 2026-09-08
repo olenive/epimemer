@@ -357,7 +357,7 @@ export const initTimelinePanel = (
    * Refill the metacontext select from the data.
    *
    * Node type and status are fixed vocabularies and stay as authored in the
-   * markup; frames are open-ended and only the graph knows them.
+   * markup; metacontexts are open-ended and only the graph knows them.
    */
   const populateMetacontexts = (): void => {
     const present = facetValues(allMarks(state.rows), "mc");
@@ -366,7 +366,7 @@ export const initTimelinePanel = (
 
     const all = document.createElement("option");
     all.value = "all";
-    all.textContent = "All frames";
+    all.textContent = "All metacontexts";
     controls.metacontextSelect.appendChild(all);
 
     for (const value of present) {

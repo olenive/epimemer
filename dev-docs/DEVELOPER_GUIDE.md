@@ -513,7 +513,7 @@ something works, create it on the write paths that already run, not in a CLI
 command the blocked caller is being told to ask for. `RELATION_LABELS.md` §2.3
 is the worked example. Mechanical migrations follow the same rule: they run
 on open (`_migrate_schema`), and only migrations that need a person's
-judgment (`epimemer frames declare`) stay in the CLI.
+judgment (`epimemer metacontexts declare`) stay in the CLI.
 
 Settings are the exception and the reason the trap is easy to fall into: they
 have environment variables read at connect, so the CLI is one of three

@@ -170,7 +170,7 @@ thing the decision landed on:
 | content written during reflect (synthesised parents, splits, enrichments, merge survivors) and `update`'s replacement | the new node, as `judged_by` |
 | `segment`, `store_decomposition` | every node and edge the ingest creates, as `judged_by`, including the priors `claim_kind`, `confidence` and `importance`, which nothing downstream re-makes |
 | `link` coining a relation label for the first time | the label's record, as `judged_by`: **the coiner, never the describer**. `describe_relation`, a verdict, or a backfill creates a record carrying no judge at all, since none of them is claiming to have introduced the word |
-| `reframe`, `correct_interval`, `describe_relation` | nothing on the node or edge; each journals its own row instead, because the thing being revised was somebody else's judgment and overwriting their name would hide that |
+| `reassign_metacontext`, `correct_interval`, `describe_relation` | nothing on the node or edge; each journals its own row instead, because the thing being revised was somebody else's judgment and overwriting their name would hide that |
 
 Three things follow that are easy to get wrong:
 
@@ -187,7 +187,8 @@ Three things follow that are easy to get wrong:
 
 A document and its segments carry **no** judge. They are the material rather
 than a claim about it: *who pasted this text* is a different question from
-*who judged what it says*. Reusing an existing entity or tag topic does not
+*who judged what it says*. Reusing an existing entity, or a topic node created
+from a tag, does not
 restamp it either: mentioning a name again is not introducing it.
 
 Nothing rewrites a relation label, so there is no label rewrite to record.
@@ -305,7 +306,7 @@ accompany rather than replacing it, and the advisory's own text is in
 blank on these, because nobody rated them.
 
 **Only an advisory that *objects* writes a row.** *Despite* means something
-only where there was something to proceed against, so a same-frame
+only where there was something to proceed against, so a same-metacontext
 contradiction, where the tool was right and the advisory is escalating the
 finding, sets `notify_user` and journals nothing. A row for every advisory
 would double the journal on the commonest path there is, which degrades
@@ -390,12 +391,12 @@ call in the system that destroys a judgment rather than superseding it.
 one field, and two writers for one value is how it ends up depending on
 which ran last.
 
-**Two more revisions live in their own tools**, `reframe` and
+**Two more revisions live in their own tools**, `reassign_metacontext` and
 `correct_interval`, and the split is about **how each is addressed**.
 `rejudge` names a `node_id` and promises that no status, edge or lineage
-moves. A frame revision moves an edge and changes what merges, what
-corroborates and what a frame-scoped search returns, so that promise would
-become false the day it grew a frame field. An interval belongs to a **(node,
+moves. A metacontext revision moves an edge and changes what merges, what
+corroborates and what a metacontext-scoped search returns, so that promise would
+become false the day it grew a metacontext field. An interval belongs to a **(node,
 source) pair**, so folding it in would grow a `source_id` that applies to one
 field out of five, the sign that two tools are wearing one name.
 
@@ -404,33 +405,33 @@ siblings, because the one real argument for a single tool was that an agent
 looks in the obvious place. So the obvious place points on; otherwise it
 reaches for `supersede_by`, which files a true claim as an error.
 
-## Withdrawing a frame: `reframe`
+## Withdrawing a metacontext: `reassign_metacontext`
 
-A frame that is wrong fails silently in three places: the node becomes
-unmergeable with its own twin (merge refuses cross-frame pairs), it stops
-corroborating the real copy, and a frame-scoped search misses it where it
-belongs while returning it where it does not. `reframe` is how a frame is
-withdrawn or moved.
+A metacontext that is wrong fails silently in three places: the node becomes
+unmergeable with its own twin (merge refuses cross-metacontext pairs), it stops
+corroborating the real copy, and a metacontext-scoped search misses it where it
+belongs while returning it where it does not. `reassign_metacontext` is how a
+metacontext is withdrawn or moved.
 
 **`assign` makes the common repair atomic, and that is the point.** A claim
-mis-filed under frame A that belongs in frame B could be moved by
+mis-filed under metacontext A that belongs in metacontext B could be moved by
 withdrawing then linking, but that path passes through a state where the
-node states no frame at all, and it strands the node there permanently if
+node states no metacontext at all, and it strands the node there permanently if
 the second call never happens.
 
-**A withdrawal that would leave no frames is refused.** A node stating no
-frame shares a frame with nothing: never compared, never merged, returned by
+**A withdrawal that would leave no metacontexts is refused.** A node stating no
+metacontext shares a metacontext with nothing: never compared, never merged, returned by
 no scoped search. So a claim goes somewhere or it stays where it is. The
-paradigm case, a real-world fact filed inside a novel's frame, is `assign` to
-the frame holding real-world claims.
+paradigm case, a real-world fact filed inside a novel's metacontext, is `assign` to
+the metacontext holding real-world claims.
 
-**The withdrawal deletes the edge rather than marking it.** Frames are
+**The withdrawal deletes the edge rather than marking it.** Metacontexts are
 derived by scanning `has_metacontext` edges, so a `withdrawn` marker would
 need every such site to subtract it, and any site missed would fail
-**open**, with the frame still applying. Deleting fails closed. The withdrawn
-frame survives in the node's `reframings` trail and in the journal row, which
-matters more here than for a rejudgment: every search and corroboration
-answer given while the frame was wrong was wrong, and the trail plus the
+**open**, with the metacontext still applying. Deleting fails closed. The withdrawn
+metacontext survives in the node's `metacontext_reassignments` trail and in the
+journal row, which matters more here than for a rejudgment: every search and corroboration
+answer given while the metacontext was wrong was wrong, and the trail plus the
 row's timestamp is the only thing that bounds which answers those were.
 
 ## Correcting a period: `correct_interval`

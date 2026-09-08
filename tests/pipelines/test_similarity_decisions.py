@@ -92,8 +92,8 @@ async def _fact(
         value=ValueSignal(),
     )
     await storage.store_node(fact)
-    # Every fact states a frame, as every ingested one has since the frame requirement — absence
-    # names no frame, so two frameless facts share none and nothing here would
+    # Every fact states a metacontext, as every ingested one has since the metacontext requirement
+    # — absence names no metacontext, so two facts without one share none and nothing here would
     # be nominated at all.
     await storage.store_edge(
         NodeEdge(
@@ -132,25 +132,25 @@ async def _fact(
     return fact
 
 
-async def _framed(storage, fact: Fact, label: str) -> str:
-    """Move a fact into its own frame, replacing the one `_fact` gave it.
+async def _in_metacontext(storage, fact: Fact, label: str) -> str:
+    """Move a fact into its own metacontext, replacing the one `_fact` gave it.
 
     Replacing rather than adding, because these tests are about a pair standing
-    in *disjoint* frames: leaving the base frame on both would give them an
-    overlap, and `same_frame` asks about overlap.
+    in *disjoint* metacontexts: leaving the base metacontext on both would give them an
+    overlap, and `same_metacontext` asks about overlap.
     """
-    frame = Metacontext(content=label)
-    await storage.store_metacontext(frame)
+    metacontext = Metacontext(content=label)
+    await storage.store_metacontext(metacontext)
     for edge in await storage.get_edges_from(fact.id, edge_type=EdgeType.HAS_METACONTEXT):
         await storage.delete_edge(edge.id)
     await storage.store_edge(
         NodeEdge(
             src_id=fact.id,
-            dst_id=frame.id,
+            dst_id=metacontext.id,
             type=EdgeType.HAS_METACONTEXT,
         )
     )
-    return frame.id
+    return metacontext.id
 
 
 async def _decide(
@@ -417,17 +417,17 @@ class TestWhichNodesMayCarryAJudgment:
         assert status.value in outcome.reason
 
 
-class TestTheCrossFrameCase:
+class TestTheCrossMetacontextCase:
     """A fiction and a fact are never one claim, and `variant_of` is the
     relation that says so. Corroboration disqualifies partners carrying one —
     which is the difference between the two being kept apart and them being kept
     apart *and counted*."""
 
-    async def test_one_claim_across_frames_is_refused(self, storage, embedding_provider):
+    async def test_one_claim_across_metacontexts_is_refused(self, storage, embedding_provider):
         a = await _fact(storage, embedding_provider, "the ring was destroyed")
         b = await _fact(storage, embedding_provider, "the ring was destroyed")
-        await _framed(storage, a, "Tolkien")
-        await _framed(storage, b, "Wagner")
+        await _in_metacontext(storage, a, "Tolkien")
+        await _in_metacontext(storage, b, "Wagner")
 
         outcome = await _decide(storage, a, b, "one_claim")
 
@@ -435,13 +435,13 @@ class TestTheCrossFrameCase:
         assert "record_variant" in outcome.reason
         assert await _edge_types_between(storage, a, b) == set()
 
-    async def test_distinct_across_frames_is_recorded(self, storage, embedding_provider):
+    async def test_distinct_across_metacontexts_is_recorded(self, storage, embedding_provider):
         """`assessed` corroborates nothing, so there is no reason to make the
         agent choose between recording its judgment and being accurate."""
         a = await _fact(storage, embedding_provider, "the ring was destroyed")
         b = await _fact(storage, embedding_provider, "the ring was destroyed")
-        await _framed(storage, a, "Tolkien")
-        await _framed(storage, b, "Wagner")
+        await _in_metacontext(storage, a, "Tolkien")
+        await _in_metacontext(storage, b, "Wagner")
 
         outcome = await _decide(storage, a, b, "distinct", "different legendaria")
 

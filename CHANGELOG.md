@@ -6,6 +6,83 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-09-08
+
+**"Frame" and "hub" are gone as words.** Both read as general graph
+vocabulary: a frame sounds like any context you care to name, and a hub like
+any well-connected node. So users, agents and the tool descriptions themselves
+drifted into using them loosely, and two precise concepts blurred into two
+vague ones. A metacontext is the world a claim is made in, and a topic node or
+a source node is a node other nodes point at. Warning about the looser reading
+would have left both words in play; removing them is what actually ends it.
+
+The graph rewrites its own stored strings when 0.2.0 opens it, so no manual
+step is needed. That migration is one-way: a graph opened by 0.2.0 holds the
+new spellings and should not be reopened by 0.1.x, which has no step that puts
+them back.
+
+**One metacontext could bleed into another through a shared topic node.** A
+topic node created from a tag asserts nothing, so it stands in no metacontext,
+and every node tagged with that name points at the same one whatever world it
+was claimed in. A fact from a novel and a fact about real history therefore sit
+one hop apart, through a node neither of them is a claim about, and the read
+tools walked straight across it. A search scoped to `the-real` filtered its
+node list correctly and then returned edges naming the fiction nodes it had
+just removed, plus the fiction document's own raw passages. `query_graph`
+returned every neighbour whatever world it belonged to, and did not even say
+which world that was.
+
+### Changed
+
+- The MCP tool `reframe` is now `reassign_metacontext`, with the same
+  arguments and the same behaviour.
+- Response keys: `same_frame` → `same_metacontext`, `nodes_without_frame` →
+  `nodes_without_metacontext` (in `graph_stats`), `already_framed` →
+  `already_in_metacontext`, `frames_now` → `metacontexts_now`.
+- Advisory kinds, as they appear in a response's `warnings` and as keys of the
+  policy `configure_warnings` stores: `cross_frame` → `cross_metacontext`,
+  `same_frame_variant` → `same_metacontext_variant`,
+  `same_frame_contradiction` → `same_metacontext_contradiction`.
+- Decision journal kinds, as `review` and `query_decisions` return them:
+  `frame_declaration` → `metacontext_declaration`, `reframe` →
+  `metacontext_reassignment`. A journal row's `frame` field is now
+  `metacontext`.
+- The CLI command `epimemer frames declare --frame` is now
+  `epimemer metacontexts declare --metacontext`.
+- The storage protocol method `count_nodes_without_frame` is now
+  `count_nodes_without_metacontext`, on both backends and the instrumented
+  wrapper. `epimemer/pipelines/frames.py` is now
+  `epimemer/pipelines/metacontexts.py`, and the names in it move the same way:
+  `declare_frames` → `declare_metacontext`, `shared_frame_set` →
+  `shared_metacontext_set`, `frame_edges` → `metacontext_edges`,
+  `is_tag_topic` → `created_from_tag`, and so on through the package.
+- A tag is the string passed in `tags=[...]`; the node it resolves to is a
+  topic node created from that tag. "Tag topic" is not used.
+- **Schema version 4, applied when a graph is opened.** It rewrites the two
+  journal kinds, moves each journal row's `frame` field to `metacontext`,
+  rewrites the renamed advisory kinds inside the prose of every
+  `proceeded_despite_advisory` row and in the graph's own warning policy, and
+  moves the metacontext-reassignment trail on each node it finds one on.
+- **A Terminology section** in `docs/README.md` and in
+  `epimemer_prompts/DEFAULT.md`, naming one word per concept, plus a guard in
+  `tests/test_docs.py` that fails when a retired word reappears in the
+  documentation or the code.
+
+- `find_nodes`, `query_graph` and `topic_tree` take an optional `metacontexts`
+  list, meaning on each what it means on `search`: results are the nodes
+  standing in any of the metacontexts named, no metacontext inherits another,
+  and an id that resolves nowhere is refused with the graph's own list rather
+  than silently narrowing the answer. The node the caller named by id is
+  returned whether or not it stands in one of them, which is what keeps a
+  topic node created from a tag usable as a starting point; its neighbours are
+  filtered. On `find_nodes` the filter runs before the `limit` cut. On
+  `topic_tree` an ancestor outside the scope is left out and the rest are
+  still ancestors, and a subtopic outside it takes its branch with it.
+- `find_nodes`, `query_graph` and `topic_tree` label every node they return
+  with the `metacontexts` it stands in, as `search` already did. Reading a
+  traversal used to mean asking again, node by node, which world each answer
+  was a claim about.
+
 ### Security
 
 - Every dependency is updated to a version with no published advisory. The
@@ -20,8 +97,16 @@ All notable changes to this project are recorded here. The format follows
 
 ### Fixed
 
+- A metacontext-scoped `search` now scopes the whole response. `edges` keeps
+  only edges whose two endpoints are both returned nodes, so no returned edge
+  names a node the scope removed. `segments` keeps only passages with at least
+  one node extracted from them standing in a named metacontext, matching each
+  passage to what was concluded from it. A passage nothing was extracted from
+  is dropped from a scoped search and still returned by an unscoped one, which
+  goes on answering *where did I read that?* for every passage that matched.
+
 - **A tag resolves to one node however its name is spelled.** `claim_kind` and
-  `claim-kind` were two hubs, and so were `design-decisions` and `design
+  `claim-kind` were two topic nodes, and so were `design-decisions` and `design
   decisions`, because a tag was matched on its exact content. Names are now
   compared with case and separators collapsed, at ingest and at
   `find_nodes(tagged_with_topic=...)`. Dates are untouched, which is the point:
@@ -32,7 +117,7 @@ All notable changes to this project are recorded here. The format follows
 - **A tag name whose node was retired now resolves to the node carrying its
   content.** Enrichment rewrites a topic's content and retires the old node, and
   a merge retires its sources; either left the old name resolving to nothing, so
-  the next document carrying it created a second hub while
+  the next document carrying it created a second topic node while
   `find_nodes(tagged_with_topic=...)` returned an empty list rather than an
   error. Resolution follows `merged_into` and `superseded_by` forward. A
   historical node is deliberately not followed: its claim is still right of its

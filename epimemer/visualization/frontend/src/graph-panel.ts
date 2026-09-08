@@ -79,7 +79,7 @@ const EDGE_MEANINGS: Record<string, keyof SemanticPalette> = {
   // taken back. It takes `contradiction`'s, which is the other edge that stops
   // a similarity partner counting, for the same reason and by the same route.
   retracted_similarity: "contradiction",
-  // Cross-frame variants. Found missing while adding the row above — it has
+  // Cross-metacontext variants. Found missing while adding the row above — it has
   // been drawing as `UNKNOWN_KIND` grey since it was introduced, which is
   // exactly the failure the two comments above warn about, live.
   variant_of: "similarity",

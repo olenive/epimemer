@@ -3,13 +3,13 @@
 Both are `rejudge`'s category — *the claim is fine, the judgment about it was
 wrong* — and both are their own tool for a **structural** reason rather than a
 tidiness one. `rejudge` is addressed by `node_id` and promises that no status,
-edge or lineage moves. A frame revision moves an edge and changes what retrieval
+edge or lineage moves. A metacontext revision moves an edge and changes what retrieval
 does; an interval belongs to a **(node, source) pair** rather than to a node, so
 folding it in would grow a `source_id` that applies to one field of five.
 
-What the frame half is really guarding is that **untagged is not neutral**.
-Base-reality knowledge is inherited by every frame, so withdrawing a node's last
-frame promotes the claim from asserted-in-one-world to asserted-in-all — which is
+What the metacontext half is really guarding is that **untagged is not neutral**.
+Base-reality knowledge is inherited by every metacontext, so withdrawing a node's last
+metacontext promotes the claim from asserted-in-one-world to asserted-in-all — which is
 why the paradigm repair is a *move*, and why a bare withdrawal has to say it
 means the promotion.
 
@@ -46,14 +46,14 @@ async def _fact(storage, content="Le Guin published The Dispossessed in 1974"):
     return node
 
 
-async def _frame(storage, content="The world of Anarres"):
+async def _metacontext(storage, content="The world of Anarres"):
     mc = Metacontext(content=content)
     await storage.store_metacontext(mc)
     return mc
 
 
-async def _framed(storage, node, *frames):
-    for mc in frames:
+async def _in_metacontext(storage, node, *metacontexts):
+    for mc in metacontexts:
         await storage.store_edge(
             NodeEdge(
                 src_id=node.id,
@@ -64,22 +64,22 @@ async def _framed(storage, node, *frames):
         )
 
 
-async def _frames_of(storage, node_id):
-    from epimemer.pipelines.reflection.review import frames_of
+async def _metacontexts_of(storage, node_id):
+    from epimemer.pipelines.reflection.review import metacontexts_of
 
-    return await frames_of(node_id, storage)
-
-
-# --- The frame half ---
+    return await metacontexts_of(node_id, storage)
 
 
-class TestMovingAFrameIsOneCall:
-    async def test_the_node_lands_in_the_new_frame_and_leaves_the_old(self, storage):
+# --- The metacontext half ---
+
+
+class TestMovingAMetacontextIsOneCall:
+    async def test_the_node_lands_in_the_new_metacontext_and_leaves_the_old(self, storage):
         node = await _fact(storage)
-        novel, real_history = await _frame(storage), await _frame(storage, "History")
-        await _framed(storage, node, novel)
+        novel, real_history = await _metacontext(storage), await _metacontext(storage, "History")
+        await _in_metacontext(storage, node, novel)
 
-        result, _ = await tools.reframe(
+        result, _ = await tools.reassign_metacontext(
             node.id,
             storage,
             withdraw=novel.id,
@@ -88,20 +88,20 @@ class TestMovingAFrameIsOneCall:
             judge=EDITOR,
         )
 
-        assert result["reframed"] is True
-        assert result["frames_now"] == [real_history.id]
-        assert await _frames_of(storage, node.id) == {real_history.id}
+        assert result["reassigned"] is True
+        assert result["metacontexts_now"] == [real_history.id]
+        assert await _metacontexts_of(storage, node.id) == {real_history.id}
 
-    async def test_a_move_never_asks_the_last_frame_question(self, storage):
+    async def test_a_move_never_asks_the_last_metacontext_question(self, storage):
         """The point of `assign`. Withdraw-then-link passes through untagged —
-        asserted in **every** frame — and strands the node there if the second
+        asserted in **every** metacontext — and strands the node there if the second
         call never happens. A move never reaches that state, so it needs no
         acknowledgment."""
         node = await _fact(storage)
-        novel, history = await _frame(storage), await _frame(storage, "History")
-        await _framed(storage, node, novel)
+        novel, history = await _metacontext(storage), await _metacontext(storage, "History")
+        await _in_metacontext(storage, node, novel)
 
-        result, _ = await tools.reframe(
+        result, _ = await tools.reassign_metacontext(
             node.id,
             storage,
             withdraw=novel.id,
@@ -109,14 +109,14 @@ class TestMovingAFrameIsOneCall:
             because="mis-filed",
         )
 
-    async def test_assigning_a_frame_this_graph_does_not_have_is_refused(self, storage):
-        """Frame ids are per graph. One carried over from another names nothing
-        here, and a node framed by nothing shares a frame with no other node."""
+    async def test_assigning_a_metacontext_this_graph_does_not_have_is_refused(self, storage):
+        """Metacontext ids are per graph. One carried over from another names nothing
+        here, and a node standing in nothing shares a metacontext with no other node."""
         node = await _fact(storage)
-        novel = await _frame(storage)
-        await _framed(storage, node, novel)
+        novel = await _metacontext(storage)
+        await _in_metacontext(storage, node, novel)
 
-        result, _ = await tools.reframe(
+        result, _ = await tools.reassign_metacontext(
             node.id,
             storage,
             withdraw=novel.id,
@@ -124,29 +124,29 @@ class TestMovingAFrameIsOneCall:
             because="mis-filed",
         )
 
-        assert result["reframed"] is False
+        assert result["reassigned"] is False
         assert "create_metacontext" in result["refused"]
-        assert await _frames_of(storage, node.id) == {novel.id}
+        assert await _metacontexts_of(storage, node.id) == {novel.id}
 
     async def test_withdrawing_one_of_several_leaves_the_rest(self, storage):
         node = await _fact(storage)
-        novel, history = await _frame(storage), await _frame(storage, "History")
-        await _framed(storage, node, novel, history)
+        novel, history = await _metacontext(storage), await _metacontext(storage, "History")
+        await _in_metacontext(storage, node, novel, history)
 
-        result, _ = await tools.reframe(
+        result, _ = await tools.reassign_metacontext(
             node.id,
             storage,
             withdraw=novel.id,
             because="only ever real history",
         )
 
-        assert result["frames_now"] == [history.id]
+        assert result["metacontexts_now"] == [history.id]
 
 
-class TestWithdrawingTheLastFrameIsRefused:
+class TestWithdrawingTheLastMetacontextIsRefused:
     """It used to be allowed behind `to_base_reality=True`, because absence
     meant base reality and the withdrawal was a *promotion* worth stating on
-    purpose. Absence means nothing now: a frameless node shares a frame
+    purpose. Absence means nothing now: a node without a metacontext shares one
     with nothing, so it is never compared, never merged, and returned by no
     scoped search. There is nothing left to authorise, so the flag is gone
     rather than renamed — the paradigm case revisable ingest judgments was built for is `assign`.
@@ -154,28 +154,28 @@ class TestWithdrawingTheLastFrameIsRefused:
 
     async def test_a_bare_last_withdrawal_is_refused(self, storage):
         node = await _fact(storage)
-        novel = await _frame(storage)
-        await _framed(storage, node, novel)
+        novel = await _metacontext(storage)
+        await _in_metacontext(storage, node, novel)
 
-        result, _ = await tools.reframe(
+        result, _ = await tools.reassign_metacontext(
             node.id,
             storage,
             withdraw=novel.id,
             because="a real publication fact",
         )
 
-        assert result["reframed"] is False
-        assert "shares a frame with nothing" in result["refused"]
-        assert await _frames_of(storage, node.id) == {novel.id}
+        assert result["reassigned"] is False
+        assert "shares a metacontext with nothing" in result["refused"]
+        assert await _metacontexts_of(storage, node.id) == {novel.id}
 
     async def test_the_refusal_names_the_move_that_works(self, storage):
         """The Le Guin case is still fixable in one call — it just has to say
-        where the claim goes, which is the frame holding real-world claims."""
+        where the claim goes, which is the metacontext holding real-world claims."""
         node = await _fact(storage)
-        novel = await _frame(storage)
-        await _framed(storage, node, novel)
+        novel = await _metacontext(storage)
+        await _in_metacontext(storage, node, novel)
 
-        refusal, _ = await tools.reframe(
+        refusal, _ = await tools.reassign_metacontext(
             node.id,
             storage,
             withdraw=novel.id,
@@ -183,8 +183,8 @@ class TestWithdrawingTheLastFrameIsRefused:
         )
         assert "assign=" in refusal["refused"]
 
-        real = await _frame(storage, "The Real")
-        result, _ = await tools.reframe(
+        real = await _metacontext(storage, "The Real")
+        result, _ = await tools.reassign_metacontext(
             node.id,
             storage,
             withdraw=novel.id,
@@ -192,93 +192,93 @@ class TestWithdrawingTheLastFrameIsRefused:
             because="a fact about the author, not about Anarres",
         )
 
-        assert result["reframed"] is True
-        assert result["frames_now"] == [real.id]
-        assert await _frames_of(storage, node.id) == {real.id}
+        assert result["reassigned"] is True
+        assert result["metacontexts_now"] == [real.id]
+        assert await _metacontexts_of(storage, node.id) == {real.id}
 
     async def test_withdrawing_one_of_several_is_untouched(self, storage):
         """The refusal is about stranding a node, not about withdrawal."""
         node = await _fact(storage)
-        novel, history = await _frame(storage), await _frame(storage, "History")
-        await _framed(storage, node, novel, history)
+        novel, history = await _metacontext(storage), await _metacontext(storage, "History")
+        await _in_metacontext(storage, node, novel, history)
 
-        result, _ = await tools.reframe(
+        result, _ = await tools.reassign_metacontext(
             node.id,
             storage,
             withdraw=novel.id,
             because="only ever real history",
         )
 
-        assert result["reframed"] is True
-        assert result["frames_now"] == [history.id]
+        assert result["reassigned"] is True
+        assert result["metacontexts_now"] == [history.id]
 
 
 class TestWhatReframingRefuses:
     async def test_a_blank_because(self, storage):
         node = await _fact(storage)
-        novel = await _frame(storage)
-        await _framed(storage, node, novel)
+        novel = await _metacontext(storage)
+        await _in_metacontext(storage, node, novel)
 
-        result, _ = await tools.reframe(
+        result, _ = await tools.reassign_metacontext(
             node.id,
             storage,
             withdraw=novel.id,
             because="   ",
         )
 
-        assert result["reframed"] is False
-        assert await _frames_of(storage, node.id) == {novel.id}
+        assert result["reassigned"] is False
+        assert await _metacontexts_of(storage, node.id) == {novel.id}
 
-    async def test_a_frame_the_node_does_not_hold(self, storage):
+    async def test_a_metacontext_the_node_does_not_hold(self, storage):
         node = await _fact(storage)
-        novel, history = await _frame(storage), await _frame(storage, "History")
-        await _framed(storage, node, novel)
+        novel, history = await _metacontext(storage), await _metacontext(storage, "History")
+        await _in_metacontext(storage, node, novel)
 
-        result, _ = await tools.reframe(
+        result, _ = await tools.reassign_metacontext(
             node.id,
             storage,
             withdraw=history.id,
             because="mis-filed",
         )
 
-        assert result["reframed"] is False
+        assert result["reassigned"] is False
 
-    async def test_a_node_stating_no_frame_has_nothing_to_withdraw(self, storage):
+    async def test_a_node_stating_no_metacontext_has_nothing_to_withdraw(self, storage):
         """It is not in base reality either — it is a node nobody has spoken
-        for, and `epimemer frames declare` is what ends that."""
+        for, and `epimemer metacontexts declare` is what ends that."""
         node = await _fact(storage)
 
-        result, _ = await tools.reframe(
+        result, _ = await tools.reassign_metacontext(
             node.id,
             storage,
             withdraw=BASE_METACONTEXT_ID,
             because="mis-filed",
         )
 
-        assert result["reframed"] is False
-        assert "no frames at all" in result["refused"]
+        assert result["reassigned"] is False
+        assert "no metacontexts at all" in result["refused"]
 
     async def test_no_such_node(self, storage):
-        result, _ = await tools.reframe(
+        result, _ = await tools.reassign_metacontext(
             "nope",
             storage,
             withdraw="anything",
             because="mis-filed",
         )
 
-        assert result["reframed"] is False
+        assert result["reassigned"] is False
 
 
-class TestTheWithdrawnFrameSurvives:
+class TestTheWithdrawnMetacontextSurvives:
     async def test_the_trail_names_what_was_withdrawn_and_why(self, storage):
-        """Every search and corroboration answer given while the frame was wrong
+        """Every search and corroboration answer given while the metacontext was wrong
         was wrong. This entry, with the journal row's timestamp beside it, is
         the only thing that bounds which answers those were."""
         node = await _fact(storage)
-        novel, history = await _frame(storage), await _frame(storage, "History")
-        await _framed(storage, node, novel)
+        novel, history = await _metacontext(storage), await _metacontext(storage, "History")
+        await _in_metacontext(storage, node, novel)
 
-        await tools.reframe(
+        await tools.reassign_metacontext(
             node.id,
             storage,
             withdraw=novel.id,
@@ -288,7 +288,7 @@ class TestTheWithdrawnFrameSurvives:
         )
 
         stored = await storage.get_node(node.id)
-        [entry] = stored.metadata["reframings"]
+        [entry] = stored.metadata["metacontext_reassignments"]
         assert entry["withdrew"] == novel.id
         assert entry["assigned"] == history.id
         assert entry["because"] == "a fact about the author"
@@ -297,25 +297,32 @@ class TestTheWithdrawnFrameSurvives:
     async def test_the_trail_is_append_only(self, storage):
         node = await _fact(storage)
         a, b, c = (
-            await _frame(storage, "A"),
-            await _frame(storage, "B"),
-            await _frame(storage, "C"),
+            await _metacontext(storage, "A"),
+            await _metacontext(storage, "B"),
+            await _metacontext(storage, "C"),
         )
-        await _framed(storage, node, a)
+        await _in_metacontext(storage, node, a)
 
-        await tools.reframe(node.id, storage, withdraw=a.id, assign=b.id, because="first")
-        await tools.reframe(node.id, storage, withdraw=b.id, assign=c.id, because="second")
+        await tools.reassign_metacontext(
+            node.id, storage, withdraw=a.id, assign=b.id, because="first"
+        )
+        await tools.reassign_metacontext(
+            node.id, storage, withdraw=b.id, assign=c.id, because="second"
+        )
 
         stored = await storage.get_node(node.id)
-        assert [e["because"] for e in stored.metadata["reframings"]] == ["first", "second"]
+        assert [e["because"] for e in stored.metadata["metacontext_reassignments"]] == [
+            "first",
+            "second",
+        ]
 
     async def test_it_journals_its_own_kind(self, storage):
         node = await _fact(storage)
-        novel = await _frame(storage)
-        await _framed(storage, node, novel)
+        novel = await _metacontext(storage)
+        await _in_metacontext(storage, node, novel)
 
-        history = await _frame(storage, "History")
-        result, _ = await tools.reframe(
+        history = await _metacontext(storage, "History")
+        result, _ = await tools.reassign_metacontext(
             node.id,
             storage,
             withdraw=novel.id,
@@ -324,19 +331,19 @@ class TestTheWithdrawnFrameSurvives:
             judge=EDITOR,
         )
 
-        [row] = await storage.query_decisions(kinds=[DecisionKind.REFRAME])
+        [row] = await storage.query_decisions(kinds=[DecisionKind.METACONTEXT_REASSIGNMENT])
         assert row.subject_ids == [node.id]
         assert row.judged_by == EDITOR
         assert row.id == result["decision_id"]
 
     async def test_nothing_is_retired_and_no_lineage_moves(self, storage):
         node = await _fact(storage)
-        novel = await _frame(storage)
-        await _framed(storage, node, novel)
+        novel = await _metacontext(storage)
+        await _in_metacontext(storage, node, novel)
         before = await storage.get_node(node.id)
 
-        history = await _frame(storage, "History")
-        await tools.reframe(
+        history = await _metacontext(storage, "History")
+        await tools.reassign_metacontext(
             node.id, storage, withdraw=novel.id, assign=history.id, because="mis-filed"
         )
 
@@ -564,6 +571,6 @@ class TestRejudgeSendsYouToTheRightTool:
         result, _ = await tools.rejudge(node.id, storage, because="nothing supplied")
 
         assert result["rejudged"] is False
-        assert "`reframe`" in result["refused"]
+        assert "`reassign_metacontext`" in result["refused"]
         assert "`correct_interval`" in result["refused"]
         assert "supersede_by" in result["refused"]

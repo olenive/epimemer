@@ -25,7 +25,7 @@ their evidence and to keep asking whether they still stand.
 - **Provenance as structure.** Every fact carries `sourced_from` edges to the
   documents that assert it, and a merge keeps one edge per contributing
   source.
-- **Frames.** A claim states which world it is about: the real one, a novel, a
+- **Metacontexts.** A claim states which world it is about: the real one, a novel, a
   named source, a perspective. Fiction never corroborates fact, and two
   perspectives can disagree without either being wrong.
 - **Validity in time.** Each source records when it says a claim held, so a
@@ -157,7 +157,7 @@ Tools exposed via the Model Context Protocol (Claude Code prefixes each as
 - **Review**: `review` lists the decisions this graph has recorded, least
   certain first; `apply_review` records that you checked one, and whether you
   agree; `rejudge` revises a judgment made at ingest without touching the
-  claim; `reframe` withdraws a metacontext from a node, or moves it to
+  claim; `reassign_metacontext` withdraws a metacontext from a node, or moves it to
   another; `correct_interval` replaces what one source is recorded as
   asserting about when a claim held
 - **Visualization**: `viz_status`
@@ -227,10 +227,10 @@ refuses and names the right variable rather than appearing to succeed.
 - **Dual-space**: vector embeddings as the primary representation, with a typed graph derived on top
 - **Three node types**: Topics (themes), Facts (atomic statements), Inferences (provisional derivations)
 - **Timelines**: ordered containers of timepoints for temporal relationships
-- **Metacontexts**: epistemic frames that separate fiction from fact, and one source or perspective from another
+- **Metacontexts**: they separate fiction from fact, and one source or perspective from another
 - **Petri nets**: all pipelines are executable, typed, visualizable Petri nets via [Petritype](https://github.com/olenive/petritype)
 - **Immutable history**: a node's *content* is never mutated; an update creates a new version joined to the old one by a history edge. Lifecycle metadata such as `status` and value signals is mutated in place
-- **Sources and tag topics are nodes**: a fact reaches its source document by a `sourced_from` edge and a tag by a `tagged_with_topic` edge, not by a string field. A *tag* is a name passed in at ingest; it resolves to a Topic node, the *tag topic*. That edge is a retrieval index and carries no evidential weight; `supports` is the evidential edge
+- **Sources and topics are nodes**: a fact reaches its source document by a `sourced_from` edge and a tag by a `tagged_with_topic` edge, not by a string field. A *tag* is a name passed in at ingest; it resolves to a Topic node, the topic node created from that tag. That edge is a retrieval index and carries no evidential weight; `supports` is the evidential edge
 - **Relations**: relationships between nodes are open-vocabulary, user-labelled edges
 
 ## Documentation

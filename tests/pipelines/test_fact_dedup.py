@@ -131,17 +131,17 @@ async def _inference(storage, content: str) -> Inference:
     return inference
 
 
-async def _framed(storage, fact: Fact, label: str) -> str:
-    frame = Metacontext(content=label)
-    await storage.store_metacontext(frame)
+async def _in_metacontext(storage, fact: Fact, label: str) -> str:
+    metacontext = Metacontext(content=label)
+    await storage.store_metacontext(metacontext)
     await storage.store_edge(
         NodeEdge(
             src_id=fact.id,
-            dst_id=frame.id,
+            dst_id=metacontext.id,
             type=EdgeType.HAS_METACONTEXT,
         )
     )
-    return frame.id
+    return metacontext.id
 
 
 def _year(value: int) -> PreciseInstant:
@@ -279,7 +279,7 @@ class TestAnOccurrenceNeverMerges:
         self, storage, embedding_provider
     ):
         """The contrast that shows the judgment is doing the work. Same periods,
-        same similarity, same frames — only the kind of claim differs, and it is
+        same similarity, same metacontexts — only the kind of claim differs, and it is
         the difference between one node with two periods and a fabricated one."""
         first = await _fact(
             storage,
@@ -344,29 +344,33 @@ class TestAnUnjudgedFactIsNotMerged:
         assert "claim_kind" in result["refused"]
 
 
-class TestFramesAreNeverCrossed:
-    """Merging a fiction frame into base reality is the single worst outcome
+class TestMetacontextsAreNeverCrossed:
+    """Merging a fiction metacontext into base reality is the single worst outcome
     available, and the naive similarity pass does exactly that."""
 
-    async def test_one_sentence_in_two_frames_stays_two_facts(self, storage, embedding_provider):
+    async def test_one_sentence_in_two_metacontexts_stays_two_facts(
+        self, storage, embedding_provider
+    ):
         first = await _fact(storage, embedding_provider, "Dragons are extinct.")
         second = await _fact(storage, embedding_provider, "Dragons are extinct.")
-        await _framed(storage, first, "Base reality")
-        await _framed(storage, second, "The novel")
+        await _in_metacontext(storage, first, "Base reality")
+        await _in_metacontext(storage, second, "The novel")
 
         result = await _merge(storage, embedding_provider, [first, second])
 
         assert result["merged"] is False
         assert "record_variant" in result["refused"]
 
-    async def test_a_partial_frame_overlap_is_still_a_refusal(self, storage, embedding_provider):
-        """`same_frame` asks whether two nodes share *at least one* frame, which
+    async def test_a_partial_metacontext_overlap_is_still_a_refusal(
+        self, storage, embedding_provider
+    ):
+        """`same_metacontext` asks whether two nodes share *at least one* metacontext, which
         is the right question for a contradiction and the wrong one here: the
-        survivor inherits the union, so it would assert in a frame only one
+        survivor inherits the union, so it would assert in a metacontext only one
         source ever stood in."""
         first = await _fact(storage, embedding_provider, "Dragons are extinct.")
         second = await _fact(storage, embedding_provider, "Dragons are extinct.")
-        shared = await _framed(storage, first, "Base reality")
+        shared = await _in_metacontext(storage, first, "Base reality")
         await storage.store_edge(
             NodeEdge(
                 src_id=second.id,
@@ -374,14 +378,14 @@ class TestFramesAreNeverCrossed:
                 type=EdgeType.HAS_METACONTEXT,
             )
         )
-        await _framed(storage, second, "The novel")
+        await _in_metacontext(storage, second, "The novel")
 
         result = await _merge(storage, embedding_provider, [first, second])
 
         assert result["merged"] is False
-        assert "same set of frames" in result["refused"]
+        assert "same set of metacontexts" in result["refused"]
 
-    async def test_two_untagged_facts_share_the_base_frame_and_merge(
+    async def test_two_untagged_facts_share_the_base_metacontext_and_merge(
         self, storage, embedding_provider
     ):
         first = await _fact(storage, embedding_provider, "The deploy failed.")
@@ -570,7 +574,7 @@ class TestAFutileMergeCycleIsRefused:
     ):
         """Refusals are ordered permanent-first, and this one is fixable: a
         person can settle it or raise the limit. Reporting it while a
-        cross-frame pair also stands would send an agent to do work that
+        cross-metacontext pair also stands would send an agent to do work that
         changes nothing."""
         oscillated = await _fact(
             storage,
@@ -579,12 +583,12 @@ class TestAFutileMergeCycleIsRefused:
             lifecycle=_completed_cycles(5),
         )
         other = await _fact(storage, embedding_provider, "Bonn is the capital.")
-        await _framed(storage, other, "fiction")
+        await _in_metacontext(storage, other, "fiction")
 
         result = await _merge(storage, embedding_provider, [oscillated, other])
 
         assert result["merged"] is False
-        assert "frames" in result["refused"]
+        assert "metacontexts" in result["refused"]
         assert "merge_cycle_limit" not in result["refused"]
 
 

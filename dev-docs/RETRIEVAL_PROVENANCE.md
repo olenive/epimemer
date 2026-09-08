@@ -127,7 +127,7 @@ selector lists what the agent was handed. The opposite is defensible (a failed
 retrieval is interesting), so this is stated rather than left to be inferred.
 
 **One call, one record.** The record is written at `_run_with_timeout`, which
-sees the tool call and not the frame-widening loop inside `search`, so the
+sees the tool call and not the metacontext-widening loop inside `search`, so the
 loop cannot appear as several records.
 
 ### 3.1 It is *our* response, not *the agent's context*

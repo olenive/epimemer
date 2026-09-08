@@ -31,7 +31,7 @@ Two further principles shape it:
   reading them knows. Archival is export, not delete.
 - **Two-tier responsibility.** The agent handles the mechanical calls. It
   **escalates the consequential ones to the human**: genuine contradictions,
-  and anything crossing a frame boundary.
+  and anything crossing a metacontext boundary.
 
 ---
 
@@ -47,8 +47,8 @@ recorded consequence:
 | **supersedes** | the new one corrects the old: the old was **wrong** | `superseded_by`; old becomes `corrected` |
 | **succeeds** | both true, over different periods: **the world moved** | `temporally_followed_by`; old becomes `historical`, restorable |
 | **recurs** | a previously retired `historical` claim is true again | `restore` plus a new `sourced_from` edge, one transaction |
-| **contradicts** | conflicting, same frame, unclear which holds | record `contradiction`; resolve, or escalate |
-| **cross-frame** | a "conflict" only because the frames differ | not a conflict; both coexist; optionally `variant_of` |
+| **contradicts** | conflicting, same metacontext, unclear which holds | record `contradiction`; resolve, or escalate |
+| **cross-metacontext** | a "conflict" only because the metacontexts differ | not a conflict; both coexist; optionally `variant_of` |
 | **compatible** | no conflict | nothing |
 
 **`supersedes` and `succeeds` are the pair to be careful about.** They are
@@ -71,7 +71,7 @@ re-read is recorded with `apply_reflection(retained=…)` (§6).
 a `sourced_from` edge per contributing document, so provenance becomes plural
 rather than being overwritten. It refuses, with a reason: an **event** rather
 than a state; a fact ingested without a `claim_kind`; a retired twin (that is
-`recurs`, and `restore`); a pair not standing in exactly the same frames
+`recurs`, and `restore`); a pair not standing in exactly the same metacontexts
 (that is `record_variant`); a fact that has already been merged and un-merged
 `merge_cycle_limit` times (default 2: an oscillation, and the refusal asks
 you to bring in the user rather than try again); and anything below the
@@ -117,7 +117,7 @@ Going ahead past it is recorded: a `proceeded_despite_advisory` row naming
 the survivor and its sources, written whether or not the graph is set to
 *show* advisories, and read back by `review(mode="advisory")`. That is what
 makes proceeding cost something. It applies to advisories that **object**;
-one that merely escalates a correct call (a same-frame contradiction is the
+one that merely escalates a correct call (a same-metacontext contradiction is the
 only kind that does) sets `notify_user` and journals nothing, because there
 was nothing to proceed against.
 
@@ -133,7 +133,7 @@ is a worklist, not a verdict:
 | `similar_pairs` | topics above the similarity threshold | `merges` or `parents` |
 | `split_candidates` | topics whose material has high internal variance | `splits` |
 | `enrichment_candidates` | thin topics with rich underlying material | `enrichments` |
-| `contradictions` | same-frame active fact pairs above 0.80, the one nomination bar, which `merge_facts` also gates on, so a pair listed here is mergeable | `record_contradiction`, then `supersessions`; or `similarities` where neither fits |
+| `contradictions` | same-metacontext active fact pairs above 0.80, the one nomination bar, which `merge_facts` also gates on, so a pair listed here is mergeable | `record_contradiction`, then `supersessions`; or `similarities` where neither fits |
 | `recurrences` | an active claim beside its own `historical` twin | `restore` |
 | `unsound_inferences` | inferences whose premises no source puts in one period | agent judgment |
 | `inference_merge_candidates` | near-identical active inferences resting on a shared premise, each with the advisory computed before you decide | `merge_inferences`, or `similarities` where they are two claims |
@@ -178,8 +178,8 @@ destroy:
   standing beside its own successor is not in conflict with it. Only *mixed*
   pairs qualify: two active facts are redundancy, two historical ones are
   both past.
-- **Cross-frame pairs are dropped**, not reported. A high-similarity pair
-  across disjoint metacontext frames is coexistence, and calling it a
+- **Cross-metacontext pairs are dropped**, not reported. A high-similarity pair
+  across disjoint metacontexts is coexistence, and calling it a
   contradiction is the misreading metacontexts exist to prevent.
 
 `unsound_inferences` and `boundary_proposals` are covered in
@@ -210,7 +210,7 @@ and `query_graph` results:
 | `superseded_candidate` | something has been nominated as replacing this |
 | `evidence_stale` | *(inferences only)* a fact this was derived from has been superseded |
 | `evidence_merged` | *(inferences only)* a fact this rests on absorbed another claim; the ids are the phrasings that went away |
-| `contested` | this has a `contradiction` edge to a live, same-frame node |
+| `contested` | this has a `contradiction` edge to a live, same-metacontext node |
 
 `contested` resolves itself when the partner is retired. The label is
 derived, so there is nothing to clean up.
@@ -283,27 +283,27 @@ bar is not a parameter of the call**: a caller does not choose the bar its
 own merge is checked against, here or in `merge_facts`. For topics that are
 merely related rather than duplicates, use `parents`.
 
-**Three of these carry a frame, and none of them may invent one.** A split's
+**Three of these carry a metacontext, and none of them may invent one.** A split's
 subtopics inherit what the parent states; a synthesised parent inherits the
 one set its children all stand in, and is refused into `parents_refused`
 when they differ; a topic merge is refused into `topic_merges_refused` unless
-every source stands in exactly the same set. Tag topics are exempt from that
-last gate: a tag names something rather than asserting it, so it stands in
-no world, and two tag topics merge whatever frame stamps they carry. Union is
-never the answer for anything else: one node asserted in two worlds is the
-worst outcome available.
+every source stands in exactly the same set. A topic node created from a tag is
+exempt from that last gate: a tag names something rather than asserting it, so
+it stands in no world, and two such nodes merge whatever metacontext stamps they
+carry. Union is never the answer for anything else: one node asserted in two
+worlds is the worst outcome available.
 
-**A merge re-states the survivor's frame rather than migrating one.** Every
+**A merge re-states the survivor's metacontext rather than migrating one.** Every
 other edge on a survivor is something its sources brought with them, but a
-frame is a claim about which world this is, and the survivor's content is
+metacontext is a claim about which world this is, and the survivor's content is
 *synthesised*, so nobody has yet said which world the synthesised wording is
-about. Migrating the edge would answer for them and credit whoever framed a
+about. Migrating the edge would answer for them and credit whoever placed a
 source; the merging agent states it under its own judge instead. A correction
-still moves the frame, where the replacement is the same claim.
+still moves the metacontext, where the replacement is the same claim.
 
-Where the sources state no frame, nothing is re-stated: inventing one would
+Where the sources state no metacontext, nothing is re-stated: inventing one would
 put words in nobody's mouth. Splits behave the same way. A node with no
-`has_metacontext` edge is one nobody spoke for, and `epimemer frames declare`
+`has_metacontext` edge is one nobody spoke for, and `epimemer metacontexts declare`
 is how a person assigns one.
 
 Merging rebuilds the node's value signal through one shared function
@@ -375,7 +375,7 @@ stays out of every future nomination.
 
 `because` is required. Anything not recorded comes back in
 `similarities_refused` with a reason rather than being applied to something
-adjacent; a cross-frame pair wants `record_variant`.
+adjacent; a cross-metacontext pair wants `record_variant`.
 
 Similarities are applied **first** in the call, before any argument that can
 retire a node. A judgment is about the wording it was made against, so a

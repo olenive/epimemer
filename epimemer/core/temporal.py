@@ -156,9 +156,9 @@ class ValidityInterval(BaseModel):
     the city is provably called both names, and every adjacent pair of periods
     overlaps by a point.
 
-    `timeline_id` is the clock, not the frame — the two axes cross both ways.
-    One frame can need two clocks (a revision to a fictional history has a real
-    publication date *and* in-universe dates) and two frames can share one
+    `timeline_id` is the clock, not the metacontext — the two axes cross both ways.
+    One metacontext can need two clocks (a revision to a fictional history has a real
+    publication date *and* in-universe dates) and two metacontexts can share one
     (competing accounts of real history both run on CE dates). `None` is the
     default wall-clock timeline, which is what real-world facts use, so the
     common case needs no decision from any caller. Only the clock is a
@@ -291,7 +291,7 @@ def compare_intervals(a: ValidityInterval, b: ValidityInterval) -> TemporalRelat
     no conversion between an in-universe date and a real one, and answering
     `before` would invent one. Useful side-effect: an inference drawn across an
     in-universe fact and a real-world fact is temporally uncheckable, which is
-    the temporal sibling of `cross-frame` and worth surfacing on its own.
+    the temporal sibling of `cross-metacontext` and worth surfacing on its own.
     """
     if a.timeline_id != b.timeline_id:
         return TemporalRelation.UNKNOWN

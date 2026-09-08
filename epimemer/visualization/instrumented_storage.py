@@ -201,12 +201,12 @@ class InstrumentedStorage:
     ) -> dict[NodeType, int]:
         return await self._inner.count_nodes_by_type(status=status)
 
-    async def count_nodes_without_frame(
+    async def count_nodes_without_metacontext(
         self,
         *,
         status: NodeStatus = NodeStatus.ACTIVE,
     ) -> int:
-        return await self._inner.count_nodes_without_frame(status=status)
+        return await self._inner.count_nodes_without_metacontext(status=status)
 
     # --- Edges (write) ---
 

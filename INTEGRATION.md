@@ -66,7 +66,7 @@ restate the count.
 |------|---------|
 | `segment` | Split text into chunks (step 1 of ingest) |
 | `store_decomposition` | Store the topics, facts and inferences you extracted (step 2 of ingest). `metacontext_id` is required: `the-real` for base reality |
-| `search` | Hybrid retrieval: embedding similarity and keyword matching run separately, their rankings are fused, then graph expansion adds what the winners connect to. Pass exact identifiers as `terms`. `include_corroboration=True` adds how many independent publishers back each result. See [docs/RETRIEVAL.md](docs/RETRIEVAL.md) |
+| `search` | Hybrid retrieval: embedding similarity and keyword matching run separately, their rankings are fused, then graph expansion adds what the winners connect to. Pass exact identifiers as `terms`. `include_corroboration=True` adds how many independent publishers back each result. `metacontexts` scopes the whole response, edges and matched passages included. See [docs/RETRIEVAL.md](docs/RETRIEVAL.md) |
 | `link` | Create a typed edge between two nodes |
 | `update` | Create a new version of a node; the old one is kept as history. `because` is required: `"it_was_wrong"` or `"the_world_changed"` |
 | `supersede_by` | Retire a node in favour of one that already exists. `because` as above. If you cannot tell which happened, use `record_contradiction` instead of guessing |
@@ -76,9 +76,9 @@ restate the count.
 
 | Tool | Purpose |
 |------|---------|
-| `query_graph` | Traverse the graph from a starting node |
-| `topic_tree` | Walk a topic hierarchy: ancestors and subtopics, previews only |
-| `find_nodes` | Return the nodes linked to a source document or a tag topic, by following edges rather than by similarity |
+| `query_graph` | Traverse the graph from a starting node. `metacontexts` scopes the neighbours, as on `search`; the starting node comes back either way |
+| `topic_tree` | Walk a topic hierarchy: ancestors and subtopics, previews only. `metacontexts` scopes the tree |
+| `find_nodes` | Return the nodes linked to a source document or a topic node, by following edges rather than by similarity. `metacontexts` scopes the listing |
 | `list_sources` | List the distinct source nodes, with reference counts |
 | `list_relations` | List the distinct user-defined relationship labels, with usage counts and descriptions |
 | `describe_relation` | Say what one of this graph's relationship labels means here: advisory prose the next agent reads before coining a label |
@@ -89,9 +89,9 @@ restate the count.
 | Tool | Purpose |
 |------|---------|
 | `check_conflicts` | Find active facts that may conflict with the given facts. You judge each pair |
-| `record_contradiction` | Record a same-frame contradiction between two facts. Both stay active |
-| `record_variant` | Record two facts as cross-frame variants of one proposition |
-| `merge_facts` | Collapse facts that restate one claim into a single node, keeping every source. Refuses events, cross-frame pairs, and facts ingested without a `claim_kind` |
+| `record_contradiction` | Record a same-metacontext contradiction between two facts. Both stay active |
+| `record_variant` | Record two facts as cross-metacontext variants of one proposition |
+| `merge_facts` | Collapse facts that restate one claim into a single node, keeping every source. Refuses events, cross-metacontext pairs, and facts ingested without a `claim_kind` |
 | `reverse_merge` | Undo a merge: restore the sources with their own edges and destroy the survivor. The only tool that deletes a node. Refuses when anything has been added to the survivor since the merge |
 | `merge_inferences` | Collapse inferences that state one conclusion into a single node. The survivor rests on the union of the sources' premises. Where those premises are dated and fall clear of each other, the response says so in `warnings` rather than refusing |
 | `configure_merge` | Read or set this graph's `merge_undo_depth` (how far back a merge stays reversible) and `merge_cycle_limit` (how many merge and un-merge rounds before a merge refuses) |
@@ -115,7 +115,7 @@ and when. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 |------|---------|
 | `review` | This graph's decisions, least certain first: a declared low `certainty` before anything unrated, then by derived difficulty (thin sources, wide merges, open contradictions, ground that moved since). Modes: `all`, `by_agent`, `since`, `unreviewed`, `advisory` (operations that completed against an objecting advisory; an advisory that only escalated a correct call writes no row). Narrow by `agent_id` (a judge's name, its key, or a key it used to be recorded under), by `since` and `until`, and by `certainty_ceiling`. Read-only, capped, and one graph wide: `graph` names which, and `elsewhere` counts the journal in every other graph so a reviewer knows where else to look |
 | `apply_review` | Record that you checked decisions and what you concluded: `confirmations` and `dissents`, each with a required `because`. Neither changes the graph. A dissent records the finding; the undo is `reverse_merge`, `restore`, `apply_reflection` or `rejudge` |
-| `reframe` | Withdraw a frame from a node, or move it to another frame in one call |
+| `reassign_metacontext` | Withdraw a metacontext from a node, or move it to another metacontext in one call |
 | `correct_interval` | Replace what one source is recorded as asserting about when a claim held |
 | `rejudge` | Revise a judgment made at ingest (`claim_kind`, `confidence`, `confidence_basis`) without touching the claim. Not a supersession: nothing is retired, no edge moves, and the value replaced is kept on the node |
 
@@ -147,7 +147,7 @@ and when. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 
 | Tool | Purpose |
 |------|---------|
-| `create_metacontext` | Create an epistemic frame (for example "Real world" or "Fiction") |
+| `create_metacontext` | Create a metacontext (for example "Real world" or "Fiction") |
 | `get_metacontexts` | Get the metacontexts a node is in |
 
 ### Graph Management (knowledge graphs)

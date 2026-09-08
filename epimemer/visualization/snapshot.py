@@ -24,7 +24,7 @@ async def assemble_snapshot(storage: StorageBackend, graph: str) -> dict:
     """Full snapshot of `graph` — nodes, edges, timelines, metacontexts.
 
     Metacontexts ride along because `has_metacontext` edges carry only ids, and
-    a frame the viewer cannot name is a frame it cannot offer as a filter.
+    a metacontext the viewer cannot name is one it cannot offer as a filter.
     Relation labels ride along for the same reason one layer over: an edge
     carries its label as a bare string, so the vocabulary's descriptions live
     nowhere the viewer can reach from the edge alone.

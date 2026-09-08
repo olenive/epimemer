@@ -2441,7 +2441,7 @@ class TestMetacontextTools:
 
     async def test_a_chosen_id_is_what_makes_the_real_ordinary(self, storage):
         """`the-real` is a convention, not a mechanism: nothing reads it
-        specially, so it has to be creatable like any other frame by whoever
+        specially, so it has to be creatable like any other metacontext by whoever
         first needs it. `ensure_base_metacontext` used to create it behind the
         scenes on every ingest, which was the last of its special cases."""
         from epimemer.core.types import BASE_METACONTEXT_ID
@@ -2460,21 +2460,21 @@ class TestMetacontextTools:
         assert stored is not None and stored.content == "The Real"
 
     async def test_an_id_is_minted_when_none_is_chosen(self, storage):
-        """Which is what every frame with no convention behind it wants."""
+        """Which is what every metacontext with no convention behind it wants."""
         first, _ = await create_metacontext("Fiction", storage)
         second, _ = await create_metacontext("Fiction", storage)
 
         assert first["metacontext_id"] != second["metacontext_id"]
 
 
-class TestAnIngestNoLongerInventsAFrame:
-    """The frame is required and `the-real` is ordinary, so ingest creates
+class TestAnIngestNoLongerInventsAMetacontext:
+    """The metacontext is required and `the-real` is ordinary, so ingest creates
     nothing. It used to call `ensure_base_metacontext` before writing,
-    back when an untagged node resolved to the base frame and the row was
+    back when an untagged node resolved to the base metacontext and the row was
     catching up with an answer the system was already giving.
     """
 
-    async def test_ingesting_into_a_graph_with_no_frames_is_refused(
+    async def test_ingesting_into_a_graph_with_no_metacontexts_is_refused(
         self, storage, embedding_provider, config
     ):
         from epimemer.core.types import BASE_METACONTEXT_ID
@@ -2490,7 +2490,7 @@ class TestAnIngestNoLongerInventsAFrame:
                 metacontext_id=BASE_METACONTEXT_ID,
             )
 
-    async def test_a_frame_somebody_created_is_all_it_needs(
+    async def test_a_metacontext_somebody_created_is_all_it_needs(
         self, storage, embedding_provider, config
     ):
         from epimemer.core.types import BASE_METACONTEXT_ID
@@ -2505,17 +2505,17 @@ class TestAnIngestNoLongerInventsAFrame:
 
         assert stored["nodes_created"]["topics"] >= 1
         assert (await graph_stats(storage, default_reflect_threshold=10))[0][
-            "nodes_without_frame"
+            "nodes_without_metacontext"
         ] == 0
 
 
-class TestAStatedFrameMustResolveHere:
+class TestAStatedMetacontextMustResolveHere:
     """A metacontext id that names nothing is refused, not written.
 
     Ids are per graph, so one carried over from another graph resolves nowhere.
-    Unchecked, the `has_metacontext` edge points at nothing and `frames_for`
-    hands the dangling id back — leaving the node in a frame it shares with no
-    other node: never compared, never merged, and absent from every frame-scoped
+    Unchecked, the `has_metacontext` edge points at nothing and `metacontexts_for`
+    hands the dangling id back — leaving the node in a metacontext it shares with no
+    other node: never compared, never merged, and absent from every metacontext-scoped
     search including the one the agent meant. That is strictly worse than being
     untagged, which at least lands somewhere coherent.
     """
@@ -2532,7 +2532,7 @@ class TestAStatedFrameMustResolveHere:
                 metacontext_id="mc-from-another-graph",
             )
 
-    async def test_the_refusal_names_the_frames_that_do_exist(
+    async def test_the_refusal_names_the_metacontexts_that_do_exist(
         self, storage, embedding_provider, config
     ):
         # No tool enumerates metacontexts, so the refusal is the only place an
@@ -2555,7 +2555,7 @@ class TestAStatedFrameMustResolveHere:
         assert fiction.id in message and "Fiction" in message
         assert storage.current_database in message
 
-    async def test_nothing_is_written_when_the_frame_is_missing(
+    async def test_nothing_is_written_when_the_metacontext_is_missing(
         self, storage, embedding_provider, config
     ):
         # Checked before the document is built, so a bad id costs nothing —
@@ -2572,7 +2572,7 @@ class TestAStatedFrameMustResolveHere:
         assert stats["total_nodes"] == 0
         assert stats["total_edges"] == 0
 
-    async def test_a_frame_that_exists_is_accepted(self, storage, embedding_provider, config):
+    async def test_a_metacontext_that_exists_is_accepted(self, storage, embedding_provider, config):
         mc = Metacontext(content="Fiction")
         await storage.store_metacontext(mc)
 
@@ -2585,7 +2585,9 @@ class TestAStatedFrameMustResolveHere:
         )
         assert store_result["nodes_created"]["topics"] >= 1
 
-    async def test_the_base_frame_is_an_ordinary_frame(self, storage, embedding_provider, config):
+    async def test_the_base_metacontext_is_an_ordinary_metacontext(
+        self, storage, embedding_provider, config
+    ):
         """`the-real` used to be accepted with no row, because an untagged node
         resolved to it and it therefore named something in every graph. Nothing
         resolves to it now, so accepting it rowless would admit an id pointing
@@ -2608,7 +2610,7 @@ class TestAStatedFrameMustResolveHere:
             )
 
     async def test_search_refuses_an_id_that_names_nothing(self, storage, embedding_provider):
-        # The read is the worse half: a frame that does not resolve narrows the
+        # The read is the worse half: a metacontext that does not resolve narrows the
         # search to nothing and answers as though the graph held nothing about
         # it, and a wrong answer to a search leaves no artifact behind anywhere.
         with pytest.raises(ValueError, match="does not exist in graph"):
@@ -2621,7 +2623,7 @@ class TestAStatedFrameMustResolveHere:
                 metacontexts=["mc-from-another-graph"],
             )
 
-    async def test_every_frame_in_the_list_is_checked(self, storage, embedding_provider):
+    async def test_every_metacontext_in_the_list_is_checked(self, storage, embedding_provider):
         """Not just the first. A union carrying one dead id answers a narrower
         question than the caller asked, and says nothing about having done so."""
         from epimemer.core.types import BASE_METACONTEXT_ID
@@ -2810,7 +2812,7 @@ class TestCheckConflicts:
         # Only self (excluded) and an orthogonal fact (below 0.9) → nothing.
         assert result["conflicts"] == []
 
-    async def test_flags_cross_frame_candidate(self, storage, embedding_provider):
+    async def test_flags_cross_metacontext_candidate(self, storage, embedding_provider):
         model_id = embedding_provider.model_id
         fiction = Metacontext(content="Fiction")
         await storage.store_metacontext(fiction)
@@ -2827,7 +2829,7 @@ class TestCheckConflicts:
 
         result, _ = await check_conflicts([query.id], storage, embedding_provider, threshold=0.5)
         cand = next(c for c in result["conflicts"][0]["candidates"] if c["id"] == variant.id)
-        assert cand["same_frame"] is False
+        assert cand["same_metacontext"] is False
         assert "Fiction" in cand["metacontexts"]
 
     async def test_skips_facts_without_embeddings(self, storage, embedding_provider):
@@ -2838,7 +2840,7 @@ class TestCheckConflicts:
 
 
 class TestRecordContradiction:
-    async def test_records_same_frame_and_signals_notify(self, storage):
+    async def test_records_same_metacontext_and_signals_notify(self, storage):
         a = Fact(content="X is true", source_id="s1")
         b = Fact(content="X is false", source_id="s1")
         await storage.store_node(a)
@@ -2855,7 +2857,7 @@ class TestRecordContradiction:
         result, _ = await record_contradiction(a.id, b.id, storage)
 
         assert result["created"] is True
-        assert result["same_frame"] is True
+        assert result["same_metacontext"] is True
         assert result["notify_user"] is True
         edges = await storage.get_edges_from(a.id, edge_type=EdgeType.CONTRADICTION)
         assert len(edges) == 1 and edges[0].dst_id == b.id
@@ -2876,7 +2878,7 @@ class TestRecordContradiction:
         from_b = await storage.get_edges_from(b.id, edge_type=EdgeType.CONTRADICTION)
         assert len(from_a) + len(from_b) == 1
 
-    async def test_cross_frame_does_not_notify(self, storage):
+    async def test_cross_metacontext_does_not_notify(self, storage):
         fiction = Metacontext(content="Fiction")
         await storage.store_metacontext(fiction)
         a = Fact(content="real", source_id="s1")
@@ -2888,7 +2890,7 @@ class TestRecordContradiction:
         )
 
         result, _ = await record_contradiction(a.id, b.id, storage)
-        assert result["same_frame"] is False
+        assert result["same_metacontext"] is False
         assert result["notify_user"] is False
         assert "warning" in result
 
@@ -2902,7 +2904,7 @@ class TestRecordContradiction:
 
 
 class TestRecordVariant:
-    async def test_records_cross_frame_variant(self, storage):
+    async def test_records_cross_metacontext_variant(self, storage):
         novel = Metacontext(content="Novel-X")
         await storage.store_metacontext(novel)
         real = Fact(content="Napoleon lost at Waterloo", source_id="s1")
@@ -2915,12 +2917,12 @@ class TestRecordVariant:
 
         result, _ = await record_variant(real.id, fic.id, storage)
         assert result["created"] is True
-        assert result["same_frame"] is False
+        assert result["same_metacontext"] is False
         assert "warning" not in result
         edges = await storage.get_edges_from(real.id, edge_type=EdgeType.VARIANT_OF)
         assert len(edges) == 1 and edges[0].dst_id == fic.id
 
-    async def test_same_frame_warns(self, storage):
+    async def test_same_metacontext_warns(self, storage):
         a = Fact(content="a", source_id="s1")
         b = Fact(content="b", source_id="s1")
         await storage.store_node(a)
@@ -2934,7 +2936,7 @@ class TestRecordVariant:
                 )
             )
         result, _ = await record_variant(a.id, b.id, storage)
-        assert result["same_frame"] is True
+        assert result["same_metacontext"] is True
         assert "warning" in result
 
     async def test_idempotent_either_direction(self, storage):
@@ -2947,7 +2949,7 @@ class TestRecordVariant:
         assert second["created"] is False and second["edge_id"] == first["edge_id"]
 
 
-class TestReflectFrameAware:
+class TestReflectMetacontextAware:
     async def _fact(self, storage, model_id, content, vector, *, mc=None):
         f = Fact(content=content, source_id="s1")
         await storage.store_node(f)
@@ -2960,14 +2962,16 @@ class TestReflectFrameAware:
             )
         return f
 
-    async def test_cross_frame_pairs_dropped_from_contradictions(self, storage, embedding_provider):
+    async def test_cross_metacontext_pairs_dropped_from_contradictions(
+        self, storage, embedding_provider
+    ):
         model_id = embedding_provider.model_id
         fiction = Metacontext(content="Fiction")
         await storage.store_metacontext(fiction)
-        # Same-frame near-identical pair.
+        # Same-metacontext near-identical pair.
         await self._fact(storage, model_id, "real A", [1.0, 0.0], mc=BASE_METACONTEXT_ID)
         await self._fact(storage, model_id, "real B", [1.0, 0.0], mc=BASE_METACONTEXT_ID)
-        # Cross-frame near-identical pair.
+        # Cross-metacontext near-identical pair.
         await self._fact(storage, model_id, "story A", [0.0, 1.0], mc=BASE_METACONTEXT_ID)
         await self._fact(storage, model_id, "story B", [0.0, 1.0], mc=fiction.id)
 
@@ -2976,19 +2980,19 @@ class TestReflectFrameAware:
             frozenset({p["fact_a"]["content"], p["fact_b"]["content"]})
             for p in result["contradictions"]
         }
-        # The same-frame pair is surfaced; the cross-frame pair is filtered out.
+        # The same-metacontext pair is surfaced; the cross-metacontext pair is filtered out.
         assert frozenset({"real A", "real B"}) in contents
         assert frozenset({"story A", "story B"}) not in contents
 
 
-# --- Retrieval visibility: frame-scoping + review labels (Phase 2c) ---
+# --- Retrieval visibility: metacontext-scoping + review labels (Phase 2c) ---
 
 
-class TestSearchFrameScoping:
-    async def test_only_the_frames_named_come_back(self, storage, embedding_provider):
-        """A union the caller states, with no frame inheriting another. This
-        used to return the named frame *plus* untagged base reality, on the
-        reasoning that real-world knowledge is the background every frame is
+class TestSearchMetacontextScoping:
+    async def test_only_the_metacontexts_named_come_back(self, storage, embedding_provider):
+        """A union the caller states, with no metacontext inheriting another. This
+        used to return the named metacontext *plus* untagged base reality, on the
+        reasoning that real-world knowledge is the background every metacontext is
         read against — hardcoded, invisible, and unaskable-for in any other
         combination. It is a sentence now."""
         mc_real = Metacontext(content="Real world")
@@ -2997,7 +3001,7 @@ class TestSearchFrameScoping:
         await storage.store_metacontext(mc_fiction)
 
         # All facts share the query's embedding so vector search returns them all;
-        # only the frame filter decides what comes back.
+        # only the metacontext filter decides what comes back.
         query = "anything"
         qvec = (await embedding_provider.embed([query]))[0]
         real = await _store_fact_with_embedding(
@@ -3014,10 +3018,10 @@ class TestSearchFrameScoping:
             qvec,
             metacontext_id=mc_fiction.id,
         )
-        frameless = await _store_fact_with_embedding(
+        no_metacontext = await _store_fact_with_embedding(
             storage,
             embedding_provider.model_id,
-            "unframed fact",
+            "fact with no metacontext",
             qvec,
         )
 
@@ -3031,10 +3035,10 @@ class TestSearchFrameScoping:
         )
         ids = {n["id"] for n in result["nodes"]}
         assert real.id in ids  # named
-        assert fic.id not in ids  # a sibling frame is not inherited
-        assert frameless.id not in ids  # and neither is saying nothing
+        assert fic.id not in ids  # a sibling metacontext is not inherited
+        assert no_metacontext.id not in ids  # and neither is saying nothing
 
-    async def test_two_frames_are_a_union(self, storage, embedding_provider):
+    async def test_two_metacontexts_are_a_union(self, storage, embedding_provider):
         """How a caller asks for a novel's world read against real history: by
         naming both, which is the combination the old hardcoded inheritance
         could express and the only one it could."""
@@ -3071,8 +3075,8 @@ class TestSearchFrameScoping:
 
         assert {real.id, fic.id} <= {n["id"] for n in result["nodes"]}
 
-    async def test_no_list_searches_every_frame(self, storage, embedding_provider):
-        """Which is what `cross_frame=True` used to mean. A flag that says
+    async def test_no_list_searches_every_metacontext(self, storage, embedding_provider):
+        """Which is what `cross_metacontext=True` used to mean. A flag that says
         *ignore the scoping I just asked for* is a second way to spell an
         omitted list, so it went with the promotion rule."""
         mc_real = Metacontext(content="Real world")
@@ -3097,10 +3101,10 @@ class TestSearchFrameScoping:
             metacontext_id=mc_fiction.id,
         )
 
-        frameless = await _store_fact_with_embedding(
+        no_metacontext = await _store_fact_with_embedding(
             storage,
             embedding_provider.model_id,
-            "unframed fact",
+            "fact with no metacontext",
             qvec,
         )
 
@@ -3112,20 +3116,22 @@ class TestSearchFrameScoping:
             graph_hops=0,
         )
         ids = {n["id"] for n in result["nodes"]}
-        assert {real.id, fic.id, frameless.id} <= ids
+        assert {real.id, fic.id, no_metacontext.id} <= ids
 
 
-class TestSearchFrameScopingBeyondTopK:
-    """Frame-scoping must not be capped by the vector top-k.
+class TestSearchMetacontextScopingBeyondTopK:
+    """Metacontext-scoping must not be capped by the vector top-k.
 
-    Vector search ranks first and returns k hits; the frame filter runs after.
-    So a frame whose relevant nodes rank below k is dropped before the filter
+    Vector search ranks first and returns k hits; the metacontext filter runs after.
+    So a metacontext whose relevant nodes rank below k is dropped before the filter
     ever sees it — the query comes back short, or empty. These pin that an
-    in-frame node still surfaces when out-of-frame nodes outrank it.
+    in-metacontext node still surfaces when out-of-metacontext nodes outrank it.
     """
 
-    async def test_frame_scoped_search_reaches_beyond_top_k(self, storage, embedding_provider):
-        mc = Metacontext(content="Frame")
+    async def test_metacontext_scoped_search_reaches_beyond_top_k(
+        self, storage, embedding_provider
+    ):
+        mc = Metacontext(content="Metacontext")
         sibling = Metacontext(content="Sibling")
         await storage.store_metacontext(mc)
         await storage.store_metacontext(sibling)
@@ -3134,17 +3140,17 @@ class TestSearchFrameScopingBeyondTopK:
         k = 3
         qvec = (await embedding_provider.embed(["anything"]))[0]
 
-        # k sibling-frame facts, each maximally similar to the query, fill the
+        # k sibling-metacontext facts, each maximally similar to the query, fill the
         # top-k. They are excluded by the filter (not base reality), so pre-fix
-        # the frame comes back empty.
+        # the metacontext comes back empty.
         for i in range(k):
             await _store_fact_with_embedding(
                 storage, model_id, f"sibling {i}", qvec, metacontext_id=sibling.id
             )
-        # One in-frame fact, strictly less similar, so it ranks below the top-k.
+        # One in-metacontext fact, strictly less similar, so it ranks below the top-k.
         weaker = [qvec[0] * 0.5, *qvec[1:]]
-        in_frame = await _store_fact_with_embedding(
-            storage, model_id, "in-frame fact", weaker, metacontext_id=mc.id
+        in_metacontext = await _store_fact_with_embedding(
+            storage, model_id, "in-metacontext fact", weaker, metacontext_id=mc.id
         )
 
         result, _ = await search(
@@ -3156,14 +3162,14 @@ class TestSearchFrameScopingBeyondTopK:
             metacontexts=[mc.id],
         )
         ids = {n["id"] for n in result["nodes"]}
-        assert in_frame.id in ids  # missed pre-fix: filtered out of the top-k
+        assert in_metacontext.id in ids  # missed pre-fix: filtered out of the top-k
 
-    async def test_frame_scoped_search_iterates_past_initial_overfetch(
+    async def test_metacontext_scoped_search_iterates_past_initial_overfetch(
         self, storage, embedding_provider
     ):
-        """Enough distractors that one over-fetch still misses the in-frame node;
+        """Enough distractors that one over-fetch still misses the in-metacontext node;
         the fetch has to grow until the store is exhausted and it surfaces."""
-        mc = Metacontext(content="Frame")
+        mc = Metacontext(content="Metacontext")
         sibling = Metacontext(content="Sibling")
         await storage.store_metacontext(mc)
         await storage.store_metacontext(sibling)
@@ -3177,8 +3183,8 @@ class TestSearchFrameScopingBeyondTopK:
                 storage, model_id, f"sibling {i}", qvec, metacontext_id=sibling.id
             )
         weaker = [qvec[0] * 0.5, *qvec[1:]]
-        in_frame = await _store_fact_with_embedding(
-            storage, model_id, "in-frame fact", weaker, metacontext_id=mc.id
+        in_metacontext = await _store_fact_with_embedding(
+            storage, model_id, "in-metacontext fact", weaker, metacontext_id=mc.id
         )
 
         result, _ = await search(
@@ -3190,9 +3196,9 @@ class TestSearchFrameScopingBeyondTopK:
             metacontexts=[mc.id],
         )
         ids = {n["id"] for n in result["nodes"]}
-        assert in_frame.id in ids
-        # Nothing out-of-frame leaks in on the way to finding it.
-        assert ids == {in_frame.id}
+        assert in_metacontext.id in ids
+        # Nothing out-of-metacontext leaks in on the way to finding it.
+        assert ids == {in_metacontext.id}
 
 
 class TestReviewLabelsInRetrieval:
@@ -3293,7 +3299,7 @@ class TestSearchWithMetacontext:
 class TestGraphStats:
     async def test_empty_graph(self, storage):
         # A graph nobody has written to *or* set up: the fixture's graph already
-        # holds the frame every ingest names, and `empty` is about knowledge.
+        # holds the metacontext every ingest names, and `empty` is about knowledge.
         await storage.switch_database("virgin")
 
         result, meta = await graph_stats(storage, default_reflect_threshold=10)
@@ -3303,7 +3309,7 @@ class TestGraphStats:
         assert result["nodes_by_type"] == {"topic": 0, "fact": 0, "inference": 0}
         assert result["edges_by_type"] == {}
         assert result["metacontexts"] == 0
-        assert result["nodes_without_frame"] == 0
+        assert result["nodes_without_metacontext"] == 0
         assert meta.nodes_returned == 0
 
     async def test_counts_nodes_and_edges_by_type(self, storage):

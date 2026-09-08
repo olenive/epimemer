@@ -97,9 +97,9 @@ class TestWorldChangeMigrationPolicy:
         ):
             assert migration_disposition(edge_type, NodeStatus.HISTORICAL) == "keep"
 
-    def test_the_frame_and_the_tags_are_copied(self):
-        """A frame says which world, a tag says what about — neither asserts the
-        claim, and losing the frame would move a fiction claim into base
+    def test_the_metacontext_and_the_tags_are_copied(self):
+        """A metacontext says which world, a tag says what about — neither asserts the
+        claim, and losing the metacontext would move a fiction claim into base
         reality."""
         for edge_type in (EdgeType.HAS_METACONTEXT, EdgeType.TAGGED_WITH_TOPIC):
             assert migration_disposition(edge_type, NodeStatus.HISTORICAL) == "copy"
@@ -114,8 +114,8 @@ class TestWorldChangeMigrationPolicy:
             assert EdgeType.SUPERSEDED_BY not in moved
             assert EdgeType.SUPERSESSION_CANDIDATE not in moved
 
-    def test_a_merge_does_not_move_the_frame(self):
-        """A correction's replacement is the same claim, so its frame follows.
+    def test_a_merge_does_not_move_the_metacontext(self):
+        """A correction's replacement is the same claim, so its metacontext follows.
         A merge's survivor is *synthesised*, so no source's framing was made
         about that wording — the merging agent re-states it under its own judge
         instead, which is `describe_relation`'s coiner rule one layer up.
@@ -634,7 +634,7 @@ class TestMetacontext:
         assert mc.status == NodeStatus.ACTIVE
 
     def test_has_value_signals(self):
-        """A frame is created by a tool call, not extracted from material, so
+        """A metacontext is created by a tool call, not extracted from material, so
         nobody is in a position to rate it — which is what unrated means."""
         mc = Metacontext(content="test")
         assert mc.value.confidence is None

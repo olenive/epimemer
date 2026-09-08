@@ -1,12 +1,14 @@
 """Resolving a name to the node that answers to it.
 
 A tag is a name, and the graph joins on it twice: `_tag_topic` resolves or
-creates one at ingest, `_resolve_hub_id` resolves one for `find_nodes`. Both
+creates one at ingest, `_resolve_node_reference` resolves one for `find_nodes`.
+Both
 matched the content exactly, against active nodes only, and that failed in two
 ways this module exists to close.
 
 **A name written two ways is one name.** `claim_kind` and `claim-kind` differ by
-a separator, and an exact match makes them two hubs. Cosine cannot make the call
+a separator, and an exact match makes them two topic nodes. Cosine cannot make
+the call
 either: those two score 0.9196 while `dev-session-2026-09-05` and
 `dev-session-2026-09-06` score 0.9935, so any threshold that unifies the first
 pair unifies the second, which is two different days of work. `tag_key` collapses
@@ -16,8 +18,8 @@ measurements.
 **A name whose node was retired still points somewhere.** Enrichment rewrites a
 topic's content and retires the old node `CORRECTED`; a merge retires its sources
 `MERGED` and names the survivor whatever the agent chose. In both cases the old
-name resolved to nothing, so the next document carrying it minted a second hub
-while `find_nodes` returned an empty list for it. `live_successor` follows the
+name resolved to nothing, so the next document carrying it minted a second topic
+node while `find_nodes` returned an empty list for it. `live_successor` follows the
 edge the retirement wrote. `dev-docs/TOPIC_DESCRIPTIONS.md` carries the case.
 
 The two are separate questions with one answer each, and both live here because
@@ -28,7 +30,7 @@ the node it names has gone.
 import re
 
 from epimemer.core.types import EdgeType, EpistemicNode, NodeStatus, NodeType, Topic
-from epimemer.pipelines.frames import is_tag_topic
+from epimemer.pipelines.metacontexts import created_from_tag
 from epimemer.storage.protocol import StorageBackend
 
 # What a retirement writes, and so what says *where this name went now*. A merge
@@ -71,14 +73,14 @@ def tag_by_key(name: str, topics: list[Topic]) -> Topic | None:
     """The tag among `topics` whose name is `name` up to spelling.
 
     Tags only. A statement topic's content is prose, and letting one answer to a
-    normalised tag name would hand a tag's hub to something nobody wrote as a
-    tag. Ties go to the first, which is the older node where the caller passed
+    normalised tag name would hand a tag's topic node to something nobody wrote
+    as a tag. Ties go to the first, which is the older node where the caller passed
     them in creation order: the spelling already in the graph wins, so a graph
     settles on one house spelling rather than following whatever was typed last.
     """
     wanted = tag_key(name)
     for topic in topics:
-        if is_tag_topic(topic) and tag_key(topic.content) == wanted:
+        if created_from_tag(topic) and tag_key(topic.content) == wanted:
             return topic
     return None
 
@@ -112,7 +114,8 @@ async def live_successor(node: EpistemicNode, storage: StorageBackend) -> Episte
 
     **Returns the node it was given rather than `None` when the trail ends
     somewhere retired.** A dangling lineage is a graph defect and a caller that
-    got `None` would create a duplicate hub, which is the failure this exists to
+    got `None` would create a duplicate topic node, which is the failure this
+    exists to
     prevent; returning the retired node keeps the name pointing at the thing it
     named.
     """

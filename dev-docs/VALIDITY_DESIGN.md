@@ -432,7 +432,7 @@ A world-change goes through `temporally_followed_by`; the historical node
 keeps its own `sourced_from` edges and therefore its validity intervals, and
 the replacement gets none of them. Both blanket answers were rejected:
 copying everything fabricates attribution, migrating nothing drops
-`has_metacontext` and moves a fiction-frame replacement into base reality.
+`has_metacontext` and moves a fiction-metacontext replacement into base reality.
 Migration is per edge type, and the table is the code:
 `migration_disposition(edge_type, status)` in `core/types.py`. Archival
 excludes `HISTORICAL`: a node retired because the world changed is still true
@@ -508,7 +508,7 @@ wrong axis. So transaction-time lookup is `graph_as_of`, and the bucketed query 
 
 T1 keys intervals by timeline, and `Timeline.reference_time` is that
 timeline's *now*. So *is this claim current?* must be asked against the
-relevant clock: a claim in a fictional frame is current when its interval
+relevant clock: a claim in a fictional metacontext is current when its interval
 contains that timeline's reference time, not wall-clock now. The first
 implementation of any "is it current" reader will reach for
 `datetime.now()`, which is why this is written down.

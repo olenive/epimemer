@@ -446,7 +446,7 @@ different set of values for the same variables, declared once in
 `tokens.css` under `:root` and `.dark`.
 
 **The one performance trap.** `currentPalette()` is called on every render,
-and the timeline re-renders on every frame of a pan. Reading nine-plus
+and the timeline re-renders on every metacontext of a pan. Reading nine-plus
 variables through `getComputedStyle` in that loop is forced-reflow jank. The
 variables are read once per theme or override change into a cached `Palette`
 object in `theme.ts`, invalidated on change, never per render.
@@ -499,7 +499,7 @@ for text tokens a live contrast ratio against `--surface-chrome`. Native
 accessible, it gets the platform's eyedropper for free, and a hand-rolled HSV
 wheel is a lot of code that has nothing to do with this project. Changes
 apply live on `input` and persist on `change`, so dragging through a gradient
-does not write to storage on every frame.
+does not write to storage on every metacontext.
 
 A *Graph & timeline* group with the semantic hues, and Export and Import
 buttons, would sit below these; both are C4.

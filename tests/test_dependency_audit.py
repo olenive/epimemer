@@ -8,6 +8,7 @@ exists at all, which is that Dependabot cannot see `uv.lock`.
 
 import importlib.util
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -125,7 +126,13 @@ class TestExitCode:
 
 
 def test_it_reads_this_environment():
-    """The environment, not the lock file: an advisory is about what is installed."""
+    """The environment, not the lock file: an advisory is about what is installed.
+
+    The version comes from `pyproject.toml` rather than being written here: a
+    release bump would otherwise fail this test for the one reason that is not a
+    defect, and the copy that goes stale is the one nobody is looking at.
+    """
+    manifest = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
     packages = audit.installed_packages()
-    assert ("epimemer", "0.1.3") in packages
+    assert ("epimemer", manifest["project"]["version"]) in packages
     assert len(packages) > 50

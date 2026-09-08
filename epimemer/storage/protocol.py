@@ -392,18 +392,19 @@ class StorageBackend(Protocol):
         """
         ...
 
-    async def count_nodes_without_frame(
+    async def count_nodes_without_metacontext(
         self,
         *,
         status: NodeStatus = NodeStatus.ACTIVE,
     ) -> int:
         """How many nodes carry no `has_metacontext` edge at all.
 
-        **The migration's completeness check.** A frame is required at ingest
-        and absence means nothing, so a node with no frame is a node nothing
-        will ever compare, merge or return from a scoped search — reachable
-        only by a graph written before the requirement. Zero here is the
-        answer, and `epimemer frames declare` is how a graph gets there.
+        **The migration's completeness check.** A metacontext is required at
+        ingest and absence means nothing, so a node with no metacontext is a node
+        nothing will ever compare, merge or return from a scoped search,
+        reachable only by a graph written before the requirement. Zero here is
+        the answer, and `epimemer metacontexts declare` is how a graph gets
+        there.
 
         Ids rather than bodies, but not a single aggregate: the answer is a set
         difference, and a correlated subquery per node would cost more than the
@@ -1362,9 +1363,9 @@ class StorageBackend(Protocol):
     ) -> Sequence[Metacontext]:
         """List all active metacontexts in a graph, for visualization.
 
-        The dashboard filters by epistemic frame, and `has_metacontext` edges
-        carry only ids — without the metacontexts themselves a viewer could
-        offer no better than a list of UUIDs.
+        The dashboard filters by metacontext, and `has_metacontext` edges carry
+        only ids: without the metacontexts themselves a viewer could offer no
+        better than a list of UUIDs.
         """
         ...
 

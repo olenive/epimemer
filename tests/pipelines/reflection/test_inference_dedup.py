@@ -60,7 +60,7 @@ def embedding_provider() -> MockEmbeddingProvider:
 
 
 # Supplied rather than derived from the text, for `test_fact_dedup`'s reason: a
-# test about what the frame rule decides must not also be a test of how alike two
+# test about what the metacontext rule decides must not also be a test of how alike two
 # sentences happen to hash.
 _TWIN = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 _STRANGER = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -74,9 +74,9 @@ async def _inference(
     vector: list[float] | None = None,
     status: NodeStatus = NodeStatus.ACTIVE,
     lifecycle: list[LifecycleEpisode] | None = None,
-    frame: str | None = BASE_METACONTEXT_ID,
+    metacontext: str | None = BASE_METACONTEXT_ID,
 ) -> Inference:
-    """One stored, embedded, framed inference. Defaults are the mergeable case."""
+    """One stored, embedded inference in a metacontext. Defaults are the mergeable case."""
     inference = Inference(
         content=content,
         source_id="seg-1",
@@ -91,11 +91,11 @@ async def _inference(
             vector=vector or _TWIN,
         )
     )
-    if frame is not None:
+    if metacontext is not None:
         await storage.store_edge(
             NodeEdge(
                 src_id=inference.id,
-                dst_id=frame,
+                dst_id=metacontext,
                 type=EdgeType.HAS_METACONTEXT,
             )
         )
@@ -132,17 +132,17 @@ async def _dated(storage, premise: Fact, name: str, *intervals) -> str:
     return document.id
 
 
-async def _frame(storage, node, label: str) -> str:
-    frame = Metacontext(content=label)
-    await storage.store_metacontext(frame)
+async def _metacontext(storage, node, label: str) -> str:
+    metacontext = Metacontext(content=label)
+    await storage.store_metacontext(metacontext)
     await storage.store_edge(
         NodeEdge(
             src_id=node.id,
-            dst_id=frame.id,
+            dst_id=metacontext.id,
             type=EdgeType.HAS_METACONTEXT,
         )
     )
-    return frame.id
+    return metacontext.id
 
 
 def _year(value: int) -> PreciseInstant:
@@ -176,7 +176,7 @@ async def _refusal(storage, embedding_provider, sources, **kwargs):
 class TestWhatWillNotMerge:
     """Each rung refuses on doubt rather than resolving it, and says which.
 
-    Ordered permanent-first for `fact_dedup`'s reason: a cross-frame pair will
+    Ordered permanent-first for `fact_dedup`'s reason: a cross-metacontext pair will
     never merge however the graph changes, while a pair below the bar may be
     nominable later. Reporting the fixable obstacle while a permanent one also
     stands sends an agent to do work that changes nothing.
@@ -208,17 +208,19 @@ class TestWhatWillNotMerge:
         """The union problem `fact_dedup` refuses on, unchanged.
 
         Two perspectives reaching the same conclusion about different worlds are
-        two conclusions, and a survivor inheriting both frames asserts in one
+        two conclusions, and a survivor inheriting both metacontexts asserts in one
         world what was only ever derived in another.
         """
         real = await _inference(storage, embedding_provider, "The pass was closed")
-        fictional = await _inference(storage, embedding_provider, "The pass was closed", frame=None)
-        await _frame(storage, fictional, "Novel-X")
+        fictional = await _inference(
+            storage, embedding_provider, "The pass was closed", metacontext=None
+        )
+        await _metacontext(storage, fictional, "Novel-X")
 
         refusal = await _refusal(storage, embedding_provider, [real, fictional])
 
         assert refusal is not None
-        assert "same set of frames" in refusal.reason
+        assert "same set of metacontexts" in refusal.reason
 
     async def test_below_the_nomination_bar_is_not_a_pair_anybody_offered(
         self, storage, embedding_provider
@@ -261,7 +263,9 @@ class TestWhatWillNotMerge:
 
         assert refusal is not None and "Ask the user" in refusal.reason
 
-    async def test_nothing_objects_to_two_twins_in_one_frame(self, storage, embedding_provider):
+    async def test_nothing_objects_to_two_twins_in_one_metacontext(
+        self, storage, embedding_provider
+    ):
         one = await _inference(storage, embedding_provider, "A reading")
         other = await _inference(storage, embedding_provider, "The same reading")
 
@@ -442,16 +446,16 @@ class TestNominationIsScopedToSharedEvidence:
 
         assert await nominate_inference_merges(storage, embedding_provider) == []
 
-    async def test_a_cross_frame_pair_is_not_offered_because_it_would_refuse(
+    async def test_a_cross_metacontext_pair_is_not_offered_because_it_would_refuse(
         self, storage, embedding_provider
     ):
         """A worklist that cannot be worked is worse than a shorter one."""
         premise = await _premise(storage, "The deploy failed")
         real = await _inference(storage, embedding_provider, "The release is unsafe")
         fictional = await _inference(
-            storage, embedding_provider, "The release cannot be trusted", frame=None
+            storage, embedding_provider, "The release cannot be trusted", metacontext=None
         )
-        await _frame(storage, fictional, "Novel-X")
+        await _metacontext(storage, fictional, "Novel-X")
         await _rests_on(storage, real, premise)
         await _rests_on(storage, fictional, premise)
 

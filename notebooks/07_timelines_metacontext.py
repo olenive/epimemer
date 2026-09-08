@@ -12,11 +12,11 @@ def _(mo):
     Two things that look similar and answer opposite questions. Both are hard to
     read from the code alone, which is why they share a notebook.
 
-    **A metacontext is a frame: which world the claim is about.** Saint
+    **A metacontext is a metacontext: which world the claim is about.** Saint
     Petersburg being in Russia and a novel's Petersburg being haunted are not a
-    contradiction, because they are asserted in different frames. Every ingested
+    contradiction, because they are asserted in different metacontexts. Every ingested
     node states one — absence is *no information*, not base reality — and a node
-    stating no frame shares a frame with nothing: never compared, never merged,
+    stating no metacontext shares a metacontext with nothing: never compared, never merged,
     returned by no scoped search. `the-real` is the conventional id for
     real-world claims and has no special status in the code.
 
@@ -27,7 +27,7 @@ def _(mo):
     than averaging them. Endpoints distinguish **unknown** from **unbounded**,
     which is the distinction the whole comparison rests on.
 
-    The rule for telling them apart: a frame answers *would this hold in every
+    The rule for telling them apart: a metacontext answers *would this hold in every
     other world here?*, an interval answers *when?*
     """)
     return
@@ -54,7 +54,7 @@ def _():
         NodeEdge,
         Timeline,
     )
-    from epimemer.pipelines.frames import frames_for, shared_frame_set
+    from epimemer.pipelines.metacontexts import metacontexts_for, shared_metacontext_set
     from epimemer.storage.memory import InMemoryStorage
 
     return (
@@ -71,16 +71,16 @@ def _():
         ValidityInterval,
         compare_intervals,
         datetime,
-        frames_for,
+        metacontexts_for,
         mo,
-        shared_frame_set,
+        shared_metacontext_set,
         timezone,
     )
 
 
 @app.cell
 def _(mo):
-    mo.md("## 1. Frames — two claims about one city, in two worlds")
+    mo.md("## 1. Metacontexts — two claims about one city, in two worlds")
     return
 
 
@@ -96,8 +96,8 @@ async def _(ClaimKind, EdgeType, Fact, InMemoryStorage, Metacontext, NodeEdge, m
         content="Bely's *Petersburg*",
         description="What is true inside the novel.",
     )
-    for _frame in (_the_real, _the_novel):
-        await store.store_metacontext(_frame)
+    for _metacontext in (_the_real, _the_novel):
+        await store.store_metacontext(_metacontext)
 
     real_fact = Fact(
         content="Saint Petersburg is a city in Russia.",
@@ -109,61 +109,73 @@ async def _(ClaimKind, EdgeType, Fact, InMemoryStorage, Metacontext, NodeEdge, m
         source_id="bely-1913",
         claim_kind=ClaimKind.STATE,
     )
-    unframed_fact = Fact(
+    fact_without_metacontext = Fact(
         content="Petersburg has canals.", source_id="unknown", claim_kind=ClaimKind.STATE
     )
 
-    for _fact in (real_fact, novel_fact, unframed_fact):
+    for _fact in (real_fact, novel_fact, fact_without_metacontext):
         await store.store_node(_fact)
-    # The third node is deliberately left with no frame edge.
-    for _fact, _frame_id in ((real_fact, "the-real"), (novel_fact, "petersburg-novel")):
+    # The third node is deliberately left with no metacontext edge.
+    for _fact, _metacontext_id in ((real_fact, "the-real"), (novel_fact, "petersburg-novel")):
         await store.store_edge(
             NodeEdge(
                 src_id=_fact.id,
-                dst_id=_frame_id,
+                dst_id=_metacontext_id,
                 type=EdgeType.HAS_METACONTEXT,
             )
         )
 
     mo.md(
-        "Three facts stored: one framed `the-real`, one framed as the novel's "
-        "world, and one **stating no frame at all** — the state a graph written "
-        "before frames were required is full of, and the one `epimemer frames "
+        "Three facts stored: one in `the-real`, one in the novel's world, and "
+        "one **stating no metacontext at all** — the state a graph written "
+        "before metacontexts were required is full of, and the one `epimemer metacontexts "
         "declare` exists to end."
     )
-    return novel_fact, real_fact, store, unframed_fact
+    return novel_fact, real_fact, store, fact_without_metacontext
 
 
 @app.cell
-async def _(frames_for, mo, novel_fact, real_fact, shared_frame_set, store, unframed_fact):
-    _ids = [real_fact.id, novel_fact.id, unframed_fact.id]
-    _frames = await frames_for(_ids, store)
+async def _(
+    metacontexts_for,
+    mo,
+    novel_fact,
+    real_fact,
+    shared_metacontext_set,
+    store,
+    fact_without_metacontext,
+):
+    _ids = [real_fact.id, novel_fact.id, fact_without_metacontext.id]
+    _metacontexts = await metacontexts_for(_ids, store)
 
     _rows = [
         ("real-world fact", real_fact.id),
         ("in-novel fact", novel_fact.id),
-        ("unframed fact", unframed_fact.id),
+        ("fact with no metacontext", fact_without_metacontext.id),
     ]
-    _lines = ["| node | frames it states |", "|---|---|"]
+    _lines = ["| node | metacontexts it states |", "|---|---|"]
     for _label, _node_id in _rows:
-        _held = sorted(_frames[_node_id]) or ["*(none)*"]
+        _held = sorted(_metacontexts[_node_id]) or ["*(none)*"]
         _lines.append(f"| {_label} | {', '.join(_held)} |")
 
-    _pair_real_novel = await shared_frame_set([real_fact.id, novel_fact.id], store)
-    _pair_unframed = await shared_frame_set([real_fact.id, unframed_fact.id], store)
+    _pair_real_novel = await shared_metacontext_set([real_fact.id, novel_fact.id], store)
+    _pair_without_metacontext = await shared_metacontext_set(
+        [real_fact.id, fact_without_metacontext.id], store
+    )
 
     mo.md(
         "\n".join(_lines) + "\n\n### What that decides\n\n"
         "- Merging the real and in-novel facts: "
         f"**{'allowed' if _pair_real_novel else 'refused'}** "
-        "— they do not stand in the same set of frames, and a merged node would "
+        "— they do not stand in the same set of metacontexts, and a merged node would "
         "assert in one world what was only ever claimed in another.\n"
-        f"- Merging the real and unframed facts: **{'allowed' if _pair_unframed else 'refused'}** "
-        "— the unframed node speaks for no world, so there is no set to agree on.\n\n"
+        f"- Merging the real fact and the one with no metacontext: "
+        f"**{'allowed' if _pair_without_metacontext else 'refused'}** "
+        "— a node without a metacontext speaks for no world, so there is no set "
+        "to agree on.\n\n"
         "*Two perspectives disagreeing about one world are also never nominated "
-        "as a contradiction, because the sweep skips pairs sharing no frame. "
+        "as a contradiction, because the sweep skips pairs sharing no metacontext. "
         "Where the disagreement is the point, `record_contradiction` takes it "
-        "and marks it cross-frame.*"
+        "and marks it cross-metacontext.*"
     )
     return
 

@@ -508,23 +508,23 @@ either label; `reflect` reports `relation_pairs_suppressed`.
   it does not steer an agent away from a name it was about to coin. Steering
   carries FC3, so whatever proposes it owes the answer there.
 - **It does not merge labels** (§5).
-- **It does not check frames when nominating a pair.** A frame check would
+- **It does not check metacontexts when nominating a pair.** A metacontext check would
   not stop the servant/consultant pair being proposed: both usages sit in the
-  same fictional universe, so their derived frame sets are identical and
+  same fictional universe, so their derived metacontext sets are identical and
   nothing fires. It catches a different case, two universes or fiction beside
   base reality, and the corroboration harm that justifies `merge_facts`'
-  cross-frame refusal does not transfer, because nothing corroborates on a
+  cross-metacontext refusal does not transfer, because nothing corroborates on a
   label. So it was only ever a nomination-quality improvement, and its last
   real reason (deprecation folding a fiction label under a real one) went
-  with merging. The answer to a cross-frame label is its description.
+  with merging. The answer to a cross-metacontext label is its description.
 
   If it is ever built, the bar is disjointness, not equality. Do not copy
   `fact_dedup`'s *exactly the same set* rule: that bar is right there because
   a merge inherits a union, and here nothing inherits, so a label
-  legitimately used in two frames would become unpairable with anything. The
-  right check is the negation of `same_frame`'s *share at least one*: do not
-  nominate a pair whose derived frame sets are disjoint, where a label's
-  frames are the union of `frames_for` over the endpoint nodes of every edge
+  legitimately used in two metacontexts would become unpairable with anything. The
+  right check is the negation of `same_metacontext`'s *share at least one*: do not
+  nominate a pair whose derived metacontext sets are disjoint, where a label's
+  metacontexts are the union of `metacontexts_for` over the endpoint nodes of every edge
   carrying it.
 
 ---

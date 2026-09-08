@@ -67,7 +67,7 @@ async def review_labels_for(
     nodes: Sequence[EpistemicNode],
     storage: StorageBackend,
     *,
-    resolve_frames: FrameResolver | None = None,
+    resolve_metacontexts: MetacontextResolver | None = None,
 ) -> dict[str, dict[str, list[str]]]:
     """Review labels for many nodes at once, keyed by node id (§4.1).
 
@@ -95,7 +95,7 @@ async def review_labels_for(
       archival nominates on. A re-read is recorded the same way as for
       ``evidence_stale``: a retention anchored to these ids.
     - ``contested`` — node has a ``contradiction`` edge (either direction) to a
-      node that is still ACTIVE and in the same frame (an unresolved same-frame
+      node that is still ACTIVE and in the same metacontext (an unresolved same-metacontext
       conflict); ids are the contesting nodes.
     """
     if not nodes:
@@ -138,19 +138,19 @@ async def review_labels_for(
         else {}
     )
 
-    # Frames are needed for each node and for whoever contradicts it, and the
+    # Metacontexts are needed for each node and for whoever contradicts it, and the
     # contradiction partners are only known now that those edges are in hand.
     # A caller that passed its own resolver has its own idea of the set to warm.
-    if resolve_frames is None:
+    if resolve_metacontexts is None:
         contested_ids = {
             endpoint
             for node in nodes
             for edge in list(contradicts_from[node.id]) + list(contradicts_to[node.id])
             for endpoint in (edge.src_id, edge.dst_id)
         }
-        resolve_frames = frame_resolver(
+        resolve_metacontexts = metacontext_resolver(
             storage,
-            seed=await frames_for(list(contested_ids), storage) if contested_ids else None,
+            seed=await metacontexts_for(list(contested_ids), storage) if contested_ids else None,
         )
 
     by_node: dict[str, dict[str, list[str]]] = {}
@@ -180,7 +180,7 @@ async def review_labels_for(
             other = await storage.get_node(other_id)
             if other is None or other.status != NodeStatus.ACTIVE:
                 continue  # resolved (the partner was retired) — no longer contested
-            if await same_frame(node.id, other_id, storage, resolve=resolve_frames):
+            if await same_metacontext(node.id, other_id, storage, resolve=resolve_metacontexts):
                 contesting.append(other_id)
         if contesting:
             labels["contested"] = _unique(contesting)
@@ -195,7 +195,7 @@ async def review_labels(
     node: EpistemicNode,
     storage: StorageBackend,
     *,
-    resolve_frames: FrameResolver | None = None,
+    resolve_metacontexts: MetacontextResolver | None = None,
 ) -> dict[str, list[str]]:
     """Epistemic review labels for one active node (REVIEW_EPISTEMIC.md §4.1).
 
@@ -205,26 +205,26 @@ async def review_labels(
     the rules and which this is the one-node spelling of; prefer that one when
     labelling a set, so the queries are shared across it.
     """
-    return (await review_labels_for([node], storage, resolve_frames=resolve_frames)).get(
-        node.id, {}
-    )
+    return (
+        await review_labels_for([node], storage, resolve_metacontexts=resolve_metacontexts)
+    ).get(node.id, {})
 
 
-async def frames_for(node_ids: Sequence[str], storage: StorageBackend) -> dict[str, set[str]]:
-    """`frames_of` for many nodes at once, keyed by node id.
+async def metacontexts_for(node_ids: Sequence[str], storage: StorageBackend) -> dict[str, set[str]]:
+    """`metacontexts_of` for many nodes at once, keyed by node id.
 
-    **This got materially more expensive when frames became explicit**,
+    **This got materially more expensive when metacontexts became explicit**,
     and the number is worth stating rather than assuming: before, almost no node
     carried a `has_metacontext` edge and the read came back nearly empty at any
     graph size; now every ingested node carries exactly one. Measured
     2026-08-28 — 684 nodes: 0.18 ms → 13.6 ms on SurrealDB, 0.28 ms → 4.6 ms
     in-memory; 5,000 nodes: 1.0 ms → 105 ms and 2.1 ms → 34 ms. About 21 µs and
-    7 µs per framed node.
+    7 µs per node holding one.
 
     It is bounded by where it is called rather than by the graph: `reflect`
-    seeds `frame_resolver` once over the nodes in nominated pairs, and search
-    scoping runs over a result set. Neither walks the whole graph. A caller that
-    did would want a storage-level frame filter instead.
+    seeds `metacontext_resolver` once over the nodes in nominated pairs, and
+    search scoping runs over a result set. Neither walks the whole graph. A
+    caller that did would want a storage-level metacontext filter instead.
     """
     tagged = await storage.get_edges_for(
         node_ids, direction="from", edge_type=EdgeType.HAS_METACONTEXT
@@ -232,87 +232,90 @@ async def frames_for(node_ids: Sequence[str], storage: StorageBackend) -> dict[s
     return {node_id: {edge.dst_id for edge in edges} for node_id, edges in tagged.items()}
 
 
-async def frames_of(node_id: str, storage: StorageBackend) -> set[str]:
+async def metacontexts_of(node_id: str, storage: StorageBackend) -> set[str]:
     """The metacontext ids a node states, and nothing more.
 
-    **Absence names no frame.** A node with no ``has_metacontext`` edge is a
+    **Absence names no metacontext.** A node with no ``has_metacontext`` edge is a
     node nobody said anything about, which is what absence means everywhere
     else here — an omitted ``confidence`` is unrated, an absent ``judged_by``
     is unknown, an omitted ``claim_kind`` is unjudged. This used to be the one
-    exception, answering the base frame for an untagged node and so turning
-    silence into an assertion about the real world; requiring the frame at
+    exception, answering the base metacontext for an untagged node and so
+    turning silence into an assertion about the real world; requiring the
+    metacontext at
     ingest made that exception unnecessary, and it was removed.
 
-    The consequence is deliberate and worth stating: a frameless node shares a
-    frame with **nothing**, so it is never nominated as contradicting anything,
-    never merged, and never returned by a scoped search. That is the honest
-    reading of *nobody said*, and it is reachable only on a graph written
-    before the requirement — ``epimemer frames declare`` is how such a graph
-    stops holding any, and ``graph_stats.nodes_without_frame`` is the check.
+    The consequence is deliberate and worth stating: a node without a
+    metacontext shares a metacontext with **nothing**, so it is never nominated
+    as contradicting anything, never merged, and never returned by a scoped
+    search. That is the honest reading of *nobody said*, and it is reachable
+    only on a graph written
+    before the requirement — ``epimemer metacontexts declare`` is how such a graph
+    stops holding any, and ``graph_stats.nodes_without_metacontext`` is the check.
 
-    Used to decide whether two nodes share a frame, and so whether an apparent
-    conflict is genuine (REVIEW_EPISTEMIC.md §4.3).
+    Used to decide whether two nodes share a metacontext, and so whether an
+    apparent conflict is genuine (REVIEW_EPISTEMIC.md §4.3).
     """
-    return (await frames_for([node_id], storage))[node_id]
+    return (await metacontexts_for([node_id], storage))[node_id]
 
 
-def frame_resolver(
+def metacontext_resolver(
     storage: StorageBackend, *, seed: dict[str, set[str]] | None = None
-) -> FrameResolver:
-    """A `frames_of` that answers each node once.
+) -> MetacontextResolver:
+    """A `metacontexts_of` that answers each node once.
 
-    Frame checks are made per *pair* — of contradiction candidates, of
+    Metacontext checks are made per *pair* — of contradiction candidates, of
     contesting nodes — while the nodes involved are drawn from a much smaller
     set. Without this, a pass that compares P pairs over N nodes does O(P)
     lookups instead of O(N).
 
-    `seed` pre-loads answers a caller already has, from `frames_for`; that is
-    what takes the remaining O(N) down to one query, since a caller running a
+    `seed` pre-loads answers a caller already has, from `metacontexts_for`;
+    that is what takes the remaining O(N) down to one query, since a caller
+    running a
     pass over a node set knows that set upfront. Anything not seeded is still
     resolved on demand, so a partial seed is safe.
 
     The cache is created by the caller and lives for that one pass, so it cannot
-    serve a stale frame to a later operation.
+    serve a stale metacontext to a later operation.
     """
     cache: dict[str, set[str]] = dict(seed) if seed else {}
 
     async def resolve(node_id: str) -> set[str]:
         if node_id not in cache:
-            cache[node_id] = await frames_of(node_id, storage)
+            cache[node_id] = await metacontexts_of(node_id, storage)
         return cache[node_id]
 
     return resolve
 
 
-FrameResolver = Callable[[str], Awaitable[set[str]]]
+MetacontextResolver = Callable[[str], Awaitable[set[str]]]
 
 
-async def same_frame(
+async def same_metacontext(
     a_id: str,
     b_id: str,
     storage: StorageBackend,
     *,
-    resolve: FrameResolver | None = None,
+    resolve: MetacontextResolver | None = None,
 ) -> bool:
-    """Whether two nodes share at least one stated metacontext frame.
+    """Whether two nodes share at least one stated metacontext.
 
-    Nodes in disjoint frames — a fiction frame and the real-world one — do not.
-    A frame overlap means an apparent contradiction is real; disjoint frames
-    mean the two simply coexist.
+    Nodes in disjoint metacontexts, a fiction one and the real-world one, do
+    not. A metacontext overlap means an apparent contradiction is real; disjoint
+    metacontexts mean the two simply coexist.
 
-    **Two frameless nodes do not share a frame**, since neither states one.
-    That diverges from the equality test `merge_facts` and topic merge use,
-    where two empty sets *are* equal and the merge is allowed — the two
-    questions differ, and only for a graph that has not been declared. Overlap
-    asks *is this conflict real*, and nothing said cannot make it real; equality
-    asks *would merging assert something new*, and merging two claims nobody
-    framed asserts nothing new. Both are right; the divergence is visible only
-    in the mid-migration state, which `epimemer frames declare` removes.
+    **Two nodes without a metacontext do not share one**, since neither states
+    one. That diverges from the equality test `merge_facts` and topic merge use,
+    where two empty sets *are* equal and the merge is allowed: the two questions
+    differ, and only for a graph that has not been declared. Overlap asks *is
+    this conflict real*, and nothing said cannot make it real; equality asks
+    *would merging assert something new*, and merging two claims nobody placed
+    asserts nothing new. Both are right; the divergence is visible only in the
+    mid-migration state, which `epimemer metacontexts declare` removes.
 
-    Pass `resolve` (from `frame_resolver`) when checking many pairs, so repeated
-    nodes are not re-read once per pair.
+    Pass `resolve` (from `metacontext_resolver`) when checking many pairs, so
+    repeated nodes are not re-read once per pair.
     """
-    lookup = resolve or (lambda node_id: frames_of(node_id, storage))
+    lookup = resolve or (lambda node_id: metacontexts_of(node_id, storage))
     return bool(await lookup(a_id) & await lookup(b_id))
 
 
@@ -347,7 +350,7 @@ async def gather_pending_review(
 
     nodes = list(await storage.query_nodes())
     # No resolver passed: `review_labels_for` warms one from the contradiction
-    # partners it finds, which is the set that actually gets frame-checked.
+    # partners it finds, which is the set that actually gets metacontext-checked.
     labels_by_node = await review_labels_for(nodes, storage)
     flagged = [node for node in nodes if node.id in labels_by_node]
     retained = await confirmed_reasons_for([node.id for node in flagged], storage)

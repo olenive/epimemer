@@ -42,8 +42,9 @@ async def _prepare_store_payload(
 ):
     """Segment content and build a store_decomposition payload.
 
-    The graph names its frames before writing into them: since the frame requirement every ingest
-    states one, and `the-real` is an ordinary metacontext created like any other.
+    The graph names its metacontexts before writing into them: every ingest
+    states one, and `the-real` is an ordinary metacontext created like any
+    other.
     """
     await storage.store_metacontext(
         Metacontext(

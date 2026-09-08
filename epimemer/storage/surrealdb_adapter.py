@@ -392,7 +392,7 @@ def _upsert(table: str, *, data: str = "data", uid: str = "uid") -> str:
 # is deletable once no graph older than the release that added it is expected to
 # be opened.
 _SCHEMA_VERSION_RECORD = "schema_version:current"
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 _SCHEMA_VERSION_GET = f"SELECT VALUE version FROM {_SCHEMA_VERSION_RECORD};"
 _SCHEMA_VERSION_SET = f"UPSERT {_SCHEMA_VERSION_RECORD} SET version = $version;"
@@ -512,6 +512,123 @@ async def _recover_retentions_from_edges(query: Callable[..., Awaitable[Any]]) -
     return len(anchors)
 
 
+# terminology-guard: off — the step exists to rewrite the retired words, so it
+# has to name them.
+#
+# Version 4: "frame" stopped being a word this system uses, so every stored
+# string that spelled it moves to the metacontext spelling. The rename is the
+# point: a value nothing writes any more still reads back out of `review`, out
+# of `query_decisions` and out of a graph's own warning policy, so a graph left
+# unmigrated would answer in a vocabulary the code no longer has.
+#
+# One-way. A graph opened by 0.2.0 holds the new strings, and 0.1.x has no step
+# that puts them back.
+_RENAME_DECLARATION_KIND = (
+    "UPDATE decision SET kind = 'metacontext_declaration' "
+    "WHERE kind = 'frame_declaration' RETURN VALUE uid;"
+)
+_RENAME_REASSIGNMENT_KIND = (
+    "UPDATE decision SET kind = 'metacontext_reassignment' WHERE kind = 'reframe' RETURN VALUE uid;"
+)
+
+# The journal row's own field, renamed with the model field it serializes.
+# `SET metacontext = frame` reads the old field and `frame = NONE` removes it,
+# which is what the driver does with a `None` anywhere else.
+_MOVE_DECISION_METACONTEXT = (
+    "UPDATE decision SET metacontext = frame, frame = NONE WHERE frame != NONE RETURN VALUE uid;"
+)
+
+# The advisory kinds, as they appear inside a `proceeded_despite_advisory` row's
+# `certainty_basis`: `journal` writes them as `[<kind>] <message>`, so the
+# brackets are what makes this a rewrite of the kind rather than of the agent's
+# prose, which is left exactly as written.
+_ADVISORY_KIND_RENAMES = {
+    "[cross_frame]": "[cross_metacontext]",
+    "[same_frame_variant]": "[same_metacontext_variant]",
+    "[same_frame_contradiction]": "[same_metacontext_contradiction]",
+}
+
+# The same kinds as keys of the per-graph warning policy `configure_warnings`
+# persists. Keys rather than values, so a rewrite has to rebuild the map.
+_ADVISORY_KEY_RENAMES = {
+    "cross_frame": "cross_metacontext",
+    "same_frame_variant": "same_metacontext_variant",
+    "same_frame_contradiction": "same_metacontext_contradiction",
+}
+
+_ADVISORY_ROWS = (
+    "SELECT uid, certainty_basis FROM decision "
+    "WHERE kind = 'proceeded_despite_advisory' AND certainty_basis != NONE;"
+)
+_SET_BASIS = "UPDATE decision SET certainty_basis = $basis WHERE uid = $uid;"
+
+# The trail `reassign_metacontext` appends to the node it moves. Projected
+# rather than selected whole so the scan costs one field per node.
+_REASSIGNMENT_TRAILS = "SELECT uid, metadata.reframings AS trail FROM {table};"
+_MOVE_TRAIL = (
+    "UPDATE {table} SET metadata.metacontext_reassignments = $trail, "
+    "metadata.reframings = NONE WHERE uid = $uid;"
+)
+# terminology-guard: on
+
+
+async def _rename_advisory_kinds_in_journal(query: Callable[..., Awaitable[Any]]) -> int:
+    """Rewrite the advisory kind each `proceeded_despite_advisory` row names.
+
+    A row whose basis holds none of the old kinds is left alone, so a second run
+    over a half-migrated graph writes nothing.
+    """
+    rewritten = 0
+    for row in await query(_ADVISORY_ROWS) or []:
+        basis = row.get("certainty_basis")
+        if not isinstance(basis, str):
+            continue
+        moved = basis
+        for old, new in _ADVISORY_KIND_RENAMES.items():
+            moved = moved.replace(old, new)
+        if moved == basis:
+            continue
+        await query(_SET_BASIS, {"basis": moved, "uid": row["uid"]})
+        rewritten += 1
+    return rewritten
+
+
+async def _rename_advisory_kinds_in_policy(query: Callable[..., Awaitable[Any]]) -> bool:
+    """Rewrite the old kind names out of this graph's warning-policy override.
+
+    Written back whole, the way `set_warning_overrides` writes it: the map is one
+    value, and a key rename is not something a partial update can express.
+    """
+    rows = await query(_WARNING_GET)
+    if not rows or rows[0] is None:
+        return False
+    stored = rows[0].get(_WARNING_FIELD) or {}
+    by_kind = stored.get("by_kind") or {}
+    if not any(key in by_kind for key in _ADVISORY_KEY_RENAMES):
+        return False
+    moved = {_ADVISORY_KEY_RENAMES.get(key, key): value for key, value in by_kind.items()}
+    await query(_WARNING_SET, {"overrides": {**stored, "by_kind": moved}})
+    return True
+
+
+async def _move_reassignment_trails(query: Callable[..., Awaitable[Any]]) -> int:
+    """Move each node's metacontext-reassignment trail under its new key.
+
+    The trail is the only place a withdrawn metacontext survives on the node, so
+    losing it would cost a reviewer the ability to bound which answers were given
+    while the old assignment stood.
+    """
+    moved = 0
+    for table in _NODE_TYPE_TO_TABLE.values():
+        for row in await query(_REASSIGNMENT_TRAILS.format(table=table)) or []:
+            trail = row.get("trail")
+            if not trail:
+                continue
+            await query(_MOVE_TRAIL.format(table=table), {"trail": trail, "uid": row["uid"]})
+            moved += 1
+    return moved
+
+
 async def _migrate_schema(query: Callable[..., Awaitable[Any]], database: str) -> None:
     """Bring one graph up to `_SCHEMA_VERSION`, a step at a time.
 
@@ -556,6 +673,28 @@ async def _migrate_schema(query: Callable[..., Awaitable[Any]], database: str) -
                 database,
                 filled,
                 recovered,
+            )
+
+    if version < 4:
+        declarations = await query(_RENAME_DECLARATION_KIND)
+        reassignments = await query(_RENAME_REASSIGNMENT_KIND)
+        fields = await query(_MOVE_DECISION_METACONTEXT)
+        advisories = await _rename_advisory_kinds_in_journal(query)
+        policy = await _rename_advisory_kinds_in_policy(query)
+        trails = await _move_reassignment_trails(query)
+        if declarations or reassignments or fields or advisories or policy or trails:
+            logger.info(
+                "graph %s: moved %d declaration and %d reassignment journal kinds, %d "
+                "journal metacontext fields, %d advisory kinds in journal prose, %d "
+                "node reassignment trails and %d warning policy to the metacontext "
+                "vocabulary",
+                database,
+                len(declarations or []),
+                len(reassignments or []),
+                len(fields or []),
+                advisories,
+                trails,
+                int(policy),
             )
 
     await query(_SCHEMA_VERSION_SET, {"version": _SCHEMA_VERSION})
@@ -1413,22 +1552,22 @@ class SurrealDBStorage:
             counts[node_type] = rows[0]["c"] if rows else 0
         return counts
 
-    async def count_nodes_without_frame(
+    async def count_nodes_without_metacontext(
         self,
         *,
         status: NodeStatus = NodeStatus.ACTIVE,
     ) -> int:
-        framed = await self._query(
+        stated = await self._query(
             "SELECT VALUE src_id FROM node_edge WHERE type = $type",
             {"type": EdgeType.HAS_METACONTEXT.value},
         )
-        framed_ids = list({row for row in framed if row})
+        with_metacontext = list({row for row in stated if row})
         total = 0
         for table in _NODE_TYPE_TO_TABLE.values():
             rows = await self._query(
                 f"SELECT count() AS c FROM {table} "
-                f"WHERE status = $status AND uid NOT IN $framed GROUP ALL",
-                {"status": status.value, "framed": framed_ids},
+                f"WHERE status = $status AND uid NOT IN $held GROUP ALL",
+                {"status": status.value, "held": with_metacontext},
             )
             total += rows[0]["c"] if rows else 0
         return total
@@ -1637,7 +1776,7 @@ class SurrealDBStorage:
         # Which edges follow the replacement depends on *why* the old node is
         # being retired: a correction re-points everything but history,
         # review and judgments; a world-change re-points nothing and
-        # copies only the frame and the tags. Both answers come from
+        # copies only the metacontext and the tags. Both answers come from
         # `migration_disposition`, so this backend cannot develop an opinion of
         # its own.
         moved = [t.value for t in moved_edge_types(status)]

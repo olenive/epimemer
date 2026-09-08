@@ -513,16 +513,18 @@ class InMemoryStorage:
             counts[_CLASS_TO_NODE_TYPE[type(node)]] += 1
         return counts
 
-    async def count_nodes_without_frame(
+    async def count_nodes_without_metacontext(
         self,
         *,
         status: NodeStatus = NodeStatus.ACTIVE,
     ) -> int:
-        framed = {
+        with_metacontext = {
             edge.src_id for edge in self._g.edges.values() if edge.type == EdgeType.HAS_METACONTEXT
         }
         return sum(
-            1 for node in self._g.nodes.values() if node.status == status and node.id not in framed
+            1
+            for node in self._g.nodes.values()
+            if node.status == status and node.id not in with_metacontext
         )
 
     # --- Edges ---
@@ -570,7 +572,7 @@ class InMemoryStorage:
         `status` is why the old node is being retired, and it decides each
         edge's fate: a correction (or a merge) re-points everything but history,
         review and judgments, while a world-change re-points nothing and copies
-        only the frame and the tags. A judgment is anchored whatever
+        only the metacontext and the tags. A judgment is anchored whatever
         the status — it was made against a wording, and no retirement leaves
         that wording in place.
 

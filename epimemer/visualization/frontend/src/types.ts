@@ -107,7 +107,7 @@ export interface TimelineView {
   metadata: Record<string, unknown>;
 }
 
-/** An epistemic frame, so a filter can name one rather than show a uuid. */
+/** A metacontext, so a filter can name one rather than show a uuid. */
 export interface MetacontextView {
   metacontext_id: string;
   content: string;

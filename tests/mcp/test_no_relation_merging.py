@@ -4,7 +4,7 @@
 carrying a listed label, in place. Edges are not versioned, so the old wording
 was gone: **a lossy, irreversible bulk rewrite in a system whose whole design is
 append-only and reversible.** `reverse_merge` undoes a node merge, `restore` an
-archival, `reframe` a frame, and `apply_review` records a dissent against any of
+archival, `reassign_metacontext` a metacontext, and `apply_review` records a dissent against any of
 them. This was the one operation with no undo, and it operated on the least
 valuable thing in the graph — a word, which affects no retrieval (§1.2).
 

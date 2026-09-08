@@ -49,8 +49,8 @@ def embedder():
 async def _fact(storage, embedder, content: str, *, claim_kind=None, source="doc1"):
     node = Fact(content=content, source_id="seg1", claim_kind=claim_kind)
     await storage.store_node(node)
-    # States a frame, as every ingested node has since the frame requirement: absence names none,
-    # so two frameless nodes share none and a `one_claim` verdict is refused.
+    # States a metacontext, as every ingested node has since the metacontext requirement: absence
+    # names none, so two nodes without one share none and a `one_claim` verdict is refused.
     await storage.store_edge(
         NodeEdge(
             src_id=node.id,
@@ -538,8 +538,8 @@ class TestBothBackendsKeepIt:
 
         await storage.store_edge(edge)
 
-        # By type: `_fact` also writes the node's frame edge, which carries no
-        # judge because nothing here claimed to have framed it.
+        # By type: `_fact` also writes the node's metacontext edge, which carries no
+        # judge because nothing here claimed to have placed it.
         stored = await storage.get_edges_from(a.id, edge_type=EdgeType.SIMILARITY)
         assert [e.judged_by for e in stored] == [CRITIC]
 

@@ -89,8 +89,8 @@ def _embedded_advice(reason: str, agent_id: str | None, action: str) -> str:
             f"{reason}\n\n"
             f"An embedded graph is rebuilt rather than declared: it lives "
             f"inside the server process, so start again with a fresh one and "
-            f"every node will name its frame at ingest. This command is for "
-            f"long-lived graphs on a served store."
+            f"every node will name its metacontext at ingest. This command is "
+            f"for long-lived graphs on a served store."
         )
     if action == "require":
         return (
@@ -308,30 +308,30 @@ async def _backfill_relations(storage: StorageBackend) -> str:
     )
 
 
-async def _declare_frames(
-    storage: StorageBackend, frame: str, handle: str | None, assume_yes: bool
+async def _declare_metacontext(
+    storage: StorageBackend, metacontext: str, handle: str | None, assume_yes: bool
 ) -> str:
-    """Stamp `frame` on every node in this graph that carries no frame at all.
+    """Stamp `metacontext` on every node in this graph that carries no metacontext at all.
 
     **The user's act, which is why it is here and not a tool.** Nothing derives
     the answer from the content: somebody is stating that the claims in a graph
-    written before frames were required were always about one world, and owning
-    having said so. An agent asserting that about its own past writes would be
-    marking its own homework, which is the reasoning that keeps judge approval
-    on this side of the wall too.
+    written before metacontexts were required were always about one world, and
+    owning having said so. An agent asserting that about its own past writes
+    would be marking its own homework, which is the reasoning that keeps judge
+    approval on this side of the wall too.
 
     It asks before writing, because the sweep is not reversible in one step: a
-    wrong frame comes off one node at a time with `reframe`, and the count is
-    the only thing that tells the user how big the claim they are about to make
-    actually is.
+    wrong metacontext comes off one node at a time with `reassign_metacontext`,
+    and the count is the only thing that tells the user how big the claim they
+    are about to make actually is.
     """
     from epimemer.mcp.tools import create_metacontext
-    from epimemer.pipelines.frames import declare_frames
+    from epimemer.pipelines.metacontexts import declare_metacontext
 
-    unframed = await storage.count_nodes_without_frame()
+    without_metacontext = await storage.count_nodes_without_metacontext()
     graph = storage.current_database
-    if unframed == 0:
-        return f"Graph '{graph}': every node already names a frame. Nothing to declare."
+    if without_metacontext == 0:
+        return f"Graph '{graph}': every node already names a metacontext. Nothing to declare."
 
     judge = None
     if handle is not None:
@@ -347,36 +347,36 @@ async def _declare_frames(
 
     if not assume_yes:
         answer = input(
-            f"Declare {unframed} unframed node(s) in graph '{graph}' as "
-            f"'{frame}'? This states that they were always claims in that "
-            f"frame. [y/N] "
+            f"Declare {without_metacontext} node(s) with no metacontext in "
+            f"graph '{graph}' as '{metacontext}'? This states that they were "
+            f"always claims in that metacontext. [y/N] "
         )
         if answer.strip().lower() not in ("y", "yes"):
             return f"Nothing declared in graph '{graph}'."
 
-    # The frame is created here when it is missing, and only here. The sweep
-    # itself refuses a frame that does not exist — a bulk stamp pointing at
-    # nothing is the isolation failure this is meant to end — but a person
-    # declaring *this graph is about the real world* is also entitled to say
-    # that frame exists. No agent reaches this path.
+    # The metacontext is created here when it is missing, and only here. The
+    # sweep itself refuses a metacontext that does not exist, since a bulk stamp
+    # pointing at nothing is the isolation failure this is meant to end, but a
+    # person declaring *this graph is about the real world* is also entitled to
+    # say that metacontext exists. No agent reaches this path.
     created = ""
-    if await storage.get_metacontext(frame) is None:
+    if await storage.get_metacontext(metacontext) is None:
         await create_metacontext(
-            frame.replace("-", " ").title(),
+            metacontext.replace("-", " ").title(),
             storage,
-            metacontext_id=frame,
+            metacontext_id=metacontext,
             description=f"Declared for graph '{graph}'.",
         )
-        created = f"Created metacontext '{frame}', which this graph did not have.\n"
+        created = f"Created metacontext '{metacontext}', which this graph did not have.\n"
 
-    result = await declare_frames(storage, frame=frame, judge=judge)
+    result = await declare_metacontext(storage, metacontext=metacontext, judge=judge)
     by = f" by '{handle}'" if handle else " with no judge recorded"
     return (
         created + f"Graph '{graph}': declared {result.declared} node(s) as "
-        f"'{result.frame}'{by}; {result.already_framed} already named a frame "
-        f"and were left alone.\n"
+        f"'{result.metacontext}'{by}; {result.already_in_metacontext} already "
+        f"named a metacontext and were left alone.\n"
         f"One journal row records the sweep. Check completeness with "
-        f"graph_stats: nodes_without_frame should now be 0."
+        f"graph_stats: nodes_without_metacontext should now be 0."
     )
 
 
@@ -430,20 +430,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     backfill.add_argument("--graph", help="Graph to write in (default: the configured one).")
 
-    frames = sub.add_parser("frames", help="Epistemic frames — which world a claim is about.")
-    frames_sub = frames.add_subparsers(dest="action", required=True)
-    declare = frames_sub.add_parser(
+    metacontexts = sub.add_parser(
+        "metacontexts", help="Metacontexts: which world a claim is about."
+    )
+    metacontexts_sub = metacontexts.add_subparsers(dest="action", required=True)
+    declare = metacontexts_sub.add_parser(
         "declare",
         help=(
-            "State which frame this graph's unframed nodes were always in. "
-            "Idempotent; skips any node that already names a frame."
+            "State which metacontext the nodes in this graph that have none "
+            "were always in. Idempotent; skips any node that already names a "
+            "metacontext."
         ),
     )
     declare.add_argument(
-        "--frame",
+        "--metacontext",
         default=BASE_METACONTEXT_ID,
         help=(
-            f"Frame to declare (default: {BASE_METACONTEXT_ID}). Use "
+            f"Metacontext to declare (default: {BASE_METACONTEXT_ID}). Use "
             f"'{QUARANTINE_METACONTEXT_ID}' for a graph nobody can vouch for — "
             f"no agent may write that one."
         ),
@@ -489,7 +492,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.action == "backfill":
             run = _backfill_relations
         elif args.action == "declare":
-            run = lambda s: _declare_frames(s, args.frame, args.judge, args.yes)
+            run = lambda s: _declare_metacontext(s, args.metacontext, args.judge, args.yes)
         else:
             run = lambda s: _require(s, args.setting, config.require_judge)
         print(asyncio.run(_with_storage(config, args.graph, run)))

@@ -361,8 +361,8 @@ class TestWorldChangeKeepsTheHistoricalNodesEdges:
     which is fabricated attribution. So provenance neither moves nor copies.
 
     But "migrate nothing" is wrong in the other direction, and dangerously —
-    it drops `has_metacontext`, and a fiction-frame claim's replacement would
-    land in base reality. A frame says which world a claim belongs to and a tag
+    it drops `has_metacontext`, and a fiction-metacontext claim's replacement would
+    land in base reality. A metacontext says which world a claim belongs to and a tag
     says what it is about; neither asserts the claim, so both are true of the
     replacement too.
     """
@@ -397,13 +397,13 @@ class TestWorldChangeKeepsTheHistoricalNodesEdges:
         assert [e.dst_id for e in kept] == ["doc-1953"]
         assert gained == [] or list(gained) == []
 
-    async def test_the_replacement_stays_in_the_frame_the_old_claim_was_in(
+    async def test_the_replacement_stays_in_the_metacontext_the_old_claim_was_in(
         self, storage, embedding_provider
     ):
         """The assertion that fails under "migrate nothing".
 
         CLAUDE.md's one hard rule is that fictional and factual information are
-        never mixed. A supersession that silently drops the frame breaks it
+        never mixed. A supersession that silently drops the metacontext breaks it
         without anyone deciding to.
         """
         old = await _fact(storage, embedding_provider, "The city is called Leningrad.")
@@ -417,8 +417,8 @@ class TestWorldChangeKeepsTheHistoricalNodesEdges:
 
         new = await self._world_change(storage, embedding_provider, old)
 
-        frames = await storage.get_edges_from(new.id, edge_type=EdgeType.HAS_METACONTEXT)
-        assert [e.dst_id for e in frames] == ["mc-fiction"]
+        metacontexts = await storage.get_edges_from(new.id, edge_type=EdgeType.HAS_METACONTEXT)
+        assert [e.dst_id for e in metacontexts] == ["mc-fiction"]
 
     async def test_both_nodes_carry_the_tag(self, storage, embedding_provider):
         """Topics are timeless, so the tag is true of both claims.

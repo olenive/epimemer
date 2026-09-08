@@ -40,7 +40,8 @@ And one pair sits below it:
 | 0.9196 | `claim-kind` · `claim_kind` | **yes** |
 
 **Ten of the eleven admitted pairs must never merge**, since a dated session tag
-names one day of work and merging two fuses their hubs. The bar rates every one
+names one day of work and merging two fuses their topic nodes. The bar rates
+every one
 of them as a better candidate than either pair that should merge, and excludes
 one of those outright. On the twelve pairs it has an opinion about, it is right
 twice.
@@ -66,20 +67,21 @@ def tag_key(name: str) -> str:
 ```
 
 Applied in the two places a tag name is resolved, `_tag_topic` and
-`_resolve_hub_id`, both in `mcp/tools.py`:
+`_resolve_node_reference`, both in `mcp/tools.py`:
 
 1. Look the name up exactly, as today. This is the common case and it keeps the
    named content index, measured at 0.53 ms against 4.0 ms without it
    (`storage/surrealdb_adapter.py`).
-2. On a miss, compare `tag_key` against the active tag Topics before creating
+2. On a miss, compare `tag_key` against the active topic nodes created from
+   tags before creating
    anything. There are 88 in one real graph, so the scan is affordable on a path
    that was about to write a node anyway.
 
-**The scan matches `is_tag_topic` nodes only.** A tag is a name and a statement
+**The scan matches `created_from_tag` nodes only.** A tag is a name and a statement
 topic is prose, so letting an extracted topic answer to a normalised tag name
-would hand a tag's hub to something nobody wrote as a tag.
+would hand a tag's topic node to something nobody wrote as a tag.
 
-**In `_resolve_hub_id` it applies to the Topic branch alone.** That function
+**In `_resolve_node_reference` it applies to the Topic branch alone.** That function
 resolves three things in order, a node id, a Topic name and a document's source
 name, and only the middle one is a tag lookup. A normalised match against a
 document filename would resolve `ISSUES.md` to `issuesmd`, which nothing asked
@@ -92,7 +94,7 @@ twice, and mints the pair this proposal exists to prevent. The cache has to
 answer the same question the store does.
 
 `store_decomposition` then reuses the existing tag rather than minting a second,
-and `find_nodes(tagged_with_topic="claim-kind")` reaches the hub written as
+and `find_nodes(tagged_with_topic="claim-kind")` reaches the topic node written as
 `claim_kind`. Where the spelling asked for differs from the one resolved to, the
 response reports `resolved_to`, so a caller learns this graph's spelling rather
 than silently getting a different tag from the one it named.
@@ -118,7 +120,7 @@ Scored against the same twelve pairs §1 measures: the 0.92 bar gets two right,
 
 Merging retires the losing source, and name resolution stops at ACTIVE, so today
 a merge strands the losing spelling: the next document tagged `claim-kind` mints
-a fresh hub. That is why the `claim-kind` pair is left unmerged.
+a fresh topic node. That is why the `claim-kind` pair is left unmerged.
 
 With `tag_key` in force the stranding cannot happen for this class, because the
 losing spelling normalises to the survivor. Cleaning up the two existing
@@ -150,7 +152,7 @@ prevention.
 
 It also removes work already sitting in the queue. Both duplicate pairs are
 live nominations, and one of them, `claim-kind` against `claim_kind`, cannot
-currently be recorded either way: `one_claim` is refused as a cross-frame pair
+currently be recorded either way: `one_claim` is refused as a cross-metacontext pair
 and `distinct` would be false.
 
 ---
@@ -221,7 +223,7 @@ and nothing else.
 **Stage 2, clean up the two existing duplicates.** **Done** on 2026-09-07,
 through `apply_reflection(merges=[...])` rather than a script of its own. `merge_nodes`
 already migrates every source's edges onto a fresh survivor and retires the
-sources, and tags are already exempt from the frame gate, so the only thing that
+sources, and tags are already exempt from the metacontext gate, so the only thing that
 stood in the way was the similarity bar that §2.3 opens. Survivors: `claim_kind`,
 which is the field name in the code and so the spelling an agent reading the code
 will type, and `design-decisions`, which is both the older name and the hyphen
@@ -239,7 +241,7 @@ question:
   points somewhere. Resolution follows `merged_into` or `superseded_by` forward.
 
 Neither subsumes the other, and landing them separately means editing
-`_tag_topic` and `_resolve_hub_id` twice. They should go in together.
+`_tag_topic` and `_resolve_node_reference` twice. They should go in together.
 
 The description field remains the fix for the retrieval half, which neither of
 these touches: a tag embedded on its name alone is invisible to a search on

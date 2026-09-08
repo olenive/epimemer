@@ -128,7 +128,7 @@ const makeResolver = (snapshot: SnapshotLike): Resolver => ({
 });
 
 /**
- * Frames a node sits in. Falls back to the raw id when the metacontext is not
+ * Metacontexts a node sits in. Falls back to the raw id when the metacontext is not
  * in the snapshot — an unhelpful label still filters correctly, where dropping
  * it would quietly lose the association.
  */

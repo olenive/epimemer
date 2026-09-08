@@ -14,7 +14,7 @@ alternative — record `SIMILARITY` and keep both, which is what corroboration
 consumes anyway (REVIEW_EPISTEMIC.md §3) — and can only choose it knowing
 whether it hit something permanent or something it can answer.
 
-That is also why the refusals are ordered permanent-first. A cross-frame pair
+That is also why the refusals are ordered permanent-first. A cross-metacontext pair
 will never merge however the graph changes; an unjudged one merges as soon as
 somebody judges it. Reporting the fixable obstacle while a permanent one also
 stands would send an agent to do work that changes nothing.
@@ -32,7 +32,7 @@ from epimemer.core.types import (
     NodeStatus,
     completed_merge_cycles,
 )
-from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD, frames_for
+from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD, metacontexts_for
 from epimemer.pipelines.reflection.topic_consolidation import all_pairs_above_threshold
 from epimemer.storage.protocol import StorageBackend
 
@@ -90,20 +90,20 @@ async def merge_refusal(
             )
         )
 
-    frames = await frames_for([fact.id for fact in sources], storage)
-    if len({frozenset(frames[fact.id]) for fact in sources}) > 1:
-        # Not `same_frame`, which asks whether two nodes share *at least one*
-        # frame. That is the right question for a contradiction — an overlap
-        # makes the conflict real — and the wrong one here, because a merge
-        # inherits the union of its sources' frames. Collapsing a base-reality
-        # claim into one also framed as fiction would leave a node asserting
-        # both, which is the single worst outcome available.
+    metacontexts = await metacontexts_for([fact.id for fact in sources], storage)
+    if len({frozenset(metacontexts[fact.id]) for fact in sources}) > 1:
+        # Not `same_metacontext`, which asks whether two nodes share *at least
+        # one* metacontext. That is the right question for a contradiction,
+        # where an overlap makes the conflict real, and the wrong one here,
+        # because a merge inherits the union of its sources' metacontexts.
+        # Collapsing a base-reality claim into a fiction one would leave a node
+        # asserting both, which is the single worst outcome available.
         return MergeRefused(
             reason=(
-                "these facts do not stand in exactly the same set of frames, "
+                "these facts do not stand in exactly the same set of metacontexts, "
                 "and a merged node would inherit the union of them — asserting "
                 "in one world what was only ever claimed in another. A "
-                "cross-frame twin is `record_variant`."
+                "cross-metacontext twin is `record_variant`."
             )
         )
 

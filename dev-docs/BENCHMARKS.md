@@ -384,7 +384,7 @@ because two sentences sharing a subject and a verb differ only by a qualifier.
 
 ### The diverse corpus, and planting
 
-`--corpus diverse` (the default) frames sentences over slots wide enough that
+`--corpus diverse` (the default) metacontexts sentences over slots wide enough that
 two draws rarely share phrasing, and `--duplicate-groups` /
 `--duplicate-size` plant restatement clusters, one claim as several sources
 would put it. 1,200 facts, real embeddings:

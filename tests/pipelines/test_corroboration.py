@@ -239,18 +239,18 @@ class TestCountingDistinctSources:
 
         assert await _count(storage, claim) == 1
 
-    async def test_a_cross_frame_variant_does_not_corroborate(self, storage):
+    async def test_a_cross_metacontext_variant_does_not_corroborate(self, storage):
         """Amendment 1's other half.
 
-        A `variant_of` partner is *that frame's* resolution of the proposition,
-        not evidence for this one. Counting it would let a fiction frame
+        A `variant_of` partner is *that metacontext's* resolution of the proposition,
+        not evidence for this one. Counting it would let a fiction metacontext
         corroborate base reality, which is the one thing CLAUDE.md forbids
         outright.
         """
         ours = await _document(storage, "our-report", publisher="BBC")
-        other_frame = await _document(storage, "the-novel", publisher="Gollancz")
+        other_metacontext = await _document(storage, "the-novel", publisher="Gollancz")
         claim = await _fact(storage, "the city is Saint Petersburg", ours)
-        variant = await _fact(storage, "the city is Novigrad", other_frame)
+        variant = await _fact(storage, "the city is Novigrad", other_metacontext)
         await _join(storage, claim, variant, EdgeType.SIMILARITY)
         await _join(storage, claim, variant, EdgeType.VARIANT_OF)
 

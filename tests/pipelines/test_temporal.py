@@ -156,7 +156,7 @@ class TestWhatItRefusesToMatch:
     def test_finds_nothing(self, text):
         assert detect_temporal_expressions(text) == []
 
-    def test_a_year_needs_a_temporal_frame(self):
+    def test_a_year_needs_a_temporal_cue(self):
         """A bare four-digit number is only a year when something says so — a
         preposition, or a date pattern around it."""
         assert detect_temporal_expressions("1897 units were sold") == []

@@ -66,7 +66,7 @@ from epimemer.pipelines.reflection.pair_scoring import stack_uniform_width
 from epimemer.pipelines.reflection.review import (
     SIMILARITY_NOMINATION_THRESHOLD,
     NodeRef,
-    frames_for,
+    metacontexts_for,
 )
 from epimemer.pipelines.reflection.similarity_decisions import already_judged_pairs
 from epimemer.pipelines.reflection.soundness import (
@@ -208,17 +208,18 @@ async def merge_refusal(
             )
         )
 
-    frames = await frames_for([node.id for node in sources], storage)
-    if len({frozenset(frames[node.id]) for node in sources}) > 1:
+    metacontexts = await metacontexts_for([node.id for node in sources], storage)
+    if len({frozenset(metacontexts[node.id]) for node in sources}) > 1:
         # Exactly `fact_dedup`'s rule and for exactly its reason: a merge
-        # inherits the union of its sources' frames, so collapsing a claim about
-        # base reality into one framed as fiction leaves a node asserting both.
+        # inherits the union of its sources' metacontexts, so collapsing a
+        # claim about base reality into a fiction one leaves a node asserting
+        # both.
         # Two perspectives reaching the same conclusion about different worlds
         # are two conclusions.
         return MergeRefused(
             reason=(
                 "these inferences do not stand in exactly the same set of "
-                "frames, and a merged node would inherit the union of them — "
+                "metacontexts, and a merged node would inherit the union of them — "
                 "asserting in one world what was only ever derived in another."
             )
         )
@@ -350,21 +351,25 @@ async def nominate_inference_merges(
     if not scored:
         return []
 
-    # Frames are read once for everything still standing, and a cross-frame pair
+    # Metacontexts are read once for everything still standing, and a cross-metacontext pair
     # is dropped here rather than offered: `merge_refusal` would refuse it, and
     # nominating what the tool refuses is a worklist that cannot be worked.
     surviving = list(dict.fromkeys(node_id for pair, _ in scored for node_id in sorted(pair)))
-    frames = await frames_for(surviving, storage)
-    same_frames = [
+    metacontexts = await metacontexts_for(surviving, storage)
+    same_metacontexts = [
         (pair, score)
         for pair, score in scored
-        if len({frozenset(frames[node_id]) for node_id in pair}) == 1
+        if len({frozenset(metacontexts[node_id]) for node_id in pair}) == 1
     ]
-    if not same_frames:
+    if not same_metacontexts:
         return []
 
     premise_nodes = await storage.get_nodes(
-        list(dict.fromkeys(premise_id for pair, _ in same_frames for premise_id in shared[pair]))
+        list(
+            dict.fromkeys(
+                premise_id for pair, _ in same_metacontexts for premise_id in shared[pair]
+            )
+        )
     )
     # Every premise any surviving candidate would rest on — the union, not the
     # intersection, because the union is what the survivor inherits. Read once
@@ -373,7 +378,7 @@ async def nominate_inference_merges(
         list(
             dict.fromkeys(
                 premise_id
-                for pair, _ in same_frames
+                for pair, _ in same_metacontexts
                 for node_id in pair
                 for premise_id in premises[node_id]
             )
@@ -402,7 +407,7 @@ async def nominate_inference_merges(
                 dated,
             ),
         )
-        for pair, score in same_frames
+        for pair, score in same_metacontexts
     ]
     # Highest scoring first, matching every other nominee list, so a caller that
     # stops reading early stops on the weakest candidates rather than a slice.

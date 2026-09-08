@@ -95,7 +95,7 @@ PUBLISHED_BY_LABEL = "published_by"
 # before the verdict stays in the graph — so without this a document that
 # *contradicts* the claim counts as evidence for it.
 #
-# `variant_of` because a cross-frame variant is **that frame's** resolution of
+# `variant_of` because a cross-metacontext variant is **that metacontext's** resolution of
 # the proposition, not support for this one.
 #
 # `retracted_similarity` for the first reason exactly, one judgment later: an

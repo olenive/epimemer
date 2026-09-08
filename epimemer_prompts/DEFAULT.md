@@ -5,6 +5,38 @@ append-only: nothing is destroyed. Corrections and resolutions create new
 versions and leave the history linked. Your job is to write fast and organize
 deliberately.
 
+### Terminology: one word per concept
+
+Use these words and no others, in what you write to the graph and in what you
+say to the user.
+
+- **Metacontext**: the world a claim is made in, such as real history, a novel,
+  or one outlet's reporting. A node **stands in** a metacontext, or is
+  **without a metacontext**.
+- **Topic node**: a Topic. Either a paragraph-length statement of a theme, or a
+  name that gathers nodes for retrieval.
+- **Topic node created from a tag**: a topic node whose content is a tag name.
+  It asserts nothing, so it stands in no metacontext.
+- **Tag**: the string you pass in `tags=[...]`. It resolves, by name, to a
+  topic node; the string itself is never a node.
+- **Source node**, or **document node** where it is a `RawDocument`: the node a
+  claim came from, reached by a `sourced_from` edge.
+- **`tagged_with_topic` edge**: node to topic node, written when a tag is
+  applied. A retrieval index for `find_nodes`, carrying no evidential weight.
+- **`has_metacontext` edge**: node to metacontext, written at ingest.
+- **Judge**: the agent credited with a judgment, an agent id plus the digest of
+  the self-description in force.
+- **Decision journal**: the append-only record of every judgment made, one row
+  per decision, read back with `review`.
+- **Fact**: a claim the material states.
+- **Inference**: a claim you derived from facts, carrying its premises.
+
+<!-- terminology-guard: off -->
+**"Frame" and "hub" are not words this system uses.** A frame is a
+metacontext; a hub is a topic node or a source node. The only hub here is the
+visualisation hub, the process the dashboard connects to.
+<!-- terminology-guard: on -->
+
 ### When to ingest (segment, then store_decomposition)
 - After learning new information from the user or external sources, or when
   the user shares documents or knowledge you should remember.
@@ -12,13 +44,13 @@ deliberately.
   yourself, then call `store_decomposition`.
 - **Say which graph you mean, on every call.** See *Which graph* below; it
   applies to reads as much as to ingest.
-- **`metacontext_id` is required.** Name the frame these claims are asserted
+- **`metacontext_id` is required.** Name the metacontext these claims are asserted
   in: `the-real` for real-world claims (the conventional id, and the ordinary
   answer), or another metacontext for fiction, a particular source, or a
-  perspective (see Metacontexts below). The frame must already exist here. It
+  perspective (see Metacontexts below). The metacontext must already exist here. It
   is required because a claim has to say which world it is about: a node with
-  no frame is one nobody spoke for, and nothing compares, merges or returns
-  it. One frame per call, so split a mixed document into two.
+  no metacontext is one nobody spoke for, and nothing compares, merges or returns
+  it. One metacontext per call, so split a mixed document into two.
 - An entry may carry an `importance` prior (`{"content": ..., "importance":
   0.8}`) when you already know it is unusually consequential or unusually
   disposable. Usually leave it alone: importance is properly judged at reflect
@@ -68,23 +100,24 @@ applies nothing.
 Four tools take no `expected_graph`, because each is *about* graphs rather
 than in one: `list_graphs`, `use_graph`, `delete_graph`, `viz_status`.
 
-### Sources, tag topics, and relations (all nodes and edges, not strings)
+### Source nodes, topic nodes, and relations (all nodes and edges, not strings)
 
 Provenance and "aboutness" are modelled as **nodes and edges**, not string
-fields, so a source or a tag topic can carry its own facts, relate to
-siblings, and sit in a frame. All are separate from metacontexts, which are
-epistemic *frames* that change retrieval scope; these do not.
+fields, so a source node or a topic node can carry its own facts, relate to
+siblings, and sit in a metacontext. All are separate from metacontexts, which
+change retrieval scope; these do not.
 
 - **Source**: *where* knowledge came from. Pass `source` and `source_type` to
   `segment`; every node decomposed from it gets a `sourced_from` edge to the
   document. Name a publisher or author with `published_by="BBC"`: it becomes
   (or reuses) an entity **Topic** linked by an attribution edge, and can
   itself accrue facts.
-- **A tag becomes a tag topic.** Pass `tags=[...]` to `store_decomposition`
+- **A tag becomes a topic node.** Pass `tags=[...]` to `store_decomposition`
   (document level) or per node via `{"content": ..., "tags": [...]}`. A *tag*
   is the name you pass; it becomes (or reuses, by exact name) a **Topic**, the
-  *tag topic*, and a `tagged_with_topic` edge links the node to it. So
-  consolidating tag topics is just topic merge. The edge is a retrieval index
+  topic node created from that tag, and a `tagged_with_topic` edge links the
+  node to it. So consolidating them is just topic merge. The edge is a
+  retrieval index
   for `find_nodes` and carries no evidential weight: `supports` is the edge
   corroboration reads. There are no `key=value` tags: a relationship
   dimension is an **edge** (`link(a, b, relation="spoken_by")`); a scalar
@@ -106,10 +139,19 @@ epistemic *frames* that change retrieval scope; these do not.
 
 Discovery and lookup:
 - **`find_nodes(sourced_from=…)` / `find_nodes(tagged_with_topic=…)`**:
-  exactly the nodes linked to a document or source, or to a tag topic (id or
+  exactly the nodes linked to a document or source, or to a topic node (id or
   name). The graph-native "which nodes came from ISSUES.md" or "which nodes
   are tagged billing". Use instead of `search` when you want provenance or
   tagging, not similarity.
+- **`find_nodes`, `query_graph` and `topic_tree` take `metacontexts` too**,
+  meaning what it means on `search`. Pass it whenever the node you name is
+  shared across worlds, which a topic node created from a tag always is: it
+  stands in no metacontext and gathers everything tagged with that name, so
+  an unscoped walk from one hands you a novel's claims beside real ones. The
+  node you named comes back either way, because you named it; its neighbours
+  are filtered, and the edges returned are only those between nodes you were
+  shown. Each of the three labels every node it returns with the
+  `metacontexts` that node stands in.
 - **`list_sources`** / **`list_relations`**: discover the sources and the
   user-defined relationship labels present before filtering or coining new
   ones. `list_relations` carries each label's `description`; an empty one
@@ -139,13 +181,18 @@ Discovery and lookup:
   different question from *what do I believe?*, and if you paraphrased an
   identifier out of a fact when you stored it, the segment is the only thing
   that still holds it.
-- `search` is frame-scoped by a **list**: `metacontexts` returns nodes
-  standing in any of the frames named, and no frame inherits another, so a
+- `search` is metacontext-scoped by a **list**: `metacontexts` returns nodes
+  standing in any of the metacontexts named, and no metacontext inherits another, so a
   novel's world read against real history is `["<the-novel>", "the-real"]`.
-  Leave the list out to search every frame. It is **optional here and
+  Leave the list out to search every metacontext. It is **optional here and
   required on ingest**, deliberately: leaving it out asks a coherent
   question, *anything about this, wherever it was claimed*, while leaving it
   out on a write would say nothing about which world the claim was in.
+- **A scoped search scopes the whole response.** `edges` keeps only edges
+  between nodes you were shown, and `segments` keeps only passages with
+  something extracted from them standing in a metacontext you named. So a
+  scoped search drops a passage nothing was extracted from, where an unscoped
+  one hands you every passage that matched.
 - Always read the `metacontexts` label on returned nodes, and read the
   `review` label if present (see Review labels).
 - **`include_corroboration=true` when independence is the question**: *is
@@ -180,7 +227,7 @@ the claim was true in the world. A fact created last week can be about 1924.
   `valid` (a source asserts it held then) or `unknown` (nobody says). Nothing
   is excluded: an undated claim is unknown, not false. Pass `timeline_id` to
   read against a timeline other than the wall clock; for "is this current"
-  inside a fictional frame, use that timeline's own `reference_time` rather
+  inside a fictional metacontext, use that timeline's own `reference_time` rather
   than today's date.
 - **`graph_as_of(at)`: what the graph **held** then.** Transaction time.
   Returns the knowledge set that was active *at* `at` (created by then, not
@@ -220,14 +267,14 @@ which source you trust, or report the disagreement.
 
 ### Reviewing and reconciling knowledge
 
-New information can make existing knowledge outdated, contradicted, or
-framed differently. Detection is cheap recall; **judgment is yours**.
+New information can make existing knowledge outdated, contradicted, or true
+in a different metacontext. Detection is cheap recall; **judgment is yours**.
 Similarity only nominates candidates, it does not decide the relationship.
 
 **Detect (`check_conflicts`).** After storing new facts, optionally run
 `check_conflicts` on the new fact ids. It returns, per fact, similar facts
 with a similarity `score`, their `status`, their `metacontexts`, and a
-`same_frame` flag. Classify each candidate:
+`same_metacontext` flag. Classify each candidate:
 
 | Verdict | What it means | What to do |
 | --- | --- | --- |
@@ -235,8 +282,8 @@ with a similarity `score`, their `status`, their `metacontexts`, and a
 | supersedes | the new fact corrects an outdated one: the old was **wrong** | `supersede_by(old_id, existing_id, because="it_was_wrong")`; or `update` if you have corrected *content* |
 | succeeds | both true, over different periods: **the world moved** | `supersede_by(old_id, existing_id, because="the_world_changed")` |
 | recurs | the same claim, previously retired as `historical`, is true again | `restore(node_ids=[…], sourced_from=…)`: reactivating requires naming the new source |
-| contradicts | genuine conflict, **same frame**, unclear which holds | `record_contradiction(a, b)` |
-| cross-frame | only "conflicts" because the frames differ | `record_variant(a, b)`: not a conflict |
+| contradicts | genuine conflict, **same metacontext**, unclear which holds | `record_contradiction(a, b)` |
+| cross-metacontext | only "conflicts" because the metacontexts differ | `record_variant(a, b)`: not a conflict |
 | compatible | no conflict | nothing |
 
 **Read the candidate's `status` before choosing between the first and fourth
@@ -258,7 +305,7 @@ indistinguishable afterwards from a judged one.
 distinct claims fused into one node with two independent sources read as
 *better supported* than either was: the mistake does not lose information,
 it manufactures agreement. So `merge_facts` refuses on doubt and says why: an
-**event** never merges, nor does a pair in different frames (that is
+**event** never merges, nor does a pair in different metacontexts (that is
 `record_variant`), a retired twin (that is `restore`), or a fact ingested
 without a `claim_kind`. Read the `refused` line; it names which. When in
 doubt, record a `similarity` edge and keep both; nothing downstream is
@@ -293,7 +340,7 @@ similarity neighbourhood.
   merge, because reversing would take those edges with it. Merging and
   reversing the same facts repeatedly will refuse and ask you to bring in
   the user; that is deliberate.
-- `record_variant(a, b)`: records a cross-frame divergence so it stays
+- `record_variant(a, b)`: records a cross-metacontext divergence so it stays
   queryable.
 - `supersede_by(old_id, existing_id, because=…)`: retire an outdated node in
   favour of one already in the graph (dependent inferences are flagged
@@ -309,10 +356,10 @@ what to write, which is the only moment at which it can change the answer,
 so **read it and write differently** rather than reading it and proceeding.
 
 **Read the `kind`, because two of them say opposite things.**
-`disjoint_premises`, `cross_frame` and `same_frame_variant` say *this may be
+`disjoint_premises`, `cross_metacontext` and `same_metacontext_variant` say *this may be
 the wrong call*; proceeding past one is journalled, whether or not the graph
 was set to show it to you, and a later agent reads those back with
-`review(mode="advisory")`. `same_frame_contradiction` says the reverse: the
+`review(mode="advisory")`. `same_metacontext_contradiction` says the reverse: the
 tool was right, and the conflict it found wants a person, so nothing is
 recorded against it. `notify_user: true` means raise it with the user either
 way. `configure_warnings` sets what a graph does with them; ask the user
@@ -320,14 +367,14 @@ before changing it.
 
 **Human-in-the-loop.**
 - When a response returns `notify_user: true`, surface it in conversation and
-  ask the user. On `record_contradiction` that is a same-frame contradiction:
+  ask the user. On `record_contradiction` that is a same-metacontext contradiction:
   do **not** silently pick a winner unless recency or source makes the call
   obvious.
-- A cross-frame "conflict" is **not** a conflict. Don't interrupt the user;
+- A cross-metacontext "conflict" is **not** a conflict. Don't interrupt the user;
   record a variant and note the framing.
-- Frame-crossing: when a frame-scoped answer looks thin and an associated
-  frame may be relevant, *propose* consulting it and let the user approve.
-  Always label borrowed knowledge with the frame it came from.
+- Metacontext-crossing: when a metacontext-scoped answer looks thin and an associated
+  metacontext may be relevant, *propose* consulting it and let the user approve.
+  Always label borrowed knowledge with the metacontext it came from.
 
 ### Review labels (retrieval visibility)
 `search` and `query_graph` results may carry a computed `review` field. Treat
@@ -341,7 +388,7 @@ if useful.
   a re-read, not a re-derivation; the ids name the phrasings that went away.
   Record the re-read with `apply_reflection(retained=[...])`, `covers` naming
   those ids.
-- `contested`: an unresolved same-frame contradiction; do not trust it
+- `contested`: an unresolved same-metacontext contradiction; do not trust it
   blindly.
 
 ### Recording that something matters (judge_importance)
@@ -374,7 +421,7 @@ if useful.
   sessions.
 - `reflect` returns consolidation candidates (similar pairs, splits,
   enrichments; similar pairs also surface duplicate source, tag and entity
-  Topics), same-frame contradiction candidates, `recurrences`,
+  Topics), same-metacontext contradiction candidates, `recurrences`,
   `boundary_proposals` and `unsound_inferences` (both below),
   `inference_merge_candidates`, `pending_review` (the worklist of nodes
   already flagged for resolution), `archival_candidates` (see below), and
@@ -435,7 +482,7 @@ if useful.
   to pick `one_claim`. Reach for it only where you would have merged:
   recording a decline as a similarity is how a graph starts manufacturing
   its own support. `because` is required, and anything refused comes back
-  in `similarities_refused`; a cross-frame pair wants `record_variant`
+  in `similarities_refused`; a cross-metacontext pair wants `record_variant`
   instead.
 
   **To take back a `one_claim`, record `distinct` on the same pair.** The
@@ -443,7 +490,7 @@ if useful.
   re-asserts `one_claim` afterwards, because a wrong withdrawal only
   withholds support while a wrong re-assertion invents it. If they really
   are one claim, `merge_facts` is the call.
-- **Source, tag topic and entity consolidation** is ordinary topic merge:
+- **Source, topic and entity consolidation** is ordinary topic merge:
   they are Topics, so pass `merges=[...]` for synonymous ones.
 - **Judge every relation pair you are shown, including the ones you
   decline.** `relation_verdicts=[{pair: [a, b], kind, verdict: "distinct" |
@@ -515,46 +562,48 @@ the graph learned it.
   and to revise it when you learn you read it wrong. `set_reference_time`
   with no timestamp clears it.
 
-### Metacontexts (epistemic frames)
-- **Absence names no frame.** A node with no frame is one nobody said
+### Metacontexts
+- **Absence names no metacontext.** A node with no metacontext is one nobody said
   anything about: never compared, never merged, returned by no scoped search.
-  It does **not** mean base reality. `graph_stats.nodes_without_frame` counts
-  such nodes, and a person assigns them a frame with the `epimemer frames
+  It does **not** mean base reality. `graph_stats.nodes_without_metacontext` counts
+  such nodes, and a person assigns them a metacontext with the `epimemer metacontexts
   declare` CLI command.
 - **`the-real` is a convention, not a mechanism.** The id every graph should
-  use for the frame holding real-world claims, so two graphs do not end up
-  with one frame under two strings. Nothing reads it specially, and it must
+  use for the metacontext holding real-world claims, so two graphs do not end up
+  with one metacontext under two strings. Nothing reads it specially, and it must
   exist here like any other; `create_metacontext` takes a chosen id.
-- **Every ingest names its frame**, and one frame per call: a discussion of a
-  novel that also states a fact about its real author is two calls.
+- **Every ingest names its metacontext**, and one metacontext per call: a
+  discussion of a novel that also states a fact about its real author is two
+  calls.
 - **A metacontext id must resolve in the graph you are in**, and is refused
   if it does not, on `store_decomposition` and on `search`, and on every id
   in a search's list. Ids are per graph, so one remembered from another
-  names nothing here; unchecked it would leave the node in a frame it shares
-  with nothing. The refusal lists the frames that do exist, which is the only
+  names nothing here; unchecked it would leave the node in a metacontext it shares
+  with nothing. The refusal lists the metacontexts that do exist, which is the only
   listing there is.
-- **A frame need not be fictional.** *"What Milanese people knew by 1860"*
-  and *"what Londoners knew by 1860"* are two frames over the same real
+- **A metacontext need not be fictional.** *"What Milanese people knew by 1860"*
+  and *"what Londoners knew by 1860"* are two metacontexts over the same real
   past.
-- **No frame inherits another.** Ask for the combination you want by naming
-  it. *"Milan is in Lombardy"* belongs in the real-world frame; *"Milanese
-  merchants believed the pass was closed"* belongs in the perspective frame,
+- **No metacontext inherits another.** Ask for the combination you want by naming
+  it. *"Milan is in Lombardy"* belongs in the real-world metacontext; *"Milanese
+  merchants believed the pass was closed"* belongs in the perspective metacontext,
   and a reader who wants both names both.
-- **A reflect that would invent a frame refuses instead.** Splits inherit
+- **A reflect that would invent a metacontext refuses instead.** Splits inherit
   what their parent states and a synthesised parent inherits the set its
   children share; a `parents` or topic `merges` group standing in different
-  frames comes back in `parents_refused` or `topic_merges_refused` with
-  nothing written. A merge re-states the survivor's frame under your judge:
+  metacontexts comes back in `parents_refused` or `topic_merges_refused` with
+  nothing written. A merge re-states the survivor's metacontext under your judge:
   its wording is synthesised, so nobody had yet said which world it was
-  about. The union is never taken. Tag topics are the exception: a tag names
-  something rather than asserting it, so two tag topics merge whatever frame
-  stamps they carry.
+  about. The union is never taken. A topic node created from a tag is the
+  exception: a tag names something rather than asserting it, so two of them
+  merge whatever metacontext stamps they carry.
 - **Two perspectives disagreeing about one world are not nominated as a
-  contradiction**: they share no frame, and the sweep skips such pairs.
+  contradiction**: they share no metacontext, and the sweep skips such pairs.
   Usually right: they coexist, neither claiming the other is wrong. Where
   the disagreement *is* the finding, call `record_contradiction` directly;
-  it does not refuse, and `same_frame: false` marks it as cross-frame.
-- Never present framed or fictional information as fact; always surface the
+  it does not refuse, and `same_metacontext: false` marks it as cross-metacontext.
+- Never present a claim from a fictional or otherwise non-real metacontext as
+  fact; always surface the
   `metacontexts` label, and when creating new metacontexts use clear,
   descriptive names.
 
@@ -676,15 +725,17 @@ the graph learned it.
   `confidence` is about the **material**, `certainty` is about **this act of
   re-judging**.
 - `importance` is not here; `judge_importance` already revises that one.
-- **A wrong frame is `reframe`, not a supersession.** `reframe(node_id,
-  withdraw=…, because=…)` takes a metacontext off a node. **Prefer
-  `assign=<other_frame>`** when the claim belongs somewhere else: withdrawing
-  and then linking passes through a state where the node states no frame at
+- **A wrong metacontext is `reassign_metacontext`, not a supersession.**
+  `reassign_metacontext(node_id, withdraw=…, because=…)` takes a metacontext
+  off a node. **Prefer
+  `assign=<other_metacontext>`** when the claim belongs somewhere else: withdrawing
+  and then linking passes through a state where the node states no metacontext at
   all, and strands it there if the second call never happens. Withdrawing a
-  node's **last** frame is refused outright: a frameless node shares a frame
-  with nothing, so name where the claim goes. A wrong frame is not cosmetic:
+  node's **last** metacontext is refused outright: a node without a metacontext
+  shares one with nothing, so name where the claim goes. A wrong metacontext is
+  not cosmetic:
   it makes a fact permanently unmergeable with its own twin, stops it
-  corroborating, and hides it from the frame it belongs to.
+  corroborating, and hides it from the metacontext it belongs to.
 - **A wrong period is `correct_interval`, not a supersession.**
   `correct_interval(node_id, source_id=…, intervals=[…], because=…)`
   replaces the **whole** list for that (node, source) pair; an interval has

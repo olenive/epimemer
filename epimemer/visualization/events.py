@@ -88,7 +88,7 @@ class TimepointView(BaseModel):
 
 
 class MetacontextView(BaseModel):
-    """An epistemic frame, so the dashboard can name one rather than show a uuid."""
+    """A metacontext, so the dashboard can name one rather than show a uuid."""
 
     metacontext_id: str
     content: str

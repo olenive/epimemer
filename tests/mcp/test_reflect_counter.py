@@ -61,7 +61,7 @@ async def _ingest(server: FastMCP, content: str, graph: str = "default") -> dict
     it means on every call — the parameter is not a formality that can be
     defaulted once at the top.
     """
-    # Frames are per graph, so a graph this test switches into names its own.
+    # Metacontexts are per graph, so a graph this test switches into names its own.
     # `create_metacontext` under a chosen id is how any graph gets `the-real`.
     await server.call_tool(
         "create_metacontext",

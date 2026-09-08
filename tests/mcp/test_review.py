@@ -368,7 +368,7 @@ class TestItWorksOnTheCorpusAsItStands:
         result, _ = await tools.review(storage)
 
         kinds = [d["kind"] for d in result["decisions"]]
-        # Two. A same-frame contradiction carries an advisory, but one that says
+        # Two. A same-metacontext contradiction carries an advisory, but one that says
         # the call was *right* and a person should see the finding — there was
         # nothing to proceed despite, so no second row. This briefly read three
         # while every advisory journalled, which doubled the journal on the

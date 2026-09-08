@@ -215,12 +215,12 @@ first.
   per-source level on the `sourced_from` edge would let a level die with the
   source it describes, and is also what a source-discredit sweep needs
   (`ISSUES.md`, *Older carry-overs*).
-- **Metacontext inheritance scope.** If a frame is inherited from a document,
+- **Metacontext inheritance scope.** If a metacontext is inherited from a document,
   do inferences derived from those facts inherit it too? Probably yes, but the
   edge cases need thought.
-- **Cross-frame retrieval composition.** When a query straddles frames
-  ("compare real AI with sci-fi AI"), how should results from several frames
-  compose? Search takes a list of frames today; composition beyond the union is
+- **Cross-metacontext retrieval composition.** When a query straddles metacontexts
+  ("compare real AI with sci-fi AI"), how should results from several metacontexts
+  compose? Search takes a list of metacontexts today; composition beyond the union is
   undesigned.
 
 ---

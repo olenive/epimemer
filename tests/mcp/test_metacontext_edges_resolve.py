@@ -1,27 +1,27 @@
 """No `has_metacontext` edge may point at a metacontext that does not exist.
 
-**The invariant, and why it is worth a file of its own.** A node framed by an id
-that resolves nowhere is worse off than one stating no frame at all: it shares a
-frame with *no other node*, so it is never compared, never merged, and missing
-from every scoped search including the frame the author meant. Nothing raises,
+**The invariant, and why it is worth a file of its own.** A node standing in an id
+that resolves nowhere is worse off than one stating no metacontext at all: it shares a
+metacontext with *no other node*, so it is never compared, never merged, and missing
+from every scoped search including the metacontext the author meant. Nothing raises,
 nothing is logged, and the node sits there unreachable by every mechanism that
 would have questioned it.
 
 Each entry point checked it. What was missing was anything checking that the set
 of entry points was still the set somebody had checked — so when
-`epimemer frames declare` shipped as a fourth writer, it wrote frame edges with
+`epimemer metacontexts declare` shipped as a fourth writer, it wrote metacontext edges with
 no validation at all, and would have stamped 208 of them on a real graph whose
 `the-real` row did not exist. It was caught by running it, not by the suite.
 
 So this file has two halves, and the second is the one that matters:
 
-1. Every path a caller can name a frame on refuses an id that resolves nowhere.
+1. Every path a caller can name a metacontext on refuses an id that resolves nowhere.
 2. **Those are all the paths there are** — a package scan, so a new writer fails
    here rather than shipping unguarded. An exception list written by whoever
    adds a writer is not a check; a list that fails when it goes stale is.
 
 Nothing defends this at the storage layer on purpose. `store_edge` could refuse
-a dangling target, but that puts a read on every frame-edge write and moves a
+a dangling target, but that puts a read on every metacontext-edge write and moves a
 policy question into the layer that is meant not to have opinions — and the
 entry points are few, named below, and cheap to keep honest.
 """
@@ -43,20 +43,20 @@ from epimemer.core.types import (
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
-from epimemer.pipelines.frames import declare_frames, reframe_node
+from epimemer.pipelines.metacontexts import declare_metacontext, reassign_metacontext
 
 DECLARER = JudgeRef(agent_id="the-user", digest="d1")
 
 # Every module that constructs a `has_metacontext` edge, and what makes each one
 # safe. Adding a writer means adding a line here *and* a refusal test above —
 # which is the point: the scan below fails until you have done both.
-FRAME_EDGE_WRITERS: dict[str, str] = {
+METACONTEXT_EDGE_WRITERS: dict[str, str] = {
     # `store_decomposition`, guarded by `require_metacontext(writing=True)`.
     "epimemer/mcp/tools.py": "require_metacontext",
-    # `reframe_node`'s `assign`, guarded inline; and `frame_edges`, the shared
-    # builder whose callers either validate first (`declare_frames`) or derive
-    # the frame from a node that already states it (splits, synthesis, merge).
-    "epimemer/pipelines/frames.py": "get_metacontext",
+    # `reassign_metacontext`'s `assign`, guarded inline; and `metacontext_edges`, the shared
+    # builder whose callers either validate first (`declare_metacontext`) or derive
+    # the metacontext from a node that already states it (splits, synthesis, merge).
+    "epimemer/pipelines/metacontexts.py": "get_metacontext",
 }
 
 
@@ -70,7 +70,7 @@ def config():
     return ServerConfig(storage_backend="memory", embedding_provider="mock")
 
 
-async def _topic(storage, embedder, content, *, frames=()):
+async def _topic(storage, embedder, content, *, metacontexts=()):
     topic = Topic(content=content, source_id="seg1")
     await storage.store_node(topic)
     vectors = await embedder.embed([content])
@@ -81,23 +81,23 @@ async def _topic(storage, embedder, content, *, frames=()):
             vector=vectors[0],
         )
     )
-    for frame in frames:
+    for metacontext in metacontexts:
         await storage.store_edge(
             NodeEdge(
                 src_id=topic.id,
-                dst_id=frame,
+                dst_id=metacontext,
                 type=EdgeType.HAS_METACONTEXT,
             )
         )
     return topic
 
 
-async def _frames_of(storage, node_id) -> set[str]:
+async def _metacontexts_of(storage, node_id) -> set[str]:
     edges = await storage.get_edges_from(node_id, edge_type=EdgeType.HAS_METACONTEXT)
     return {edge.dst_id for edge in edges}
 
 
-class TestEveryPathThatNamesAFrameChecksIt:
+class TestEveryPathThatNamesAMetacontextChecksIt:
     """One test per entry point, and the list is closed by the scan below."""
 
     async def test_ingest_refuses_and_writes_nothing(self, storage, embedder, config):
@@ -121,11 +121,15 @@ class TestEveryPathThatNamesAFrameChecksIt:
 
         assert [n for n in await storage.query_nodes() if isinstance(n, Topic)] == []
 
-    async def test_reframe_refuses_an_assignment_that_resolves_nowhere(self, storage, embedder):
+    async def test_reassign_metacontext_refuses_an_assignment_that_resolves_nowhere(
+        self, storage, embedder
+    ):
         fiction, _ = await tools.create_metacontext("The novel", storage)
-        node = await _topic(storage, embedder, "the council", frames=[fiction["metacontext_id"]])
+        node = await _topic(
+            storage, embedder, "the council", metacontexts=[fiction["metacontext_id"]]
+        )
 
-        outcome = await reframe_node(
+        outcome = await reassign_metacontext(
             storage,
             node_id=node.id,
             withdraw=fiction["metacontext_id"],
@@ -134,7 +138,7 @@ class TestEveryPathThatNamesAFrameChecksIt:
         )
 
         assert "no metacontext 'nowhere'" in outcome.reason
-        assert await _frames_of(storage, node.id) == {fiction["metacontext_id"]}
+        assert await _metacontexts_of(storage, node.id) == {fiction["metacontext_id"]}
 
     async def test_the_declaration_sweep_refuses_one_too(self, storage, embedder):
         """The gap that shipped. A sweep is the worst place to lose this: it
@@ -143,13 +147,13 @@ class TestEveryPathThatNamesAFrameChecksIt:
         legacy = await _topic(storage, embedder, "written before the rule")
 
         with pytest.raises(ValueError, match="no metacontext 'nowhere'"):
-            await declare_frames(storage, frame="nowhere", judge=DECLARER)
+            await declare_metacontext(storage, metacontext="nowhere", judge=DECLARER)
 
-        assert await _frames_of(storage, legacy.id) == set()
+        assert await _metacontexts_of(storage, legacy.id) == set()
 
 
 class TestTheDerivedPathsCannotIntroduceOne:
-    """Splits, synthesis and merge do not take a frame from the caller — they
+    """Splits, synthesis and merge do not take a metacontext from the caller — they
     re-state what their inputs already say. So closing the entry points above
     closes the graph, and these assert the derivation rather than a check.
     """
@@ -160,7 +164,7 @@ class TestTheDerivedPathsCannotIntroduceOne:
             storage,
             embedder,
             "the novel's politics",
-            frames=[fiction["metacontext_id"]],
+            metacontexts=[fiction["metacontext_id"]],
         )
 
         await tools.apply_reflection(
@@ -175,11 +179,13 @@ class TestTheDerivedPathsCannotIntroduceOne:
             for node in await storage.query_nodes()
             if node.metadata.get("split_from") == parent.id
         )
-        assert await _frames_of(storage, child.id) <= await _frames_of(storage, parent.id)
+        assert await _metacontexts_of(storage, child.id) <= await _metacontexts_of(
+            storage, parent.id
+        )
 
     async def test_a_synthesis_states_only_what_its_children_state(self, storage, embedder):
-        a = await _topic(storage, embedder, "the council", frames=[BASE_METACONTEXT_ID])
-        b = await _topic(storage, embedder, "the war", frames=[BASE_METACONTEXT_ID])
+        a = await _topic(storage, embedder, "the council", metacontexts=[BASE_METACONTEXT_ID])
+        b = await _topic(storage, embedder, "the war", metacontexts=[BASE_METACONTEXT_ID])
 
         await tools.apply_reflection(
             storage,
@@ -191,10 +197,10 @@ class TestTheDerivedPathsCannotIntroduceOne:
         parent = next(
             node for node in await storage.query_nodes() if node.metadata.get("synthesized_from")
         )
-        assert await _frames_of(storage, parent.id) == {BASE_METACONTEXT_ID}
+        assert await _metacontexts_of(storage, parent.id) == {BASE_METACONTEXT_ID}
 
 
-def _modules_writing_frame_edges() -> set[str]:
+def _modules_writing_metacontext_edges() -> set[str]:
     """Every module constructing a `NodeEdge(type=EdgeType.HAS_METACONTEXT)`.
 
     Parsed rather than grepped, so a mention in a comment or a comparison
@@ -227,19 +233,19 @@ def _modules_writing_frame_edges() -> set[str]:
 class TestTheListOfWritersIsClosed:
     """The half that was missing, and the reason the defect shipped.
 
-    Each writer above checked its own frame. Nothing checked that the writers
+    Each writer above checked its own metacontext. Nothing checked that the writers
     were still the ones somebody had checked, so a fourth arrived unguarded and
     only a real graph noticed. This reads the package, because a guard whose
     reach is an accident of where the code happens to sit fails open.
     """
 
-    def test_no_module_writes_a_frame_edge_unaccounted_for(self):
-        assert _modules_writing_frame_edges() == set(FRAME_EDGE_WRITERS)
+    def test_no_module_writes_a_metacontext_edge_unaccounted_for(self):
+        assert _modules_writing_metacontext_edges() == set(METACONTEXT_EDGE_WRITERS)
 
     def test_each_named_writer_still_validates(self):
         """A companion to the list, so an entry cannot go stale by having its
         check quietly deleted while the file keeps writing edges."""
         root = pathlib.Path(epimemer.__file__).parent.parent
-        for module, guard in FRAME_EDGE_WRITERS.items():
+        for module, guard in METACONTEXT_EDGE_WRITERS.items():
             source = (root / module).read_text()
             assert guard in source, f"{module} no longer calls {guard}"

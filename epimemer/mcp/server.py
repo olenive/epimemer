@@ -549,7 +549,7 @@ async def memory_store_decomposition(
                      behaviour, the original announcement
               Rate per node, never per document — one message can carry a 0.9
               preference and a 0.3 guess from the same person. Inside a
-              metacontext the frame is the record, so a fictional fact can
+              metacontext the metacontext is the record, so a fictional fact can
               honestly be 0.9. Never lower it for contradiction or for age:
               record_contradiction and created_at carry those already, and
               unlike a frozen prior they stay current.
@@ -609,29 +609,30 @@ async def memory_store_decomposition(
               timeline_id: omit for real-world dates. Give it for in-universe
               time (a novel's chronology), so fictional and real dates are never
               compared as though they shared a clock.
-        metacontext_id: **Required** — the frame every claim in this document
+        metacontext_id: **Required** — the metacontext every claim in this document
             is asserted in, applied to every node in it. Pass `the-real` for
             real-world claims: that is the conventional id and the ordinary
             answer, and it is what you want whenever the claims would hold in
-            every other frame here. Like any frame, it has to exist in this
+            every other metacontext here. Like any metacontext, it has to exist in this
             graph first — `create_metacontext` takes a chosen id. Pass a
             metacontext id for fiction, a named source, or a perspective.
             It is required because a claim has to say which world it is about.
-            A node with no frame is one nobody spoke for: nothing compares it,
-            nothing merges it, and no scoped search returns it. A stated frame
+            A node with no metacontext is one nobody spoke for: nothing compares it,
+            nothing merges it, and no scoped search returns it. A stated metacontext
             carries your judge and is named on the ingest journal row, so a
-            wrong one is findable with `review` and fixable with `reframe`.
-            Nothing here prevents a wrong frame; it makes one recoverable.
-            **One frame per call, so split a mixed document into two.** A
+            wrong one is findable with `review` and fixable with `reassign_metacontext`.
+            Nothing here prevents a wrong metacontext; it makes one recoverable.
+            **One metacontext per call, so split a mixed document into two.** A
             discussion of a novel that also states a fact about its real author
-            is two calls: the in-world claims in the novel's frame, the
+            is two calls: the in-world claims in the novel's metacontext, the
             author's biography in `the-real`.
             A stated id must already exist **in this graph**: ids are per
             graph, so one carried over from another names nothing here, and a
-            node framed by an id that resolves nowhere shares a frame with no
-            other node, so it is never compared, never merged, and missing from
-            every frame-scoped search including the frame you meant. A wrong id
-            is refused, and the refusal lists the frames that do exist.
+            node standing in an id that resolves nowhere shares a metacontext
+            with no other node, so it is never compared, never merged, and
+            missing from every metacontext-scoped search including the
+            metacontext you meant. A wrong id is refused, and the refusal lists
+            the metacontexts that do exist.
         tags: Optional document-level tag names applied to every node. Each tag
             becomes (or reuses) a Topic linked by a tagged_with_topic edge. Every node
             also gets a sourced_from edge to the document.
@@ -785,15 +786,21 @@ async def memory_search(
         k: Maximum number of results per retrieval arm.
         node_types: Filter to specific types: "topic", "fact", "inference".
         graph_hops: Number of graph traversal hops from the fused results.
-        metacontexts: Optional — the frames to search, as a list. Results are
-            nodes standing in **any** of them, and no frame inherits another: a
+        metacontexts: Optional — the metacontexts to search, as a list. Results are
+            nodes standing in **any** of them, and no metacontext inherits another: a
             question about a novel's world read against real history names both
             (`["world-of-anarres", "the-real"]`), and one about only what the
-            novel says names one. Omit the list to search every frame, which is
+            novel says names one. Omit the list to search every metacontext, which is
             a coherent question rather than an unstated assumption — the reason
-            this is optional where the frame on ingest is not. Every id must
+            this is optional where the metacontext on ingest is not. Every id must
             exist in this graph; one that does not resolve is refused rather
-            than quietly narrowing the search to the frames that do.
+            than quietly narrowing the search to the metacontexts that do.
+            Scoping applies to the whole response, not the node list alone:
+            `edges` keeps only edges between nodes you were shown, and
+            `segments` keeps only passages with something extracted from them
+            standing in a metacontext you named. So a scoped search drops a
+            passage nothing was extracted from, where an unscoped one returns
+            every passage that matched.
         terms: Exact strings that matter — identifiers, names, phrases. Matched
             whole and ORed; each matches only documents containing all of its
             words. Omit and the keyword arm falls back to the query's own words,
@@ -1103,7 +1110,7 @@ async def memory_check_conflicts(
 
     Recall stage of the review loop: for each fact, returns similar facts above
     `threshold` with their similarity score, **status**, metacontext labels, and
-    a same_frame flag. Similarity only nominates — classify each candidate
+    a same_metacontext flag. Similarity only nominates — classify each candidate
     yourself and record the verdict. Run this on freshly-ingested fact ids to
     catch outdated or conflicting knowledge.
 
@@ -1127,7 +1134,7 @@ async def memory_check_conflicts(
                     government in 2010 and back in 2024 is one claim recurring.
       contradicts — both claim to hold now and they cannot both. Call
                     record_contradiction.
-      cross-frame — same words, different frames (fiction vs. reality). Call
+      cross-metacontext — same words, different metacontexts (fiction vs. reality). Call
                     record_variant.
       compatible  — related but not in tension. Nothing to record.
 
@@ -1174,9 +1181,9 @@ async def memory_record_contradiction(
     """Record a genuine contradiction between two facts (both stay active).
 
     Creates one `contradiction` edge (idempotent per pair). The response includes
-    notify_user — when true (a same-frame contradiction), surface it to the user
+    notify_user — when true (a same-metacontext contradiction), surface it to the user
     in conversation and ask how to resolve it. If the facts are in different
-    frames it is not a real contradiction; prefer record_variant.
+    metacontexts it is not a real contradiction; prefer record_variant.
 
     Args:
         a_id: One fact id.
@@ -1213,13 +1220,13 @@ async def memory_record_variant(
     ctx: Context,
     expected_graph: str | None = None,
 ) -> str:
-    """Record that two facts are the same proposition resolved differently per frame.
+    """Record that two facts are the same proposition resolved differently per metacontext.
 
-    Creates one `variant_of` edge (idempotent per pair) so a cross-frame
-    divergence (e.g. real history vs. a fiction frame) is queryable. Both facts
-    stay active. Use for facts in different metacontexts; if they share a frame
+    Creates one `variant_of` edge (idempotent per pair) so a cross-metacontext
+    divergence (e.g. real history vs. a fiction metacontext) is queryable. Both facts
+    stay active. Use for facts in different metacontexts; if they share a metacontext
     and conflict, use record_contradiction instead — recording a variant between
-    two facts in one frame comes back with a `warning` saying so, and is
+    two facts in one metacontext comes back with a `warning` saying so, and is
     recorded as a decision taken against advice.
 
     Args:
@@ -1275,7 +1282,7 @@ async def memory_merge_facts(
 
     Merges are refused, with a reason, when: any fact is not active (a
     recurring historical twin is `restore`, not a merge); the facts do not stand
-    in exactly the same frames (that is `record_variant`); any of them is an
+    in exactly the same metacontexts (that is `record_variant`); any of them is an
     **event** rather than a state; any of them was ingested without a
     `claim_kind`; or a pair falls below the similarity nomination bar. A refusal
     comes back as `merged: false` with `refused` — read it, it says which.
@@ -1351,7 +1358,7 @@ async def memory_merge_inferences(
 
     Merges are refused, with a reason, when: fewer than two distinct nodes are
     named; any of them is not active; they do not stand in exactly the same
-    frames; a pair falls below the similarity nomination bar; or the sources
+    metacontexts; a pair falls below the similarity nomination bar; or the sources
     have already been merged and un-merged up to the graph's cycle limit. A
     refusal comes back as `merged: false` with `refused` — read it, it says
     which. There is no claim_kind gate here: whether combining premises is
@@ -1515,7 +1522,7 @@ async def memory_configure_warnings(
 
     An advisory is what the system knows and you cannot compute: that a merge
     would rest on premises no source puts in one period, or that a pair you
-    called a contradiction stands in two different frames. It arrives before you
+    called a contradiction stands in two different metacontexts. It arrives before you
     decide, and nothing here refuses on one.
 
     Args:
@@ -1526,7 +1533,7 @@ async def memory_configure_warnings(
             clean. A kind explicitly set to "flag" outranks it and still
             reaches you; a kind following the default does not. To silence a
             flagged kind, set that kind to "proceed".
-        actions: Per-kind overrides, e.g. {"same_frame_contradiction":
+        actions: Per-kind overrides, e.g. {"same_metacontext_contradiction":
             "proceed"}. "proceed" surfaces the advisory; "flag" also sets
             notify_user, meaning you are expected to raise it with the user.
             Merged over what is already set rather than replacing it.
@@ -1568,7 +1575,7 @@ async def memory_reflect(
       covers duplicate source/tag/entity Topics)
     - Topics with high internal variance that could be split
     - Topics with thin descriptions but rich associated material
-    - Potential contradictions between facts (same-frame only) — both sides
+    - Potential contradictions between facts (same-metacontext only) — both sides
       active, since that is what makes them rivals
     - recurrences: a live fact saying what a `historical` one said, meaning the
       claim is true again rather than in conflict. Resolve with restore
@@ -1697,23 +1704,23 @@ async def memory_apply_reflection(
             reach for "one_claim" only when you would have merged.
             Either way the pair stops being nominated. `because` is required.
             Pairs that could not be recorded come back in `similarities_refused`
-            with a reason — a cross-frame pair wants record_variant instead.
+            with a reason — a cross-metacontext pair wants record_variant instead.
         parents: Consolidate similar topics under a new parent (non-destructive;
             children stay active). Each: {children_ids: [str], content: str}
             content = your synthesized parent description. The parent inherits
-            the frame its children **all** stand in; a group standing in
-            different frames is refused into `parents_refused`, because a
+            the metacontext its children **all** stand in; a group standing in
+            different metacontexts is refused into `parents_refused`, because a
             parent drawn from a fiction claim and a real one would assert in
-            both worlds. Synthesise within a frame, or `reframe` the odd one out.
+            both worlds. Synthesise within a metacontext, or `reassign_metacontext` the odd one out.
         splits: Split a broad topic into subtopics.
             Each: {topic_id: str, subtopics: [str]}
             subtopics = list of subtopic description strings. Each subtopic
-            inherits the parent's frame — same content, refined.
+            inherits the parent's metacontext — same content, refined.
         enrichments: Rewrite a topic's own wording using its associated
             material. Each: {topic_id: str, new_content: str}.
             **This replaces the topic's content, which is the name tags and
             `find_nodes` resolve by.** Rewriting the name of a tag splits it:
-            the next document carrying that tag mints a second hub, and
+            the next document carrying that tag mints a second topic node, and
             `find_nodes(tagged_with_topic=...)` returns nothing for the old name.
             Enrich a topic that states something; leave a tag's name alone.
         merges: Fuse near-duplicate topics into one combined topic; the sources
@@ -1721,9 +1728,9 @@ async def memory_apply_reflection(
             A merge is applied only if every pair of sources is at least
             merge_similarity_threshold similar, else it is rejected — use this
             only for true duplicates, and `parents` for merely related topics.
-            Sources standing in different frames are refused into
+            Sources standing in different metacontexts are refused into
             `topic_merges_refused`: the survivor inherits every source's edges,
-            frames included, so a cross-frame merge asserts in one world what
+            metacontexts included, so a cross-metacontext merge asserts in one world what
             was only ever claimed in another.
         supersessions: Resolve flagged/contested nodes from reflect's
             pending_review by superseding the losing node with an existing one.
@@ -2070,9 +2077,9 @@ async def epimemer_rejudge(
 
     **Three ingest judgments are revised elsewhere, and the split is about how
     each is addressed rather than about tidiness.** `importance` →
-    `judge_importance`, which is already this tool for that one field. A **frame**
-    → `reframe`, because withdrawing a metacontext moves an edge and changes what
-    merges, what corroborates and what a frame-scoped search returns — which this
+    `judge_importance`, which is already this tool for that one field. A **metacontext**
+    → `reassign_metacontext`, because withdrawing a metacontext moves an edge and changes what
+    merges, what corroborates and what a metacontext-scoped search returns — which this
     tool promises not to do. A **validity interval** → `correct_interval`,
     because an interval belongs to a (node, source) pair rather than to a node.
     Going to `supersede_by` for any of the three would file a true claim as an
@@ -2119,8 +2126,8 @@ async def epimemer_rejudge(
     )
 
 
-@mcp.tool(name="reframe")
-async def memory_reframe(
+@mcp.tool(name="reassign_metacontext")
+async def memory_reassign_metacontext(
     node_id: str,
     withdraw: str,
     because: str,
@@ -2128,28 +2135,29 @@ async def memory_reframe(
     assign: str | None = None,
     expected_graph: str | None = None,
 ) -> str:
-    """Withdraw a frame from a node, optionally putting another in its place.
+    """Withdraw a metacontext from a node, optionally putting another in its place.
 
-    A metacontext assignment used to be one-way, so a fact wrongly framed as
-    fiction stayed framed for ever. That is not cosmetic: it becomes permanently
-    unmergeable with its own twin, it stops corroborating the real copy, and a
-    frame-scoped search misses it where it belongs while returning it where it
-    does not. All three fail silently.
+    A metacontext assignment used to be one-way, so a fact wrongly assigned to
+    a fiction metacontext stayed there for ever. That is not cosmetic: it
+    becomes permanently unmergeable with its own twin, it stops corroborating
+    the real copy, and a metacontext-scoped search misses it where it belongs
+    while returning it where it does not. All three fail silently.
 
-    Not a supersession — the claim is unchanged and the world has not moved, so
+    Not a supersession: the claim is unchanged and the world has not moved, so
     nothing is retired. Use `update` when the claim itself was wrong.
 
     Args:
-        node_id: The node whose framing you are revising.
+        node_id: The node whose metacontext you are revising.
         withdraw: The metacontext id to remove. The node must currently hold it.
-        because: Why the original framing was wrong. Required.
+        because: Why the original assignment was wrong. Required.
         assign: A metacontext id to put in its place, applied in the same call.
-            **Use this whenever the claim belongs in another frame** —
-            withdrawing and then linking passes through a state where the node
-            states no frame at all, and strands it there if the second call
-            never happens. A withdrawal that would leave no frames is refused
-            outright: a frameless node shares a frame with nothing, so it is
-            never compared, never merged, and returned by no scoped search.
+            **Use this whenever the claim belongs in another metacontext.**
+            Withdrawing and then linking passes through a state where the node
+            states no metacontext at all, and strands it there if the second
+            call never happens. A withdrawal that would leave no metacontexts is
+            refused outright: a node without a metacontext shares a metacontext
+            with nothing, so it is never compared, never merged, and returned by
+            no scoped search.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
@@ -2160,8 +2168,8 @@ async def memory_reframe(
     if refused is not None:
         return refused
     return await _run_with_timeout(
-        "epimemer.reframe",
-        lambda: tools.reframe(
+        "epimemer.reassign_metacontext",
+        lambda: tools.reassign_metacontext(
             node_id=node_id,
             storage=deps["storage"],
             withdraw=withdraw,
@@ -2173,8 +2181,11 @@ async def memory_reframe(
         f"node_id={node_id}",
         lambda r, m: (
             f"refused node={node_id}"
-            if not r["reframed"]
-            else f"reframed={node_id} withdrew={r['withdrew']} frames_now={len(r['frames_now'])}"
+            if not r["reassigned"]
+            else (
+                f"reassigned={node_id} withdrew={r['withdrew']} "
+                f"metacontexts_now={len(r['metacontexts_now'])}"
+            )
         ),
         expected_graph=expected_graph,
     )
@@ -2248,14 +2259,29 @@ async def memory_query_graph(
     ctx: Context,
     hops: int = 1,
     edge_types: list[str] | None = None,
+    metacontexts: list[str] | None = None,
     expected_graph: str | None = None,
 ) -> str:
     """Traverse the graph from a node, returning the local subgraph.
+
+    Every returned node carries its `metacontexts` label, so you can see which
+    world each neighbour is a claim about without asking again per node.
 
     Args:
         node_id: Starting node ID.
         hops: Number of traversal hops (default 1).
         edge_types: If provided, only traverse these edge types.
+        metacontexts: Optional — the metacontexts to walk in, as a list. Results
+            are nodes standing in **any** of them, and no metacontext inherits
+            another, exactly as on `search`. Every id must exist in this graph;
+            one that does not resolve is refused rather than quietly narrowing
+            the walk to the metacontexts that do. Scope this walk whenever the
+            starting node is shared across worlds: a topic node created from a
+            tag stands in no metacontext and gathers everything tagged with it,
+            so an unscoped walk from one hands you a novel's claims beside real
+            ones. The starting node comes back either way, because you named
+            it; its neighbours are filtered, and the edges returned are only
+            those between nodes you were shown.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
@@ -2269,6 +2295,7 @@ async def memory_query_graph(
             storage=deps["storage"],
             hops=hops,
             edge_types=edge_types,
+            metacontexts=metacontexts,
         ),
         ctx,
         f"node={node_id} hops={hops}",
@@ -2282,6 +2309,7 @@ async def memory_topic_tree(
     topic_id: str,
     ctx: Context,
     depth: int = 2,
+    metacontexts: list[str] | None = None,
     expected_graph: str | None = None,
 ) -> str:
     """Drill into a topic hierarchy: its ancestors and its subtopics.
@@ -2289,13 +2317,21 @@ async def memory_topic_tree(
     Returns ids and short content previews only — never the underlying
     material — so you can pick a branch and then search or query_graph just
     that. Use it when search returns a topic carrying `subtopics`, or to see
-    how a broad topic was split.
+    how a broad topic was split. Each entry carries the `metacontexts` its
+    topic stands in.
 
     Args:
         topic_id: The topic to centre the tree on.
         depth: Levels of subtopics to descend (default 2; 1 is direct
             subtopics only). A subtopic cut off by the limit that has children
             of its own is flagged `has_more`.
+        metacontexts: Optional — the metacontexts to walk in, as a list. Topics
+            standing in **any** of them are shown, and no metacontext inherits
+            another, exactly as on `search`. Every id must exist in this graph;
+            one that does not resolve is refused. The topic you named comes
+            back either way; an ancestor outside the scope is left out and the
+            rest are still ancestors, and a subtopic outside it takes its
+            branch with it.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
@@ -2308,6 +2344,7 @@ async def memory_topic_tree(
             topic_id=topic_id,
             storage=deps["storage"],
             depth=depth,
+            metacontexts=metacontexts,
         ),
         ctx,
         f"topic={topic_id} depth={depth}",
@@ -2417,21 +2454,32 @@ async def memory_find_nodes(
     tagged_with_topic: str | None = None,
     node_types: list[str] | None = None,
     status: str = "active",
+    metacontexts: list[str] | None = None,
     limit: int = 50,
     expected_graph: str | None = None,
 ) -> str:
-    """Find nodes connected to a source or topic hub by graph traversal.
+    """Find nodes connected to a source node or a topic node by graph traversal.
 
-    Unlike search (vector similarity), this returns exactly the nodes linked to a
-    hub — e.g. find_nodes(sourced_from="ISSUES.md") returns everything that came
-    from that document; find_nodes(tagged_with_topic="billing") returns nodes about
-    billing.
+    Unlike search (vector similarity), this returns exactly the nodes linked to
+    that node: find_nodes(sourced_from="ISSUES.md") returns everything that came
+    from that document; find_nodes(tagged_with_topic="billing") returns nodes
+    about billing. Every returned node carries its `metacontexts` label.
 
     Args:
         sourced_from: A document/entity id or name — return its `sourced_from` nodes.
         tagged_with_topic: A Topic id or name — return nodes tagged with that concept.
         node_types: Filter to "topic"/"fact"/"inference".
         status: Node status to list (default "active").
+        metacontexts: Optional — the metacontexts to list from, as a list.
+            Results are nodes standing in **any** of them, and no metacontext
+            inherits another, exactly as on `search`. Every id must exist in
+            this graph; one that does not resolve is refused rather than
+            quietly narrowing the listing to the metacontexts that do. Scope
+            this whenever the node you name is shared across worlds: a topic
+            node created from a tag stands in no metacontext and gathers
+            everything tagged with it, so an unscoped listing mixes a novel's
+            claims with real ones. The filter runs before `limit`, so a full
+            page is a full page of what you asked for.
         limit: Maximum nodes to return.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
@@ -2447,6 +2495,7 @@ async def memory_find_nodes(
             tagged_with_topic=tagged_with_topic,
             node_types=node_types,
             status=status,
+            metacontexts=metacontexts,
             limit=limit,
         ),
         ctx,
@@ -2867,10 +2916,10 @@ async def memory_create_metacontext(
         content: Short name for the metacontext.
         description: Optional longer explanation.
         metacontext_id: An id to create it under, instead of a minted one. Use
-            `the-real` for the frame holding real-world claims — that is the
+            `the-real` for the metacontext holding real-world claims — that is the
             conventional name every graph should use for it, so that two graphs
-            do not end up with the same frame under two strings. It is an
-            ordinary frame in every other respect, and a graph has to create it
+            do not end up with the same metacontext under two strings. It is an
+            ordinary metacontext in every other respect, and a graph has to create it
             once before anything can be ingested into it. Re-creating an
             existing id replaces its prose.
         expected_graph: The graph you believe you are working in. The active graph

@@ -54,8 +54,8 @@ def config():
 
 async def _node(storage, embedder, node):
     await storage.store_node(node)
-    # States a frame, as every ingested node has since the frame requirement: absence names none,
-    # so two frameless nodes share none and a `one_claim` verdict is refused.
+    # States a metacontext, as every ingested node has since the metacontext requirement: absence
+    # names none, so two nodes without one share none and a `one_claim` verdict is refused.
     await storage.store_edge(
         NodeEdge(
             src_id=node.id,

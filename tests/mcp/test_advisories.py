@@ -43,14 +43,14 @@ from epimemer.storage.protocol import WarningOverrides, resolve_warning_policy
 CRITIC = JudgeRef(agent_id="a-critic", digest="d1")
 
 
-async def _fact(storage, content, *, frame=BASE_METACONTEXT_ID):
+async def _fact(storage, content, *, metacontext=BASE_METACONTEXT_ID):
     fact = Fact(content=content, source_id="seg-1")
     await storage.store_node(fact)
-    if frame is not None:
+    if metacontext is not None:
         await storage.store_edge(
             NodeEdge(
                 src_id=fact.id,
-                dst_id=frame,
+                dst_id=metacontext,
                 type=EdgeType.HAS_METACONTEXT,
             )
         )
@@ -58,16 +58,16 @@ async def _fact(storage, content, *, frame=BASE_METACONTEXT_ID):
 
 
 async def _elsewhere(storage, fact, label):
-    frame = Metacontext(content=label)
-    await storage.store_metacontext(frame)
+    metacontext = Metacontext(content=label)
+    await storage.store_metacontext(metacontext)
     await storage.store_edge(
         NodeEdge(
             src_id=fact.id,
-            dst_id=frame.id,
+            dst_id=metacontext.id,
             type=EdgeType.HAS_METACONTEXT,
         )
     )
-    return frame.id
+    return metacontext.id
 
 
 class TestThePolicyResolvesWithoutASingleton:
@@ -84,12 +84,12 @@ class TestThePolicyResolvesWithoutASingleton:
 
         assert resolved_action(policy, AdvisoryKind.DISJOINT_PREMISES) is (AdvisoryAction.FLAG)
 
-    def test_a_same_frame_contradiction_flags_out_of_the_box(self):
+    def test_a_same_metacontext_contradiction_flags_out_of_the_box(self):
         """Not a preference — a compatibility requirement. `record_contradiction`
-        has always notified on a same-frame pair, and a default of `proceed`
+        has always notified on a same-metacontext pair, and a default of `proceed`
         would have kept the key while quietly changing its trigger."""
         assert (
-            resolved_action(WarningPolicy(), AdvisoryKind.SAME_FRAME_CONTRADICTION)
+            resolved_action(WarningPolicy(), AdvisoryKind.SAME_METACONTEXT_CONTRADICTION)
             is AdvisoryAction.FLAG
         )
 
@@ -102,18 +102,20 @@ class TestThePolicyResolvesWithoutASingleton:
         )
 
         assert resolved.by_kind[AdvisoryKind.DISJOINT_PREMISES] is AdvisoryAction.FLAG
-        assert resolved.by_kind[AdvisoryKind.SAME_FRAME_CONTRADICTION] is (AdvisoryAction.FLAG)
+        assert resolved.by_kind[AdvisoryKind.SAME_METACONTEXT_CONTRADICTION] is (
+            AdvisoryAction.FLAG
+        )
 
     def test_a_graph_can_quieten_a_kind_the_default_escalates(self):
         resolved = resolve_warning_policy(
             WarningOverrides(
-                by_kind={AdvisoryKind.SAME_FRAME_CONTRADICTION: AdvisoryAction.PROCEED}
+                by_kind={AdvisoryKind.SAME_METACONTEXT_CONTRADICTION: AdvisoryAction.PROCEED}
             ),
             WarningPolicy(),
         )
 
         assert (
-            resolved_action(resolved, AdvisoryKind.SAME_FRAME_CONTRADICTION)
+            resolved_action(resolved, AdvisoryKind.SAME_METACONTEXT_CONTRADICTION)
             is AdvisoryAction.PROCEED
         )
 
@@ -128,9 +130,9 @@ class TestThePolicyResolvesWithoutASingleton:
     def test_two_configs_do_not_share_one_policy(self):
         """A shared mutable default would be a singleton reached by accident."""
         first, second = ServerConfig(), ServerConfig()
-        first.warning_policy.by_kind[AdvisoryKind.CROSS_FRAME] = AdvisoryAction.FLAG
+        first.warning_policy.by_kind[AdvisoryKind.CROSS_METACONTEXT] = AdvisoryAction.FLAG
 
-        assert AdvisoryKind.CROSS_FRAME not in second.warning_policy.by_kind
+        assert AdvisoryKind.CROSS_METACONTEXT not in second.warning_policy.by_kind
 
     def test_an_explicitly_named_flag_outranks_the_global_mute(self):
         """Specific beats general, the rule every `resolve_*` here keeps.
@@ -141,19 +143,19 @@ class TestThePolicyResolvesWithoutASingleton:
         be an instruction nobody can follow.
         """
         advisories = [
-            Advisory(kind=AdvisoryKind.CROSS_FRAME, message="x"),
-            Advisory(kind=AdvisoryKind.SAME_FRAME_CONTRADICTION, message="y"),
+            Advisory(kind=AdvisoryKind.CROSS_METACONTEXT, message="x"),
+            Advisory(kind=AdvisoryKind.SAME_METACONTEXT_CONTRADICTION, message="y"),
         ]
 
         assert len(surfaced(WarningPolicy(), advisories)) == 2
         muted = surfaced(WarningPolicy(surface=False), advisories)
-        assert [a.kind for a in muted] == [AdvisoryKind.SAME_FRAME_CONTRADICTION]
+        assert [a.kind for a in muted] == [AdvisoryKind.SAME_METACONTEXT_CONTRADICTION]
         assert notify_user(WarningPolicy(), advisories) is True
 
     def test_a_kind_following_the_default_action_is_silenced_by_the_mute(self):
         """The exception is narrow on purpose: a kind nobody named is general,
         however the general default is set."""
-        advisories = [Advisory(kind=AdvisoryKind.CROSS_FRAME, message="x")]
+        advisories = [Advisory(kind=AdvisoryKind.CROSS_METACONTEXT, message="x")]
         loud = WarningPolicy(surface=False, default_action=AdvisoryAction.FLAG, by_kind={})
 
         assert surfaced(loud, advisories) == []
@@ -161,9 +163,10 @@ class TestThePolicyResolvesWithoutASingleton:
     def test_setting_a_named_kind_to_proceed_is_how_an_escalation_is_withdrawn(
         self,
     ):
-        advisories = [Advisory(kind=AdvisoryKind.SAME_FRAME_CONTRADICTION, message="y")]
+        advisories = [Advisory(kind=AdvisoryKind.SAME_METACONTEXT_CONTRADICTION, message="y")]
         quiet = WarningPolicy(
-            surface=False, by_kind={AdvisoryKind.SAME_FRAME_CONTRADICTION: AdvisoryAction.PROCEED}
+            surface=False,
+            by_kind={AdvisoryKind.SAME_METACONTEXT_CONTRADICTION: AdvisoryAction.PROCEED},
         )
 
         assert surfaced(quiet, advisories) == []
@@ -176,7 +179,7 @@ class TestThePolicyResolvesWithoutASingleton:
 
 
 class TestEachKindGivesExactlyOneKindOfAdvice:
-    """The defect the fourth kind fixed: `SAME_FRAME_CONTRADICTION` was raised
+    """The defect the fourth kind fixed: `SAME_METACONTEXT_CONTRADICTION` was raised
     both where the tool was right and where it was wrong, so one kind carried
     opposite advice — the *field that needs "or" to describe it* tell.
 
@@ -188,19 +191,21 @@ class TestEachKindGivesExactlyOneKindOfAdvice:
     def test_every_kind_is_classified_and_nothing_else_is(self):
         assert set(ADVISORY_STANCE) == set(AdvisoryKind)
 
-    def test_only_the_same_frame_contradiction_endorses_the_call(self):
+    def test_only_the_same_metacontext_contradiction_endorses_the_call(self):
         endorsing = {
             kind for kind, stance in ADVISORY_STANCE.items() if stance is AdvisoryStance.ESCALATES
         }
-        assert endorsing == {AdvisoryKind.SAME_FRAME_CONTRADICTION}
+        assert endorsing == {AdvisoryKind.SAME_METACONTEXT_CONTRADICTION}
 
     def test_an_escalating_advisory_has_nothing_to_proceed_despite(self):
         assert (
-            objects_to_the_call([Advisory(kind=AdvisoryKind.SAME_FRAME_CONTRADICTION, message="y")])
+            objects_to_the_call(
+                [Advisory(kind=AdvisoryKind.SAME_METACONTEXT_CONTRADICTION, message="y")]
+            )
             is False
         )
         assert (
-            objects_to_the_call([Advisory(kind=AdvisoryKind.SAME_FRAME_VARIANT, message="y")])
+            objects_to_the_call([Advisory(kind=AdvisoryKind.SAME_METACONTEXT_VARIANT, message="y")])
             is True
         )
 
@@ -208,7 +213,7 @@ class TestEachKindGivesExactlyOneKindOfAdvice:
         assert (
             objects_to_the_call(
                 [
-                    Advisory(kind=AdvisoryKind.SAME_FRAME_CONTRADICTION, message="y"),
+                    Advisory(kind=AdvisoryKind.SAME_METACONTEXT_CONTRADICTION, message="y"),
                     Advisory(kind=AdvisoryKind.DISJOINT_PREMISES, message="x"),
                 ]
             )
@@ -221,7 +226,7 @@ class TestConfigureWarnings:
         result, _ = await tools.configure_warnings(storage)
 
         assert result["surface"] is True
-        assert result["actions"]["same_frame_contradiction"] == "flag"
+        assert result["actions"]["same_metacontext_contradiction"] == "flag"
         assert result["actions"]["disjoint_premises"] == "proceed"
         assert result["overridden"] == {}
 
@@ -231,20 +236,20 @@ class TestConfigureWarnings:
         result, _ = await tools.configure_warnings(storage)
 
         assert result["actions"]["disjoint_premises"] == "flag"
-        assert result["actions"]["same_frame_contradiction"] == "flag"
+        assert result["actions"]["same_metacontext_contradiction"] == "flag"
         # Which answers this graph gave, as opposed to inherited — the two are
         # different, because only the second tracks a changed default.
         assert result["overridden"] == {"by_kind": {"disjoint_premises": "flag"}}
 
     async def test_a_second_call_merges_rather_than_replacing(self, storage):
         await tools.configure_warnings(storage, actions={"disjoint_premises": "flag"})
-        await tools.configure_warnings(storage, actions={"cross_frame": "flag"})
+        await tools.configure_warnings(storage, actions={"cross_metacontext": "flag"})
 
         result, _ = await tools.configure_warnings(storage)
 
         assert result["overridden"]["by_kind"] == {
             "disjoint_premises": "flag",
-            "cross_frame": "flag",
+            "cross_metacontext": "flag",
         }
 
     async def test_clear_goes_back_to_the_default_at_the_time(self, storage):
@@ -281,40 +286,40 @@ class TestTheTwoExistingWarningsBecameAdvisories:
     plus, in one case, a boolean. The right idiom and the wrong plumbing: no
     kind, no subjects, nothing a setting could address. The response keys stay."""
 
-    async def test_a_same_frame_contradiction_still_notifies(self, storage):
+    async def test_a_same_metacontext_contradiction_still_notifies(self, storage):
         a = await _fact(storage, "X is true")
         b = await _fact(storage, "X is false")
 
         result, _ = await tools.record_contradiction(a.id, b.id, storage)
 
-        assert result["same_frame"] is True
+        assert result["same_metacontext"] is True
         assert result["notify_user"] is True
-        assert result["warnings"][0]["kind"] == "same_frame_contradiction"
+        assert result["warnings"][0]["kind"] == "same_metacontext_contradiction"
 
-    async def test_a_cross_frame_contradiction_still_says_use_record_variant(self, storage):
+    async def test_a_cross_metacontext_contradiction_still_says_use_record_variant(self, storage):
         a = await _fact(storage, "real")
-        b = await _fact(storage, "fictional", frame=None)
+        b = await _fact(storage, "fictional", metacontext=None)
         await _elsewhere(storage, b, "Fiction")
 
         result, _ = await tools.record_contradiction(a.id, b.id, storage)
 
-        assert result["same_frame"] is False
+        assert result["same_metacontext"] is False
         assert result["notify_user"] is False
         assert "record_variant" in result["warning"]
-        assert result["warnings"][0]["kind"] == "cross_frame"
+        assert result["warnings"][0]["kind"] == "cross_metacontext"
 
-    async def test_a_cross_frame_variant_is_the_correct_use_and_says_nothing(self, storage):
+    async def test_a_cross_metacontext_variant_is_the_correct_use_and_says_nothing(self, storage):
         a = await _fact(storage, "Napoleon lost at Waterloo")
-        b = await _fact(storage, "Napoleon won at Waterloo", frame=None)
+        b = await _fact(storage, "Napoleon won at Waterloo", metacontext=None)
         await _elsewhere(storage, b, "Novel-X")
 
         result, _ = await tools.record_variant(a.id, b.id, storage)
 
-        assert result["same_frame"] is False
+        assert result["same_metacontext"] is False
         assert "warning" not in result and "warnings" not in result
         assert result["notify_user"] is False
 
-    async def test_a_same_frame_variant_is_advised_against_and_stays_quiet(self, storage):
+    async def test_a_same_metacontext_variant_is_advised_against_and_stays_quiet(self, storage):
         """It keeps the whisper it always had — but as a policy rather than a
         hard-coding, so a graph that wants it louder can name it."""
         a = await _fact(storage, "a")
@@ -323,11 +328,11 @@ class TestTheTwoExistingWarningsBecameAdvisories:
         result, _ = await tools.record_variant(a.id, b.id, storage)
 
         assert "record_contradiction" in result["warning"]
-        assert result["warnings"][0]["kind"] == "same_frame_variant"
+        assert result["warnings"][0]["kind"] == "same_metacontext_variant"
         assert result["notify_user"] is False
 
-    async def test_a_same_frame_variant_can_be_escalated_by_a_graph(self, storage):
-        await tools.configure_warnings(storage, actions={"same_frame_variant": "flag"})
+    async def test_a_same_metacontext_variant_can_be_escalated_by_a_graph(self, storage):
+        await tools.configure_warnings(storage, actions={"same_metacontext_variant": "flag"})
         a = await _fact(storage, "a")
         b = await _fact(storage, "b")
 
@@ -337,8 +342,8 @@ class TestTheTwoExistingWarningsBecameAdvisories:
 
     async def test_the_wrong_tool_is_recorded_and_the_right_one_is_not(self, storage):
         """The whole of the stance split, at the two call sites that motivated
-        it. A same-frame variant used the wrong tool and the graph says so; a
-        same-frame contradiction used the right one and had nothing to proceed
+        it. A same-metacontext variant used the wrong tool and the graph says so; a
+        same-metacontext contradiction used the right one and had nothing to proceed
         against."""
         a = await _fact(storage, "a")
         b = await _fact(storage, "b")
@@ -357,14 +362,16 @@ class TestTheTwoExistingWarningsBecameAdvisories:
     async def test_a_graph_can_turn_the_notification_off_as_a_decision(self, storage):
         """It stays possible; it just becomes something somebody chose rather
         than a side effect of a representation change."""
-        await tools.configure_warnings(storage, actions={"same_frame_contradiction": "proceed"})
+        await tools.configure_warnings(
+            storage, actions={"same_metacontext_contradiction": "proceed"}
+        )
         a = await _fact(storage, "X is true")
         b = await _fact(storage, "X is false")
 
         result, _ = await tools.record_contradiction(a.id, b.id, storage)
 
         assert result["notify_user"] is False
-        assert result["warnings"][0]["kind"] == "same_frame_contradiction"
+        assert result["warnings"][0]["kind"] == "same_metacontext_contradiction"
 
     async def test_a_mute_does_not_withdraw_the_contradiction_escalation(self, storage):
         """It is named `flag` by default, and a switch that names no kind is the
@@ -376,7 +383,7 @@ class TestTheTwoExistingWarningsBecameAdvisories:
         result, _ = await tools.record_contradiction(a.id, b.id, storage)
 
         assert result["notify_user"] is True
-        assert result["warnings"][0]["kind"] == "same_frame_contradiction"
+        assert result["warnings"][0]["kind"] == "same_metacontext_contradiction"
 
     async def test_a_mute_does_hide_a_kind_that_only_objects(self, storage):
         await tools.configure_warnings(storage, surface=False)
@@ -400,7 +407,7 @@ class TestTheRecordIsReadBackByReview:
 
     async def test_the_mode_selects_only_advisory_rows(self, storage):
         a = await _fact(storage, "real")
-        b = await _fact(storage, "fictional", frame=None)
+        b = await _fact(storage, "fictional", metacontext=None)
         await _elsewhere(storage, b, "Fiction")
         await tools.record_contradiction(a.id, b.id, storage, judge=CRITIC)
 
@@ -414,7 +421,7 @@ class TestTheRecordIsReadBackByReview:
         assert {d["kind"] for d in only["decisions"]} == {"proceeded_despite_advisory"}
 
     async def test_the_commonest_path_does_not_double_the_journal(self, storage):
-        """A same-frame contradiction is the ordinary, correct use of the tool.
+        """A same-metacontext contradiction is the ordinary, correct use of the tool.
         A row for every one of them would swamp the review this mode exists for
         — the selectivity argument that keeps `DecisionKind` fine-grained,
         turned on the kind itself."""
@@ -429,7 +436,7 @@ class TestTheRecordIsReadBackByReview:
 
     async def test_the_row_carries_what_the_decider_was_told(self, storage):
         a = await _fact(storage, "real")
-        b = await _fact(storage, "fictional", frame=None)
+        b = await _fact(storage, "fictional", metacontext=None)
         await _elsewhere(storage, b, "Fiction")
         await tools.record_contradiction(a.id, b.id, storage, judge=CRITIC)
 
@@ -437,7 +444,7 @@ class TestTheRecordIsReadBackByReview:
 
         row = result["decisions"][0]
         assert row["judged_by"] == "a-critic"
-        assert "cross_frame" in row["certainty_basis"]
+        assert "cross_metacontext" in row["certainty_basis"]
         assert {s["id"] for s in row["subjects"]} == {a.id, b.id}
 
     async def test_an_unwritten_kind_would_have_read_as_a_clean_graph(self):
@@ -469,7 +476,7 @@ class TestAStoredOverrideFromANewerBuild:
 
     def test_an_unknown_action_raises_too(self):
         with pytest.raises(ValidationError):
-            WarningOverrides.model_validate({"by_kind": {"cross_frame": "reject"}})
+            WarningOverrides.model_validate({"by_kind": {"cross_metacontext": "reject"}})
 
     async def test_the_failure_reaches_the_tools_that_read_the_policy(self, storage):
         """Not a defect to fix here — a consequence to know about. Recovering

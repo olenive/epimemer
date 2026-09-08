@@ -122,7 +122,7 @@ class TestStoreIsUpsert:
         assert got.content == "second"
 
     async def test_store_metacontext_twice_updates_in_place(self, store):
-        mc = Metacontext(content="frame")
+        mc = Metacontext(content="metacontext")
         await store.store_metacontext(mc)
 
         mc.description = "now described"
@@ -770,7 +770,7 @@ class TestVizListTimelines:
 
 
 class TestVizListMetacontexts:
-    """Metacontexts are named in the dashboard's frame filter, so the viz read
+    """Metacontexts are named in the dashboard's metacontext filter, so the viz read
     must reach them the same way it reaches timelines — by graph, without
     moving the active connection."""
 
@@ -783,7 +783,7 @@ class TestVizListMetacontexts:
 
     async def test_omits_superseded_metacontexts(self, store):
         await store.store_metacontext(
-            Metacontext(content="Retired frame", status=NodeStatus.SUPERSEDED)
+            Metacontext(content="Retired metacontext", status=NodeStatus.SUPERSEDED)
         )
 
         assert list(await store.viz_list_metacontexts(store.current_database)) == []
@@ -1060,14 +1060,16 @@ class TestBatchedEdgeFetch:
         assert got.weight == 0.25
         assert got.metadata == {"note": "kept"}
 
-    async def _hub_and_spokes(self, store, count: int):
-        hub = Topic(content="hub", source_id="s1")
-        await store.store_node(hub)
+    async def _topic_and_spokes(self, store, count: int):
+        topic = Topic(content="topic", source_id="s1")
+        await store.store_node(topic)
         facts = [Fact(content=f"f{i}", source_id="s1") for i in range(count)]
         for fact in facts:
             await store.store_node(fact)
-            await store.store_edge(NodeEdge(src_id=fact.id, dst_id=hub.id, type=EdgeType.SUPPORTS))
-        return hub, facts
+            await store.store_edge(
+                NodeEdge(src_id=fact.id, dst_id=topic.id, type=EdgeType.SUPPORTS)
+            )
+        return topic, facts
 
     @pytest.mark.parametrize("count", [40, 250])
     async def test_a_large_request_answers_the_same_as_a_small_one(self, store, count):
@@ -1080,7 +1082,7 @@ class TestBatchedEdgeFetch:
         cheap branch and the expensive one are asserted to agree. 40 is below
         the crossover and 250 above it, both small enough for the default suite.
         """
-        hub, facts = await self._hub_and_spokes(store, count)
+        topic, facts = await self._topic_and_spokes(store, count)
 
         result = await store.get_edges_for(
             [f.id for f in facts], direction="from", edge_type=EdgeType.SUPPORTS
@@ -1088,7 +1090,7 @@ class TestBatchedEdgeFetch:
 
         assert len(result) == count
         assert all(len(result[f.id]) == 1 for f in facts)
-        assert {result[f.id][0].dst_id for f in facts} == {hub.id}
+        assert {result[f.id][0].dst_id for f in facts} == {topic.id}
 
     async def test_the_large_path_returns_only_what_was_asked_for(self, store):
         """The scan branch reads rows nobody asked about; none may leak out.
@@ -1097,10 +1099,12 @@ class TestBatchedEdgeFetch:
         back and the ids are matched here. A node outside the request must not
         appear in the map, and its edges must not be attributed to one inside.
         """
-        hub, facts = await self._hub_and_spokes(store, 150)
+        topic, facts = await self._topic_and_spokes(store, 150)
         stranger = Fact(content="stranger", source_id="s2")
         await store.store_node(stranger)
-        await store.store_edge(NodeEdge(src_id=stranger.id, dst_id=hub.id, type=EdgeType.SUPPORTS))
+        await store.store_edge(
+            NodeEdge(src_id=stranger.id, dst_id=topic.id, type=EdgeType.SUPPORTS)
+        )
 
         asked = [f.id for f in facts]
         result = await store.get_edges_for(asked, direction="from", edge_type=EdgeType.SUPPORTS)
@@ -1111,8 +1115,8 @@ class TestBatchedEdgeFetch:
 
     async def test_the_large_path_still_honours_no_type_filter(self, store):
         """Without a type the scan reads the whole edge table — same contract."""
-        hub, facts = await self._hub_and_spokes(store, 150)
-        extra = NodeEdge(src_id=facts[0].id, dst_id=hub.id, type=EdgeType.RELATED, label="also")
+        topic, facts = await self._topic_and_spokes(store, 150)
+        extra = NodeEdge(src_id=facts[0].id, dst_id=topic.id, type=EdgeType.RELATED, label="also")
         await store.store_edge(extra)
 
         result = await store.get_edges_for([f.id for f in facts], direction="from")

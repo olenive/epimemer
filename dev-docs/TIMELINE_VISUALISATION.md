@@ -167,9 +167,9 @@ The receiver replaces its copy rather than merging. Published from
 ### 6.3 Metacontexts in the snapshot
 
 `has_metacontext` edges carry only ids, so without the metacontexts
-themselves the frame filter could offer nothing but UUIDs.
+themselves the metacontext filter could offer nothing but UUIDs.
 `viz_list_metacontexts(database)` mirrors `viz_list_timelines`, and
-`assemble_snapshot` carries a `metacontexts` key. Where a frame is still
+`assemble_snapshot` carries a `metacontexts` key. Where a metacontext is still
 unresolvable the panel falls back to the raw id rather than dropping the
 association.
 
@@ -273,7 +273,7 @@ temporal comes back as a label with no dates. Out of scope on purpose:
 - **Clock times**, and anything needing the reader's present.
 
 Two guards matter more than they look. A bare four-digit number is a year
-only when a preposition frames it or a date pattern surrounds it; otherwise
+only when a preposition metacontexts it or a date pattern surrounds it; otherwise
 `3000 troops` and `error code 1997` become dates. And the preposition needs a
 word boundary in front of it, or "versi*on* 2024" reads as "on 2024".
 
@@ -293,7 +293,7 @@ word boundary in front of it, or "versi*on* 2024" reads as "on 2024".
 The pure/impure split is the point: the parts most likely to be wrong (break
 placement, zoom anchoring, query parsing, mark linkage, label layout) need no
 browser to test. `timeline-model.ts` exists because deciding *which marks
-there are* (resolving `TIMELINK` edges to nodes, naming frames, splitting
+there are* (resolving `TIMELINK` edges to nodes, naming metacontexts, splitting
 dated from undated) is as error-prone as the geometry and just as testable
 without a DOM.
 
@@ -552,7 +552,7 @@ ornament) is the Information-is-Beautiful school.
 |---|---|
 | Endpoint: **point** (stated) | Crisp bar cap with a short perpendicular tick; date label in the mono face |
 | Endpoint: **unknown** | The bar **dissolves**: a linear gradient to fully transparent over roughly 24px. "The edge is somewhere in this fog" |
-| Endpoint: **unbounded** | The bar keeps **full weight and exits the frame**. "There is no edge" |
+| Endpoint: **unbounded** | The bar keeps **full weight and exits the metacontext**. "There is no edge" |
 | **Witness point** | Solid dot on the bar with a faint halo ring. A claim with no endpoints and one witness, the commonest real record, is a dot with the bar fading **symmetrically** away from it in both directions |
 | **Vague label, resolved** ("during the Renaissance" with explicit approximate bounds) | **Hatched** band (45° line pattern), soft `c.` date labels, the stored label rendered verbatim on the band |
 | **Vague label, unresolved** | Never placed on the axis. Goes to the undated tray (§12.6) as a chip, label intact |
@@ -571,7 +571,7 @@ ornament) is the Information-is-Beautiful school.
 1. **A gap is never styled as "false".** Open world: outside a stated
    interval is *no assertion*. A red or shaded gap draws a claim nobody made.
 2. **Unknown and unbounded never share a treatment.** They are different
-   values in the model, so fade for one, frame-exit for the other.
+   values in the model, so fade for one, metacontext-exit for the other.
 3. **A label-only interval never sits on the axis.** Tray until resolved;
    resolution *adds* a position, it never replaces the words.
 4. **No filled union bar.** "No default collapse" is a data rule; the hollow

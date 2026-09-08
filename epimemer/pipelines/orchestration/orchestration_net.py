@@ -68,7 +68,7 @@ class StoreDecompositionInput(BaseModel):
     document_id: str
     segments: list[dict] = Field(default_factory=list)
     # Required, like the tool it routes to. Optional here it would default
-    # a frame the caller never named, and this path bypasses the tool signature
+    # a metacontext the caller never named, and this path bypasses the tool signature
     # that is otherwise the enforcement — `the-real` for base reality.
     metacontext_id: str
 

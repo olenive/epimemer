@@ -61,6 +61,9 @@ from tests.storage.test_edge_type_migration import (
 from tests.storage.test_retention_migration import (
     assert_a_double_written_graph_migrates_itself,
 )
+from tests.storage.test_terminology_migration import (
+    assert_a_frame_spelled_graph_migrates_itself,
+)
 
 WS_URL = os.environ.get("EPIMEMER_SURREAL_WS_URL")
 WS_USER = os.environ.get("EPIMEMER_SURREAL_USER", "root")
@@ -729,6 +732,33 @@ async def test_a_double_written_graph_migrates_itself_over_ws(db_name):
 
     try:
         await assert_a_double_written_graph_migrates_itself(open_store)
+    finally:
+        cleaner = _make_store(db_name)
+        await cleaner.connect()
+        await cleaner.delete_database(db_name)
+        await cleaner.close()
+        for store in opened:
+            with contextlib.suppress(Exception):
+                await store.close()
+
+
+async def test_a_frame_spelled_graph_migrates_itself_over_ws(db_name):
+    """The ws:// copy of the embedded terminology migration test.
+
+    Same reason as the two above: both deployments reach `_setup_schema`, and
+    checking them against one script is what stops the two being held to
+    different expectations.
+    """
+    opened: list[SurrealDBStorage] = []
+
+    async def open_store() -> SurrealDBStorage:
+        store = _make_store(db_name)
+        await store.connect()
+        opened.append(store)
+        return store
+
+    try:
+        await assert_a_frame_spelled_graph_migrates_itself(open_store)
     finally:
         cleaner = _make_store(db_name)
         await cleaner.connect()

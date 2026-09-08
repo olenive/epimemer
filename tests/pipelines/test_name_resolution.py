@@ -1,11 +1,11 @@
 """A name resolves to the node that answers to it, up to spelling and lineage.
 
 Two failures, one call site each, both silent. `claim_kind` written beside
-`claim-kind` gave one tag two hubs, and neither the exact match nor the merge
+`claim-kind` gave one tag two topic nodes, and neither the exact match nor the merge
 bar could tell that pair from `dev-session-2026-09-05` beside
 `dev-session-2026-09-06`, which must stay apart. And a name whose node had been
 merged away or rewritten resolved to nothing, so the write path minted a second
-hub while the read path returned an empty list.
+topic node while the read path returned an empty list.
 
 `dev-docs/TAG_IDENTITY.md` and `dev-docs/TOPIC_DESCRIPTIONS.md` carry the
 measurements and the reasoning.
@@ -21,7 +21,7 @@ from epimemer.core.types import (
     NodeType,
     Topic,
 )
-from epimemer.pipelines.frames import TAG_EXTRACTION_METHOD
+from epimemer.pipelines.metacontexts import TAG_EXTRACTION_METHOD
 from epimemer.pipelines.name_resolution import (
     live_successor,
     resolve_name,
@@ -87,7 +87,7 @@ class TestTagByKey:
     def test_a_statement_topic_does_not_answer_to_a_tag_name(self):
         """A tag is a name and a statement topic is prose.
 
-        Letting one answer to a normalised tag name would hand a tag's hub to
+        Letting one answer to a normalised tag name would hand a tag's topic node to
         something nobody wrote as a tag.
         """
         prose = Topic(content="claim kind", source_id="seg1", extraction_method="agent")
@@ -176,7 +176,7 @@ class TestFollowingARetirementForward:
     async def test_a_dangling_lineage_returns_the_node_it_was_given(self, storage):
         """A retired node whose successor is gone still names the thing it named.
 
-        Returning nothing would have the caller mint a duplicate hub, which is
+        Returning nothing would have the caller mint a duplicate topic node, which is
         the failure this exists to prevent.
         """
         orphan = await _stored(storage, _tag("orphan"), status=NodeStatus.MERGED)

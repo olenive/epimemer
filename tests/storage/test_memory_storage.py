@@ -632,7 +632,7 @@ class TestStoreIsolation:
         assert (await store.get_document(doc.id)).content == "original"
 
     async def test_mutating_returned_metacontext_does_not_change_store(self, store):
-        mc = Metacontext(content="frame")
+        mc = Metacontext(content="metacontext")
         await store.store_metacontext(mc)
 
         (await store.get_metacontext(mc.id)).description = "mutated"

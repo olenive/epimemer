@@ -277,7 +277,7 @@ class TestClocksDoNotConvert:
     There is no conversion between an in-universe date and a real one, and
     answering `before` would invent one. The useful side-effect is that an
     inference drawn across a fictional fact and a real one is temporally
-    uncheckable — the temporal sibling of `cross-frame`.
+    uncheckable — the temporal sibling of `cross-metacontext`.
     """
 
     def test_the_default_wall_clock_compares_with_itself(self):

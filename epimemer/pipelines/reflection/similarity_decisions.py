@@ -71,7 +71,7 @@ from epimemer.core.types import (
     JudgeRef,
     NodeEdge,
 )
-from epimemer.pipelines.reflection.review import same_frame
+from epimemer.pipelines.reflection.review import same_metacontext
 from epimemer.storage.protocol import StorageBackend
 
 # An edge of any of these between two nodes means the pair has been put in front
@@ -263,8 +263,8 @@ async def apply_similarity_decision(
         a_id, b_id, EdgeType.RETRACTED_SIMILARITY, storage
     )
 
-    if verdict == "one_claim" and not await same_frame(a_id, b_id, storage):
-        # A `similarity` edge across frames is a fiction corroborating a fact.
+    if verdict == "one_claim" and not await same_metacontext(a_id, b_id, storage):
+        # A `similarity` edge across metacontexts is a fiction corroborating a fact.
         # `variant_of` is the relation for it, and corroboration already
         # disqualifies partners that carry one — which is the difference
         # between the two being kept apart and them being kept apart *and
@@ -272,9 +272,9 @@ async def apply_similarity_decision(
         return SimilarityRefused(
             pair=pair,
             reason=(
-                "these are in different metacontext frames, so 'one_claim' would "
-                "have one frame's resolution corroborate the other's — "
-                "record_variant is the relation for a cross-frame pair. "
+                "these are in different metacontexts, so 'one_claim' would "
+                "have one metacontext's resolution corroborate the other's — "
+                "record_variant is the relation for a cross-metacontext pair. "
                 "'distinct' is available and writes no similarity."
             ),
         )

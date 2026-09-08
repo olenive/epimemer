@@ -53,7 +53,7 @@ class TemporalExpression(BaseModel):
 MIN_YEAR = 1000
 MAX_YEAR = 2999
 
-# A bare four-digit number is a year only when something frames it as one.
+# A bare four-digit number is a year only when something metacontexts it as one.
 # `of` is excluded on purpose: "the winter of 1897" would be worth having, but
 # "a group of 1500 people" is the same shape, and the cost is not symmetric.
 #
@@ -180,11 +180,11 @@ def _century(m: re.Match) -> TemporalExpression | None:
     return TemporalExpression(text=m.group("expr"), start=start, end=_utc(ordinal * 100 + 1))
 
 
-def _framed_year(m: re.Match) -> TemporalExpression | None:
+def _bracketed_year(m: re.Match) -> TemporalExpression | None:
     year = int(m["year"])
     if not _in_range(year):
         return None
-    # The preposition frames the number but is not part of the date, so only
+    # The preposition metacontexts the number but is not part of the date, so only
     # the year is reported. Vague matches keep their framing, because without
     # it "the Renaissance" reads as a noun rather than a time.
     return TemporalExpression(text=m["year"], start=_utc(year), end=_utc(year + 1))
@@ -260,7 +260,7 @@ _PATTERNS: tuple[tuple[re.Pattern, object], ...] = (
     ),
     (
         re.compile(rf"{_PREPOSITION}\s+{_year_group('year')}", re.IGNORECASE),
-        _framed_year,
+        _bracketed_year,
     ),
     # Vague markers. Kept short and explicit: an open-ended attempt to
     # recognise "temporal-sounding" prose is how a detector starts inventing.

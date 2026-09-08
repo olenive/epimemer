@@ -42,7 +42,7 @@ lose information, it inverts the quantity corroboration measures.
 | `redundant`, but `merge_facts` refused (an event, or an unjudged `claim_kind`) | genuinely one claim | `similarity` **and** `assessed` |
 | `compatible`: different claims that merely look alike | not one claim | `assessed` only |
 
-The other refusals need no new action: a cross-frame pair is
+The other refusals need no new action: a cross-metacontext pair is
 `record_variant`, and a retired twin is `recurs` and `restore`.
 
 `assessed` is a denormalised suppression index and passes §3.4's rule: it is
@@ -76,8 +76,8 @@ separate errand. Rules that decide behaviour:
   belongs exactly where a nomination could have happened; `CORRECTED`,
   `ARCHIVED` and `MERGED` are refused because a judgment there suppresses
   nothing and a `similarity` edge would still be counted as support.
-- **`one_claim` is refused across frames.** A `similarity` edge across frames
-  is a fiction corroborating a fact. `distinct` across frames is accepted,
+- **`one_claim` is refused across metacontexts.** A `similarity` edge across two
+  of them is a fiction corroborating a fact. `distinct` across metacontexts is accepted,
   since `assessed` corroborates nothing.
 - **`distinct` over a standing `one_claim` is a retraction.** It writes a
   `retracted_similarity` edge that disqualifies the standing one, the
@@ -259,7 +259,8 @@ re-examined by nothing.
 | synthesised topics, splits, enrichments, merge survivors | the node |
 
 A correction does not inherit the previous node's judge: the replacement is
-this agent's wording. Reusing an entity or tag topic does not restamp it, and
+this agent's wording. Reusing an entity or a topic node created from a tag does
+not restamp it, and
 re-recording a pair that already has its edge returns `created: False` and
 leaves the judge alone: a second agent calling the same tool has confirmed,
 which is a review with a record of its own (§6.4), not an overwrite. The
@@ -365,7 +366,7 @@ class DecisionRecord(BaseModel):
     certainty_basis: str | None
     reviews: str | None  # the record this one is about
     supersedes: str | None
-    frame: str | None
+    metacontext: str | None
 ```
 
 `reviewed` is `EXISTS(record WHERE reviews = this.id)`, and `unreviewed` is
@@ -559,8 +560,8 @@ writer; `review()` stays read-only.
 
 **A dissent records a finding and performs no undo.** Every undo in this
 system already has a tool (`reverse_merge`, `restore`, `apply_reflection`
-with `distinct`, `rejudge`, `reframe`, `correct_interval`), each with its own
-refusals and its own row that legitimately sets `supersedes`. A dispatcher
+with `distinct`, `rejudge`, `reassign_metacontext`, `correct_interval`), each
+with its own refusals and its own row that legitimately sets `supersedes`. A dispatcher
 over them would be a convenience less safe than the sequence it replaces. So
 a dissent sets only `reviews`, and its real use is where the undo was
 refused: a merge whose survivor has since been contradicted cannot be
@@ -604,14 +605,15 @@ value supplied is what the node already carries is refused and pointed at
 the segments are still stored.
 
 **Scope, and what is deliberately elsewhere.** `importance` stays with
-`judge_importance`, which already is this tool for one field. Frames and
-validity intervals have their own writers, `reframe` and `correct_interval`,
-and the split is about addressing rather than naming: `rejudge` takes a
-`node_id` and promises no status, edge or lineage moves, while a frame
+`judge_importance`, which already is this tool for one field. Metacontexts and
+validity intervals have their own writers, `reassign_metacontext` and
+`correct_interval`, and the split is about addressing rather than naming: `rejudge` takes a
+`node_id` and promises no status, edge or lineage moves, while a metacontext
 revision moves an edge and changes what merges, what corroborates and what a
 scoped search returns, and an interval belongs to a `(node, source)` pair.
-`reframe` takes an optional `assign`, so moving a claim from frame A to frame
-B never passes through frameless; withdrawing a node's last frame is a
+`reassign_metacontext` takes an optional `assign`, so moving a claim from
+metacontext A to metacontext B never passes through the state of holding none;
+withdrawing a node's last metacontext is a
 promotion taken with `to_base_reality=True` as an acknowledgment, because a
 flat refusal would have left the tool unable to fix the case it was built
 for. A refusal that blocks the motivating example is a design error, not a
@@ -793,7 +795,7 @@ then `A+C`, then `A+D`. Free at the point of use, since `merge_facts`
 already loads every source. `merge_cycle_limit`, default 2, a per-graph
 setting: one merge-then-reverse is an ordinary correction, two can be two
 judges disagreeing, the third attempt is oscillation and `merge_refusal`
-refuses it, ordered after the permanent refusals (cross-frame, event) and
+refuses it, ordered after the permanent refusals (cross-metacontext, event) and
 before the similarity bar, since it is fixable by a human decision. The
 refusal says the limit is configurable, so the setting has to be real or a
 legitimate third merge is blocked with no recourse. Refusal rather than a
@@ -1012,7 +1014,7 @@ out a subject the moment somebody clicked the decision naming it.
 - **`uncertain` and `difficult` as modes** (§6.2); **`between` as a mode;
   `graphs=` on `review()`** (§6.1, §6.6).
 - **`reversals` on `apply_review`** (§6.4). It reversed nothing.
-- **`rejudge` growing frame and interval fields** (§6.5).
+- **`rejudge` growing metacontext and interval fields** (§6.5).
 - **A global undo ring** (§7.3). It would throw away its tail across a
   session.
 - **Retiring the survivor on reversal; a public `delete_node`** (§7.7).

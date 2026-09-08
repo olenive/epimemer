@@ -47,7 +47,7 @@ async def supersede_node(
     supersession path is correct by construction: a replacement that is not
     embedded is invisible to vector search, and one that does not inherit the
     edges it is entitled to is orphaned — from its evidence after a correction,
-    or from its frame and topics after a world-change.
+    or from its metacontext and topics after a world-change.
 
     Args:
         old_node: The node being superseded.
@@ -60,7 +60,7 @@ async def supersede_node(
             caller knows which one happened. It selects two things
             besides the status itself: the edge migration policy — see
             `migration_disposition`, under which a `HISTORICAL` node
-            keeps its own provenance while only its frame and tags are copied
+            keeps its own provenance while only its metacontext and tags are copied
             onto the replacement — and which lineage edge is written, see
             `lineage_edge_type_for`. Judgments made about the old node stay on
             it under *either* status, so that is not one of the
@@ -344,7 +344,7 @@ async def merge_nodes(
 
     # The merged node inherits its sources' sources/tags/relationships via edge
     # migration below (sourced_from / tagged_with_topic / user edges are migrated).
-    # Its **frame** is the exception and is re-stated rather than migrated.
+    # Its **metacontext** is the exception and is re-stated rather than migrated.
     vectors = await embedding_provider.embed([merged_node.content])
     merged_embedding = EmbeddingRecord(
         item_id=merged_node.id,
@@ -356,22 +356,26 @@ async def merge_nodes(
         for source in source_nodes
     ]
 
-    # The survivor's frame is **re-stated**, not inherited. Its content is
+    # The survivor's metacontext is **re-stated**, not inherited. Its content is
     # synthesised, so no source's framing was ever made about this wording, and
     # a migrated edge would answer *which world is this about* on the merging
     # agent's behalf while crediting somebody else. `migration_disposition`
     # keeps `has_metacontext` on the sources for the same reason; these are the
     # replacement. The set is well-defined because every merge path refuses
-    # sources that do not stand in exactly the same frames, so the union is that
+    # sources that do not stand in exactly the same metacontexts, so the union is that
     # one set — and an empty one (an undeclared graph) re-states nothing, which
     # is right: nobody has said anything to restate.
-    from epimemer.pipelines.frames import frame_edges
-    from epimemer.pipelines.reflection.review import frames_for
+    from epimemer.pipelines.metacontexts import metacontext_edges
+    from epimemer.pipelines.reflection.review import metacontexts_for
 
-    source_frames = await frames_for([source.id for source in source_nodes], storage)
-    restated = frame_edges(
+    source_metacontexts = await metacontexts_for([source.id for source in source_nodes], storage)
+    restated = metacontext_edges(
         merged_node.id,
-        {frame for frames in source_frames.values() for frame in frames},
+        {
+            metacontext
+            for metacontexts in source_metacontexts.values()
+            for metacontext in metacontexts
+        },
         judge=judge,
     )
 
@@ -433,11 +437,11 @@ def _repointed(edge_id: str, source_ids: set[str], survivor_id: str) -> str:
     return survivor_id if edge_id in source_ids else edge_id
 
 
-async def _frames_for_reversal(node_ids, storage):
-    """The sources' stated frames, imported late to avoid an import cycle."""
-    from epimemer.pipelines.reflection.review import frames_for
+async def _metacontexts_for_reversal(node_ids, storage):
+    """The sources' stated metacontexts, imported late to avoid an import cycle."""
+    from epimemer.pipelines.reflection.review import metacontexts_for
 
-    return await frames_for(node_ids, storage)
+    return await metacontexts_for(node_ids, storage)
 
 
 async def reversal_refusal(
@@ -491,16 +495,18 @@ async def reversal_refusal(
         }
         | {(source_id, survivor.id, EdgeType.MERGED_INTO.value) for source_id in source_ids}
         | {
-            # The frame the merge **re-stated** on the survivor. It is not in
+            # The metacontext the merge **re-stated** on the survivor. It is not in
             # the captured partition, because a merge no longer migrates
             # `has_metacontext` — the sources kept theirs, and these are new edges
             # the merge itself wrote. Left out, every merge became irreversible the
             # moment re-statement shipped: the guard would see the survivor's own
-            # frame as something added since. Derived the same way `merge_nodes`
+            # metacontext as something added since. Derived the same way `merge_nodes`
             # derived it, from the sources, so the two cannot drift.
-            (survivor.id, frame, EdgeType.HAS_METACONTEXT.value)
-            for frames in (await _frames_for_reversal(list(source_ids), storage)).values()
-            for frame in frames
+            (survivor.id, metacontext, EdgeType.HAS_METACONTEXT.value)
+            for metacontexts in (
+                await _metacontexts_for_reversal(list(source_ids), storage)
+            ).values()
+            for metacontext in metacontexts
         }
     )
 

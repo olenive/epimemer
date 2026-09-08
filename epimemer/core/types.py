@@ -235,14 +235,15 @@ class EdgeType(str, Enum):
     # Temporal
     TIMELINK = "timelink"  # node → timeline (with timepoint_id in metadata)
 
-    # Epistemic framing
+    # Metacontext
     HAS_METACONTEXT = "has_metacontext"  # node → metacontext
 
-    # Aboutness & provenance (sources and tag topics are nodes; these connect to
-    # them). A tag is the name the caller passed; the Topic it resolves to is the
-    # tag topic, and this edge names it. It is a retrieval index: `find_nodes` is
-    # its only reader, and nothing weighs it as evidence.
-    TAGGED_WITH_TOPIC = "tagged_with_topic"  # node → topic (the tag topic)
+    # Aboutness & provenance (source nodes and topic nodes are nodes; these
+    # connect to them). A tag is the name the caller passed; the topic node it
+    # resolves to is created from that tag, and this edge names it. It is a
+    # retrieval index: `find_nodes` is its only reader, and nothing weighs it as
+    # evidence.
+    TAGGED_WITH_TOPIC = "tagged_with_topic"  # node → topic node created from a tag
     SOURCED_FROM = "sourced_from"  # node → RawDocument (originating document)
 
     # Epistemic review (see REVIEW_EPISTEMIC.md)
@@ -276,7 +277,7 @@ class EdgeType(str, Enum):
     # one under-counts. Under-counting is the direction fact dedup already chose when
     # it left the pre-`claim_kind` corpus unmergeable.
     RETRACTED_SIMILARITY = "retracted_similarity"
-    VARIANT_OF = "variant_of"  # fact ↔ fact, across frames
+    VARIANT_OF = "variant_of"  # fact ↔ fact, across metacontexts
     BASED_ON = "based_on"  # metacontext → metacontext (association)
 
     # User-defined relationship (open vocabulary): the descriptor lives in
@@ -368,14 +369,14 @@ SEGMENT_ANCHOR_EDGE_TYPES: frozenset[EdgeType] = frozenset(
     {EdgeType.ABOUT, EdgeType.CONTAINS, EdgeType.IMPLIES}
 )
 
-# Built-in edges pointing at a provenance/source hub. Excluded from default
+# Built-in edges pointing at a source node. Excluded from default
 # traversal (a search must not fan out into everything a source produced) but NOT
 # from migration (a corrected node keeps its source).
 PROVENANCE_EDGE_TYPES: frozenset[EdgeType] = frozenset({EdgeType.SOURCED_FROM})
 
 # Behavioural kinds for user-tier (RELATED) edges. Open vocabulary lives in the
 # label; the engine only reads the kind. `attribution` = where it came from / who
-# said it (don't fan out from the hub); `relationship` = a real-world relation
+# said it (don't fan out from the source node); `relationship` = a real-world relation
 # worth following.
 RELATIONSHIP_KIND = "relationship"
 ATTRIBUTION_KIND = "attribution"
@@ -384,9 +385,9 @@ ATTRIBUTION_KIND = "attribution"
 def traversal_excluded(edge: NodeEdge) -> bool:
     """True when default retrieval should NOT expand through this edge.
 
-    Excludes history + review (graph bookkeeping) and provenance/attribution edges
-    (don't fan out from a version/source hub). `tagged_with_topic` and relationship-kind
-    edges are followed, like `about`/`supports`.
+    Excludes history + review (graph bookkeeping) and provenance/attribution
+    edges (don't fan out from a version or source node). `tagged_with_topic` and
+    relationship-kind edges are followed, like `about`/`supports`.
     """
     if edge.type in NON_KNOWLEDGE_EDGE_TYPES or edge.type in PROVENANCE_EDGE_TYPES:
         return True
@@ -417,9 +418,9 @@ JUDGMENT_EDGE_TYPES: frozenset[EdgeType] = frozenset(
 )
 
 # Edges a world-change carries onto the replacement rather than leaving behind.
-# A frame says *which world* a claim belongs to; a tag says what it is *about*.
+# A metacontext says *which world* a claim belongs to; a tag says what it is *about*.
 # Neither asserts the claim, so both are as true of the replacement as of its
-# predecessor — and dropping the frame would move a fiction-frame claim into
+# predecessor — and dropping the metacontext would move a fiction-metacontext claim into
 # base reality, which is the one thing CLAUDE.md forbids outright.
 WORLD_CHANGE_COPIED_EDGE_TYPES: frozenset[EdgeType] = frozenset(
     {EdgeType.HAS_METACONTEXT, EdgeType.TAGGED_WITH_TOPIC}
@@ -462,14 +463,14 @@ def migration_disposition(edge_type: EdgeType, status: NodeStatus) -> EdgeDispos
     re-pointing one asserts it of a claim nobody assessed. That half of it is
     not confined to this status; see above.
 
-    Frames and tags are the exception, and copy: see
+    Metacontexts and tags are the exception, and copy: see
     `WORLD_CHANGE_COPIED_EDGE_TYPES`.
 
-    **A merge does not move the frame**. Every other edge on a survivor is
-    something its sources genuinely brought with them, but a frame is a claim
-    about which world this is — and the survivor's content is *synthesised*, so
-    nobody has yet said which world the synthesised wording is about. Moving the
-    edge would answer for them, attributed to whoever framed a source. The
+    **A merge does not move the metacontext**. Every other edge on a survivor is
+    something its sources genuinely brought with them, but a metacontext is a
+    claim about which world this is, and the survivor's content is *synthesised*,
+    so nobody has yet said which world the synthesised wording is about. Moving
+    the edge would answer for them, attributed to whoever placed a source. The
     merging agent re-states it instead, under its own judge: merging is not
     coining, one layer up from `describe_relation`'s version of the same rule.
     A correction still moves it — there the replacement is the same claim.
@@ -494,18 +495,18 @@ def moved_edge_types(status: NodeStatus) -> frozenset[EdgeType]:
     return frozenset(t for t in EdgeType if migration_disposition(t, status) == "move")
 
 
-# The conventional id for the frame holding claims about the real world. A
+# The conventional id for the metacontext holding claims about the real world. A
 # **convention, not a mechanism**: it is an ordinary metacontext that must exist
 # like any other, and nothing in the system reads it specially. Named here so
-# that every graph uses the same string for the same frame rather than half of
-# them saying "reality" and half "real-world", which would leave two frames
+# that every graph uses the same string for the same metacontext rather than half of
+# them saying "reality" and half "real-world", which would leave two metacontexts
 # nothing ever compares.
 BASE_METACONTEXT_ID = "the-real"
 
-# The frame a declaration sweep stamps on a graph nobody is prepared to vouch
+# The metacontext a declaration sweep stamps on a graph nobody is prepared to vouch
 # for. **No agent may write it**: `store_decomposition` refuses it by name, and
-# only `epimemer frames declare` puts it on anything. That asymmetry is the
-# whole point — a frame an agent could assert into is a frame that stops meaning
+# only `epimemer metacontexts declare` puts it on anything. That asymmetry is the
+# whole point — a metacontext an agent could assert into is a metacontext that stops meaning
 # *nobody has vouched for this*, and becomes untagged again under a new name.
 QUARANTINE_METACONTEXT_ID = "unvouched"
 
@@ -813,7 +814,8 @@ class Topic(BaseModel):
 
     id: str = Field(default_factory=_new_id)
     content: str  # paragraph-level description
-    source_id: str | None = None  # Segment.id, if extracted from text (entity/tag topics have none)
+    # Segment.id, if extracted from text (entity topics and topics from a tag have none)
+    source_id: str | None = None
     status: NodeStatus = NodeStatus.ACTIVE
     superseded_at: datetime | None = None
     # Every spell this node has spent out of the active set. Append-only; the
@@ -1162,7 +1164,7 @@ class Timeline(BaseModel):
 
 
 class Metacontext(BaseModel):
-    """Epistemic frame for disambiguation.
+    """Epistemic metacontext for disambiguation.
 
     Metacontexts distinguish different takes, sources, or interpretations
     of the same information. For example, "Real historical events" vs.
@@ -1663,9 +1665,9 @@ class DecisionKind(str, Enum):
     # claim is unchanged and the world has not moved, so `because` has no honest
     # value. `rejudge` covers the node-scoped fields; these two are
     # separate because they are addressed differently, which is the tell that
-    # they are different tools: a frame is an edge onto a metacontext, and an
+    # they are different tools: a metacontext is an edge onto a metacontext, and an
     # interval belongs to a (node, source) pair rather than to a node.
-    REFRAME = "reframe"
+    METACONTEXT_REASSIGNMENT = "metacontext_reassignment"
     INTERVAL_CORRECTION = "interval_correction"
 
     # Everything else an agent asserts about the graph.
@@ -1695,12 +1697,12 @@ class DecisionKind(str, Enum):
     # it carried are in `certainty_basis`, which is the row's own prose.
     PROCEEDED_DESPITE_ADVISORY = "proceeded_despite_advisory"
 
-    # One declaration sweep: a user stating, through the CLI, which frame the
+    # One declaration sweep: a user stating, through the CLI, which metacontext the
     # nodes of a graph that predate the requirement were always in. One row per
     # sweep rather than per node — the archival-sweep granularity rule, and for
     # the same reason: it is one act of judgment applied to whatever it found,
     # not N independent verdicts. Its subjects are the nodes it stamped.
-    FRAME_DECLARATION = "frame_declaration"
+    METACONTEXT_DECLARATION = "metacontext_declaration"
 
     # Review of a decision already in the journal (§6.4, step 7). All three
     # carry a `reviews` pointer, and none of them is a graph change: the point
@@ -1786,13 +1788,13 @@ class DecisionRecord(BaseModel):
     # breaks a derived-only scheme, since a confirmation supersedes nothing.
     reviews: str | None = None
     supersedes: str | None = None
-    # The frame this decision was made in, where the decision names one. Ingest
-    # and a declaration sweep both apply exactly one frame to everything they
+    # The metacontext this decision was made in, where the decision names one. Ingest
+    # and a declaration sweep both apply exactly one metacontext to everything they
     # touch, so one value per row is the whole of it — and it is what turns the
-    # recoverability argument for requiring a frame into a supported read: *what
+    # recoverability argument for requiring a metacontext into a supported read: *what
     # did this agent file into the real world* is one query here rather than a
     # walk from ingest rows out to the edges of the nodes they name.
-    frame: str | None = None
+    metacontext: str | None = None
 
 
 SUPERSESSION_KINDS: dict[NodeStatus, DecisionKind] = {

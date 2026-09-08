@@ -172,7 +172,9 @@ class TestTwoReadingsBecomeOne:
         assert premises == {premise.id, other_premise.id}
         assert meta.source_types == {"inferences": 1}
 
-    async def test_the_survivor_is_searchable_and_framed(self, storage, embedding_provider):
+    async def test_the_survivor_is_searchable_and_in_a_metacontext(
+        self, storage, embedding_provider
+    ):
         one = await _inference(storage, embedding_provider, "A reading")
         other = await _inference(storage, embedding_provider, "The same reading")
 
@@ -182,10 +184,10 @@ class TestTwoReadingsBecomeOne:
             [result["inference_id"]], model_id=embedding_provider.model_id
         )
         assert stored[result["inference_id"]]
-        frames = await storage.get_edges_from(
+        metacontexts = await storage.get_edges_from(
             result["inference_id"], edge_type=EdgeType.HAS_METACONTEXT
         )
-        assert [edge.dst_id for edge in frames] == [BASE_METACONTEXT_ID]
+        assert [edge.dst_id for edge in metacontexts] == [BASE_METACONTEXT_ID]
 
     async def test_the_confidence_basis_travels_with_the_confidence(
         self, storage, embedding_provider
@@ -529,7 +531,7 @@ class TestARequiredJudgeReachesEveryWriter:
         assert survivor.judged_by.agent_id == "a-critic"
         rows = await storage.query_decisions(kinds=[DecisionKind.MERGE])
         assert [row.judged_by.agent_id for row in rows] == ["a-critic"]
-        # The frame the merge re-states is written under the merging judge too,
+        # The metacontext the merge re-states is written under the merging judge too,
         # rather than inheriting an edge somebody else wrote.
-        frames = await storage.get_edges_from(survivor.id, edge_type=EdgeType.HAS_METACONTEXT)
-        assert [edge.judged_by.agent_id for edge in frames] == ["a-critic"]
+        metacontexts = await storage.get_edges_from(survivor.id, edge_type=EdgeType.HAS_METACONTEXT)
+        assert [edge.judged_by.agent_id for edge in metacontexts] == ["a-critic"]

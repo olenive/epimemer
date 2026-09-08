@@ -34,9 +34,10 @@ from epimemer.storage.memory import InMemoryStorage
 def _graph_with_the_real() -> InMemoryStorage:
     """An in-memory graph somebody has set up.
 
-    Since the frame requirement a frame is required at ingest and `the-real` is an ordinary
+    A metacontext is required at ingest and `the-real` is an ordinary
     metacontext, created once like any other. A server fixture without it would
-    make every test here start by creating a frame, which tests the fixture.
+    make every test here start by creating a metacontext, which tests the
+    fixture.
     """
     store = InMemoryStorage()
     store._graphs[store._database].metacontexts[BASE_METACONTEXT_ID] = Metacontext(
@@ -161,7 +162,7 @@ async def _seed(server: FastMCP) -> dict:
     )["result"]
     metacontext = _parse(
         await server.call_tool(
-            "create_metacontext", {"expected_graph": "default", "content": "Runbook frame"}
+            "create_metacontext", {"expected_graph": "default", "content": "Runbook metacontext"}
         )
     )["result"]
 
@@ -258,7 +259,7 @@ def _args(tool: str, seeded: dict) -> dict:
             "timeline_id": seeded["timeline_id"],
             "timepoint_id": seeded["timepoint_id"],
         },
-        "create_metacontext": {"content": "Another frame"},
+        "create_metacontext": {"content": "Another metacontext"},
         "get_metacontexts": {"node_id": facts[0]},
         "graph_stats": {},
         "review": {},
@@ -268,11 +269,11 @@ def _args(tool: str, seeded: dict) -> dict:
         # Refused — no field is supplied — and a refusal still names the id back
         # at the agent, which is the property under test.
         "rejudge": {"node_id": facts[0], "because": "checking the shape"},
-        # Refused — the seeded facts carry no frame — and a refusal still names
+        # Refused — the seeded facts carry no metacontext — and a refusal still names
         # the id back at the agent, which is the property under test.
-        "reframe": {
+        "reassign_metacontext": {
             "node_id": facts[0],
-            "withdraw": "not-a-frame",
+            "withdraw": "not-a-metacontext",
             "because": "checking the shape",
         },
         # Refused — no source edge names this document — same property.
@@ -328,7 +329,7 @@ ALL_TOOLS = [
     "review",
     "apply_review",
     "rejudge",
-    "reframe",
+    "reassign_metacontext",
     "correct_interval",
     "query_graph",
     "topic_tree",

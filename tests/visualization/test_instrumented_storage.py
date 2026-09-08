@@ -57,7 +57,8 @@ class TestLifecyclePassThrough:
 
 class TestTagTopicEmission:
     """Regression: tag/entity Topics have source_id=None. The write path and the
-    viz view model must both tolerate that — a tag Topic must never crash a write.
+    viz view model must both tolerate that: a topic node created from a tag
+    must never crash a write.
     """
 
     def test_node_to_view_allows_none_source_id(self):

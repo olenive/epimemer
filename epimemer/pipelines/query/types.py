@@ -98,7 +98,7 @@ class QueryMetadata(BaseModel):
     """Metadata about the query execution for logging/feedback."""
 
     # How deep the *vector* scan reached, not how many nodes either arm looked
-    # at. Deliberately unchanged by the lexical arm: frame-scoped search grows
+    # at. Deliberately unchanged by the lexical arm: metacontext-scoped search grows
     # its fetch until this number stops rising, which is a statement about the
     # embedding store running out of candidates and would mean nothing if a
     # second arm's hits were added to it.

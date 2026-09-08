@@ -17,9 +17,9 @@ a live defect where the two jobs collided.
 
 Topics are joined by exact string match on `content`, in two places:
 
-- **Write.** `_tag_topic` in `mcp/tools.py` resolves or creates a tag topic by
-  looking up an active Topic whose content is exactly the tag name.
-- **Read.** `_resolve_hub_id` in `mcp/tools.py` resolves a name the same way
+- **Write.** `_tag_topic` in `mcp/tools.py` resolves or creates the topic node a
+  tag names by looking up an active Topic whose content is exactly the tag name.
+- **Read.** `_resolve_node_reference` in `mcp/tools.py` resolves a name the same way
   for `find_nodes(tagged_with_topic=...)`.
 
 Both go through `get_node_by_content`, which filters to `ACTIVE`.
@@ -29,7 +29,7 @@ node with status `CORRECTED`. So an enrichment moves the join key, and the two
 paths then fail in opposite directions:
 
 - The write path finds no active topic with that name and creates a second
-  hub. Nodes tagged before the enrichment point at the old node, nodes tagged
+  topic node. Nodes tagged before the enrichment point at the old node, nodes tagged
   after point at the new one, and neither knows about the other.
 - The read path misses, falls back to the raw string, and returns an empty
   list. There is no error.
@@ -37,7 +37,8 @@ paths then fail in opposite directions:
 The retired node is left `CORRECTED`, the one status `restore` refuses by
 design, so no designed path walks any of this back.
 
-This has happened: an enrichment pass on a real graph rewrote six tag topics
+This has happened: an enrichment pass on a real graph rewrote six topic nodes
+created from tags
 (`issue-16`, `issue-46`, `issue-52`, `issue-53`, `issue-61`, `issue-62`) into
 sentences, following a tool docstring that promised to improve a description
 and handed the agent the name. The docstring now says what the tool does; §5
@@ -45,7 +46,8 @@ covers the repair.
 
 ### 1.2 What the names measure
 
-A tag topic is embedded on its name alone. On a real graph, scoring every
+A topic node created from a tag is embedded on its name alone. On a real graph,
+scoring every
 active tag pair against its stored embedding, every pair above 0.75 cosine was
 also at or above the 0.80 nomination bar (`pipelines/reflection/review.py`),
 and two kinds were mixed together:
@@ -73,7 +75,7 @@ hazard exists now and is independent of everything here, so it has its own
 `ISSUES.md` entry rather than being a benefit claimed by this document.
 
 What §1.2 establishes is the shape of the problem: a name-only embedding does
-two things badly at once. A tag topic is invisible to a search on meaning, and
+two things badly at once. Such a node is invisible to a search on meaning, and
 it looks like its neighbours for reasons that have nothing to do with what it
 means. §2.3 and §6 say what still has to be measured before acting on that.
 
@@ -107,15 +109,15 @@ has the same defect and has to be free to name its survivor. A merge retires
 its sources as `MERGED` and creates a survivor whose content the agent chooses.
 Merge `design decisions` and `design-decisions` into `design-decisions`, then
 ingest a document tagged `design decisions`: `_tag_topic` finds no ACTIVE node
-with that name and mints a fresh hub. That is the split of §1.1 arriving
-through a different door, and exempting tag topics from the merge frame gate
-makes such a merge easier to perform, not harder.
+with that name and mints a fresh topic node. That is the split of §1.1 arriving
+through a different door, and exempting tag-named topics from the merge
+metacontext gate makes such a merge easier to perform, not harder.
 
 **The root cause is on the read side: name resolution stops at ACTIVE.**
 `get_node_by_content` filters to active nodes, so a name whose node has been
 retired resolves to nothing, whatever retired it.
 
-**The fix.** `_tag_topic` and `_resolve_hub_id` follow a `MERGED` or
+**The fix.** `_tag_topic` and `_resolve_node_reference` follow a `MERGED` or
 `CORRECTED` hit forward, through `merged_into` or `superseded_by`, to the live
 successor. One place, and it closes enrichment, merge, and any rename anyone
 writes later. Every tag in the §1.1 incident still had a successor to follow.
@@ -158,8 +160,9 @@ the direction of the effect is unmeasured, and Stage 1.5 (§6) exists to supply
 the real numbers before Stage 2 flips the embedding.
 
 Embedding the name alone is the alternative. It is cheaper and changes no
-existing score, and it gives up the retrieval half of the problem: tag topics
-stay invisible to a search on meaning, and the pairs in §1.2 keep their scores.
+existing score, and it gives up the retrieval half of the problem: a topic node
+created from a tag stays invisible to a search on meaning, and the pairs in §1.2
+keep their scores.
 
 ---
 
@@ -198,7 +201,8 @@ asks which:
   decisions.
 
 **This removes the need for a guard.** The obvious fix to §1.1 is to refuse
-enrichment on a tag topic, using `is_tag_topic`. If enrichment cannot reach
+enrichment on a topic node created from a tag, using `created_from_tag`. If
+enrichment cannot reach
 `content` at all, nothing can split a tag, and the guard has nothing to do. It
 is also one fewer "except tags" clause, of which reflection already has several.
 
@@ -222,15 +226,16 @@ places need a decision rather than nothing:
 
 ## 5. The broken tags
 
-Of the six tag topics rewritten in the §1.1 incident, `issue-46` has been
+Of the six topic nodes created from tags and rewritten in the §1.1 incident,
+`issue-46` has been
 repaired; `issue-16`, `issue-52`, `issue-53`, `issue-61` and `issue-62` are
 still sentences holding their tags' edges. The repair is the one already run:
-create the bare tag topic, move its `tagged_with_topic` edges onto it keeping
+create the bare topic node, move its `tagged_with_topic` edges onto it keeping
 their original `created_at` and `judged_by`, and prune the moved edges from any
 merge-undo record that would otherwise restore a duplicate.
 
 The sentences the enrichment wrote are good prose, and they are exactly what
-the new field is for. Seeding each repaired tag topic's `description` from the
+the new field is for. Seeding each repaired node's `description` from the
 sentence that displaced its name turns the damage into the field's first data,
 after a person has read the five once.
 
@@ -240,11 +245,11 @@ after a person has read the five once.
 
 **Stage 0, name resolution follows a retired node forward** (§2.2). **Built**,
 in `pipelines/name_resolution.py`, alongside stage 1 of `TAG_IDENTITY.md`, which
-edits the same two functions. `_tag_topic` and `_resolve_hub_id` resolve a
-`MERGED` or `CORRECTED` hit through `merged_into` or `superseded_by` to the live
+edits the same two functions. `_tag_topic` and `_resolve_node_reference` resolve
+a `MERGED` or `CORRECTED` hit through `merged_into` or `superseded_by` to the live
 successor. A `HISTORICAL` node is deliberately not followed: its claim is still
-right of its period, so its name has not moved. Tests: a tag whose node was merged away resolves
-to the survivor and mints no second hub; the same for a tag whose node was
+right of its period, so its name has not moved. Tests: a tag whose node was
+merged away resolves to the survivor and mints no second topic node; the same for a tag whose node was
 superseded; a name that never existed still resolves to nothing; a chain of
 two hops resolves to the end of it.
 
@@ -256,7 +261,8 @@ backends; a topic with no description embeds exactly as it does now;
 `embedding_text` is the only place the two fields are joined.
 
 **Stage 1.5, measurement. Stage 2 does not begin until it reports.** Seed a
-dozen tag topics with real descriptions and re-run the pairwise sweep,
+dozen topic nodes created from tags with real descriptions and re-run the
+pairwise sweep,
 recording in this document:
 
 - **Symmetric pairs**, both described. Does the `dev-session` cluster fall
@@ -274,9 +280,9 @@ accepts an optional description per topic. Read paths surface it. Tests:
 enrichment leaves `content` byte-identical and the node id unchanged; the
 replaced wording is recoverable; a described topic re-embeds; the §1.1 failure
 is a regression test, tagging a document, enriching the tag, and tagging
-again, asserting one hub.
+again, asserting one topic node.
 
-**Stage 3, repair.** The five tag topics, with descriptions seeded per §5.
+**Stage 3, repair.** The five topic nodes, with descriptions seeded per §5.
 Verification is `find_nodes(tagged_with_topic=...)` returning the expected
 count for each.
 
@@ -286,7 +292,7 @@ count for each.
 
 **A `TagLabel` registry beside the graph**, copying `RelationLabel`. The
 graph's only association mechanism is a node-to-node edge, and a tag exists to
-be a hub that gathers otherwise unrelated facts and inferences. A tag has
+be a node that gathers otherwise unrelated facts and inferences. A tag has
 nothing at the far end of the edge unless it is itself a node. A relation
 label can live off-graph because both of its endpoints are already real nodes.
 A registry would also have to be kept in step with the nodes it describes, and
@@ -294,8 +300,8 @@ this proposal has one object where that has two.
 
 **Tags stop being nodes.** The same argument, harder: it would mean a second
 kind of association alongside the only one the graph has, plus thousands of
-edges and every tag topic migrated, plus every read path that treats a tag
-topic as a topic.
+edges and every tag-named topic node migrated, plus every read path that treats
+one as an ordinary topic.
 
 **A description on the `tagged_with_topic` edge**, saying why this node
 carries this tag. Rejected on three counts: it is per (node, tag) pair, so a

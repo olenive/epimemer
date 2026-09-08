@@ -65,8 +65,8 @@ async def _fanned_facts(storage, provider, count: int) -> list[Fact]:
     for i in range(count):
         fact = Fact(content=f"Claim number {i}", source_id="s1")
         await storage.store_node(fact)
-        # Every node states a frame, as every ingested one has since the frame requirement:
-        # absence names none, so two frameless nodes share none and the
+        # Every node states a metacontext, as every ingested one has since the metacontext
+        # requirement: absence names none, so two nodes without one share none and the
         # contradiction sweep would skip every pair here.
         await storage.store_edge(
             NodeEdge(
@@ -93,8 +93,8 @@ async def _identical_topics(storage, provider, count: int) -> list[Topic]:
     for i in range(count):
         topic = Topic(content=f"Subject number {i}", source_id="s1")
         await storage.store_node(topic)
-        # Every node states a frame, as every ingested one has since the frame requirement:
-        # absence names none, so two frameless nodes share none and the
+        # Every node states a metacontext, as every ingested one has since the metacontext
+        # requirement: absence names none, so two nodes without one share none and the
         # contradiction sweep would skip every pair here.
         await storage.store_edge(
             NodeEdge(

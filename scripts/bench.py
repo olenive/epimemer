@@ -27,7 +27,7 @@ against the plain corpus it would measure an empty walk over nothing.
 **Two corpora, and `diverse` is the default from 2026-08-29.** `--corpus
 templated` draws sentences from a 17-word vocabulary, which makes each one a
 near-restatement of every other and survives the pair scorer at ~1% under the
-real model — two orders above real prose. `--corpus diverse` frames sentences
+real model — two orders above real prose. `--corpus diverse` metacontexts sentences
 over wide slots instead, survives at ~0, and plants restatement clusters
 (`--duplicate-groups`, `--duplicate-size`) so the surviving-pair population is
 an **input** rather than a property of the generator nobody chose.
@@ -137,7 +137,7 @@ _WORDS = (
     "context source relation timeline metacontext contradiction evidence"
 ).split()
 
-# The diverse corpus: a frame with wide slots rather than a wider word bag. The
+# The diverse corpus: a metacontext with wide slots rather than a wider word bag. The
 # slots multiply, so two independent draws rarely share enough phrasing to
 # score, while every sentence stays ordinary English. Measured over 400 facts
 # at the fact threshold (2026-08-29): 2 surviving pairs in 79,800 — 0.0025%,
@@ -155,7 +155,7 @@ disused ornamental tidal seasonal fortified shallow overgrown temperate arid
 communal wooden slate northern outlying disputed narrow steep gilded frozen
 sparse crowded ancient rebuilt flooded quiet remote sunken vacant walled""".split()
 
-# Past tense and intransitive, so both verb slots in a frame read as English.
+# Past tense and intransitive, so both verb slots in a metacontext read as English.
 _VERBS = """collapsed expanded flooded reopened silted froze burned thrived faltered drained
 shifted split merged closed reappeared dwindled hardened settled cracked warmed
 lapsed doubled vanished recovered stalled widened sank rose fractured cleared""".split()
@@ -401,7 +401,7 @@ async def _seed(
     reflect timing put beside its unplanted twin would be comparing two corpora
     rather than one corpus with and without duplicates.
     """
-    # Every ingest names its frame, so the graph needs one. A real graph gets
+    # Every ingest names its metacontext, so the graph needs one. A real graph gets
     # this once from `create_metacontext`; a benchmark builds its own world.
     await storage.store_metacontext(
         Metacontext(
@@ -1050,7 +1050,7 @@ def main() -> None:
         default="diverse",
         help=(
             "which text to generate. 'diverse', the default from 2026-08-29, "
-            "frames sentences over wide slots and survives the pair scorer at "
+            "metacontexts sentences over wide slots and survives the pair scorer at "
             "~0, like real prose. 'templated' is the 17-word vocabulary every "
             "figure recorded before that date was taken over, and survives at "
             "~1%% under the real model — pass it to reproduce one of them."

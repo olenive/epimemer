@@ -1,8 +1,9 @@
 """One tag, however it is spelled, and however its node was retired.
 
-`_tag_topic` resolves a tag at ingest and `_resolve_hub_id` resolves one for
+`_tag_topic` resolves a tag at ingest and `_resolve_node_reference` resolves one for
 `find_nodes`. Both matched content exactly, against active nodes only, so a
-separator or a retirement made two hubs out of one tag and neither path said so.
+separator or a retirement made two topic nodes out of one tag and neither path
+said so.
 
 `dev-docs/TAG_IDENTITY.md` has the measurement that rules out fixing this with
 the similarity bar: `claim-kind` and `claim_kind` score 0.9196 while
@@ -24,7 +25,7 @@ from epimemer.core.types import (
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
-from epimemer.pipelines.frames import TAG_EXTRACTION_METHOD, is_tag_topic
+from epimemer.pipelines.metacontexts import TAG_EXTRACTION_METHOD, created_from_tag
 
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
 
@@ -56,7 +57,7 @@ async def _ingest(storage, embedder, config, text, *, tags):
 
 async def _tag_topics(storage) -> list[Topic]:
     nodes = await storage.query_nodes(node_type=NodeType.TOPIC)
-    return [n for n in nodes if isinstance(n, Topic) and is_tag_topic(n)]
+    return [n for n in nodes if isinstance(n, Topic) and created_from_tag(n)]
 
 
 async def _named(storage, content: str) -> Topic:

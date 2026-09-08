@@ -258,8 +258,8 @@ class TestRequiringAJudge:
         assert "EPIMEMER_APPROVED_AGENTS" not in err
 
 
-class TestDeclaringAFrame:
-    """The user's statement about a graph written before frames were required.
+class TestDeclaringAMetacontext:
+    """The user's statement about a graph written before metacontexts were required.
 
     Here rather than in an MCP tool for the reason approval is here: an agent
     declaring what its own past writes were about is marking its own homework,
@@ -269,56 +269,56 @@ class TestDeclaringAFrame:
     async def test_it_asks_before_writing(self, storage, monkeypatch):
         """The count is the only thing that tells a user how large the claim
         they are about to make is, and the sweep does not come off in one
-        step — a wrong frame is removed one node at a time with `reframe`."""
-        from epimemer.cli import _declare_frames
+        step — a wrong metacontext is removed one node at a time with `reassign_metacontext`."""
+        from epimemer.cli import _declare_metacontext
         from epimemer.core.types import BASE_METACONTEXT_ID, Topic
 
         await storage.store_node(Topic(content="Vienna", source_id="s1"))
         asked: list[str] = []
         monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt) or "n")
 
-        message = await _declare_frames(storage, BASE_METACONTEXT_ID, None, False)
+        message = await _declare_metacontext(storage, BASE_METACONTEXT_ID, None, False)
 
-        assert "1 unframed node(s)" in asked[0]
+        assert "1 node(s) with no metacontext" in asked[0]
         assert "Nothing declared" in message
-        assert await storage.count_nodes_without_frame() == 1
+        assert await storage.count_nodes_without_metacontext() == 1
 
     async def test_yes_skips_the_prompt_and_declares(self, storage):
-        from epimemer.cli import _declare_frames
+        from epimemer.cli import _declare_metacontext
         from epimemer.core.types import BASE_METACONTEXT_ID, Topic
 
         await storage.store_node(Topic(content="Vienna", source_id="s1"))
 
-        message = await _declare_frames(storage, BASE_METACONTEXT_ID, "the-user", True)
+        message = await _declare_metacontext(storage, BASE_METACONTEXT_ID, "the-user", True)
 
         assert "declared 1 node(s)" in message
-        assert await storage.count_nodes_without_frame() == 0
+        assert await storage.count_nodes_without_metacontext() == 0
 
-    async def test_the_command_creates_a_frame_the_graph_lacks(self, storage):
-        """The sweep refuses a frame that does not exist, and this is the only
+    async def test_the_command_creates_a_metacontext_the_graph_lacks(self, storage):
+        """The sweep refuses a metacontext that does not exist, and this is the only
         place that gap is closed: a person declaring *this graph is about the
-        real world* is entitled to say that frame exists. No agent reaches it.
+        real world* is entitled to say that metacontext exists. No agent reaches it.
         """
-        from epimemer.cli import _declare_frames
+        from epimemer.cli import _declare_metacontext
         from epimemer.core.types import Topic
 
         await storage.switch_database("undeclared")
         await storage.store_node(Topic(content="Vienna", source_id="s1"))
 
-        message = await _declare_frames(storage, "the-real", None, True)
+        message = await _declare_metacontext(storage, "the-real", None, True)
 
         assert "Created metacontext 'the-real'" in message
         assert await storage.get_metacontext("the-real") is not None
-        assert await storage.count_nodes_without_frame() == 0
+        assert await storage.count_nodes_without_metacontext() == 0
 
     async def test_a_finished_graph_says_so_without_asking(self, storage):
         """What makes the command naturally dead rather than deprecated: once
-        no unframed node is left there is nothing for it to do, and it says
+        no node is left without a metacontext there is nothing for it to do, and it says
         that instead of prompting for a declaration about nothing."""
-        from epimemer.cli import _declare_frames
+        from epimemer.cli import _declare_metacontext
         from epimemer.core.types import BASE_METACONTEXT_ID
 
-        message = await _declare_frames(storage, BASE_METACONTEXT_ID, None, False)
+        message = await _declare_metacontext(storage, BASE_METACONTEXT_ID, None, False)
 
         assert "Nothing to declare" in message
 
@@ -327,7 +327,7 @@ class TestDeclaringAFrame:
         graph is rebuilt rather than declared."""
         monkeypatch.setenv("EPIMEMER_STORAGE_BACKEND", "memory")
 
-        code = main(["frames", "declare"])
+        code = main(["metacontexts", "declare"])
 
         err = capsys.readouterr().err
         assert code == 2

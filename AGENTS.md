@@ -58,8 +58,8 @@ The rules that must hold on every call:
 - Claim a judge with `claim_agent` once per session before writing, and use
   whatever judge the user hands back. Claim again after `use_graph`. A refusal
   here goes to the user, never worked around.
-- Every `store_decomposition` names its frame (`metacontext_id`): `the-real`
-  for real-world claims, one frame per call, so a mixed document is two calls.
+- Every `store_decomposition` names its metacontext (`metacontext_id`): `the-real`
+  for real-world claims, one metacontext per call, so a mixed document is two calls.
 - Omit `confidence` and `claim_kind` rather than guess; give a one-line
   `confidence_basis` with any confidence you do supply.
 - Record a verdict on every pair reflect nominates (`similarities`,
