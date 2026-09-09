@@ -406,6 +406,13 @@ _SCHEMA_VERSION_SET = f"UPSERT {_SCHEMA_VERSION_RECORD} SET version = $version;"
 # and would leave the second statement a silent no-op.
 #
 # `RETURN VALUE uid` so the count costs a list of ids rather than a list of rows.
+#
+# Worth knowing when reading a graph written before this ran: the rename matched
+# on the shape, which is all a stored edge carries, so a hand-written `supports`
+# from a fact to a topic became `extracted_under_topic` along with the rest. An
+# agent that meant evidential support there has no record saying so. Such an
+# edge cannot be written now — `EDGE_SHAPES` refuses the pairing — but the old
+# rows predate the check.
 _RENAME_TAGGED_WITH = (
     "UPDATE node_edge SET type = 'tagged_with_topic' WHERE type = 'tagged_with' RETURN VALUE uid;"
 )

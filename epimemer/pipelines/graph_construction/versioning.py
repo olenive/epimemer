@@ -24,6 +24,7 @@ from epimemer.core.types import (
     with_merge_undo,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
+from epimemer.pipelines.embedding_text import embedding_text
 from epimemer.storage.protocol import StorageBackend, resolve_merge_settings
 
 
@@ -79,7 +80,7 @@ async def supersede_node(
 
     # Sources, tags, and relationships ride along via edge migration below
     # (sourced_from / tagged_with_topic / user edges are migrated, not version-anchored).
-    vectors = await embedding_provider.embed([new_node.content])
+    vectors = await embedding_provider.embed([embedding_text(new_node)])
     new_embedding = EmbeddingRecord(
         item_id=new_node.id,
         model_id=embedding_provider.model_id,
@@ -345,7 +346,7 @@ async def merge_nodes(
     # The merged node inherits its sources' sources/tags/relationships via edge
     # migration below (sourced_from / tagged_with_topic / user edges are migrated).
     # Its **metacontext** is the exception and is re-stated rather than migrated.
-    vectors = await embedding_provider.embed([merged_node.content])
+    vectors = await embedding_provider.embed([embedding_text(merged_node)])
     merged_embedding = EmbeddingRecord(
         item_id=merged_node.id,
         model_id=embedding_provider.model_id,

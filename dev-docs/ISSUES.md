@@ -140,6 +140,12 @@ measuring before building rather than after.
 precondition is a graph nobody set up.** Running a migration against real data
 catches a class the suite structurally cannot.
 
+**A rule stated only in a comment is a rule the code does not have.** Every
+engine edge type carried its shape in prose beside the enum, and `link` wrote
+whichever pairing it was asked for, so readers each re-checked what the edge
+type had already told them. The comments became `EDGE_SHAPES`, a total map with
+a test over it, and the ones that only restated the table went.
+
 **A field's home is part of its definition.** `confidence_basis` lives in
 `node.metadata`, apart from `value.confidence`, on purpose: the basis is prose
 about one judgment and `ValueSignal` is the numbers every ranker reads.
@@ -346,30 +352,6 @@ run accepts one without checking the dates. `TOPIC_DESCRIPTIONS.md` proposes
 the fix, embedding a description alongside the name, and its §1.2 carries the
 measurements. Until that ships, treat any nominated pair of `dev-session` tags
 as a false positive.
-
-### `link` writes any engine edge type between any two node kinds
-
-🟡 **Open.** `link` validates the edge type against the enum and validates that
-both endpoints exist. It says nothing about what they are, so
-`link(fact, topic, edge_type="supports")` is accepted, and so is a
-`derived_from` from a topic, a `subtopic_of` between two facts, an
-`extracted_under_topic` onto an inference. Every reader that assumes a shape
-has to defend itself: `dependent_inference_ids` fetches its `supports`
-destinations and keeps the inferences precisely because the edge alone does
-not say. A reader that forgets, and nothing stops one, is simply wrong about
-the graph.
-
-The fix is a declared shape per engine edge type, source kind and destination
-kind, that `link` refuses to violate. It belongs beside the enum, where the
-comments already state each shape in prose that nothing reads. Whether coining
-should be refused outright or recorded as an override is the decision to make
-first, so this is written down rather than built.
-
-Worth knowing when reading old graphs: the schema version 2 migration renamed
-a mis-shaped `supports` edge into `extracted_under_topic` wherever its
-destination was a topic, hand-written ones included. It matched on the shape,
-which is all a stored edge carries, so an agent that meant evidential support
-between a fact and a topic no longer has a record saying so.
 
 ---
 

@@ -160,24 +160,29 @@ class TestMCPProtocol:
 
         search_result = await server.call_tool(
             "search",
-            {"expected_graph": "default", "query": "First paragraph", "k": 2, "graph_hops": 0},
+            {"expected_graph": "default", "query": "First paragraph", "k": 10, "graph_hops": 0},
         )
         search_data = _parse_response(search_result)
         nodes = search_data["result"]["nodes"]
 
-        if len(nodes) >= 2:
-            link_result = await server.call_tool(
-                "link",
-                {
-                    "expected_graph": "default",
-                    "src_id": nodes[0]["id"],
-                    "dst_id": nodes[1]["id"],
-                    "edge_type": "supports",
-                },
-            )
-            link_data = _parse_response(link_result)
-            assert "result" in link_data
-            assert "edge_id" in link_data["result"]
+        # `supports` runs from a fact to an inference and `link` refuses any
+        # other shape, so the two ends are chosen by kind rather than taken in
+        # rank order.
+        fact = next(node for node in nodes if node["node_type"] == "fact")
+        inference = next(node for node in nodes if node["node_type"] == "inference")
+
+        link_result = await server.call_tool(
+            "link",
+            {
+                "expected_graph": "default",
+                "src_id": fact["id"],
+                "dst_id": inference["id"],
+                "edge_type": "supports",
+            },
+        )
+        link_data = _parse_response(link_result)
+        assert "result" in link_data
+        assert "edge_id" in link_data["result"]
 
     async def test_reflect_via_protocol(self, server):
         result = await server.call_tool(

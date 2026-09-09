@@ -68,7 +68,7 @@ class TestCoiningALabelRecordsIt:
     async def test_an_engine_edge_records_no_label(self, storage):
         a, b = await _pair(storage)
 
-        await tools.link(a.id, b.id, storage, edge_type="about", judge=CRITIC)
+        await tools.link(a.id, b.id, storage, edge_type="subtopic_of", judge=CRITIC)
 
         assert await storage.query_relation_labels() == []
 

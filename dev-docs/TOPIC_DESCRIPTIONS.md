@@ -1,8 +1,9 @@
 # Topic descriptions: a name that does not move
 
-**Status: stage 0 built; the description field itself is not.** §6 breaks the
-rest into stages with the types, call sites and tests each one needs; §9 lists
-what is still open. Where an unbuilt section says "does", read "would".
+**Status: stages 0 and 1 built; the field exists and nothing writes it yet.**
+§6 breaks the rest into stages with the types, call sites and tests each one
+needs; §9 lists what is still open. Where an unbuilt section says "does", read
+"would".
 
 `Topic` has one text field. It carries two jobs: the name the graph joins on,
 and the prose that explains what the topic is. This proposes splitting them,
@@ -136,10 +137,11 @@ It is not a substitute for this.
 
 **Recommendation: `content` and `description` together, through one function.**
 
-Nine call sites embed today (`vector_search.py`, two in `versioning.py`,
-`relation_consolidation.py`, five in `tools.py`). Nine independently written
-concatenations would be the two-definitions failure this project has hit more
-than once, so this needs one function and one definition:
+A node's vector is written at ingest, when a tag or an entity name resolves to a
+topic node, on supersession, on merge, and on both halves of the topic
+hierarchy. Each of those spelling the join for itself would be the
+two-definitions failure this project has hit more than once, so this needs one
+function and one definition:
 
 ```python
 def embedding_text(node: EpistemicNode) -> str:
@@ -253,12 +255,40 @@ merged away resolves to the survivor and mints no second topic node; the same fo
 superseded; a name that never existed still resolves to nothing; a chain of
 two hops resolves to the end of it.
 
-**Stage 1, additive, changes no behaviour.** `Topic.description`, the
-`embedding_text` function, and every one of the nine embed sites routed
-through it. Every description is empty, so every vector is byte-identical to
-what it is today. Tests: a topic round-trips its description through both
-backends; a topic with no description embeds exactly as it does now;
-`embedding_text` is the only place the two fields are joined.
+**Stage 1, additive, changes no behaviour. Built.** `Topic.description` on the
+model, and `embedding_text` in `pipelines/embedding_text.py`, with every site
+that embeds a node routed through it:
+
+| Site | What it embeds |
+|---|---|
+| `_resolve_entity_topic`, `mcp/tools.py` | a source or publisher entity's topic node, on creation |
+| `_tag_topic`, `mcp/tools.py` | the topic node a tag mints when its name resolves to nothing |
+| `store_decomposition`, `mcp/tools.py` | every topic, fact and inference in a segment |
+| parent synthesis, `apply_reflection` in `mcp/tools.py` | a topic node synthesised over its children |
+| topic splitting, `apply_reflection` in `mcp/tools.py` | each subtopic a split creates |
+| `supersede_node`, `pipelines/graph_construction/versioning.py` | the replacement node |
+| `merge_nodes`, `pipelines/graph_construction/versioning.py` | the survivor |
+
+Four further embed calls stay as they are, because what they embed is not a
+node and so has no second field to join: the query text in
+`pipelines/query/vector_search.py`, the relation label strings in
+`pipelines/reflection/relation_consolidation.py`, the raw passage text in
+`pipelines/segmentation/semantic_similarity.py`, and the material the split
+sweep scores for internal variance in `mcp/tools.py`, which is the contents of
+facts and inferences.
+
+**No migration and no schema step.** The `topic` table is `SCHEMALESS` and
+nodes serialise through `model_dump`, so an existing row simply has no
+`description` key and Pydantic supplies the empty default on read.
+`_SCHEMA_VERSION` is untouched: nothing needs rewriting.
+
+Every description is empty, so every vector is byte-identical to what it was.
+Tests: a topic round-trips its description through both backends and an
+undescribed one reads back empty; a SurrealDB row with the key unset reads back
+empty; a topic with no description embeds exactly as it did; `embedding_text`
+is the only place the two fields are joined, and every embed call in the
+package either reaches it or is named above as embedding something other than a
+node.
 
 **Stage 1.5, measurement. Stage 2 does not begin until it reports.** Seed a
 dozen topic nodes created from tags with real descriptions and re-run the

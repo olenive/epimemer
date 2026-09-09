@@ -6,6 +6,39 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
+**`link` refuses an edge whose ends are the wrong kinds of node.** Until now it
+checked that the edge type was a real one and that both nodes existed, and
+nothing else, so `link(fact, topic, edge_type="supports")` was written even
+though `supports` means a fact backing an inference. So were a `subtopic_of`
+between two facts and an `extracted_under_topic` pointing at an inference. The
+graph then held edges whose type said one thing and whose ends said another,
+and every tool reading them had to re-check what it had just been handed.
+
+Each engine edge type now declares which kinds of node it joins, in a table
+beside the list of edge types so the two cannot come apart. A pairing outside
+it is refused outright rather than recorded with an override, because it is a
+category error against what the type means rather than a judgment anyone could
+defend. The refusal names the pairs that type does join, and any type that does
+join the two nodes you named: asking for `supports` from a fact to a topic node
+now comes back suggesting `extracted_under_topic` and `tagged_with_topic`. A
+relationship the engine does not define is what `relation` was always for, and
+that stays open: the agent coins the word and the word says what it joins.
+
+The same question is now asked by every other call that takes both ends from
+the caller : `supersede_by`, `record_contradiction`, `record_variant`, and the
+similarity verdicts and synthesised parents inside `apply_reflection`, each
+refusing in the way it already refuses everything else. Existing edges are left
+alone; nothing rewrites what is already stored.
+
+### Changed
+
+- A topic node now carries a `description` beside its content, and the read
+  tools return it. It is empty on every topic: nothing writes one yet. It
+  exists so that saying what a topic covers never has to move the name the
+  graph joins tags on, which is what rewriting the content did. Embeddings are
+  unchanged, because an empty description adds nothing to the text a node is
+  embedded on.
+
 ## [0.2.0] — 2026-09-08
 
 **"Frame" and "hub" are gone as words.** Both read as general graph

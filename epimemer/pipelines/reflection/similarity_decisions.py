@@ -70,6 +70,8 @@ from epimemer.core.types import (
     EdgeType,
     JudgeRef,
     NodeEdge,
+    edge_shape_violation,
+    endpoint_kind_of,
 )
 from epimemer.pipelines.reflection.review import same_metacontext
 from epimemer.storage.protocol import StorageBackend
@@ -235,6 +237,21 @@ async def apply_similarity_decision(
     missing = [node_id for node_id, node in ((a_id, a), (b_id, b)) if node is None]
     if missing:
         return SimilarityRefused(pair=pair, reason=f"no such node: {', '.join(missing)}.")
+
+    # A verdict is about one claim seen twice, so both sides have to be the same
+    # kind of node. The sweep only ever nominates like with like; the pair
+    # arrives from the caller, which is where a topic can meet a fact. Every
+    # edge a verdict writes shares the one shape, so `assessed` — the one both
+    # verdicts write — answers for all of them.
+    mismatch = edge_shape_violation(EdgeType.ASSESSED, endpoint_kind_of(a), endpoint_kind_of(b))
+    if mismatch is not None:
+        return SimilarityRefused(
+            pair=pair,
+            reason=(
+                f"{mismatch} A verdict says these two are one claim or two, "
+                f"which is not a question about a pair of different kinds."
+            ),
+        )
 
     # The sweep only ever nominates ACTIVE and HISTORICAL (`NOMINATED_STATUSES`),
     # so an `assessed` edge touching anything else suppresses nothing that could

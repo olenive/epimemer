@@ -127,6 +127,12 @@ change retrieval scope; these do not.
   `relationship` (followed in retrieval) or `attribution` (where it came from
   or who said it; not followed); a label reuses its kind after first use.
   Known engine edges still use `link(..., edge_type="supports")`.
+- **An engine edge type joins particular kinds, and any other pairing is
+  refused.** `supports` runs from a fact to an inference, `subtopic_of` from
+  one topic to another, `extracted_under_topic` from a fact to a topic node.
+  The refusal names the pairs that type does join and any type that does join
+  your two nodes, so read it rather than trying a second type. Where the
+  relationship is one the engine does not define, coin it with `relation`.
 - **Say what a label means here, once, with `describe_relation(name,
   description)`.** The same word means different things in different graphs
   (`advised` is a retainer in one and employment in another), and the

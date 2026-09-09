@@ -223,6 +223,40 @@ class TestPayloadFidelity:
         assert got is not None
         assert got.value.importance == pytest.approx(0.5)
 
+    async def test_a_topic_description_round_trips(self, store):
+        """A topic's prose survives the round trip on every backend.
+
+        `description` sits beside `content` and carries the same kinds of
+        characters, so it takes the same serialization path and can fail the
+        same ways. It is asserted separately because it is the newer field and
+        the one a backend would forget.
+        """
+        topic = Topic(
+            content="reflect",
+            description="The consolidation sweep, and the tool that runs it.",
+            source_id="s1",
+        )
+        await store.store_node(topic)
+
+        got = await store.get_node(topic.id)
+        assert got is not None
+        assert got.description == "The consolidation sweep, and the tool that runs it."
+        assert got.content == "reflect"
+
+    async def test_an_undescribed_topic_reads_back_undescribed(self, store):
+        """Empty is the state every topic is in, and it has to survive the trip.
+
+        Undescribed is a real answer rather than a missing value, and a backend
+        that turned the empty string into a null would hand back something a
+        caller has to test for separately.
+        """
+        topic = Topic(content="no prose yet", source_id="s1")
+        await store.store_node(topic)
+
+        got = await store.get_node(topic.id)
+        assert got is not None
+        assert got.description == ""
+
     async def test_an_unrated_confidence_round_trips_as_absent(self, store):
         """The confidence prior: absence has to survive the trip, or the field is 0.5 again.
 

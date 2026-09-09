@@ -863,6 +863,32 @@ class TestStoreDecompositionValuePriors:
         assert node.metadata["confidence_basis"] == ("stated plainly, source has no stake")
 
 
+class TestATopicsDescriptionReachesTheCaller:
+    """`_node_to_dict` is what `search`, `find_nodes` and `restore` hand back.
+
+    The field is empty on every topic until enrichment learns to write one, and
+    it is returned from the start so a caller can tell an undescribed topic from
+    a described one rather than from a key that is sometimes there.
+    """
+
+    def test_an_undescribed_topic_reports_an_empty_description(self):
+        data = _node_to_dict(Topic(content="reflect", source_id=None))
+
+        assert data["description"] == ""
+
+    def test_a_described_topic_reports_its_prose(self):
+        data = _node_to_dict(
+            Topic(
+                content="reflect",
+                description="The consolidation sweep over the graph.",
+                source_id=None,
+            )
+        )
+
+        assert data["description"] == "The consolidation sweep over the graph."
+        assert data["content"] == "reflect"
+
+
 # --- Search tests ---
 
 
@@ -1252,15 +1278,15 @@ class TestJudgeImportanceUpward:
 
 class TestLink:
     async def test_creates_edge(self, storage):
-        t = Topic(content="topic A", source_id="s1")
-        f = Fact(content="fact B", source_id="s1")
-        await storage.store_node(t)
+        f = Fact(content="fact A", source_id="s1")
+        i = Inference(content="inference B", source_id="s1")
         await storage.store_node(f)
+        await storage.store_node(i)
 
-        result, _ = await link(t.id, f.id, storage, edge_type="supports")
+        result, _ = await link(f.id, i.id, storage, edge_type="supports")
         assert "edge_id" in result
 
-        edges = await storage.get_edges_from(t.id)
+        edges = await storage.get_edges_from(f.id)
         assert any(e.type == EdgeType.SUPPORTS for e in edges)
 
     async def test_rejects_invalid_edge_type(self, storage):

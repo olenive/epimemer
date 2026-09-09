@@ -37,6 +37,7 @@ from epimemer.core.types import (
     DecisionRecord,
     EdgeType,
     EmbeddingRecord,
+    EndpointKind,
     EpistemicNode,
     Fact,
     Inference,
@@ -57,6 +58,10 @@ from epimemer.core.types import (
     agent_name,
     current_description,
     description_digest,
+    edge_shape_violation,
+    edge_types_joining,
+    endpoint_kind_of,
+    lineage_edge_type_for,
     live_agents,
     merged_value_signal,
     name_holder,
@@ -77,6 +82,7 @@ from epimemer.mcp.config import (
 )
 from epimemer.mcp.retrieval_records import RetrievedNode
 from epimemer.mcp.types import ResponseMeta
+from epimemer.pipelines.embedding_text import embedding_text
 from epimemer.pipelines.graph_construction.edge_creation import DecomposedSegment
 from epimemer.pipelines.query.types import SeedProvenance
 from epimemer.pipelines.reflection.review import SIMILARITY_NOMINATION_THRESHOLD
@@ -610,7 +616,7 @@ async def _upsert_entity_topic(
         judged_by=judge,
     )
     await storage.store_node(topic)
-    vec = (await embedding_provider.embed([name]))[0]
+    vec = (await embedding_provider.embed([embedding_text(topic)]))[0]
     await storage.store_embedding(
         EmbeddingRecord(
             item_id=topic.id,
@@ -845,6 +851,42 @@ async def require_metacontexts(metacontexts: Sequence[str] | None, storage: Stor
         await require_metacontext(metacontext_id, storage)
 
 
+def edge_shape_refusal(edge_type: EdgeType, src: EndpointKind, dst: EndpointKind) -> str | None:
+    """Why this edge may not be written, with what to write instead, or `None`.
+
+    The alternatives come out of `EDGE_SHAPES` rather than a hand-written list
+    of near misses, so a suggestion cannot outlive the shape it was based on.
+    Where the pair carries no engine type at all the refusal says so and points
+    at `relation`, because an agent that reaches for `has_metacontext` between
+    two facts wants an edge the engine does not define.
+    """
+    violation = edge_shape_violation(edge_type, src, dst)
+    if violation is None:
+        return None
+    alternatives = [candidate.value for candidate in edge_types_joining(src, dst)]
+    if alternatives:
+        instead = f"Edge types that do join {src.value} -> {dst.value}: {', '.join(alternatives)}."
+    else:
+        instead = (
+            f"No engine edge type joins {src.value} -> {dst.value}. Where the "
+            f"relationship is one the engine does not define, coin it with "
+            f"`relation` and the edge will say what you meant."
+        )
+    return f"{violation} {instead}"
+
+
+def require_edge_shape(edge_type: EdgeType, src: EndpointKind, dst: EndpointKind) -> None:
+    """Raise unless `edge_type` may join these two kinds.
+
+    A raise rather than a returned refusal, matching the missing node and the
+    unknown edge type it stands beside in `link`: all three are malformed
+    requests rather than judgments the graph declines.
+    """
+    refusal = edge_shape_refusal(edge_type, src, dst)
+    if refusal is not None:
+        raise ValueError(refusal)
+
+
 async def store_decomposition(
     document_id: str,
     segments: list[dict],
@@ -989,7 +1031,7 @@ async def store_decomposition(
         )
         tag_cache[key] = topic
         batch_nodes.append(topic)
-        vec = (await embedding_provider.embed([name]))[0]
+        vec = (await embedding_provider.embed([embedding_text(topic)]))[0]
         batch_embeddings.append(
             EmbeddingRecord(
                 item_id=topic.id,
@@ -1060,7 +1102,7 @@ async def store_decomposition(
         datable.extend((node.id, node.content) for node in seg_nodes)
 
         if seg_nodes:
-            vectors = await embedding_provider.embed([n.content for n in seg_nodes])
+            vectors = await embedding_provider.embed([embedding_text(n) for n in seg_nodes])
             for node, vector in zip(seg_nodes, vectors, strict=True):
                 batch_embeddings.append(
                     EmbeddingRecord(
@@ -2357,6 +2399,15 @@ async def link(
     user-defined label → a RELATED edge). For a user relation, `kind` is
     "relationship" (followed in retrieval) or "attribution" (not); a label already
     in use reuses its existing kind (set once per label).
+
+    **An engine edge type whose endpoints are the wrong kinds is refused**, and
+    the refusal names the pairs that type does join plus any type that does join
+    the two nodes at hand. Each engine type means one thing about one shape —
+    `supports` is a fact backing an inference, `subtopic_of` is one topic under
+    another — so the wrong kinds are not a debatable judgment but a claim the
+    type cannot carry, and every reader that trusts the shape would inherit it.
+    A relationship the engine does not define is what `relation` is for: coin
+    the word and the edge says what you meant.
     """
     description = ""
     if relation is not None:
@@ -2394,10 +2445,14 @@ async def link(
         raise ValueError("link requires either edge_type or relation")
 
     # Verify both nodes exist
-    if await storage.get_node(src_id) is None:
+    src_node = await storage.get_node(src_id)
+    if src_node is None:
         raise ValueError(f"Source node '{src_id}' not found")
-    if await storage.get_node(dst_id) is None:
+    dst_node = await storage.get_node(dst_id)
+    if dst_node is None:
         raise ValueError(f"Destination node '{dst_id}' not found")
+
+    require_edge_shape(et, endpoint_kind_of(src_node), endpoint_kind_of(dst_node))
 
     edge = NodeEdge(
         src_id=src_id,
@@ -2683,10 +2738,17 @@ async def supersede_by(
     old = await storage.get_node(old_id)
     if old is None:
         raise ValueError(f"Node '{old_id}' not found")
-    if await storage.get_node(existing_id) is None:
+    existing = await storage.get_node(existing_id)
+    if existing is None:
         raise ValueError(f"Node '{existing_id}' not found")
 
     status = superseded_status_for(because)
+    # The lineage edge is written from ids the caller chose, so this is the one
+    # place that can say a fact was replaced by a topic. `update` cannot: it
+    # builds the replacement itself, of the same kind as what it retires.
+    require_edge_shape(
+        lineage_edge_type_for(status), endpoint_kind_of(old), endpoint_kind_of(existing)
+    )
     edge = await supersede_by_existing(
         old,
         existing_id,
@@ -2861,10 +2923,13 @@ async def record_contradiction(
 
     if a_id == b_id:
         raise ValueError("A node cannot contradict itself")
-    if await storage.get_node(a_id) is None:
+    a = await storage.get_node(a_id)
+    if a is None:
         raise ValueError(f"Node '{a_id}' not found")
-    if await storage.get_node(b_id) is None:
+    b = await storage.get_node(b_id)
+    if b is None:
         raise ValueError(f"Node '{b_id}' not found")
+    require_edge_shape(EdgeType.CONTRADICTION, endpoint_kind_of(a), endpoint_kind_of(b))
 
     shares_metacontext = await same_metacontext(a_id, b_id, storage)
     edge_id, created = await _ensure_symmetric_edge(
@@ -2927,10 +2992,13 @@ async def record_variant(
 
     if a_id == b_id:
         raise ValueError("A node cannot be a variant of itself")
-    if await storage.get_node(a_id) is None:
+    a = await storage.get_node(a_id)
+    if a is None:
         raise ValueError(f"Node '{a_id}' not found")
-    if await storage.get_node(b_id) is None:
+    b = await storage.get_node(b_id)
+    if b is None:
         raise ValueError(f"Node '{b_id}' not found")
+    require_edge_shape(EdgeType.VARIANT_OF, endpoint_kind_of(a), endpoint_kind_of(b))
 
     shares_metacontext = await same_metacontext(a_id, b_id, storage)
     edge_id, created = await _ensure_symmetric_edge(
@@ -4146,6 +4214,33 @@ async def apply_reflection(
         if len(children) < 2:
             continue
 
+        # A parent gathers topics. The children arrive as ids, so a fact among
+        # them would be filed under a topic by a `subtopic_of` edge, and the
+        # hierarchy walk would then hand it back as a topic to everything
+        # reading the tree. The rule is `EDGE_SHAPES`', asked here rather than
+        # restated, so the two cannot come apart.
+        miscast = [
+            f"{child.id} is a {endpoint_kind_of(child).value}"
+            for child in children
+            if edge_shape_violation(
+                EdgeType.SUBTOPIC_OF, endpoint_kind_of(child), EndpointKind.TOPIC
+            )
+            is not None
+        ]
+        if miscast:
+            parents_refused.append(
+                {
+                    "children_ids": children_ids,
+                    "reason": (
+                        f"a synthesised parent gathers topics under itself, and "
+                        f"{'; '.join(miscast)}. Facts and inferences reach a topic "
+                        f"through the edges ingest writes, not through the topic "
+                        f"hierarchy."
+                    ),
+                }
+            )
+            continue
+
         # The synthesised parent is a **new assertion**, so it has to say which
         # world it is about like any other write — and the only metacontext it can
         # honestly claim is the one its children already agree on. Inheriting a
@@ -4180,7 +4275,7 @@ async def apply_reflection(
             *await plan_subtopic_edges(children, parent_topic.id, storage),
             *metacontext_edges(parent_topic.id, inherited, judge=judge),
         ]
-        vectors = await embedding_provider.embed([parent_topic.content])
+        vectors = await embedding_provider.embed([embedding_text(parent_topic)])
         await storage.write_batch_tx(
             nodes=[parent_topic],
             edges=edges,
@@ -4228,7 +4323,7 @@ async def apply_reflection(
                 for edge in metacontext_edges(st.id, inherited, judge=judge)
             ],
         ]
-        vectors = await embedding_provider.embed([st.content for st in subtopics])
+        vectors = await embedding_provider.embed([embedding_text(st) for st in subtopics])
         embeddings = [
             EmbeddingRecord(item_id=st.id, model_id=model_id, vector=vec)
             for st, vec in zip(subtopics, vectors, strict=True)

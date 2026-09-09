@@ -121,6 +121,27 @@ class TestNodeStorage:
         assert got.value.importance == 0.3
         assert got.value.confidence == 0.9
 
+    async def test_a_row_written_before_description_existed_reads_back_empty(self, store):
+        """A topic row with no `description` column at all reads back undescribed.
+
+        This is what every row in every existing graph looks like, and it is why
+        the field needs no migration: the `topic` table is SCHEMALESS, so a
+        missing key is simply absent from the record and Pydantic supplies the
+        declared default on read. `UNSET` plants exactly that row rather than a
+        row holding an empty string, which is the case a round-trip test cannot
+        reach.
+        """
+        topic = Topic(content="written last year", source_id="s1")
+        await store.store_node(topic)
+        await store.db.query("UPDATE topic UNSET description WHERE uid = $uid", {"uid": topic.id})
+
+        rows = await store.db.query("SELECT * FROM topic WHERE uid = $uid", {"uid": topic.id})
+        assert "description" not in rows[0]
+
+        got = await store.get_node(topic.id)
+        assert isinstance(got, Topic)
+        assert got.description == ""
+
 
 class TestEdgeStorage:
     async def test_store_and_retrieve_edges(self, store):

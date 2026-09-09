@@ -12,7 +12,7 @@ from enum import Enum
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from epimemer.core.temporal import ImpreciseInstant, ValidityInterval
 
@@ -195,33 +195,38 @@ class ClaimKind(str, Enum):
 
 
 class EdgeType(str, Enum):
+    # Which endpoints each type joins is `EDGE_SHAPES`, below, rather than a
+    # comment here: the shapes are enforced, and a second copy in prose would be
+    # the half that rots. The comments say why a type exists, which nothing else
+    # records.
+
     # Segment anchoring
-    ABOUT = "about"  # segment → topic
-    CONTAINS = "contains"  # segment → fact
-    IMPLIES = "implies"  # segment → inference
+    ABOUT = "about"
+    CONTAINS = "contains"
+    IMPLIES = "implies"
 
     # Semantic hierarchy
-    SUPPORTS = "supports"  # fact → inference (evidential support)
-    # fact → topic: the fact was extracted from a segment about this topic. Its
+    SUPPORTS = "supports"  # evidential support
+    # The fact was extracted from a segment about this topic. Its
     # own type rather than a second meaning on `supports`, because the readers
     # want opposite things: corroboration and the soundness check weigh
     # evidential support, `topic_enrichment` wants the material filed under a
     # topic. One type serving both made every reader of `supports` filter its
     # destinations by node kind to find out which meaning it had.
     EXTRACTED_UNDER_TOPIC = "extracted_under_topic"
-    ABSTRACTS = "abstracts"  # inference → topic
-    DERIVED_FROM = "derived_from"  # inference → fact
+    ABSTRACTS = "abstracts"
+    DERIVED_FROM = "derived_from"  # the inference points at its premise
 
     # Cross-node linking
-    SIMILARITY = "similarity"  # topic ↔ topic, fact ↔ fact
-    CONTRADICTION = "contradiction"  # fact ↔ fact
+    SIMILARITY = "similarity"  # symmetric: one edge stands for the pair
+    CONTRADICTION = "contradiction"  # symmetric
 
     # Topic hierarchy (DAG — multiple parents allowed, cycles forbidden)
-    SUBTOPIC_OF = "subtopic_of"  # topic → parent topic
+    SUBTOPIC_OF = "subtopic_of"  # the child points at the parent
 
     # History
-    SUPERSEDED_BY = "superseded_by"  # node → node (correction)
-    # node → node (world-change). States temporal order, not replacement, which
+    SUPERSEDED_BY = "superseded_by"  # a correction
+    # A world-change. States temporal order, not replacement, which
     # is what lets a claim become true *again* without contradicting the edge
     # that recorded it stepping aside. It deliberately does **not** claim
     # adjacency: Saint Petersburg → Petrograd → Leningrad → Saint Petersburg is
@@ -230,41 +235,40 @@ class EdgeType(str, Enum):
     # not gapless, cycles are legal, and two transitions the same way round
     # between one pair are two edges — never dedup these by (src, dst, type).
     TEMPORALLY_FOLLOWED_BY = "temporally_followed_by"
-    MERGED_INTO = "merged_into"  # node → node (merge)
+    MERGED_INTO = "merged_into"  # the retired source points at the survivor
 
     # Temporal
-    TIMELINK = "timelink"  # node → timeline (with timepoint_id in metadata)
+    TIMELINK = "timelink"  # which timepoint is in the edge's metadata
 
     # Metacontext
-    HAS_METACONTEXT = "has_metacontext"  # node → metacontext
+    HAS_METACONTEXT = "has_metacontext"
 
-    # Aboutness & provenance (source nodes and topic nodes are nodes; these
-    # connect to them). A tag is the name the caller passed; the topic node it
-    # resolves to is created from that tag, and this edge names it. It is a
-    # retrieval index: `find_nodes` is its only reader, and nothing weighs it as
-    # evidence.
-    TAGGED_WITH_TOPIC = "tagged_with_topic"  # node → topic node created from a tag
-    SOURCED_FROM = "sourced_from"  # node → RawDocument (originating document)
+    # Aboutness & provenance. A tag is the name the caller passed; the topic
+    # node it resolves to is created from that tag, and this edge names it. It
+    # is a retrieval index: `find_nodes` is its only reader, and nothing weighs
+    # it as evidence.
+    TAGGED_WITH_TOPIC = "tagged_with_topic"
+    SOURCED_FROM = "sourced_from"  # the document the claim came from
 
     # Epistemic review (see REVIEW_EPISTEMIC.md)
-    SUPERSESSION_CANDIDATE = "supersession_candidate"  # newer fact → older fact
-    EVIDENCE_SUPERSEDED = "evidence_superseded"  # superseded fact → dependent inference
-    # merged fact → dependent inference. Its own type rather than a qualified
-    # `evidence_superseded`, because the two events say opposite things about
+    SUPERSESSION_CANDIDATE = "supersession_candidate"  # the newer fact points at the older
+    EVIDENCE_SUPERSEDED = "evidence_superseded"  # the retired fact points at what depended on it
+    # The merged fact points at what depended on it. Its own type rather than a
+    # qualified `evidence_superseded`, because the two events say opposite things about
     # the claim: a correction says it was wrong, a merge says two phrasings of
     # it collapsed and the survivor carries every source. Consumers route
     # on the type — labels, archival, migration all do — so a reader that has
     # never heard of this one sees an edge it does not handle rather than a
     # familiar edge that has quietly grown a second meaning.
     EVIDENCE_MERGED = "evidence_merged"
-    # fact ↔ fact: *somebody has judged this pair*, whichever way it went. Its
+    # *Somebody has judged this pair*, whichever way it went. Its
     # own type rather than a flag on `similarity`, because the two have readers
     # wanting opposite breadth: nomination wants every pair anybody assessed
     # suppressed, corroboration wants only restatements of one claim. One edge
     # serving both makes "these are different claims" corroborate — which is
     # manufactured support, the worst failure this system has.
     ASSESSED = "assessed"
-    # fact ↔ fact: an earlier `one_claim` verdict about this pair has been
+    # An earlier `one_claim` verdict about this pair has been
     # **withdrawn**. Written only where one stands, because that is the
     # only place it does anything: `similarity` is not deleted — nothing here
     # deletes — so this is what stops it corroborating, exactly as
@@ -277,13 +281,158 @@ class EdgeType(str, Enum):
     # one under-counts. Under-counting is the direction fact dedup already chose when
     # it left the pre-`claim_kind` corpus unmergeable.
     RETRACTED_SIMILARITY = "retracted_similarity"
-    VARIANT_OF = "variant_of"  # fact ↔ fact, across metacontexts
-    BASED_ON = "based_on"  # metacontext → metacontext (association)
+    VARIANT_OF = "variant_of"  # one proposition resolved differently per metacontext
+    BASED_ON = "based_on"  # one metacontext builds on another
 
     # User-defined relationship (open vocabulary): the descriptor lives in
     # NodeEdge.label, behaviour in NodeEdge.kind. The engine routes on the enum;
     # all open relationships share this one sentinel.
     RELATED = "related"
+
+
+class EndpointKind(str, Enum):
+    """What sits at the end of an edge, at the grain the shapes distinguish.
+
+    Wider than `NodeType` because edges leave the epistemic nodes: a segment is
+    the passage a node was extracted from, a document is what a claim came from,
+    a metacontext is the world it is asserted in, a timeline is what it is dated
+    against. The first three carry `NodeType`'s own strings, so a node kind
+    crosses over by value.
+    """
+
+    TOPIC = "topic"
+    FACT = "fact"
+    INFERENCE = "inference"
+    SEGMENT = "segment"
+    DOCUMENT = "document"
+    METACONTEXT = "metacontext"
+    TIMELINE = "timeline"
+
+
+# The three kinds an epistemic node can be. Named once so that "from any node"
+# in the shape table below means the same thing everywhere it appears.
+EPISTEMIC_ENDPOINTS: frozenset[EndpointKind] = frozenset(
+    {EndpointKind.TOPIC, EndpointKind.FACT, EndpointKind.INFERENCE}
+)
+
+
+class EdgeShape(BaseModel):
+    """Which endpoint pairs one edge type may join.
+
+    `unrestricted` is stated rather than left to an empty `pairs`, because an
+    open type and a type nobody has got round to constraining would otherwise
+    look identical, and they are opposite claims.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    pairs: frozenset[tuple[EndpointKind, EndpointKind]] = frozenset()
+    unrestricted: bool = False
+
+
+def _joins(*pairs: tuple[EndpointKind, EndpointKind]) -> EdgeShape:
+    return EdgeShape(pairs=frozenset(pairs))
+
+
+def _from_any_node(dst: EndpointKind) -> EdgeShape:
+    """Any epistemic node to one endpoint: what provenance and framing edges do."""
+    return EdgeShape(pairs=frozenset((src, dst) for src in EPISTEMIC_ENDPOINTS))
+
+
+# Two nodes of the same kind. Every edge that uses it says something about *one
+# claim seen twice* — a pair judged, a version replaced, two rows collapsed —
+# and a claim cannot be a topic at one end and a fact at the other.
+_BETWEEN_LIKE_NODES = EdgeShape(pairs=frozenset((kind, kind) for kind in EPISTEMIC_ENDPOINTS))
+
+
+# What each engine edge type may join, as data rather than as prose nothing
+# reads. `link` refuses a violation outright: an edge type joining the wrong
+# kinds is a category error against what the type means rather than a judgment
+# somebody could defend, so there is no override to record. Without it every
+# reader that assumes a shape has to re-check it — `dependent_inference_ids`
+# fetches the destinations of `supports` and keeps only the inferences, because
+# the edge alone did not say.
+#
+# **Total, and a test says so.** A type added without a shape fails rather than
+# defaulting to *anything goes*, on `ADVISORY_STANCE`'s reasoning: silence
+# quietly becoming the permissive answer is how the guarantee is lost.
+EDGE_SHAPES: dict[EdgeType, EdgeShape] = {
+    EdgeType.ABOUT: _joins((EndpointKind.SEGMENT, EndpointKind.TOPIC)),
+    EdgeType.CONTAINS: _joins((EndpointKind.SEGMENT, EndpointKind.FACT)),
+    EdgeType.IMPLIES: _joins((EndpointKind.SEGMENT, EndpointKind.INFERENCE)),
+    EdgeType.SUPPORTS: _joins((EndpointKind.FACT, EndpointKind.INFERENCE)),
+    EdgeType.EXTRACTED_UNDER_TOPIC: _joins((EndpointKind.FACT, EndpointKind.TOPIC)),
+    EdgeType.ABSTRACTS: _joins((EndpointKind.INFERENCE, EndpointKind.TOPIC)),
+    EdgeType.DERIVED_FROM: _joins((EndpointKind.INFERENCE, EndpointKind.FACT)),
+    # Topics, facts and inferences are all nominated in pairs and all suppressed
+    # by a verdict, so all three can carry these — `already_judged_pairs` is the
+    # one reader, and it takes ids rather than a node kind for that reason.
+    EdgeType.SIMILARITY: _BETWEEN_LIKE_NODES,
+    EdgeType.ASSESSED: _BETWEEN_LIKE_NODES,
+    EdgeType.RETRACTED_SIMILARITY: _BETWEEN_LIKE_NODES,
+    # Facts only, both of them: a contradiction is two claims that cannot both
+    # hold, and a variant is one proposition resolved differently per
+    # metacontext. Neither is a question you can ask about a theme.
+    EdgeType.CONTRADICTION: _joins((EndpointKind.FACT, EndpointKind.FACT)),
+    EdgeType.VARIANT_OF: _joins((EndpointKind.FACT, EndpointKind.FACT)),
+    EdgeType.SUBTOPIC_OF: _joins((EndpointKind.TOPIC, EndpointKind.TOPIC)),
+    EdgeType.SUPERSEDED_BY: _BETWEEN_LIKE_NODES,
+    EdgeType.TEMPORALLY_FOLLOWED_BY: _BETWEEN_LIKE_NODES,
+    EdgeType.MERGED_INTO: _BETWEEN_LIKE_NODES,
+    EdgeType.TIMELINK: _from_any_node(EndpointKind.TIMELINE),
+    EdgeType.HAS_METACONTEXT: _from_any_node(EndpointKind.METACONTEXT),
+    # A topic can be tagged like anything else, so the topic-to-topic pair here
+    # is a tag applied to a topic rather than a hierarchy edge in disguise.
+    EdgeType.TAGGED_WITH_TOPIC: _from_any_node(EndpointKind.TOPIC),
+    EdgeType.SOURCED_FROM: _from_any_node(EndpointKind.DOCUMENT),
+    EdgeType.SUPERSESSION_CANDIDATE: _joins((EndpointKind.FACT, EndpointKind.FACT)),
+    EdgeType.EVIDENCE_SUPERSEDED: _joins((EndpointKind.FACT, EndpointKind.INFERENCE)),
+    EdgeType.EVIDENCE_MERGED: _joins((EndpointKind.FACT, EndpointKind.INFERENCE)),
+    EdgeType.BASED_ON: _joins((EndpointKind.METACONTEXT, EndpointKind.METACONTEXT)),
+    # Open, and this is the point of it: an agent coins the word and says what
+    # it joins. `published_by` runs from a document to a topic, an ordinary user
+    # relation runs between two nodes, and the engine reads neither as evidence.
+    EdgeType.RELATED: EdgeShape(unrestricted=True),
+}
+
+
+def describe_edge_shape(edge_type: EdgeType) -> str:
+    """The endpoints `edge_type` joins, for a refusal to quote."""
+    shape = EDGE_SHAPES[edge_type]
+    if shape.unrestricted:
+        return "any two endpoints"
+    return ", ".join(f"{src.value} -> {dst.value}" for src, dst in sorted(shape.pairs))
+
+
+def edge_shape_violation(edge_type: EdgeType, src: EndpointKind, dst: EndpointKind) -> str | None:
+    """Why `edge_type` may not join these two, or `None` where it may.
+
+    Pure, and takes kinds rather than ids: whether an edge is well-shaped is a
+    question about what the endpoints are, so every writer can ask it with the
+    nodes it has already loaded and none of them has to reach for storage.
+    """
+    shape = EDGE_SHAPES[edge_type]
+    if shape.unrestricted or (src, dst) in shape.pairs:
+        return None
+    return (
+        f"'{edge_type.value}' joins {describe_edge_shape(edge_type)}, "
+        f"and this is {src.value} -> {dst.value}."
+    )
+
+
+def edge_types_joining(src: EndpointKind, dst: EndpointKind) -> list[EdgeType]:
+    """The engine edge types this pair could carry, in declaration order.
+
+    Read off the table rather than listed by hand, so a refusal suggesting an
+    alternative cannot suggest one whose shape has since moved. `related` is
+    left out: it fits every pair, so naming it would drown the suggestion that
+    is actually about these two.
+    """
+    return [
+        edge_type
+        for edge_type, shape in EDGE_SHAPES.items()
+        if not shape.unrestricted and (src, dst) in shape.pairs
+    ]
 
 
 # Edges that record version history rather than knowledge. They are anchored to
@@ -813,7 +962,14 @@ class Topic(BaseModel):
     """
 
     id: str = Field(default_factory=_new_id)
-    content: str  # paragraph-level description
+    content: str  # the wording, and the name a tag resolves to by exact match
+    # Advisory prose saying what the topic covers, kept apart from `content` so
+    # that describing a topic never moves the name the graph joins on. Empty
+    # means **undescribed**, a true state worth telling apart from a described
+    # one, which is why the field exists before anything writes it: enrichment
+    # gains the ability to write it in a later stage, and until then every topic
+    # reads back empty here. `dev-docs/TOPIC_DESCRIPTIONS.md` carries the case.
+    description: str = ""
     # Segment.id, if extracted from text (entity topics and topics from a tag have none)
     source_id: str | None = None
     status: NodeStatus = NodeStatus.ACTIVE
@@ -896,6 +1052,20 @@ class Inference(BaseModel):
 
 # Union of all epistemic node types
 EpistemicNode = Topic | Fact | Inference
+
+
+def endpoint_kind_of(node: EpistemicNode) -> EndpointKind:
+    """Which endpoint kind a loaded node is, for `edge_shape_violation`.
+
+    Lives here rather than beside the shapes because the node classes are
+    defined below them. The class is the only record of a node's kind, so this
+    is the one crossing from an object to the vocabulary the table speaks.
+    """
+    if isinstance(node, Topic):
+        return EndpointKind.TOPIC
+    if isinstance(node, Fact):
+        return EndpointKind.FACT
+    return EndpointKind.INFERENCE
 
 
 class NodeChangeEvent(BaseModel):

@@ -872,10 +872,17 @@ async def memory_link(
     Give either a known engine `edge_type` or a free `relation` label (open
     vocabulary — anything you need, e.g. "refuted_in", "funded_by").
 
+    Each engine edge type joins particular kinds of node and says one thing
+    about them: `supports` is a fact backing an inference, `subtopic_of` is one
+    topic under another. **Any other pairing is refused**, and the refusal names
+    the pairs that type does join plus any type that does join the two nodes you
+    named. Where the relationship is one the engine does not define, `relation`
+    is what to reach for.
+
     Args:
         src_id: Source node ID.
         dst_id: Destination node ID.
-        edge_type: A known engine edge type (e.g. "supports", "contradicts").
+        edge_type: A known engine edge type (e.g. "supports", "subtopic_of").
         relation: A free user-defined relationship label (creates a RELATED edge).
         kind: For a user relation — "relationship" (followed in retrieval) or
             "attribution" (where it came from / who said it; not followed). A
