@@ -56,6 +56,9 @@ export interface NodeView {
   node_id: string;
   node_type: string;
   content: string;
+  // A topic's prose about what it covers; empty on facts and inferences, and
+  // absent from a snapshot taken by a server that predates the field.
+  description?: string;
   status: string;
   source_id: string;
   extraction_method: string;

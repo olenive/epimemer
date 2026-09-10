@@ -132,7 +132,7 @@ is a worklist, not a verdict:
 |---|---|---|
 | `similar_pairs` | topics above the similarity threshold | `merges` or `parents` |
 | `split_candidates` | topics whose material has high internal variance | `splits` |
-| `enrichment_candidates` | thin topics with rich underlying material | `enrichments` |
+| `enrichment_candidates` | topics saying less about themselves than their material does, each with the description it currently carries | `enrichments` |
 | `contradictions` | same-metacontext active fact pairs above 0.80, the one nomination bar, which `merge_facts` also gates on, so a pair listed here is mergeable | `record_contradiction`, then `supersessions`; or `similarities` where neither fits |
 | `recurrences` | an active claim beside its own `historical` twin | `restore` |
 | `unsound_inferences` | inferences whose premises no source puts in one period | agent judgment |
@@ -267,7 +267,7 @@ Every kind of decision is optional and they are applied in one call:
 | `similarities` | record what you decided about a nominated pair |
 | `parents` | synthesise a parent topic over children |
 | `splits` | split a broad topic into subtopics |
-| `enrichments` | rewrite a thin topic, superseding it with a fuller one |
+| `enrichments` | describe a thin topic, beside its unchanged name |
 | `merges` | fuse near-duplicate topics into one |
 | `supersessions` | resolve a flagged node against an existing one |
 | `retained` | record that you re-read a nominated node and it stands |
@@ -283,15 +283,26 @@ bar is not a parameter of the call**: a caller does not choose the bar its
 own merge is checked against, here or in `merge_facts`. For topics that are
 merely related rather than duplicates, use `parents`.
 
+**`enrichments` writes a description beside a name that does not change.** Each
+entry is `{topic_id, description}`, and the write is in place: the topic keeps
+its id, its content byte for byte and every edge it holds. That matters because
+`content` is the name a tag resolves to at ingest and the name
+`find_nodes(tagged_with_topic=...)` resolves back, and an enrichment that moved
+it split the tag in two. It is most worth doing for a topic node created from a
+tag, whose bare name says nothing about what it covers, and such a node is
+embedded on its name and description together. A description that replaces an
+earlier one keeps the earlier wording on the node, so improving one loses
+nothing.
+
 **Three of these carry a metacontext, and none of them may invent one.** A split's
 subtopics inherit what the parent states; a synthesised parent inherits the
 one set its children all stand in, and is refused into `parents_refused`
 when they differ; a topic merge is refused into `topic_merges_refused` unless
-every source stands in exactly the same set. A topic node created from a tag is
-exempt from that last gate: a tag names something rather than asserting it, so
-it stands in no world, and two such nodes merge whatever metacontext stamps they
-carry. Union is never the answer for anything else: one node asserted in two
-worlds is the worst outcome available.
+every source stands in exactly the same set. An all-tag merge is exempt from
+that last gate: a tag names something rather than asserting it, so it stands in
+every metacontext it is used from, and the survivor is used from every world its
+sources were. Union is never the answer for anything else: one node asserted in
+two worlds is the worst outcome available.
 
 **A merge re-states the survivor's metacontext rather than migrating one.** Every
 other edge on a survivor is something its sources brought with them, but a
@@ -301,10 +312,12 @@ about. Migrating the edge would answer for them and credit whoever placed a
 source; the merging agent states it under its own judge instead. A correction
 still moves the metacontext, where the replacement is the same claim.
 
-Where the sources state no metacontext, nothing is re-stated: inventing one would
-put words in nobody's mouth. Splits behave the same way. A node with no
-`has_metacontext` edge is one nobody spoke for, and `epimemer metacontexts declare`
-is how a person assigns one.
+The survivor re-states the union of what the sources stated, which for every
+gated path is the one set they all stand in and for an all-tag merge is every
+metacontext the name was used from. Where the sources state no metacontext,
+nothing is re-stated: inventing one would put words in nobody's mouth. Splits
+behave the same way. A node with no `has_metacontext` edge is one nobody spoke
+for, and `epimemer metacontexts declare` is how a person assigns one.
 
 Merging rebuilds the node's value signal through one shared function
 (`merged_value_signal`) rather than field by field, so no clock or score is

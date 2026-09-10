@@ -1830,6 +1830,14 @@ class DecisionKind(str, Enum):
     RETENTION = "retention"
     REACTIVATION = "reactivation"
     BOUNDARY = "boundary"
+    # A name put back on the node that holds its edges, after an earlier
+    # enrichment overwrote it with a sentence. Its own kind rather than
+    # `ENRICHMENT`, which is the opposite act: enrichment adds what a topic did
+    # not say, and this takes back a name the topic never stopped needing.
+    # Nor `CORRECTION`, whose subjects are a retired node and its replacement:
+    # this creates no node and retires none, and a reviewer auditing what was
+    # superseded would get a row where nothing was.
+    NAME_RESTORATION = "name_restoration"
 
     # Revisions of an ingest-time judgment that are *not* supersessions — the
     # claim is unchanged and the world has not moved, so `because` has no honest

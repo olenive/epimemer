@@ -337,11 +337,12 @@ still found rather than lost to a filter applied after the cut.
 
 #### A scoped search scopes the whole response
 
-A topic node created from a tag asserts nothing, so it stands in no
-metacontext, and every node tagged with that name points at the same one
-whatever world it was claimed in. That makes it a bridge: a fact from a novel
-and a fact about real history sit one hop apart, through a node neither is a
-claim about. Filtering the node list alone leaves the bridge in the response.
+A topic node created from a tag stands in every metacontext it is used from,
+and every node tagged with that name points at the same one whatever world it
+was claimed in. That makes it a bridge: a fact from a novel and a fact about
+real history sit one hop apart, through a node that stands in both worlds and
+is a claim about neither. Filtering the node list alone leaves the bridge in
+the response.
 
 | Key | Scoped | Unscoped |
 |---|---|---|

@@ -7,8 +7,9 @@ metacontext requirement, which ended in a rule worth stating once here:
 in base reality, it is a node nobody said anything about, and it shares a
 metacontext with nothing. Every function below exists because of that:
 `shared_metacontext_set` and `metacontext_edges` so reflect re-states a
-metacontext instead of minting a node without one, and `declare_metacontext` so
-a graph written before the rule can stop holding any.
+metacontext instead of minting a node without one, `declare_metacontext` so
+a graph written before the rule can stop holding any, and
+`stamp_tag_metacontexts` so a name stands where it is used rather than nowhere.
 
 A metacontext assignment used to be **one-way**: `link` writes a
 `has_metacontext` edge and nothing removed one, so a fact wrongly assigned to a
@@ -40,7 +41,7 @@ Deleting fails closed: every reader agrees, and the prior value survives in the
 node's trail and in the journal row, which is where `rejudge` keeps its own.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
 from pydantic import BaseModel
 
@@ -49,6 +50,7 @@ from epimemer.core.types import (
     EdgeType,
     JudgeRef,
     NodeEdge,
+    NodeType,
     Topic,
 )
 from epimemer.pipelines.reflection.review import metacontexts_for
@@ -255,11 +257,14 @@ TAG_EXTRACTION_METHOD = "agent:tag"
 def created_from_tag(node: Topic) -> bool:
     """Whether this Topic is a tag rather than a statement about a world.
 
-    A tag is a name. It asserts nothing, so there is no world for it to be
-    about, and `store_decomposition` creates the topic node with no
-    `has_metacontext` edge. `_tag_topic` resolves by content, so one tag serves
-    every metacontext at once. The topic-merge gate exempts topic nodes created
-    from a tag.
+    A tag is a name, so it asserts nothing, and `_tag_topic` resolves it by
+    content: one name is one topic node, whatever world it is used from. What
+    that node stands in is derived from use rather than judged: it is **the
+    union of the metacontexts of the nodes tagged with it**, so `store_decomposition`
+    adds this call's metacontext to it, and the set only grows. The union is the
+    worst answer available for a claim, which is what `shared_metacontext_set`
+    says, and the right one for a name: a name in two worlds records that it was
+    used from both. That is why the topic-merge gate exempts an all-tag merge.
     """
     return node.extraction_method == TAG_EXTRACTION_METHOD
 
@@ -282,6 +287,84 @@ def metacontext_edges(
         )
         for metacontext in sorted(metacontexts)
     ]
+
+
+def metacontexts_to_stamp(held: set[str], used_from: Iterable[set[str]]) -> set[str]:
+    """The metacontexts a tag is used from and does not yet stand in.
+
+    Add-only, and that is the whole rule: a tag stamped by a declaration keeps
+    what it was given, and a use withdrawn from a node here leaves the name
+    standing where it stood. Nothing derives a removal, so this never returns
+    one, and running it twice returns nothing the second time.
+    """
+    return set().union(*used_from) - held
+
+
+class TagMetacontextStamping(BaseModel):
+    """What one stamping pass over a graph's tags found and what it wrote.
+
+    `topics_seen` beside `edges_written` is the idempotence check: a rerun sees
+    the same topic nodes and writes nothing.
+    """
+
+    topics_seen: int
+    edges_written: int
+    topic_ids: list[str] = []
+
+
+async def stamp_tag_metacontexts(storage: StorageBackend) -> TagMetacontextStamping:
+    """Put every topic node created from a tag in the metacontexts it is used from.
+
+    The union of the metacontexts of the nodes that point at it with a
+    `tagged_with_topic` edge, minus what it already holds. This brings a graph
+    written before ingest wrote the edge up to the rule the ingest now keeps, so
+    a scoped read returns the tags used from that scope instead of dropping them
+    and every edge that reached them.
+
+    **No judge and no journal row.** This derives edges from edges already in
+    the graph, which anybody can re-derive from the same rows; a declaration is a
+    person stating that claims nobody spoke for were about one world, and this is
+    not that.
+
+    A tag that tags nothing is left alone: it is used from nowhere, so the union
+    is empty and there is nothing to say about it until it is next used. Uses are
+    counted whatever status the tagged node now has, matching ingest: the name
+    was used from that world at the time, and archiving the claim does not
+    unsay it.
+    """
+    topics = [
+        node
+        for node in await storage.query_nodes(node_type=NodeType.TOPIC)
+        if isinstance(node, Topic) and created_from_tag(node)
+    ]
+    if not topics:
+        return TagMetacontextStamping(topics_seen=0, edges_written=0)
+
+    topic_ids = [topic.id for topic in topics]
+    uses = await storage.get_edges_for(
+        topic_ids, direction="to", edge_type=EdgeType.TAGGED_WITH_TOPIC
+    )
+    held = await storage.get_edges_for(
+        topic_ids, direction="from", edge_type=EdgeType.HAS_METACONTEXT
+    )
+    tagged_ids = sorted({edge.src_id for edges in uses.values() for edge in edges})
+    tagged_metacontexts = await metacontexts_for(tagged_ids, storage)
+
+    written = 0
+    stamped: list[str] = []
+    for topic_id in topic_ids:
+        missing = metacontexts_to_stamp(
+            {edge.dst_id for edge in held[topic_id]},
+            (tagged_metacontexts[edge.src_id] for edge in uses[topic_id]),
+        )
+        if not missing:
+            continue
+        for edge in metacontext_edges(topic_id, missing):
+            await storage.store_edge(edge)
+        written += len(missing)
+        stamped.append(topic_id)
+
+    return TagMetacontextStamping(topics_seen=len(topics), edges_written=written, topic_ids=stamped)
 
 
 class MetacontextDeclaration(BaseModel):

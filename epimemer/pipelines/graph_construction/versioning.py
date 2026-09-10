@@ -362,10 +362,12 @@ async def merge_nodes(
     # a migrated edge would answer *which world is this about* on the merging
     # agent's behalf while crediting somebody else. `migration_disposition`
     # keeps `has_metacontext` on the sources for the same reason; these are the
-    # replacement. The set is well-defined because every merge path refuses
-    # sources that do not stand in exactly the same metacontexts, so the union is that
-    # one set — and an empty one (an undeclared graph) re-states nothing, which
-    # is right: nobody has said anything to restate.
+    # replacement. The set is the union, which for every gated merge path is one
+    # set: those refuse sources that do not stand in exactly the same
+    # metacontexts. An all-tag merge is the exempt case and the union is the
+    # answer there, since a name stands in every metacontext it is used from.
+    # An empty union (an undeclared graph) re-states nothing, which is right:
+    # nobody has said anything to restate.
     from epimemer.pipelines.metacontexts import metacontext_edges
     from epimemer.pipelines.reflection.review import metacontexts_for
 

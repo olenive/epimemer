@@ -11,30 +11,31 @@ topic splits and parent synthesis, and a second spelling of the join would show
 up as a topic that quietly fails to match itself. One function, one definition,
 and a test that asserts no other module joins the two fields.
 
-**Every description is empty today**, because nothing writes one yet. So every
-vector this produces is byte-identical to the one the same node got before this
-module existed, and the branch below is dead until enrichment starts writing
-descriptions. Whether it stays that way is a measurement rather than a guess:
-adding a description to a stored topic moves it away from the same topic
-arriving undescribed at ingest, which is exactly where topic similarity is meant
-to catch a duplicate, and that number has not been taken.
-`dev-docs/TOPIC_DESCRIPTIONS.md` holds the case and the measurement it waits on.
+**The join is narrow, and the narrowness is the design.** Only a topic node
+created from a tag joins its description; every other node embeds on `content`
+alone. `dev-docs/TOPIC_DESCRIPTIONS.md` holds the case.
 """
 
 from epimemer.core.types import EpistemicNode, Topic
+from epimemer.pipelines.metacontexts import created_from_tag
 
 
 def embedding_text(node: EpistemicNode) -> str:
-    """The text this node is embedded on: its wording, plus its description.
+    """The text this node is embedded on.
 
-    A described topic reads as one sentence followed by another, which is what
-    the embedding model was trained on and keeps the name at the front where it
-    dominates. An undescribed topic returns its `content` unchanged, so it
-    embeds exactly as it always has.
+    A topic node created from a tag joins its description to its name, because a
+    bare tag name is the one wording that says nothing about what the topic
+    means: it is invisible to a search on meaning, and it scores against its
+    neighbours on how alike the strings are rather than on what they cover. A
+    statement topic's `content` is already the prose a description would restate,
+    so joining one there would only move a stored topic away from the same topic
+    arriving undescribed at ingest, which is exactly where topic similarity is
+    meant to catch a duplicate.
 
-    Facts and inferences return `content`. A claim's wording is the claim, and
-    they carry no second field to join.
+    Everything else returns `content`: an undescribed topic, a described
+    statement topic, and every fact and inference, whose wording is the claim and
+    which carry no second field to join.
     """
-    if isinstance(node, Topic) and node.description:
+    if isinstance(node, Topic) and node.description and created_from_tag(node):
         return f"{node.content}. {node.description}"
     return node.content

@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { initDrawer, notRetrievedMarker, type DrawerHandle } from "./drawer";
+import {
+  initDrawer,
+  nodeDetailBody,
+  notRetrievedMarker,
+  type DrawerHandle,
+} from "./drawer";
 
 const MARKUP = `
   <div id="detail-drawer" class="hidden h-40">
@@ -144,5 +149,35 @@ describe("test_dimmed_node_stays_clickable_and_says_it_was_not_retrieved", () =>
 
     expect($("detail-content").textContent).toContain("content");
     expect($("detail-content").textContent).toMatch(/not in this retrieval/i);
+  });
+});
+
+/**
+ * A topic node created from a tag has a bare name for content, so without its
+ * description the drawer shows a viewer an identifier and nothing else.
+ */
+describe("test_a_described_topic_shows_its_description_beneath_its_content", () => {
+  it("puts the description under the content, labelled", () => {
+    const body = nodeDetailBody("issue-53", "Validity intervals, per source.");
+
+    expect(body.startsWith("issue-53")).toBe(true);
+    expect(body).toContain("Validity intervals, per source.");
+    expect(body.indexOf("issue-53")).toBeLessThan(
+      body.indexOf("Validity intervals"),
+    );
+  });
+
+  it("shows content alone when there is no description", () => {
+    expect(nodeDetailBody("a fact about rollbacks")).toBe("a fact about rollbacks");
+    expect(nodeDetailBody("a fact about rollbacks", "")).toBe(
+      "a fact about rollbacks",
+    );
+  });
+
+  it("reaches the drawer body a click can read", () => {
+    drawer.showNode("topic — 1a2b3c4d", nodeDetailBody("issue-53", "What it covers."));
+
+    expect($("detail-content").textContent).toContain("issue-53");
+    expect($("detail-content").textContent).toContain("What it covers.");
   });
 });

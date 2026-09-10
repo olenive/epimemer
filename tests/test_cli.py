@@ -20,6 +20,11 @@ from epimemer.mcp.config import ServerConfig
 
 AT = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
 
+# The repair re-embeds each node it fixes, and the command builds its provider
+# from the config it is handed. A mock one keeps the test off the model
+# download without teaching the command about test doubles.
+_MOCK_EMBEDDING = ServerConfig(embedding_provider="mock", embedding_dimension=8)
+
 
 class TestWhereThisCommandCannotReach:
     """Approvals live in per-graph settings *inside* the backend, and an
@@ -332,6 +337,97 @@ class TestDeclaringAMetacontext:
         err = capsys.readouterr().err
         assert code == 2
         assert "rebuilt rather than declared" in err
+        assert "EPIMEMER_APPROVED_AGENTS" not in err
+
+
+class TestRepairingDisplacedTagNames:
+    """Also the user's act, for the reason declaring is: only a person who knows
+    what the tag was for can say which of two sentences was its name.
+
+    What the repair itself does is asserted in
+    `tests/pipelines/test_tag_name_repair.py`; these are about the command
+    around it, which is the prompt and what it says afterwards.
+    """
+
+    SENTENCE = "Validity intervals: when a claim was true, per source"
+
+    async def _damaged(self, storage):
+        from epimemer.core.types import EdgeType, NodeEdge, NodeStatus, Topic
+        from epimemer.pipelines.metacontexts import TAG_EXTRACTION_METHOD
+        from epimemer.pipelines.reflection.tag_name_repair import (
+            ENRICHED_TAG_EXTRACTION_METHOD,
+        )
+
+        original = Topic(
+            content="issue-53",
+            source_id=None,
+            extraction_method=TAG_EXTRACTION_METHOD,
+            status=NodeStatus.CORRECTED,
+        )
+        enriched = Topic(
+            content=self.SENTENCE,
+            source_id=None,
+            extraction_method=ENRICHED_TAG_EXTRACTION_METHOD,
+            metadata={"enriched_from": original.id},
+        )
+        await storage.store_node(original)
+        await storage.store_node(enriched)
+        await storage.store_edge(
+            NodeEdge(src_id=original.id, dst_id=enriched.id, type=EdgeType.SUPERSEDED_BY)
+        )
+        return enriched
+
+    async def test_it_shows_both_wordings_and_does_nothing_on_a_refusal(self, storage, monkeypatch):
+        from epimemer.cli import _repair_tag_names
+
+        enriched = await self._damaged(storage)
+        asked: list[str] = []
+        monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt) or "n")
+
+        message = await _repair_tag_names(storage, _MOCK_EMBEDDING, None, False)
+
+        assert self.SENTENCE in asked[0]
+        assert "issue-53" in asked[0]
+        assert "restored 0 name(s)" in message
+        assert (await storage.get_node(enriched.id)).content == self.SENTENCE
+
+    async def test_yes_skips_the_prompt_and_restores_the_name(self, storage):
+        from epimemer.cli import _repair_tag_names
+
+        enriched = await self._damaged(storage)
+
+        message = await _repair_tag_names(storage, _MOCK_EMBEDDING, "the-user", True)
+
+        assert "restored 1 name(s) by 'the-user'" in message
+        after = await storage.get_node(enriched.id)
+        assert after.content == "issue-53"
+        assert after.description == self.SENTENCE
+
+    async def test_a_graph_with_nothing_to_repair_says_so(self, storage):
+        from epimemer.cli import _repair_tag_names
+
+        message = await _repair_tag_names(storage, _MOCK_EMBEDDING, None, True)
+
+        assert "Nothing to repair" in message
+
+    async def test_a_rerun_finds_nothing(self, storage):
+        from epimemer.cli import _repair_tag_names
+
+        await self._damaged(storage)
+        await _repair_tag_names(storage, _MOCK_EMBEDDING, None, True)
+
+        assert "Nothing to repair" in await _repair_tag_names(storage, _MOCK_EMBEDDING, None, True)
+
+    def test_it_refuses_a_store_the_server_will_never_read(self, capsys, monkeypatch):
+        """And says the graph is not stuck: enrichment cannot displace a name any
+        more, so an embedded graph has nothing to repair in the first place."""
+        monkeypatch.setenv("EPIMEMER_STORAGE_BACKEND", "memory")
+
+        code = main(["tags", "repair"])
+
+        err = capsys.readouterr().err
+        assert code == 2
+        assert "nothing to repair" in err
         assert "EPIMEMER_APPROVED_AGENTS" not in err
 
 

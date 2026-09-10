@@ -528,8 +528,9 @@ async def memory_store_decomposition(
             topics/facts/inferences: each item is either a content string, or
               an object {"content": str, "tags": ["billing", ...],
               "importance": 0.8, "confidence": 0.9, "confidence_basis": "...",
-              "claim_kind": "state"} to attach per-node tags, either value
-              prior, and (on facts) the condition-or-occurrence judgment.
+              "claim_kind": "state", "description": "..."} to attach per-node
+              tags, either value prior, (on facts) the condition-or-occurrence
+              judgment, and (on topics) prose saying what the topic covers.
             importance: 0.0–1.0, default 0.5. Set it only when you already know
               a node is unusually consequential or unusually disposable —
               importance is properly judged at reflect time, and `reinforce` is
@@ -556,6 +557,13 @@ async def memory_store_decomposition(
             confidence_basis: one line saying why. Asked for whenever you
               supply a confidence other than the 0.5 default — a high prior
               nobody can review later is worth little — but never required.
+            description: **topics only**, and supplying it on a fact or an
+              inference is an error. A sentence or two saying what the topic
+              covers, kept beside `content` rather than folded into it, because
+              `content` is the name tags and `find_nodes` resolve by. Worth
+              writing wherever the name alone would not tell a reader what the
+              topic is about. A claim carries no description: its wording is the
+              claim.
             claim_kind: "state" or "event" — **facts only**, and supplying it on
               a topic or inference is an error. Ask what kind of thing is being
               claimed, not how strongly:
@@ -1723,13 +1731,16 @@ async def memory_apply_reflection(
             Each: {topic_id: str, subtopics: [str]}
             subtopics = list of subtopic description strings. Each subtopic
             inherits the parent's metacontext — same content, refined.
-        enrichments: Rewrite a topic's own wording using its associated
-            material. Each: {topic_id: str, new_content: str}.
-            **This replaces the topic's content, which is the name tags and
-            `find_nodes` resolve by.** Rewriting the name of a tag splits it:
-            the next document carrying that tag mints a second topic node, and
-            `find_nodes(tagged_with_topic=...)` returns nothing for the old name.
-            Enrich a topic that states something; leave a tag's name alone.
+        enrichments: Describe a topic from its associated material.
+            Each: {topic_id: str, description: str}.
+            **The description is written beside the topic's name, never over
+            it**, so the name tags and `find_nodes` resolve by stays exactly
+            where it is: the node keeps its id, its content and every edge. A
+            topic node created from a tag is the case this is most worth doing
+            for, since a bare tag name says nothing about what the topic covers.
+            Write what the material shows the topic to be about, in a sentence
+            or two. Replacing a description keeps the previous wording on the
+            node, so nothing is lost by improving one.
         merges: Fuse near-duplicate topics into one combined topic; the sources
             are retired as MERGED history. Each: {source_ids: [str], content: str}.
             A merge is applied only if every pair of sources is at least
@@ -2284,9 +2295,10 @@ async def memory_query_graph(
             one that does not resolve is refused rather than quietly narrowing
             the walk to the metacontexts that do. Scope this walk whenever the
             starting node is shared across worlds: a topic node created from a
-            tag stands in no metacontext and gathers everything tagged with it,
-            so an unscoped walk from one hands you a novel's claims beside real
-            ones. The starting node comes back either way, because you named
+            tag stands in every metacontext it is used from and gathers
+            everything tagged with it, so an unscoped walk from one hands you a
+            novel's claims beside real ones. The starting node comes back
+            either way, because you named
             it; its neighbours are filtered, and the edges returned are only
             those between nodes you were shown.
         expected_graph: The graph you believe you are working in. The active graph
@@ -2483,9 +2495,9 @@ async def memory_find_nodes(
             this graph; one that does not resolve is refused rather than
             quietly narrowing the listing to the metacontexts that do. Scope
             this whenever the node you name is shared across worlds: a topic
-            node created from a tag stands in no metacontext and gathers
-            everything tagged with it, so an unscoped listing mixes a novel's
-            claims with real ones. The filter runs before `limit`, so a full
+            node created from a tag stands in every metacontext it is used from
+            and gathers everything tagged with it, so an unscoped listing mixes
+            a novel's claims with real ones. The filter runs before `limit`, so a full
             page is a full page of what you asked for.
         limit: Maximum nodes to return.
         expected_graph: The graph you believe you are working in. The active graph

@@ -169,7 +169,7 @@ async def assert_a_frame_spelled_graph_migrates_itself(open_store) -> None:
     assert "reframings" not in trail
     assert [entry["because"] for entry in trail["metacontext_reassignments"]] == ["it is fiction"]
 
-    assert await _schema_version(reopened) == 4
+    assert await _schema_version(reopened) == 5
     await reopened.close()
 
     # A second open changes nothing: the marker stops the steps running, and
@@ -180,7 +180,7 @@ async def assert_a_frame_spelled_graph_migrates_itself(open_store) -> None:
     assert await _row(again, ADVISORY_ROW) == advisory
     assert await again.get_warning_overrides() == overrides
     assert await _trail(again, node_id) == trail
-    assert await _schema_version(again) == 4
+    assert await _schema_version(again) == 5
     await again.close()
 
 
@@ -219,7 +219,7 @@ async def test_a_graph_already_at_version_3_still_gets_this_step(embedded_url):
 
     assert (await _row(reopened, DECLARATION_ROW))["kind"] == "metacontext_declaration"
     assert "metacontext_reassignments" in await _trail(reopened, node_id)
-    assert await _schema_version(reopened) == 4
+    assert await _schema_version(reopened) == 5
     await reopened.close()
 
 
@@ -228,7 +228,7 @@ async def test_a_fresh_graph_is_stamped_and_left_alone(embedded_url):
     store = SurrealDBStorage(url=embedded_url)
     await store.connect()
 
-    assert await _schema_version(store) == 4
+    assert await _schema_version(store) == 5
     assert await store.query_decisions() == []
     assert await store.get_warning_overrides() == WarningOverrides()
     await store.close()

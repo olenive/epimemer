@@ -16,7 +16,8 @@ say to the user.
 - **Topic node**: a Topic. Either a paragraph-length statement of a theme, or a
   name that gathers nodes for retrieval.
 - **Topic node created from a tag**: a topic node whose content is a tag name.
-  It asserts nothing, so it stands in no metacontext.
+  It asserts nothing, so it stands in every metacontext it is used from: the
+  metacontexts of the nodes tagged with it, taken together.
 - **Tag**: the string you pass in `tags=[...]`. It resolves, by name, to a
   topic node; the string itself is never a node.
 - **Source node**, or **document node** where it is a `RawDocument`: the node a
@@ -55,6 +56,12 @@ visualisation hub, the process the dashboard connects to.
   0.8}`) when you already know it is unusually consequential or unusually
   disposable. Usually leave it alone: importance is properly judged at reflect
   time, when the surrounding graph exists to judge it against.
+- **A topic entry may carry a `description`** (`{"content": "validity", "description":
+  "When a claim was true, per source."}`), prose saying what the topic covers,
+  beside the `content` the graph joins on. Topics only; it is an error on a fact
+  or an inference, whose wording *is* the claim. Write one wherever the content
+  alone would not tell a reader what the topic is about. A topic left undescribed
+  can be described later, by `apply_reflection(enrichments=[...])`.
 - **Give every fact a `claim_kind`** (`{"content": ..., "claim_kind":
   "state"}`). Facts only; it is an error on a topic or an inference. Ask what
   kind of thing is being claimed:
@@ -116,7 +123,9 @@ change retrieval scope; these do not.
   (document level) or per node via `{"content": ..., "tags": [...]}`. A *tag*
   is the name you pass; it becomes (or reuses, by exact name) a **Topic**, the
   topic node created from that tag, and a `tagged_with_topic` edge links the
-  node to it. So consolidating them is just topic merge. The edge is a
+  node to it. That topic node joins the metacontext you are ingesting into, so
+  a name ends up standing in every metacontext it is used from and a scoped
+  read returns it. So consolidating them is just topic merge. The edge is a
   retrieval index
   for `find_nodes` and carries no evidential weight: `supports` is the edge
   corroboration reads. There are no `key=value` tags: a relationship
@@ -151,9 +160,10 @@ Discovery and lookup:
   tagging, not similarity.
 - **`find_nodes`, `query_graph` and `topic_tree` take `metacontexts` too**,
   meaning what it means on `search`. Pass it whenever the node you name is
-  shared across worlds, which a topic node created from a tag always is: it
-  stands in no metacontext and gathers everything tagged with that name, so
-  an unscoped walk from one hands you a novel's claims beside real ones. The
+  shared across worlds, which a topic node created from a tag often is: it
+  stands in every metacontext it is used from and gathers everything tagged
+  with that name, so an unscoped walk from one hands you a novel's claims
+  beside real ones. The
   node you named comes back either way, because you named it; its neighbours
   are filtered, and the edges returned are only those between nodes you were
   shown. Each of the three labels every node it returns with the
@@ -470,6 +480,16 @@ if useful.
   because}])` where they are two. Two inferences agreeing is **not**
   automatically redundancy; it may be independent support, which is the
   thing corroboration exists to count.
+- **Enrichment describes a topic; it never renames one.** `reflect` nominates
+  topics saying less about themselves than their material does, and you answer
+  with `apply_reflection(enrichments=[{topic_id, description}])`. The
+  description is written beside the topic's `content`, which stays exactly as it
+  is: `content` is the name a tag resolves to at ingest and the name
+  `find_nodes(tagged_with_topic=...)` resolves back, so moving it would split
+  the tag in two. The nomination shows the description the topic carries now, if
+  any; replacing one keeps the earlier wording on the node, so a better sentence
+  costs nothing. Worth writing wherever the name alone would not tell a reader
+  what the topic covers, which is every topic node created from a tag.
 - Apply your decisions with `apply_reflection`. To resolve flagged nodes in
   batch, pass `supersessions=[{old_id, by_id}]`. Resolving a loser
   automatically clears the winner's `contested` and `superseded_candidate`
@@ -600,9 +620,9 @@ the graph learned it.
   metacontexts comes back in `parents_refused` or `topic_merges_refused` with
   nothing written. A merge re-states the survivor's metacontext under your judge:
   its wording is synthesised, so nobody had yet said which world it was
-  about. The union is never taken. A topic node created from a tag is the
-  exception: a tag names something rather than asserting it, so two of them
-  merge whatever metacontext stamps they carry.
+  about. The union is never taken, with one exception: an all-tag merge, where
+  the survivor stands in every metacontext its sources stood in. A name is used
+  from a world rather than claimed about one, so the union is what it means.
 - **Two perspectives disagreeing about one world are not nominated as a
   contradiction**: they share no metacontext, and the sweep skips such pairs.
   Usually right: they coexist, neither claiming the other is wrong. Where

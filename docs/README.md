@@ -21,7 +21,7 @@ every page here.
 |---|---|
 | **metacontext** | The world a claim is made in: real history, a novel, one outlet's reporting. A node **stands in** a metacontext, or is **without a metacontext**. Metacontexts are nodes, and `create_metacontext` makes one |
 | **topic node** | A Topic: a paragraph-length statement of a theme, or a name that gathers nodes for retrieval |
-| **topic node created from a tag** | A topic node whose content is a tag name. It asserts nothing, so it stands in no metacontext, and topic merge exempts it |
+| **topic node created from a tag** | A topic node whose content is a tag name. It asserts nothing, so it stands in every metacontext it is used from: the union of the metacontexts of the nodes tagged with it. Topic merge exempts it from the exact-equality gate for the same reason |
 | **tag** | The string passed in `tags=[...]`. It resolves, by name, to a topic node; the string itself is never a node |
 | **source node** / **document node** | The node a claim came from, reached by a `sourced_from` edge. A document node is a `RawDocument`; a publisher or author is an entity Topic |
 | **`tagged_with_topic` edge** | Node to topic node, written when a tag is applied. A retrieval index for `find_nodes`, carrying no evidential weight |

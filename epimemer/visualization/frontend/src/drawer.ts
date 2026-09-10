@@ -60,6 +60,18 @@ const TAB_OFF =
 export const notRetrievedMarker = (inFocus: boolean, focusOn: boolean): string =>
   focusOn && !inFocus ? "⊘ Not in this retrieval." : "";
 
+/**
+ * A node's detail text: its content, and its description beneath where it has one.
+ *
+ * Labelled rather than run on as a second paragraph, because the drawer renders
+ * one block of text and the two strings are different kinds of thing: the
+ * content is the wording the graph joins on, and the description says what it
+ * covers. For a topic node created from a tag the content is a bare name, so
+ * without the description the drawer has nothing to show at all.
+ */
+export const nodeDetailBody = (content: string, description = ""): string =>
+  description ? `${content}\n\nDescription: ${description}` : content;
+
 export const initDrawer = (elements: DrawerElements): DrawerHandle => {
   const held: Record<DrawerTab, { title: string; body: string } | null> = {
     node: null,

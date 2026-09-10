@@ -633,12 +633,16 @@ class TestReflectionAppliesManyDecisionsAndJournalsEachOne:
         await tools.apply_reflection(
             storage,
             embedder,
-            enrichments=[{"topic_id": topic.id, "new_content": "Vienna, in Austria"}],
+            enrichments=[{"topic_id": topic.id, "description": "The capital of Austria."}],
             judge=CRITIC,
         )
 
         record = await _only(storage, DecisionKind.ENRICHMENT)
-        assert topic.id in record.subject_ids
+        # One subject, and it is the topic that was described. The row named two
+        # while enrichment minted a replacement node; there is no second node to
+        # name now, and a row still carrying one would send a reviewer looking
+        # for a node nothing created.
+        assert record.subject_ids == [topic.id]
 
     async def test_an_archival_sweep_is_one_row(self, storage, embedder):
         """Approving a batch of trivial nodes is a single pass over a single

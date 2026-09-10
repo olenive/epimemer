@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.1] — 2026-09-10
 
 **`link` refuses an edge whose ends are the wrong kinds of node.** Until now it
 checked that the edge type was a real one and that both nodes existed, and
@@ -30,14 +30,75 @@ similarity verdicts and synthesised parents inside `apply_reflection`, each
 refusing in the way it already refuses everything else. Existing edges are left
 alone; nothing rewrites what is already stored.
 
+**A topic node created from a tag now stands in every metacontext it is used
+from.** It used to stand in none, on the grounds that a name asserts nothing and
+so has no world to be about. The first half is right and the conclusion did not
+follow: absence means *nobody spoke for this node* everywhere else here, so
+nothing compared a tag, nothing merged it, and no scoped read returned it. A
+search scoped to `the-real` dropped `design-decisions` along with every
+`tagged_with_topic` edge that reached it, which on one real graph meant hiding
+the most-used topic nodes in the whole thing. `graph_stats.nodes_without_metacontext`
+had no steady state meaning *done* either: `epimemer metacontexts declare`
+stamped every tag it found, and the next ingest minted another one standing
+nowhere.
+
+A tag now takes the union of the metacontexts of the nodes tagged with it, which
+is the worst answer available for a claim and the right one for a name:
+`dev-session-2026-09-08` standing in both a novel's world and `the-real` says
+only that the name was used from both. `store_decomposition` adds its
+metacontext to each tag it resolves, once per tag per call and only where the
+topic node is not already there, and an all-tag merge leaves the survivor
+standing where all its sources stood. Scoped reads return the tags used from the
+scope, `topic_tree` labels them like any other entry, and the count of nodes
+without a metacontext reaches zero and stays there.
+
+Schema version 5 stamps the tags already in a graph when it is opened, from the
+metacontexts their tagged nodes stand in. It adds edges and removes none, so a
+tag a declaration sweep stamped keeps what it was given and gains whatever else
+its uses say; a tag that tags nothing is left alone. That migration is one-way:
+a graph opened by this version holds the new edges, and nothing puts them back.
+
+**Enrichment describes a topic instead of renaming it.** A topic's content is
+the name the graph joins on: `store_decomposition` resolves a tag to a topic
+node by it, and `find_nodes(tagged_with_topic=...)` resolves the same name back.
+Enrichment used to replace that content and retire the original, so an enriched
+tag split in two: documents tagged before it stayed on the first node,
+documents tagged after minted a second, and neither knew about the other. It now
+writes prose into the topic's `description` and leaves the name alone. The node
+keeps its id, its status and every edge it holds, so there is nothing left for a
+guard to refuse and no reason to treat a tag as a special case.
+
+**This is a breaking change for callers of `apply_reflection`.** An enrichment
+entry is `{topic_id, description}`; `new_content` is refused, and the refusal
+says what to send instead. Improving a description keeps the wording it replaced
+in the topic's `description_history`, so nothing is lost by writing a better one.
+
+### Added
+
+- `store_decomposition` takes an optional `description` on a topic entry, so a
+  topic arrives described rather than waiting for a reflect to notice it. Facts
+  and inferences refuse one: a claim's wording is the claim.
+- `epimemer tags repair` puts back the names the old enrichment overwrote. It is
+  for graphs written before this release, prints each sentence beside the name
+  it would restore, and asks before touching anything. The repair is in place:
+  the node keeps its id and its edges, the sentence becomes its description, and
+  the retired original is left as it is. Idempotent, so a second run finds
+  nothing. Like the other write commands here it refuses an embedded store, and
+  an embedded graph has nothing to repair in any case.
+
 ### Changed
 
-- A topic node now carries a `description` beside its content, and the read
-  tools return it. It is empty on every topic: nothing writes one yet. It
-  exists so that saying what a topic covers never has to move the name the
-  graph joins tags on, which is what rewriting the content did. Embeddings are
-  unchanged, because an empty description adds nothing to the text a node is
-  embedded on.
+- A topic node created from a tag is embedded on its name **and** its
+  description where it has one. A bare tag name says nothing about what the
+  topic covers: on one real graph every active tag pair above 0.75 cosine was
+  also above the 0.80 nomination bar, with `dev-session-<date>` pairs at 0.97 to
+  0.99 outscoring `claim-kind` against `claim_kind` at 0.92, and two issue-number
+  tags scored 0.789 bare against 0.253 with descriptions. Every other node still
+  embeds on its content alone, statement topics included: their content is
+  already the prose a description would restate, so joining one there would only
+  move a stored topic away from the same topic arriving undescribed at ingest.
+- `topic_tree` previews a topic's description where it has one.
+- The visualiser's node detail shows a topic's description beneath its content.
 
 ## [0.2.0] — 2026-09-08
 

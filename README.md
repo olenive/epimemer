@@ -216,6 +216,12 @@ the user asked for it, so these acts are reserved for a person at the CLI.
 `epimemer relations backfill` gives every relationship label already in use a
 record, in one go. It is idempotent and never touches a label that has one.
 
+`epimemer tags repair` puts back the names an old enrichment overwrote. It is
+for graphs written before enrichment learned to describe a topic instead of
+renaming it, and it asks about each node before touching it, since only a person
+can say which of two sentences was the tag's name. Idempotent: on a graph that
+never held the damage it finds nothing.
+
 All of these work only against a **served** SurrealDB. An embedded store lives
 inside the server process, so a CLI writing to it would write to a separate
 copy the running server never reads. For the two settings, use

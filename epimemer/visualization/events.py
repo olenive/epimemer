@@ -44,6 +44,12 @@ class NodeView(BaseModel):
     node_id: str
     node_type: str  # "topic" | "fact" | "inference"
     content: str
+    # A topic's prose about what it covers, empty on everything else. Sent
+    # rather than left to the panel to fetch, because the panel has no reader
+    # for a node beyond this view, and for a topic node created from a tag it
+    # is the whole of what the tooltip can say: `issue-53` names nothing a
+    # viewer can act on.
+    description: str = ""
     # "active" | "corrected" | "historical" | "merged" | "archived", plus the
     # legacy "superseded" on graphs written before the supersession split.
     status: str
@@ -152,6 +158,7 @@ def node_to_view(node: EpistemicNode, graph: str) -> NodeView:
         node_id=node.id,
         node_type=_node_type_label(node),
         content=node.content,
+        description=node.description if isinstance(node, Topic) else "",
         status=node.status.value,
         source_id=node.source_id,
         extraction_method=node.extraction_method,

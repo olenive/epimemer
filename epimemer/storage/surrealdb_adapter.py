@@ -52,6 +52,7 @@ from epimemer.storage.bm25 import containment_first
 from epimemer.storage.protocol import (
     EdgeDirection,
     MergeOverrides,
+    StorageBackend,
     WarningOverrides,
     drop_none_values,
     validate_graph_name,
@@ -392,7 +393,7 @@ def _upsert(table: str, *, data: str = "data", uid: str = "uid") -> str:
 # is deletable once no graph older than the release that added it is expected to
 # be opened.
 _SCHEMA_VERSION_RECORD = "schema_version:current"
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 _SCHEMA_VERSION_GET = f"SELECT VALUE version FROM {_SCHEMA_VERSION_RECORD};"
 _SCHEMA_VERSION_SET = f"UPSERT {_SCHEMA_VERSION_RECORD} SET version = $version;"
@@ -636,7 +637,9 @@ async def _move_reassignment_trails(query: Callable[..., Awaitable[Any]]) -> int
     return moved
 
 
-async def _migrate_schema(query: Callable[..., Awaitable[Any]], database: str) -> None:
+async def _migrate_schema(
+    query: Callable[..., Awaitable[Any]], database: str, storage: StorageBackend
+) -> None:
     """Bring one graph up to `_SCHEMA_VERSION`, a step at a time.
 
     Gated on the version marker rather than on the absence of old rows: this
@@ -650,6 +653,12 @@ async def _migrate_schema(query: Callable[..., Awaitable[Any]], database: str) -
     idempotent, so the second run rewrites nothing and the repeated marker write
     stores the same number; a race costs work, not correctness, and needs no
     lock.
+
+    `storage` is this same adapter, handed in so a step can be written against
+    nodes and edges rather than rows. Version 5 is one: what it derives is a
+    walk over `tagged_with_topic` and `has_metacontext`, which the protocol
+    already answers, and passing the backend is what lets the in-memory store
+    run the identical function in tests.
     """
     stored = await query(_SCHEMA_VERSION_GET)
     version = int(stored[0]) if stored and stored[0] is not None else 0
@@ -702,6 +711,25 @@ async def _migrate_schema(query: Callable[..., Awaitable[Any]], database: str) -
                 advisories,
                 trails,
                 int(policy),
+            )
+
+    if version < 5:
+        # A topic node created from a tag used to be written with no metacontext
+        # at all, which left it out of every scoped read along with the
+        # `tagged_with_topic` edges that reached it. It now stands in every
+        # metacontext it is used from, and this puts the tags already in the
+        # graph where their uses say they stand. One way: it adds edges and
+        # removes none, so a tag a declaration stamped keeps what it was given.
+        from epimemer.pipelines.metacontexts import stamp_tag_metacontexts
+
+        stamped = await stamp_tag_metacontexts(storage)
+        if stamped.edges_written:
+            logger.info(
+                "graph %s: put %d topic nodes created from tags in the "
+                "metacontexts they are used from, writing %d edges",
+                database,
+                len(stamped.topic_ids),
+                stamped.edges_written,
             )
 
     await query(_SCHEMA_VERSION_SET, {"version": _SCHEMA_VERSION})
@@ -1044,6 +1072,11 @@ class SurrealDBStorage:
         # back pointed where the caller believes it is.
         self._selected = database
         self._reconnect_lock = asyncio.Lock()
+        # The task rebuilding the connection, while it holds the lock. Schema
+        # migration runs inside `connect()` and version 5 goes through `_call`,
+        # so a socket lost during it would otherwise re-enter `_reconnect` from
+        # the task already holding the lock and wait on itself for ever.
+        self._reconnecting: asyncio.Task | None = None
         self._guard = make_graph_guard()
 
     async def connect(self) -> None:
@@ -1087,14 +1120,20 @@ class SurrealDBStorage:
             self._db = None
             with contextlib.suppress(Exception):
                 await stale.close()
-            await self.connect()
+            self._reconnecting = asyncio.current_task()
+            try:
+                await self.connect()
+            finally:
+                self._reconnecting = None
 
     async def _call(self, operation: Callable[[AsyncSurreal], Awaitable[Any]]) -> Any:
         conn = self.db
         try:
             return await operation(conn)
         except ConnectionClosed, WebSocketException:
-            if is_embedded_url(self._url):
+            # A failure inside the rebuild is a failed connection, and the
+            # caller of `_reconnect` should hear about it rather than deadlock.
+            if is_embedded_url(self._url) or self._reconnecting is asyncio.current_task():
                 raise
             await self._reconnect(conn)
             return await operation(self.db)
@@ -1359,7 +1398,7 @@ class SurrealDBStorage:
 
         # `_selected` rather than `_database`: it names the graph the connection
         # is actually pointed at, which is what these statements will hit.
-        await _migrate_schema(query, self._selected)
+        await _migrate_schema(query, self._selected, self)
 
     @property
     def db(self) -> AsyncSurreal:

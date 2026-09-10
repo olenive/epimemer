@@ -1,9 +1,9 @@
 # Topic descriptions: a name that does not move
 
-**Status: stages 0 and 1 built; the field exists and nothing writes it yet.**
-§6 breaks the rest into stages with the types, call sites and tests each one
-needs; §9 lists what is still open. Where an unbuilt section says "does", read
-"would".
+**Status: stages 0 to 2 built, stage 1.5 measured (§6.1), stage 3 command built,
+repair pending on the real graph.** §6 breaks the work into stages with the
+types, call sites and tests each one needs; §9 lists what is still open. Where
+an unbuilt section says "does", read "would".
 
 `Topic` has one text field. It carries two jobs: the name the graph joins on,
 and the prose that explains what the topic is. This proposes splitting them,
@@ -157,9 +157,11 @@ tuned against content-only vectors. The pair measured in §1.2 is symmetric:
 both texts carry a description. The hazard is asymmetric. A topic arriving at
 ingest has no description and the stored topic it should match has one, so the
 two texts diverge for a reason that has nothing to do with what they mean, and
-topic similarity weakens exactly where it is supposed to catch a duplicate. So
-the direction of the effect is unmeasured, and Stage 1.5 (§6) exists to supply
-the real numbers before Stage 2 flips the embedding.
+topic similarity weakens exactly where it is supposed to catch a duplicate.
+§6.1 measures both directions, and the asymmetric number is what it changes:
+a name and its described self score 0.44 to 0.73, which is why the
+recommendation narrows to joining the description only where `content` is a
+name.
 
 Embedding the name alone is the alternative. It is cheaper and changes no
 existing score, and it gives up the retrieval half of the problem: a topic node
@@ -290,23 +292,86 @@ is the only place the two fields are joined, and every embed call in the
 package either reaches it or is named above as embedding something other than a
 node.
 
-**Stage 1.5, measurement. Stage 2 does not begin until it reports.** Seed a
-dozen topic nodes created from tags with real descriptions and re-run the
-pairwise sweep,
-recording in this document:
+**Stage 1.5, measurement. Measured 2026-09-10**, and §6.1 holds the numbers.
+The question was whether a described topic still matches its own undescribed
+restatement, and the answer splits by what `content` is: a name does not, a
+statement mostly does.
 
-- **Symmetric pairs**, both described. Does the `dev-session` cluster fall
-  below 0.80, and do `claim-kind` and `claim_kind` stay above it?
-- **Asymmetric pairs**, one described and one not, which is the ingest case of
-  §2.3. How far does a described topic move from the same topic undescribed?
+### 6.1 What the descriptions measure
 
-The asymmetric number decides whether the embedding changes at all. If a
-described topic no longer matches its own undescribed restatement, embedding
-the name alone is the answer and the description stays prose for readers.
+Fourteen tag names from one real graph, each given a one-sentence description
+of the kind enrichment would write, embedded on `all-MiniLM-L6-v2` through
+`embedding_text`. Nothing was written to the graph.
+
+**Symmetric pairs, both described.** The sort §1.2 asked for happens:
+
+| Pair | Bare | Described |
+|---|---|---|
+| `dev-session-2026-09-05` · `dev-session-2026-09-06` | 0.994 | 0.443 |
+| `dev-session-2026-08-12` · `dev-session-2026-07-22` | 0.991 | 0.474 |
+| `dev-session-2026-09-05` · `dev-session-2026-07-22` | 0.990 | 0.216 |
+| `dev-session-2026-09-04` · `dev-session-2026-09-05` | 0.972 | 0.422 |
+| `dev-session-2026-09-04` · `dev-session-2026-09-07` | 0.968 | 0.399 |
+| `claim-kind` · `claim_kind` | 0.920 | 0.978 |
+| `reflect` · `reflection` | 0.814 | 0.987 |
+| `provenance` · `retrieval-provenance` | 0.804 | 0.572 |
+
+Every date pair falls from above the 0.92 merge bar to below the 0.80
+nomination bar, and both genuine duplicates rise above 0.97. Of 91 described
+pairs, exactly two clear 0.80, and they are the two that should. The
+`provenance` pair falls because its descriptions say two different things,
+one about `sourced_from` edges and one about the retrieval log, which is the
+description deciding a question the names could not: §1.2 marked it as a
+merge on the strength of the strings alone.
+
+**Asymmetric pairs, a bare name against its own described node**, which is the
+ingest case of §2.3. It fails:
+
+| Name | Self, bare vs described | Nearest described node |
+|---|---|---|
+| `dev-session-2026-09-05` | 0.439 | `dev-session-2026-08-12`, 0.595 |
+| `dev-session-2026-09-07` | 0.471 | `dev-session-2026-08-12`, 0.598 |
+| `reflect` | 0.476 | itself |
+| `metacontext` | 0.498 | itself |
+| `claim-kind` | 0.690 | itself |
+| `retrieval-provenance` | 0.728 | itself |
+
+Across all fourteen the self score runs 0.44 to 0.73, below the nomination bar
+in every case, and six of the fourteen bare names sit nearer some other
+described node than their own. By vector, a name cannot find its described
+self.
+
+**That does not reach ingest, because a tag never resolves by vector.**
+`_tag_topic` and `_resolve_node_reference` resolve by name through `tag_key`,
+so the described node is found by the string and the vector is never asked.
+Where it does reach is `search` on the bare name: a query of `reflect` against
+the described `reflect` scores 0.476 where it scored 1.0 before, while a query
+on what reflect *does* now finds it. That is the trade the field was proposed
+to make, and `find_nodes(tagged_with_topic=...)` keeps the exact-name path.
+
+**Statement topics**, measured on four real ones with a sentence of
+description each: a topic against its own described self scores 0.946, 0.875,
+0.861 and 0.961. All four stay above the 0.80 nomination bar and two fall
+below the 0.92 merge bar. For a statement the description is a small addition
+to a long text, so the shift is small, and still large enough that
+`all_pairs_above_threshold` would refuse to merge a described statement topic
+with its own undescribed restatement half the time.
+
+**Recommendation: join the description into the embedding only where `content`
+is a name.** For a topic node created from a tag the description is the whole
+of its meaning, the symmetric gain is decisive, and the asymmetric loss lands
+on a path that resolves by name anyway. For a statement topic the content
+already carries the meaning, the gain is unmeasured and the loss is a merge
+refusal at the bar. So `embedding_text` returns `content` for every node
+except one created from a tag, where it returns `f"{content}. {description}"`.
+That is one more `created_from_tag` branch, and a principled one: it is the
+name-versus-statement distinction that function exists to draw, not an
+exemption from a rule.
 
 **Stage 2, the half that pays.** Enrichment writes `description` in place,
 keeps the wording it replaced (§3), and re-embeds. `store_decomposition`
-accepts an optional description per topic. Read paths surface it. Tests:
+accepts an optional description per topic. Read paths surface it.
+`embedding_text` takes the §6.1 shape. Tests:
 enrichment leaves `content` byte-identical and the node id unchanged; the
 replaced wording is recoverable; a described topic re-embeds; the §1.1 failure
 is a regression test, tagging a document, enriching the tag, and tagging
@@ -353,8 +418,14 @@ same assertion, unattributed and unversioned.
 
 ## 9. Open
 
-- Where the replaced wording lives when enrichment overwrites a description:
-  the journal payload or the topic's `metadata` (§3).
 - Whether Stage 0 should also cover `get_node_by_content`'s other callers, or
   stay in the two name-resolution sites where the question is *where did this
   name go*.
+
+## 9.1 Settled
+
+- **Where the replaced wording lives when enrichment overwrites a description**
+  (§3): the topic's `metadata`, as an append-only `description_history`. The
+  journal row's payload shape is shared by every caller of `journal`, and a
+  node's own history already has a place on the node, beside
+  `metacontext_reassignments` and the `rejudge` trail.

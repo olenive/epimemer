@@ -323,7 +323,12 @@ export interface GraphPanelHandle {
 export const initGraphPanel = (
   container: HTMLElement,
   router: EventRouter,
-  onNodeSelect: (nodeId: string, content: string, nodeType: string) => void,
+  onNodeSelect: (
+    nodeId: string,
+    content: string,
+    nodeType: string,
+    description: string,
+  ) => void,
   controls?: { layoutSelect: HTMLSelectElement; filterSelect: HTMLSelectElement },
 ): GraphPanelHandle => {
   const state: GraphPanelState = {
@@ -368,6 +373,7 @@ export const initGraphPanel = (
     if (existing.length > 0) {
       existing.data("label", truncate(n.content, 40));
       existing.data("content", n.content);
+      existing.data("description", n.description ?? "");
       existing.data("status", n.status);
       existing.data("opacity", statusOpacity(n.status));
       return;
@@ -379,6 +385,7 @@ export const initGraphPanel = (
         id: n.node_id,
         label: truncate(n.content, 40),
         content: n.content,
+        description: n.description ?? "",
         nodeType: n.node_type,
         status: n.status,
         inFocus: inFocus(n.node_id),
@@ -447,6 +454,7 @@ export const initGraphPanel = (
       node.data("id"),
       node.data("content") ?? "",
       node.data("nodeType") ?? "",
+      node.data("description") ?? "",
     );
   });
 
@@ -466,6 +474,7 @@ export const initGraphPanel = (
           id: n.node_id,
           label: truncate(n.content, 40),
           content: n.content,
+          description: n.description ?? "",
           nodeType: n.node_type,
           status: n.status,
           inFocus: inFocus(n.node_id),

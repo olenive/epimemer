@@ -288,57 +288,43 @@ existing backend, not a new backend, so the full-protocol rule does not apply.
 
 ### Parent synthesis gates an all-tag child set the way topic merge used to
 
-🟡 **Open.** Parent synthesis calls `shared_metacontext_set` over its children, so a
-stamped topic node created from a tag and a bare one as children land in
+🟡 **Open.** Parent synthesis calls `shared_metacontext_set` over its children, so
+two topic nodes created from tags used from different worlds land in
 `parents_refused`.
 Same shape as the merge fix: test whether every child `created_from_tag`, and let
-an all-tag parent inherit the empty metacontext set. Left undone because no synthesis
+an all-tag parent take the union, which is what a name standing in every
+metacontext it is used from means. Left undone because no synthesis
 over topic nodes created from tags has been wanted yet, and the gate refusing is
 the safe
 direction to be wrong in.
 
-### Metacontext stamps on tag-named topic nodes survive a merge
+### Five tags on the real graph are still holding a sentence where their name was
 
-🟡 **Open**, and the reason it matters is a sweep nobody has run yet. Topic nodes
-created from tags
-written before tags were exempt carry a `the-real` stamp from
-`epimemer metacontexts declare`, which stamped every node it found holding
-none; tag
-topics written since carry none. `merge_nodes` migrates a stamped source's
-`has_metacontext` edge onto the survivor, so a stamp outlives the node it was
-on. Harmless while the merge gate exempts them, but it means stripping
-the stamped originals leaves stamps behind on anything already merged. Either
-drop metacontext edges from migration when every source was created from a tag,
-or scope any
-cleanup to survivors as well as originals.
+🟡 **Open, and the command that fixes it is built.** An enrichment pass, back
+when enrichment replaced a topic's content, rewrote six topic nodes created from
+tags into sentences. `issue-46` has been repaired by hand; `issue-16`,
+`issue-52`, `issue-53`, `issue-61` and `issue-62` are still sentences carrying up
+to 107 `tagged_with_topic` edges each, with the bare name left on a `CORRECTED`
+node holding none of them.
 
-### A tag name resolves only while its node is active, so a merge splits the tag
+Nothing is being lost while it stands: name resolution follows the retirement
+forward, so `find_nodes(tagged_with_topic="issue-53")` answers and the next
+document tagged `issue-53` reuses the same node. What is wrong is what a reader
+sees, since `search`, `topic_tree` and the visualisation all show the sentence
+where a tag's name should be.
 
-🔴 **Open, and the same defect has arrived twice.** `_tag_topic` and
-`_resolve_node_reference` both resolve a tag through `get_node_by_content`, which
-filters to ACTIVE. A tag whose node has been retired therefore resolves to
-nothing, whatever retired it, and the next document carrying that name mints a
-second topic node while `find_nodes(tagged_with_topic=...)` returns an empty list for
-the old one.
-
-Enrichment has done this (it supersedes the tag's topic node with an enriched
-copy).
-Topic merge can do it too: a merge retires its sources as `MERGED` and names
-the survivor whatever the agent chose, so merging `design decisions` into
-`design-decisions` strands the first name. Exempting tag-named topic nodes from
-the merge
-metacontext gate made such a merge easier to perform.
-
-The fix is on the read side, and it closes both doors plus any rename written
-later: resolve a `MERGED` or `CORRECTED` hit forward through `merged_into` or
-`superseded_by` to the live successor. `TOPIC_DESCRIPTIONS.md` §2.2 carries the
-reasoning and §6 has it as Stage 0.
+Run `epimemer tags repair --graph <graph> --judge <you>` against the served
+store. It prints each sentence beside the name it would restore and asks; the
+repair keeps the node's id and every edge, and the sentence becomes the node's
+description, which is what it should have been written into. Verification is
+`find_nodes(tagged_with_topic=<name>)` returning the expected count for each.
 
 ### Tag names embed so alike that reflect can nominate two unrelated tags
 
-🔴 **Open, and live on real graphs.** A topic node created from a tag is embedded
-on its name
-alone, so tags built from one template score as near-duplicates however
+🟡 **Open until somebody writes the descriptions.** A topic node created from a
+tag is embedded on its name and its description, and every one of those
+descriptions is still empty, so today they are all embedded on their names
+alone. Tags built from one template then score as near-duplicates however
 different their subjects. On one real graph, every pair above 0.75 cosine was
 also above the 0.80 nomination bar (`pipelines/reflection/review.py`), and most
 of them were `dev-session-<date>` pairs at 0.97 to 0.99: different days of
@@ -348,10 +334,12 @@ higher than the pairs that should, so a reviewer working from the nomination
 list has no signal to tell them apart.
 
 The nominations are proposals rather than merges, so nothing is lost until a
-run accepts one without checking the dates. `TOPIC_DESCRIPTIONS.md` proposes
-the fix, embedding a description alongside the name, and its §1.2 carries the
-measurements. Until that ships, treat any nominated pair of `dev-session` tags
-as a false positive.
+run accepts one without checking the dates. The mechanism that separates them
+has shipped: describe a tag through `apply_reflection(enrichments=[...])` and
+its vector moves onto what it covers. Two issue-number tags scored 0.789 bare
+and 0.253 with descriptions; `TOPIC_DESCRIPTIONS.md` §1.2 carries the
+measurements. Until the `dev-session` tags are described, treat any nominated
+pair of them as a false positive.
 
 ---
 

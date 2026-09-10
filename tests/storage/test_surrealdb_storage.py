@@ -830,6 +830,40 @@ class TestReconnection:
         assert results == [None] * 5
         assert len(built) == 2, f"{len(built) - 1} connections built for one drop"
 
+    async def test_a_drop_during_the_rebuilds_own_migration_raises_instead_of_hanging(
+        self, monkeypatch
+    ):
+        """Schema version 5 walks nodes and edges through `_call` inside `connect()`.
+
+        A socket lost there, on a `connect()` that `_reconnect` itself started,
+        would re-enter `_reconnect` from the task already holding its lock and
+        wait on itself for ever. The caller has to get the error instead.
+        """
+        built: list = []
+        store = await self._connected(monkeypatch, built, "ws://127.0.0.1:8000/rpc")
+        built[0].fails = True
+
+        original_build = surrealdb_adapter.AsyncSurreal
+
+        def build_then_die_in_migration(url: str):
+            fake = original_build(url)
+            healthy_query = fake.query
+
+            async def query(sql: str, params: dict | None = None) -> list:
+                # The version 5 step reading the graph's topics through `query_nodes`.
+                if sql.startswith("SELECT * FROM topic WHERE status"):
+                    raise ConnectionClosedError(None, None)
+                return await healthy_query(sql, params)
+
+            fake.query = query
+            return fake
+
+        monkeypatch.setattr(surrealdb_adapter, "AsyncSurreal", build_then_die_in_migration)
+
+        with pytest.raises(ConnectionClosedError):
+            await asyncio.wait_for(store.get_node("anything"), timeout=5)
+        assert len(built) == 2, "the failed rebuild was itself rebuilt"
+
 
 class TestFullTextDialectAndIdfFloor:
     """Where the two SurrealDBs this adapter drives do not agree.

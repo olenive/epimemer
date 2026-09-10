@@ -17,6 +17,7 @@ import pytest
 
 from epimemer.core.types import Fact, Inference, Topic
 from epimemer.pipelines.embedding_text import embedding_text
+from epimemer.pipelines.metacontexts import TAG_EXTRACTION_METHOD
 
 PACKAGE = Path(__file__).resolve().parents[2] / "epimemer"
 THE_ONE_PLACE = PACKAGE / "pipelines" / "embedding_text.py"
@@ -58,7 +59,7 @@ def _embed_calls() -> list[tuple[Path, ast.Call, str]]:
 
 
 class TestAnUndescribedTopicEmbedsAsItAlwaysHas:
-    """Nothing writes a description yet, so nothing may move a vector yet."""
+    """A topic nobody has described embeds exactly as it did before the field."""
 
     def test_a_topic_with_no_description_returns_its_content(self):
         topic = Topic(content="retrieval-provenance", source_id=None)
@@ -87,7 +88,7 @@ class TestAnUndescribedTopicEmbedsAsItAlwaysHas:
         assert embedding_text(inference) == inference.content
 
 
-class TestADescribedTopicJoinsTheTwo:
+class TestADescribedTopicNodeFromATagJoinsTheTwo:
     """The definition, stated once here so a change to it has to be deliberate."""
 
     def test_the_description_follows_the_name_as_a_second_sentence(self):
@@ -95,9 +96,45 @@ class TestADescribedTopicJoinsTheTwo:
             content="reflect",
             description="The consolidation sweep over the graph.",
             source_id=None,
+            extraction_method=TAG_EXTRACTION_METHOD,
         )
 
         assert embedding_text(topic) == "reflect. The consolidation sweep over the graph."
+
+    def test_an_undescribed_tag_is_unmoved(self):
+        topic = Topic(content="reflect", source_id=None, extraction_method=TAG_EXTRACTION_METHOD)
+
+        assert embedding_text(topic) == "reflect"
+
+
+class TestADescribedStatementTopicEmbedsOnItsContentAlone:
+    """A statement topic's content is already the prose a description restates.
+
+    Joining one there would move a stored topic away from the same topic
+    arriving undescribed at ingest, which is exactly where topic similarity is
+    meant to catch a duplicate: the asymmetric hazard, paid for nothing, since
+    the content already says what the topic covers.
+    """
+
+    def test_a_described_statement_topic_returns_its_content(self):
+        topic = Topic(
+            content="How the graph consolidates itself over repeated passes",
+            description="Covers reflect, merge and archival.",
+            source_id="seg-1",
+        )
+
+        assert embedding_text(topic) == topic.content
+
+    def test_a_described_parent_topic_returns_its_content(self):
+        """Nothing synthesised by reflect joins either: only tags do."""
+        topic = Topic(
+            content="Consolidation",
+            description="Covers reflect, merge and archival.",
+            source_id="seg-1",
+            extraction_method="agent:parent_synthesis",
+        )
+
+        assert embedding_text(topic) == topic.content
 
 
 class TestEveryEmbedSiteReachesTheFunction:

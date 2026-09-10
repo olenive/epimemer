@@ -171,7 +171,7 @@ class TestNothingIsWrittenBeforeTheBatchIsChecked:
                 storage,
                 embedding_provider,
                 splits=[{"topic_id": "t1"}],  # no subtopics
-                enrichments=[{"new_content": "better"}],  # no topic_id
+                enrichments=[{"description": "better"}],  # no topic_id
                 judgments=[{"node_id": "n1", "direction": "up"}],  # no reason
             )
         message = str(caught.value)
@@ -214,7 +214,7 @@ class TestRefusableJudgmentsStillCostOneEntry:
         result, _ = await tools.apply_reflection(
             storage,
             embedding_provider,
-            enrichments=[{"topic_id": "nope", "new_content": "x"}],
+            enrichments=[{"topic_id": "nope", "description": "x"}],
             judgments=[{"node_id": "nope", "direction": "up", "reason": "x"}],
         )
         assert result["topics_enriched"] == 0
@@ -303,6 +303,31 @@ class TestWhatCountsAsMalformed:
                 == []
             )
 
+    def test_an_enrichment_still_sending_new_content_is_named_the_new_key(self):
+        """The key that used to rewrite a topic's name, and what to send instead.
+
+        A bare *'description' is required* would have the agent rename the key
+        and send the same sentence, which is the wording it wanted the name
+        replaced by, which is the defect the shape change exists to end.
+        """
+        found = malformed_entries(
+            {"enrichments": [{"topic_id": "t", "new_content": "a fuller sentence"}]}
+        )
+
+        assert len(found) == 2
+        problems = " ".join(item.problem for item in found)
+        assert "'new_content' is no longer accepted" in problems
+        assert "description" in problems
+
+    def test_an_enrichment_sending_both_spellings_is_still_refused(self):
+        """Sending both is an author who has not been told the write changed."""
+        found = malformed_entries(
+            {"enrichments": [{"topic_id": "t", "new_content": "x", "description": "y"}]}
+        )
+
+        assert len(found) == 1
+        assert found[0].problem.startswith("'new_content' is no longer accepted")
+
     def test_an_archival_that_is_not_an_id(self):
         found = malformed_entries({"archivals": [{"node_id": "a"}]})
         assert found[0].problem == "entry is dict, not a node id"
@@ -327,7 +352,7 @@ def _sample_entry(field: str) -> dict:
         "relation_verdicts": {"pair": ["a", "b"]},
         "parents": {"children_ids": ["a", "b"], "content": "c"},
         "splits": {"topic_id": "t", "subtopics": ["a"]},
-        "enrichments": {"topic_id": "t", "new_content": "c"},
+        "enrichments": {"topic_id": "t", "description": "c"},
         "merges": {"source_ids": ["a", "b"], "content": "c"},
         "supersessions": {"old_id": "a", "by_id": "b", "because": "it_was_wrong"},
         "judgments": {"node_id": "n", "direction": "up", "reason": "r"},

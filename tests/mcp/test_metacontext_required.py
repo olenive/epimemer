@@ -454,9 +454,11 @@ class TestTopicMergeGetsTheGateFactsAlreadyHad:
         assert result["topic_merges_refused"] == []
 
     async def test_tags_are_exempt_from_the_gate(self, storage, embedder):
-        """A tag asserts nothing, so the gate has no question to ask of it.
+        """Names take the union, so the gate has no question to ask of them.
 
-        A tag and its own plural merge even where one carries a metacontext stamp.
+        A tag and its own plural merge even where they stand in different
+        metacontexts: each was used from whatever worlds its nodes were claimed
+        in, and the survivor is used from all of them.
         """
         twin = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         a = await _topic(storage, embedder, "metacontext", vector=twin, tag=True)
@@ -482,9 +484,9 @@ class TestTopicMergeGetsTheGateFactsAlreadyHad:
     async def test_a_merged_tag_is_still_a_tag(self, storage, embedder):
         """Merging names yields a name, so the survivor merges again.
 
-        The survivor carries the metacontext stamp of whichever source had one. It
-        has to stay recognisable as a tag, or that stamp is compared against
-        the next bare tag and the merge is refused.
+        The survivor stands in the union of what its sources stood in. It has to
+        stay recognisable as a tag, or that set is compared for exact equality
+        against the next tag's and the merge is refused.
         """
         twin = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         a = await _topic(storage, embedder, "metacontext", vector=twin, tag=True)

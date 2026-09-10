@@ -147,7 +147,7 @@ async def assert_a_double_written_graph_migrates_itself(open_store) -> None:
     assert "recovered from review_confirmed edges" in orphaned.certainty_basis
 
     assert await _confirmed_edge_count(reopened) == 0
-    assert await _schema_version(reopened) == 4
+    assert await _schema_version(reopened) == 5
 
     # And the nominator reads all three back, which is what the verdict is for.
     from epimemer.pipelines.reflection.retention import confirmed_reasons_for
@@ -169,7 +169,7 @@ async def assert_a_double_written_graph_migrates_itself(open_store) -> None:
     assert await _retention_row(again, ids["kept_for_itself"]) == itself
     assert await _retention_row(again, ids["orphaned"]) == orphaned
     assert await _confirmed_edge_count(again) == 0
-    assert await _schema_version(again) == 4
+    assert await _schema_version(again) == 5
     await again.close()
 
 
@@ -211,7 +211,7 @@ async def test_a_graph_already_at_version_2_still_gets_this_step(embedded_url):
     )
     assert (await _retention_row(reopened, ids["orphaned"])).covers == []
     assert await _confirmed_edge_count(reopened) == 0
-    assert await _schema_version(reopened) == 4
+    assert await _schema_version(reopened) == 5
     await reopened.close()
 
 
@@ -242,7 +242,7 @@ async def test_a_fresh_graph_is_stamped_and_left_alone(embedded_url):
     store = SurrealDBStorage(url=embedded_url)
     await store.connect()
 
-    assert await _schema_version(store) == 4
+    assert await _schema_version(store) == 5
     assert await store.query_decisions() == []
     assert await _confirmed_edge_count(store) == 0
     await store.close()

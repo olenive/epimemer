@@ -63,7 +63,7 @@ REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
     "relation_verdicts": ("pair",),
     "parents": ("children_ids", "content"),
     "splits": ("topic_id", "subtopics"),
-    "enrichments": ("topic_id", "new_content"),
+    "enrichments": ("topic_id", "description"),
     "merges": ("source_ids", "content"),
     "supersessions": ("old_id", "by_id", "because"),
     "judgments": ("node_id", "direction", "reason"),
@@ -95,6 +95,23 @@ LIST_VALUED: dict[str, tuple[str, ...]] = {
 # Lists whose entries are bare node ids rather than objects.
 ID_VALUED: tuple[str, ...] = ("archivals",)
 
+# A key a field used to take, and what to send instead. Named rather than left
+# to the generic *'description' is required*, because the shape change came with
+# a change of meaning: an agent sending `new_content` is asking for the topic's
+# name to be rewritten, which is the defect that split a tag in two, and being
+# told a key is missing would have it rename the key and send the same sentence.
+RETIRED_KEYS: dict[str, dict[str, str]] = {
+    "enrichments": {
+        "new_content": (
+            "'new_content' is no longer accepted: enrichment writes "
+            "'description' beside the topic's name and never replaces the name "
+            "itself, which is what `find_nodes` and the next document's tags "
+            "resolve by. Send {topic_id, description} with prose saying what the "
+            "topic covers."
+        )
+    },
+}
+
 
 def _is_list(value: object) -> bool:
     return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
@@ -109,10 +126,14 @@ def _entry_problems(field: str, entry: object) -> list[str]:
             f"{', '.join(repr(key) for key in required)}"
         ]
 
+    retired = [reason for key, reason in RETIRED_KEYS.get(field, {}).items() if key in entry]
     missing = [f"{key!r} is required" for key in required if key not in entry]
-    if missing:
+    if retired or missing:
         # Return here: every check below indexes a key that has to be present.
-        return missing
+        # A retired key is reported even where the entry is otherwise well
+        # formed, since sending both spellings is an entry whose author has not
+        # yet been told the write changed.
+        return [*retired, *missing]
 
     problems: list[str] = []
     for key in LIST_VALUED.get(field, ()):

@@ -1,11 +1,14 @@
 """The `epimemer` command: what only a user may do.
 
-One subcommand group today — `agents` — and it exists because of a rule rather
-than for convenience. Approving an agent id is the act that makes review
-provable (`dev-docs/REVIEW_MODE.md` §2.2), so no MCP tool may perform it: a tool
-the agent can call cannot establish that the *user* called it. The two channels
-that terminate at a person are `ctx.elicit`, which the server raises in-band,
-and this command, which the agent cannot run.
+Every group here exists because of a rule rather than for convenience. Approving
+an agent id is the act that makes review provable (`dev-docs/REVIEW_MODE.md`
+§2.2), so no MCP tool may perform it: a tool the agent can call cannot establish
+that the *user* called it. The two channels that terminate at a person are
+`ctx.elicit`, which the server raises in-band, and this command, which the agent
+cannot run. `metacontexts declare` and `tags repair` are here on the same
+grounds: both state something about a graph's past that nothing in the graph can
+derive, and an agent asserting it about its own writes would be marking its own
+homework.
 
 **It does not work against every backend, and that is checked rather than
 hoped.** Approvals live in per-graph settings *inside the storage backend*, and
@@ -19,13 +22,17 @@ and names `EPIMEMER_APPROVED_AGENTS`, which the server reads at connect.
 import argparse
 import asyncio
 import sys
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
     QUARANTINE_METACONTEXT_ID,
+    Agent,
+    DecisionKind,
     JudgeRef,
     RelationLabel,
+    Topic,
     agent_name,
     current_description,
     live_agents,
@@ -91,6 +98,18 @@ def _embedded_advice(reason: str, agent_id: str | None, action: str) -> str:
             f"inside the server process, so start again with a fresh one and "
             f"every node will name its metacontext at ingest. This command is "
             f"for long-lived graphs on a served store."
+        )
+    if action == "repair":
+        # The damage this repairs was done by an enrichment on a long-lived
+        # graph, and an embedded one does not live long enough to hold any:
+        # enrichment cannot reach a name any more, so a graph started since is
+        # not a graph waiting to be fixed.
+        return (
+            f"{reason}\n\n"
+            f"An embedded graph has nothing to repair: it is rebuilt with each "
+            f"server process, and enrichment writes a description beside a "
+            f"topic's name rather than over it, so no name can be displaced in "
+            f"one. This command is for long-lived graphs on a served store."
         )
     if action == "require":
         return (
@@ -308,6 +327,42 @@ async def _backfill_relations(storage: StorageBackend) -> str:
     )
 
 
+def _judge_ref(agents: Sequence[Agent], handle: str | None) -> JudgeRef | None:
+    """The judge a `--judge` handle names, or None when none was given.
+
+    A handle nothing answers to is recorded as itself, which is what seeding a
+    judge that has not claimed yet has always meant here.
+    """
+    if handle is None:
+        return None
+    agent = resolve_agent(agents, handle)
+    return JudgeRef(
+        agent_id=agent.id if agent is not None else handle.strip(),
+        digest=(
+            version.digest if agent is not None and (version := current_description(agent)) else ""
+        ),
+    )
+
+
+def _confirmed(prompt: str) -> bool:
+    """Ask on stdin, and read *no stdin at all* as a no.
+
+    A shell that hands the command no terminal, a `!` line in an agent harness
+    for one, raises `EOFError` inside `input()`. A write command must not die
+    half-way through its prompts on that; it treats the missing answer as the
+    default one and says how to answer without a terminal.
+    """
+    try:
+        answer = input(prompt)
+    except EOFError:
+        print(
+            "\nNo terminal to answer on: treating that as no. "
+            "Pass --yes to confirm without a prompt."
+        )
+        return False
+    return answer.strip().lower() in ("y", "yes")
+
+
 async def _declare_metacontext(
     storage: StorageBackend, metacontext: str, handle: str | None, assume_yes: bool
 ) -> str:
@@ -333,25 +388,14 @@ async def _declare_metacontext(
     if without_metacontext == 0:
         return f"Graph '{graph}': every node already names a metacontext. Nothing to declare."
 
-    judge = None
-    if handle is not None:
-        agent = resolve_agent(await storage.list_agents(), handle)
-        judge = JudgeRef(
-            agent_id=agent.id if agent is not None else handle.strip(),
-            digest=(
-                version.digest
-                if agent is not None and (version := current_description(agent))
-                else ""
-            ),
-        )
+    judge = _judge_ref(await storage.list_agents(), handle)
 
     if not assume_yes:
-        answer = input(
+        if not _confirmed(
             f"Declare {without_metacontext} node(s) with no metacontext in "
             f"graph '{graph}' as '{metacontext}'? This states that they were "
             f"always claims in that metacontext. [y/N] "
-        )
-        if answer.strip().lower() not in ("y", "yes"):
+        ):
             return f"Nothing declared in graph '{graph}'."
 
     # The metacontext is created here when it is missing, and only here. The
@@ -378,6 +422,86 @@ async def _declare_metacontext(
         f"One journal row records the sweep. Check completeness with "
         f"graph_stats: nodes_without_metacontext should now be 0."
     )
+
+
+async def _repair_tag_names(
+    storage: StorageBackend,
+    config: ServerConfig,
+    handle: str | None,
+    assume_yes: bool,
+) -> str:
+    """Put back the names an old enrichment overwrote on topic nodes from tags.
+
+    **A user's act, for the reason `declare` is one.** The repair reads a
+    sentence an agent wrote and asserts that the words in front of it are a tag's
+    name rather than what the tag is about. Nothing derives that: the two
+    wordings are both prose in the same field, and only a person who knows what
+    the tag was for can say which is which. So it prints both and asks, one node
+    at a time.
+
+    Nothing is created and nothing is retired. Each repaired node keeps its id
+    and every edge, so the count of nodes carrying the tag is the same before and
+    after; what changes is that the name resolves to the node holding them again.
+    """
+    from epimemer.mcp.config import create_embedding_provider
+    from epimemer.mcp.tools import journal
+    from epimemer.pipelines.reflection.tag_name_repair import (
+        displaced_tag_names,
+        repaired,
+    )
+    from epimemer.pipelines.reflection.topic_enrichment import reembedded
+
+    graph = storage.current_database
+    displaced = await displaced_tag_names(storage)
+    if not displaced:
+        return (
+            f"Graph '{graph}': no topic node created from a tag is holding a "
+            f"name an enrichment overwrote. Nothing to repair."
+        )
+
+    judge = _judge_ref(await storage.list_agents(), handle)
+    embedding_provider = create_embedding_provider(config)
+
+    restored: list[str] = []
+    skipped: list[str] = []
+    for entry in displaced:
+        if not assume_yes:
+            if not _confirmed(
+                f"\n{entry.topic_id}\n"
+                f"  now reads: {entry.displaced_by}\n"
+                f"  restore name: {entry.name}\n"
+                f"  the sentence becomes this topic's description; "
+                f"{entry.tagged_nodes} node(s) tagged with it keep their edges.\n"
+                f"Repair it? [y/N] "
+            ):
+                skipped.append(entry.name)
+                continue
+
+        topic = await storage.get_node(entry.topic_id)
+        if not isinstance(topic, Topic):
+            skipped.append(entry.name)
+            continue
+        fixed = repaired(topic, entry, judge=judge)
+        await storage.store_node(fixed)
+        await storage.store_embedding(await reembedded(fixed, storage, embedding_provider))
+        await journal(storage, DecisionKind.NAME_RESTORATION, [fixed.id], judge=judge)
+        restored.append(entry.name)
+
+    by = f" by '{handle}'" if handle else " with no judge recorded"
+    lines = [
+        f"Graph '{graph}': restored {len(restored)} name(s){by}"
+        + (f", left {len(skipped)} alone" if skipped else "")
+        + "."
+    ]
+    lines.extend(f"  restored {name}" for name in restored)
+    lines.extend(f"  skipped  {name}" for name in skipped)
+    if restored:
+        lines.append(
+            "Each repaired node kept its id and its edges. Check one with "
+            "find_nodes(tagged_with_topic=<name>): it should return the nodes "
+            "that were tagged before the enrichment and the ones tagged since."
+        )
+    return "\n".join(lines)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -460,6 +584,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     declare.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
     declare.add_argument("--graph", help="Graph to write in (default: the configured one).")
+
+    tags = sub.add_parser("tags", help="Topic nodes created from tags.")
+    tags_sub = tags.add_subparsers(dest="action", required=True)
+    repair = tags_sub.add_parser(
+        "repair",
+        help=(
+            "Put back the names an old enrichment overwrote on topic nodes "
+            "created from tags. Asks per node; idempotent."
+        ),
+    )
+    repair.add_argument(
+        "--judge",
+        help=(
+            "Judge to record as having restored the names. Omitted, the rows "
+            "carry no judge, which reads as nobody having said so."
+        ),
+    )
+    repair.add_argument(
+        "--yes",
+        action="store_true",
+        help="Repair every candidate without asking about each one.",
+    )
+    repair.add_argument("--graph", help="Graph to write in (default: the configured one).")
     return parser
 
 
@@ -477,7 +624,7 @@ def main(argv: list[str] | None = None) -> int:
 
     config = load_config()
 
-    if args.action in ("confirm", "require", "rename", "backfill", "declare"):
+    if args.action in ("confirm", "require", "rename", "backfill", "declare", "repair"):
         unreachable = unreachable_store(config)
         if unreachable is not None:
             print(
@@ -493,6 +640,8 @@ def main(argv: list[str] | None = None) -> int:
             run = _backfill_relations
         elif args.action == "declare":
             run = lambda s: _declare_metacontext(s, args.metacontext, args.judge, args.yes)
+        elif args.action == "repair":
+            run = lambda s: _repair_tag_names(s, config, args.judge, args.yes)
         else:
             run = lambda s: _require(s, args.setting, config.require_judge)
         print(asyncio.run(_with_storage(config, args.graph, run)))

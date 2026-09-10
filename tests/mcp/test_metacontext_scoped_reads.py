@@ -1,10 +1,10 @@
 """A scoped read must not leak another metacontext through a shared topic node.
 
-A topic node created from a tag asserts nothing, so it stands in no
-metacontext, and every node tagged with that name points at the same one
-whatever world it was claimed in. That makes it a bridge: a fact from a novel
-and a fact about real history are one hop apart, through a node neither of them
-is a claim about.
+One topic node can be pointed at from several worlds: every node tagged with a
+name points at the same topic node whatever world it was claimed in, and a
+topic node written before anybody named a metacontext stands in none. Either
+way it is a bridge: a fact from a novel and a fact about real history are one
+hop apart, through a node neither of them is a claim about.
 
 Filtering the node list is not enough on its own. `search` used to return
 `query_result.edges` and `query_result.segments` untouched, so a scoped search
@@ -84,7 +84,7 @@ class TwoWorlds(BaseModel):
 
 
 async def _two_worlds(storage, embedding_provider, query: str) -> TwoWorlds:
-    """Two facts sharing one topic node created from a tag, one world each.
+    """Two facts sharing one topic node that stands in no metacontext, one world each.
 
     Both facts carry the query's own vector, so the vector arm returns both and
     the metacontext filter is the only thing deciding what comes back. A third
@@ -217,16 +217,16 @@ class TestQueryGraphLabelsAndScopes:
         assert {world.real_fact.id, world.fiction_fact.id} <= by_id.keys()
         assert by_id[world.real_fact.id]["metacontexts"] == ["The Real"]
         assert by_id[world.fiction_fact.id]["metacontexts"] == ["The novel"]
-        # The topic node created from a tag asserts nothing, so it stands in no
-        # metacontext and carries no label rather than an empty one.
+        # The shared topic node stands in no metacontext, so it carries no
+        # label rather than an empty one.
         assert "metacontexts" not in by_id[world.shared.id]
 
     async def test_scoped_keeps_the_seed_and_drops_the_other_world(
         self, storage, embedding_provider
     ):
         """The seed comes back whether or not it stands in a named metacontext,
-        because the caller named it — which is what makes a topic node created
-        from a tag usable as a starting point at all."""
+        because the caller named it — which is what makes a topic node standing
+        outside the scope usable as a starting point at all."""
         world = await _two_worlds(storage, embedding_provider, "anarres")
 
         result, _ = await query_graph(

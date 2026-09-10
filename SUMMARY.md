@@ -116,7 +116,9 @@ its own facts, relate to siblings, and sit in a metacontext:
   **Topic**. "Which nodes came from X" is a traversal (see `find_nodes`).
 - **A tag becomes a topic node**: a *tag* is the name passed in `tags=`. It
   resolves, by exact name, to a Topic, the topic node created from that tag,
-  and a `tagged_with_topic` edge links the node to it. Consolidating tags *is*
+  and a `tagged_with_topic` edge links the node to it. That topic node joins
+  the ingest's metacontext, so a name stands in every metacontext it is used
+  from. Consolidating tags *is*
   topic merge. That edge is a retrieval index and carries no evidential
   weight: `supports` is the edge corroboration reads, and nothing weighs this
   one.
@@ -281,14 +283,16 @@ take part in search like other nodes.
   metacontext, which is a coherent question; that is why the read side is
   optional where ingest is not. A scoped read scopes the whole response, edges
   and matched passages included, because a topic node created from a tag
-  stands in no metacontext and bridges every world it was applied in.
+  stands in every metacontext it is used from and bridges each of them.
 - **Nothing invents a metacontext on a node's behalf**: splits inherit what the
   parent states; a synthesised parent inherits the one set its children all
   stand in and is refused when they differ; a merge re-states the survivor's
   metacontext under the merging agent's judge, because the survivor's content is
   synthesised and no source's framing was made about that wording. Union is
-  never the answer: one node asserted in two worlds is the worst outcome
-  available.
+  never the answer for a claim: one node asserted in two worlds is the worst
+  outcome available. A name is the exception, and the only one: a topic node
+  created from a tag stands in the union of the metacontexts it is used from,
+  because it asserts nothing in any of them.
 - **A stated metacontext must exist in the graph you are in**: ids are per
   graph, and `store_decomposition` and `search` both refuse one that resolves
   nowhere, every id in a search's list included.

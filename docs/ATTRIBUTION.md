@@ -167,10 +167,11 @@ thing the decision landed on:
 | `restore`, `reverse_merge` | the same episode, as `restored_by`: a separate field, because returning is a separate decision |
 | `record_contradiction`, `record_variant`, `link`, `apply_reflection`'s similarity verdicts | the edge, as `judged_by` |
 | `judge_importance` | the value signal, as the latest judge; every entry in the node's reinforcement trail names its own |
-| content written during reflect (synthesised parents, splits, enrichments, merge survivors) and `update`'s replacement | the new node, as `judged_by` |
+| content written during reflect (synthesised parents, splits, merge survivors) and `update`'s replacement | the new node, as `judged_by` |
 | `segment`, `store_decomposition` | every node and edge the ingest creates, as `judged_by`, including the priors `claim_kind`, `confidence` and `importance`, which nothing downstream re-makes |
 | `link` coining a relation label for the first time | the label's record, as `judged_by`: **the coiner, never the describer**. `describe_relation`, a verdict, or a backfill creates a record carrying no judge at all, since none of them is claiming to have introduced the word |
 | `reassign_metacontext`, `correct_interval`, `describe_relation` | nothing on the node or edge; each journals its own row instead, because the thing being revised was somebody else's judgment and overwriting their name would hide that |
+| `apply_reflection`'s enrichments | its own journal row; where the enrichment replaced an earlier description, that wording's `description_history` entry too. The node's `judged_by` names whoever wrote its **name**, which an enrichment does not touch, so it stays where it is |
 
 Three things follow that are easy to get wrong:
 

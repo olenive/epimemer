@@ -644,6 +644,11 @@ class DecompositionEntry(BaseModel):
     """
 
     content: str
+    # Prose saying what a topic covers, beside the name the graph joins on.
+    # Topics only; supplying it on a fact or an inference is refused rather than
+    # dropped, on `claim_kind`'s grounds. Here as well as at reflect so a topic
+    # can arrive described instead of waiting for a sweep to notice it.
+    description: str | None = None
     tags: list[str] = Field(default_factory=list)
     importance: float | None = None
     confidence: float | None = None
@@ -722,6 +727,29 @@ def _claim_kind_field(entry: DecompositionEntry, cls: type) -> dict:
             f"than on a kind of its own."
         )
     return {"claim_kind": entry.claim_kind}
+
+
+def _description_field(entry: DecompositionEntry, cls: type) -> dict:
+    """`description` as a constructor keyword, refused where there is no field.
+
+    Mirrors `_claim_kind_field`, and raises for the same reason: prose written
+    into a field that does not exist is a judgment the agent believes it made.
+    Only topics carry one. A claim's wording *is* the claim, and a second field
+    beside it would be somewhere to put a softer version of the same assertion,
+    unattributed and unversioned.
+    """
+    if entry.description is None:
+        return {}
+    if cls is not Topic:
+        raise ValueError(
+            f"description was supplied on a {cls.__name__.lower()} "
+            f"({entry.content[:60]!r}). Only topics carry one: a topic's content "
+            f"is a name and the description says what it covers, while a fact or "
+            f"an inference *is* its wording, so a second field beside it would "
+            f"be a softer restatement of the claim that nothing attributes or "
+            f"versions."
+        )
+    return {"description": entry.description}
 
 
 EXTRACTED_TIMELINE_NAME = "Extracted"
@@ -911,9 +939,11 @@ async def store_decomposition(
             `confidence_basis` records why a supplied one was chosen. A fact may
             also carry `claim_kind` — condition or occurrence — which is the
             judgment fact dedup is gated on and which only this step can make
-            . The ladder an agent calibrates against lives in `server.py`'s
-            tool docstring, which is what an agent actually reads before
-            ingesting.
+            . A topic may carry `description`, prose saying what it covers
+            beside the name the graph joins on, so a topic arrives described
+            rather than waiting for a reflect to notice it. The ladder an agent
+            calibrates against lives in `server.py`'s tool docstring, which is
+            what an agent actually reads before ingesting.
 
     `metacontext_id` is **required** — the metacontext every claim in this document
     is asserted in, and it must already exist here. `the-real` is the
@@ -938,8 +968,10 @@ async def store_decomposition(
     Every node gets a `sourced_from` edge to the originating document, and a
     `has_metacontext` edge to the metacontext. `tags` (document-level) and per-node
     tags are resolved-or-created (by exact name) as Topics linked by
-    `tagged_with_topic` edges, so a repeated tag reuses one Topic. Everything is
-    persisted in one atomic write.
+    `tagged_with_topic` edges, so a repeated tag reuses one Topic. Each such
+    topic node also joins this call's metacontext, once per call and only where
+    it does not already stand there, so a name ends up standing in every
+    metacontext it is used from. Everything is persisted in one atomic write.
 
     Temporal expressions in node content become timepoints on a timeline
     (`timeline_id`, or the shared extracted one), linked by `TIMELINK`. Only
@@ -950,7 +982,7 @@ async def store_decomposition(
     from epimemer.pipelines.graph_construction.edge_creation import (
         edge_creation_net,
     )
-    from epimemer.pipelines.metacontexts import TAG_EXTRACTION_METHOD
+    from epimemer.pipelines.metacontexts import TAG_EXTRACTION_METHOD, metacontext_edges
     from epimemer.pipelines.name_resolution import resolve_name, tag_by_key, tag_key
 
     # Imported as a module: the `propose_timepoints` flag above would otherwise
@@ -1078,6 +1110,7 @@ async def store_decomposition(
                         else {}
                     ),
                     **_claim_kind_field(parsed, cls),
+                    **_description_field(parsed, cls),
                 )
                 bucket.append(node)
                 if parsed.validity:
@@ -1154,6 +1187,25 @@ async def store_decomposition(
         total_topics += len(topics)
         total_facts += len(facts)
         total_inferences += len(inferences)
+
+    # A topic node created from a tag stands in every metacontext it is used
+    # from, so this call's metacontext joins the set. Names take the union
+    # because a name asserts nothing: `dev-session-2026-09-08` used from a novel
+    # and from real history says only that it was used from both, where the same
+    # union on a claim would assert in one world what was claimed in another.
+    #
+    # Once per tag per call, whatever the tag's tally of nodes, and only where
+    # the topic node does not already stand here: one batched read over the
+    # tags this call resolved, rather than one per tagged node. A tag minted in
+    # this call has no edges yet and gets the edge in the same atomic batch.
+    tag_topic_ids = sorted({topic.id for topic in tag_cache.values()})
+    if tag_topic_ids:
+        stated = await storage.get_edges_for(
+            tag_topic_ids, direction="from", edge_type=EdgeType.HAS_METACONTEXT
+        )
+        for tag_topic_id in tag_topic_ids:
+            if all(edge.dst_id != metacontext_id for edge in stated[tag_topic_id]):
+                batch_edges.extend(metacontext_edges(tag_topic_id, [metacontext_id], judge=judge))
 
     # Timepoints ride in the same write: a TIMELINK naming a timeline that was
     # never stored resolves to an empty row rather than an error, so a partial
@@ -1407,17 +1459,30 @@ async def _retrieve_metacontext_scoped(
 _HIERARCHY_PREVIEW_CHARS = 100
 
 
+def _truncated(text: str) -> str:
+    if len(text) > _HIERARCHY_PREVIEW_CHARS:
+        return text[:_HIERARCHY_PREVIEW_CHARS] + "…"
+    return text
+
+
 def _content_preview(node: EpistemicNode) -> dict:
-    """Reduce a node to id plus truncated content.
+    """Reduce a node to id plus truncated content, and its description if it has one.
 
     Hierarchy responses carry previews and never full material: the point of
     drill-down is that the caller decides what is worth loading, which a
     response that already inlined everything would defeat.
+
+    A described topic previews its description too, truncated the same way. A
+    preview exists to say what a thing is, and for a topic node created from a
+    tag the name alone cannot: `issue-53` is an identifier, and a caller picking
+    a branch out of a tree of them would be choosing blind. The key is absent on
+    an undescribed node rather than empty, so *undescribed* reads as the absence
+    it is.
     """
-    content = node.content
-    if len(content) > _HIERARCHY_PREVIEW_CHARS:
-        content = content[:_HIERARCHY_PREVIEW_CHARS] + "…"
-    return {"id": node.id, "content_preview": content}
+    preview = {"id": node.id, "content_preview": _truncated(node.content)}
+    if isinstance(node, Topic) and node.description:
+        preview["description_preview"] = _truncated(node.description)
+    return preview
 
 
 async def _hierarchy_annotations(
@@ -1493,9 +1558,13 @@ async def topic_tree(
     held back by the limit that does have children is flagged ``has_more``, so a
     truncated branch is never mistaken for a leaf.
 
+    A described topic carries a ``description_preview`` beside its content one,
+    and an undescribed one carries no such key.
+
     Every entry carries the `metacontexts` its topic stands in, so a tree whose
     branches were split from different worlds says so on its face. A topic node
-    created from a tag stands in no metacontext and carries no such key.
+    created from a tag is labelled like any other entry, with the metacontexts
+    it is used from.
 
     `metacontexts` scopes the tree to topics standing in **any** of the
     metacontexts listed, with the same meaning it has on `search`: a union the
@@ -1680,8 +1749,9 @@ async def search(
     `topic_tree` instead of being handed the whole subtree.
 
     **A scoped search scopes the whole response**, because a topic node created
-    from a tag stands in no metacontext and is shared by everything tagged with
-    it, so one edge reaches from a novel's world into real history:
+    from a tag stands in every metacontext it is used from and is shared by
+    everything tagged with it, so one edge reaches from a novel's world into
+    real history:
 
     - `edges` keeps an edge only where both of its endpoints are returned
       nodes. An edge to a node the filter removed names a node the caller was
@@ -2085,9 +2155,9 @@ async def find_nodes(
     metacontexts listed, with the same meaning it has on `search`: a union the
     caller states, no metacontext inheriting another, and every id refused
     unless it resolves in this graph. It matters most here, because a topic
-    node created from a tag stands in no metacontext and is shared by
-    everything tagged with it, so an unscoped listing of one topic node mixes
-    a novel's claims with real ones.
+    node created from a tag stands in every metacontext it is used from and is
+    shared by everything tagged with it, so an unscoped listing of one topic
+    node mixes a novel's claims with real ones.
 
     The node the caller named is not among the results either way: this returns
     what points *at* it. Every returned node carries its `metacontexts` label,
@@ -3629,7 +3699,7 @@ async def reflect(
                 )
         return candidates
 
-    # 4. Find enrichment candidates (thin descriptions with rich material)
+    # 4. Find enrichment candidates (thin topics with rich material)
     async def _enrichment():
         candidates = []
         for topic in await _active_topics():
@@ -3639,6 +3709,13 @@ async def reflect(
                     {
                         "topic_id": topic.id,
                         "current_content": topic.content,
+                        # What a description sent back would replace. Empty on
+                        # an undescribed topic, and the difference matters:
+                        # writing over prose somebody already judged is a
+                        # different act from describing a topic for the first
+                        # time, and the agent cannot tell them apart from a
+                        # nomination that shows only the name.
+                        "current_description": topic.description,
                         "associated_material": material,
                     }
                 )
@@ -3925,7 +4002,11 @@ async def apply_reflection(
         rather than losing it.
     parents: [{children_ids: [str], content: str}] — synthesized parent topics
     splits: [{topic_id: str, subtopics: [str]}] — split a broad topic
-    enrichments: [{topic_id: str, new_content: str}] — improved descriptions
+    enrichments: [{topic_id: str, description: str}], prose saying what a
+        topic covers, written **beside** its name rather than over it. The
+        topic keeps its id, its content byte for byte and every edge it holds;
+        a description this one replaces is kept in the node's
+        `description_history`. Nothing here can move the name a tag resolves by.
     merges: [{source_ids: [str], content: str}] — fuse near-duplicate topics
         into one combined topic (sources retained as MERGED history). Each merge
         is applied only if *every* pair of sources clears
@@ -4035,7 +4116,6 @@ async def apply_reflection(
         merge_nodes,
         plan_subtopic_edges,
         supersede_by_existing,
-        supersede_node,
     )
     from epimemer.pipelines.metacontexts import (
         TAG_EXTRACTION_METHOD,
@@ -4059,6 +4139,7 @@ async def apply_reflection(
         apply_similarity_decision,
     )
     from epimemer.pipelines.reflection.topic_consolidation import all_pairs_above_threshold
+    from epimemer.pipelines.reflection.topic_enrichment import described, reembedded
 
     # 0. Nothing is applied until the whole batch is known to be applicable.
     #    The nine steps below share no transaction and their order is the
@@ -4341,38 +4422,23 @@ async def apply_reflection(
         )
         topics_split += 1
 
-    # 4. Enrich topic descriptions
+    # 4. Write a description beside a topic's unchanged name
     for enrich_spec in enrichments or []:
         topic_id = enrich_spec["topic_id"]
-        new_content: str = enrich_spec["new_content"]
+        description: str = enrich_spec["description"]
 
-        old_topic = await storage.get_node(topic_id)
-        if old_topic is None or not isinstance(old_topic, Topic):
+        topic = await storage.get_node(topic_id)
+        if topic is None or not isinstance(topic, Topic):
             continue
 
-        enriched = Topic(
-            content=new_content,
-            source_id=old_topic.source_id,
-            value=old_topic.value,
-            extraction_method=f"{old_topic.extraction_method}:enriched",
-            judged_by=judge,
-            metadata={**old_topic.metadata, "enriched_from": topic_id},
-        )
-        # supersede_node embeds the replacement and migrates edges.
-        # Enrichment rewrites the topic's content; the earlier wording was never
-        # true-of-a-period, so this is a correction. Content is also the name
-        # `_tag_topic` and `_resolve_node_reference` resolve by, and both stop at
-        # ACTIVE, so rewriting a tag's name splits it in two.
-        # `dev-docs/TOPIC_DESCRIPTIONS.md` is the fix.
-        await supersede_node(
-            old_topic,
-            enriched,
-            storage,
-            embedding_provider,
-            status=NodeStatus.CORRECTED,
-            judge=judge,
-        )
-        await journal(storage, DecisionKind.ENRICHMENT, [topic_id, enriched.id], judge=judge)
+        # In place: same id, same content, same status, and every edge stays
+        # where it is. Enrichment used to replace the content and retire the old
+        # node `CORRECTED`, which moved the name `_tag_topic` and
+        # `_resolve_node_reference` join on and split a tag in two.
+        enriched = described(topic, description, judge=judge)
+        await storage.store_node(enriched)
+        await storage.store_embedding(await reembedded(enriched, storage, embedding_provider))
+        await journal(storage, DecisionKind.ENRICHMENT, [topic_id], judge=judge)
         topics_enriched += 1
 
     # 5. Merge near-duplicate topics into one (guarded by a high similarity bar)
@@ -4411,7 +4477,9 @@ async def apply_reflection(
         # onto the survivor, `has_metacontext` among them, so merging across
         # metacontexts leaves one topic asserted in both worlds. Exact set equality,
         # not overlap — `shared_metacontext_set` carries the reasoning.
-        # Tags are exempt: `created_from_tag` says why a tag stands in no metacontext.
+        # An all-tag merge is exempt because names take the union: two spellings
+        # of one name were used from whatever worlds their nodes were claimed
+        # in, and the survivor is used from all of them.
         if not merging_tags and (await shared_metacontext_set(source_ids, storage) is None):
             topic_merges_refused.append(
                 {
@@ -5357,9 +5425,10 @@ async def query_graph(
     metacontexts listed, with the same meaning it has on `search`: a union the
     caller states, no metacontext inheriting another, and every id refused
     unless it resolves in this graph. The seed is returned whether or not it
-    stands in one of them, because the caller named it — which is what makes a
-    topic node created from a tag, standing in no metacontext, usable as a
-    starting point for a scoped walk. Its neighbours are filtered, and `edges`
+    stands in one of them, because the caller named it — which is what keeps a
+    topic node created from a tag usable as a starting point for a scoped walk
+    even where the walk names a world the tag was never used from. Its
+    neighbours are filtered, and `edges`
     keeps only the edges between nodes that survived, so no returned edge
     points at a node the response left out.
     """

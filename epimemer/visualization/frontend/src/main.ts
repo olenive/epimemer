@@ -10,7 +10,7 @@
 import "./style.css";
 
 import { fetchGraphs, fetchRetrievals, fetchSessions, fetchSnapshot } from "./api";
-import { initDrawer, notRetrievedMarker } from "./drawer";
+import { initDrawer, nodeDetailBody, notRetrievedMarker } from "./drawer";
 import { createEventRouter } from "./events";
 import { highlightNote, initGraphPanel } from "./graph-panel";
 import { initLogPanel } from "./log-panel";
@@ -134,10 +134,17 @@ const drawer = initDrawer({
  * did *not* come back, and the marker states the absence rather than leaving it
  * implied by the colour (§4.3).
  */
-const showDetail = (nodeId: string, content: string, nodeType: string): void => {
+const showDetail = (
+  nodeId: string,
+  content: string,
+  nodeType: string,
+  // Empty for anything that is not a topic, and for a timepoint, which is not
+  // a graph node at all.
+  description = "",
+): void => {
   drawer.showNode(
     `${nodeType} — ${nodeId.slice(0, 8)}`,
-    content,
+    nodeDetailBody(content, description),
     notRetrievedMarker(graphPanel.isInFocus(nodeId), recordSelector.selected() !== null),
   );
 };
@@ -171,8 +178,8 @@ const graphPanel = initGraphPanel(
   // node narrows the log to what was done to it. The rail is not revealed —
   // ambient signal, deliberate detail — so the filter is simply there when you
   // open it. `logPanel` is initialised below and only read at click time.
-  (nodeId, content, nodeType) => {
-    showDetail(nodeId, content, nodeType);
+  (nodeId, content, nodeType, description) => {
+    showDetail(nodeId, content, nodeType, description);
     logPanel.filterToNode(nodeId);
   },
   {

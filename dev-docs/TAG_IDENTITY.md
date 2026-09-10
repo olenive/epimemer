@@ -150,10 +150,13 @@ descriptions on relation labels: an agent picking from a described vocabulary
 never coins the fourth synonym, and the intervention moves from repair to
 prevention.
 
-It also removes work already sitting in the queue. Both duplicate pairs are
-live nominations, and one of them, `claim-kind` against `claim_kind`, cannot
-currently be recorded either way: `one_claim` is refused as a cross-metacontext pair
-and `distinct` would be false.
+It also removes work already sitting in the queue. Both duplicate pairs were
+live nominations, and one of them, `claim-kind` against `claim_kind`, could not
+be recorded either way while a tag stood in no metacontext: `one_claim` was
+refused as a cross-metacontext pair and `distinct` would have been false. A tag
+now stands in every metacontext it is used from, so two tags used from one world
+are a same-metacontext pair and `one_claim` is available for them. Preventing
+the duplicate is still worth more than being able to judge it.
 
 ---
 
