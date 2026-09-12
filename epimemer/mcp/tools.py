@@ -923,10 +923,12 @@ async def store_decomposition(
     *,
     metacontext_id: str,
     tags: list[str] | None = None,
+    tag_descriptions: dict[str, str] | None = None,
     timeline_id: str | None = None,
     propose_timepoints: bool = True,
     event_bus: InProcessEventBus | None = None,
     judge: JudgeRef | None = None,
+    warning_policy: WarningPolicy | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Store agent-provided decomposition: topics, facts, inferences per segment.
 
@@ -964,6 +966,20 @@ async def store_decomposition(
     the `DecompositionEntry` object beside `importance` and `confidence`, for
     the same reason those are per node — not built, and deliberately not
     foreclosed.
+
+    **Every tag this call would create needs a line in `tag_descriptions`, and
+    the call is refused without one.** A tag is a name, and a name with nothing
+    beside it is embedded on its own characters, so two days of work score 0.99
+    against each other and every reflect nominates the pair for merging. The
+    caller is the only party that knows what a tag means at the moment it is
+    minted, which is why this refuses rather than warns: a warning is read by
+    the next agent, not this one. Names are matched up to spelling, the same
+    normalisation tags themselves resolve by. A description for a tag the graph
+    already describes is **not** written, and the response says so in
+    `warnings`: a live description is judged prose with a history trail, and
+    replacing it is enrichment. One exception, so a graph backfills as it is
+    used: an existing tag whose description is empty takes the supplied one,
+    through the same `described()` write enrichment uses.
 
     Every node gets a `sourced_from` edge to the originating document, and a
     `has_metacontext` edge to the metacontext. `tags` (document-level) and per-node
@@ -1024,21 +1040,15 @@ async def store_decomposition(
     # for every node carrying it.
     datable: list[tuple[str, str]] = []
 
-    async def _tag_topic(name: str) -> Topic:
-        """Resolve-or-create the Topic a tag names, adding new ones to the batch.
+    async def _stored_tag(name: str) -> Topic | None:
+        """The topic node this tag name already resolves to, or `None`.
 
-        Three questions in order, cheapest first: has this call already resolved
-        the name, does the store hold it as written, and does the store hold it
-        under another spelling. Only the third reads more than one node, and only
-        where the answer would otherwise have been to write one.
+        Two questions, cheapest first: does the store hold the name as written,
+        and does it hold it under another spelling. Only the second reads more
+        than one node, and only where the answer would otherwise have been to
+        write one.
         """
         nonlocal active_topics
-        key = tag_key(name)
-        if key in tag_cache:
-            resolved = tag_cache[key]
-            if resolved.content != name:
-                tags_resolved_to[name] = resolved.content
-            return resolved
         # `resolve_name` follows a retirement forward, so a tag whose node was
         # merged away or rewritten still names whatever carries its content now.
         existing = await resolve_name(name, storage)
@@ -1050,14 +1060,34 @@ async def store_decomposition(
                     if isinstance(node, Topic)
                 ]
             existing = tag_by_key(name, active_topics)
-        if isinstance(existing, Topic):
-            tag_cache[key] = existing
-            if existing.content != name:
-                tags_resolved_to[name] = existing.content
-            return existing
+        return existing if isinstance(existing, Topic) else None
+
+    async def _tag_topic(name: str) -> Topic:
+        """Resolve-or-create the Topic a tag names, adding new ones to the batch.
+
+        Everything this call names was resolved into `tag_cache` before any of
+        the document was built, so a miss here is a name being minted — with
+        the description the pre-pass refused the call for lacking.
+        """
+        key = tag_key(name)
+        if key in tag_cache:
+            resolved = tag_cache[key]
+            if resolved.content != name:
+                tags_resolved_to[name] = resolved.content
+            return resolved
+        # One moment for both fields: the writer has just said what this name
+        # means, so the description has been stood behind as of its creation,
+        # and reflect measures the next change from there.
+        minted_at = datetime.now(UTC)
         topic = Topic(
             content=name,
+            description=supplied_descriptions[key],
+            created_at=minted_at,
+            description_reviewed_at=minted_at,
             source_id=None,
+            # Set before the embed below, because `embedding_text` joins the
+            # description onto the name only for a node `created_from_tag`
+            # recognises, and that reads `extraction_method`.
             extraction_method=TAG_EXTRACTION_METHOD,
             judged_by=judge,
         )
@@ -1072,6 +1102,83 @@ async def store_decomposition(
             )
         )
         return topic
+
+    # Every tag this call would attach, in the order the segment loop meets
+    # them, and deduplicated by `tag_key`: `claim_kind` and `claim-kind` are one
+    # name, so they are asked about once and the first spelling is the one a
+    # mint would use. Doc-level tags appear only where there is an entry to
+    # carry them, which is exactly when the loop below applies them.
+    named_tags: dict[str, str] = {}
+    for seg_data in segments:
+        for field in ("topics", "facts", "inferences"):
+            for entry in seg_data.get(field, []):
+                for name in (*doc_tag_names, *_decomposition_entry(entry).tags):
+                    named_tags.setdefault(tag_key(name), name)
+
+    # Blank prose is no description: a key whose value says nothing would let a
+    # caller satisfy the requirement without meeting it.
+    supplied_descriptions = {
+        tag_key(name): text.strip()
+        for name, text in (tag_descriptions or {}).items()
+        if text and text.strip()
+    }
+
+    # Resolved before any of the document is built, so a call that would mint an
+    # undescribed tag is refused having written nothing at all — the same shape
+    # as the metacontext check above, and for the same reason.
+    advisories: list[Advisory] = []
+    # Paired with the key the description arrived under, never the resolved
+    # node's own: `resolve_name` follows a retirement forward, so the name
+    # `issue-46` can land on a survivor called `confidence-as-a-prior`, whose
+    # key nobody in this call typed.
+    to_describe: list[tuple[str, Topic]] = []
+    undescribed: list[str] = []
+    # Two names in one call can resolve to one node, where a merge or a rename
+    # put them on the same successor, and describing it twice would write the
+    # second sentence over the first without keeping it.
+    resolved_ids: set[str] = set()
+    for key, tag_name in named_tags.items():
+        stored_tag = await _stored_tag(tag_name)
+        if stored_tag is None:
+            if key not in supplied_descriptions:
+                undescribed.append(tag_name)
+            continue
+        tag_cache[key] = stored_tag
+        if key not in supplied_descriptions or stored_tag.id in resolved_ids:
+            continue
+        resolved_ids.add(stored_tag.id)
+        if stored_tag.description:
+            advisories.append(
+                Advisory(
+                    kind=AdvisoryKind.DESCRIPTION_NOT_WRITTEN,
+                    message=(
+                        f"'{stored_tag.content}' is already described, so the "
+                        f"description supplied for it was not written. The stored "
+                        f"one is judged prose with a history trail; to replace it, "
+                        f"send apply_reflection(enrichments=[...]), which keeps the "
+                        f"wording it replaces."
+                    ),
+                    subjects=[stored_tag.id],
+                    detail={"tag": stored_tag.content, "stored": stored_tag.description},
+                )
+            )
+        else:
+            to_describe.append((key, stored_tag))
+
+    if undescribed:
+        listed = ", ".join(f"'{name}'" for name in sorted(undescribed))
+        raise ValueError(
+            f"store_decomposition wrote nothing. These tags do not exist in "
+            f"graph '{storage.current_database}' yet and have no description: "
+            f"{listed}. Pass `tag_descriptions` with one line for each, saying "
+            f"what the tag covers. A tag is a name, and a name with nothing "
+            f"beside it is embedded on its own characters, so two dated session "
+            f"tags score 0.99 against each other and every reflect nominates the "
+            f"pair for merging, for ever. You are the only party that knows what "
+            f"this tag means at the moment it is minted, which is why this is "
+            f"refused rather than warned about. Only new tags need an entry: a "
+            f"name this graph already holds keeps the description it has."
+        )
 
     for seg_data in segments:
         segment_id = seg_data["segment_id"]
@@ -1238,6 +1345,24 @@ async def store_decomposition(
         timelines=batch_timelines,
     )
 
+    # An existing tag nobody has described takes the one supplied, so a graph
+    # backfills as it is used rather than waiting for a separate pass. Through
+    # the same `described()` write enrichment uses, so the review time is
+    # stamped and the wording (there is none to replace here) would be kept.
+    #
+    # After the batch and outside it, because `write_batch_tx` inserts and this
+    # updates a row that already exists — and because a description written for
+    # a document that then failed to land would describe a tag by a claim the
+    # graph does not hold.
+    from epimemer.pipelines.reflection.topic_enrichment import described, reembedded
+
+    for supplied_key, stored_tag in to_describe:
+        newly_described = described(stored_tag, supplied_descriptions[supplied_key], judge=judge)
+        await storage.store_node(newly_described)
+        await storage.store_embedding(
+            await reembedded(newly_described, storage, embedding_provider)
+        )
+
     # One journal row for the call, never one per fact (§4.1). Forty-four facts
     # out of one document is one reading of one document, and a row each would
     # make ingest the journal's dominant writer by orders of magnitude while
@@ -1271,7 +1396,19 @@ async def store_decomposition(
         "edges_created": len(batch_edges),
         "timepoints_proposed": timepoints_proposed,
         "historical_twins": await _historical_twins(batch_nodes, storage),
-    }
+        # Tags that had no description and have one now. Counted rather than
+        # left silent: it is the one case where prose supplied here reaches the
+        # graph on a name somebody else minted.
+        "tags_described": len(to_describe),
+    } | await carry_advisories(
+        storage,
+        await advisory_policy(
+            storage, warning_policy if warning_policy is not None else WarningPolicy()
+        ),
+        advisories,
+        [advisory.subjects[0] for advisory in advisories],
+        judge=judge,
+    )
     if tags_resolved_to:
         # Said rather than done silently: a caller that asked for `claim-kind`
         # and got the topic node written as `claim_kind` has learned this graph's
@@ -3610,6 +3747,13 @@ CAPPED_KEYS = (
 # read. `reflect(max_nominations=...)` raises it for a caller who means to.
 MAX_NOMINATIONS = 200
 
+# How many pieces of material one enrichment nomination carries. Chosen to fit
+# a reflect response holding several nominations at once, and separate from
+# `MAX_NOMINATIONS` because it bounds what is shown *within* one nominee rather
+# than how many nominees there are. Nothing is hidden by it: `changed_count`
+# and `material_count` report what the cap left out.
+ENRICHMENT_MATERIAL_CAP = 20
+
 
 def _capped(items: list, limit: int) -> tuple[list, bool]:
     """The first `limit` items, and whether anything was dropped.
@@ -3657,7 +3801,9 @@ async def reflect(
     from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
     from epimemer.pipelines.reflection.topic_enrichment import (
         _should_enrich,
+        changed_since,
         gather_associated_material_for,
+        material_contents,
     )
     from epimemer.pipelines.reflection.topic_splitting import should_split
     from epimemer.visualization.phase_events import phase_pipeline
@@ -3685,7 +3831,16 @@ async def reflect(
     async def _splits():
         candidates = []
         for topic in await _active_topics():
-            material = await _material_for(topic)
+            nodes = await _material_for(topic)
+            # A topic somebody stood behind since its material last moved is
+            # not re-offered: `description_reviewed_at` records *last stood
+            # behind what this topic says and covers*, and a split decline
+            # stamps it too. Without this the same topics came back on every
+            # reflect, 97 of them on one real graph, every one already read.
+            since = topic.description_reviewed_at
+            if since is not None and not changed_since(nodes, since):
+                continue
+            material = material_contents(nodes)
             if len(material) < 4:
                 continue
             material_vectors = await embedding_provider.embed(material)
@@ -3699,26 +3854,65 @@ async def reflect(
                 )
         return candidates
 
-    # 4. Find enrichment candidates (thin topics with rich material)
+    # 4. Find topics whose description wants writing or re-reading.
+    #
+    #    **Two tests, and `since` says which one ran.** A described topic
+    #    somebody has stood behind is nominated when its material moved after
+    #    that moment, and carries the delta. A topic nobody has reviewed has no
+    #    moment to measure from, so the length ratio decides and the nomination
+    #    carries a sample instead. The two answer different questions — *does
+    #    this still cover what came in* against *what is this about* — so they
+    #    are two keys rather than one list with a null in it.
     async def _enrichment():
         candidates = []
         for topic in await _active_topics():
             material = await _material_for(topic)
-            if _should_enrich(topic, material, material_ratio=3.0):
-                candidates.append(
+            since = topic.description_reviewed_at
+            changed = changed_since(material, since) if since is not None else []
+            if since is None:
+                if not _should_enrich(topic, material_contents(material), material_ratio=3.0):
+                    continue
+            elif not changed:
+                continue
+            candidates.append(
+                {
+                    "topic_id": topic.id,
+                    "current_content": topic.content,
+                    # What a description sent back would replace. Empty on
+                    # an undescribed topic, and the difference matters:
+                    # writing over prose somebody already judged is a
+                    # different act from describing a topic for the first
+                    # time, and the agent cannot tell them apart from a
+                    # nomination that shows only the name.
+                    "current_description": topic.description,
+                    # Null where nobody has ever reviewed this description,
+                    # which is what tells the two shapes below apart.
+                    "since": since.isoformat() if since is not None else None,
+                    # How much the description is standing over, so the
+                    # reviewer can weigh the delta against the whole.
+                    "material_count": len(material),
+                }
+                | (
                     {
-                        "topic_id": topic.id,
-                        "current_content": topic.content,
-                        # What a description sent back would replace. Empty on
-                        # an undescribed topic, and the difference matters:
-                        # writing over prose somebody already judged is a
-                        # different act from describing a topic for the first
-                        # time, and the agent cannot tell them apart from a
-                        # nomination that shows only the name.
-                        "current_description": topic.description,
-                        "associated_material": material,
+                        "changed_material": [
+                            {
+                                "content": change.content,
+                                "change": change.change,
+                                "at": change.at.isoformat(),
+                            }
+                            for change in changed[:ENRICHMENT_MATERIAL_CAP]
+                        ],
+                        # The full count, so the cap is visible rather than
+                        # silent: a reviewer told twenty when there were
+                        # ninety would read the delta as the whole of it.
+                        "changed_count": len(changed),
+                    }
+                    if since is not None
+                    else {
+                        "sample": material_contents(material)[:ENRICHMENT_MATERIAL_CAP],
                     }
                 )
+            )
         return candidates
 
     # Split detection and the enrichment scan walk the same topic set. Fetched
@@ -3736,9 +3930,12 @@ async def reflect(
 
     # Both phases want the same material. Gathered for every topic in one go the
     # first time either asks, and scoped to this call so nothing goes stale.
-    material_cache: dict[str, list[str]] = {}
+    # The nodes rather than their wording: the split sweep scores the text and
+    # the enrichment scan asks when each one arrived, and one of those questions
+    # a string cannot answer.
+    material_cache: dict[str, list[EpistemicNode]] = {}
 
-    async def _material_for(topic: Topic) -> list[str]:
+    async def _material_for(topic: Topic) -> list[EpistemicNode]:
         if not material_cache:
             material_cache.update(
                 await gather_associated_material_for(await _active_topics(), storage)
@@ -3974,6 +4171,8 @@ async def apply_reflection(
     parents: list[dict] | None = None,
     splits: list[dict] | None = None,
     enrichments: list[dict] | None = None,
+    descriptions_confirmed: list[str] | None = None,
+    splits_declined: list[str] | None = None,
     merges: list[dict] | None = None,
     supersessions: list[dict] | None = None,
     archivals: list[str] | None = None,
@@ -4007,6 +4206,23 @@ async def apply_reflection(
         topic keeps its id, its content byte for byte and every edge it holds;
         a description this one replaces is kept in the node's
         `description_history`. Nothing here can move the name a tag resolves by.
+        Writing one also stamps `description_reviewed_at`, so reflect measures
+        the next change from this moment.
+    descriptions_confirmed: [topic_id] — *read against what changed, and it
+        still fits*. The other answer to an enrichment nomination, and the one
+        that had no writer: a nomination nobody answers comes back on every
+        reflect, so a description the agent read and kept had nowhere to say so.
+        Stamps `description_reviewed_at` and journals one
+        `DecisionKind.DESCRIPTION_REVIEW` row for the batch, the way `RETENTION`
+        records that an archival candidate was re-read and stands. The
+        description's text is untouched, and so is its history: nothing was
+        replaced. Ids that are not topics are skipped, as supersessions are.
+    splits_declined: [topic_id] — *read the material, and it is one topic*.
+        The answer to a split nomination other than splitting, which had no
+        writer either. Stamps the same `description_reviewed_at`, since a split
+        verdict is a judgment about the same material a description covers, and
+        journals one `DecisionKind.SPLIT_DECLINED` row for the batch. The topic
+        is not nominated for splitting again until its material moves.
     merges: [{source_ids: [str], content: str}] — fuse near-duplicate topics
         into one combined topic (sources retained as MERGED history). Each merge
         is applied only if *every* pair of sources clears
@@ -4119,6 +4335,7 @@ async def apply_reflection(
     )
     from epimemer.pipelines.metacontexts import (
         TAG_EXTRACTION_METHOD,
+        combined_metacontext_set,
         created_from_tag,
         metacontext_edges,
         shared_metacontext_set,
@@ -4155,6 +4372,8 @@ async def apply_reflection(
             "parents": parents,
             "splits": splits,
             "enrichments": enrichments,
+            "descriptions_confirmed": descriptions_confirmed,
+            "splits_declined": splits_declined,
             "merges": merges,
             "supersessions": supersessions,
             "archivals": archivals,
@@ -4327,8 +4546,11 @@ async def apply_reflection(
         # honestly claim is the one its children already agree on. Inheriting a
         # union instead would let a topic drawn from a fiction claim and a real
         # one assert in both, which `fact_dedup` calls the worst outcome
-        # available; refusing is that gate, one tier up.
-        inherited = await shared_metacontext_set([child.id for child in children], storage)
+        # available; refusing is that gate, one tier up. The one exception is a
+        # parent over nothing but topic nodes created from tags: it gathers
+        # names, and a name stands in every metacontext it is used from, so the
+        # parent takes the union the way an all-tag merge survivor does.
+        inherited = await combined_metacontext_set(children, storage)
         if inherited is None:
             parents_refused.append(
                 {
@@ -4440,6 +4662,56 @@ async def apply_reflection(
         await storage.store_embedding(await reembedded(enriched, storage, embedding_provider))
         await journal(storage, DecisionKind.ENRICHMENT, [topic_id], judge=judge)
         topics_enriched += 1
+
+    # 4b. Mark a description read against what changed and left standing. The
+    #     verdict opposite to an enrichment, and the one a nomination previously
+    #     had no way to answer: an unanswered nomination returns on every
+    #     reflect, so *I looked, and it still fits* has to be recordable.
+    #
+    #     One moment for the batch, so several confirmations made in one act are
+    #     not spread across the microseconds it took to write them.
+    confirmed_topics: list[Topic] = []
+    confirmed_at = datetime.now(UTC)
+    for topic_id in descriptions_confirmed or []:
+        topic = await storage.get_node(topic_id)
+        if not isinstance(topic, Topic):
+            continue
+        # The text is untouched, so there is nothing to re-embed and nothing to
+        # keep in `description_history`: a confirmation replaced no wording.
+        confirmed = topic.model_copy(update={"description_reviewed_at": confirmed_at})
+        await storage.store_node(confirmed)
+        confirmed_topics.append(confirmed)
+    if confirmed_topics:
+        # One row for the batch, on the archival sweep's granularity rule: this
+        # is one act of reading applied to whatever it covered, rather than N
+        # independent verdicts.
+        await journal(
+            storage,
+            DecisionKind.DESCRIPTION_REVIEW,
+            [topic.id for topic in confirmed_topics],
+            judge=judge,
+        )
+
+    # 4b. Record the topics whose split nomination was read and declined. The
+    #     same stamp as a confirmation, on purpose: *last stood behind what this
+    #     topic says and covers* is one moment, and the split scan skips a topic
+    #     whose material has not moved since it.
+    declined_topics: list[Topic] = []
+    declined_at = datetime.now(UTC)
+    for topic_id in splits_declined or []:
+        topic = await storage.get_node(topic_id)
+        if not isinstance(topic, Topic):
+            continue
+        declined = topic.model_copy(update={"description_reviewed_at": declined_at})
+        await storage.store_node(declined)
+        declined_topics.append(declined)
+    if declined_topics:
+        await journal(
+            storage,
+            DecisionKind.SPLIT_DECLINED,
+            [topic.id for topic in declined_topics],
+            judge=judge,
+        )
 
     # 5. Merge near-duplicate topics into one (guarded by a high similarity bar)
     for merge_spec in merges or []:
@@ -4775,6 +5047,8 @@ async def apply_reflection(
         "parents_refused": parents_refused,
         "topics_split": topics_split,
         "topics_enriched": topics_enriched,
+        "descriptions_confirmed": len(confirmed_topics),
+        "splits_declined": len(declined_topics),
         "topics_merged": topics_merged,
         "merges_rejected": merges_rejected,
         "topic_merges_refused": topic_merges_refused,
@@ -4796,6 +5070,7 @@ async def apply_reflection(
             + parents_created
             + topics_split
             + topics_enriched
+            + len(confirmed_topics)
             + topics_merged
             + supersessions_applied
             + len(to_archive)

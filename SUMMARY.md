@@ -43,7 +43,11 @@ An extracted topic is a paragraph-length summary of a theme, not a keyword.
 Written that way it embeds well, clusters well, and can be refined later
 without losing nuance. The other kind is a **topic node created from a tag**: a
 Topic created from a name the caller passed in `tags=`, which gathers nodes for
-retrieval (see *Source nodes, topic nodes, and relations* below).
+retrieval (see *Source nodes, topic nodes, and relations* below). Every topic
+has a `content`, the name the graph joins on, and a `description`, prose saying
+what it covers. Enrichment writes the description and never the name, and a
+tag cannot be created without one, since a bare name embeds on its own
+characters and two dated tags then look like duplicates.
 
 ### Facts
 Atomic, verifiable, grounded statements tied to source material. Each fact
@@ -118,8 +122,7 @@ its own facts, relate to siblings, and sit in a metacontext:
   resolves, by exact name, to a Topic, the topic node created from that tag,
   and a `tagged_with_topic` edge links the node to it. That topic node joins
   the ingest's metacontext, so a name stands in every metacontext it is used
-  from. Consolidating tags *is*
-  topic merge. That edge is a retrieval index and carries no evidential
+  from. Consolidating tags *is* topic merge. That edge is a retrieval index and carries no evidential
   weight: `supports` is the edge corroboration reads, and nothing weighs this
   one.
 - **Relations are open vocabulary**: engine edges are a typed enum; user
@@ -537,7 +540,10 @@ the same thing*; only an agent can answer *do they contradict, supersede, or
 coexist?* So `reflect` returns pairs with their scores rather than verdicts.
 
 One phase per worklist, and `REFLECT_PHASES` in `mcp/tools.py` names them in
-execution order. Two separations in that list matter: recurrences are
+execution order. Every nomination has a recordable answer, including the
+negative one (a pair judged distinct, a description confirmed, a split
+declined, a node retained), and a recorded answer is not asked for again until
+something under it changes. Two separations in that list matter: recurrences are
 reported apart from contradictions, because a claim standing beside its own
 successor is not in conflict with it; and cross-metacontext pairs are dropped
 rather than reported, because high similarity across disjoint metacontexts is

@@ -3682,7 +3682,12 @@ class _FixedEmbed:
 
 
 async def _ingest(storage, ep, config, content, *, source, tags=None, facts):
-    """Segment + decompose one document into the given facts."""
+    """Segment + decompose one document into the given facts.
+
+    A line per tag, because a tag this graph has not seen is refused without
+    one. A repeat of a name already here needs none, and supplying one anyway
+    changes nothing.
+    """
     seg, _ = await segment_text(content, storage, ep, config, source=source)
     sid = seg["segments"][0]["segment_id"]
     await store_decomposition(
@@ -3691,6 +3696,7 @@ async def _ingest(storage, ep, config, content, *, source, tags=None, facts):
         storage=storage,
         embedding_provider=ep,
         tags=tags,
+        tag_descriptions={name: f"Everything filed under {name}." for name in tags or []},
         metacontext_id=BASE_METACONTEXT_ID,
     )
     return seg["document_id"]

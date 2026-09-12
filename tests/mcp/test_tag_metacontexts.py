@@ -51,7 +51,12 @@ async def _fiction(storage) -> str:
 
 
 async def _ingest(storage, embedder, config, text, *, tags, metacontext_id, per_node_tags=None):
-    """Ingest one paragraph stating one fact, carrying `tags`."""
+    """Ingest one paragraph stating one fact, carrying `tags`.
+
+    One line per tag, because a name this graph has never seen is refused
+    without one. It covers both places a tag can appear, which is the whole
+    reason the dict sits at the call level rather than beside each `tags` list.
+    """
     seg, _ = await tools.segment_text(text, storage, embedder, config)
     fact = {"content": text, **({"tags": per_node_tags} if per_node_tags else {})}
     stored, _ = await tools.store_decomposition(
@@ -61,6 +66,10 @@ async def _ingest(storage, embedder, config, text, *, tags, metacontext_id, per_
         embedding_provider=embedder,
         metacontext_id=metacontext_id,
         tags=tags,
+        tag_descriptions={
+            name: f"Everything this graph files under {name}."
+            for name in [*tags, *(per_node_tags or [])]
+        },
         judge=CRITIC,
     )
     return stored
@@ -349,3 +358,65 @@ class TestAnAllTagMergeTakesTheUnion:
         survivor = await storage.get_node_by_content("design-decisions", node_type=NodeType.TOPIC)
         assert survivor is not None and survivor.id not in (a.id, b.id)
         assert await _stands_in(storage, survivor.id) == {BASE_METACONTEXT_ID, fiction}
+
+
+class TestAnAllTagParentTakesTheUnion:
+    """Parent synthesis used to gate an all-tag child set the way topic merge
+    used to: `shared_metacontext_set` over children used from different worlds
+    refused the parent. A parent over names gathers names, and a name stands in
+    every metacontext it is used from, so the parent takes the union."""
+
+    async def test_a_parent_over_tags_stands_where_any_child_stood(self, storage, embedder):
+        fiction = await _fiction(storage)
+        a = await _tag_topic(storage, embedder, "issue-53", metacontexts=[BASE_METACONTEXT_ID])
+        b = await _tag_topic(
+            storage, embedder, "validity", metacontexts=[BASE_METACONTEXT_ID, fiction]
+        )
+
+        result, _ = await tools.apply_reflection(
+            storage,
+            embedder,
+            parents=[{"children_ids": [a.id, b.id], "content": "temporal validity"}],
+            judge=CRITIC,
+        )
+
+        assert result["parents_created"] == 1
+        assert result["parents_refused"] == []
+        parent = next(
+            node for node in await storage.query_nodes() if node.metadata.get("synthesized_from")
+        )
+        assert await _stands_in(storage, parent.id) == {BASE_METACONTEXT_ID, fiction}
+
+    async def test_one_statement_child_keeps_the_equality_gate(self, storage, embedder):
+        """The union is the answer for names only. A statement among the
+        children is a claim, and a claim combined across worlds would assert in
+        both, so the gate that refuses it stays."""
+        fiction = await _fiction(storage)
+        tag = await _tag_topic(storage, embedder, "issue-53", metacontexts=[BASE_METACONTEXT_ID])
+        statement = Topic(
+            content="The council rules by decree.",
+            source_id=None,
+            extraction_method="agent",
+        )
+        await storage.store_node(statement)
+        await storage.store_embedding(
+            EmbeddingRecord(
+                item_id=statement.id,
+                model_id=embedder.model_id,
+                vector=(await embedder.embed([statement.content]))[0],
+            )
+        )
+        await storage.store_edge(
+            NodeEdge(src_id=statement.id, dst_id=fiction, type=EdgeType.HAS_METACONTEXT)
+        )
+
+        result, _ = await tools.apply_reflection(
+            storage,
+            embedder,
+            parents=[{"children_ids": [tag.id, statement.id], "content": "governance"}],
+            judge=CRITIC,
+        )
+
+        assert result["parents_created"] == 0
+        assert len(result["parents_refused"]) == 1
+        assert "metacontexts" in result["parents_refused"][0]["reason"]

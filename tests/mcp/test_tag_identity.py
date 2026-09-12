@@ -40,6 +40,13 @@ def config():
     return ServerConfig(storage_backend="memory", embedding_provider="mock")
 
 
+def _descriptions(tags) -> dict[str, str]:
+    """One line per tag, because a tag this graph has never seen is refused
+    without one. Identity is decided by `tag_key` and never by this prose, so a
+    single form serves every name here."""
+    return {name: f"Everything this graph files under {name}." for name in tags}
+
+
 async def _ingest(storage, embedder, config, text, *, tags):
     """Ingest one paragraph carrying `tags`, and return the store's response."""
     seg, _ = await tools.segment_text(text, storage, embedder, config)
@@ -50,6 +57,7 @@ async def _ingest(storage, embedder, config, text, *, tags):
         embedding_provider=embedder,
         metacontext_id=BASE_METACONTEXT_ID,
         tags=tags,
+        tag_descriptions=_descriptions(tags),
         judge=CRITIC,
     )
     return stored

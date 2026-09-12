@@ -131,8 +131,8 @@ is a worklist, not a verdict:
 | Key | Nominates | Applied via |
 |---|---|---|
 | `similar_pairs` | topics above the similarity threshold | `merges` or `parents` |
-| `split_candidates` | topics whose material has high internal variance | `splits` |
-| `enrichment_candidates` | topics saying less about themselves than their material does, each with the description it currently carries | `enrichments` |
+| `split_candidates` | topics whose material bisects into two clusters, skipping any somebody stood behind since its material last moved | `splits` or `splits_declined` |
+| `enrichment_candidates` | topics whose material moved since somebody last stood behind the description, with the change itself; and topics nobody has described yet, with a sample | `enrichments` or `descriptions_confirmed` |
 | `contradictions` | same-metacontext active fact pairs above 0.80, the one nomination bar, which `merge_facts` also gates on, so a pair listed here is mergeable | `record_contradiction`, then `supersessions`; or `similarities` where neither fits |
 | `recurrences` | an active claim beside its own `historical` twin | `restore` |
 | `unsound_inferences` | inferences whose premises no source puts in one period | agent judgment |
@@ -267,7 +267,9 @@ Every kind of decision is optional and they are applied in one call:
 | `similarities` | record what you decided about a nominated pair |
 | `parents` | synthesise a parent topic over children |
 | `splits` | split a broad topic into subtopics |
-| `enrichments` | describe a thin topic, beside its unchanged name |
+| `splits_declined` | record that you read the material and it is one topic |
+| `enrichments` | describe a topic, beside its unchanged name |
+| `descriptions_confirmed` | record that you read a description against the change and it stands |
 | `merges` | fuse near-duplicate topics into one |
 | `supersessions` | resolve a flagged node against an existing one |
 | `retained` | record that you re-read a nominated node and it stands |
@@ -294,15 +296,63 @@ embedded on its name and description together. A description that replaces an
 earlier one keeps the earlier wording on the node, so improving one loses
 nothing.
 
+**A description is reviewed when the material under it moves.** Each topic
+carries `description_reviewed_at`, the moment somebody last wrote the
+description or read it and let it stand. Reflect nominates a topic whose
+material was created, archived or superseded after that moment, and the
+nomination carries the change: `since`, a `changed_material` list of at most
+twenty entries newest first, each saying what happened and when, plus
+`changed_count` and `material_count` for what the cap hid and how much the
+description stands over. Archival and supersession count because a description
+standing over material that has since been retired is as stale as one written
+before half of it arrived.
+
+A topic nobody has described has no moment to measure from, so it falls back to
+the older test: its material is at least three times the length of its name and
+description together. That question, *is this topic thin*, answers identically
+on every run, which is why a good description over forty facts used to be
+nominated for ever. Once a topic has been reviewed, the ratio is never
+consulted for it again.
+
+**Both answers clear the nomination, and one of them is required.**
+`enrichments` writes a new sentence; `descriptions_confirmed`, a list of topic
+ids, records that the description was read against the change and still fits.
+Both stamp `description_reviewed_at`. A confirmation journals
+`DecisionKind.DESCRIPTION_REVIEW`, one row for the batch, the way `RETENTION`
+records that an archival candidate was re-read and stands: an `ENRICHMENT` row
+with the same text before and after would misreport it, and a reviewer
+selecting `ENRICHMENT` should get the rows where a description moved. A
+nomination nobody answers comes back on the next reflect unchanged, which is
+the rule an unjudged pair already follows.
+
+**A split nomination is answered the same way.** `should_split` bisects a
+topic's material and nominates where the two centroids sit apart relative to
+the spread inside them; that number is inflated exactly when there is little
+material, so most nominations are read and kept whole. `splits_declined`
+records that, on the same `description_reviewed_at` a confirmation stamps:
+*last stood behind what this topic says and covers* is one moment, and the
+split scan skips a topic whose material has not moved since it. It journals
+`DecisionKind.SPLIT_DECLINED`, one row for the batch. Before it existed the
+same topics came back on every reflect, 97 of them on one real graph.
+
+**The material walk follows `tagged_with_topic`** as well as
+`extracted_under_topic` and `abstracts`. A tag holds neither of the other two,
+so until it did, the enrichment scan could not reach a topic node created from
+a tag at all, and the only path to a described tag was an agent calling
+`apply_reflection` by hand. New tags arrive described, because
+`store_decomposition` refuses to mint one without a line in `tag_descriptions`;
+the undescribed tags already on a graph are what this scan now finds.
+
 **Three of these carry a metacontext, and none of them may invent one.** A split's
 subtopics inherit what the parent states; a synthesised parent inherits the
 one set its children all stand in, and is refused into `parents_refused`
 when they differ; a topic merge is refused into `topic_merges_refused` unless
-every source stands in exactly the same set. An all-tag merge is exempt from
-that last gate: a tag names something rather than asserting it, so it stands in
-every metacontext it is used from, and the survivor is used from every world its
-sources were. Union is never the answer for anything else: one node asserted in
-two worlds is the worst outcome available.
+every source stands in exactly the same set. An all-tag merge and an all-tag
+parent are exempt from those two gates: a tag names something rather than
+asserting it, so it stands in every metacontext it is used from, and a node
+gathering names is used from every world they were. Union is never the answer
+for anything else: one node asserted in two worlds is the worst outcome
+available.
 
 **A merge re-states the survivor's metacontext rather than migrating one.** Every
 other edge on a survivor is something its sources brought with them, but a

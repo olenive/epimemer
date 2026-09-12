@@ -970,6 +970,17 @@ class Topic(BaseModel):
     # gains the ability to write it in a later stage, and until then every topic
     # reads back empty here. `dev-docs/TOPIC_DESCRIPTIONS.md` carries the case.
     description: str = ""
+    # When somebody last wrote the description above or read it against the
+    # topic's material and let it stand. `None` means nobody ever has, which is
+    # every topic written before the field existed, and is the state reflect
+    # falls back to its length-ratio heuristic for. Once it is set, reflect
+    # nominates the topic exactly when material under it was created, archived
+    # or superseded after this moment, so a description written last week over
+    # material that has not moved is left alone. Read by reflect alone, and
+    # written by creation-with-a-description, by `described()` and by
+    # `apply_reflection(descriptions_confirmed=...)`.
+    # `dev-docs/DESCRIPTION_REVIEW.md` carries the case.
+    description_reviewed_at: datetime | None = None
     # Segment.id, if extracted from text (entity topics and topics from a tag have none)
     source_id: str | None = None
     status: NodeStatus = NodeStatus.ACTIVE
@@ -1828,6 +1839,17 @@ class DecisionKind(str, Enum):
     # because a judgment moves `importance` — which is how *do not nominate
     # this* got written into a field meaning *how consequential this is*.
     RETENTION = "retention"
+    # A topic's description read against material that moved under it, and kept.
+    # The verdict opposite to `ENRICHMENT`, and it stands beside it the way
+    # `RETENTION` stands beside `ARCHIVAL`: somebody looked and chose not to
+    # write. An `ENRICHMENT` row carrying the same text before and after would
+    # misreport that as a change, and a reviewer selecting `ENRICHMENT` to see
+    # where a description moved would get rows where none did.
+    DESCRIPTION_REVIEW = "description_review"
+    # A split nomination read and declined: the material is one topic. Its own
+    # kind for the same reason as the two above; a reviewer asking what was
+    # split should not get the rows where nothing was.
+    SPLIT_DECLINED = "split_declined"
     REACTIVATION = "reactivation"
     BOUNDARY = "boundary"
     # A name put back on the node that holds its edges, after an earlier

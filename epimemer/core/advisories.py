@@ -49,10 +49,17 @@ class AdvisoryKind(str, Enum):
     # world resolves differently from another, so same-metacontext is again the wrong
     # tool — and what is being described is probably a contradiction.
     SAME_METACONTEXT_VARIANT = "same_metacontext_variant"
-    # A contradiction recorded within one metacontext. **The only kind here that says
-    # the call was right**: the conflict is real rather than a divergence of
-    # worlds, which is exactly what makes it worth putting to a person.
+    # A contradiction recorded within one metacontext. The conflict is real
+    # rather than a divergence of worlds, which is exactly what makes it worth
+    # putting to a person.
     SAME_METACONTEXT_CONTRADICTION = "same_metacontext_contradiction"
+    # A description supplied at ingest for a tag this graph already describes.
+    # The stored one stands: it is judged prose with a history trail, and
+    # replacing it is enrichment, which goes through `apply_reflection` where
+    # the wording it replaced is kept. The ingest itself was right, so there is
+    # nothing here to proceed against; what the agent needs to know is that the
+    # sentence it wrote was not the one the graph now holds.
+    DESCRIPTION_NOT_WRITTEN = "description_not_written"
 
 
 class AdvisoryStance(str, Enum):
@@ -70,12 +77,18 @@ class AdvisoryStance(str, Enum):
     `proceeded_despite_advisory` row is written. *Despite* is meaningful only
     where there was something to proceed against, and a row for every correct
     call degrades the review the kind exists for.
+
+    So the question a stance answers is narrow: **does this argue the operation
+    may be wrong?** Everything else an advisory can be — a conflict worth
+    putting to a person, a sentence the graph declined to store — is the same
+    answer to that question, which is *no*.
     """
 
     # The operation may be the wrong one. Proceeding is worth recording.
     OBJECTS = "objects"
-    # The operation was right; the finding it turned up wants a person. Nothing
-    # was proceeded against, so nothing is journalled.
+    # The operation was right. Nothing was proceeded against, so nothing is
+    # journalled, and the advisory is a finding for whoever reads the response:
+    # a conflict that wants a person, or a write the graph declined to make.
     ESCALATES = "escalates"
 
 
@@ -89,6 +102,7 @@ ADVISORY_STANCE: dict[AdvisoryKind, AdvisoryStance] = {
     AdvisoryKind.CROSS_METACONTEXT: AdvisoryStance.OBJECTS,
     AdvisoryKind.SAME_METACONTEXT_VARIANT: AdvisoryStance.OBJECTS,
     AdvisoryKind.SAME_METACONTEXT_CONTRADICTION: AdvisoryStance.ESCALATES,
+    AdvisoryKind.DESCRIPTION_NOT_WRITTEN: AdvisoryStance.ESCALATES,
 }
 
 

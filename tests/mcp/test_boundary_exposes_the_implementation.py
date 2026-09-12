@@ -102,6 +102,7 @@ NOT_AGENT_SETTABLE: dict[tuple[str, str], str] = {
     "advisory policy is a gate it can open",
     ("record_contradiction", "warning_policy"): "as merge_inferences",
     ("record_variant", "warning_policy"): "as merge_inferences",
+    ("store_decomposition", "warning_policy"): "as merge_inferences",
     (
         "search",
         "record_retrieval",

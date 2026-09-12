@@ -191,11 +191,18 @@ class TestEachKindGivesExactlyOneKindOfAdvice:
     def test_every_kind_is_classified_and_nothing_else_is(self):
         assert set(ADVISORY_STANCE) == set(AdvisoryKind)
 
-    def test_only_the_same_metacontext_contradiction_endorses_the_call(self):
+    def test_the_kinds_that_endorse_the_call_are_named_one_by_one(self):
+        """An inventory rather than a rule, so a kind cannot join the
+        non-journalling half by being added: a same-metacontext contradiction
+        is a right call that found something, and a description not written is
+        a right call the graph declined one write inside."""
         endorsing = {
             kind for kind, stance in ADVISORY_STANCE.items() if stance is AdvisoryStance.ESCALATES
         }
-        assert endorsing == {AdvisoryKind.SAME_METACONTEXT_CONTRADICTION}
+        assert endorsing == {
+            AdvisoryKind.SAME_METACONTEXT_CONTRADICTION,
+            AdvisoryKind.DESCRIPTION_NOT_WRITTEN,
+        }
 
     def test_an_escalating_advisory_has_nothing_to_proceed_despite(self):
         assert (

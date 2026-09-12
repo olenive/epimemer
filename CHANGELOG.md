@@ -4,6 +4,53 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] — 2026-09-12
+
+**A new tag needs a description, and the call is refused without one.** This
+changes what every caller of `store_decomposition` that creates tags has to
+send: a `tag_descriptions` dict with one line per new tag. Existing tags need
+nothing. The rest of this release is the other half of the same idea, that
+every reflect nomination has a recordable answer, so nothing is asked twice
+until something changes.
+
+- `tag_descriptions` is required on `store_decomposition` for every tag the
+  call would create, and the call is refused without it, naming the tags that
+  need a line. A tag with no description is embedded on its own characters, so
+  two dated session tags score 0.99 against each other and every reflect asks
+  for them to be merged. An entry for a tag the graph already describes is not
+  written and comes back in `warnings`; an entry for an existing tag with no
+  description is written, so a graph backfills as it is used.
+- Reflect nominates a topic's description for review when the material under it
+  changed, rather than whenever the material is long. The nomination carries
+  the delta: `since`, the nodes created, archived or superseded since then
+  (newest first, at most twenty, each saying which and when), `changed_count`
+  and `material_count`. A topic nobody has described keeps the old length
+  ratio, and arrives with `since: null` and a sample instead.
+- `apply_reflection(descriptions_confirmed=[topic_id])` records that a
+  description was read against the change and still fits. The answer opposite
+  to an enrichment, and the one that had no writer, so an unanswered nomination
+  came back for ever.
+- `DecisionKind.DESCRIPTION_REVIEW` journals a confirmation, one row per batch,
+  the way `RETENTION` stands beside `ARCHIVAL`. An `ENRICHMENT` row with the
+  same text before and after would misreport it.
+- `description_reviewed_at` on `Topic` records when its description was last
+  written or confirmed. Absent on existing rows, where it reads `None` and
+  means never reviewed; no schema step.
+- A synthesised parent whose children are all topic nodes created from tags
+  stands in the union of their metacontexts, the way an all-tag merge survivor
+  does, instead of being refused when the children are used from different
+  worlds. `combined_metacontext_set` states both answers once.
+- `apply_reflection(splits_declined=[topic_id])` records that a split
+  nomination was read and the topic is one topic, journaled as
+  `DecisionKind.SPLIT_DECLINED`. It stamps `description_reviewed_at`, and the
+  split scan skips a topic whose material has not moved since somebody last
+  stood behind it, whether by a description written or confirmed or a split
+  declined. Before this the same topics came back on every reflect.
+- The material walk under a topic follows `tagged_with_topic` as well as
+  `extracted_under_topic` and `abstracts`, so reflect can reach a topic node
+  created from a tag at all. It never could before, which is why the tags on a
+  real graph had stayed undescribed.
+
 ## [0.2.1] — 2026-09-10
 
 **`link` refuses an edge whose ends are the wrong kinds of node.** Until now it

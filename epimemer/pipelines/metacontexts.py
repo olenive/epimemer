@@ -250,6 +250,26 @@ async def shared_metacontext_set(
     return set(next(iter(distinct))) if len(distinct) == 1 else None
 
 
+async def combined_metacontext_set(
+    topics: Sequence[Topic], storage: StorageBackend
+) -> set[str] | None:
+    """The metacontexts a node combining these topics may stand in, or `None`.
+
+    Two answers, and which one applies is decided by what the topics are. Every
+    one a topic node created from a tag: the **union**, because a name stands in
+    every metacontext it is used from and a node gathering names is used from
+    all of them. That is the answer the all-tag merge exemption gives, and it is
+    the same answer stated once for parent synthesis. Any topic a statement: the
+    **one set they all share**, from `shared_metacontext_set`, and `None` where
+    they differ, because a claim combining a fiction claim and a real one would
+    assert in both worlds.
+    """
+    ids = [topic.id for topic in topics]
+    if topics and all(created_from_tag(topic) for topic in topics):
+        return set().union(*(await metacontexts_for(ids, storage)).values())
+    return await shared_metacontext_set(ids, storage)
+
+
 TAG_EXTRACTION_METHOD = "agent:tag"
 """What `store_decomposition` stamps on a Topic it creates to carry a tag."""
 

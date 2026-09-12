@@ -93,7 +93,7 @@ LIST_VALUED: dict[str, tuple[str, ...]] = {
 }
 
 # Lists whose entries are bare node ids rather than objects.
-ID_VALUED: tuple[str, ...] = ("archivals",)
+ID_VALUED: tuple[str, ...] = ("archivals", "descriptions_confirmed", "splits_declined")
 
 # A key a field used to take, and what to send instead. Named rather than left
 # to the generic *'description' is required*, because the shape change came with

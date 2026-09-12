@@ -68,6 +68,9 @@ async def _ingest(storage, embedder, config, *, judge=None, **kwargs):
         embedding_provider=embedder,
         judge=judge,
         metacontext_id=BASE_METACONTEXT_ID,
+        # The per-node tag above is new to this graph, and a new tag is refused
+        # without a line saying what it covers.
+        tag_descriptions={"diplomacy": "Relations between states, and how they are settled."},
     )
     return seg, store
 

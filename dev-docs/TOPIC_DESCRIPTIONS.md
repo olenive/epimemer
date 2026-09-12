@@ -1,9 +1,15 @@
 # Topic descriptions: a name that does not move
 
-**Status: stages 0 to 2 built, stage 1.5 measured (§6.1), stage 3 command built,
-repair pending on the real graph.** §6 breaks the work into stages with the
+**Status: stages 0 to 3 built, stage 1.5 measured (§6.1), and the repair in §5
+run on the real graph on 2026-09-10: the five names are back on the nodes that
+hold their edges.** §6 breaks the work into stages with the
 types, call sites and tests each one needs; §9 lists what is still open. Where
 an unbuilt section says "does", read "would".
+
+**Who writes a description, and when reflect asks for it again, is built in
+`DESCRIPTION_REVIEW.md`**: `store_decomposition` refuses to mint a tag without
+one, and reflect nominates a described topic for review exactly when the
+material under it has moved since somebody last stood behind what it says.
 
 `Topic` has one text field. It carries two jobs: the name the graph joins on,
 and the prose that explains what the topic is. This proposes splitting them,
@@ -230,18 +236,18 @@ places need a decision rather than nothing:
 
 ## 5. The broken tags
 
-Of the six topic nodes created from tags and rewritten in the §1.1 incident,
-`issue-46` has been
-repaired; `issue-16`, `issue-52`, `issue-53`, `issue-61` and `issue-62` are
-still sentences holding their tags' edges. The repair is the one already run:
-create the bare topic node, move its `tagged_with_topic` edges onto it keeping
-their original `created_at` and `judged_by`, and prune the moved edges from any
-merge-undo record that would otherwise restore a duplicate.
+**Repaired, 2026-09-10.** All six topic nodes created from tags and rewritten
+in the §1.1 incident carry their names again: `issue-46` by hand, and
+`issue-16`, `issue-52`, `issue-53`, `issue-61` and `issue-62` through
+`epimemer tags repair`. The repair creates the bare topic node, moves its
+`tagged_with_topic` edges onto it keeping their original `created_at` and
+`judged_by`, and prunes the moved edges from any merge-undo record that would
+otherwise restore a duplicate.
 
 The sentences the enrichment wrote are good prose, and they are exactly what
-the new field is for. Seeding each repaired node's `description` from the
-sentence that displaced its name turns the damage into the field's first data,
-after a person has read the five once.
+the new field is for, so each repaired node's `description` was seeded from the
+sentence that had displaced its name. That turned the damage into the field's
+first data, and it is why those five are the only described tags on the graph.
 
 ---
 
@@ -377,9 +383,9 @@ replaced wording is recoverable; a described topic re-embeds; the §1.1 failure
 is a regression test, tagging a document, enriching the tag, and tagging
 again, asserting one topic node.
 
-**Stage 3, repair.** The five topic nodes, with descriptions seeded per §5.
-Verification is `find_nodes(tagged_with_topic=...)` returning the expected
-count for each.
+**Stage 3, repair. Run 2026-09-10.** The five topic nodes, with descriptions
+seeded per §5. Verified by `find_nodes(tagged_with_topic=...)` returning the
+expected count for each.
 
 ---
 
@@ -418,6 +424,9 @@ same assertion, unattributed and unversioned.
 
 ## 9. Open
 
+- Who writes the description, and when reflect asks for it again: **settled and
+  built** in `DESCRIPTION_REVIEW.md`, which requires one on every new tag and
+  nominates a description for review when the material under it changes.
 - Whether Stage 0 should also cover `get_node_by_content`'s other callers, or
   stay in the two name-resolution sites where the question is *where did this
   name go*.

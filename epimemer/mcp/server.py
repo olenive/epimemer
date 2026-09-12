@@ -500,6 +500,7 @@ async def memory_store_decomposition(
     metacontext_id: str,
     ctx: Context,
     tags: list[str] | None = None,
+    tag_descriptions: dict[str, str] | None = None,
     timeline_id: str | None = None,
     propose_timepoints: bool = True,
     expected_graph: str | None = None,
@@ -644,6 +645,23 @@ async def memory_store_decomposition(
         tags: Optional document-level tag names applied to every node. Each tag
             becomes (or reuses) a Topic linked by a tagged_with_topic edge. Every node
             also gets a sourced_from edge to the document.
+        tag_descriptions: {tag name: one line saying what the tag covers}.
+            **Required for every tag in this call that does not exist yet, both
+            document-level and per-node; the call is refused without them and
+            nothing is written.** The refusal names the tags that need a line,
+            so add them and resend. Write what somebody reading the tag a month
+            from now would need: "the 11 September 2026 development session" for
+            `dev-session-2026-09-11`, "how a claim's period is recorded, per
+            source" for `validity`. Without one a tag is embedded on its own
+            characters, so two dated sessions score 0.99 against each other and
+            every reflect asks you to merge two different days of work.
+            One dict for the whole call, covering both places a tag can appear.
+            Names match up to case and separators, the way tags themselves
+            resolve. An entry for a tag this graph already describes is **not**
+            written and comes back in `warnings`: changing a live description is
+            enrichment, through apply_reflection. An entry for an existing tag
+            that has no description yet **is** written, so a graph fills in as
+            it is used. A call that creates no tags needs no dict.
         timeline_id: Optional timeline to propose timepoints onto — use it when
             the document belongs to a timeline you have already created (a
             novel's chronology, a project history). It must exist. Omitted,
@@ -670,10 +688,12 @@ async def memory_store_decomposition(
             embedding_provider=deps["embedding_provider"],
             metacontext_id=metacontext_id,
             tags=tags,
+            tag_descriptions=tag_descriptions,
             timeline_id=timeline_id,
             propose_timepoints=propose_timepoints,
             event_bus=deps.get("event_bus"),
             judge=judge,
+            warning_policy=deps["config"].warning_policy,
         )
         count = await deps["storage"].bump_reflect_counter()
         threshold = await tools.effective_reflect_threshold(
@@ -694,6 +714,8 @@ async def memory_store_decomposition(
             f"graph={r['active_graph']} nodes={m.nodes_returned} "
             f"edges={r['edges_created']} timepoints={r['timepoints_proposed']} "
             f"reflect={r['stores_since_reflect']}/{r['reflect_threshold']}"
+            + (f" described={r['tags_described']}" if r["tags_described"] else "")
+            + (f" warnings={len(r['warnings'])}" if r.get("warnings") else "")
         ),
         expected_graph=expected_graph,
     )
@@ -1588,8 +1610,21 @@ async def memory_reflect(
     Reads only — nothing here changes the graph. Identifies:
     - Similar topic pairs that could be consolidated under a parent (this also
       covers duplicate source/tag/entity Topics)
-    - Topics with high internal variance that could be split
-    - Topics with thin descriptions but rich associated material
+    - Topics with high internal variance that could be split. A topic somebody
+      stood behind since its material last moved (a description confirmed or
+      written, a split declined) is not offered again until it moves. Answer
+      each one with `splits` or `splits_declined`; unanswered, it returns
+    - enrichment_candidates: topics whose description wants writing or
+      re-reading. A topic somebody has already described is nominated when
+      material under it was **created, archived or superseded** since that
+      moment, and the nomination shows `since`, the `changed_material` itself
+      (newest first, at most 20 of them) and `changed_count`. A topic nobody
+      has described yet has no moment to measure from, so it arrives with
+      `since: null` and a `sample` of its material instead. Either way
+      `material_count` says how much the description stands over. Answer each
+      one with apply_reflection — `enrichments` with a new sentence, or
+      `descriptions_confirmed` with the topic id where the description still
+      fits. One you leave unanswered comes back on every reflect
     - Potential contradictions between facts (same-metacontext only) — both sides
       active, since that is what makes them rivals
     - recurrences: a live fact saying what a `historical` one said, meaning the
@@ -1689,6 +1724,8 @@ async def memory_apply_reflection(
     parents: list[dict] | None = None,
     splits: list[dict] | None = None,
     enrichments: list[dict] | None = None,
+    descriptions_confirmed: list[str] | None = None,
+    splits_declined: list[str] | None = None,
     merges: list[dict] | None = None,
     supersessions: list[dict] | None = None,
     archivals: list[str] | None = None,
@@ -1727,10 +1764,19 @@ async def memory_apply_reflection(
             different metacontexts is refused into `parents_refused`, because a
             parent drawn from a fiction claim and a real one would assert in
             both worlds. Synthesise within a metacontext, or `reassign_metacontext` the odd one out.
+            A parent over nothing but topic nodes created from tags takes the
+            union instead: it gathers names, and a name stands in every
+            metacontext it is used from.
         splits: Split a broad topic into subtopics.
             Each: {topic_id: str, subtopics: [str]}
             subtopics = list of subtopic description strings. Each subtopic
             inherits the parent's metacontext — same content, refined.
+        splits_declined: The other answer to a split nomination, as a list of
+            topic ids: *I read the material, and it is one topic*. The detector
+            is a recall device, so most nominations end here. It records that
+            somebody looked, on the same stamp a description confirmation uses,
+            and the topic is not nominated for splitting again until its
+            material moves. Unanswered, it comes back on the next reflect.
         enrichments: Describe a topic from its associated material.
             Each: {topic_id: str, description: str}.
             **The description is written beside the topic's name, never over
@@ -1741,6 +1787,18 @@ async def memory_apply_reflection(
             Write what the material shows the topic to be about, in a sentence
             or two. Replacing a description keeps the previous wording on the
             node, so nothing is lost by improving one.
+            An enrichment also records that you have just read the topic, so
+            reflect measures the next change from now.
+        descriptions_confirmed: The other answer to an enrichment nomination, as
+            a list of topic ids: *I read the description against what changed,
+            and it still covers the topic*. Use it whenever the nomination's
+            `changed_material` does not make the existing description wrong or
+            incomplete — which, once a topic is described, is the common case.
+            It writes no text and touches no history; it records that somebody
+            looked, and the topic is not nominated again until its material
+            moves. **Answer every nomination with one or the other.** An
+            unanswered one comes back on the next reflect unchanged, exactly as
+            an unjudged pair does.
         merges: Fuse near-duplicate topics into one combined topic; the sources
             are retired as MERGED history. Each: {source_ids: [str], content: str}.
             A merge is applied only if every pair of sources is at least
@@ -1855,6 +1913,8 @@ async def memory_apply_reflection(
             parents=parents,
             splits=splits,
             enrichments=enrichments,
+            descriptions_confirmed=descriptions_confirmed,
+            splits_declined=splits_declined,
             merges=merges,
             supersessions=supersessions,
             archivals=archivals,
@@ -1867,7 +1927,9 @@ async def memory_apply_reflection(
         ),
         ctx,
         f"parents={len(parents or [])} splits={len(splits or [])} "
-        f"enrichments={len(enrichments or [])} merges={len(merges or [])} "
+        f"enrichments={len(enrichments or [])} "
+        f"confirmed={len(descriptions_confirmed or [])} "
+        f"splits_declined={len(splits_declined or [])} merges={len(merges or [])} "
         f"supersessions={len(supersessions or [])} archivals={len(archivals or [])} "
         f"retained={len(retained or [])} "
         f"judgments={len(judgments or [])} "

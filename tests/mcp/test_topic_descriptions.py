@@ -47,6 +47,12 @@ def config():
 
 
 async def _ingest(storage, embedder, config, text, *, tags=(), facts=("a claim",)):
+    """One document carrying `tags`.
+
+    The descriptions are what the ingest rule requires of a new tag; the tests
+    below then overwrite them through `apply_reflection`, which is the act they
+    are about.
+    """
     seg, _ = await tools.segment_text(text, storage, embedder, config)
     stored, _ = await tools.store_decomposition(
         document_id=seg["document_id"],
@@ -55,9 +61,29 @@ async def _ingest(storage, embedder, config, text, *, tags=(), facts=("a claim",
         embedding_provider=embedder,
         metacontext_id=BASE_METACONTEXT_ID,
         tags=list(tags),
+        tag_descriptions={name: f"Everything filed under {name}." for name in tags},
         judge=CRITIC,
     )
     return stored
+
+
+async def _undescribed_topic(storage, embedder, config, content="Validity") -> Topic:
+    """A topic with no description, for the tests about what a first one does.
+
+    A statement topic rather than a tag: a tag is refused at ingest without a
+    description now, so the only topic that can arrive undescribed is one whose
+    `content` already says what it covers.
+    """
+    seg, _ = await tools.segment_text("A document.", storage, embedder, config)
+    await tools.store_decomposition(
+        document_id=seg["document_id"],
+        segments=[{"segment_id": seg["segments"][0]["segment_id"], "topics": [content]}],
+        storage=storage,
+        embedding_provider=embedder,
+        metacontext_id=BASE_METACONTEXT_ID,
+        judge=CRITIC,
+    )
+    return await _named(storage, content)
 
 
 async def _tag_topics(storage) -> list[Topic]:
@@ -151,8 +177,7 @@ class TestTheReplacedWordingIsRecoverable:
     async def test_a_first_description_records_no_history(self, storage, embedder, config):
         """There is nothing to keep: an empty description is undescribed, and a
         trail entry saying so would be a revision nobody made."""
-        await _ingest(storage, embedder, config, "A document.", tags=["issue-53"])
-        topic = await _named(storage, "issue-53")
+        topic = await _undescribed_topic(storage, embedder, config)
 
         await _enrich(storage, embedder, topic.id, ISSUE_53)
 
@@ -160,8 +185,7 @@ class TestTheReplacedWordingIsRecoverable:
         assert "description_history" not in after.metadata
 
     async def test_a_second_description_keeps_the_first(self, storage, embedder, config):
-        await _ingest(storage, embedder, config, "A document.", tags=["issue-53"])
-        topic = await _named(storage, "issue-53")
+        topic = await _undescribed_topic(storage, embedder, config)
         await _enrich(storage, embedder, topic.id, ISSUE_53)
 
         await _enrich(storage, embedder, topic.id, "A sharper sentence.", judge=CRITIC)
@@ -171,8 +195,7 @@ class TestTheReplacedWordingIsRecoverable:
         assert [entry["replaced"] for entry in after.metadata["description_history"]] == [ISSUE_53]
 
     async def test_the_trail_names_who_wrote_the_replacement(self, storage, embedder, config):
-        await _ingest(storage, embedder, config, "A document.", tags=["issue-53"])
-        topic = await _named(storage, "issue-53")
+        topic = await _undescribed_topic(storage, embedder, config)
         await _enrich(storage, embedder, topic.id, ISSUE_53, judge=EDITOR)
 
         await _enrich(storage, embedder, topic.id, "A sharper sentence.", judge=CRITIC)
@@ -181,8 +204,7 @@ class TestTheReplacedWordingIsRecoverable:
         assert after.metadata["description_history"][0]["judged_by"]["agent_id"] == "critic"
 
     async def test_the_trail_is_append_only(self, storage, embedder, config):
-        await _ingest(storage, embedder, config, "A document.", tags=["issue-53"])
-        topic = await _named(storage, "issue-53")
+        topic = await _undescribed_topic(storage, embedder, config)
         for text in (ISSUE_53, "A second.", "A third."):
             await _enrich(storage, embedder, topic.id, text)
 
@@ -190,6 +212,22 @@ class TestTheReplacedWordingIsRecoverable:
         assert [entry["replaced"] for entry in after.metadata["description_history"]] == [
             ISSUE_53,
             "A second.",
+        ]
+
+    async def test_a_tag_described_at_ingest_keeps_that_wording_too(
+        self, storage, embedder, config
+    ):
+        """The ingest rule writes the first description now, so the first
+        enrichment of a tag is already a replacement, and the trail is where
+        the wording the creator chose survives."""
+        await _ingest(storage, embedder, config, "A document.", tags=["issue-53"])
+        topic = await _named(storage, "issue-53")
+
+        await _enrich(storage, embedder, topic.id, ISSUE_53)
+
+        after = await storage.get_node(topic.id)
+        assert [entry["replaced"] for entry in after.metadata["description_history"]] == [
+            "Everything filed under issue-53."
         ]
 
     async def test_the_judge_who_wrote_the_name_is_unchanged(self, storage, embedder, config):
@@ -371,28 +409,23 @@ class TestADescribedTopicIsNotNominatedForEver:
         """The agent cannot tell a first description from an overwrite of prose
         somebody judged, out of a nomination that shows only the name.
 
-        A statement topic rather than a tag, because material is gathered over
-        the `extracted_under_topic` and `abstracts` edges that ingest writes from
-        a segment's claims, and a tag holds neither.
+        A tag, and a second document under it, because a described topic is
+        nominated only when its material moves: the enrichment below is what
+        stamps `description_reviewed_at`, and the second ingest is what changes
+        something after it.
         """
-        seg, _ = await tools.segment_text("A document.", storage, embedder, config)
-        await tools.store_decomposition(
-            document_id=seg["document_id"],
-            segments=[
-                {
-                    "segment_id": seg["segments"][0]["segment_id"],
-                    "topics": ["Validity"],
-                    "facts": ["The claim held from March until the rename in September."],
-                }
-            ],
-            storage=storage,
-            embedding_provider=embedder,
-            metacontext_id=BASE_METACONTEXT_ID,
-            judge=CRITIC,
-        )
-        topic = await _named(storage, "Validity")
+        await _ingest(storage, embedder, config, "First document.", tags=["issue-53"])
+        topic = await _named(storage, "issue-53")
         await _enrich(storage, embedder, topic.id, "Short.")
 
+        await _ingest(
+            storage,
+            embedder,
+            config,
+            "Second document.",
+            tags=["issue-53"],
+            facts=["a later claim"],
+        )
         result, _ = await tools.reflect(storage, embedder)
 
         nominated = {c["topic_id"]: c for c in result["enrichment_candidates"]}
@@ -412,8 +445,7 @@ class TestTopicTreePreviewsADescription:
 
     async def test_an_undescribed_topic_carries_no_such_key(self, storage, embedder, config):
         """Absent rather than empty, so *undescribed* reads as the absence it is."""
-        await _ingest(storage, embedder, config, "A document.", tags=["issue-53"])
-        topic = await _named(storage, "issue-53")
+        topic = await _undescribed_topic(storage, embedder, config)
 
         result, _ = await tools.topic_tree(topic.id, storage)
 

@@ -62,6 +62,21 @@ visualisation hub, the process the dashboard connects to.
   or an inference, whose wording *is* the claim. Write one wherever the content
   alone would not tell a reader what the topic is about. A topic left undescribed
   can be described later, by `apply_reflection(enrichments=[...])`.
+- **Every tag you create needs a line in `tag_descriptions`, and the call is
+  refused without it.** One dict for the whole call, covering both the
+  document-level `tags` and any per-node ones:
+  `tag_descriptions={"dev-session-2026-09-11": "The 11 September 2026
+  development session."}`. The refusal names the tags still needing a line, so
+  add them and resend; nothing was written. Only *new* tags need one, and a
+  call that creates none needs no dict. You are the only party that knows what
+  a tag means at the moment you mint it, which is why this refuses rather than
+  warns: a warning would be read by the next agent, not by you. Without a
+  description a tag is embedded on its own characters, so two dated sessions
+  score 0.99 against each other and every reflect asks you to merge two
+  different days of work. An entry for a tag that is already described is not
+  written and comes back in `warnings` — changing a live description is
+  enrichment, through `apply_reflection`. An entry for an existing tag that has
+  no description yet *is* written, which is how a graph fills in as it is used.
 - **Give every fact a `claim_kind`** (`{"content": ..., "claim_kind":
   "state"}`). Facts only; it is an error on a topic or an inference. Ask what
   kind of thing is being claimed:
@@ -375,10 +390,12 @@ so **read it and write differently** rather than reading it and proceeding.
 `disjoint_premises`, `cross_metacontext` and `same_metacontext_variant` say *this may be
 the wrong call*; proceeding past one is journalled, whether or not the graph
 was set to show it to you, and a later agent reads those back with
-`review(mode="advisory")`. `same_metacontext_contradiction` says the reverse: the
-tool was right, and the conflict it found wants a person, so nothing is
-recorded against it. `notify_user: true` means raise it with the user either
-way. `configure_warnings` sets what a graph does with them; ask the user
+`review(mode="advisory")`. Two say the reverse, that the call was right and
+nothing is recorded against it: `same_metacontext_contradiction`, where the
+conflict found wants a person, and `description_not_written`, where a
+`tag_descriptions` entry named a tag the graph already describes and the stored
+description stands. `notify_user: true` means raise it with the user, whichever
+kind it came from. `configure_warnings` sets what a graph does with them; ask the user
 before changing it.
 
 **Human-in-the-loop.**
@@ -480,16 +497,40 @@ if useful.
   because}])` where they are two. Two inferences agreeing is **not**
   automatically redundancy; it may be independent support, which is the
   thing corroboration exists to count.
-- **Enrichment describes a topic; it never renames one.** `reflect` nominates
-  topics saying less about themselves than their material does, and you answer
-  with `apply_reflection(enrichments=[{topic_id, description}])`. The
-  description is written beside the topic's `content`, which stays exactly as it
-  is: `content` is the name a tag resolves to at ingest and the name
+- **Enrichment describes a topic; it never renames one.** The description is
+  written beside the topic's `content`, which stays exactly as it is: `content`
+  is the name a tag resolves to at ingest and the name
   `find_nodes(tagged_with_topic=...)` resolves back, so moving it would split
-  the tag in two. The nomination shows the description the topic carries now, if
-  any; replacing one keeps the earlier wording on the node, so a better sentence
-  costs nothing. Worth writing wherever the name alone would not tell a reader
-  what the topic covers, which is every topic node created from a tag.
+  the tag in two. Replacing a description keeps the earlier wording on the node,
+  so a better sentence costs nothing.
+- **An enrichment nomination arrives when the material under a described topic
+  changed**, and it shows you the change. The nomination carries `since`, the
+  moment somebody last wrote or confirmed the description, and
+  `changed_material`: the nodes created, archived or superseded since then,
+  newest first, each saying which of the three happened and when. `changed_count`
+  and `material_count` say how many there were in all and how much the
+  description stands over, so you can see what the cap of twenty hid. A topic
+  nobody has described yet has no moment to measure from, so it comes with
+  `since: null` and a `sample` of its material instead: that one is the
+  first-time question, *what is this topic about*.
+- **Answer every nomination, one way or the other.**
+  - `apply_reflection(enrichments=[{topic_id, description}])` where the change
+    makes the description wrong or incomplete. Write what the material shows
+    the topic to be about, in a sentence or two.
+  - `apply_reflection(descriptions_confirmed=[topic_id])` where you read it
+    against the change and it still fits. Which, once a topic is described, is
+    the common case: it writes nothing, records that you looked, and stops the
+    topic being nominated until its material moves again.
+
+  A nomination you leave unanswered comes back on the next reflect unchanged,
+  exactly as an unjudged pair does.
+- **A split nomination has the same two answers.** `splits=[{topic_id,
+  subtopics}]` where the material really is two subjects, and
+  `splits_declined=[topic_id]` where you read it and it is one topic. The
+  detector is a recall device and inflates on small topics, so declining is the
+  common answer. It stamps the same review time a description confirmation
+  does, and the topic is not offered for splitting again until its material
+  moves.
 - Apply your decisions with `apply_reflection`. To resolve flagged nodes in
   batch, pass `supersessions=[{old_id, by_id}]`. Resolving a loser
   automatically clears the winner's `contested` and `superseded_candidate`
@@ -620,9 +661,10 @@ the graph learned it.
   metacontexts comes back in `parents_refused` or `topic_merges_refused` with
   nothing written. A merge re-states the survivor's metacontext under your judge:
   its wording is synthesised, so nobody had yet said which world it was
-  about. The union is never taken, with one exception: an all-tag merge, where
-  the survivor stands in every metacontext its sources stood in. A name is used
-  from a world rather than claimed about one, so the union is what it means.
+  about. The union is never taken, with one exception: a merge or a parent
+  over nothing but topic nodes created from tags, where the result stands in
+  every metacontext its sources stood in. A name is used from a world rather
+  than claimed about one, so the union is what it means.
 - **Two perspectives disagreeing about one world are not nominated as a
   contradiction**: they share no metacontext, and the sweep skips such pairs.
   Usually right: they coexist, neither claiming the other is wrong. Where

@@ -1,8 +1,19 @@
 """Topic enrichment for the reflection layer.
 
-Identifies topics whose associated material has grown substantially richer than
-what the topic currently says about itself, and gathers that material so the
-calling agent can write a description through `apply_reflection`.
+Gathers the material under each topic so the calling agent can write a
+description through `apply_reflection`, and decides which topics to put in front
+of it.
+
+**Two tests, and which one applies depends on whether anybody has looked.** A
+topic whose `description_reviewed_at` is set is nominated exactly when a node
+under it was created, archived or superseded after that moment: the question is
+*has anything happened since somebody last stood behind what this says about
+itself*, and `changed_since` answers it. A topic nobody has ever reviewed has no
+moment to measure from, so it keeps the length ratio in `_should_enrich`, which
+asks the first-time question, *is this topic thin beside its material*. The
+ratio answered identically on every run, which is why a good description over
+forty facts used to be nominated for ever. `dev-docs/DESCRIPTION_REVIEW.md`
+carries the case.
 
 **Enrichment writes `description` and never `content`.** The name is the join
 key: `_tag_topic` resolves a tag to a topic node by it at ingest, and
@@ -15,6 +26,10 @@ for a guard to refuse. `dev-docs/TOPIC_DESCRIPTIONS.md` carries the case.
 """
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
+from typing import Literal
+
+from pydantic import BaseModel
 
 from epimemer.core.types import (
     EdgeType,
@@ -23,30 +38,59 @@ from epimemer.core.types import (
     Fact,
     Inference,
     JudgeRef,
+    NodeStatus,
     Topic,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
 from epimemer.pipelines.embedding_text import embedding_text
 from epimemer.storage.protocol import StorageBackend
 
+# The three edges that put a claim under a topic. `tagged_with_topic` is the
+# one a topic node created from a tag holds, and leaving it out was why the
+# enrichment scan could never reach a tag: the only path to a described tag was
+# an agent calling `apply_reflection(enrichments=...)` by hand.
+MATERIAL_EDGE_TYPES: tuple[EdgeType, ...] = (
+    EdgeType.EXTRACTED_UNDER_TOPIC,
+    EdgeType.ABSTRACTS,
+    EdgeType.TAGGED_WITH_TOPIC,
+)
+
+
+class MaterialChange(BaseModel):
+    """One node under a topic that moved since its description was last stood behind.
+
+    `at` is the moment of the change rather than the node's creation, so a list
+    of these sorts newest-first on one field whichever kind of change each is.
+    """
+
+    node_id: str
+    content: str
+    change: Literal["created", "archived", "superseded"]
+    at: datetime
+
 
 async def gather_associated_material_for(
     topics: Sequence[Topic], storage: StorageBackend
-) -> dict[str, list[str]]:
-    """Text content of the epistemic nodes linked to each topic, keyed by id.
+) -> dict[str, list[EpistemicNode]]:
+    """The epistemic nodes linked to each topic, keyed by topic id.
 
-    Gathers content from:
+    Gathers material from:
     - Facts via incoming EXTRACTED_UNDER_TOPIC edges (fact → topic)
     - Inferences via incoming ABSTRACTS edges (inference → topic)
+    - Anything tagged with the topic, via incoming TAGGED_WITH_TOPIC edges
 
-    Two queries for the whole topic set rather than two per topic — both
+    **The nodes rather than their content strings**, because `changed_since`
+    asks when each one arrived and whether it has since been retired, which a
+    string cannot answer. Callers that want the wording read `.content`.
+
+    Three queries for the whole topic set rather than three per topic — both
     `reflect` phases that need material walk every active topic, so per-topic
     reads made this one of the larger N+1 sites.
     """
     topic_ids = [topic.id for topic in topics]
     by_edge_type = {
         edge_type: await storage.get_edges_for(topic_ids, direction="to", edge_type=edge_type)
-        for edge_type in (EdgeType.EXTRACTED_UNDER_TOPIC, EdgeType.ABSTRACTS)
+        for edge_type in MATERIAL_EDGE_TYPES
     }
 
     # The linked nodes in one read rather than one per edge. This was the
@@ -62,19 +106,62 @@ async def gather_associated_material_for(
         ]
     )
 
-    material: dict[str, list[str]] = {}
+    material: dict[str, list[EpistemicNode]] = {}
     for topic_id in topic_ids:
-        contents: list[str] = []
+        nodes: list[EpistemicNode] = []
+        # Deduplicated: one node carrying a tag it was also extracted under
+        # would otherwise be counted, sampled and reported as two.
+        seen: set[str] = set()
         for by_topic in by_edge_type.values():
             for edge in by_topic[topic_id]:
                 node = linked.get(edge.src_id)
-                if node is not None and isinstance(node, (Fact, Inference)):
-                    contents.append(node.content)
-        material[topic_id] = contents
+                if isinstance(node, (Fact, Inference)) and node.id not in seen:
+                    seen.add(node.id)
+                    nodes.append(node)
+        material[topic_id] = nodes
     return material
 
 
-def _should_enrich(topic: Topic, material: list[str], material_ratio: float) -> bool:
+def material_contents(material: Sequence[EpistemicNode]) -> list[str]:
+    """Just the wording, for the callers that score or sample text."""
+    return [node.content for node in material]
+
+
+def changed_since(material: Sequence[EpistemicNode], since: datetime) -> list[MaterialChange]:
+    """The nodes under a topic that arrived or were retired after `since`, newest first.
+
+    Pure. Three kinds of change count, on `DESCRIPTION_REVIEW.md` §2.2's
+    reading: a description written over material that has since been retired is
+    as stale as one written before half the material arrived.
+
+    Archival and supersession are told apart by `status`, and both are dated by
+    `superseded_at`, which is the field `set_node_status_tx` writes whichever
+    retires the node. Where a node both arrived and was retired in the window,
+    the retirement is the change reported: it is the later of the two, and it is
+    the one that decides what the topic now stands over.
+    """
+    changes = [change for node in material if (change := _change_to(node, since)) is not None]
+    return sorted(changes, key=lambda change: change.at, reverse=True)
+
+
+def _change_to(node: EpistemicNode, since: datetime) -> MaterialChange | None:
+    """What happened to this node after `since`, or `None` if nothing did."""
+    retired_at = node.superseded_at
+    if retired_at is not None and retired_at > since:
+        return MaterialChange(
+            node_id=node.id,
+            content=node.content,
+            change="archived" if node.status is NodeStatus.ARCHIVED else "superseded",
+            at=retired_at,
+        )
+    if node.created_at > since:
+        return MaterialChange(
+            node_id=node.id, content=node.content, change="created", at=node.created_at
+        )
+    return None
+
+
+def _should_enrich(topic: Topic, material: Sequence[str], material_ratio: float) -> bool:
     """Whether what this topic says about itself is thin beside its material.
 
     Measured against `content` **and** `description` together, because that is
@@ -89,7 +176,9 @@ def _should_enrich(topic: Topic, material: list[str], material_ratio: float) -> 
     return sum(len(m) for m in material) >= said * material_ratio
 
 
-def described(topic: Topic, description: str, *, judge: JudgeRef | None) -> Topic:
+def described(
+    topic: Topic, description: str, *, judge: JudgeRef | None, at: datetime | None = None
+) -> Topic:
     """`topic` with `description` written on it, keeping the wording it replaced.
 
     Pure, and the whole of what an enrichment changes: same id, same `content`
@@ -103,6 +192,12 @@ def described(topic: Topic, description: str, *, judge: JudgeRef | None) -> Topi
     the new text. Extending the `ENRICHMENT` row would change `journal`'s payload
     for every caller of it; a node's own trail is where a node's own history
     already lives, beside `metacontext_reassignments` and the `rejudge` trail.
+
+    **`description_reviewed_at` moves to `at`**, because whoever wrote this
+    sentence has just read the topic's material: that is the same act a
+    confirmation records, and reflect measures the next change from it. `at`
+    defaults to now, and is an argument so a caller writing several topics in
+    one batch can stamp them all with one moment.
 
     `judged_by` does not move. It records who wrote the *name*, which is
     unchanged, and each trail entry carries whoever wrote that description.
@@ -121,6 +216,7 @@ def described(topic: Topic, description: str, *, judge: JudgeRef | None) -> Topi
     return topic.model_copy(
         update={
             "description": description,
+            "description_reviewed_at": at if at is not None else datetime.now(UTC),
             "metadata": {
                 **topic.metadata,
                 **({"description_history": history} if history else {}),

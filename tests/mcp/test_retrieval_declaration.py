@@ -130,6 +130,7 @@ async def _seed(server: FastMCP) -> dict:
                     }
                 ],
                 "tags": ["ops"],
+                "tag_descriptions": {"ops": "Running and operating the service."},
             },
         )
     )["result"]

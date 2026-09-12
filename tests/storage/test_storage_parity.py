@@ -257,6 +257,33 @@ class TestPayloadFidelity:
         assert got is not None
         assert got.description == ""
 
+    async def test_a_review_time_round_trips(self, store):
+        """When the description was last stood behind is what reflect measures
+        change from, so a backend that rounded or dropped it would re-nominate
+        every described topic on every run."""
+        reviewed_at = datetime(2026, 9, 11, 14, 32, 5, 123456, tzinfo=UTC)
+        topic = Topic(
+            content="reflect",
+            description="The consolidation sweep.",
+            description_reviewed_at=reviewed_at,
+            source_id="s1",
+        )
+        await store.store_node(topic)
+
+        got = await store.get_node(topic.id)
+        assert got is not None
+        assert got.description_reviewed_at == reviewed_at
+
+    async def test_a_topic_written_before_the_field_existed_reads_back_unreviewed(self, store):
+        """No migration and no schema step: a row with no such key reads `None`,
+        which is the never-reviewed case the length ratio still covers."""
+        topic = Topic(content="an older topic", source_id="s1")
+        await store.store_node(topic)
+
+        got = await store.get_node(topic.id)
+        assert got is not None
+        assert got.description_reviewed_at is None
+
     async def test_an_unrated_confidence_round_trips_as_absent(self, store):
         """The confidence prior: absence has to survive the trip, or the field is 0.5 again.
 

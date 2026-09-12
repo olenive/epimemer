@@ -105,7 +105,10 @@ per node.
 An all-tag merge in `apply_reflection` re-states the union of the sources'
 metacontexts on the survivor, under the merging judge as today. Names take the
 union, so the exact-equality gate stays exempt for tags, and the exemption now
-has a stated reason instead of a workaround.
+has a stated reason instead of a workaround. Parent synthesis over an all-tag
+child set takes the same union, through `combined_metacontext_set` in
+`pipelines/metacontexts.py`, which states the two answers once: union for
+names, the one shared set for anything else.
 
 ### 2.3 Migration
 
