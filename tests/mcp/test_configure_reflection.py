@@ -171,14 +171,18 @@ class TestOverrideReachesTheReadouts:
         await storage.bump_reflect_counter()
         await storage.bump_reflect_counter()
 
-        result, _ = await graph_stats(storage, default_reflect_threshold=10)
+        result, _ = await graph_stats(
+            storage, default_reflect_threshold=10, default_backup_threshold=50
+        )
 
         assert result["reflect_threshold"] == 2
         assert result["reflect_threshold_overridden"] is True
         assert result["reflect_suggested"] is True
 
     async def test_graph_stats_marks_an_unoverridden_threshold(self, storage):
-        result, _ = await graph_stats(storage, default_reflect_threshold=10)
+        result, _ = await graph_stats(
+            storage, default_reflect_threshold=10, default_backup_threshold=50
+        )
 
         assert result["reflect_threshold"] == 10
         assert result["reflect_threshold_overridden"] is False

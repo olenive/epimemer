@@ -509,6 +509,192 @@ class TestTheRosterIsWhatTheUserPicksFrom:
         assert tools.selected_judge_id(tools.NEW_JUDGE_CHOICE) is None
 
 
+class TestARetiredJudgeIsOutOfTheMainListAndOutOfReach:
+    """The point of retiring one. A judge nobody should choose again otherwise
+    sits in the picker beside the live ones, one keystroke from being selected
+    by mistake, and the only way to keep it out was to rename it to something
+    warning-shaped."""
+
+    async def test_the_roster_omits_it(self, storage):
+        await tools.claim_agent(
+            storage, agent_id="critic", description="a critic", approve_id=_accept(), now=AT
+        )
+        await tools.claim_agent(
+            storage, agent_id="stale", description="an old judge", approve_id=_accept(), now=AT
+        )
+        await tools.retire_judge(storage, handle="stale", now=LATER)
+
+        assert [choice.name for choice in await tools.judge_roster(storage)] == ["critic"]
+
+    async def test_the_retired_roster_offers_it_with_the_date(self, storage):
+        await tools.claim_agent(
+            storage, agent_id="stale", description="an old judge", approve_id=_accept(), now=AT
+        )
+        await tools.retire_judge(storage, handle="stale", now=LATER)
+
+        (choice,) = await tools.retired_judge_roster(storage)
+
+        assert choice.name == "stale"
+        assert "retired 2026-08-23" in choice.title
+        # The same key shape as the main list, so one `selected_judge_id` reads
+        # both and the sub-picker needs no second decoder.
+        assert tools.selected_judge_id(choice.key) == choice.agent_id
+
+    async def test_the_most_recently_retired_comes_first(self, storage):
+        for name in ("first", "second"):
+            await tools.claim_agent(
+                storage, agent_id=name, description="a critic", approve_id=_accept(), now=AT
+            )
+        await tools.retire_judge(storage, handle="first", now=AT)
+        await tools.retire_judge(storage, handle="second", now=LATER)
+
+        order = [choice.name for choice in await tools.retired_judge_roster(storage)]
+        assert order == ["second", "first"]
+
+    async def test_a_serving_graph_offers_no_retired_ones(self, storage):
+        await tools.claim_agent(
+            storage, agent_id="critic", description="a critic", approve_id=_accept(), now=AT
+        )
+        assert await tools.retired_judge_roster(storage) == []
+
+    async def test_claiming_it_by_name_is_refused(self, storage):
+        await tools.claim_agent(
+            storage, agent_id="stale", description="an old judge", approve_id=_accept(), now=AT
+        )
+        await tools.retire_judge(storage, handle="stale", now=LATER)
+
+        result, _ = await tools.claim_agent(
+            storage,
+            agent_id="stale",
+            description="an old judge",
+            approve_id=_accept(),
+            now=LATER,
+        )
+
+        assert result["status"] == "refused"
+        assert "retired" in result["reason"]
+        assert "2026-08-23" in result["reason"], "when, so the user can tell if it was theirs"
+        assert "epimemer agents reinstate stale" in result["reason"]
+
+    async def test_claiming_it_by_key_is_refused(self, storage):
+        claimed, _ = await tools.claim_agent(
+            storage, agent_id="stale", description="an old judge", approve_id=_accept(), now=AT
+        )
+        await tools.retire_judge(storage, handle="stale", now=LATER)
+
+        result, _ = await tools.claim_agent(
+            storage,
+            agent_id=claimed["agent_id"],
+            description="an old judge",
+            approve_id=_accept(),
+            now=LATER,
+        )
+
+        assert result["status"] == "refused"
+        assert result["agent_id"] == claimed["agent_id"]
+
+    async def test_claiming_it_by_a_former_key_is_refused(self, storage):
+        old, _ = await tools.claim_agent(
+            storage, agent_id="Opus 5 Judge", description="a critic", approve_id=_accept(), now=AT
+        )
+        await tools.claim_agent(
+            storage, agent_id="Opus 5", description="a critic", approve_id=_accept(), now=AT
+        )
+        await tools.rename_judge(storage, handle="Opus 5 Judge", name="Opus 5", same_judge=True)
+        await tools.retire_judge(storage, handle="Opus 5", now=LATER)
+
+        result, _ = await tools.claim_agent(
+            storage,
+            agent_id=old["agent_id"],
+            description="a critic",
+            approve_id=_accept(),
+            now=LATER,
+        )
+
+        assert result["status"] == "refused"
+        assert "retired" in result["reason"]
+
+    async def test_an_approved_bare_key_does_not_get_it_past_a_silent_client(self, storage):
+        """The elicitation-less path reads the approved list, and a retired
+        judge stays on that list — retiring is not withdrawing approval. This is
+        the gap the check would have if it lived in the picker."""
+        claimed, _ = await tools.claim_agent(
+            storage, agent_id="stale", description="an old judge", approve_id=_accept(), now=AT
+        )
+        await tools.retire_judge(storage, handle="stale", now=LATER)
+        assert claimed["agent_id"] in await storage.get_approved_agent_ids()
+
+        result, _ = await tools.claim_agent(
+            storage,
+            agent_id=claimed["agent_id"],
+            description="an old judge",
+            approve_id=_silent,
+            now=LATER,
+        )
+
+        assert result["status"] == "refused"
+        assert "retired" in result["reason"]
+
+    async def test_the_cadence_memo_does_not_carry_a_session_past_it(self, storage):
+        """The memo means *this session already had this identity confirmed*,
+        and a judge retired since is a different answer to the same question."""
+        claimed, _ = await tools.claim_agent(
+            storage, agent_id="stale", description="an old judge", approve_id=_accept(), now=AT
+        )
+        await tools.retire_judge(storage, handle="stale", now=LATER)
+
+        result, _ = await tools.claim_agent(
+            storage,
+            agent_id="stale",
+            description="an old judge",
+            approve_id=_accept(),
+            confirmed_identity=claimed["agent_id"],
+            now=LATER,
+        )
+
+        assert result["status"] == "refused"
+
+    async def test_a_refused_retired_judge_is_not_approved_on_its_way_out(self, storage):
+        """The user typing a retired name into the free-text prompt must not
+        leave its key on the approved list: the refusal would then have admitted
+        a judge nothing can bind."""
+        await tools.claim_agent(
+            storage, agent_id="stale", description="an old judge", approve_id=_accept(), now=AT
+        )
+        await tools.retire_judge(storage, handle="stale", now=LATER)
+        await storage.set_approved_agent_ids([])
+
+        result, _ = await tools.claim_agent(
+            storage,
+            agent_id="anything",
+            description="a critic",
+            approve_id=_accept("stale"),
+            now=LATER,
+        )
+
+        assert result["status"] == "refused"
+        assert await storage.get_approved_agent_ids() == []
+
+    async def test_reinstating_it_lets_the_next_claim_through(self, storage):
+        await tools.claim_agent(
+            storage, agent_id="stale", description="an old judge", approve_id=_accept(), now=AT
+        )
+        await tools.retire_judge(storage, handle="stale", now=LATER)
+        await tools.reinstate_judge(storage, handle="stale", now=LATER)
+
+        result, _ = await tools.claim_agent(
+            storage,
+            agent_id="stale",
+            description="an old judge",
+            approve_id=_accept(),
+            now=LATER,
+        )
+
+        assert result["status"] == "claimed"
+        assert [choice.name for choice in await tools.judge_roster(storage)] == ["stale"]
+        assert await tools.retired_judge_roster(storage) == []
+
+
 class TestADescriptionIsAClaimNotACredential:
     """Nothing verifies the prose. `confirmed_at` is the only human weight.
 

@@ -791,7 +791,9 @@ async def _run_one(
         )
         similarity_edges = await _wire_similarity(storage, degree=similarity_degree, rng=rng)
         dated_facts = await _wire_validity(storage, share=dated_share, rng=rng)
-        stats, _ = await graph_stats(storage, default_reflect_threshold=10)
+        stats, _ = await graph_stats(
+            storage, default_reflect_threshold=10, default_backup_threshold=50
+        )
         _emit(
             {
                 **tags,

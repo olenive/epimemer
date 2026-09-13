@@ -48,14 +48,18 @@ class TestReflectCounterInStats:
         await storage.bump_reflect_counter()
         await storage.bump_reflect_counter()
 
-        result, _ = await graph_stats(storage, default_reflect_threshold=5)
+        result, _ = await graph_stats(
+            storage, default_reflect_threshold=5, default_backup_threshold=50
+        )
 
         assert result["stores_since_reflect"] == 2
         assert result["reflect_threshold"] == 5
         assert result["reflect_suggested"] is False
 
     async def test_fresh_graph_reports_zero(self, storage):
-        result, _ = await graph_stats(storage, default_reflect_threshold=10)
+        result, _ = await graph_stats(
+            storage, default_reflect_threshold=10, default_backup_threshold=50
+        )
 
         assert result["stores_since_reflect"] == 0
         assert result["reflect_suggested"] is False
@@ -69,11 +73,15 @@ class TestReflectCounterInStats:
         await storage.bump_reflect_counter()
         await storage.bump_reflect_counter()
 
-        at_threshold, _ = await graph_stats(storage, default_reflect_threshold=2)
+        at_threshold, _ = await graph_stats(
+            storage, default_reflect_threshold=2, default_backup_threshold=50
+        )
         assert at_threshold["reflect_suggested"] is True
 
         await storage.bump_reflect_counter()
-        past_threshold, _ = await graph_stats(storage, default_reflect_threshold=2)
+        past_threshold, _ = await graph_stats(
+            storage, default_reflect_threshold=2, default_backup_threshold=50
+        )
         assert past_threshold["stores_since_reflect"] == 3
         assert past_threshold["reflect_suggested"] is True
 
@@ -82,7 +90,9 @@ class TestReflectCounterInStats:
         await storage.bump_reflect_counter()
         await storage.reset_reflect_counter()
 
-        result, _ = await graph_stats(storage, default_reflect_threshold=2)
+        result, _ = await graph_stats(
+            storage, default_reflect_threshold=2, default_backup_threshold=50
+        )
 
         assert result["stores_since_reflect"] == 0
         assert result["reflect_suggested"] is False
@@ -90,7 +100,9 @@ class TestReflectCounterInStats:
     async def test_reflect_keys_are_always_present(self, storage):
         """Even on an empty graph — an absent key is indistinguishable from
         `false` to a caller, and this readout exists to be checked."""
-        result, _ = await graph_stats(storage, default_reflect_threshold=10)
+        result, _ = await graph_stats(
+            storage, default_reflect_threshold=10, default_backup_threshold=50
+        )
 
         assert result["empty"] is True
         assert {"stores_since_reflect", "reflect_threshold", "reflect_suggested"} <= (result.keys())

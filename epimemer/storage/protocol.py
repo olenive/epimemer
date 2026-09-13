@@ -27,6 +27,7 @@ from epimemer.core.types import (
     EmbeddingRecord,
     EpistemicNode,
     JudgeRef,
+    JudgeUsage,
     Metacontext,
     NodeEdge,
     NodeStatus,
@@ -76,6 +77,18 @@ def resolve_reflect_threshold(override: int | None, default: int) -> int:
     protocol methods that store the override because both the MCP tools and the
     visualization instrumentation resolve it, and a second copy is how a badge
     starts showing a number the ingest path does not judge against.
+    """
+    return default if override is None else override
+
+
+def resolve_backup_threshold(override: int | None, default: int) -> int:
+    """The one rule for which backup threshold wins: a graph's override, else
+    the process default.
+
+    `resolve_reflect_threshold` said twice, deliberately rather than shared: the
+    two thresholds are stored apart, mean different things, and a single
+    function taking both would be one place that had to remember which number it
+    was resolving. Trivial and separate beats clever and shared.
     """
     return default if override is None else override
 
@@ -274,6 +287,16 @@ class StorageBackend(Protocol):
         source by its human name (e.g. "ISSUES.md"), not just its id."""
         ...
 
+    async def query_documents(self) -> Sequence[RawDocument]:
+        """Every document in the active graph. Unordered.
+
+        Whole-table, and the only read that reaches a document without already
+        knowing its id or its source name. Export is what needs it: a bundle
+        that carried the nodes but not the text they were extracted from would
+        restore a graph whose provenance edges point at nothing.
+        """
+        ...
+
     # --- Segments ---
 
     async def store_segment(self, segment: Segment) -> str:
@@ -298,6 +321,16 @@ class StorageBackend(Protocol):
         `get_edges_for`: a list has an empty value and a segment does not.
         Repeated ids collapse; an empty request returns `{}` without touching
         the store.
+        """
+        ...
+
+    async def query_segments(self) -> Sequence[Segment]:
+        """Every segment in the active graph. Unordered.
+
+        The counterpart to `query_documents`, and separate from
+        `get_segments_for_document` for the reason `get_segments` is: a segment
+        whose document has gone is still a segment, and an export that walked
+        the documents would silently leave it out.
         """
         ...
 
@@ -471,6 +504,16 @@ class StorageBackend(Protocol):
 
         Backends should implement this as an aggregate query rather than
         materializing edges, so it stays cheap on large graphs.
+        """
+        ...
+
+    async def query_edges(self) -> Sequence[NodeEdge]:
+        """Every edge in the active graph. Unordered.
+
+        The active-graph counterpart to `viz_list_edges`, which names a database
+        and is a dashboard read. Export needs the whole set and cannot get it
+        from the endpoint lookups: an edge whose src is a document rather than a
+        node would be reachable from neither end of a walk over the node ids.
         """
         ...
 
@@ -696,6 +739,49 @@ class StorageBackend(Protocol):
 
         Read-modify-write of a shared timeline is last-writer-wins across
         concurrent callers, exactly as `add_timeline_timepoint` already is.
+        """
+        ...
+
+    async def write_verbatim_tx(
+        self,
+        *,
+        documents: Sequence[RawDocument] = (),
+        segments: Sequence[Segment] = (),
+        nodes: Sequence[EpistemicNode] = (),
+        edges: Sequence[NodeEdge] = (),
+        embeddings: Sequence[EmbeddingRecord] = (),
+        timelines: Sequence[Timeline] = (),
+        metacontexts: Sequence[Metacontext] = (),
+        relation_labels: Sequence[RelationLabel] = (),
+        relation_verdicts: Sequence[RelationVerdict] = (),
+        decisions: Sequence[DecisionRecord] = (),
+        agents: Sequence[Agent] = (),
+    ) -> None:
+        """Write every record exactly as given, deriving nothing and stamping nothing.
+
+        **The import path's one write, and the only method here that promises
+        verbatim.** Restoring a graph from a bundle has to put back the ids and
+        the timestamps that were exported, and most of the ordinary writers
+        cannot: `store_relation_label` merges the row against whatever is
+        already recorded under `(name, kind)`, `record_decision` renders
+        `decided_at` through the journal's own padding, and the counter methods
+        move a number rather than setting it. A restore that went through them
+        would come back subtly different from what it read, which is precisely
+        the property the round-trip test exists to deny.
+
+        **Insert-only, not upsert**, on `write_batch_tx`'s terms and for its
+        reason: these records are being put into a graph that did not exist a
+        moment ago, so every id is new and re-writing one is a caller error
+        rather than an update. All-or-nothing, and every section optional.
+        Sections are independent — nothing here reads one to derive another —
+        so a caller may split a large restore across several calls.
+
+        **Not a general-purpose writer.** Every other path has a reason for the
+        stamping it does — a journal row's timestamp has to sort against its
+        neighbours, a relation label's id has to survive an update because
+        journal rows name it — and reaching for this to skip that reasoning
+        would put a record in the store that nothing else could have written.
+        Import is the caller; a second one needs an argument.
         """
         ...
 
@@ -1018,6 +1104,17 @@ class StorageBackend(Protocol):
         """Zero the active graph's counter. Returns the count before the reset."""
         ...
 
+    async def set_reflect_counter(self, count: int) -> None:
+        """Put the active graph's counter at exactly `count`.
+
+        **Import's method, and it has no other caller.** Everything else moves
+        the counter by one or back to zero, because the count means *stores
+        since the last reflect* and no ordinary act knows a number to assert.
+        A restored graph does: it carries the count its bundle recorded, and
+        bumping in a loop to reach it would be the same write said N times.
+        """
+        ...
+
     async def get_reflect_threshold_override(self) -> int | None:
         """The active graph's threshold override, or None if it has none.
 
@@ -1032,6 +1129,58 @@ class StorageBackend(Protocol):
 
     async def set_reflect_threshold_override(self, threshold: int | None) -> None:
         """Set the active graph's threshold override, or clear it with None."""
+        ...
+
+    # --- Backup bookkeeping ---
+    #
+    # The reflect counter's four methods again, for a second question. The two
+    # counters move together and are zeroed by different acts: reflecting clears
+    # one, a successful backup clears the other, and a graph that has been
+    # consolidated for months without ever being written out has a small reflect
+    # count and a large backup one. One counter serving both would have to be
+    # reset by whichever came first, and the other question would go unanswered.
+
+    async def get_backup_counter(self) -> int:
+        """Stores recorded in the active graph since its last backup.
+
+        Belongs to the graph rather than the process, for the reflect counter's
+        reason: it lives beside the data it describes, so it survives a restart
+        and switching graphs switches counters. Absent state reads as 0.
+        """
+        ...
+
+    async def bump_backup_counter(self) -> int:
+        """Record one store against the active graph. Returns the new count."""
+        ...
+
+    async def reset_backup_counter(self) -> int:
+        """Zero the active graph's backup counter. Returns the count before it.
+
+        Called by a backup that succeeded, and by nothing else: a counter zeroed
+        by an attempt would say a graph was safe on the strength of a write that
+        failed.
+        """
+        ...
+
+    async def set_backup_counter(self, count: int) -> None:
+        """Put the active graph's backup counter at exactly `count`.
+
+        Import's method, on `set_reflect_counter`'s terms and for its reason.
+        """
+        ...
+
+    async def get_backup_threshold_override(self) -> int | None:
+        """The active graph's backup threshold override, or None if it has none.
+
+        Stored beside the reflect counter and scoped the same way. None means
+        the graph follows the process default — deliberately not the default's
+        current *value*, so changing the configured default later still reaches
+        a graph that was once overridden and then cleared.
+        """
+        ...
+
+    async def set_backup_threshold_override(self, threshold: int | None) -> None:
+        """Set the active graph's backup threshold override, or clear it with None."""
         ...
 
     async def get_merge_overrides(self) -> MergeOverrides:
@@ -1119,6 +1268,38 @@ class StorageBackend(Protocol):
 
     async def list_agents(self) -> list[Agent]:
         """Every agent in the active graph. Unordered."""
+        ...
+
+    async def delete_agent(self, agent_id: str) -> None:
+        """Remove one agent record from the active graph. A no-op if it is absent.
+
+        **The one hard delete on this protocol, and it is gated outside it.**
+        Nothing else here deletes a record, for the reason the journal is
+        append-only: a `judged_by` holds a key, and the key has to keep
+        resolving to a name for as long as anything carries it. So the only
+        record this may be called for is one nothing carries, which
+        `judge_usage` establishes and `epimemer agents delete` refuses without.
+
+        The gate is the caller's rather than the backend's, on the rule the
+        require-a-judge policy follows: a backend holding a policy is a second
+        place for it to differ.
+        """
+        ...
+
+    async def judge_usage(self, agent_ids: Sequence[str]) -> JudgeUsage:
+        """How much of this graph names any of these keys.
+
+        A **set** of keys rather than one, for `query_decisions`' reason:
+        consolidating two records rewrites no rows, so *this judge* is
+        `agent_aliases`, and a scan over the current key alone would report an
+        absorbed judge's history as nobody's. An empty list matches nothing and
+        returns zeroes, which is a caller that named a judge with no keys.
+
+        Counts, not rows: the answer is shown to a person deciding whether to
+        delete or retire, and the ids would be a list nobody could read.
+        Backends answer it with aggregates rather than by materialising the
+        graph — it runs on the biggest tables there are.
+        """
         ...
 
     async def get_approved_agent_ids(self) -> list[str]:

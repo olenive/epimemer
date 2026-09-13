@@ -2530,9 +2530,9 @@ class TestAnIngestNoLongerInventsAMetacontext:
         )
 
         assert stored["nodes_created"]["topics"] >= 1
-        assert (await graph_stats(storage, default_reflect_threshold=10))[0][
-            "nodes_without_metacontext"
-        ] == 0
+        assert (
+            await graph_stats(storage, default_reflect_threshold=10, default_backup_threshold=50)
+        )[0]["nodes_without_metacontext"] == 0
 
 
 class TestAStatedMetacontextMustResolveHere:
@@ -2594,7 +2594,9 @@ class TestAStatedMetacontextMustResolveHere:
                 config,
                 metacontext_id="nope",
             )
-        stats, _ = await graph_stats(storage, default_reflect_threshold=10)
+        stats, _ = await graph_stats(
+            storage, default_reflect_threshold=10, default_backup_threshold=50
+        )
         assert stats["total_nodes"] == 0
         assert stats["total_edges"] == 0
 
@@ -3328,7 +3330,9 @@ class TestGraphStats:
         # holds the metacontext every ingest names, and `empty` is about knowledge.
         await storage.switch_database("virgin")
 
-        result, meta = await graph_stats(storage, default_reflect_threshold=10)
+        result, meta = await graph_stats(
+            storage, default_reflect_threshold=10, default_backup_threshold=50
+        )
         assert result["total_nodes"] == 0
         assert result["total_edges"] == 0
         assert result["empty"] is True
@@ -3355,7 +3359,9 @@ class TestGraphStats:
             NodeEdge(src_id=inference.id, dst_id=fact_a.id, type=EdgeType.DERIVED_FROM)
         )
 
-        result, meta = await graph_stats(storage, default_reflect_threshold=10)
+        result, meta = await graph_stats(
+            storage, default_reflect_threshold=10, default_backup_threshold=50
+        )
         assert result["total_nodes"] == 4
         assert result["nodes_by_type"] == {"topic": 1, "fact": 2, "inference": 1}
         assert result["total_edges"] == 3
@@ -3370,7 +3376,9 @@ class TestGraphStats:
             [topic], status=NodeStatus.SUPERSEDED, at=datetime.now(UTC)
         )
 
-        result, _ = await graph_stats(storage, default_reflect_threshold=10)
+        result, _ = await graph_stats(
+            storage, default_reflect_threshold=10, default_backup_threshold=50
+        )
         assert result["nodes_by_type"]["topic"] == 0
         assert result["total_nodes"] == 0
 
@@ -3379,7 +3387,9 @@ class TestGraphStats:
         await storage.store_metacontext(Metacontext(content="Real world"))
         await storage.store_metacontext(Metacontext(content="Fiction"))
 
-        result, _ = await graph_stats(storage, default_reflect_threshold=10)
+        result, _ = await graph_stats(
+            storage, default_reflect_threshold=10, default_backup_threshold=50
+        )
         assert result["metacontexts"] == 2
 
 

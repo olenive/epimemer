@@ -15,9 +15,13 @@ from epimemer.core.types import (
     Agent,
     DecisionKind,
     DecisionRecord,
+    Fact,
     JudgeRef,
+    agent_aliases,
     agent_name,
+    is_retired,
     live_agents,
+    retired_at,
 )
 from epimemer.mcp import tools
 from epimemer.storage.protocol import judge_aliases
@@ -288,3 +292,207 @@ class TestSeedingApprovalsTheWayAPersonNamesThem:
         assert "Opus 5" in result["reason"], "a key in a message for a person is unusable"
         assert claimed["agent_id"] not in result["reason"]
         assert result["approved_judges"] == ["Opus 5"]
+
+
+class TestRetiringAJudge:
+    """A judge that should not be chosen again leaves the picker, and keeps
+    everything else. The alternative users had was renaming it to something
+    warning-shaped, which is a warning nothing enforces."""
+
+    async def test_it_is_recorded_as_retired_and_nothing_else_changes(self, storage):
+        claimed = await _claim(storage, "Opus 5")
+        record = await _decided(storage, claimed["agent_id"])
+
+        result = await tools.retire_judge(storage, handle="Opus 5", now=LATER)
+
+        assert result["status"] == "retired"
+        stored = await storage.get_agent(claimed["agent_id"])
+        assert is_retired(stored)
+        assert retired_at(stored) == LATER
+        assert agent_name(stored) == "Opus 5"
+        assert len(stored.descriptions) == 1
+        # The decision is still there, still readable, and still reviewable —
+        # `judged_by` holds a key, and the key still resolves to a name.
+        found = await storage.query_decisions(agent_ids=agent_aliases(stored))
+        assert [r.id for r in found] == [record.id]
+
+    async def test_it_says_how_to_bring_it_back_and_what_happens_to_sessions(self, storage):
+        await _claim(storage, "Opus 5")
+
+        result = await tools.retire_judge(storage, handle="Opus 5", now=LATER)
+
+        assert "epimemer agents reinstate Opus 5" in result["message"]
+        assert "continue until they reconnect" in result["message"]
+
+    async def test_a_key_or_a_former_key_names_it_too(self, storage):
+        old = await _claim(storage, "Opus 5 Judge")
+        await _claim(storage, "Opus 5", now=LATER)
+        await tools.rename_judge(storage, handle="Opus 5 Judge", name="Opus 5", same_judge=True)
+
+        result = await tools.retire_judge(storage, handle=old["agent_id"], now=LATER)
+
+        assert result["status"] == "retired"
+        assert is_retired(await storage.get_agent(result["agent_id"]))
+
+    async def test_retiring_one_already_retired_is_refused_with_the_date(self, storage):
+        await _claim(storage, "Opus 5")
+        await tools.retire_judge(storage, handle="Opus 5", now=AT)
+
+        result = await tools.retire_judge(storage, handle="Opus 5", now=LATER)
+
+        assert result["status"] == "refused"
+        assert "already retired on 2026-08-22" in result["reason"]
+
+    async def test_a_handle_nothing_answers_to_is_refused(self, storage):
+        await _claim(storage, "Opus 5")
+
+        result = await tools.retire_judge(storage, handle="nobody", now=LATER)
+
+        assert result["status"] == "refused"
+        assert "No judge here answers to 'nobody'" in result["reason"]
+        assert "Opus 5" in result["reason"]
+
+    async def test_an_absorbed_record_cannot_be_retired_on_its_own(self, storage):
+        """It is not a judge in its own right. Its old name stops naming
+        anything, and its key resolves to the judge that absorbed it — which is
+        the one a user retiring it means."""
+        old = await _claim(storage, "Opus 5 Judge")
+        new = await _claim(storage, "Opus 5", now=LATER)
+        await tools.rename_judge(storage, handle="Opus 5 Judge", name="Opus 5", same_judge=True)
+
+        by_old_name = await tools.retire_judge(storage, handle="Opus 5 Judge", now=LATER)
+        assert by_old_name["status"] == "refused"
+
+        by_key = await tools.retire_judge(storage, handle=old["agent_id"], now=LATER)
+        assert by_key["agent_id"] == new["agent_id"]
+        assert not is_retired(await storage.get_agent(old["agent_id"]))
+
+
+class TestReinstatingAJudge:
+    async def test_it_can_be_claimed_again(self, storage):
+        await _claim(storage, "Opus 5")
+        await tools.retire_judge(storage, handle="Opus 5", now=AT)
+
+        result = await tools.reinstate_judge(storage, handle="Opus 5", now=LATER)
+
+        assert result["status"] == "reinstated"
+        claimed, _ = await tools.claim_agent(
+            storage, agent_id="Opus 5", description="a critic", approve_id=_accept(), now=LATER
+        )
+        assert claimed["status"] == "claimed"
+
+    async def test_the_spell_it_spent_retired_stays_on_the_record(self, storage):
+        await _claim(storage, "Opus 5")
+        await tools.retire_judge(storage, handle="Opus 5", now=AT)
+
+        result = await tools.reinstate_judge(storage, handle="Opus 5", now=LATER)
+
+        stored = await storage.get_agent(result["agent_id"])
+        assert [(e.retired_at, e.reinstated_at) for e in stored.retirements] == [(AT, LATER)]
+
+    async def test_reinstating_a_serving_judge_is_refused(self, storage):
+        await _claim(storage, "Opus 5")
+
+        result = await tools.reinstate_judge(storage, handle="Opus 5", now=LATER)
+
+        assert result["status"] == "refused"
+        assert "is not retired" in result["reason"]
+
+    async def test_a_handle_nothing_answers_to_is_refused(self, storage):
+        result = await tools.reinstate_judge(storage, handle="nobody", now=LATER)
+
+        assert result["status"] == "refused"
+        assert "No judge here answers to 'nobody'" in result["reason"]
+
+    async def test_the_refusal_lists_retired_judges_and_marks_them(self, storage):
+        """The judge a user is most likely to be naming at `reinstate` is a
+        retired one, so *not found* has to say which those are."""
+        await _claim(storage, "Opus 5")
+        await tools.retire_judge(storage, handle="Opus 5", now=AT)
+
+        result = await tools.reinstate_judge(storage, handle="opus five", now=LATER)
+
+        assert "Opus 5 (retired)" in result["reason"]
+
+
+class TestDeletingAJudgeThatHasNeverJudged:
+    """The journal is append-only and `judged_by` holds a key, so a record can
+    only go where nothing carries it. Everything else is retired."""
+
+    async def test_an_unused_judge_is_scanned_clean_and_deleted(self, storage):
+        claimed = await _claim(storage, "Opus 5")
+
+        scan = await tools.judge_deletion_scan(storage, handle="Opus 5")
+        assert scan["status"] == "deletable"
+        assert scan["usage"] == {"decisions": 0, "nodes": 0, "edges": 0, "relations": 0}
+
+        result = await tools.delete_judge(storage, handle="Opus 5")
+
+        assert result["status"] == "deleted"
+        assert await storage.get_agent(claimed["agent_id"]) is None
+
+    async def test_the_approval_goes_with_the_record(self, storage):
+        """An approved key with no judge behind it would be offered by the
+        picker as a bare id and mint the record again."""
+        claimed = await _claim(storage, "Opus 5")
+        assert claimed["agent_id"] in await storage.get_approved_agent_ids()
+
+        await tools.delete_judge(storage, handle="Opus 5")
+
+        assert await storage.get_approved_agent_ids() == []
+
+    async def test_a_judge_that_decided_something_is_refused_with_the_counts(self, storage):
+        claimed = await _claim(storage, "Opus 5")
+        await _decided(storage, claimed["agent_id"])
+
+        result = await tools.delete_judge(storage, handle="Opus 5")
+
+        assert result["status"] == "refused"
+        assert "1 journal row(s)" in result["reason"]
+        assert "epimemer agents retire Opus 5" in result["reason"]
+        assert await storage.get_agent(claimed["agent_id"]) is not None
+
+    async def test_a_judge_that_wrote_a_node_is_refused(self, storage):
+        claimed = await _claim(storage, "Opus 5")
+        await storage.store_node(
+            Fact(
+                content="x",
+                source_id="s1",
+                judged_by=JudgeRef(agent_id=claimed["agent_id"], digest="d1"),
+            )
+        )
+
+        result = await tools.delete_judge(storage, handle="Opus 5")
+
+        assert result["status"] == "refused"
+        assert "1 node(s)" in result["reason"]
+
+    async def test_a_judge_that_absorbed_another_is_refused(self, storage):
+        """Rows written under the absorbed key resolve through this record, so
+        deleting it strands them even where it has judged nothing itself."""
+        await _claim(storage, "Opus 5 Judge")
+        new = await _claim(storage, "Opus 5", now=LATER)
+        await tools.rename_judge(storage, handle="Opus 5 Judge", name="Opus 5", same_judge=True)
+
+        result = await tools.delete_judge(storage, handle="Opus 5")
+
+        assert result["status"] == "refused"
+        assert "consolidated into it" in result["reason"]
+        assert await storage.get_agent(new["agent_id"]) is not None
+
+    async def test_a_handle_nothing_answers_to_is_refused(self, storage):
+        result = await tools.delete_judge(storage, handle="nobody")
+
+        assert result["status"] == "refused"
+        assert "No judge here answers to 'nobody'" in result["reason"]
+
+    async def test_a_retired_judge_that_never_judged_can_still_be_deleted(self, storage):
+        """Retiring is not a state that protects a record; what protects one is
+        something naming it."""
+        claimed = await _claim(storage, "Opus 5")
+        await tools.retire_judge(storage, handle="Opus 5", now=LATER)
+
+        result = await tools.delete_judge(storage, handle="Opus 5")
+
+        assert result["status"] == "deleted"
+        assert await storage.get_agent(claimed["agent_id"]) is None

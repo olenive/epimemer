@@ -91,6 +91,56 @@ After consolidating, *this judge's decisions* is a query over a **set** of
 keys. That is what `former_ids` is for, and a judge that was never
 consolidated has a set of one.
 
+## Taking a judge out of use
+
+As a graph ages, what it knows includes judges nobody should choose again. A
+retired judge **leaves the picker's main list and `claim_agent` refuses it**,
+by name, by key, by a former key, and through the approved list alike. Its
+record, name, description history, approval and every decision stay exactly as
+they are, and `review(mode="by_agent")` still answers for it.
+
+Sessions already bound to it are left alone: the binding stands until that
+client reconnects, and the refusal lands at its next `claim_agent`. Retiring is
+housekeeping, not an emergency stop. It is per graph, as judge records and
+approvals are, so a judge wanted out everywhere is retired once per graph.
+
+The trail is append-only, the same shape as the descriptions: retiring appends
+an episode and reinstating closes it, so *was out of use from here to here, and
+is out of use again now* stays readable. Two channels, the same two that can
+rename:
+
+- `epimemer agents retire <handle>` and `epimemer agents reinstate <handle>`,
+  on a served SurrealDB. Neither asks for confirmation, since retiring costs
+  nothing that reinstating does not give straight back;
+- the judge picker's **A retired judge…** entry, shown only where the graph has
+  one. It opens a second picker over the retired judges, brings the chosen one
+  back, and returns to the main picker with it on the list. Choosing it there
+  is a separate gesture: a judge somebody deliberately took out of use does not
+  come back and get bound by one keystroke.
+
+`epimemer agents list` shows retired judges under a heading of their own with
+the date each was put away.
+
+## Deleting one that has never judged
+
+`epimemer agents delete <handle>` removes a judge's record outright, and it is
+allowed only where nothing in the graph names it. Judges are per graph, which
+is what makes *never used* answerable: the command scans this graph's journal
+rows, nodes, edges and relation records for the judge's keys, prints the
+result, and asks before acting (`--yes` skips the prompt).
+
+Anything above zero is a refusal that states the counts and points at
+`epimemer agents retire` instead. So is a judge that has absorbed another,
+whose keys other rows still carry. The rule behind all of it: `judged_by` holds
+a key, the journal is append-only, and the key has to keep resolving to a name
+for as long as anything carries it. Deleting withdraws the approval along with
+the record, since an approved key with no judge behind it would be offered by
+the picker as a bare id and mint the record again.
+
+None of the three is reachable from an MCP tool, for the reason renaming is
+not: a handle an agent could retire is a handle an agent could use to take a
+rival judge off the roster.
+
 ## Descriptions append, and are never edited
 
 `Agent.descriptions` is an append-only list of dated `AgentDescription`s, the
@@ -474,10 +524,10 @@ outside it.
 
 Three things about it are deliberate:
 
-- **No MCP tool can change it.** `configure_reflection` and `configure_merge`
-  are agent-callable because they tune how eagerly the system nominates
-  things. This is a gate on the agent itself, and a gate the agent can open
-  is decoration.
+- **No MCP tool can change it.** `configure_reflection`, `configure_backup`
+  and `configure_merge` are agent-callable because they tune how eagerly the
+  system nominates or suggests things. This is a gate on the agent itself, and
+  a gate the agent can open is decoration.
 - **It is not retroactive.** Turning it on says nothing about earlier writes:
   the rows that had no judge still have none, and still mean unknown.
 - **Turning it on before approving a judge refuses everything**, so the

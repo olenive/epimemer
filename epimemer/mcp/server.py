@@ -703,6 +703,11 @@ async def memory_store_decomposition(
         result["reflect_threshold"] = threshold
         if count >= threshold:
             result["reflect_suggested"] = True
+        # The backup counter moves with the reflect counter, store for store.
+        # Two counters rather than one because the two are zeroed by different
+        # acts: reflecting clears one, a successful backup clears the other.
+        await deps["storage"].bump_backup_counter()
+        result.update(await tools.backup_pressure(deps["storage"], deps["config"].backup_threshold))
         return result, meta
 
     return await _run_with_timeout(
@@ -1905,9 +1910,9 @@ async def memory_apply_reflection(
     judge, refused = await _judge_for_write(ctx, expected_graph)
     if refused is not None:
         return refused
-    return await _run_with_timeout(
-        "epimemer.apply_reflection",
-        lambda: tools.apply_reflection(
+
+    async def _do() -> tuple[dict, ResponseMeta]:
+        result, meta = await tools.apply_reflection(
             storage=deps["storage"],
             embedding_provider=deps["embedding_provider"],
             parents=parents,
@@ -1924,7 +1929,17 @@ async def memory_apply_reflection(
             boundaries=boundaries,
             similarities=similarities,
             judge=judge,
-        ),
+        )
+        # Reported, not moved. Applying a reflection is the moment an agent is
+        # already thinking about the state of the graph, which makes it the
+        # right place to see that a backup is due — but the counter counts
+        # stores, and this is not one.
+        result.update(await tools.backup_pressure(deps["storage"], deps["config"].backup_threshold))
+        return result, meta
+
+    return await _run_with_timeout(
+        "epimemer.apply_reflection",
+        _do,
         ctx,
         f"parents={len(parents or [])} splits={len(splits or [])} "
         f"enrichments={len(enrichments or [])} "
@@ -3071,6 +3086,10 @@ async def epimemer_graph_stats(
     graph. When reflect_suggested is true, suggest running reflect to the user.
     reflect_threshold_overridden says whether that threshold was set for this
     graph via configure_reflection or comes from the server default.
+
+    stores_since_backup, backup_threshold and backup_suggested say the same
+    about backing the graph up. When backup_suggested is true, raise it with the
+    user and call backup_graph if they agree.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -3078,13 +3097,15 @@ async def epimemer_graph_stats(
         lambda: tools.graph_stats(
             storage=deps["storage"],
             default_reflect_threshold=deps["config"].reflect_threshold,
+            default_backup_threshold=deps["config"].backup_threshold,
         ),
         ctx,
         "",
         lambda r, m: (
             f"nodes={r['total_nodes']} edges={r['total_edges']} "
             f"mc={r['metacontexts']} graph={r['graph']} "
-            f"reflect={r['stores_since_reflect']}/{r['reflect_threshold']}"
+            f"reflect={r['stores_since_reflect']}/{r['reflect_threshold']} "
+            f"backup={r['stores_since_backup']}/{r['backup_threshold']}"
         ),
         expected_graph=expected_graph,
     )
@@ -3126,6 +3147,94 @@ async def epimemer_configure_reflection(
         f"threshold={threshold}",
         lambda r, m: (
             f"graph={r['graph']} threshold={r['reflect_threshold']} overridden={r['overridden']}"
+        ),
+        expected_graph=expected_graph,
+    )
+
+
+@mcp.tool(name="configure_backup")
+async def epimemer_configure_backup(
+    ctx: Context,
+    threshold: int | None = None,
+    expected_graph: str | None = None,
+) -> str:
+    """Set how many stores this graph takes before a backup is suggested.
+
+    configure_reflection for the other counter. The setting belongs to the
+    active graph and persists — use it when one graph deserves a different
+    rhythm from the server default (a scratchpad nobody would miss, a graph
+    holding months of work).
+
+    This cannot say **where** a backup goes. The destination is the server's,
+    set by the user in EPIMEMER_BACKUP_DESTINATION, and backup_graph takes no
+    path of its own.
+
+    Args:
+        threshold: Stores before a backup is suggested (at least 1). Omit it
+            to clear this graph's setting and follow the server default again.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else — naming it turns a
+            wrong-graph call from silent into refused.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.configure_backup",
+        lambda: tools.configure_backup(
+            storage=deps["storage"],
+            threshold=threshold,
+            default_threshold=deps["config"].backup_threshold,
+        ),
+        ctx,
+        f"threshold={threshold}",
+        lambda r, m: (
+            f"graph={r['graph']} threshold={r['backup_threshold']} overridden={r['overridden']}"
+        ),
+        expected_graph=expected_graph,
+    )
+
+
+@mcp.tool(name="backup_graph")
+async def epimemer_backup_graph(
+    ctx: Context,
+    expected_graph: str | None = None,
+) -> str:
+    """Write the active graph out as a bundle, to the destination the server
+    was configured with.
+
+    Call this when backup_suggested is true **and the user has agreed**, or
+    when they ask for a backup. It takes no path: where a graph goes is the
+    user's decision, made once in EPIMEMER_BACKUP_DESTINATION. If none is
+    configured this refuses and says so — raise that with the user rather than
+    looking for another way to write a file.
+
+    The bundle holds everything except the vectors, which are recomputed on
+    import. Restoring one is `epimemer graphs import`, a command the user runs.
+
+    Returns where it was written and how many rows of each kind went into it,
+    and zeroes the backup counter.
+
+    Args:
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else — naming it turns a
+            wrong-graph call from silent into refused.
+    """
+    deps = ctx.lifespan_context
+    return await _run_with_timeout(
+        "epimemer.backup_graph",
+        lambda: tools.backup_graph(
+            storage=deps["storage"],
+            destination=deps["config"].backup_destination,
+            embedding_provider=deps["config"].embedding_provider,
+            embedding_model_id=deps["config"].embedding_model_id,
+            default_backup_threshold=deps["config"].backup_threshold,
+        ),
+        ctx,
+        "",
+        lambda r, m: (
+            f"graph={r['graph']} status={r['status']}"
+            + (f" to={r['written_to']}" if r.get("written_to") else "")
         ),
         expected_graph=expected_graph,
     )
@@ -3416,10 +3525,43 @@ async def _elicit_rename(ctx: Context, roster: list[tools.JudgeChoice]) -> str |
     return merged.get("message") or merged.get("reason")
 
 
-# A picker that renames has to put itself up again afterwards, because renaming
-# is not an answer to *which judge is this*. Bounded so that a client answering
-# "rename" for ever cannot spin: three is more rounds than anyone wants and far
-# fewer than a loop.
+async def _elicit_reinstate(ctx: Context, retired: list[tools.JudgeChoice]) -> str | None:
+    """Bring a retired judge back, from inside the picker. A note for the log, or None.
+
+    **Two gestures, never one.** This reinstates and returns; the main picker
+    then goes back up with the judge on it, and choosing it is a separate
+    answer. A judge somebody deliberately took out of use must not come back
+    and be bound by the same keystroke, which is the whole difference between
+    this entry and an ordinary roster line.
+
+    Declining leaves every judge as it was and returns to the main picker,
+    because *A retired judge…* is a question the user opened, not one they were
+    asked.
+    """
+    choices = {choice.key: {"title": choice.title} for choice in retired}
+    try:
+        picked = await ctx.elicit(
+            "Which retired judge should be brought back? It returns to the "
+            "list, and you then choose it there.",
+            response_type=choices,
+        )
+    except Exception:
+        return None
+    if not isinstance(picked, AcceptedElicitation):
+        return None
+    handle = tools.selected_judge_id(str(picked.data or ""))
+    if handle is None:
+        return None
+
+    result = await tools.reinstate_judge(ctx.lifespan_context["storage"], handle=handle)
+    return result.get("message") or result.get("reason")
+
+
+# A picker that renames or reinstates has to put itself up again afterwards,
+# because neither is an answer to *which judge is this*. Bounded so that a
+# client answering "rename" for ever cannot spin: three is more rounds than
+# anyone wants and far fewer than a loop, and it is exactly enough to bring a
+# judge back, rename it, and pick it.
 _PICKER_ROUNDS = 3
 
 
@@ -3458,7 +3600,11 @@ async def _elicit_agent_id(ctx: Context, proposed: str, description: str) -> too
     storage = ctx.lifespan_context["storage"]
     for _ in range(_PICKER_ROUNDS):
         roster = await tools.judge_roster(storage)
-        if not roster:
+        # Offered only where there is something behind it. An entry opening an
+        # empty list is a dead end shown on every bind, and the picker's cost is
+        # paid every time.
+        retired = await tools.retired_judge_roster(storage)
+        if not roster and not retired:
             # Nothing to pick from — a graph nobody has judged in yet.
             return await _elicit_new_judge_name(ctx, proposed, description)
 
@@ -3466,9 +3612,14 @@ async def _elicit_agent_id(ctx: Context, proposed: str, description: str) -> too
             choice.key: {"title": choice.title} for choice in roster
         }
         choices[tools.NEW_JUDGE_CHOICE] = {"title": f"A new judge — proposed: {proposed}"}
-        choices[tools.RENAME_JUDGE_CHOICE] = {
-            "title": "Rename a judge — decisions follow the new name"
-        }
+        if roster:
+            choices[tools.RENAME_JUDGE_CHOICE] = {
+                "title": "Rename a judge — decisions follow the new name"
+            }
+        if retired:
+            choices[tools.RETIRED_JUDGE_CHOICE] = {
+                "title": "A retired judge… — reinstate one and pick it"
+            }
         message = (
             f"Which judge is this agent, in graph '{storage.current_database}'?"
             f"\n\nDecline to refuse it an identity. Nothing verifies what an "
@@ -3491,6 +3642,13 @@ async def _elicit_agent_id(ctx: Context, proposed: str, description: str) -> too
             _tool_logger.info("claim_agent: rename from the picker: %s", note)
             # Renaming answered a different question, so the picker goes back up
             # — now showing the name the user just chose.
+            continue
+        if key == tools.RETIRED_JUDGE_CHOICE:
+            note = await _elicit_reinstate(ctx, retired)
+            _tool_logger.info("claim_agent: reinstate from the picker: %s", note)
+            # Same round trip, and for a stronger reason: the reinstated judge
+            # is now on the main list, and choosing it is the user's second,
+            # separate gesture.
             continue
         chosen = tools.selected_judge_id(key)
         if chosen is None:

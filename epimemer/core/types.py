@@ -1549,6 +1549,25 @@ class AgentDescription(BaseModel):
     confirmed_at: datetime | None = None
 
 
+class RetirementEpisode(BaseModel):
+    """One spell a judge spent out of use, and the reinstatement that ended it.
+
+    Append-only, and a list rather than a `retired_at` scalar for
+    `LifecycleEpisode`'s reason: a judge can be retired, brought back and
+    retired again, and a scalar plus a timestamp cannot say *was out of use
+    from here to here, and is out of use again now*. Clearing the scalar on the
+    return would erase the first spell; keeping it would report the judge as
+    retired while it is serving.
+
+    A judge is retired exactly while the last episode is open, which is what
+    `is_retired` reads. Nothing here is ever edited except closing the open
+    episode, once.
+    """
+
+    retired_at: datetime
+    reinstated_at: datetime | None = None
+
+
 class Agent(BaseModel):
     """A judge: something that made decisions in this graph.
 
@@ -1597,6 +1616,11 @@ class Agent(BaseModel):
     authorised_at: datetime = Field(default_factory=_now)
     first_seen_at: datetime | None = None
     last_seen_at: datetime | None = None
+    # Whether this judge may still be claimed, as the trail of times it was
+    # taken out of use and brought back. Retirement changes nothing else: the
+    # record, the descriptions, the approval and every decision stay as they
+    # are, and `review(mode="by_agent")` still answers for it.
+    retirements: list[RetirementEpisode] = Field(default_factory=list)
 
 
 def new_agent_id() -> str:
@@ -1676,9 +1700,70 @@ def absorbed_agent_ids(agents: Sequence[Agent]) -> set[str]:
 
 
 def live_agents(agents: Sequence[Agent]) -> list[Agent]:
-    """The judges this graph actually has, absorbed records dropped."""
+    """The judges this graph actually has, absorbed records dropped.
+
+    **Retired judges are here.** *Live* means *not absorbed into another
+    record*, and a retired judge is still a judge in its own right: its
+    decisions stay readable, `resolve_agent` still finds it, and
+    `review(mode="by_agent")` still answers for it. Only *may this be claimed*
+    turns on retirement, which is what `serving_agents` answers.
+    """
     absorbed = absorbed_agent_ids(agents)
     return [agent for agent in agents if agent.id not in absorbed]
+
+
+def is_retired(agent: Agent) -> bool:
+    """Whether this judge is out of use now — the last episode still open."""
+    return bool(agent.retirements) and agent.retirements[-1].reinstated_at is None
+
+
+def retired_at(agent: Agent) -> datetime | None:
+    """When the spell this judge is currently in began, or None if it is serving.
+
+    The date every refusal and listing quotes, read from the open episode rather
+    than from the first one: a judge retired, brought back and retired again was
+    taken out of use on the later date, and the earlier one would misdate it.
+    """
+    return agent.retirements[-1].retired_at if is_retired(agent) else None
+
+
+def retired(agent: Agent, at: datetime) -> Agent:
+    """`agent`, out of use from `at`. A no-op on one already retired.
+
+    Idempotent rather than an error because the refusal belongs to the caller
+    that can say something useful about it; appending a second open episode
+    would leave a trail claiming the judge was retired twice without ever
+    coming back.
+    """
+    if is_retired(agent):
+        return agent
+    return agent.model_copy(
+        update={"retirements": [*agent.retirements, RetirementEpisode(retired_at=at)]}
+    )
+
+
+def reinstated(agent: Agent, at: datetime) -> Agent:
+    """`agent`, back in use from `at`, with the open episode closed. A no-op if serving."""
+    if not is_retired(agent):
+        return agent
+    return agent.model_copy(
+        update={
+            "retirements": [
+                *agent.retirements[:-1],
+                agent.retirements[-1].model_copy(update={"reinstated_at": at}),
+            ]
+        }
+    )
+
+
+def serving_agents(agents: Sequence[Agent]) -> list[Agent]:
+    """The judges a session may be bound to: live, and not retired."""
+    return [agent for agent in live_agents(agents) if not is_retired(agent)]
+
+
+def retired_agents(agents: Sequence[Agent]) -> list[Agent]:
+    """The live judges that have been taken out of use."""
+    return [agent for agent in live_agents(agents) if is_retired(agent)]
 
 
 def resolve_agent(agents: Sequence[Agent], handle: str) -> Agent | None:
@@ -1775,6 +1860,52 @@ def absorbing(survivor: Agent, absorbed: Agent) -> Agent:
             "last_seen_at": max((s for s in last if s), default=None),
         }
     )
+
+
+def node_judge_ids(node: EpistemicNode) -> set[str]:
+    """Every judge key this node records, from all four places one can sit.
+
+    The one enumeration of *where a `JudgeRef` lives on a node*, so that a
+    field added to `Topic`, `Fact`, `Inference` or `ValueSignal` has a single
+    place to be declared. `judge_usage` is the caller that must not miss one: a
+    judge deleted while a node still names it leaves an id nothing can resolve
+    to a name, which is the whole reason deletion is gated.
+    """
+    refs = [node.judged_by, node.value.importance_judged_by]
+    for episode in node.lifecycle:
+        refs += [episode.retired_by, episode.restored_by]
+    return {ref.agent_id for ref in refs if ref is not None}
+
+
+class JudgeUsage(BaseModel):
+    """What still names a judge in one graph, counted rather than listed.
+
+    The scan behind `epimemer agents delete`. All zero means the judge has
+    decided nothing here and its keys appear nowhere, so removing the record
+    orphans nothing; anything else means an id would stop resolving to a name,
+    and the answer is to retire it instead.
+
+    Counted per kind rather than summed, because the number the user acts on is
+    *what it judged*, and "17" says nothing about whether that is a day's work
+    or a graph's history.
+    """
+
+    # Journal rows whose `judged_by` names one of the judge's keys.
+    decisions: int = 0
+    # Nodes carrying a key in any of `node_judge_ids`' four places. Counted
+    # once per node however many of them name it.
+    nodes: int = 0
+    # Edges whose `judged_by` names a key.
+    edges: int = 0
+    # Relation-vocabulary rows: a label this judge coined, or a verdict it
+    # recorded about a pair. Neither is a node or an edge, and both hold the id
+    # exactly as durably.
+    relations: int = 0
+
+
+def judge_is_unused(usage: JudgeUsage) -> bool:
+    """Whether nothing in the graph names this judge, so the record may go."""
+    return usage.decisions == 0 and usage.nodes == 0 and usage.edges == 0 and usage.relations == 0
 
 
 # --- The decision journal (REVIEW_MODE.md §4) ---

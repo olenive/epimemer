@@ -452,6 +452,20 @@ if useful.
 - After ingesting several documents (the system suggests a reflect after the
   configured threshold), when asked to consolidate, or periodically in long
   sessions.
+- **`backup_suggested` is a second prompt, and it is not yours to act on
+  alone.** `store_decomposition`, `apply_reflection` and `graph_stats` report
+  `stores_since_backup` against `backup_threshold`, and when the count reaches
+  it, `backup_suggested` is true. Raise it with the user, in one line, saying
+  how many stores it has been. If they say yes, call `backup_graph`; if they
+  say no or say nothing, leave it, and the prompt returns on the next store.
+  Reflecting does not clear it, and a backup does not clear the reflect count:
+  the two counters answer different questions.
+- **`backup_graph` takes no path and you must not look for one.** Where a graph
+  goes was decided once by the user, in `EPIMEMER_BACKUP_DESTINATION`. If the
+  tool refuses because nothing is configured, tell the user that and stop:
+  writing the graph somewhere of your own choosing, through any other tool, is
+  never the answer. The user's own route is `epimemer graphs export`, a
+  command you cannot run.
 - `reflect` returns consolidation candidates (similar pairs, splits,
   enrichments; similar pairs also surface duplicate source, tag and entity
   Topics), same-metacontext contradiction candidates, `recurrences`,
@@ -699,6 +713,11 @@ the graph learned it.
   message to the user and let them decide what you should be called. The
   identity is theirs to assign, and it is what lets a later review show that
   a *different* agent made these decisions.
+- **A judge can be retired**, and claiming one is refused with a message
+  saying when. Its decisions are all still there and `review` still answers
+  for it; what it cannot be is claimed. Relay the refusal and ask which judge
+  you should be instead. Only the user can bring one back, from the prompt
+  this call raises or the command line.
 - **Your description is a claim, not a credential.** Nothing verifies it.
   Describe what you are in a way that would let someone tell you from
   another agent (the model or harness, the role you were given) and do not

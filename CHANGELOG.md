@@ -4,6 +4,94 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.3] — 2026-09-13
+
+**A judge can be taken out of use, brought back, or removed if it never judged
+anything.** Until now a judge, once confirmed, could only be renamed or
+consolidated, so one nobody had claimed for weeks sat in the `claim_agent`
+picker beside the live ones, one keystroke from being selected by mistake.
+
+- `epimemer agents retire <handle>` takes a judge out of use. Its record, name,
+  description history, approval and every decision stay exactly as they are,
+  and `review(mode="by_agent")` still answers for it; what changes is that
+  `claim_agent` refuses it, whether reached by name, by key, by a former key
+  or through the approved list, and the picker stops offering it. Sessions already
+  bound continue until they reconnect.
+- `epimemer agents reinstate <handle>` brings one back, and so does the judge
+  picker's new *A retired judge…* entry, shown only where the graph has one. It
+  opens a second picker over the retired judges, reinstates the chosen one, and
+  returns to the main picker with it on the list: choosing it is a separate
+  gesture, so a deliberate removal is never undone by one keystroke.
+- `epimemer agents delete <handle>` removes a judge that has judged nothing.
+  The command scans this graph's journal rows, nodes, edges and relation
+  records for the judge's keys, prints the result, and asks before acting
+  (`--yes` skips the prompt). Any count above zero is a refusal that states the
+  counts and points at `retire` instead, because `judged_by` holds a key and
+  the key has to keep resolving to a name for as long as anything carries it.
+- `epimemer agents list` shows retired judges under a heading of their own,
+  with the date each was put away.
+- `Agent.retirements` records the trail as an append-only list of
+  `RetirementEpisode`, the same shape the descriptions use: a scalar plus a
+  timestamp cannot say *was out of use, came back, and is out of use again*. A
+  record written before this reads as an empty trail, which is a serving judge;
+  no schema step.
+- `judge_usage(agent_ids)` and `delete_agent(agent_id)` on the storage
+  protocol, implemented on both backends. `judge_usage` counts by aggregate
+  rather than materialising the graph, and `delete_agent` is the one hard
+  delete on the protocol, gated by the scan above rather than by the backend.
+- None of the three is reachable from an MCP tool, for the reason renaming is
+  not: a handle an agent could retire is a handle an agent could use to take a
+  rival judge off the roster.
+
+**A graph can be written out as a bundle and rebuilt from one.** Nothing
+exported a graph before this: the in-memory backend persists nothing and a
+SurrealDB graph lives on a volume inside the user's container runtime, so one
+deleted machine was the whole graph. There was also no way to move a graph
+between backends, and no way to re-embed one after changing the embedding model.
+
+- `epimemer graphs export <graph> --to <path>` writes the graph as
+  `<graph>-<YYYY-MM-DD>.epimemer.tar.gz`, one JSON Lines file per section plus a
+  manifest. `--to` takes a local path, a `gs://` URL or an `s3://` URL, the last
+  two through the optional `epimemer[gcs]` and `epimemer[s3]` extras;
+  credentials come from each provider's own standard chain and Epimemer reads
+  none. `--plain` writes an uncompressed directory for reading or diffing, and
+  import accepts either form.
+- `epimemer graphs import <bundle> --graph <name>` rebuilds it as a **new**
+  graph. It refuses a name that exists, with no override: replacing a graph is
+  `delete_graph` and then import, two acts the user already has. A failure drops
+  the partial graph and says why, so a retry is never blocked by a half-written
+  one.
+- `epimemer graphs verify <bundle>` imports into a scratch graph, exports it
+  again, compares the files, and drops the scratch graph. That comparison is the
+  definition of lossless here, run on the user's own data.
+- **Embeddings are not in the bundle**, and import re-embeds every node with the
+  provider the importing server is configured with. Vectors are the one derived
+  part of a graph, the part that does not compress, and cheap to recompute. It
+  also makes *export, change `EPIMEMER_EMBEDDING_MODEL_ID`, import* the model
+  migration path, which did not otherwise exist. The manifest records what the
+  graph was embedded with, so a restore onto a different model says so.
+- `backup_graph` is a new MCP tool. It writes a bundle to
+  `EPIMEMER_BACKUP_DESTINATION` and takes **no path**, so an agent can act on a
+  backup prompt without choosing where a graph goes; with nothing configured it
+  refuses and names the variable. It needs no judge, because a backup asserts
+  nothing about the graph.
+- `store_decomposition` and `apply_reflection` now return `stores_since_backup`,
+  `backup_threshold` and `backup_suggested` beside the reflect keys, and
+  `graph_stats` reports them too. The threshold follows the reflect threshold's
+  pattern: `EPIMEMER_BACKUP_THRESHOLD` (default 50) as the process default, a
+  per-graph override set by the new `configure_backup` tool, and one pure
+  `resolve_backup_threshold`. The two counters are separate because they are
+  zeroed by different acts: reflecting clears one, a successful backup the other.
+- On the storage protocol, implemented on both backends: `query_documents`,
+  `query_segments` and `query_edges`, which are the whole-section reads export
+  needs; `write_verbatim_tx`, the one write that stores records exactly as given
+  rather than deriving ids and timestamps the way `store_relation_label`,
+  `record_decision` and the counters do; `set_reflect_counter`; and the six
+  backup-bookkeeping methods.
+- `fsspec` joins the runtime dependencies. It is pure Python with no
+  dependencies of its own, and it is what makes a local path and a cloud URL one
+  code path.
+
 ## [0.2.2] — 2026-09-12
 
 **A new tag needs a description, and the call is refused without one.** This

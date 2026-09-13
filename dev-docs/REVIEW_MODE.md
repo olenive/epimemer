@@ -191,6 +191,29 @@ collision asks whether they are the same judge, and yes consolidates. The CLI
 answers it with `--same-judge`. Typing the name of an existing judge on the
 free-text path joins it rather than minting a second record.
 
+**Retiring lives there too, and for the same reason**: a handle an agent could
+retire is a handle an agent could use to take a rival judge off the roster. A
+retired judge leaves the picker's main list and `claim_agent` refuses it, by
+name, key, former key or through the approved list: one gate on the resolved
+record, so no route reaches a binding. Everything else about it is untouched,
+which is what separates retiring from deleting: `live_agents` still holds it,
+`resolve_agent` still finds it, and `review(mode="by_agent")` still answers for
+it, so `serving_agents` rather than `live_agents` is what the picker reads. The
+trail is an append-only list of `RetirementEpisode`, on `LifecycleEpisode`'s
+argument: a scalar plus a timestamp cannot say *was out of use, came back, and
+is out of use again*. Reinstating takes two gestures from the picker, bring it
+back and then choose it, since one keystroke undoing a deliberate removal is the
+mistake retiring exists to prevent.
+
+**Deleting is gated on a scan and is CLI-only.** `judge_usage` counts the
+journal rows, nodes, edges and relation records naming any of a judge's keys,
+and the record goes only where every count is zero and it has absorbed nothing.
+Anything else is retired, because `judged_by` holds a key and the key has to
+keep resolving to a name for as long as anything carries it. `node_judge_ids`
+is the one enumeration of where a `JudgeRef` sits on a node, and the SurrealDB
+clause `_NODE_NAMES_JUDGE` is its counterpart: a field added to one and missed
+in the other would let the command delete a record something still points at.
+
 **The user owns the semantics.** Whether ids track a model, a role or a task
 is the user's scheme. The server can detect a new session or a different
 client (`ctx.session_id`, `ctx.client_id`); it can never detect a different
@@ -925,10 +948,12 @@ corroborate.
 
 ### 10.3 The registry and its approval channels
 
-`Agent`, `AgentDescription`, `JudgeRef` in `core/types.py`; the `agent`
-table and the `approved_agent_ids` graph-state field on both backends;
-`claim_agent` over elicitation; `EPIMEMER_APPROVED_AGENTS`; the `epimemer`
-CLI (`agents confirm`, `agents list`, `agents rename`, `agents require`).
+`Agent`, `AgentDescription`, `RetirementEpisode`, `JudgeRef` in
+`core/types.py`; the `agent` table and the `approved_agent_ids` graph-state
+field on both backends; `claim_agent` over elicitation;
+`EPIMEMER_APPROVED_AGENTS`; the `epimemer` CLI (`agents confirm`, `agents
+list`, `agents rename`, `agents retire`, `agents reinstate`, `agents delete`,
+`agents require`).
 
 **Config seeding runs on every graph the server lands on**, not only at
 connect. Approval is per graph, so connect-time seeding alone would leave

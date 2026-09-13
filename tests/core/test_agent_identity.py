@@ -17,16 +17,30 @@ from datetime import UTC, datetime, timedelta
 from epimemer.core.types import (
     Agent,
     AgentDescription,
+    Fact,
+    JudgeRef,
+    JudgeUsage,
+    LifecycleEpisode,
+    NodeStatus,
+    ValueSignal,
     absorbed_agent_ids,
     absorbing,
     agent_aliases,
     agent_name,
     description_digest,
+    is_retired,
+    judge_is_unused,
     live_agents,
     name_holder,
     new_agent_id,
+    node_judge_ids,
+    reinstated,
     renamed,
     resolve_agent,
+    retired,
+    retired_agents,
+    retired_at,
+    serving_agents,
 )
 
 AT = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
@@ -221,3 +235,127 @@ class TestConsolidatingTwoRecordsThatWereAlwaysOneJudge:
         survivor = _agent("k1", "a", former_ids=["k2"])
         merged = absorbing(survivor, _agent("k2", "b"))
         assert merged.former_ids == ["k2"]
+
+
+class TestRetirementIsAnAppendOnlyTrail:
+    """A judge can be taken out of use, brought back, and taken out again.
+
+    A `retired_at` scalar cannot say that: clearing it on the return erases the
+    first spell, and keeping it reports a serving judge as retired. Same problem
+    and same answer as `LifecycleEpisode` on a node.
+    """
+
+    def test_a_fresh_judge_is_not_retired(self):
+        agent = _agent("k1", "Opus 5")
+        assert not is_retired(agent)
+        assert retired_at(agent) is None
+        assert agent.retirements == []
+
+    def test_retiring_opens_an_episode(self):
+        agent = retired(_agent("k1", "Opus 5"), AT)
+
+        assert is_retired(agent)
+        assert retired_at(agent) == AT
+        assert agent.retirements[-1].reinstated_at is None
+
+    def test_reinstating_closes_it_rather_than_clearing_it(self):
+        agent = reinstated(retired(_agent("k1", "Opus 5"), AT), LATER)
+
+        assert not is_retired(agent)
+        assert retired_at(agent) is None
+        assert agent.retirements[-1].retired_at == AT, "the spell out of use is kept"
+        assert agent.retirements[-1].reinstated_at == LATER
+
+    def test_a_second_retirement_appends_and_dates_from_the_later_one(self):
+        later_still = LATER + timedelta(days=7)
+        agent = retired(reinstated(retired(_agent("k1", "Opus 5"), AT), LATER), later_still)
+
+        assert [ep.retired_at for ep in agent.retirements] == [AT, later_still]
+        assert retired_at(agent) == later_still, "the spell it is in now, not the first"
+
+    def test_retiring_an_already_retired_judge_changes_nothing(self):
+        once = retired(_agent("k1", "Opus 5"), AT)
+        assert retired(once, LATER).retirements == once.retirements
+
+    def test_reinstating_a_serving_judge_changes_nothing(self):
+        assert reinstated(_agent("k1", "Opus 5"), AT).retirements == []
+
+    def test_nothing_else_about_the_record_moves(self):
+        agent = _agent("k1", "Opus 5", former_ids=["old"], descriptions=[_described("a", AT)])
+
+        out = retired(agent, AT)
+
+        assert out.id == agent.id
+        assert agent_name(out) == "Opus 5"
+        assert out.former_ids == ["old"]
+        assert out.descriptions == agent.descriptions
+
+
+class TestRetiredIsNotAbsorbed:
+    """*Live* means *not absorbed*, and a retired judge is still a judge.
+
+    Its decisions have to stay readable and `review(mode="by_agent")` has to
+    keep answering for it, so it must not drop out of `live_agents` or become
+    unresolvable. Only *may this be claimed* turns on retirement.
+    """
+
+    def test_a_retired_judge_is_still_live_and_still_resolves(self):
+        agents = [retired(_agent("k1", "Opus 5"), AT)]
+
+        assert [a.id for a in live_agents(agents)] == ["k1"]
+        assert resolve_agent(agents, "Opus 5").id == "k1"
+        assert resolve_agent(agents, "k1").id == "k1"
+
+    def test_the_live_set_splits_into_serving_and_retired(self):
+        agents = [_agent("k1", "Serving"), retired(_agent("k2", "Put away"), AT)]
+
+        assert [a.id for a in serving_agents(agents)] == ["k1"]
+        assert [a.id for a in retired_agents(agents)] == ["k2"]
+
+    def test_an_absorbed_record_is_in_neither_however_it_was_left(self):
+        agents = [
+            _agent("k1", "Opus 5", former_ids=["old"]),
+            retired(_agent("old", "old name"), AT),
+        ]
+
+        assert [a.id for a in serving_agents(agents)] == ["k1"]
+        assert retired_agents(agents) == [], "absorbed first, so not a judge to retire"
+
+
+class TestWhereAJudgeKeyCanSitOnANode:
+    """`node_judge_ids` is the one enumeration, and deletion depends on it.
+
+    A `JudgeRef` field added to a node and missed there would let
+    `epimemer agents delete` remove a judge some node still points at.
+    """
+
+    def test_a_node_nobody_judged_names_nobody(self):
+        assert node_judge_ids(Fact(content="x", source_id="s1")) == set()
+
+    def test_the_writer_the_importance_judge_and_both_ends_of_an_episode(self):
+        node = Fact(
+            content="x",
+            source_id="s1",
+            judged_by=JudgeRef(agent_id="writer", digest="d"),
+            value=ValueSignal(importance_judged_by=JudgeRef(agent_id="rater", digest="d")),
+            lifecycle=[
+                LifecycleEpisode(
+                    retired_at=AT,
+                    because=NodeStatus.ARCHIVED,
+                    retired_by=JudgeRef(agent_id="retirer", digest="d"),
+                    restored_at=LATER,
+                    restored_by=JudgeRef(agent_id="restorer", digest="d"),
+                )
+            ],
+        )
+
+        assert node_judge_ids(node) == {"writer", "rater", "retirer", "restorer"}
+
+
+class TestNothingNamingAJudgeMeansItsRecordCanGo:
+    def test_all_zero_is_unused(self):
+        assert judge_is_unused(JudgeUsage())
+
+    def test_any_one_count_is_enough_to_keep_it(self):
+        for field in ("decisions", "nodes", "edges", "relations"):
+            assert not judge_is_unused(JudgeUsage(**{field: 1})), field

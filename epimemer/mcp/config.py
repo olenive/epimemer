@@ -51,6 +51,22 @@ class ServerConfig(BaseModel):
     similarity_threshold: float = 0.75
 
     reflect_threshold: int = 10
+
+    # Stores into a graph before the response suggests backing it up, on the
+    # reflect threshold's pattern: process default here, per-graph override on
+    # the backend, one pure `resolve_backup_threshold`. Higher than the reflect
+    # threshold because the two answer different questions — reflect is
+    # housekeeping a graph wants often, and a backup is an act with a
+    # destination and a cost.
+    backup_threshold: int = 50
+
+    # Where `backup_graph` writes: a local path, a `gs://` URL or an `s3://`
+    # URL. **The tool takes no path of its own**, and this is why: an agent
+    # acting on a backup prompt should not be choosing where a graph goes.
+    # `None` means no destination is configured, and the tool refuses naming
+    # this variable rather than inventing somewhere to write.
+    backup_destination: str | None = None
+
     tool_timeout_seconds: float = 30.0
 
     # Agent ids the user admits to every graph this server opens
@@ -129,6 +145,8 @@ def load_config() -> ServerConfig:
         "segmentation_strategy": "EPIMEMER_SEGMENTATION_STRATEGY",
         "similarity_threshold": "EPIMEMER_SIMILARITY_THRESHOLD",
         "reflect_threshold": "EPIMEMER_REFLECT_THRESHOLD",
+        "backup_threshold": "EPIMEMER_BACKUP_THRESHOLD",
+        "backup_destination": "EPIMEMER_BACKUP_DESTINATION",
         "approved_agents": "EPIMEMER_APPROVED_AGENTS",
         "require_judge": "EPIMEMER_REQUIRE_JUDGE",
         "record_retrieval": "EPIMEMER_RECORD_RETRIEVAL",

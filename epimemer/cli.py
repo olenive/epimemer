@@ -10,6 +10,13 @@ grounds: both state something about a graph's past that nothing in the graph can
 derive, and an agent asserting it about its own writes would be marking its own
 homework.
 
+`graphs` is the one group that is here for reach rather than for a rule. An
+agent can back a graph up — `backup_graph` writes to the destination the server
+was configured with, and takes no path of its own, so it can act on a prompt
+without choosing where a graph goes. Naming a path, importing a bundle, and
+verifying one are the parts a person does, and they have to work when the server
+is not running.
+
 **It does not work against every backend, and that is checked rather than
 hoped.** Approvals live in per-graph settings *inside the storage backend*, and
 an embedded store (`mem://`, `file://`, `surrealkv://`, or the in-memory
@@ -21,9 +28,11 @@ and names `EPIMEMER_APPROVED_AGENTS`, which the server reads at connect.
 
 import argparse
 import asyncio
+import secrets
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
@@ -35,15 +44,22 @@ from epimemer.core.types import (
     Topic,
     agent_name,
     current_description,
-    live_agents,
     resolve_agent,
+    retired_agents,
+    retired_at,
+    serving_agents,
 )
 from epimemer.mcp.config import ServerConfig, create_storage, load_config
 from epimemer.mcp.tools import (
     approved_labels,
+    delete_judge,
+    judge_deletion_scan,
+    reinstate_judge,
     rename_judge,
+    retire_judge,
     seed_approved_judges,
 )
+from epimemer.pipelines.transfer import BUNDLE_FORMAT_VERSION
 from epimemer.storage.protocol import StorageBackend, resolve_require_judge
 from epimemer.storage.surrealdb_adapter import is_embedded_url
 
@@ -110,6 +126,20 @@ def _embedded_advice(reason: str, agent_id: str | None, action: str) -> str:
             f"server process, and enrichment writes a description beside a "
             f"topic's name rather than over it, so no name can be displaced in "
             f"one. This command is for long-lived graphs on a served store."
+        )
+    if action in ("retire", "reinstate", "delete"):
+        # No environment variable stands in for these: whether a judge is
+        # retired is state on its record inside the graph, and the graph is
+        # inside the server process. Saying which channel is left is the whole
+        # message — the picker runs in there and can reinstate.
+        return (
+            f"{reason}\n\n"
+            f"Whether a judge is retired lives on its record inside the graph, "
+            f"so there is nothing out here to write it to. On a served "
+            f"SurrealDB this command works. On an embedded store the judges go "
+            f"with the process, and the one channel that reaches them is the "
+            f"prompt claim_agent raises, whose *A retired judge…* entry can "
+            f"bring one back."
         )
     if action == "require":
         return (
@@ -205,6 +235,45 @@ async def _rename(storage: StorageBackend, handle: str, name: str, same: bool) -
     return result.get("message") or result.get("reason", result["status"])
 
 
+async def _retire(storage: StorageBackend, handle: str) -> str:
+    """Take a judge out of use, without asking twice.
+
+    No confirmation prompt, because retiring costs nothing that reinstating
+    does not give straight back: the record, the descriptions and every
+    decision stay exactly as they are. Deleting is the one that asks.
+    """
+    result = await retire_judge(storage, handle=handle)
+    return result.get("message") or result.get("reason", result["status"])
+
+
+async def _reinstate(storage: StorageBackend, handle: str) -> str:
+    """Put a retired judge back in use. The other half of `retire`."""
+    result = await reinstate_judge(storage, handle=handle)
+    return result.get("message") or result.get("reason", result["status"])
+
+
+async def _delete(storage: StorageBackend, handle: str, assume_yes: bool) -> str:
+    """Remove a judge that has never judged anything, after showing the scan.
+
+    **The scan is printed before anything is asked**, because *this judge has
+    judged nothing* is the whole basis for deleting one and the user is the
+    party entitled to disbelieve it. A judge that has judged something is
+    refused here with the counts: the journal is append-only, so a deleted
+    record would leave rows naming an id nothing resolves to a name, and
+    retiring is the answer instead.
+    """
+    scan = await judge_deletion_scan(storage, handle=handle)
+    if scan["status"] != "deletable":
+        return scan["reason"]
+
+    print(scan["message"])
+    if not assume_yes and not _confirmed(f"Delete the judge '{scan['name']}'? [y/N] "):
+        return f"Left '{scan['name']}' as it was."
+
+    result = await delete_judge(storage, handle=handle)
+    return result.get("message") or result.get("reason", result["status"])
+
+
 async def _require(storage: StorageBackend, setting: str, default: bool) -> str:
     """Set, clear, or read this graph's require-a-judge policy (§3.3.1).
 
@@ -241,10 +310,41 @@ async def _require(storage: StorageBackend, setting: str, default: bool) -> str:
     )
 
 
+def _agent_lines(agent: Agent) -> list[str]:
+    """One judge as `agents list` shows it: the handle, the keys, the claim."""
+    seen = agent.last_seen_at.isoformat() if agent.last_seen_at else "never"
+    since = retired_at(agent)
+    head = f"(last seen {seen}, {len(agent.descriptions)} version(s))"
+    if since is not None:
+        head = f"(retired {since.date().isoformat()}, last seen {seen}, "
+        head += f"{len(agent.descriptions)} version(s))"
+    lines = [f"{agent_name(agent)}  {head}"]
+    # The key and the ids consolidated into it, on their own line: not for
+    # reading, but this is the only place they can be seen at all, and a
+    # reviewer chasing a `judged_by` out of an old row needs them.
+    lines.append(f"    key {agent.id}")
+    if agent.former_ids:
+        lines.append(f"    also recorded as {', '.join(agent.former_ids)}")
+    version = current_description(agent)
+    if version is not None:
+        # Said plainly on every listing: the description is the agent's own
+        # assertion, and the only part carrying human weight is whether a
+        # person confirmed it (§2.4).
+        mark = (
+            f"confirmed {version.confirmed_at.isoformat()}"
+            if version.confirmed_at is not None
+            else "self-reported, unconfirmed"
+        )
+        lines.append(f"    {version.text}")
+        lines.append(f"    [{version.digest}] {mark}")
+    return lines
+
+
 async def _list(storage: StorageBackend) -> str:
     approved = await storage.get_approved_agent_ids()
     stored = await storage.list_agents()
-    agents = sorted(live_agents(stored), key=agent_name)
+    serving = sorted(serving_agents(stored), key=agent_name)
+    out_of_use = sorted(retired_agents(stored), key=agent_name)
     override = await storage.get_require_judge()
     lines = [
         f"graph: {storage.current_database}",
@@ -254,31 +354,19 @@ async def _list(storage: StorageBackend) -> str:
         + ("follows the server setting" if override is None else ("yes" if override else "no")),
         "",
     ]
-    if not agents:
+    if not serving and not out_of_use:
         lines.append("No agent has claimed an identity in this graph.")
-    for agent in agents:
-        version = current_description(agent)
-        seen = agent.last_seen_at.isoformat() if agent.last_seen_at else "never"
-        lines.append(
-            f"{agent_name(agent)}  (last seen {seen}, {len(agent.descriptions)} version(s))"
-        )
-        # The key and the ids consolidated into it, on their own line: not for
-        # reading, but this is the only place they can be seen at all, and a
-        # reviewer chasing a `judged_by` out of an old row needs them.
-        lines.append(f"    key {agent.id}")
-        if agent.former_ids:
-            lines.append(f"    also recorded as {', '.join(agent.former_ids)}")
-        if version is not None:
-            # Said plainly on every listing: the description is the agent's own
-            # assertion, and the only part carrying human weight is whether a
-            # person confirmed it (§2.4).
-            mark = (
-                f"confirmed {version.confirmed_at.isoformat()}"
-                if version.confirmed_at is not None
-                else "self-reported, unconfirmed"
-            )
-            lines.append(f"    {version.text}")
-            lines.append(f"    [{version.digest}] {mark}")
+    for agent in serving:
+        lines.extend(_agent_lines(agent))
+    # A heading of their own rather than a marker in the main list: these are
+    # judges nothing may be claimed as, and the reason to read the listing at
+    # all is to see which is which.
+    if out_of_use:
+        lines.extend(["", "retired judges:"])
+        for agent in out_of_use:
+            lines.extend(_agent_lines(agent))
+        lines.append("")
+        lines.append("Bring one back with `epimemer agents reinstate <name>`.")
     return "\n".join(lines)
 
 
@@ -504,6 +592,167 @@ async def _repair_tag_names(
     return "\n".join(lines)
 
 
+def _bundle_destination(to: str, graph: str, *, plain: bool) -> str:
+    """Where the bundle actually lands, given what the user typed after `--to`.
+
+    A destination that is an existing local directory, or that ends in a slash,
+    is a folder to write *into* and gets the default name. Anything else is
+    taken literally, so a user who names a file gets that file.
+    """
+    from epimemer.pipelines.transfer import default_bundle_name
+
+    looks_like_a_folder = to.endswith("/") or Path(to).is_dir()
+    if not looks_like_a_folder:
+        return to
+    name = default_bundle_name(graph, datetime.now(UTC), plain=plain)
+    return f"{to.rstrip('/')}/{name}"
+
+
+async def _export_bundle(
+    storage: StorageBackend, config: ServerConfig, graph: str, to: str, plain: bool
+) -> str:
+    """Write the active graph out as a bundle, and say where it went.
+
+    The embedding provider and model are recorded from config rather than read
+    off the vectors: what a graph was embedded with is a fact about the server
+    that wrote it, and a graph with no nodes yet has no vector to ask.
+    """
+    from epimemer.pipelines.transfer import (
+        export_graph,
+        section_counts,
+        unreachable_destination,
+        write_bundle,
+    )
+
+    # Landing on a graph creates it, so switching first and exporting what is
+    # there would turn a mistyped name into an empty bundle and a success
+    # message. The check comes before the switch.
+    existing = await storage.list_databases()
+    if graph not in existing:
+        raise ValueError(
+            f"Graph '{graph}' does not exist on this server, so there is nothing "
+            f"to export. Graphs here: {', '.join(sorted(existing)) or 'none'}."
+        )
+    await storage.switch_database(graph)
+    destination = _bundle_destination(to, graph, plain=plain)
+    unreachable = unreachable_destination(destination)
+    if unreachable is not None:
+        raise ValueError(unreachable)
+
+    bundle = await export_graph(
+        storage,
+        embedding_provider=config.embedding_provider,
+        embedding_model_id=config.embedding_model_id,
+    )
+    written = write_bundle(bundle, destination, plain=plain)
+    counts = section_counts(bundle)
+    rows = ", ".join(f"{section} {count}" for section, count in counts.items() if count)
+    return (
+        f"Wrote graph '{graph}' to {written}.\n"
+        f"  {rows}\n"
+        f"  Vectors are not in the bundle: import re-embeds with whatever "
+        f"provider the importing server is configured with."
+    )
+
+
+def _import_summary(report) -> list[str]:
+    """The lines every restore prints, whether it was asked for or verified."""
+    lines = [f"  {report.nodes_embedded} node(s) re-embedded with '{report.embedding_model_id}'."]
+    if report.reembedded_with_a_different_model:
+        lines.append(
+            f"  The bundle was embedded with "
+            f"'{report.bundle_embedding_model_id}', so every vector in the "
+            f"restored graph is new. Search results will differ."
+        )
+    if report.older_format:
+        lines.append(
+            f"  The bundle is in format version {report.format_version} and this "
+            f"Epimemer writes {BUNDLE_FORMAT_VERSION}. Anything the older format "
+            f"did not carry took its default."
+        )
+    return lines
+
+
+async def _import_bundle(
+    storage: StorageBackend, config: ServerConfig, path: str, graph: str
+) -> str:
+    """Rebuild a bundle as a new graph, and say what landed."""
+    from epimemer.mcp.config import create_embedding_provider
+    from epimemer.pipelines.transfer import import_graph, read_bundle
+
+    bundle = read_bundle(path)
+    report = await import_graph(bundle, storage, create_embedding_provider(config), graph=graph)
+    rows = ", ".join(f"{section} {count}" for section, count in report.counts.items() if count)
+    return "\n".join(
+        [
+            f"Imported {path} as graph '{graph}'.",
+            f"  {rows}",
+            *_import_summary(report),
+        ]
+    )
+
+
+async def _verify_bundle(storage: StorageBackend, config: ServerConfig, path: str) -> str:
+    """Import into a scratch graph, compare, drop it, and say what was found.
+
+    **The comparison is the whole bundle, not the counts.** Import already
+    checks its own counts against the manifest, so a verify that stopped there
+    would only be running the same check twice. Exporting the restored graph and
+    comparing the files is what tells a user their backup would come back as the
+    graph they wrote — which is exactly the round-trip property, run on their
+    own data.
+
+    The scratch graph is dropped whether the comparison passed or not: a graph
+    left behind under a name nobody chose is worse than no verification.
+    """
+    from epimemer.mcp.config import create_embedding_provider
+    from epimemer.pipelines.transfer import (
+        bundle_bytes,
+        export_graph,
+        import_graph,
+        read_bundle,
+    )
+
+    bundle = read_bundle(path)
+    scratch = f"verify-{secrets.token_hex(4)}"
+    report = await import_graph(bundle, storage, create_embedding_provider(config), graph=scratch)
+    original = storage.current_database
+    try:
+        await storage.switch_database(scratch)
+        restored = await export_graph(
+            storage,
+            embedding_provider=bundle.manifest.embedding_provider,
+            embedding_model_id=bundle.manifest.embedding_model_id,
+            exported_at=bundle.manifest.exported_at,
+        )
+        before = bundle_bytes(bundle)
+        after = bundle_bytes(restored)
+        # The manifest carries the graph name, which a scratch import is bound
+        # to differ on. Everything else is the graph itself.
+        differing = sorted(
+            name for name in before if name != "manifest.json" and before[name] != after[name]
+        )
+    finally:
+        await storage.switch_database(original)
+        await storage.delete_database(scratch)
+
+    lines = [
+        f"Verified {path} by importing it as '{scratch}' and dropping it again.",
+        f"  graph '{bundle.manifest.graph}', written by Epimemer "
+        f"{bundle.manifest.epimemer_version} on "
+        f"{bundle.manifest.exported_at.date().isoformat()}",
+        *_import_summary(report),
+    ]
+    if differing:
+        lines.append(
+            f"  MISMATCH: {', '.join(differing)} came back different. This bundle "
+            f"would not restore the graph it was written from."
+        )
+    else:
+        lines.append("  Every section came back byte for byte. The bundle is sound.")
+    return "\n".join(lines)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="epimemer", description="Epimemer administration.")
     sub = parser.add_subparsers(dest="group", required=True)
@@ -534,6 +783,28 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     rename.add_argument("--graph", help="Graph to write in (default: the configured one).")
+
+    retire = agents_sub.add_parser(
+        "retire",
+        help="Take a judge out of use. Its decisions and history are untouched.",
+    )
+    retire.add_argument("agent_id", help="The judge: its name, key, or a former key.")
+    retire.add_argument("--graph", help="Graph to write in (default: the configured one).")
+
+    reinstate = agents_sub.add_parser("reinstate", help="Put a retired judge back in use.")
+    reinstate.add_argument("agent_id", help="The judge: its name, key, or a former key.")
+    reinstate.add_argument("--graph", help="Graph to write in (default: the configured one).")
+
+    delete = agents_sub.add_parser(
+        "delete",
+        help=(
+            "Remove a judge that has never judged anything. Scans the graph "
+            "first and refuses with the counts if it has; retire it instead."
+        ),
+    )
+    delete.add_argument("agent_id", help="The judge: its name, key, or a former key.")
+    delete.add_argument("--yes", action="store_true", help="Skip the confirmation prompt.")
+    delete.add_argument("--graph", help="Graph to write in (default: the configured one).")
 
     listing = agents_sub.add_parser("list", help="Judges and approvals in a graph.")
     listing.add_argument("--graph", help="Graph to read (default: the configured one).")
@@ -607,6 +878,49 @@ def build_parser() -> argparse.ArgumentParser:
         help="Repair every candidate without asking about each one.",
     )
     repair.add_argument("--graph", help="Graph to write in (default: the configured one).")
+
+    graphs = sub.add_parser("graphs", help="Whole graphs: export, import, verify.")
+    graphs_sub = graphs.add_subparsers(dest="action", required=True)
+
+    export = graphs_sub.add_parser(
+        "export",
+        help="Write a graph out as a bundle. Embeddings are recomputed on import.",
+    )
+    export.add_argument("graph", help="The graph to export.")
+    export.add_argument(
+        "--to",
+        required=True,
+        help=(
+            "Where to write it: a local path, a gs:// URL, or an s3:// URL. A "
+            "directory (or a path ending in '/') gets the default filename, "
+            "<graph>-<YYYY-MM-DD>.epimemer.tar.gz. Cloud URLs need the matching "
+            "extra installed and read credentials from the provider's own chain."
+        ),
+    )
+    export.add_argument(
+        "--plain",
+        action="store_true",
+        help="Write an uncompressed directory of files, for reading or diffing.",
+    )
+
+    importing = graphs_sub.add_parser(
+        "import",
+        help=(
+            "Rebuild a bundle as a new graph. Refuses a graph that exists: "
+            "delete it first if replacing it is what you meant."
+        ),
+    )
+    importing.add_argument("bundle", help="Path to a bundle: a .tar.gz or a --plain directory.")
+    importing.add_argument("--graph", required=True, help="Name for the new graph.")
+
+    verify = graphs_sub.add_parser(
+        "verify",
+        help=(
+            "Check a bundle by importing it into a scratch graph, comparing it "
+            "against itself, and dropping the scratch graph again."
+        ),
+    )
+    verify.add_argument("bundle", help="Path to a bundle: a .tar.gz or a --plain directory.")
     return parser
 
 
@@ -624,7 +938,17 @@ def main(argv: list[str] | None = None) -> int:
 
     config = load_config()
 
-    if args.action in ("confirm", "require", "rename", "backfill", "declare", "repair"):
+    if args.action in (
+        "confirm",
+        "require",
+        "rename",
+        "retire",
+        "reinstate",
+        "delete",
+        "backfill",
+        "declare",
+        "repair",
+    ):
         unreachable = unreachable_store(config)
         if unreachable is not None:
             print(
@@ -636,6 +960,12 @@ def main(argv: list[str] | None = None) -> int:
             run = lambda s: _confirm(s, args.agent_id)
         elif args.action == "rename":
             run = lambda s: _rename(s, args.agent_id, args.name, args.same_judge)
+        elif args.action == "retire":
+            run = lambda s: _retire(s, args.agent_id)
+        elif args.action == "reinstate":
+            run = lambda s: _reinstate(s, args.agent_id)
+        elif args.action == "delete":
+            run = lambda s: _delete(s, args.agent_id, args.yes)
         elif args.action == "backfill":
             run = _backfill_relations
         elif args.action == "declare":
@@ -645,6 +975,29 @@ def main(argv: list[str] | None = None) -> int:
         else:
             run = lambda s: _require(s, args.setting, config.require_judge)
         print(asyncio.run(_with_storage(config, args.graph, run)))
+        return 0
+
+    if args.action in ("export", "import", "verify"):
+        # A note rather than the wall above. These three are not the user's
+        # exclusive act — `backup_graph` does the same export from inside the
+        # server — so refusing here would take away the one channel a user has
+        # when the server is not running. What the note is for: an embedded
+        # store opened from out here is an empty one, so exporting it writes an
+        # empty bundle and importing into it throws the graph away at exit.
+        unreachable = unreachable_store(config)
+        if unreachable is not None:
+            print(f"Note: {unreachable}\n", file=sys.stderr)
+        if args.action == "export":
+            run = lambda s: _export_bundle(s, config, args.graph, args.to, args.plain)
+        elif args.action == "import":
+            run = lambda s: _import_bundle(s, config, args.bundle, args.graph)
+        else:
+            run = lambda s: _verify_bundle(s, config, args.bundle)
+        try:
+            print(asyncio.run(_with_storage(config, None, run)))
+        except (ValueError, OSError) as refused:
+            print(str(refused), file=sys.stderr)
+            return 2
         return 0
 
     # Listing an embedded store is not wrong, only empty — it opens a store

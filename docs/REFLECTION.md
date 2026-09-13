@@ -197,6 +197,24 @@ reflect, and nothing triggers one. The suggestion is information for the
 agent, and running it stays a deliberate act: an automatic reflect on a timer
 would be a consolidation nobody asked for over a graph nobody was looking at.
 
+### Backing up runs the same way
+
+Backups are prompted rather than scheduled, on exactly this pattern and for
+this reason. A second counter, `stores_since_backup`, moves store for store
+with the reflect one and is zeroed by a successful backup rather than by a
+reflect; `configure_backup` sets its per-graph threshold, and
+`store_decomposition`, `apply_reflection` and `graph_stats` report
+`backup_suggested` beside `reflect_suggested`.
+
+What the agent does with it differs in one way, and the difference is the
+point. A reflect is the agent's to run. A backup is the user's, so the agent
+raises the suggestion and waits: `backup_graph` writes to the destination the
+server was configured with (`EPIMEMER_BACKUP_DESTINATION`) and takes **no
+path**, so an agent acting on the prompt cannot choose where a graph goes. With
+no destination configured it refuses and names the variable. It requires no
+judge, because a backup asserts nothing about the graph — it writes down what
+is already there.
+
 ---
 
 ## 4. Review labels

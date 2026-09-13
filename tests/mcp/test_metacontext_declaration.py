@@ -208,7 +208,9 @@ class TestGraphStatsIsTheCompletenessCheck:
         await _node(storage, Topic(content="Vienna", source_id="s1"))
         await _node(storage, Topic(content="Salzburg", source_id="s1"))
 
-        stats, _ = await tools.graph_stats(storage, default_reflect_threshold=5)
+        stats, _ = await tools.graph_stats(
+            storage, default_reflect_threshold=5, default_backup_threshold=50
+        )
 
         assert stats["nodes_without_metacontext"] == 2
 
@@ -219,7 +221,9 @@ class TestGraphStatsIsTheCompletenessCheck:
         await _node(storage, Topic(content="Vienna", source_id="s1"))
 
         await declare_metacontext(storage, metacontext=BASE_METACONTEXT_ID, judge=DECLARER)
-        stats, _ = await tools.graph_stats(storage, default_reflect_threshold=5)
+        stats, _ = await tools.graph_stats(
+            storage, default_reflect_threshold=5, default_backup_threshold=50
+        )
 
         assert stats["nodes_without_metacontext"] == 0
 
@@ -231,6 +235,8 @@ class TestGraphStatsIsTheCompletenessCheck:
             metacontexts=[fiction["metacontext_id"]],
         )
 
-        stats, _ = await tools.graph_stats(storage, default_reflect_threshold=5)
+        stats, _ = await tools.graph_stats(
+            storage, default_reflect_threshold=5, default_backup_threshold=50
+        )
 
         assert stats["nodes_without_metacontext"] == 0

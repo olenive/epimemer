@@ -126,6 +126,8 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_SEGMENTATION_STRATEGY` | `paragraph` | `paragraph` or `semantic` |
 | `EPIMEMER_SIMILARITY_THRESHOLD` | `0.75` | Similarity threshold for search |
 | `EPIMEMER_REFLECT_THRESHOLD` | `10` | Stores into a graph before the server suggests a reflect. Counted per graph in storage and reported by `graph_stats`; a graph can override it with `configure_reflection` |
+| `EPIMEMER_BACKUP_THRESHOLD` | `50` | Stores into a graph before the server suggests a backup. Counted per graph, reported by `graph_stats`, and overridable per graph with `configure_backup`. A separate count from the reflect one: reflecting clears that one, a successful backup clears this |
+| `EPIMEMER_BACKUP_DESTINATION` | (empty) | Where `backup_graph` writes: a local path, a `gs://` URL or an `s3://` URL. The tool takes no path of its own, so this is the only thing that says where a graph goes. Empty means the tool refuses and names this variable rather than inventing somewhere. Credentials come from each provider's own chain |
 | `EPIMEMER_RECORD_RETRIEVAL` | `true` | Whether `search` stamps `retrieved_at` on what it returns. `false` disables it, which blinds the `never_retrieved` nomination; ranking is unaffected either way |
 | `EPIMEMER_IMPORTANCE_STEP` | `0.25` | How much of the gap to its bound one `judge_importance` call closes, up or down. Nothing moves importance automatically |
 | `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
@@ -151,7 +153,7 @@ Tools exposed via the Model Context Protocol (Claude Code prefixes each as
 - **Archival**: `archive`, `restore`
 - **Timelines**: `create_timeline`, `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`
 - **Metacontexts**: `create_metacontext`, `get_metacontexts`
-- **Graph management**: `list_graphs`, `use_graph`, `delete_graph`
+- **Graph management**: `list_graphs`, `use_graph`, `delete_graph`, `backup_graph`, `configure_backup`
 - **Agents**: `claim_agent` says which judge you are. The user picks the
   judge, and can rename it later without disturbing any decision
 - **Review**: `review` lists the decisions this graph has recorded, least
@@ -213,6 +215,15 @@ agents require on|off|default` decides whether writes to that graph must
 name one. No MCP tool can do any of this: a tool the agent calls cannot prove
 the user asked for it, so these acts are reserved for a person at the CLI.
 
+`epimemer agents retire <handle>` takes a judge out of use. It keeps its name,
+its history and every decision, and review still answers for it; what changes
+is that `claim_agent` refuses it and the picker stops offering it beside the
+live ones. `epimemer agents reinstate <handle>` brings one back, as does the
+picker's *A retired judge…* entry. `epimemer agents delete <handle>` removes a
+judge that has never judged anything: it scans the graph, shows what it found,
+and refuses with the counts if anything names the judge, since a deleted record
+would leave rows carrying a key nothing resolves to a name.
+
 `epimemer relations backfill` gives every relationship label already in use a
 record, in one go. It is idempotent and never touches a label that has one.
 
@@ -227,6 +238,51 @@ inside the server process, so a CLI writing to it would write to a separate
 copy the running server never reads. For the two settings, use
 `EPIMEMER_APPROVED_AGENTS` and `EPIMEMER_REQUIRE_JUDGE` instead; the command
 refuses and names the right variable rather than appearing to succeed.
+
+### Backup and restore
+
+Three commands, and they are the same code the `backup_graph` tool runs:
+
+```bash
+epimemer graphs export <graph> --to <path>     # a bundle of the whole graph
+epimemer graphs import <bundle> --graph <name> # rebuild it as a new graph
+epimemer graphs verify <bundle>                # check one, then drop the copy
+```
+
+A bundle is one JSON Lines file per section — metacontexts, judges, nodes,
+edges, the decision journal, the relation vocabulary, timelines, documents and
+segments, and the graph's own settings — plus a manifest, compressed into
+`<graph>-<YYYY-MM-DD>.epimemer.tar.gz`. `--plain` writes the directory
+uncompressed for reading or diffing, and import accepts either.
+
+`--to` takes a local path, which covers an external drive, a synced folder or a
+repository you commit yourself, or a cloud URL. `gs://` needs
+`epimemer[gcs]` installed and `s3://` needs `epimemer[s3]`; a URL whose
+filesystem is missing is refused with the extra named. Credentials come from
+each provider's standard chain, and Epimemer reads none of its own.
+
+**Embeddings are not in the bundle.** Import re-embeds every node with the
+provider the importing server is configured with, which is why *export, change
+`EPIMEMER_EMBEDDING_MODEL_ID`, import* is how a graph moves to a new embedding
+model. The manifest records what it was embedded with, so a restore onto a
+different model says so.
+
+**Import creates a new graph.** It refuses a name that already exists, with no
+override: replacing a graph is `delete_graph` and then import, two acts you
+already have. A failed import drops the partial graph and says why.
+
+The `graphs` commands run against whatever store the configuration names, so
+unlike the commands above they are not refused on an embedded one. They do warn:
+an embedded store opened from outside the server is an empty one, so exporting
+it writes an empty bundle and importing into it throws the graph away when the
+command exits.
+
+Nothing runs on a schedule. Instead, `store_decomposition` and
+`apply_reflection` report `stores_since_backup` against `backup_threshold`, and
+when `backup_suggested` is true the agent raises it with you. Say yes and it
+calls `backup_graph`, which writes to `EPIMEMER_BACKUP_DESTINATION` and takes no
+path of its own, so an agent can act on the prompt without choosing where your
+graph goes. `EPIMEMER_BACKUP_THRESHOLD` sets how often it asks.
 
 ## Architecture
 

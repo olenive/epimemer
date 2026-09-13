@@ -23,19 +23,32 @@ from epimemer.core.temporal import (
     ValidityInterval,
 )
 from epimemer.core.types import (
+    Agent,
+    DecisionKind,
+    DecisionRecord,
     EdgeType,
     EmbeddingRecord,
     Fact,
     Inference,
+    JudgeRef,
+    JudgeUsage,
     Metacontext,
     NodeEdge,
     NodeStatus,
     NodeType,
     RawDocument,
+    RelationLabel,
+    RelationVerdict,
     Segment,
     Timeline,
+    Timepoint,
     Topic,
     ValueSignal,
+    is_retired,
+    judge_is_unused,
+    reinstated,
+    retired,
+    retired_at,
 )
 from epimemer.mcp import tools
 from epimemer.pipelines.timeline.functions import add_timepoint
@@ -2092,3 +2105,344 @@ class TestTimestampsAtAWholeSecond:
         found = await store.query_nodes(at_time=self.HALF_PAST)
 
         assert [n.id for n in found] == [node.id]
+
+
+AT = datetime(2026, 9, 12, 12, 0, tzinfo=UTC)
+JUDGE = JudgeRef(agent_id="k1", digest="d1")
+
+
+class TestRetirementRoundTrips:
+    """The trail is a list of dated objects on the agent row, and an open
+    episode is one with no `reinstated_at` at all — the shape SurrealDB stores
+    as an absent key. A backend that read absence back as anything but `None`
+    would report a retired judge as serving, which is the whole switch."""
+
+    async def test_an_open_episode_reads_back_open(self, store):
+        await store.upsert_agent(retired(Agent(id="k1", name="Opus 5"), AT))
+
+        stored = await store.get_agent("k1")
+
+        assert is_retired(stored)
+        assert retired_at(stored) == AT
+
+    async def test_a_closed_episode_keeps_both_dates(self, store):
+        later = AT + timedelta(days=3)
+        await store.upsert_agent(reinstated(retired(Agent(id="k1"), AT), later))
+
+        stored = await store.get_agent("k1")
+
+        assert not is_retired(stored)
+        assert [(e.retired_at, e.reinstated_at) for e in stored.retirements] == [(AT, later)]
+
+    async def test_a_record_written_before_retirement_existed_has_an_empty_trail(self, store):
+        await store.upsert_agent(Agent(id="k1", name="Opus 5"))
+
+        stored = await store.get_agent("k1")
+
+        assert stored.retirements == []
+        assert not is_retired(stored)
+
+
+class TestDeletingAnAgentRecord:
+    """The one hard delete on the protocol. Gated outside it, so the backends
+    only have to agree that it removes the row and tolerates a missing one."""
+
+    async def test_the_record_goes(self, store):
+        await store.upsert_agent(Agent(id="k1", name="Opus 5"))
+
+        await store.delete_agent("k1")
+
+        assert await store.get_agent("k1") is None
+        assert await store.list_agents() == []
+
+    async def test_deleting_one_leaves_the_others(self, store):
+        await store.upsert_agent(Agent(id="k1", name="One"))
+        await store.upsert_agent(Agent(id="k2", name="Two"))
+
+        await store.delete_agent("k1")
+
+        assert [a.id for a in await store.list_agents()] == ["k2"]
+
+    async def test_deleting_what_is_not_there_is_a_no_op(self, store):
+        await store.delete_agent("never-existed")
+        assert await store.list_agents() == []
+
+
+class TestWhatStillNamesAJudge:
+    """The scan behind `epimemer agents delete`, and it has to find a key
+    wherever a `JudgeRef` can sit. A count that missed one would let the command
+    delete a record some row still points at, leaving an id nothing resolves to
+    a name — which is exactly what retirement exists to avoid."""
+
+    async def test_a_judge_nothing_names_is_unused(self, store):
+        assert judge_is_unused(await store.judge_usage(["k1"]))
+
+    async def test_no_keys_is_zero_rather_than_everything(self, store):
+        await store.record_decision(
+            DecisionRecord(kind=DecisionKind.MERGE, subject_ids=["n1"], judged_by=JUDGE)
+        )
+        assert await store.judge_usage([]) == JudgeUsage()
+
+    async def test_a_journal_row_counts(self, store):
+        await store.record_decision(
+            DecisionRecord(kind=DecisionKind.MERGE, subject_ids=["n1"], judged_by=JUDGE)
+        )
+
+        usage = await store.judge_usage(["k1"])
+
+        assert usage.decisions == 1
+        assert (usage.nodes, usage.edges, usage.relations) == (0, 0, 0)
+
+    async def test_a_node_the_judge_wrote_counts(self, store):
+        await store.store_node(Fact(content="x", source_id="s1", judged_by=JUDGE))
+        assert (await store.judge_usage(["k1"])).nodes == 1
+
+    async def test_a_node_whose_importance_the_judge_rated_counts(self, store):
+        await store.store_node(
+            Fact(
+                content="x",
+                source_id="s1",
+                value=ValueSignal(importance_judged_by=JUDGE),
+            )
+        )
+        assert (await store.judge_usage(["k1"])).nodes == 1
+
+    async def test_a_node_the_judge_retired_counts(self, store):
+        node = Fact(content="x", source_id="s1")
+        await store.store_node(node)
+        await store.set_node_status_tx([node], status=NodeStatus.CORRECTED, at=AT, judge=JUDGE)
+
+        assert (await store.judge_usage(["k1"])).nodes == 1
+
+    async def test_a_node_naming_the_judge_twice_counts_once(self, store):
+        await store.store_node(
+            Fact(
+                content="x",
+                source_id="s1",
+                judged_by=JUDGE,
+                value=ValueSignal(importance_judged_by=JUDGE),
+            )
+        )
+        assert (await store.judge_usage(["k1"])).nodes == 1
+
+    async def test_every_node_table_is_scanned(self, store):
+        await store.store_node(Topic(content="t", judged_by=JUDGE))
+        await store.store_node(Fact(content="f", source_id="s1", judged_by=JUDGE))
+        await store.store_node(Inference(content="i", source_id="s1", judged_by=JUDGE))
+
+        assert (await store.judge_usage(["k1"])).nodes == 3
+
+    async def test_an_edge_counts(self, store):
+        await store.store_edge(
+            NodeEdge(src_id="a", dst_id="b", type=EdgeType.SUPPORTS, judged_by=JUDGE)
+        )
+        assert (await store.judge_usage(["k1"])).edges == 1
+
+    async def test_a_coined_relation_label_counts(self, store):
+        await store.store_relation_label(RelationLabel(name="reports-to", judged_by=JUDGE))
+        assert (await store.judge_usage(["k1"])).relations == 1
+
+    async def test_a_relation_verdict_counts(self, store):
+        await store.record_relation_verdict(
+            RelationVerdict(
+                label_ids=["l1", "l2"],
+                verdict="distinct",
+                because="different things",
+                judged_by=JUDGE,
+            )
+        )
+        assert (await store.judge_usage(["k1"])).relations == 1
+
+    async def test_another_judges_work_is_not_counted(self, store):
+        other = JudgeRef(agent_id="k2", digest="d1")
+        await store.store_node(Fact(content="x", source_id="s1", judged_by=other))
+        await store.store_edge(
+            NodeEdge(src_id="a", dst_id="b", type=EdgeType.SUPPORTS, judged_by=other)
+        )
+        await store.record_decision(
+            DecisionRecord(kind=DecisionKind.MERGE, subject_ids=["n1"], judged_by=other)
+        )
+
+        assert judge_is_unused(await store.judge_usage(["k1"]))
+
+    async def test_a_row_with_no_judge_at_all_is_not_counted(self, store):
+        await store.store_node(Fact(content="x", source_id="s1"))
+        await store.store_edge(NodeEdge(src_id="a", dst_id="b", type=EdgeType.SUPPORTS))
+        await store.record_decision(DecisionRecord(kind=DecisionKind.MERGE, subject_ids=["n1"]))
+
+        assert judge_is_unused(await store.judge_usage(["k1"]))
+
+    async def test_the_scan_covers_every_key_a_consolidated_judge_answers_for(self, store):
+        """Consolidating rewrites no rows, so *this judge* is a set of keys and
+        a scan over the current one alone would report the absorbed judge's
+        history as nobody's."""
+        await store.store_node(
+            Fact(content="x", source_id="s1", judged_by=JudgeRef(agent_id="old", digest="d"))
+        )
+
+        assert judge_is_unused(await store.judge_usage(["k1"]))
+        assert (await store.judge_usage(["k1", "old"])).nodes == 1
+
+
+class TestWholeSectionReads:
+    """The reads export needs, which nothing else in the system asks for.
+
+    Each one is the only route to its whole table: a document without its id or
+    its source name, a segment whose document has gone, an edge whose src is a
+    document rather than a node. A backend that answered any of them from a
+    partial index would restore a smaller graph than it exported.
+    """
+
+    async def test_every_document_comes_back(self, store):
+        await store.store_document(RawDocument(id="d1", content="one", source="one.md"))
+        await store.store_document(RawDocument(id="d2", content="two"))
+
+        assert {d.id for d in await store.query_documents()} == {"d1", "d2"}
+
+    async def test_documents_are_empty_on_a_fresh_graph(self, store):
+        assert list(await store.query_documents()) == []
+
+    async def test_every_segment_comes_back_including_an_orphan(self, store):
+        await store.store_segment(
+            Segment(id="s1", source_id="d1", text="one", span_start=0, span_end=3)
+        )
+        await store.store_segment(
+            Segment(id="s2", source_id="gone", text="two", span_start=0, span_end=3)
+        )
+
+        assert {s.id for s in await store.query_segments()} == {"s1", "s2"}
+
+    async def test_every_edge_comes_back_whole(self, store):
+        await store.store_edge(
+            NodeEdge(
+                id="e1",
+                src_id="n1",
+                dst_id="n2",
+                type=EdgeType.RELATED,
+                label="reports_to",
+                kind="attribution",
+                weight=0.5,
+                metadata={"note": "kept"},
+            )
+        )
+        await store.store_edge(
+            NodeEdge(id="e2", src_id="n1", dst_id="d1", type=EdgeType.SOURCED_FROM)
+        )
+
+        edges = {edge.id: edge for edge in await store.query_edges()}
+
+        assert set(edges) == {"e1", "e2"}
+        assert edges["e1"].label == "reports_to"
+        assert edges["e1"].kind == "attribution"
+        assert edges["e1"].weight == 0.5
+        assert edges["e1"].metadata == {"note": "kept"}
+
+
+class TestTheReflectCounterCanBeSetOutright:
+    """Import restores a count it read from a bundle; nothing else asserts one."""
+
+    async def test_it_lands_on_the_number_given(self, store):
+        await store.set_reflect_counter(17)
+        assert await store.get_reflect_counter() == 17
+
+    async def test_zero_is_a_number_like_any_other(self, store):
+        await store.bump_reflect_counter()
+        await store.set_reflect_counter(0)
+        assert await store.get_reflect_counter() == 0
+
+    async def test_a_bump_carries_on_from_where_it_was_set(self, store):
+        await store.set_reflect_counter(4)
+        assert await store.bump_reflect_counter() == 5
+
+
+class TestVerbatimWrites:
+    """What `write_verbatim_tx` promises: the record that went in comes back.
+
+    Import cannot go through the ordinary writers, because three of them derive
+    something. Each test here names the one that would have moved.
+    """
+
+    async def test_a_journal_row_keeps_its_id_and_its_instant(self, store):
+        record = DecisionRecord(
+            id="decision-1",
+            kind=DecisionKind.MERGE,
+            subject_ids=["n1"],
+            judged_by=JUDGE,
+            decided_at=AT,
+        )
+        await store.write_verbatim_tx(decisions=[record])
+
+        stored = await store.get_decision("decision-1")
+        assert stored is not None
+        assert stored.decided_at == AT
+        assert stored.judged_by == JUDGE
+
+    async def test_a_relation_label_keeps_the_id_it_arrived_with(self, store):
+        """`store_relation_label` merges against whatever is recorded under
+        `(name, kind)` and would hand back that record's id instead."""
+        await store.write_verbatim_tx(
+            relation_labels=[
+                RelationLabel(id="label-1", name="reports_to", kind="relationship", description="x")
+            ]
+        )
+
+        stored = await store.get_relation_label("reports_to", "relationship")
+        assert stored is not None
+        assert stored.id == "label-1"
+        assert stored.description == "x"
+
+    async def test_an_agent_keeps_its_last_seen_stamp(self, store):
+        await store.write_verbatim_tx(agents=[Agent(id="k9", name="Restored", last_seen_at=AT)])
+
+        stored = await store.get_agent("k9")
+        assert stored is not None
+        assert stored.last_seen_at == AT
+
+    async def test_every_section_lands_in_one_call(self, store):
+        await store.write_verbatim_tx(
+            documents=[RawDocument(id="d1", content="one")],
+            segments=[Segment(id="s1", source_id="d1", text="one", span_start=0, span_end=3)],
+            nodes=[
+                Topic(id="t1", content="Weather"),
+                Fact(id="f1", content="It rained", source_id="s1"),
+                Inference(id="i1", content="It was wet", source_id="s1"),
+            ],
+            edges=[NodeEdge(id="e1", src_id="f1", dst_id="t1", type=EdgeType.TAGGED_WITH_TOPIC)],
+            embeddings=[EmbeddingRecord(id="emb1", item_id="t1", model_id="m", vector=[0.5, 0.25])],
+            timelines=[
+                Timeline(id="tl1", name="TL", timepoints=[Timepoint(id="tp1", label="then")])
+            ],
+            metacontexts=[Metacontext(id="mc1", content="The Real")],
+            relation_labels=[RelationLabel(id="rl1", name="caused_by", kind="relationship")],
+            relation_verdicts=[
+                RelationVerdict(id="v1", label_ids=["rl1", "rl2"], verdict="distinct", because="no")
+            ],
+            decisions=[DecisionRecord(id="dec1", kind=DecisionKind.INGEST, subject_ids=["f1"])],
+            agents=[Agent(id="k1", name="Judge")],
+        )
+
+        assert (await store.get_document("d1")) is not None
+        assert set((await store.get_segments(["s1"])).keys()) == {"s1"}
+        assert set((await store.get_nodes(["t1", "f1", "i1"])).keys()) == {"t1", "f1", "i1"}
+        assert [e.id for e in await store.query_edges()] == ["e1"]
+        assert [e.vector for e in await store.get_embeddings_for_item("t1")] == [[0.5, 0.25]]
+        assert [t.id for t in await store.query_timelines()] == ["tl1"]
+        assert [m.id for m in await store.query_metacontexts()] == ["mc1"]
+        assert [r.id for r in await store.query_relation_labels()] == ["rl1"]
+        assert [v.id for v in await store.query_relation_verdicts()] == ["v1"]
+        assert [d.id for d in await store.query_decisions()] == ["dec1"]
+        assert [a.id for a in await store.list_agents()] == ["k1"]
+
+    async def test_an_empty_call_writes_nothing_and_does_not_raise(self, store):
+        await store.write_verbatim_tx()
+        assert list(await store.query_edges()) == []
+
+    async def test_the_edge_index_is_maintained(self, store):
+        """The in-memory backend keeps endpoint indexes beside the edge table,
+        and a write path that skipped them would leave an edge nothing finds."""
+        await store.write_verbatim_tx(
+            edges=[NodeEdge(id="e1", src_id="a", dst_id="b", type=EdgeType.SUPPORTS)]
+        )
+
+        assert [e.id for e in await store.get_edges_from("a")] == ["e1"]
+        assert [e.id for e in await store.get_edges_to("b")] == ["e1"]

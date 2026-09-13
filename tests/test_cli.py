@@ -7,16 +7,41 @@ an approval that reports success into a store the server never reads is worse
 than a refusal, because the user then believes they have done it.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
-from epimemer.cli import _confirm, _list, _rename, main, unreachable_store
+import pytest
+
+from epimemer.cli import (
+    _confirm,
+    _delete,
+    _export_bundle,
+    _import_bundle,
+    _list,
+    _reinstate,
+    _rename,
+    _retire,
+    _verify_bundle,
+    main,
+    unreachable_store,
+)
 from epimemer.core.types import (
     Agent,
+    DecisionKind,
+    DecisionRecord,
+    Fact,
+    JudgeRef,
+    Metacontext,
+    Topic,
     agent_name,
+    is_retired,
     live_agents,
+    retired,
     with_description,
 )
 from epimemer.mcp.config import ServerConfig
+from epimemer.pipelines import transfer
+from epimemer.pipelines.transfer import unreachable_destination
+from epimemer.storage.memory import InMemoryStorage
 
 AT = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
 
@@ -199,6 +224,153 @@ class TestListing:
 
         assert "approved judges: (none)" in out
         assert "No agent has claimed an identity" in out
+
+    async def test_retired_judges_get_a_heading_of_their_own_with_the_date(self, storage):
+        """A marker in the main list would be a distinction the reader has to
+        hunt for, and which judges may still be claimed is the reason to read
+        the listing at all."""
+        await storage.upsert_agent(Agent(id="k1", name="serving", authorised_at=AT))
+        await storage.upsert_agent(retired(Agent(id="k2", name="stale", authorised_at=AT), AT))
+
+        out = await _list(storage)
+
+        serving_part, retired_part = out.split("retired judges:")
+        assert "serving" in serving_part
+        assert "stale" not in serving_part
+        assert "stale" in retired_part
+        assert "retired 2026-08-22" in retired_part
+        assert "epimemer agents reinstate" in retired_part
+
+    async def test_a_graph_with_no_retired_judge_has_no_heading(self, storage):
+        await storage.upsert_agent(Agent(id="k1", name="serving", authorised_at=AT))
+
+        assert "retired judges:" not in await _list(storage)
+
+
+class TestRetiringAndReinstating:
+    """Housekeeping a user does, and no MCP tool can: a handle an agent could
+    retire is a handle an agent could use to take a rival judge off the roster.
+    Neither asks for confirmation — retiring costs nothing that reinstating does
+    not give straight back."""
+
+    async def test_retiring_says_what_happens_to_sessions_already_bound(self, storage):
+        await storage.upsert_agent(Agent(id="k1", name="Opus 5", authorised_at=AT))
+
+        message = await _retire(storage, "Opus 5")
+
+        assert is_retired(await storage.get_agent("k1"))
+        assert "Sessions currently using this judge continue until they reconnect" in message
+
+    async def test_retiring_one_already_retired_is_refused(self, storage):
+        await storage.upsert_agent(retired(Agent(id="k1", name="Opus 5", authorised_at=AT), AT))
+
+        message = await _retire(storage, "Opus 5")
+
+        assert "already retired" in message
+
+    async def test_reinstating_puts_it_back(self, storage):
+        await storage.upsert_agent(retired(Agent(id="k1", name="Opus 5", authorised_at=AT), AT))
+
+        message = await _reinstate(storage, "Opus 5")
+
+        assert not is_retired(await storage.get_agent("k1"))
+        assert "back in use" in message
+
+    async def test_reinstating_a_serving_judge_is_refused(self, storage):
+        await storage.upsert_agent(Agent(id="k1", name="Opus 5", authorised_at=AT))
+
+        assert "is not retired" in await _reinstate(storage, "Opus 5")
+
+    async def test_a_handle_naming_nobody_is_refused(self, storage):
+        assert "No judge here answers to 'nobody'" in await _retire(storage, "nobody")
+        assert "No judge here answers to 'nobody'" in await _reinstate(storage, "nobody")
+
+    def test_the_refusal_off_an_embedded_store_says_what_is_left(self, capsys, monkeypatch):
+        """No environment variable stands in for this one, so the message has to
+        name the channel that does reach an embedded graph."""
+        monkeypatch.setenv("EPIMEMER_STORAGE_BACKEND", "memory")
+
+        code = main(["agents", "retire", "Opus 5"])
+
+        err = capsys.readouterr().err
+        assert code == 2
+        assert "EPIMEMER_APPROVED_AGENTS" not in err
+        assert "A retired judge…" in err
+
+
+class TestDeletingAJudge:
+    """The one hard delete, and it is gated on a scan the user is shown. A judge
+    that has judged anything is retired instead: the journal is append-only, so
+    the record would leave rows naming a key nothing resolves to a name."""
+
+    async def test_the_scan_is_printed_before_anything_is_asked(self, storage, monkeypatch, capsys):
+        await storage.upsert_agent(Agent(id="k1", name="Opus 5", authorised_at=AT))
+        asked: list[str] = []
+        monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt) or "n")
+
+        message = await _delete(storage, "Opus 5", False)
+
+        assert "has judged nothing in this graph" in capsys.readouterr().out
+        assert "Delete the judge 'Opus 5'?" in asked[0]
+        assert "Left 'Opus 5' as it was" in message
+        assert await storage.get_agent("k1") is not None
+
+    async def test_answering_yes_removes_the_record_and_the_approval(self, storage, monkeypatch):
+        await storage.upsert_agent(Agent(id="k1", name="Opus 5", authorised_at=AT))
+        await storage.set_approved_agent_ids(["k1"])
+        monkeypatch.setattr("builtins.input", lambda prompt: "y")
+
+        message = await _delete(storage, "Opus 5", False)
+
+        assert "is deleted" in message
+        assert await storage.get_agent("k1") is None
+        assert await storage.get_approved_agent_ids() == []
+
+    async def test_yes_skips_the_prompt(self, storage, monkeypatch):
+        await storage.upsert_agent(Agent(id="k1", name="Opus 5", authorised_at=AT))
+        monkeypatch.setattr(
+            "builtins.input", lambda prompt: pytest.fail("--yes must not ask") or ""
+        )
+
+        await _delete(storage, "Opus 5", True)
+
+        assert await storage.get_agent("k1") is None
+
+    async def test_no_terminal_reads_as_no(self, storage, monkeypatch):
+        """A shell that hands the command no terminal must not delete a record
+        on the strength of an `EOFError`."""
+
+        def _no_terminal(prompt):
+            raise EOFError
+
+        await storage.upsert_agent(Agent(id="k1", name="Opus 5", authorised_at=AT))
+        monkeypatch.setattr("builtins.input", _no_terminal)
+
+        await _delete(storage, "Opus 5", False)
+
+        assert await storage.get_agent("k1") is not None
+
+    async def test_a_judge_that_has_judged_is_refused_with_the_counts(self, storage, monkeypatch):
+        await storage.upsert_agent(Agent(id="k1", name="Opus 5", authorised_at=AT))
+        await storage.record_decision(
+            DecisionRecord(
+                kind=DecisionKind.MERGE,
+                subject_ids=["n1"],
+                judged_by=JudgeRef(agent_id="k1", digest="d1"),
+            )
+        )
+        monkeypatch.setattr(
+            "builtins.input", lambda prompt: pytest.fail("a refusal must not ask") or ""
+        )
+
+        message = await _delete(storage, "Opus 5", False)
+
+        assert "1 journal row(s)" in message
+        assert "epimemer agents retire Opus 5" in message
+        assert await storage.get_agent("k1") is not None
+
+    async def test_a_handle_naming_nobody_is_refused(self, storage):
+        assert "No judge here answers to 'nobody'" in await _delete(storage, "nobody", True)
 
 
 class TestRequiringAJudge:
@@ -448,3 +620,203 @@ class TestServe:
 
         assert main(["serve"]) == 0
         assert calls == [((), {})]
+
+
+class TestGraphBundles:
+    """Export, import and verify, which are the three acts a backup needs.
+
+    Unlike the rest of this file these are not the user's *exclusive* act —
+    `backup_graph` performs the same export from inside the server — so they do
+    not sit behind the reachability wall. What they do get is the note, because
+    an embedded store opened from out here is an empty one.
+    """
+
+    async def _graph_with_something_in_it(self):
+        store = InMemoryStorage()
+        await store.connect()
+        await store.switch_database("source")
+        await store.store_metacontext(Metacontext(id="the-real", content="The Real"))
+        await store.store_node(Topic(id="topic-1", content="Weather"))
+        await store.store_node(Fact(id="fact-1", content="It rained", source_id="seg-1"))
+        return store
+
+    async def test_a_directory_gets_the_default_name(self, tmp_path):
+        store = await self._graph_with_something_in_it()
+
+        message = await _export_bundle(store, _MOCK_EMBEDDING, "source", str(tmp_path), False)
+
+        written = [path.name for path in tmp_path.iterdir()]
+        assert written == [f"source-{date.today().isoformat()}.epimemer.tar.gz"]
+        assert "Wrote graph 'source'" in message
+        assert "nodes 2" in message
+
+    async def test_a_graph_that_does_not_exist_is_refused_before_anything_is_written(
+        self, tmp_path
+    ):
+        store = await self._graph_with_something_in_it()
+
+        with pytest.raises(ValueError, match="'sorce' does not exist"):
+            await _export_bundle(store, _MOCK_EMBEDDING, "sorce", str(tmp_path), False)
+
+        assert list(tmp_path.iterdir()) == []
+        assert "sorce" not in await store.list_databases()
+
+    async def test_a_named_file_is_taken_literally(self, tmp_path):
+        store = await self._graph_with_something_in_it()
+
+        await _export_bundle(store, _MOCK_EMBEDDING, "source", str(tmp_path / "mine.tar.gz"), False)
+
+        assert (tmp_path / "mine.tar.gz").is_file()
+
+    async def test_plain_writes_a_directory_of_files(self, tmp_path):
+        store = await self._graph_with_something_in_it()
+
+        await _export_bundle(store, _MOCK_EMBEDDING, "source", str(tmp_path / "plain"), True)
+
+        written = {path.name for path in (tmp_path / "plain").iterdir()}
+        assert "manifest.json" in written
+        assert "nodes.jsonl" in written
+
+    async def test_import_rebuilds_the_graph_under_the_name_given(self, tmp_path):
+        source = await self._graph_with_something_in_it()
+        await _export_bundle(source, _MOCK_EMBEDDING, "source", str(tmp_path / "b.tar.gz"), False)
+        target = InMemoryStorage()
+        await target.connect()
+
+        message = await _import_bundle(
+            target, _MOCK_EMBEDDING, str(tmp_path / "b.tar.gz"), "restored"
+        )
+
+        assert "as graph 'restored'" in message
+        assert "restored" in await target.list_databases()
+        await target.switch_database("restored")
+        assert (await target.get_node("fact-1")) is not None
+
+    async def test_import_refuses_a_graph_that_exists(self, tmp_path):
+        source = await self._graph_with_something_in_it()
+        await _export_bundle(source, _MOCK_EMBEDDING, "source", str(tmp_path / "b.tar.gz"), False)
+
+        with pytest.raises(ValueError, match="already exists"):
+            await _import_bundle(source, _MOCK_EMBEDDING, str(tmp_path / "b.tar.gz"), "source")
+
+    async def test_verify_reports_a_sound_bundle_and_leaves_no_graph(self, tmp_path):
+        source = await self._graph_with_something_in_it()
+        await _export_bundle(source, _MOCK_EMBEDDING, "source", str(tmp_path / "b.tar.gz"), False)
+        target = InMemoryStorage()
+        await target.connect()
+
+        message = await _verify_bundle(target, _MOCK_EMBEDDING, str(tmp_path / "b.tar.gz"))
+
+        assert "byte for byte" in message
+        assert [name for name in await target.list_databases() if name.startswith("verify-")] == []
+
+    async def test_verify_says_which_sections_came_back_different(self, tmp_path, monkeypatch):
+        """The mismatch branch, which is the only reason to run verify at all.
+
+        Forced by making the restore drop the nodes, which is what a broken
+        verbatim write would look like from out here.
+        """
+        source = await self._graph_with_something_in_it()
+        await _export_bundle(source, _MOCK_EMBEDDING, "source", str(tmp_path / "b.tar.gz"), False)
+        target = InMemoryStorage()
+        await target.connect()
+
+        real = transfer.import_graph
+
+        async def losing_the_nodes(bundle, storage, provider, *, graph):
+            return await real(
+                bundle.model_copy(
+                    update={
+                        "nodes": [],
+                        "manifest": bundle.manifest.model_copy(
+                            update={"counts": {**bundle.manifest.counts, "nodes": 0}}
+                        ),
+                    }
+                ),
+                storage,
+                provider,
+                graph=graph,
+            )
+
+        monkeypatch.setattr(transfer, "import_graph", losing_the_nodes)
+
+        message = await _verify_bundle(target, _MOCK_EMBEDDING, str(tmp_path / "b.tar.gz"))
+
+        assert "MISMATCH" in message
+        assert "nodes.jsonl" in message
+
+
+class TestWhereABundleCanBeWritten:
+    """`--to` takes a local path or a cloud URL, through one `fsspec` call.
+
+    A local path needs no extra installed, and a cloud URL whose driver is
+    missing has to say which extra installs it: the alternative is an
+    `ImportError` naming a package the user never asked for.
+    """
+
+    def test_a_local_path_needs_nothing(self, tmp_path):
+        assert unreachable_destination(str(tmp_path / "b.tar.gz")) is None
+
+    def test_a_cloud_url_without_its_driver_names_the_extra(self, monkeypatch):
+        import fsspec
+
+        def missing(protocol):
+            raise ImportError(f"no driver for {protocol}")
+
+        monkeypatch.setattr(fsspec, "get_filesystem_class", missing)
+
+        for url, extra in (("gs://bucket/b.tar.gz", "gcs"), ("s3://bucket/b.tar.gz", "s3")):
+            message = unreachable_destination(url)
+            assert message is not None and f"epimemer[{extra}]" in message
+
+    def test_an_unknown_scheme_says_so_rather_than_naming_an_extra(self, monkeypatch):
+        import fsspec
+
+        def unknown(protocol):
+            raise ValueError(protocol)
+
+        monkeypatch.setattr(fsspec, "get_filesystem_class", unknown)
+
+        message = unreachable_destination("wat://bucket/b.tar.gz")
+        assert message is not None and "does not know" in message
+
+    async def test_export_refuses_before_reading_the_graph(self, monkeypatch):
+        import fsspec
+
+        monkeypatch.setattr(
+            fsspec,
+            "get_filesystem_class",
+            lambda protocol: (_ for _ in ()).throw(ImportError(protocol)),
+        )
+        store = InMemoryStorage()
+        await store.connect()
+
+        with pytest.raises(ValueError, match=r"epimemer\[gcs\]"):
+            await _export_bundle(store, _MOCK_EMBEDDING, "default", "gs://bucket/b.tar.gz", False)
+
+    def test_the_command_exits_two_and_says_which_extra(self, monkeypatch, capsys, tmp_path):
+        import fsspec
+
+        monkeypatch.setenv("EPIMEMER_STORAGE_BACKEND", "memory")
+        monkeypatch.setenv("EPIMEMER_EMBEDDING_PROVIDER", "mock")
+        monkeypatch.setattr(
+            fsspec,
+            "get_filesystem_class",
+            lambda protocol: (_ for _ in ()).throw(ImportError(protocol)),
+        )
+
+        code = main(["graphs", "export", "default", "--to", "s3://bucket/b.tar.gz"])
+
+        assert code == 2
+        assert "epimemer[s3]" in capsys.readouterr().err
+
+    def test_the_command_writes_a_bundle_to_a_local_path(self, monkeypatch, capsys, tmp_path):
+        """The wiring, end to end: argv in, a file on disk out."""
+        monkeypatch.setenv("EPIMEMER_STORAGE_BACKEND", "memory")
+        monkeypatch.setenv("EPIMEMER_EMBEDDING_PROVIDER", "mock")
+
+        code = main(["graphs", "export", "default", "--to", str(tmp_path / "b.tar.gz")])
+
+        assert code == 0
+        assert (tmp_path / "b.tar.gz").is_file()
+        assert "Wrote graph 'default'" in capsys.readouterr().out

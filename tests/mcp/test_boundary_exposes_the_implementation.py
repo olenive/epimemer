@@ -131,6 +131,33 @@ NOT_AGENT_SETTABLE: dict[tuple[str, str], str] = {
         "configure_reflection",
         "default_threshold",
     ): "as graph_stats: the agent sets the per-graph override, never the default it falls back to",
+    (
+        "graph_stats",
+        "default_backup_threshold",
+    ): "as default_reflect_threshold, for the other counter",
+    (
+        "configure_backup",
+        "default_threshold",
+    ): "as configure_reflection: the agent sets the per-graph override, never the default",
+    (
+        "backup_graph",
+        "destination",
+    ): "where a graph goes is the user's decision, made once in "
+    "EPIMEMER_BACKUP_DESTINATION. A tool that took a path would let an agent "
+    "acting on a backup prompt choose where the whole graph was written",
+    (
+        "backup_graph",
+        "embedding_provider",
+    ): "what the graph was embedded with, recorded in the manifest. A fact "
+    "about the server, not a per-call choice",
+    (
+        "backup_graph",
+        "embedding_model_id",
+    ): "as embedding_provider",
+    (
+        "backup_graph",
+        "default_backup_threshold",
+    ): "as graph_stats",
 }
 
 # Supplied by the boundary for every tool, and never interesting here.

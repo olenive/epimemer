@@ -52,12 +52,12 @@ and `EPIMEMER_GRAPH` (see *Which graph a server opens* below).
 
 ### Verify Connection
 
-In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 46 tools.
+In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 48 tools.
 
 ## Available Tools
 
 Claude Code prefixes each tool as `mcp__epimemer__<name>`. This table is
-the canonical list of the 46 tools; other docs link here rather than
+the canonical list of the 48 tools; other docs link here rather than
 restate the count.
 
 ### Core Memory Operations
@@ -159,6 +159,8 @@ Both storage backends support multiple named graphs.
 | `list_graphs` | List the available knowledge graphs and show the active one |
 | `use_graph` | Switch to a knowledge graph, creating it if needed |
 | `delete_graph` | Delete a knowledge graph permanently |
+| `backup_graph` | Write the active graph out as a bundle, to the destination the server was configured with (`EPIMEMER_BACKUP_DESTINATION`). Takes no path: where a graph goes is the user's decision. Refuses plainly when nothing is configured |
+| `configure_backup` | Set or clear this graph's store threshold for suggesting a backup |
 
 #### Which graph a server opens
 

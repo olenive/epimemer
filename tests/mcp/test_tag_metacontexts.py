@@ -236,7 +236,9 @@ class TestIngestPutsATagWhereItIsUsedFrom:
             metacontext_id=BASE_METACONTEXT_ID,
         )
 
-        stats, _ = await tools.graph_stats(storage, default_reflect_threshold=10)
+        stats, _ = await tools.graph_stats(
+            storage, default_reflect_threshold=10, default_backup_threshold=50
+        )
         assert stats["nodes_without_metacontext"] == 0
 
 

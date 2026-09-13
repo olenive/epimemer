@@ -29,6 +29,7 @@ from epimemer.core.types import (
     Fact,
     Inference,
     JudgeRef,
+    JudgeUsage,
     LifecycleEpisode,
     Metacontext,
     NodeEdge,
@@ -751,6 +752,7 @@ _REFLECT_BUMP = (
     f"UPSERT {_REFLECT_RECORD} SET {_REFLECT_FIELD} = ({_REFLECT_FIELD} ?? 0) + 1 RETURN AFTER;"
 )
 _REFLECT_RESET = f"UPSERT {_REFLECT_RECORD} SET {_REFLECT_FIELD} = 0 RETURN BEFORE;"
+_REFLECT_SET = f"UPSERT {_REFLECT_RECORD} SET {_REFLECT_FIELD} = $count RETURN AFTER;"
 
 # The per-graph threshold override shares the record with the counter — same
 # scope, same lifetime — but never the same field. Clearing writes NONE, which
@@ -783,6 +785,41 @@ def _threshold_override(rows) -> int | None:
     if not rows or rows[0] is None:
         return None
     value = rows[0].get(_THRESHOLD_FIELD)
+    return None if value is None else int(value)
+
+
+# The backup counter and its threshold override, on the reflect pair's terms:
+# same graph-state row, own fields. Two counters rather than one because the
+# two are zeroed by different acts.
+_BACKUP_FIELD = "stores_since_backup"
+
+_BACKUP_GET = f"SELECT {_BACKUP_FIELD} FROM {_REFLECT_RECORD};"
+_BACKUP_BUMP = (
+    f"UPSERT {_REFLECT_RECORD} SET {_BACKUP_FIELD} = ({_BACKUP_FIELD} ?? 0) + 1 RETURN AFTER;"
+)
+_BACKUP_RESET = f"UPSERT {_REFLECT_RECORD} SET {_BACKUP_FIELD} = 0 RETURN BEFORE;"
+_BACKUP_SET = f"UPSERT {_REFLECT_RECORD} SET {_BACKUP_FIELD} = $count RETURN AFTER;"
+
+_BACKUP_THRESHOLD_FIELD = "backup_threshold_override"
+
+_BACKUP_THRESHOLD_GET = f"SELECT {_BACKUP_THRESHOLD_FIELD} FROM {_REFLECT_RECORD};"
+_BACKUP_THRESHOLD_SET = (
+    f"UPSERT {_REFLECT_RECORD} SET {_BACKUP_THRESHOLD_FIELD} = $threshold RETURN AFTER;"
+)
+
+
+def _backup_count(rows) -> int:
+    """`_reflect_count` for the backup counter's field."""
+    if not rows or rows[0] is None:
+        return 0
+    return int(rows[0].get(_BACKUP_FIELD) or 0)
+
+
+def _backup_threshold_override(rows) -> int | None:
+    """`_threshold_override` for the backup threshold's field."""
+    if not rows or rows[0] is None:
+        return None
+    value = rows[0].get(_BACKUP_THRESHOLD_FIELD)
     return None if value is None else int(value)
 
 
@@ -1020,6 +1057,20 @@ _EPISODE_IN_WINDOW = (
     "OR array::len((lifecycle ?? [])"
     f"[WHERE restored_at != NONE AND {instant('restored_at')} >= {instant('$start')} "
     f"AND {instant('restored_at')} < {instant('$end')}]) > 0"
+)
+
+
+# Does this node name any of `$ids` as a judge? The SurrealQL half of
+# `node_judge_ids`, and it has to enumerate the same four places: a field added
+# there and missed here would let `epimemer agents delete` remove a judge some
+# node still points at. The `?? []` is load-bearing for `_EPISODE_IN_WINDOW`'s
+# reason — a row written before episodes existed has no `lifecycle` at all, and
+# `array::len(NONE)` is an error rather than zero.
+_NODE_NAMES_JUDGE = (
+    "judged_by.agent_id IN $ids "
+    "OR value.importance_judged_by.agent_id IN $ids "
+    "OR array::len((lifecycle ?? [])"
+    "[WHERE retired_by.agent_id IN $ids OR restored_by.agent_id IN $ids]) > 0"
 )
 
 
@@ -1431,6 +1482,10 @@ class SurrealDBStorage:
             return None
         return RawDocument.model_validate(_clean_record(rows[0]))
 
+    async def query_documents(self) -> Sequence[RawDocument]:
+        rows = await self._query("SELECT * FROM document")
+        return [RawDocument.model_validate(_clean_record(r)) for r in rows]
+
     # --- Segments ---
 
     async def store_segment(self, segment: Segment) -> str:
@@ -1455,6 +1510,10 @@ class SurrealDBStorage:
                 segment = Segment.model_validate(_clean_record(row))
                 found[segment.id] = segment
         return found
+
+    async def query_segments(self) -> Sequence[Segment]:
+        rows = await self._query("SELECT * FROM segment")
+        return [Segment.model_validate(_clean_record(r)) for r in rows]
 
     # --- Epistemic Nodes ---
 
@@ -1725,6 +1784,10 @@ class SurrealDBStorage:
                 continue
             counts[EdgeType(raw_type)] = row["c"]
         return counts
+
+    async def query_edges(self) -> Sequence[NodeEdge]:
+        rows = await self._query("SELECT * FROM node_edge")
+        return [NodeEdge.model_validate(_clean_record(r)) for r in rows]
 
     # --- Atomic compound operations ---
 
@@ -2202,6 +2265,64 @@ class SurrealDBStorage:
             return
         await self._run_transaction(statements, params)
 
+    async def write_verbatim_tx(
+        self,
+        *,
+        documents: Sequence[RawDocument] = (),
+        segments: Sequence[Segment] = (),
+        nodes: Sequence[EpistemicNode] = (),
+        edges: Sequence[NodeEdge] = (),
+        embeddings: Sequence[EmbeddingRecord] = (),
+        timelines: Sequence[Timeline] = (),
+        metacontexts: Sequence[Metacontext] = (),
+        relation_labels: Sequence[RelationLabel] = (),
+        relation_verdicts: Sequence[RelationVerdict] = (),
+        decisions: Sequence[DecisionRecord] = (),
+        agents: Sequence[Agent] = (),
+    ) -> None:
+        """Every record as given, in one transaction. See the protocol.
+
+        One bulk `INSERT INTO table $rows` per table rather than a statement per
+        record: a restore is the largest write this backend ever takes, and a
+        transaction of one statement per row would be tens of thousands of
+        statements in a single batch.
+
+        A journal row still renders `decided_at` through `_decision_row`, and an
+        edge still renders its `type` as the enum's value. Neither is a stamp:
+        they are how this backend spells those two values, and `decided_at` is
+        indexed, so the padded rendering is what makes a later range query
+        correct (`_iso_micros`).
+        """
+        statements: list[str] = []
+        params: dict = {}
+
+        def bulk(table: str, key: str, rows: list[dict]) -> None:
+            if not rows:
+                return
+            statements.append(f"INSERT INTO {table} ${key}")
+            params[key] = rows
+
+        nodes_by_table: dict[str, list[dict]] = {}
+        for node in nodes:
+            nodes_by_table.setdefault(_node_to_table(node), []).append(_serialize(node))
+        for table, rows in nodes_by_table.items():
+            bulk(table, f"verbatim_{table}", rows)
+
+        bulk("document", "verbatim_documents", [_serialize(d) for d in documents])
+        bulk("segment", "verbatim_segments", [_serialize(s) for s in segments])
+        bulk("node_edge", "verbatim_edges", [_edge_row(e) for e in edges])
+        bulk("embedding", "verbatim_embeddings", [_serialize(e) for e in embeddings])
+        bulk("timeline", "verbatim_timelines", [_serialize(t) for t in timelines])
+        bulk("metacontext", "verbatim_metacontexts", [_serialize(m) for m in metacontexts])
+        bulk("relation_label", "verbatim_labels", [_serialize(rl) for rl in relation_labels])
+        bulk("relation_verdict", "verbatim_verdicts", [_serialize(v) for v in relation_verdicts])
+        bulk("decision", "verbatim_decisions", [_decision_row(d) for d in decisions])
+        bulk("agent", "verbatim_agents", [_serialize(a) for a in agents])
+
+        if not statements:
+            return
+        await self._run_transaction(statements, params)
+
     # --- Embeddings ---
 
     async def store_embedding(self, embedding: EmbeddingRecord) -> str:
@@ -2574,12 +2695,39 @@ class SurrealDBStorage:
         rows = await self._query(_REFLECT_RESET)
         return _reflect_count(rows)
 
+    async def set_reflect_counter(self, count: int) -> None:
+        await self._query(_REFLECT_SET, {"count": count})
+
     async def get_reflect_threshold_override(self) -> int | None:
         rows = await self._query(_THRESHOLD_GET)
         return _threshold_override(rows)
 
     async def set_reflect_threshold_override(self, threshold: int | None) -> None:
         await self._query(_THRESHOLD_SET, {"threshold": threshold})
+
+    # --- Backup bookkeeping ---
+
+    async def get_backup_counter(self) -> int:
+        rows = await self._query(_BACKUP_GET)
+        return _backup_count(rows)
+
+    async def bump_backup_counter(self) -> int:
+        rows = await self._query(_BACKUP_BUMP)
+        return _backup_count(rows)
+
+    async def reset_backup_counter(self) -> int:
+        rows = await self._query(_BACKUP_RESET)
+        return _backup_count(rows)
+
+    async def set_backup_counter(self, count: int) -> None:
+        await self._query(_BACKUP_SET, {"count": count})
+
+    async def get_backup_threshold_override(self) -> int | None:
+        rows = await self._query(_BACKUP_THRESHOLD_GET)
+        return _backup_threshold_override(rows)
+
+    async def set_backup_threshold_override(self, threshold: int | None) -> None:
+        await self._query(_BACKUP_THRESHOLD_SET, {"threshold": threshold})
 
     async def get_merge_overrides(self) -> MergeOverrides:
         rows = await self._query(_MERGE_GET)
@@ -2618,6 +2766,36 @@ class SurrealDBStorage:
     async def list_agents(self) -> list[Agent]:
         rows = await self._query("SELECT * FROM agent")
         return [Agent.model_validate(_clean_record(r)) for r in rows]
+
+    async def delete_agent(self, agent_id: str) -> None:
+        await self._query("DELETE FROM agent WHERE uid = $uid", {"uid": agent_id})
+
+    async def judge_usage(self, agent_ids: Sequence[str]) -> JudgeUsage:
+        keys = list(dict.fromkeys(agent_ids))
+        if not keys:
+            return JudgeUsage()
+        params = {"ids": keys}
+
+        async def counted(table: str, where: str) -> int:
+            rows = await self._query(
+                f"SELECT count() AS c FROM {table} WHERE {where} GROUP ALL", params
+            )
+            return rows[0]["c"] if rows else 0
+
+        nodes = 0
+        for table in _NODE_TYPE_TO_TABLE.values():
+            nodes += await counted(table, _NODE_NAMES_JUDGE)
+        return JudgeUsage(
+            # The one clause here with an index behind it: `idx_decision_judge`
+            # is on `judged_by.agent_id` for exactly this shape.
+            decisions=await counted("decision", "judged_by.agent_id IN $ids"),
+            nodes=nodes,
+            edges=await counted("node_edge", "judged_by.agent_id IN $ids"),
+            relations=(
+                await counted("relation_label", "judged_by.agent_id IN $ids")
+                + await counted("relation_verdict", "judged_by.agent_id IN $ids")
+            ),
+        )
 
     async def get_approved_agent_ids(self) -> list[str]:
         rows = await self._query(_APPROVED_AGENTS_GET)

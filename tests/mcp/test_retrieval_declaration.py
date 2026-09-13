@@ -290,6 +290,10 @@ def _args(tool: str, seeded: dict) -> dict:
         "configure_merge": {},
         "configure_warnings": {},
         "configure_reflection": {"threshold": 7},
+        "configure_backup": {"threshold": 7},
+        # Refused: no destination is configured in the test server. A refusal is
+        # still a response, which is what is under test.
+        "backup_graph": {},
         "list_graphs": {},
         # Refused: no id is approved in the test graph and there is no channel
         # to a user. A refusal is still a response, which is what is under test.
@@ -351,6 +355,8 @@ ALL_TOOLS = [
     "get_metacontexts",
     "graph_stats",
     "configure_reflection",
+    "configure_backup",
+    "backup_graph",
     "list_graphs",
     "use_graph",
     "claim_agent",

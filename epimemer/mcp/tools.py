@@ -61,6 +61,8 @@ from epimemer.core.types import (
     edge_shape_violation,
     edge_types_joining,
     endpoint_kind_of,
+    is_retired,
+    judge_is_unused,
     lineage_edge_type_for,
     live_agents,
     merged_value_signal,
@@ -68,8 +70,13 @@ from epimemer.core.types import (
     new_agent_id,
     reachable_statuses,
     recorded_relation_label,
+    reinstated,
     renamed,
     resolve_agent,
+    retired,
+    retired_agents,
+    retired_at,
+    serving_agents,
     superseded_status_for,
     supersession_kind,
     with_description,
@@ -107,6 +114,7 @@ from epimemer.storage.protocol import (
     MergeOverrides,
     StorageBackend,
     WarningOverrides,
+    resolve_backup_threshold,
     resolve_merge_settings,
     resolve_reflect_threshold,
     resolve_require_judge,
@@ -6350,8 +6358,147 @@ async def configure_reflection(
     return result, ResponseMeta()
 
 
+async def effective_backup_threshold(storage: StorageBackend, default: int) -> int:
+    """The backup threshold in force for the active graph: its override, else `default`.
+
+    `effective_reflect_threshold` for the other counter. Two functions rather
+    than one taking a pair, so a caller cannot resolve the reflect override
+    against the backup default by transposing two arguments.
+    """
+    return resolve_backup_threshold(await storage.get_backup_threshold_override(), default)
+
+
+async def backup_pressure(storage: StorageBackend, default_threshold: int) -> dict:
+    """The three keys every response reporting backup pressure carries.
+
+    One function because three responses carry them — `store_decomposition`,
+    `apply_reflection` and `graph_stats` — and a second spelling of
+    `count >= threshold` is how one readout starts disagreeing with another
+    about whether a backup is due.
+    """
+    count = await storage.get_backup_counter()
+    threshold = await effective_backup_threshold(storage, default_threshold)
+    return {
+        "stores_since_backup": count,
+        "backup_threshold": threshold,
+        "backup_suggested": count >= threshold,
+    }
+
+
+async def configure_backup(
+    storage: StorageBackend,
+    *,
+    threshold: int | None,
+    default_threshold: int,
+) -> tuple[dict, ResponseMeta]:
+    """Set the active graph's backup threshold, or clear it back to the default.
+
+    `configure_reflection` for the other counter, with the same two rules.
+    `threshold=None` clears the override, so the graph follows whatever the
+    process default is at the time rather than freezing today's value; and the
+    counter is deliberately untouched, because raising the threshold means *not
+    yet* and zeroing the count would say the graph had just been written out.
+
+    **It cannot say where a backup goes.** That is `EPIMEMER_BACKUP_DESTINATION`
+    and only that: how eagerly the system suggests a backup is a rhythm an agent
+    may tune, and where a graph is written is not.
+    """
+    if threshold is not None and threshold < 1:
+        raise ValueError(f"threshold must be at least 1, got {threshold}")
+
+    await storage.set_backup_threshold_override(threshold)
+
+    result = {
+        "graph": storage.current_database,
+        "overridden": threshold is not None,
+        "default_threshold": default_threshold,
+        **await backup_pressure(storage, default_threshold),
+    }
+    return result, ResponseMeta()
+
+
+async def backup_graph(
+    storage: StorageBackend,
+    *,
+    destination: str | None,
+    embedding_provider: str,
+    embedding_model_id: str,
+    default_backup_threshold: int,
+) -> tuple[dict, ResponseMeta]:
+    """Write the active graph out as a bundle, to the configured destination.
+
+    **No path argument, and that is the design.** An agent acting on
+    `backup_suggested` should be able to do the thing without also choosing
+    where a graph goes; the destination is the server's, set once by the user in
+    `EPIMEMER_BACKUP_DESTINATION`. With none set this refuses and names the
+    variable rather than picking somewhere.
+
+    **No judge.** A backup asserts nothing about the graph — it writes down what
+    is already there — so there is no judgment to attribute and requiring one
+    would put a gate in front of the act that protects the data.
+
+    The counter is zeroed only after the write returns, so a destination that
+    refuses leaves the graph still asking to be backed up.
+    """
+    from epimemer.pipelines.transfer import (
+        default_bundle_name,
+        export_graph,
+        section_counts,
+        unreachable_destination,
+        write_bundle,
+    )
+
+    graph = storage.current_database
+    if not destination:
+        return {
+            "status": "refused",
+            "graph": graph,
+            "reason": (
+                "No backup destination is configured, so there is nowhere to "
+                "write this graph. Ask the user to set EPIMEMER_BACKUP_DESTINATION "
+                "to a folder or a cloud URL and restart the server. Do not invent "
+                "a path: `epimemer graphs export` is how a user writes a bundle "
+                "somewhere of their choosing."
+            ),
+            **await backup_pressure(storage, default_backup_threshold),
+        }, ResponseMeta()
+
+    at = datetime.now(UTC)
+    target = f"{destination.rstrip('/')}/{default_bundle_name(graph, at)}"
+    unreachable = unreachable_destination(target)
+    if unreachable is not None:
+        return {
+            "status": "refused",
+            "graph": graph,
+            "reason": unreachable,
+            **await backup_pressure(storage, default_backup_threshold),
+        }, ResponseMeta()
+
+    bundle = await export_graph(
+        storage,
+        embedding_provider=embedding_provider,
+        embedding_model_id=embedding_model_id,
+        exported_at=at,
+    )
+    written = write_bundle(bundle, target)
+    await storage.reset_backup_counter()
+
+    result = {
+        "status": "written",
+        "graph": graph,
+        "written_to": written,
+        "counts": section_counts(bundle),
+        "embedded_with": embedding_model_id,
+        **await backup_pressure(storage, default_backup_threshold),
+    }
+    return result, ResponseMeta()
+
+
 async def graph_stats(
-    storage: StorageBackend, *, default_reflect_threshold: int
+    storage: StorageBackend,
+    *,
+    default_reflect_threshold: int,
+    default_backup_threshold: int,
 ) -> tuple[dict, ResponseMeta]:
     """Summarize the active graph: node counts by type, edge counts by type, totals.
 
@@ -6362,12 +6509,12 @@ async def graph_stats(
     `metacontext_id` was required, and it is how a user checks that
     `epimemer metacontexts declare` has finished its work.
 
-    Also reports reflection pressure: the graph's store counter, the threshold in
-    force, whether that threshold is a per-graph override, and whether a reflect
-    is due. The counter and any override are stored per graph; the default is
-    process config, so it is passed in. These keys are always present — an absent
-    key reads the same as `false` to a caller, and this is a readout meant to be
-    checked.
+    Also reports reflection pressure and backup pressure: the graph's two store
+    counters, the thresholds in force, whether each threshold is a per-graph
+    override, and whether a reflect or a backup is due. The counters and any
+    overrides are stored per graph; the defaults are process config, so they are
+    passed in. These keys are always present — an absent key reads the same as
+    `false` to a caller, and this is a readout meant to be checked.
     """
     node_counts = await storage.count_nodes_by_type()
     edge_counts = await storage.count_edges_by_type()
@@ -6407,6 +6554,11 @@ async def graph_stats(
         # Inclusive, matching store_decomposition — the two readouts must not
         # disagree about whether a reflect is due.
         "reflect_suggested": stores_since_reflect >= reflect_threshold,
+        # Backup pressure sits beside reflection pressure because it is the same
+        # question asked of a different act, and a reader checking one is the
+        # reader who should see the other.
+        "backup_threshold_overridden": (await storage.get_backup_threshold_override()) is not None,
+        **await backup_pressure(storage, default_backup_threshold),
     }
     meta = ResponseMeta(nodes_returned=total_nodes, source_types=nodes_by_type)
     return result, meta
@@ -6550,6 +6702,7 @@ _ROSTER_LINE_BUDGET = 88
 JUDGE_CHOICE_PREFIX = "use:"
 NEW_JUDGE_CHOICE = "new:"
 RENAME_JUDGE_CHOICE = "rename:"
+RETIRED_JUDGE_CHOICE = "retired:"
 
 
 class JudgeChoice(BaseModel):
@@ -6605,12 +6758,18 @@ async def judge_roster(storage: StorageBackend) -> list[JudgeChoice]:
     approved id that is any live judge's — current or former — since it is that
     judge, listed once already.
 
+    **Retired judges are not offered either**, which is what retiring one is
+    for: it leaves the main list rather than sitting beside the live ones, one
+    keystroke from being chosen by mistake. It is not hidden — the picker's
+    *A retired judge…* entry opens `retired_judge_roster` — and nothing about
+    its decisions changes.
+
     Ordering is load-bearing rather than cosmetic: the picker goes up on every
     bind, which is affordable only while the answer the user wants is the first
     line offered.
     """
     stored = await storage.list_agents()
-    live = live_agents(stored)
+    live = serving_agents(stored)
     known = {alias for agent in stored for alias in agent_aliases(agent)}
     bare = [
         agent_id for agent_id in await storage.get_approved_agent_ids() if agent_id not in known
@@ -6644,6 +6803,38 @@ async def judge_roster(storage: StorageBackend) -> list[JudgeChoice]:
         )
         for agent_id in bare
     ]
+
+
+async def retired_judge_roster(storage: StorageBackend) -> list[JudgeChoice]:
+    """The retired judges, for the sub-picker that brings one back.
+
+    Most recently retired first, because the one a user wants back is usually
+    the one most recently put away. No approved-but-unclaimed ids here: a bare
+    id has no record, and a judge with no record has never been retired.
+
+    Empty is the ordinary case, and the main picker leaves the *A retired
+    judge…* entry off entirely when it is — an option that opens an empty list
+    is a dead end offered on every bind.
+    """
+    retired_ones = retired_agents(await storage.list_agents())
+    retired_ones.sort(key=agent_name)
+    retired_ones.sort(key=lambda agent: retired_at(agent) or agent.authorised_at, reverse=True)
+    return [
+        JudgeChoice(
+            key=f"{JUDGE_CHOICE_PREFIX}{agent.id}",
+            agent_id=agent.id,
+            name=agent_name(agent),
+            title=_retired_roster_title(agent),
+        )
+        for agent in retired_ones
+    ]
+
+
+def _retired_roster_title(agent: Agent) -> str:
+    """One line in the reinstate sub-picker: who, and when it was put away."""
+    since = retired_at(agent)
+    when = since.date().isoformat() if since else "an unrecorded date"
+    return f"{agent_name(agent)} · retired {when}"
 
 
 def selected_judge_id(key: str) -> str | None:
@@ -6693,6 +6884,45 @@ def _unapproved_reason(handle: str, labels: Sequence[str]) -> str:
     )
 
 
+def _no_such_judge(handle: str, agents: Sequence[Agent]) -> dict:
+    """The refusal every judge command gives a handle nothing answers to.
+
+    Retired judges are listed too, and marked, because *not found* would be
+    both wrong and unhelpful for the judge a user is most likely to be naming
+    at `reinstate`.
+    """
+    known = [
+        agent_name(agent) + (" (retired)" if is_retired(agent) else "")
+        for agent in sorted(live_agents(agents), key=agent_name)
+    ]
+    return {
+        "status": "refused",
+        "reason": f"No judge here answers to '{handle}'. Known: {', '.join(known) or 'none'}.",
+    }
+
+
+def _retired_reason(agent: Agent) -> str:
+    """Why a claim on a retired judge was refused, written for the user to act on.
+
+    Says which judge, when it was retired, and both ways back, because the
+    agent reading it can do neither: reinstating is a user's act on the same
+    two channels approval is, and an agent that could undo a retirement could
+    put a judge somebody removed back on the roster.
+    """
+    since = retired_at(agent)
+    name = agent_name(agent)
+    when = f" on {since.date().isoformat()}" if since else ""
+    return (
+        f"'{name}' is a retired judge in this graph, retired{when}. Its "
+        f"decisions are all still there and review still answers for it, but "
+        f"nothing new may be judged as it. Ask the user which judge you should "
+        f"be instead. If this one should come back, they can run "
+        f"`epimemer agents reinstate {name}` on a served SurrealDB, or choose "
+        f"*A retired judge…* in the prompt this call raises; you cannot, and "
+        f"that is deliberate."
+    )
+
+
 async def rename_judge(
     storage: StorageBackend,
     *,
@@ -6729,13 +6959,7 @@ async def rename_judge(
     agents = await storage.list_agents()
     agent = resolve_agent(agents, handle)
     if agent is None:
-        return {
-            "status": "refused",
-            "reason": (
-                f"No judge here answers to '{handle}'. Known: "
-                f"{', '.join(agent_name(a) for a in live_agents(agents)) or 'none'}."
-            ),
-        }
+        return _no_such_judge(handle, agents)
 
     holder = name_holder(agents, name, excluding=agent.id)
     if holder is not None and not same_judge:
@@ -6779,6 +7003,202 @@ async def rename_judge(
             f"'{was}' is now '{name}'. Every decision it has already made "
             f"reads under the new name — the id it was recorded with has not "
             f"changed and nothing was rewritten."
+        ),
+    }
+
+
+async def retire_judge(
+    storage: StorageBackend, *, handle: str, now: datetime | None = None
+) -> dict:
+    """Take a judge out of use, or say why it cannot be.
+
+    **Nothing is removed and nothing is rewritten.** The record, the name, the
+    description history, the approval and every decision stay exactly as they
+    are, and `review(mode="by_agent")` still answers for it. What changes is
+    that `claim_agent` refuses it and the picker stops offering it, which is
+    the whole of what retirement means: a judge nobody should choose again
+    otherwise sits in the picker beside the live ones, one keystroke from being
+    selected by mistake.
+
+    **Sessions already bound are left alone.** The binding stands until that
+    client reconnects and the refusal lands at its next `claim_agent`. This is
+    housekeeping rather than an emergency stop, and a stop would be a different
+    feature.
+
+    Not reachable from any MCP tool, for the reason renaming is not: a handle
+    an agent could retire is a handle an agent could use to take a rival judge
+    off the roster. Its callers are the CLI and, for the reinstating half, the
+    elicitation prompt.
+    """
+    at = now or datetime.now(UTC)
+    agents = await storage.list_agents()
+    agent = resolve_agent(agents, handle)
+    if agent is None:
+        return _no_such_judge(handle, agents)
+    if is_retired(agent):
+        since = retired_at(agent)
+        return {
+            "status": "refused",
+            "agent_id": agent.id,
+            "name": agent_name(agent),
+            "reason": (
+                f"'{agent_name(agent)}' was already retired on "
+                f"{since.date().isoformat() if since else 'an unrecorded date'}."
+            ),
+        }
+
+    await storage.upsert_agent(retired(agent, at))
+    return {
+        "status": "retired",
+        "agent_id": agent.id,
+        "name": agent_name(agent),
+        "retired_at": at.isoformat(),
+        "message": (
+            f"'{agent_name(agent)}' is retired as of {at.date().isoformat()}. "
+            f"It keeps every decision it has made, review still answers for it, "
+            f"and nothing new can be judged as it. Bring it back with "
+            f"`epimemer agents reinstate {agent_name(agent)}`.\n"
+            f"Sessions currently using this judge continue until they reconnect."
+        ),
+    }
+
+
+async def reinstate_judge(
+    storage: StorageBackend, *, handle: str, now: datetime | None = None
+) -> dict:
+    """Put a retired judge back in use, or say why it is not retired.
+
+    Closes the open retirement rather than clearing it, so the spell it spent
+    out of use stays on the record: *was retired, and came back* is the thing a
+    scalar could not say.
+
+    Reinstating never binds. From the picker it takes two gestures — bring it
+    back, then choose it from the main list — because a judge somebody retired
+    should not be re-entered by the same keystroke that brings it into view.
+    """
+    at = now or datetime.now(UTC)
+    agents = await storage.list_agents()
+    agent = resolve_agent(agents, handle)
+    if agent is None:
+        return _no_such_judge(handle, agents)
+    if not is_retired(agent):
+        return {
+            "status": "refused",
+            "agent_id": agent.id,
+            "name": agent_name(agent),
+            "reason": f"'{agent_name(agent)}' is not retired, so there is nothing to bring back.",
+        }
+
+    await storage.upsert_agent(reinstated(agent, at))
+    return {
+        "status": "reinstated",
+        "agent_id": agent.id,
+        "name": agent_name(agent),
+        "reinstated_at": at.isoformat(),
+        "message": (
+            f"'{agent_name(agent)}' is back in use. It can be claimed again and "
+            f"the picker offers it; the spell it spent retired stays on its record."
+        ),
+    }
+
+
+async def judge_deletion_scan(storage: StorageBackend, *, handle: str) -> dict:
+    """Whether this judge's record can go, and what says otherwise. Writes nothing.
+
+    **A judge that has judged anything is retired, never deleted.** The journal
+    is append-only and `judged_by` holds a key, so removing the record would
+    leave rows and nodes carrying an id nothing resolves to a name. Judges are
+    per graph, which is what makes *never used* answerable at all: the scan is
+    over this graph and nowhere else.
+
+    Separate from `delete_judge` because the CLI shows the result to the user
+    and asks before acting. `delete_judge` runs it again rather than trusting
+    what it is handed, so the gate holds however it is called.
+    """
+    agents = await storage.list_agents()
+    agent = resolve_agent(agents, handle)
+    if agent is None:
+        return _no_such_judge(handle, agents)
+
+    name = agent_name(agent)
+    if agent.former_ids:
+        # An absorbed record cannot be reached from here — `resolve_agent`
+        # returns the judge that absorbed it — so the case that survives is the
+        # absorber, which answers for keys other rows still carry.
+        return {
+            "status": "refused",
+            "agent_id": agent.id,
+            "name": name,
+            "reason": (
+                f"'{name}' answers for {len(agent.former_ids)} key(s) "
+                f"consolidated into it, and rows written under those keys "
+                f"resolve through this record. Retire it instead: "
+                f"`epimemer agents retire {name}`."
+            ),
+        }
+
+    usage = await storage.judge_usage(agent_aliases(agent))
+    if not judge_is_unused(usage):
+        return {
+            "status": "refused",
+            "agent_id": agent.id,
+            "name": name,
+            "usage": usage.model_dump(),
+            "reason": (
+                f"'{name}' has judged things here: {usage.decisions} journal "
+                f"row(s), {usage.nodes} node(s), {usage.edges} edge(s), "
+                f"{usage.relations} relation record(s). Deleting it would leave "
+                f"them naming a judge nothing can resolve, so retire it "
+                f"instead: `epimemer agents retire {name}`."
+            ),
+        }
+
+    return {
+        "status": "deletable",
+        "agent_id": agent.id,
+        "name": name,
+        "usage": usage.model_dump(),
+        "message": (
+            f"'{name}' has judged nothing in this graph: no journal row, node, "
+            f"edge or relation record names it. Deleting removes the record and "
+            f"withdraws its approval; nothing else changes."
+        ),
+    }
+
+
+async def delete_judge(storage: StorageBackend, *, handle: str) -> dict:
+    """Remove a judge that has never judged anything, or say why it stays.
+
+    The only hard delete in this system, and it is allowed precisely where it
+    orphans nothing: `judge_deletion_scan` has to come back clean first. The
+    approval goes with the record, since an approved key with no judge behind it
+    would be offered by the picker as a bare id and mint the record again.
+
+    CLI only, and not even the picker: retiring is the housekeeping a user does
+    while choosing a judge, and deleting is the tidy-up they do deliberately,
+    having read a scan.
+    """
+    scan = await judge_deletion_scan(storage, handle=handle)
+    if scan["status"] != "deletable":
+        return scan
+
+    agent = await storage.get_agent(scan["agent_id"])
+    if agent is None:
+        return _no_such_judge(handle, await storage.list_agents())
+
+    keys = set(agent_aliases(agent))
+    approved = await storage.get_approved_agent_ids()
+    remaining = [key for key in approved if key not in keys]
+    if remaining != approved:
+        await storage.set_approved_agent_ids(remaining)
+    await storage.delete_agent(agent.id)
+    return {
+        "status": "deleted",
+        "agent_id": agent.id,
+        "name": scan["name"],
+        "message": (
+            f"'{scan['name']}' is deleted. It had judged nothing, so nothing in "
+            f"this graph refers to it; its approval is withdrawn too."
         ),
     }
 
@@ -6870,6 +7290,7 @@ async def claim_agent(
     key = existing.id if existing is not None else handle
 
     confirmed_now = False
+    newly_chosen: str | None = None
     memo_holds = confirmed_identity is not None and key == confirmed_identity and key in approved
     if memo_holds:
         # Asked and answered, this session, for this graph, for this identity.
@@ -6897,7 +7318,10 @@ async def claim_agent(
                 key = handle
             else:
                 key = new_agent_id()
-            approved = await approve_agent_ids(storage, [key])
+            # Approved after the retired check below rather than here: a judge
+            # about to be refused must not be admitted on its way out, and
+            # `EPIMEMER_APPROVED_AGENTS` would then carry a key nothing can bind.
+            newly_chosen = key
             confirmed_now = True
         elif outcome.channel_available or key not in approved:
             # Declined refuses even a pre-approved judge; unavailable falls
@@ -6910,6 +7334,22 @@ async def claim_agent(
                 "approved_judges": approved_labels(approved, agents),
                 "reason": _unapproved_reason(handle, approved_labels(approved, agents)),
             }, ResponseMeta()
+
+    # One gate for every way a retired judge can be arrived at: proposed by
+    # name, by key or by a former key; typed into the free-text prompt; carried
+    # by the cadence memo from before it was retired; or read off the approved
+    # list by a client that cannot elicit. They all land here holding the record.
+    if existing is not None and is_retired(existing):
+        return {
+            "status": "refused",
+            "agent_id": existing.id,
+            "name": agent_name(existing),
+            "retired_at": (since := retired_at(existing)) and since.isoformat(),
+            "reason": _retired_reason(existing),
+        }, ResponseMeta()
+
+    if newly_chosen is not None:
+        approved = await approve_agent_ids(storage, [newly_chosen])
 
     agent = existing or Agent(id=key, name=handle, authorised_at=at, first_seen_at=at)
     current = current_description(agent)

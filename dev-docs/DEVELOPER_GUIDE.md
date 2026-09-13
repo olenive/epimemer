@@ -441,6 +441,11 @@ parameterises `storage` over `InMemoryStorage` and `SurrealDBStorage("mem://")`.
      outlives the databases it talks to, so a dropped connection has to be
      rebuilt rather than raised forever; see `_reconnect` in
      `surrealdb_adapter.py` and the constraints in its comment
+   - `write_verbatim_tx`, which stores each record exactly as given rather
+     than deriving anything, plus the whole-section reads beside it
+     (`query_documents`, `query_segments`, `query_edges`). Graph bundles are
+     built on those four, and `GRAPH_BUNDLES.md` §3 says what verbatim rules
+     out
    - Any schema migration the SurrealDB adapter runs on open
      (`_migrate_schema`), if the backend persists across releases
 2. Add tests in `tests/storage/test_your_backend.py`, and add the backend to

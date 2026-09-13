@@ -68,69 +68,6 @@ they have no lifecycle, and their occurrences are separate event facts.
 
 ---
 
-### Retiring, reinstating and deleting judges
-
-**What.** A judge, once confirmed for a graph, can only be renamed or
-consolidated. Nothing takes one out of use: a judge nobody has claimed for
-weeks sits in the `claim_agent` picker beside the live ones, one keystroke from
-being selected by mistake. Three operations, none of which exists:
-
-- **Retire.** The judge leaves the picker's main list and `claim_agent`
-  refuses it. Its record, name, description history, approval history and
-  every decision stay exactly as they are, and `review(mode="by_agent")` still
-  answers for it. `agents list` shows it under a separate *retired* heading
-  with the date.
-- **Reinstate.** The picker gains an entry beside *A new judge* and *Rename a
-  judge*: *A retired judge…*, which opens a second picker over the retired
-  ones. Choosing one there reinstates it and returns to the main picker, now
-  showing it live, the round-trip the rename entry already makes. A retired
-  judge is never selected by the gesture that selects a live one, and nothing
-  is hidden.
-- **Delete.** Only for a judge that has never been used, and the graph can
-  say so: judges are per graph, so *never used* means no journal row names
-  the id and no node or edge carries it in `judged_by`. The command scans,
-  states that result to the user, and refuses otherwise with the counts. A
-  judge that has judged anything is retired, never deleted, because the rows
-  and nodes would keep an id nothing could resolve to a name.
-
-Both retire and reinstate go on the judge record as an append-only trail
-(`retired_at`, `reinstated_at`), the way description versions do. All three are
-reachable from the CLI (`agents retire`, `agents reinstate`, `agents delete`)
-and the first two from the picker, and none from an MCP tool, for the reason
-rename and confirm are not: a handle an agent could retire is a handle an agent
-could use to take a rival judge off the roster.
-
-**Why.** The picker exists so a human chooses an identity from what the graph
-already knows. As graphs age, what the graph knows includes judges that should
-not be chosen again, and today the only way to keep one out of reach is to
-rename it to something warning-shaped. The distinction from delete matters
-because the journal is append-only: `judged_by` is the id, and the id has to
-keep resolving for as long as anything carries it.
-
-**Cost.** Small. A `retired` trail on the agent record, a `live_agents` filter
-that already exists gaining one more reason to exclude, three CLI subcommands,
-one more picker entry with a sub-picker, and the never-used scan. Storage
-parity on the record shape across both backends.
-
-**Decisions taken, 2026-09-12.**
-
-- *Retired*, not *archived*: archival already means something specific for
-  nodes here (exported, restorable), and the two should not read as one thing.
-- Retirement is per graph, as judge records and approvals are. A judge wanted
-  out everywhere is retired once per graph.
-- A session already bound to a judge when it is retired elsewhere is left
-  alone: the binding stands until that client reconnects, and the refusal lands
-  at its next `claim_agent`. The retire prompt says so: *sessions currently
-  using this judge continue until they reconnect.* Retirement is housekeeping,
-  not an emergency stop; a stop would be a different feature.
-- Reinstatement is allowed, and takes at least two gestures.
-- Delete is gated on the never-used scan, with the result shown to the user.
-
-**Blockers.** None. Build retire and reinstate first, delete after, since delete
-is clutter removal once retire exists.
-
----
-
 ## Needs a decision before it needs code
 
 ### Sharing a graph between users
@@ -146,10 +83,31 @@ example, is kept in a graph its maintainers can read and its users cannot.
 **Why.** A graph is a shared understanding, and today it can be shared only by
 sharing a database.
 
-**Blockers.** Everything. This needs a notion of a user the server does not
-have, an authorisation model, and a decision about whether the judge registry
-(`claim_agent`) is the right seed for identity or a separate thing. Do not
-start from the storage layer.
+**Decisions taken, 2026-09-12.** Two tiers. The read-only tier is the graph
+bundle: `epimemer graphs export`, hand the file over or publish it, they run
+`epimemer graphs import`. That is what the project's own development history
+needs, and it needs no notion of a user. The live tier, people working on one
+graph together, is parked until a team needs it, with the shape decided:
+
+- The server is a stdio process the user runs, so there is no client to
+  authenticate: whoever launched it is the user. Any Epimemer-level user or
+  access list would be enforced by code the same person controls against a
+  database they can already open. So identity is the database credential, one
+  per person, and a grant is a database-level user on one graph
+  (`OWNER`, `EDITOR` or `VIEWER`). The judge registry is a separate thing: a
+  judge is an agent identity a person approves, not the person.
+- What Epimemer then owes a per-graph credential: a read path that writes
+  nothing (`search` stamps `retrieved_at` and `claim_agent` writes
+  `last_seen_at`, so a viewer cannot search today); permission errors turned
+  into plain refusals naming the access level; `list_graphs` without
+  namespace rights, since `INFO FOR NS` needs them; a CLI that wraps the
+  grant; and the database user recorded on a judge binding, since two people
+  sharing one picker will pick the same judge and review would merge their
+  sessions.
+- Nothing finer than a whole graph, and nothing about reaching the database
+  across machines, which is the database's own configuration.
+
+**Blockers.** A team that needs it.
 
 ---
 

@@ -26,6 +26,7 @@ from epimemer.core.types import (
     Fact,
     Inference,
     JudgeRef,
+    JudgeUsage,
     Metacontext,
     NodeEdge,
     NodeStatus,
@@ -37,6 +38,7 @@ from epimemer.core.types import (
     Timeline,
     Topic,
     migration_disposition,
+    node_judge_ids,
     recorded_relation_label,
     relation_pair_key,
     with_retirement,
@@ -143,6 +145,10 @@ class _GraphStore:
     decisions: dict[str, DecisionRecord] = field(default_factory=dict)
     stores_since_reflect: int = 0
     reflect_threshold_override: int | None = None
+    # The same pair for backups. Two counters rather than one because the two
+    # are zeroed by different acts — reflecting clears one, a backup the other.
+    stores_since_backup: int = 0
+    backup_threshold_override: int | None = None
     merge_overrides: MergeOverrides = field(default_factory=MergeOverrides)
     warning_overrides: WarningOverrides = field(default_factory=WarningOverrides)
 
@@ -388,6 +394,9 @@ class InMemoryStorage:
                 return _copy(doc)
         return None
 
+    async def query_documents(self) -> Sequence[RawDocument]:
+        return _copy_all(self._g.documents.values())
+
     # --- Segments ---
 
     async def store_segment(self, segment: Segment) -> str:
@@ -404,6 +413,9 @@ class InMemoryStorage:
             if segment is not None:
                 found[segment_id] = _copy(segment)
         return found
+
+    async def query_segments(self) -> Sequence[Segment]:
+        return _copy_all(self._g.segments.values())
 
     # --- Epistemic Nodes ---
 
@@ -563,6 +575,9 @@ class InMemoryStorage:
         for edge in self._g.edges.values():
             counts[edge.type] += 1
         return counts
+
+    async def query_edges(self) -> Sequence[NodeEdge]:
+        return _copy_all(self._g.edges.values())
 
     # --- Atomic compound operations ---
 
@@ -856,6 +871,60 @@ class InMemoryStorage:
                     self._g.timelines[timeline_id] = previous
             raise
 
+    async def write_verbatim_tx(
+        self,
+        *,
+        documents: Sequence[RawDocument] = (),
+        segments: Sequence[Segment] = (),
+        nodes: Sequence[EpistemicNode] = (),
+        edges: Sequence[NodeEdge] = (),
+        embeddings: Sequence[EmbeddingRecord] = (),
+        timelines: Sequence[Timeline] = (),
+        metacontexts: Sequence[Metacontext] = (),
+        relation_labels: Sequence[RelationLabel] = (),
+        relation_verdicts: Sequence[RelationVerdict] = (),
+        decisions: Sequence[DecisionRecord] = (),
+        agents: Sequence[Agent] = (),
+    ) -> None:
+        """Every record as given. See the protocol for what verbatim means here.
+
+        Snapshot-and-restore on failure, the way the supersession transactions
+        do it: a restore writes eleven collections and a partial one is a graph
+        nothing would report as broken.
+
+        Relation labels go straight into the dict rather than through
+        `store_relation_label`, and verdicts are appended without the retry
+        check: both of those derive, and deriving is what this method exists not
+        to do.
+        """
+        snapshot = copy.deepcopy(self._g)
+        try:
+            for doc in documents:
+                self._g.documents[doc.id] = _store(doc)
+            for segment in segments:
+                self._g.segments[segment.id] = _store(segment)
+            for node in nodes:
+                self._g.nodes[node.id] = _store(node)
+            for edge in edges:
+                _put_edge(self._g, _store(edge))
+            for embedding in embeddings:
+                _put_embedding(self._g, _store(embedding))
+            for timeline in timelines:
+                self._g.timelines[timeline.id] = _store(timeline)
+            for mc in metacontexts:
+                self._g.metacontexts[mc.id] = _store(mc)
+            for label in relation_labels:
+                self._g.relation_labels[(label.name, label.kind)] = _store(label)
+            for verdict in relation_verdicts:
+                self._g.relation_verdicts.append(_store(verdict))
+            for record in decisions:
+                self._g.decisions[record.id] = _store(record)
+            for agent in agents:
+                self._g.agents[agent.id] = _copy(agent)
+        except Exception:
+            self._graphs[self._database] = snapshot
+            raise
+
     # --- Embeddings ---
 
     async def store_embedding(self, embedding: EmbeddingRecord) -> str:
@@ -1057,11 +1126,37 @@ class InMemoryStorage:
         self._g.stores_since_reflect = 0
         return previous
 
+    async def set_reflect_counter(self, count: int) -> None:
+        self._g.stores_since_reflect = count
+
     async def get_reflect_threshold_override(self) -> int | None:
         return self._g.reflect_threshold_override
 
     async def set_reflect_threshold_override(self, threshold: int | None) -> None:
         self._g.reflect_threshold_override = threshold
+
+    # --- Backup bookkeeping ---
+
+    async def get_backup_counter(self) -> int:
+        return self._g.stores_since_backup
+
+    async def bump_backup_counter(self) -> int:
+        self._g.stores_since_backup += 1
+        return self._g.stores_since_backup
+
+    async def reset_backup_counter(self) -> int:
+        previous = self._g.stores_since_backup
+        self._g.stores_since_backup = 0
+        return previous
+
+    async def set_backup_counter(self, count: int) -> None:
+        self._g.stores_since_backup = count
+
+    async def get_backup_threshold_override(self) -> int | None:
+        return self._g.backup_threshold_override
+
+    async def set_backup_threshold_override(self, threshold: int | None) -> None:
+        self._g.backup_threshold_override = threshold
 
     async def get_merge_overrides(self) -> MergeOverrides:
         return self._g.merge_overrides.model_copy()
@@ -1086,6 +1181,32 @@ class InMemoryStorage:
 
     async def list_agents(self) -> list[Agent]:
         return _copy_all(self._g.agents.values())
+
+    async def delete_agent(self, agent_id: str) -> None:
+        self._g.agents.pop(agent_id, None)
+
+    async def judge_usage(self, agent_ids: Sequence[str]) -> JudgeUsage:
+        keys = set(agent_ids)
+        if not keys:
+            return JudgeUsage()
+        return JudgeUsage(
+            decisions=sum(
+                1
+                for record in self._g.decisions.values()
+                if record.judged_by is not None and record.judged_by.agent_id in keys
+            ),
+            nodes=sum(1 for node in self._g.nodes.values() if node_judge_ids(node) & keys),
+            edges=sum(
+                1
+                for edge in self._g.edges.values()
+                if edge.judged_by is not None and edge.judged_by.agent_id in keys
+            ),
+            relations=sum(
+                1
+                for row in (*self._g.relation_labels.values(), *self._g.relation_verdicts)
+                if row.judged_by is not None and row.judged_by.agent_id in keys
+            ),
+        )
 
     async def get_approved_agent_ids(self) -> list[str]:
         return list(self._g.approved_agent_ids)

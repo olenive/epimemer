@@ -585,7 +585,8 @@ The tools group into: **core memory** (`segment`, `store_decomposition`,
 **archival** (`archive`, `restore`); **timelines** (`create_timeline`,
 `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`);
 **metacontexts** (`create_metacontext`, `get_metacontexts`, `reassign_metacontext`);
-**graph management** (`list_graphs`, `use_graph`, `delete_graph`);
+**graph management** (`list_graphs`, `use_graph`, `delete_graph`,
+`backup_graph`, `configure_backup`);
 **agents** (`claim_agent`); **review** (`review`, `apply_review`, `rejudge`,
 `correct_interval`); and **visualization** (`viz_status`).
 

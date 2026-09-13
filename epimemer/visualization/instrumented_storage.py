@@ -26,6 +26,7 @@ from epimemer.core.types import (
     EmbeddingRecord,
     EpistemicNode,
     JudgeRef,
+    JudgeUsage,
     Metacontext,
     NodeEdge,
     NodeStatus,
@@ -108,6 +109,9 @@ class InstrumentedStorage:
     async def get_document_by_source(self, source: str) -> RawDocument | None:
         return await self._inner.get_document_by_source(source)
 
+    async def query_documents(self) -> Sequence[RawDocument]:
+        return await self._inner.query_documents()
+
     # --- Segments (write) ---
 
     async def store_segment(self, segment: Segment) -> str:
@@ -127,6 +131,9 @@ class InstrumentedStorage:
 
     async def get_segments(self, segment_ids: Sequence[str]) -> dict[str, Segment]:
         return await self._inner.get_segments(segment_ids)
+
+    async def query_segments(self) -> Sequence[Segment]:
+        return await self._inner.query_segments()
 
     async def get_segments_for_document(self, doc_id: str) -> Sequence[Segment]:
         return await self._inner.get_segments_for_document(doc_id)
@@ -492,6 +499,76 @@ class InstrumentedStorage:
         except Exception:
             logger.exception("write_batch_tx event emission failed; write already committed")
 
+    async def write_verbatim_tx(
+        self,
+        *,
+        documents: Sequence[RawDocument] = (),
+        segments: Sequence[Segment] = (),
+        nodes: Sequence[EpistemicNode] = (),
+        edges: Sequence[NodeEdge] = (),
+        embeddings: Sequence[EmbeddingRecord] = (),
+        timelines: Sequence[Timeline] = (),
+        metacontexts: Sequence[Metacontext] = (),
+        relation_labels: Sequence[RelationLabel] = (),
+        relation_verdicts: Sequence[RelationVerdict] = (),
+        decisions: Sequence[DecisionRecord] = (),
+        agents: Sequence[Agent] = (),
+    ) -> None:
+        """Delegate the restore, then announce the nodes and edges it landed.
+
+        One `graph_action` for the whole call rather than an event per section:
+        a restore arrives as a graph appearing all at once, and the strip has no
+        reading for eleven separate bursts. The per-record `NodeStored` and
+        `EdgeStored` events still go out, because the dashboard builds its view
+        from them.
+        """
+        await self._inner.write_verbatim_tx(
+            documents=documents,
+            segments=segments,
+            nodes=nodes,
+            edges=edges,
+            embeddings=embeddings,
+            timelines=timelines,
+            metacontexts=metacontexts,
+            relation_labels=relation_labels,
+            relation_verdicts=relation_verdicts,
+            decisions=decisions,
+            agents=agents,
+        )
+        # Committed already: emission is best-effort, on `write_batch_tx`'s rule.
+        try:
+            graph = self._inner.current_database
+            for node in nodes:
+                await self._bus.publish(NodeStored(graph=graph, node=node_to_view(node, graph)))
+            for edge in edges:
+                await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
+            for timeline in timelines:
+                await self._bus.publish(
+                    TimelineStored(graph=graph, timeline=timeline_to_view(timeline, graph))
+                )
+            await self._bus.publish(
+                graph_action(
+                    graph=graph,
+                    verb=ActionVerb.STORED,
+                    subjects=[node.id for node in nodes],
+                    counts={
+                        "documents": len(documents),
+                        "segments": len(segments),
+                        "nodes": len(nodes),
+                        "edges": len(edges),
+                        "embeddings": len(embeddings),
+                        "timelines": len(timelines),
+                        "metacontexts": len(metacontexts),
+                        "relation_labels": len(relation_labels),
+                        "relation_verdicts": len(relation_verdicts),
+                        "decisions": len(decisions),
+                        "agents": len(agents),
+                    },
+                )
+            )
+        except Exception:
+            logger.exception("write_verbatim_tx event emission failed; write already committed")
+
     # --- Edges (read) ---
 
     async def get_edges_from(
@@ -515,6 +592,9 @@ class InstrumentedStorage:
 
     async def count_edges_by_type(self) -> dict[EdgeType, int]:
         return await self._inner.count_edges_by_type()
+
+    async def query_edges(self) -> Sequence[NodeEdge]:
+        return await self._inner.query_edges()
 
     # --- Embeddings (write) ---
 
@@ -680,12 +760,40 @@ class InstrumentedStorage:
         await self._publish_reflect_state(0)
         return previous
 
+    async def set_reflect_counter(self, count: int) -> None:
+        await self._inner.set_reflect_counter(count)
+        await self._publish_reflect_state(count)
+
     async def get_reflect_threshold_override(self) -> int | None:
         return await self._inner.get_reflect_threshold_override()
 
     async def set_reflect_threshold_override(self, threshold: int | None) -> None:
         await self._inner.set_reflect_threshold_override(threshold)
         await self._publish_reflect_state(await self._inner.get_reflect_counter())
+
+    # --- Backup bookkeeping (delegate) ---
+    #
+    # No events, on `set_merge_overrides`' rule: the strip shows reflection
+    # pressure and nothing shows backup pressure, and an event type nobody
+    # consumes is a second thing to keep correct for no reader.
+
+    async def get_backup_counter(self) -> int:
+        return await self._inner.get_backup_counter()
+
+    async def bump_backup_counter(self) -> int:
+        return await self._inner.bump_backup_counter()
+
+    async def reset_backup_counter(self) -> int:
+        return await self._inner.reset_backup_counter()
+
+    async def set_backup_counter(self, count: int) -> None:
+        await self._inner.set_backup_counter(count)
+
+    async def get_backup_threshold_override(self) -> int | None:
+        return await self._inner.get_backup_threshold_override()
+
+    async def set_backup_threshold_override(self, threshold: int | None) -> None:
+        await self._inner.set_backup_threshold_override(threshold)
 
     async def get_merge_overrides(self) -> MergeOverrides:
         return await self._inner.get_merge_overrides()
@@ -716,6 +824,12 @@ class InstrumentedStorage:
 
     async def list_agents(self) -> list[Agent]:
         return await self._inner.list_agents()
+
+    async def delete_agent(self, agent_id: str) -> None:
+        await self._inner.delete_agent(agent_id)
+
+    async def judge_usage(self, agent_ids: Sequence[str]) -> JudgeUsage:
+        return await self._inner.judge_usage(agent_ids)
 
     async def get_approved_agent_ids(self) -> list[str]:
         return await self._inner.get_approved_agent_ids()
