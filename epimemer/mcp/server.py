@@ -19,7 +19,7 @@ from fastmcp.server.elicitation import AcceptedElicitation
 
 from epimemer.core.types import JudgeRef
 from epimemer.logging.structured import ToolInvocationLog, log_tool_call, setup_logging
-from epimemer.mcp import tools
+from epimemer.mcp import guidance, tools
 from epimemer.mcp.config import (
     create_embedding_provider,
     create_storage,
@@ -179,15 +179,25 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         await storage.close()
 
 
+# The instructions string reaches every client on connect, so it carries the
+# rules that must hold on every call; the full guide is the `guide` prompt
+# below, pulled when the work calls for it.
 mcp = FastMCP(
     "epimemer",
-    instructions="Epimemer is a layered epistemic memory system. Use segment to segment text, "
-    "then store_decomposition to store your extracted topics/facts/inferences. "
-    "Use search to find relevant knowledge, reflect to consolidate the graph, "
-    "and query_graph to explore relationships. "
-    "Use list_graphs and use_graph to manage knowledge graphs.",
+    instructions=guidance.rules(),
     lifespan=app_lifespan,
 )
+
+
+@mcp.prompt(
+    name="guide",
+    description="The full guide to using Epimemer well: when to ingest, search, "
+    "reflect and review, how to record verdicts, and what each warning means. "
+    "Read it before nontrivial memory work; the per-call rules are already in "
+    "the server instructions.",
+)
+def guide_prompt() -> str:
+    return guidance.guide()
 
 
 def _build_response(result: dict, meta: ResponseMeta, latency_ms: float) -> str:
@@ -2878,8 +2888,14 @@ async def memory_add_timepoint(
 ) -> str:
     """Add a timepoint to a timeline.
 
-    Timepoints can be concrete (with start/end ISO datetimes), vague
-    (label only), or a mix. Concrete timepoints are auto-sorted.
+    A timepoint is one of three kinds, and the response says which it turned out
+    to be: an **instant** (`start` alone), an **interval** (`start` and `end`),
+    or a **vague** point (`label` alone, "during the Renaissance"), which has no
+    place on the axis until something orders it. The kind is read off the dates,
+    so it is not something to pass in. Dated points are kept in order of start.
+
+    An `end` with no `start` is refused, because `start` is where the mark goes,
+    and so is a point with neither a date nor a label.
 
     Args:
         timeline_id: The timeline to add to.
@@ -2905,7 +2921,7 @@ async def memory_add_timepoint(
         ),
         ctx,
         f"timeline={timeline_id}",
-        lambda r, m: f"tp={r['timepoint_id']}",
+        lambda r, m: f"tp={r['timepoint_id']} kind={r['kind']}",
         expected_graph=expected_graph,
     )
 
@@ -2922,7 +2938,15 @@ async def memory_query_timeline(
 ) -> str:
     """Query timepoints on a timeline.
 
-    Either find nearest to a target datetime, or get all in a range.
+    Either find nearest to a target datetime, or get all in a range. Passing
+    neither returns every point on the timeline.
+
+    Each returned point carries its `kind`: `instant`, `interval`, or `vague`
+    for one that only a label places. A range query answers in chronological
+    order and includes intervals that began before the window and were still
+    running when it opened. Vague points have no coordinate, so a range or
+    nearest query leaves them out. The response also carries the timeline's
+    `reference_time`, its own "now", which is null when it follows the clock.
 
     Args:
         timeline_id: The timeline to query.
@@ -2966,6 +2990,9 @@ async def memory_create_timelink(
 ) -> str:
     """Link a node to a specific timepoint on a timeline.
 
+    The response names the point's `kind`, so a fact just dated can be checked
+    against what it was dated to without a second call.
+
     Args:
         node_id: The node to link.
         timeline_id: The timeline containing the timepoint.
@@ -2986,7 +3013,7 @@ async def memory_create_timelink(
         ),
         ctx,
         f"{node_id}->{timeline_id}:{timepoint_id}",
-        lambda r, m: f"edge={r['edge_id']}",
+        lambda r, m: f"edge={r['edge_id']} kind={r['kind']}",
         expected_graph=expected_graph,
     )
 
@@ -3226,6 +3253,7 @@ async def epimemer_backup_graph(
         lambda: tools.backup_graph(
             storage=deps["storage"],
             destination=deps["config"].backup_destination,
+            backup_keep=deps["config"].backup_keep,
             embedding_provider=deps["config"].embedding_provider,
             embedding_model_id=deps["config"].embedding_model_id,
             default_backup_threshold=deps["config"].backup_threshold,

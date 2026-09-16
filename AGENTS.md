@@ -1,3 +1,6 @@
+# Calude Code Usage Insturctions
+If there are large or easily abstractable chunks of coding, as well as routine tasks such as running tests and parsing their outputs, please hand these off to a Opus 5 subagent to save on context in the main thread.
+
 # Coding
 Prefer a functional style; minimise inheritance; avoid classes with `self` or
 `@staticmethod`; Pydantic BaseModel for data structures is encouraged. Type
@@ -48,24 +51,8 @@ measurements.
 3. Use Tailwind CSS.
 
 # Memory System (Epimemer)
-The full guide to the epimemer MCP tools is `epimemer_prompts/DEFAULT.md`,
-the single home for that material; read it before nontrivial memory work.
-The rules that must hold on every call:
-
-- Pass `expected_graph` on every tool call, reads included. Say the graph you
-  meant; never paste the name out of a refusal. Only `list_graphs`,
-  `use_graph`, `delete_graph` and `viz_status` take none.
-- Claim a judge with `claim_agent` once per session before writing, and use
-  whatever judge the user hands back. Claim again after `use_graph`. A refusal
-  here goes to the user, never worked around.
-- Every `store_decomposition` names its metacontext (`metacontext_id`): `the-real`
-  for real-world claims, one metacontext per call, so a mixed document is two calls.
-- Omit `confidence` and `claim_kind` rather than guess; give a one-line
-  `confidence_basis` with any confidence you do supply.
-- Record a verdict on every pair reflect nominates (`similarities`,
-  `relation_verdicts`, `retained`); suppression is permanent, and an unjudged
-  pair comes back on every reflect, for ever.
-- Read `warnings` before deciding what to write, not after; `notify_user:
-  true` means raise it with the user.
-- Ingest after learning something worth keeping; search before answering
-  anything prior context could improve; reflect when the response suggests it.
+The server sends the per-call rules (`epimemer_prompts/RULES.md`) as its MCP
+instructions and serves the full guide (`epimemer_prompts/DEFAULT.md`) as the
+MCP prompt `guide`; read the guide before nontrivial memory work. Those two
+files are the single home for that material, so change them rather than
+restating rules here.

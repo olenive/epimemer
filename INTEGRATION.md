@@ -139,9 +139,9 @@ and when. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 |------|---------|
 | `create_timeline` | Create a named timeline, optionally anchored to its own "now" |
 | `set_reference_time` | Set or clear a timeline's "now", which past and future are measured against |
-| `add_timepoint` | Add a timepoint, concrete or vague, to a timeline |
-| `query_timeline` | Find the nearest timepoints, or query a time range |
-| `create_timelink` | Link a node to a specific timepoint on a timeline |
+| `add_timepoint` | Add a timepoint to a timeline; the response says which kind the dates made it, `instant`, `interval` or `vague` |
+| `query_timeline` | Find the nearest timepoints, or query a time range; each point comes back with its kind, and a range answers in chronological order |
+| `create_timelink` | Link a node to a specific timepoint on a timeline, and report that point's kind |
 
 ### Metacontext Operations
 
@@ -225,19 +225,24 @@ MCP tool can change it. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 
 ## Agent Guidance
 
-`epimemer_prompts/DEFAULT.md` is the full guide to using these tools well:
-when to ingest, search and reflect, and how to record verdicts. Add its
-contents to your agent's instructions (for Claude Code, the project's
-CLAUDE.md), or point the agent at the file.
+The server carries its own guidance, so nothing needs copying into an agent's
+instructions. It comes in two sizes:
 
-It ships with the package, so an installed copy has it too. To print the path:
+- **The rules**, `epimemer_prompts/RULES.md`, are the server's MCP
+  `instructions` string: about 2 KB, sent to every client on connect, so they
+  sit in every context. They are what must hold on every call: pass
+  `expected_graph`, claim a judge, name the metacontext, record every verdict,
+  read `warnings` first.
+- **The guide**, `epimemer_prompts/DEFAULT.md`, is the MCP prompt `guide`:
+  about 50 KB, when to ingest, search, reflect and review, and what each
+  warning means. Claude Code lists it as the slash command
+  `/mcp__epimemer__guide`; an agent should pull it before nontrivial memory
+  work rather than hold it in every context.
 
-```bash
-python -c "import importlib.resources as r; print(r.files('epimemer_prompts') / 'DEFAULT.md')"
-```
-
-Serving the guide over MCP itself, so that nothing needs copying, is on the
-backlog in `dev-docs/PROPOSED_FEATURES.md`.
+Both files ship with the package. A project's own instructions can still add
+to them (which graph its work goes in, what to tag it with), and the rules
+are short enough to restate there when a client does not surface MCP
+`instructions`.
 
 ## Response Format
 

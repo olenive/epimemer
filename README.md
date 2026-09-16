@@ -67,8 +67,10 @@ exits**. See [Persistence](#persistence) for the setup that keeps a graph.
 Any other MCP client works the same way: the server speaks stdio, and
 `epimemer serve` is the command. The
 [integration guide](https://github.com/olenive/epimemer/blob/main/INTEGRATION.md)
-has the full configuration, the guidance to put in an agent's instructions,
-and the canonical tool table.
+has the full configuration, the canonical tool table, and how the agent
+guidance reaches the agent: the server sends the per-call rules on connect and
+serves the full guide as the MCP prompt `guide`, so nothing is pasted into an
+agent's instructions.
 
 ## Persistence
 
@@ -128,6 +130,7 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_REFLECT_THRESHOLD` | `10` | Stores into a graph before the server suggests a reflect. Counted per graph in storage and reported by `graph_stats`; a graph can override it with `configure_reflection` |
 | `EPIMEMER_BACKUP_THRESHOLD` | `50` | Stores into a graph before the server suggests a backup. Counted per graph, reported by `graph_stats`, and overridable per graph with `configure_backup`. A separate count from the reflect one: reflecting clears that one, a successful backup clears this |
 | `EPIMEMER_BACKUP_DESTINATION` | (empty) | Where `backup_graph` writes: a local path, a `gs://` URL or an `s3://` URL. The tool takes no path of its own, so this is the only thing that says where a graph goes. Empty means the tool refuses and names this variable rather than inventing somewhere. Credentials come from each provider's own chain |
+| `EPIMEMER_BACKUP_KEEP` | (empty) | How many bundles of a graph to leave at the destination after a backup writes. Empty keeps every one, so deleting a backup has to be asked for. Set it to a count and the older bundles of that graph go, oldest first, ordered by the date in the filename; a `--plain` directory is never touched. A process setting like the destination it governs, with no per-graph override and no tool that can change it |
 | `EPIMEMER_RECORD_RETRIEVAL` | `true` | Whether `search` stamps `retrieved_at` on what it returns. `false` disables it, which blinds the `never_retrieved` nomination; ranking is unaffected either way |
 | `EPIMEMER_IMPORTANCE_STEP` | `0.25` | How much of the gap to its bound one `judge_importance` call closes, up or down. Nothing moves importance automatically |
 | `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |

@@ -1301,18 +1301,72 @@ class EmbeddingRecord(BaseModel):
 # --- Timelines ---
 
 
+TimepointKind = Literal["instant", "interval", "vague"]
+
+
+def timepoint_kind(
+    start: datetime | None,
+    end: datetime | None,
+    label: str | None,
+) -> TimepointKind:
+    """What kind of point these fields describe, or a refusal if they describe none.
+
+    The one place the rule lives, so the model, the tools and anything reading a
+    stored record all answer the same way. Two shapes are refused:
+
+    `end` without `start`, because `start` is where the mark is placed. The
+    validity model can say "ended then, began we do not know when"
+    (`ValidityInterval` has an unknown start for exactly that), but a timepoint
+    has nowhere to put such a thing.
+
+    Neither a date nor a label, which would be a mark with nothing on it.
+    """
+    if start is None:
+        if end is not None:
+            raise ValueError(
+                "A timepoint with an end needs a start: give the start the source "
+                "stated, or record what is known as a label."
+            )
+        if label is None or not label.strip():
+            raise ValueError(
+                "A timepoint needs a date or a label: a point with neither is a "
+                "mark with nothing written on it."
+            )
+        return "vague"
+    return "interval" if end is not None else "instant"
+
+
 class Timepoint(BaseModel):
     """A point or interval on a timeline.
 
     Can be concrete (with start/end datetimes), vague (label only),
     or a mix (concrete start with descriptive label).
+
+    **`kind` is derived and never supplied.** It is a property rather than a
+    field, so it is computed from the dates every time it is read and cannot
+    drift from them. Two things follow. A caller passing `kind` is refused,
+    because `extra="forbid"` leaves it nowhere to land. And the serialised form
+    never carries it, so a record written before `kind` existed reads back as
+    the kind its fields imply, with no migration and no change to the bundle
+    format.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     id: str = Field(default_factory=_new_id)
     start: datetime | None = None  # concrete start (optional)
     end: datetime | None = None  # concrete end (optional, for intervals)
     label: str | None = None  # free-text (e.g., "during the Renaissance")
     metadata: dict = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _fields_describe_a_point(self) -> Timepoint:
+        timepoint_kind(self.start, self.end, self.label)
+        return self
+
+    @property
+    def kind(self) -> TimepointKind:
+        return timepoint_kind(self.start, self.end, self.label)
 
 
 class Timeline(BaseModel):

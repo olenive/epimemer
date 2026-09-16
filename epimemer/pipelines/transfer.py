@@ -32,6 +32,7 @@ from __future__ import annotations
 import gzip
 import io
 import json
+import re
 import tarfile
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
@@ -410,6 +411,91 @@ def default_bundle_name(graph: str, at: datetime, *, plain: bool = False) -> str
     return f"{graph}-{stamp}{suffix}"
 
 
+def _dated_bundle(graph: str) -> re.Pattern[str]:
+    """Filenames `default_bundle_name` writes for `graph`, and nothing else.
+
+    Anchored on the date, because a bare prefix match is the bug here: a graph
+    named `notes` would otherwise claim every bundle of `notes-archive`, and
+    retention would delete another graph's backups. The graph name is escaped
+    because nothing stops one containing a regex metacharacter.
+    """
+    return re.compile(rf"^{re.escape(graph)}-\d{{4}}-\d{{2}}-\d{{2}}{re.escape(BUNDLE_SUFFIX)}$")
+
+
+def stale_bundles(names: Sequence[str], graph: str, keep: int) -> list[str]:
+    """Which of `names` retention should remove, newest `keep` spared.
+
+    Pure, and takes names rather than a filesystem so the rule can be read and
+    tested without a destination. Entries may be bare names or full paths; the
+    last segment decides, and whatever was passed in comes back, so the caller
+    deletes by the same string it listed.
+
+    **Ordered by the date in the name, never by modification time.** Object
+    stores stamp mtime at upload and a copied folder loses it altogether, so
+    mtime order is the order the bundles arrived at this destination rather
+    than the order the graph was written in. The date is in the filename for
+    exactly this reason, and it is ISO-8601, so sorting it as text is sorting
+    it chronologically.
+
+    A `--plain` bundle is a directory, matches nothing here, and is left alone:
+    retention removes what `backup_graph` writes, and that is always a tarball.
+    """
+    if keep < 1:
+        raise ValueError(f"keep must be at least 1, got {keep}")
+
+    pattern = _dated_bundle(graph)
+    matched = [name for name in names if pattern.match(name.rstrip("/").rsplit("/", 1)[-1])]
+    oldest_first = sorted(matched, key=lambda name: name.rstrip("/").rsplit("/", 1)[-1])
+    return oldest_first[: max(0, len(oldest_first) - keep)]
+
+
+class PruneReport(BaseModel):
+    """What retention did at a destination, for the backup result to report."""
+
+    kept: int
+    removed: list[str] = Field(default_factory=list)
+    # Name to reason, for bundles retention chose but could not delete. They
+    # are still there, so they are counted in `kept`.
+    failed: dict[str, str] = Field(default_factory=dict)
+
+
+def prune_bundles(destination: str, graph: str, keep: int) -> PruneReport:
+    """Delete every bundle of `graph` at `destination` but the newest `keep`.
+
+    Call it only once a write has returned. A prune that ran first, or ran
+    alongside, could delete the last good bundle on the way to a backup that
+    then failed.
+
+    **A delete that fails does not fail the backup.** The graph is already
+    written out by the time this runs, and a bundle nobody could remove is a
+    tidiness problem, not a data problem, so the names come back in `failed`
+    for the user to deal with.
+    """
+    import fsspec
+
+    fs, root = fsspec.core.url_to_fs(destination)
+    try:
+        present = fs.ls(root, detail=False)
+    except FileNotFoundError:
+        # Nothing written here yet, which a first backup reaches by racing its
+        # own destination into existence.
+        return PruneReport(kept=0)
+
+    pattern = _dated_bundle(graph)
+    total = sum(1 for name in present if pattern.match(str(name).rstrip("/").rsplit("/", 1)[-1]))
+    removed: list[str] = []
+    failed: dict[str, str] = {}
+    for name in stale_bundles([str(name) for name in present], graph, keep):
+        try:
+            fs.rm(name)
+        except Exception as refused:
+            failed[name.rsplit("/", 1)[-1]] = str(refused)
+        else:
+            removed.append(name.rsplit("/", 1)[-1])
+
+    return PruneReport(kept=total - len(removed), removed=removed, failed=failed)
+
+
 # Which extra installs the filesystem behind a URL scheme. `fsspec` itself is a
 # core dependency and is tiny; the cloud drivers are not, and neither is wanted
 # by a user whose backups go to a folder.
@@ -765,12 +851,15 @@ __all__ = [
     "BundleManifest",
     "GraphSettings",
     "ImportReport",
+    "PruneReport",
     "bundle_bytes",
     "default_bundle_name",
     "export_graph",
     "import_graph",
+    "prune_bundles",
     "read_bundle",
     "section_counts",
+    "stale_bundles",
     "unreachable_destination",
     "write_bundle",
 ]

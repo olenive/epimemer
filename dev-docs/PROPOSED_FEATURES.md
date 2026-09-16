@@ -35,36 +35,10 @@ Claim an entry by name in your commit message.
 
 ### Specialized timelines
 
-**What.** Only the base `Timeline` / `Timepoint` model exists. Three
-specialised backing structures are envisaged and do not:
-
-- **`PreciseTimeline`**: a datetime interval index supporting range and
-  proximity queries.
-- **`VagueTimeline`**: labelled points ordered by relative before/after
-  constraints rather than coordinates.
-- **`CyclicalTimeline`**: templates such as "every Monday", mapped to concrete
-  instances when something links to them.
-
-**Why.** The timeline panel currently plots what curation and extraction happen
-to produce. These are what would let a caller *ask questions* of a timeline
-(what happened near this, what overlaps this, what recurs) rather than only
-render it.
-
-**Cost.** The largest item in this file. Each needs add/remove/reorder with
-stable UUIDs, its own query surface (proximity, overlap detection), and a
-storage round-trip on both backends per the parity rule. `VagueTimeline` is the
-awkward one: relative ordering is a constraint graph, and it has to stay
-coherent when constraints conflict.
-
-**Blockers.** None technical, but worth a decision first: whether these are
-three types or one type with a mode. The current `Timepoint` already spans
-concrete, interval, and label-only, so the case for three separate models is
-not obvious and should be argued before any of it is built.
-
-One constraint is already decided (`VALIDITY_DESIGN.md`, T2): recurrence-rule
-facts such as "Christmas is Dec 24–26, annually" are `CyclicalTimeline`'s case
-and never route through supersession or restore. They never stop being true, so
-they have no lifecycle, and their occurrences are separate event facts.
+**Picked up, and designed in `TIMELINES.md`.** Decisions taken 2026-09-16: one
+`Timeline` rather than the three specialised types this entry proposed, with
+those three becoming capabilities of it. That document carries the model, the
+tool surface, the storage shape and a three-stage build order.
 
 ---
 
@@ -106,32 +80,50 @@ graph together, is parked until a team needs it, with the shape decided:
   sessions.
 - Nothing finer than a whole graph, and nothing about reaching the database
   across machines, which is the database's own configuration.
+- A version number on the timeline record, checked on write. A timeline is
+  stored as one record and every change rewrites it whole, so two writers on
+  one timeline are last-writer-wins today, and with ordering constraints in
+  the record (`TIMELINES.md` §2.5) what gets lost is a recorded assertion, not
+  a mark. Deferred with the rest of this tier because one server has one
+  client, so the race needs two servers on one database.
 
 **Blockers.** A team that needs it.
 
 ---
 
-### Serving the agent guidance over MCP
+### Timelines on other clocks
 
-**The state.** `epimemer_prompts/DEFAULT.md` holds the full guidance on using
-the tools well, and `INTEGRATION.md` tells users to copy it into their agent's
-instructions. The server's own MCP `instructions` string is three sentences.
+**The state.** A timepoint's coordinate is a Python `datetime`: Gregorian,
+years 1 to 9999, microsecond resolution. Fiction set in a real-shaped calendar
+works. Geological time ("2.1 million years ago"), astronomical time,
+sub-microsecond events (a reaction intermediate at 40 nanoseconds), and
+invented calendars (a thirteen-month year; the 40k notation `0.123.456.M41`,
+whose year is past 9999) cannot be stored.
 
-**What.** Serve the guidance through MCP itself, so nothing needs copying:
-expose `DEFAULT.md` as an MCP prompt (FastMCP supports prompt registration, and
-clients such as Claude Code surface prompts to the user), and keep the server
-`instructions` string as the short orientation it is. The file stays the single
-source; the prompt reads it.
+**What.** Separate the coordinate from the calendar. A timeline gets a
+*clock*: a unit (seconds, days, years, millions of years), an epoch (what zero
+means: "present day", "start of the reaction", "year 0 of M1"), and a
+precision. A timepoint's coordinate becomes a number on that clock. The
+default clock is Gregorian, so ordinary timelines change nothing. Parsing and
+formatting a notation is the agent's job, not the server's: the agent reads
+"0.123.456.M41", writes the coordinate, and the original text stays as the
+point's label, which is the "store what the source said" rule already in
+force. A per-timeline description of the convention lets a fresh agent recover
+it from the graph.
 
-**Why.** A copy pasted into a project's CLAUDE.md goes stale the day the
-guidance changes, and the MCP protocol already has a channel for exactly this.
+**Why.** Assuming linear time, everything in `TIMELINES.md` (ordering,
+bounds, periodic recurrence, contradictions) is arithmetic on coordinates and
+works unchanged on any clock. Only `CalendarRule` is about months and weekdays
+and stays Gregorian.
 
-**Cost.** Small: one prompt registration reading the file, a test that it
-matches the file, and the `INTEGRATION.md` section updated to name the prompt.
+**Cost.** Medium. The coordinate type touches every timeline query function,
+both storage backends (SurrealDB stores dates as strings, and numbers compared
+as strings sort wrongly, the trap the design rules name), extraction, and the
+dashboard axis. `TIMELINES.md` keeps this cheap by forbidding anything that
+assumes a date where a number would do.
 
-**Blockers.** None. One decision worth making at the same time: whether a
-shorter always-loaded variant (the per-call rules only) should be offered
-beside the full guide, since 43 KB is a lot to hold in every context window.
+**Blockers.** A graph that needs one. Decided on 2026-09-16 not to build it
+alongside `TIMELINES.md`.
 
 ---
 

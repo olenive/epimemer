@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 from fastmcp import FastMCP
+from pydantic import ValidationError
 
 from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.embeddings.mock import MockEmbeddingProvider
@@ -208,6 +209,7 @@ class TestBackupGraphTool:
         result, _ = await backup_graph(
             storage,
             destination=None,
+            backup_keep=None,
             embedding_provider="mock",
             embedding_model_id="mock-embed",
             default_backup_threshold=50,
@@ -224,6 +226,7 @@ class TestBackupGraphTool:
         await backup_graph(
             storage,
             destination=None,
+            backup_keep=None,
             embedding_provider="mock",
             embedding_model_id="mock-embed",
             default_backup_threshold=50,
@@ -235,6 +238,7 @@ class TestBackupGraphTool:
         result, _ = await backup_graph(
             storage,
             destination=str(tmp_path),
+            backup_keep=None,
             embedding_provider="mock",
             embedding_model_id="mock-embed",
             default_backup_threshold=50,
@@ -250,6 +254,7 @@ class TestBackupGraphTool:
         result, _ = await backup_graph(
             storage,
             destination=str(tmp_path),
+            backup_keep=None,
             embedding_provider="mock",
             embedding_model_id="mock-embed",
             default_backup_threshold=50,
@@ -268,6 +273,7 @@ class TestBackupGraphTool:
         result, _ = await backup_graph(
             storage,
             destination=str(tmp_path),
+            backup_keep=None,
             embedding_provider="mock",
             embedding_model_id="mock-embed",
             default_backup_threshold=50,
@@ -284,6 +290,7 @@ class TestBackupGraphTool:
         await backup_graph(
             storage,
             destination=str(tmp_path),
+            backup_keep=None,
             embedding_provider="mock",
             embedding_model_id="mock-embed",
             default_backup_threshold=50,
@@ -305,6 +312,7 @@ class TestBackupGraphTool:
         result, _ = await backup_graph(
             storage,
             destination="gs://bucket/backups",
+            backup_keep=None,
             embedding_provider="mock",
             embedding_model_id="mock-embed",
             default_backup_threshold=50,
@@ -312,6 +320,111 @@ class TestBackupGraphTool:
 
         assert result["status"] == "refused"
         assert "epimemer[gcs]" in result["reason"]
+
+
+def _dated(destination: Path, graph: str, *dates: str) -> None:
+    """Bundles from earlier days, as files a previous backup would have left."""
+    for date in dates:
+        (destination / f"{graph}-{date}.epimemer.tar.gz").write_bytes(b"an older bundle")
+
+
+def _bundles(destination: Path, graph: str) -> list[str]:
+    return sorted(p.name for p in destination.iterdir() if p.name.startswith(f"{graph}-"))
+
+
+class TestBackupRetention:
+    """`EPIMEMER_BACKUP_KEEP`: how many bundles a destination holds.
+
+    Unset keeps everything, and that is the default — a retention policy nobody
+    set should never be the reason a backup is gone.
+    """
+
+    def test_the_default_keeps_everything(self):
+        assert ServerConfig().backup_keep is None
+
+    def test_a_count_below_one_is_refused_at_load(self):
+        """Zero would delete the bundle the backup just wrote."""
+        with pytest.raises(ValidationError, match="at least 1"):
+            ServerConfig(backup_keep=0)
+
+    async def test_unset_removes_nothing(self, storage, tmp_path):
+        graph = storage.current_database
+        _dated(tmp_path, graph, "2026-01-01", "2026-02-01", "2026-03-01")
+
+        result, _ = await backup_graph(
+            storage,
+            destination=str(tmp_path),
+            backup_keep=None,
+            embedding_provider="mock",
+            embedding_model_id="mock-embed",
+            default_backup_threshold=50,
+        )
+
+        assert len(_bundles(tmp_path, graph)) == 4
+        assert "removed" not in result
+        assert "kept" not in result
+
+    async def test_it_keeps_the_newest_and_counts_todays_among_them(self, storage, tmp_path):
+        graph = storage.current_database
+        _dated(tmp_path, graph, "2026-01-01", "2026-02-01", "2026-03-01", "2026-04-01")
+
+        result, _ = await backup_graph(
+            storage,
+            destination=str(tmp_path),
+            backup_keep=2,
+            embedding_provider="mock",
+            embedding_model_id="mock-embed",
+            default_backup_threshold=50,
+        )
+
+        today = Path(result["written_to"]).name
+        assert result["kept"] == 2
+        assert result["removed"] == [
+            f"{graph}-2026-01-01.epimemer.tar.gz",
+            f"{graph}-2026-02-01.epimemer.tar.gz",
+            f"{graph}-2026-03-01.epimemer.tar.gz",
+        ]
+        assert _bundles(tmp_path, graph) == sorted([f"{graph}-2026-04-01.epimemer.tar.gz", today])
+
+    async def test_a_failed_write_prunes_nothing(self, storage, tmp_path, monkeypatch):
+        """The old bundles are all a graph has while the new one does not exist."""
+        graph = storage.current_database
+        _dated(tmp_path, graph, "2026-01-01", "2026-02-01", "2026-03-01")
+
+        from epimemer.pipelines import transfer
+
+        def _refuse(*args, **kwargs):
+            raise OSError("the destination went away")
+
+        monkeypatch.setattr(transfer, "write_bundle", _refuse)
+
+        with pytest.raises(OSError):
+            await backup_graph(
+                storage,
+                destination=str(tmp_path),
+                backup_keep=1,
+                embedding_provider="mock",
+                embedding_model_id="mock-embed",
+                default_backup_threshold=50,
+            )
+
+        assert len(_bundles(tmp_path, graph)) == 3
+
+    async def test_it_leaves_another_graph_alone(self, storage, tmp_path):
+        """One destination holds every graph this server opens."""
+        graph = storage.current_database
+        _dated(tmp_path, f"{graph}-archive", "2026-01-01", "2026-02-01")
+
+        await backup_graph(
+            storage,
+            destination=str(tmp_path),
+            backup_keep=1,
+            embedding_provider="mock",
+            embedding_model_id="mock-embed",
+            default_backup_threshold=50,
+        )
+
+        assert len(_bundles(tmp_path, f"{graph}-archive")) == 2
 
 
 # --- Through the MCP server: the counter an agent actually sees ---

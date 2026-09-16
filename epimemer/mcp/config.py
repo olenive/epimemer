@@ -67,6 +67,17 @@ class ServerConfig(BaseModel):
     # this variable rather than inventing somewhere to write.
     backup_destination: str | None = None
 
+    # How many dated bundles per graph to leave in `backup_destination` after a
+    # backup writes. `None` keeps everything, and that is the default because
+    # deleting a backup has to be asked for: a retention policy nobody set
+    # should never be the reason a bundle is gone.
+    #
+    # A process setting like the destination it governs, so there is no
+    # per-graph override and no MCP tool to set it. Retention is a property of
+    # the folder or bucket, which one server fills for every graph it opens, and
+    # an agent that could raise the count could also lower it to 1.
+    backup_keep: int | None = None
+
     tool_timeout_seconds: float = 30.0
 
     # Agent ids the user admits to every graph this server opens
@@ -128,6 +139,22 @@ class ServerConfig(BaseModel):
             return [part.strip() for part in value.split(",") if part.strip()]
         return value
 
+    @field_validator("backup_keep")
+    @classmethod
+    def _at_least_one(cls, value):
+        """Zero would delete every backup the moment one was written.
+
+        Refused at load rather than clamped, because `EPIMEMER_BACKUP_KEEP=0`
+        is a user who meant something Epimemer cannot do. Leaving the variable
+        unset is how you keep everything.
+        """
+        if value is not None and value < 1:
+            raise ValueError(
+                f"EPIMEMER_BACKUP_KEEP must be at least 1, got {value}. "
+                f"Unset it to keep every backup."
+            )
+        return value
+
 
 def load_config() -> ServerConfig:
     """Load server config from EPIMEMER_ environment variables."""
@@ -147,6 +174,7 @@ def load_config() -> ServerConfig:
         "reflect_threshold": "EPIMEMER_REFLECT_THRESHOLD",
         "backup_threshold": "EPIMEMER_BACKUP_THRESHOLD",
         "backup_destination": "EPIMEMER_BACKUP_DESTINATION",
+        "backup_keep": "EPIMEMER_BACKUP_KEEP",
         "approved_agents": "EPIMEMER_APPROVED_AGENTS",
         "require_judge": "EPIMEMER_REQUIRE_JUDGE",
         "record_retrieval": "EPIMEMER_RECORD_RETRIEVAL",

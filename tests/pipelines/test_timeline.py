@@ -152,6 +152,74 @@ class TestGetInRange:
         results = get_in_range(tl, _dt(2022), _dt(2025))
         assert len(results) == 1
 
+    def test_results_are_in_chronological_order(self):
+        """A straddling interval started first, so it is reported first. A
+        caller reading the list as a chronology must not have to re-sort it."""
+        tl = Timeline(name="test")
+        tl, _ = add_timepoint(tl, start=_dt(2018), end=_dt(2023), label="the long war")
+        tl, _ = add_timepoint(tl, start=_dt(2022), label="the treaty")
+        tl, _ = add_timepoint(tl, start=_dt(2024), label="the election")
+
+        results = get_in_range(tl, _dt(2021), _dt(2025))
+        assert [tp.label for tp in results] == ["the long war", "the treaty", "the election"]
+
+    def test_several_straddling_intervals_keep_their_order(self):
+        tl = Timeline(name="test")
+        tl, _ = add_timepoint(tl, start=_dt(2000), end=_dt(2030), label="the century")
+        tl, _ = add_timepoint(tl, start=_dt(2010), end=_dt(2022), label="the decade")
+        tl, _ = add_timepoint(tl, start=_dt(2021), label="the year")
+
+        results = get_in_range(tl, _dt(2020), _dt(2025))
+        assert [tp.label for tp in results] == ["the century", "the decade", "the year"]
+
+    def test_an_interval_that_ended_before_the_window_is_left_out(self):
+        tl = Timeline(name="test")
+        tl, _ = add_timepoint(tl, start=_dt(2000), end=_dt(2005), label="over already")
+        tl, _ = add_timepoint(tl, start=_dt(2021), label="the year")
+
+        results = get_in_range(tl, _dt(2020), _dt(2025))
+        assert [tp.label for tp in results] == ["the year"]
+
+    def test_an_interval_touching_the_window_edge_is_included(self):
+        tl = Timeline(name="test")
+        tl, _ = add_timepoint(tl, start=_dt(2010), end=_dt(2020), label="up to the line")
+
+        assert [tp.label for tp in get_in_range(tl, _dt(2020), _dt(2025))] == ["up to the line"]
+
+    def test_vague_points_are_left_out(self):
+        tl = Timeline(name="test")
+        tl, _ = add_timepoint(tl, label="during the Renaissance")
+        tl, _ = add_timepoint(tl, start=_dt(2021), label="the year")
+
+        assert [tp.label for tp in get_in_range(tl, _dt(2020), _dt(2025))] == ["the year"]
+
+    def test_points_out_of_order_in_the_record_still_come_back_in_order(self):
+        """`get_in_range` promises a chronology, so it does not depend on the
+        record happening to be sorted."""
+        tl = Timeline(
+            name="test",
+            timepoints=[
+                Timepoint(start=_dt(2024), label="later"),
+                Timepoint(start=_dt(2021), label="earlier"),
+            ],
+        )
+
+        results = get_in_range(tl, _dt(2020), _dt(2025))
+        assert [tp.label for tp in results] == ["earlier", "later"]
+
+    def test_a_long_history_before_the_window_is_skipped_correctly(self):
+        """The backwards walk is bounded by the longest interval on the
+        timeline, so a century of short intervals before the window is passed
+        over without changing the answer."""
+        tl = Timeline(name="test")
+        for year in range(1800, 1900):
+            tl, _ = add_timepoint(tl, start=_dt(year), end=_dt(year + 1), label=str(year))
+        tl, _ = add_timepoint(tl, start=_dt(1850), end=_dt(1995), label="the long one")
+        tl, _ = add_timepoint(tl, start=_dt(1990), label="the year")
+
+        results = get_in_range(tl, _dt(1990), _dt(1991))
+        assert [tp.label for tp in results] == ["the long one", "the year"]
+
 
 class TestReorderTimepoints:
     def test_sorts_by_start_datetime(self):

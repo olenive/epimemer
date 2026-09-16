@@ -51,6 +51,7 @@ from epimemer.core.types import (
     RelationLabel,
     Segment,
     Timeline,
+    Timepoint,
     Topic,
     ValueSignal,
     absorbing,
@@ -79,6 +80,7 @@ from epimemer.core.types import (
     serving_agents,
     superseded_status_for,
     supersession_kind,
+    timepoint_kind,
     with_description,
 )
 from epimemer.embeddings.protocol import EmbeddingProvider
@@ -6089,6 +6091,16 @@ def _reference_time_iso(timeline: Timeline) -> str | None:
     return None if timeline.reference_time is None else timeline.reference_time.isoformat()
 
 
+def _timepoint_payload(timepoint: Timepoint) -> dict:
+    """A timepoint as a caller reads it: its stored fields plus its `kind`.
+
+    `kind` is derived rather than stored, so it is added here instead of coming
+    out of `model_dump`. That is the point of deriving it: the record cannot
+    hold a kind that disagrees with the dates beside it.
+    """
+    return {**timepoint.model_dump(mode="json"), "kind": timepoint.kind}
+
+
 async def create_timeline(
     name: str,
     storage: StorageBackend,
@@ -6153,8 +6165,16 @@ async def add_timeline_timepoint(
     end: datetime | None = None,
     label: str | None = None,
 ) -> tuple[dict, ResponseMeta]:
-    """Add a timepoint to an existing timeline."""
+    """Add a timepoint to an existing timeline.
+
+    The shape of the point is checked before anything is read or written, so a
+    malformed request comes back as the same kind of plain refusal as a timeline
+    that does not exist, rather than as a validation error raised from inside
+    the model.
+    """
     from epimemer.pipelines.timeline.functions import add_timepoint
+
+    kind = timepoint_kind(start, end, label)
 
     tl = await storage.get_timeline(timeline_id)
     if tl is None:
@@ -6166,6 +6186,9 @@ async def add_timeline_timepoint(
     result = {
         "timeline_id": tl.id,
         "timepoint_id": tp.id,
+        # What the dates were read as: an instant, an interval, or a vague point
+        # that only a label places.
+        "kind": kind,
         "timepoints_count": len(tl.timepoints),
     }
     meta = ResponseMeta(nodes_returned=1)
@@ -6181,7 +6204,12 @@ async def query_timeline(
     range_end: datetime | None = None,
     k: int = 5,
 ) -> tuple[dict, ResponseMeta]:
-    """Query timepoints on a timeline (nearest or range)."""
+    """Query timepoints on a timeline (nearest or range).
+
+    Every returned point carries its `kind`, so a caller can tell an instant
+    from an interval, and either from a point that only a label places, without
+    inspecting which date fields came back.
+    """
     from epimemer.pipelines.timeline.functions import find_nearest, get_in_range
 
     tl = await storage.get_timeline(timeline_id)
@@ -6203,7 +6231,7 @@ async def query_timeline(
         # Reported on every query so a caller reading timepoints can tell which
         # of them are past and which are future without a second call.
         "reference_time": _reference_time_iso(tl),
-        "timepoints": [tp.model_dump(mode="json") for tp in timepoints],
+        "timepoints": [_timepoint_payload(tp) for tp in timepoints],
     }
     meta = ResponseMeta(nodes_returned=len(timepoints))
     return result, meta
@@ -6215,7 +6243,11 @@ async def create_timelink(
     timepoint_id: str,
     storage: StorageBackend,
 ) -> tuple[dict, ResponseMeta]:
-    """Link a node to a specific timepoint on a timeline."""
+    """Link a node to a specific timepoint on a timeline.
+
+    The response names the point's `kind`, so a caller that has just dated a
+    fact can see what it dated it to without a second call.
+    """
     # Verify node exists
     node = await storage.get_node(node_id)
     if node is None:
@@ -6240,7 +6272,7 @@ async def create_timelink(
     )
     await storage.store_edge(edge)
 
-    result = {"edge_id": edge.id, "timepoint_id": timepoint_id}
+    result = {"edge_id": edge.id, "timepoint_id": timepoint_id, "kind": tp.kind}
     meta = ResponseMeta(nodes_returned=1, retrieved=_declare([node_id]))
     return result, meta
 
@@ -6421,6 +6453,7 @@ async def backup_graph(
     storage: StorageBackend,
     *,
     destination: str | None,
+    backup_keep: int | None,
     embedding_provider: str,
     embedding_model_id: str,
     default_backup_threshold: int,
@@ -6439,10 +6472,16 @@ async def backup_graph(
 
     The counter is zeroed only after the write returns, so a destination that
     refuses leaves the graph still asking to be backed up.
+
+    `backup_keep` is `EPIMEMER_BACKUP_KEEP`: with a count set, the older
+    bundles of this graph are removed once the new one is written, and the
+    result says how many were kept and which went. With none set nothing is
+    ever deleted, and the result says nothing about retention.
     """
     from epimemer.pipelines.transfer import (
         default_bundle_name,
         export_graph,
+        prune_bundles,
         section_counts,
         unreachable_destination,
         write_bundle,
@@ -6491,6 +6530,16 @@ async def backup_graph(
         "embedded_with": embedding_model_id,
         **await backup_pressure(storage, default_backup_threshold),
     }
+
+    # After the write, never before: a prune that ran first could remove the
+    # last good bundle on the way to a backup that then failed.
+    if backup_keep is not None:
+        pruned = prune_bundles(destination, graph, backup_keep)
+        result["kept"] = pruned.kept
+        result["removed"] = pruned.removed
+        if pruned.failed:
+            result["removal_failed"] = pruned.failed
+
     return result, ResponseMeta()
 
 

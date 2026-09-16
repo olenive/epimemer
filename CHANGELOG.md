@@ -4,6 +4,46 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.4] — 2026-09-16
+
+**A timepoint now says what kind of thing it is, and a range query answers in
+order.** Every point a timeline hands back carries a `kind`: an `instant` is a
+date, an `interval` is a date and an end, and a `vague` point is a label such as
+"during the Terror" that nothing has placed on the axis yet. The kind is read
+off the dates whenever it is asked for rather than stored beside them, so it
+cannot go stale, a caller passing one is refused, and records written before
+this existed read back as the kind their fields imply with no migration. Two
+shapes that used to be stored silently are now refused in plain words: an `end`
+with no `start`, since the start is where the mark goes, and a point with
+neither a date nor a label, which is a mark with nothing written on it. A range
+query used to return intervals that began before the window after the points
+inside it, so the war that was already running arrived after the treaty that
+ended it; results now come back in order of start, and the search back for
+still-running intervals stops at the longest interval on the timeline instead of
+testing every point in the earlier history.
+
+**A backup destination can now be told how many bundles to hold.** Set
+`EPIMEMER_BACKUP_KEEP` to a count and `backup_graph` removes the older bundles
+of the graph it just wrote, keeping the newest that many, and reports which went
+and how many are left. Until now every backup added a dated file and nothing
+ever removed one, so a graph backed up on prompt filled a folder or a bucket
+with near-identical snapshots that the user had to prune by hand. Leaving the
+variable unset keeps everything, which stays the default: deleting a backup has
+to be asked for. Bundles are ordered by the date in the filename rather than by
+modification time, which an object store stamps at upload and a copied folder
+loses; only files of the exact shape `<graph>-<date>.epimemer.tar.gz` are
+matched, so a graph named `notes` never touches the bundles of `notes-archive`,
+and a `--plain` directory is left alone. The prune runs after the write returns,
+so a failed backup removes nothing.
+
+**The server now carries its own guidance.** The per-call rules
+(`epimemer_prompts/RULES.md`, about 2 KB) are its MCP `instructions` string,
+so every client has them from connect; the full guide (`DEFAULT.md`) is the
+MCP prompt `guide`, `/mcp__epimemer__guide` in Claude Code, pulled before
+nontrivial memory work. Until now the guide reached an agent only if someone
+pasted it into that agent's instructions, and the server said five sentences
+about itself.
+
 ## [0.2.3] — 2026-09-13
 
 **A judge can be taken out of use, brought back, or removed if it never judged

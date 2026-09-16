@@ -682,6 +682,55 @@ class TestTimelineReferenceTime:
         assert got.reference_time is None
 
 
+class TestTimepointKindSurvivesStorage:
+    """`kind` is derived, so what has to survive storage is the fields it is
+    derived from. The stored row must not gain a `kind` of its own, or a row
+    written by an older server would come back disagreeing with its dates."""
+
+    async def test_all_three_kinds_round_trip(self, store):
+        timeline = Timeline(
+            name="the revolution",
+            timepoints=[
+                Timepoint(id="tp-1", start=datetime(1789, 7, 14, tzinfo=UTC)),
+                Timepoint(
+                    id="tp-2",
+                    start=datetime(1793, 9, 5, tzinfo=UTC),
+                    end=datetime(1794, 7, 28, tzinfo=UTC),
+                    label="the Terror",
+                ),
+                Timepoint(id="tp-3", label="long afterwards"),
+            ],
+        )
+        await store.store_timeline(timeline)
+
+        got = await store.get_timeline(timeline.id)
+        assert got is not None
+        assert [tp.kind for tp in got.timepoints] == ["instant", "interval", "vague"]
+
+    async def test_the_stored_form_carries_no_kind(self, store):
+        timeline = Timeline(
+            name="the revolution",
+            timepoints=[Timepoint(id="tp-1", start=datetime(1789, 7, 14, tzinfo=UTC))],
+        )
+        await store.store_timeline(timeline)
+
+        got = await store.get_timeline(timeline.id)
+        assert "kind" not in got.timepoints[0].model_dump(mode="json")
+
+    async def test_a_timepoint_added_through_the_tools_keeps_its_kind(self, store):
+        created, _ = await tools.create_timeline("tl", store)
+        timeline_id = created["timeline_id"]
+        await tools.add_timeline_timepoint(
+            timeline_id,
+            store,
+            start=datetime(1793, 9, 5, tzinfo=UTC),
+            end=datetime(1794, 7, 28, tzinfo=UTC),
+        )
+
+        queried, _ = await tools.query_timeline(timeline_id, store)
+        assert [tp["kind"] for tp in queried["timepoints"]] == ["interval"]
+
+
 class TestTimelineToolsPersist:
     """`add_timeline_timepoint` re-stores the whole timeline, so an insert-only
     backend drops every timepoint after the first — and `create_timelink` then

@@ -2427,6 +2427,114 @@ class TestTimelineTools:
             await create_timelink(t.id, tl_result["timeline_id"], "nonexistent", storage)
 
 
+class TestTimepointKindOnResponses:
+    """Every tool that hands back a timepoint says what kind it is, so a caller
+    never has to infer it from which date fields came back."""
+
+    async def test_add_timepoint_reports_its_kind(self, storage):
+        created, _ = await create_timeline("test", storage)
+        tl_id = created["timeline_id"]
+
+        instant, _ = await add_timeline_timepoint(
+            tl_id, storage, start=datetime(1789, 7, 14, tzinfo=UTC)
+        )
+        interval, _ = await add_timeline_timepoint(
+            tl_id,
+            storage,
+            start=datetime(1793, 9, 5, tzinfo=UTC),
+            end=datetime(1794, 7, 28, tzinfo=UTC),
+            label="the Terror",
+        )
+        vague, _ = await add_timeline_timepoint(tl_id, storage, label="long afterwards")
+
+        assert instant["kind"] == "instant"
+        assert interval["kind"] == "interval"
+        assert vague["kind"] == "vague"
+
+    async def test_query_timeline_reports_the_kind_of_each_point(self, storage):
+        created, _ = await create_timeline("test", storage)
+        tl_id = created["timeline_id"]
+        await add_timeline_timepoint(tl_id, storage, start=datetime(1789, 7, 14, tzinfo=UTC))
+        await add_timeline_timepoint(
+            tl_id,
+            storage,
+            start=datetime(1793, 9, 5, tzinfo=UTC),
+            end=datetime(1794, 7, 28, tzinfo=UTC),
+        )
+        await add_timeline_timepoint(tl_id, storage, label="long afterwards")
+
+        result, _ = await query_timeline(tl_id, storage)
+
+        assert [tp["kind"] for tp in result["timepoints"]] == ["instant", "interval", "vague"]
+
+    async def test_query_timeline_reports_kind_on_a_range_query(self, storage):
+        created, _ = await create_timeline("test", storage)
+        tl_id = created["timeline_id"]
+        await add_timeline_timepoint(
+            tl_id,
+            storage,
+            start=datetime(1793, 9, 5, tzinfo=UTC),
+            end=datetime(1794, 7, 28, tzinfo=UTC),
+        )
+
+        result, _ = await query_timeline(
+            tl_id,
+            storage,
+            range_start=datetime(1794, 1, 1, tzinfo=UTC),
+            range_end=datetime(1795, 1, 1, tzinfo=UTC),
+        )
+
+        assert [tp["kind"] for tp in result["timepoints"]] == ["interval"]
+
+    async def test_create_timelink_reports_the_points_kind(self, storage):
+        t = Topic(content="the Terror", source_id="s1")
+        await storage.store_node(t)
+        created, _ = await create_timeline("test", storage)
+        tl_id = created["timeline_id"]
+        point, _ = await add_timeline_timepoint(
+            tl_id,
+            storage,
+            start=datetime(1793, 9, 5, tzinfo=UTC),
+            end=datetime(1794, 7, 28, tzinfo=UTC),
+            label="the Terror",
+        )
+
+        result, _ = await create_timelink(t.id, tl_id, point["timepoint_id"], storage)
+
+        assert result["kind"] == "interval"
+
+
+class TestTimepointRefusals:
+    """A malformed point is refused in words a caller can act on, the way a
+    missing timeline already is."""
+
+    async def test_an_end_without_a_start_is_refused(self, storage):
+        created, _ = await create_timeline("test", storage)
+
+        with pytest.raises(ValueError, match="start"):
+            await add_timeline_timepoint(
+                created["timeline_id"],
+                storage,
+                end=datetime(1794, 7, 28, tzinfo=UTC),
+                label="it ended in Thermidor",
+            )
+
+    async def test_neither_a_date_nor_a_label_is_refused(self, storage):
+        created, _ = await create_timeline("test", storage)
+
+        with pytest.raises(ValueError, match="date or a label"):
+            await add_timeline_timepoint(created["timeline_id"], storage)
+
+    async def test_a_refused_point_is_not_written(self, storage):
+        created, _ = await create_timeline("test", storage)
+        tl_id = created["timeline_id"]
+
+        with pytest.raises(ValueError):
+            await add_timeline_timepoint(tl_id, storage, end=datetime(1794, 7, 28, tzinfo=UTC))
+
+        assert (await storage.get_timeline(tl_id)).timepoints == []
+
+
 # --- Metacontext tool tests ---
 
 

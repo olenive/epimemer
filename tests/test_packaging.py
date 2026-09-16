@@ -1,10 +1,10 @@
 """The wheel carries the agent guidance, not just the code.
 
 `epimemer_prompts/DEFAULT.md` is the full guide to using the tools well, and
-`INTEGRATION.md` tells a reader to open it and paste it into their agent's
-instructions. Version 0.1.0 shipped without it: 91 files in the wheel and not
-one `.md`, so everyone who installed from PyPI was pointed at a file they did
-not have.
+`RULES.md` beside it is the server's instructions string; the server reads
+both at startup. Version 0.1.0 shipped without the guide: 91 files in the
+wheel and not one `.md`, so everyone who installed from PyPI was pointed at a
+file they did not have. Today the same gap would stop the server importing.
 
 The cause is worth stating, because it looks like it cannot happen. The build
 already finds the directory — `[tool.setuptools.packages.find]` matches

@@ -5,9 +5,9 @@ Backed by a sorted list with bisect for efficient lookups.
 The implementation is swappable later without changing the interface.
 """
 
-from bisect import bisect_left, insort_left
+from bisect import bisect_left, bisect_right, insort_left
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from epimemer.core.types import EdgeType, NodeEdge, Timeline, Timepoint
 from epimemer.pipelines.timeline.temporal import detect_temporal_expressions
@@ -101,40 +101,54 @@ def get_in_range(
     start: datetime,
     end: datetime,
 ) -> list[Timepoint]:
-    """Get all timepoints that overlap with a time range.
+    """Every dated timepoint overlapping `[start, end]`, in chronological order.
 
-    A timepoint overlaps if:
-    - Its start falls within [start, end], or
-    - Its interval [tp.start, tp.end] overlaps with [start, end], or
-    - It has no concrete dates (excluded from range queries)
+    A point overlaps when its first moment is at or before `end` and its last
+    moment is at or after `start`. An instant's last moment is its `start`, an
+    interval's is its `end`, which is the same reading of "last moment" that
+    `compare_intervals` in `core/temporal.py` uses. Vague points have no
+    coordinate, so a range query cannot answer for them and leaves them out.
+
+    **Intervals that began before the window come back in their place**, ahead
+    of the points inside it rather than appended after them. A caller reading
+    the list as a chronology would otherwise have to re-sort it, and the war
+    that was already running would arrive after the treaty that ended it.
+
+    **How far back the search goes.** Points are sorted by `start`, so one
+    bisect finds the far edge of the window. The near edge needs a walk
+    backwards, because an interval that began long ago can still be running.
+    That walk has an exact bound: nothing starting more than the longest
+    interval on this timeline before `start` can reach the window. The longest
+    interval is measured in the same pass that gathers the dated points, so the
+    bound costs nothing to have, and a timeline whose intervals are all short
+    skips its whole earlier history rather than testing every point in it, as
+    this function used to.
+
+    Sorting is by `start` and is done here rather than assumed: the record is
+    kept in that order by `reorder_timepoints`, but a chronology the caller was
+    promised should not depend on it. On an already-sorted list the sort is a
+    single pass.
     """
-    results: list[Timepoint] = []
+    dated = sorted(
+        (tp for tp in timeline.timepoints if tp.start is not None),
+        key=lambda tp: tp.start,
+    )
+    if not dated:
+        return []
 
-    concrete = [tp for tp in timeline.timepoints if tp.start is not None]
+    longest = max(
+        ((tp.end - tp.start) for tp in dated if tp.end is not None),
+        default=timedelta(0),
+    )
 
-    # Use bisect for efficient range finding
-    starts = [tp.start for tp in concrete]
-    left = bisect_left(starts, start)
+    starts = [tp.start for tp in dated]
+    # The first point that begins after the window: nothing from here on can
+    # overlap, since every later point begins later still.
+    stop = bisect_right(starts, end)
+    # The earliest point that could still be running when the window opens.
+    first = bisect_left(starts, start - longest)
 
-    for i in range(left, len(concrete)):
-        tp = concrete[i]
-        if tp.start > end:
-            break
-
-        # Point timepoint: start is within range
-        if tp.end is None:
-            results.append(tp)
-        # Interval timepoint: check overlap
-        elif tp.start <= end and tp.end >= start:
-            results.append(tp)
-
-    # Also check intervals that started before the range but extend into it
-    for i in range(0, left):
-        tp = concrete[i]
-        if tp.end is not None and tp.end >= start:
-            results.append(tp)
-
-    return results
+    return [tp for tp in dated[first:stop] if (tp.end if tp.end is not None else tp.start) >= start]
 
 
 def reorder_timepoints(timeline: Timeline) -> Timeline:

@@ -197,6 +197,24 @@ the write. **Credentials come from each provider's own standard chain and
 Epimemer reads none**, so a URL this accepts can still be refused by the
 service, and that refusal is the service's to explain.
 
+`EPIMEMER_BACKUP_KEEP` is retention: with a count set, `backup_graph` removes
+the older bundles of the graph it just wrote, keeping the newest that many, and
+reports `kept` and `removed`. Unset it keeps everything, which is the default
+because deleting a backup has to be asked for. Three rules make it safe.
+`stale_bundles` matches only `<graph>-<YYYY-MM-DD>.epimemer.tar.gz`, anchored on
+the date, so a graph named `notes` never claims the bundles of `notes-archive`
+and a `--plain` directory matches nothing. It orders by the date in the
+filename, never by modification time: an object store stamps mtime at upload and
+a copied folder loses it, so mtime order is the order bundles arrived rather
+than the order the graph was written in. And the prune runs only once
+`write_bundle` has returned, so a failed backup removes nothing; a delete that
+fails after that is reported in `removal_failed` rather than raised, because by
+then the graph is already written out.
+
+Retention is a property of the destination, which one server fills for every
+graph it opens, so there is no per-graph override and no MCP tool to set it. An
+agent that could raise the count could also lower it to 1.
+
 Git hosting is not a destination. Bundles are full snapshots and private memory
 does not belong on a forge; a user who wants it points a local path at a
 repository they commit themselves.

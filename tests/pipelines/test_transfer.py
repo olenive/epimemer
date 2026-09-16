@@ -58,8 +58,10 @@ from epimemer.pipelines.transfer import (
     bundle_bytes,
     export_graph,
     import_graph,
+    prune_bundles,
     read_bundle,
     section_counts,
+    stale_bundles,
     write_bundle,
 )
 from epimemer.storage.memory import InMemoryStorage
@@ -777,3 +779,133 @@ class TestAFileThatIsNotABundle:
     def test_a_path_with_nothing_at_it_says_so(self, tmp_path):
         with pytest.raises(BundleFormatError, match="No bundle at"):
             read_bundle(tmp_path / "missing.tar.gz")
+
+
+def _name(graph: str, date: str) -> str:
+    return f"{graph}-{date}.epimemer.tar.gz"
+
+
+class TestStaleBundles:
+    """Which bundles retention removes, decided from the names alone."""
+
+    def test_the_newest_keep_survive(self):
+        names = [_name("default", d) for d in ("2026-01-01", "2026-02-01", "2026-03-01")]
+
+        assert stale_bundles(names, "default", 1) == names[:2]
+
+    def test_the_date_in_the_name_orders_them_not_the_listing(self):
+        """A listing arrives in whatever order the store felt like."""
+        names = [
+            _name("default", "2026-03-01"),
+            _name("default", "2026-01-01"),
+            _name("default", "2026-02-01"),
+        ]
+
+        assert stale_bundles(names, "default", 1) == [
+            _name("default", "2026-01-01"),
+            _name("default", "2026-02-01"),
+        ]
+
+    def test_dates_across_a_year_and_a_month_boundary_still_order(self):
+        names = [
+            _name("default", "2025-12-31"),
+            _name("default", "2026-01-01"),
+            _name("default", "2026-09-02"),
+            _name("default", "2026-09-10"),
+        ]
+
+        assert stale_bundles(names, "default", 2) == names[:2]
+
+    def test_keep_larger_than_the_count_removes_nothing(self):
+        names = [_name("default", "2026-01-01"), _name("default", "2026-02-01")]
+
+        assert stale_bundles(names, "default", 5) == []
+        assert stale_bundles([], "default", 5) == []
+
+    def test_a_graph_whose_name_is_a_prefix_of_another_is_untouched(self):
+        """`notes` must never claim the backups of `notes-archive`, which is
+        what a bare prefix match would do."""
+        names = [
+            _name("notes", "2026-01-01"),
+            _name("notes-archive", "2026-01-01"),
+            _name("notes-archive", "2026-02-01"),
+        ]
+
+        assert stale_bundles(names, "notes", 1) == []
+        assert stale_bundles(names, "notes-archive", 1) == [_name("notes-archive", "2026-01-01")]
+
+    def test_a_plain_directory_bundle_is_never_matched(self):
+        """`--plain` writes a folder, and retention removes tarballs."""
+        names = [
+            "default-2026-01-01.epimemer",
+            "default-2026-01-01.epimemer/",
+            _name("default", "2026-02-01"),
+            _name("default", "2026-03-01"),
+        ]
+
+        assert stale_bundles(names, "default", 1) == [_name("default", "2026-02-01")]
+
+    def test_anything_that_is_not_a_dated_bundle_is_left_alone(self):
+        names = [
+            "default.epimemer.tar.gz",
+            "default-latest.epimemer.tar.gz",
+            "default-2026-01.epimemer.tar.gz",
+            "default-2026-01-01.tar.gz",
+            "notes.txt",
+        ]
+
+        assert stale_bundles(names, "default", 1) == []
+
+    def test_full_paths_come_back_as_they_went_in(self):
+        """The caller deletes by the same string it listed."""
+        names = [f"bucket/backups/{_name('default', d)}" for d in ("2026-01-01", "2026-02-01")]
+
+        assert stale_bundles(names, "default", 1) == [names[0]]
+
+    def test_keeping_none_is_refused(self):
+        """Zero would delete the bundle the backup just wrote."""
+        with pytest.raises(ValueError, match="at least 1"):
+            stale_bundles([_name("default", "2026-01-01")], "default", 0)
+
+
+class TestPruneBundles:
+    def test_it_deletes_the_stale_ones_and_reports_what_is_left(self, tmp_path):
+        for date in ("2026-01-01", "2026-02-01", "2026-03-01"):
+            (tmp_path / _name("default", date)).write_bytes(b"a bundle")
+        (tmp_path / "notes.txt").write_text("not a bundle")
+
+        report = prune_bundles(str(tmp_path), "default", 1)
+
+        assert report.kept == 1
+        assert report.removed == [_name("default", "2026-01-01"), _name("default", "2026-02-01")]
+        assert report.failed == {}
+        assert (tmp_path / _name("default", "2026-03-01")).is_file()
+        assert (tmp_path / "notes.txt").is_file()
+
+    def test_a_destination_with_nothing_in_it_yet(self, tmp_path):
+        report = prune_bundles(str(tmp_path / "not-written-to"), "default", 3)
+
+        assert report.kept == 0
+        assert report.removed == []
+
+    def test_a_delete_that_fails_is_reported_rather_than_raised(self, tmp_path, monkeypatch):
+        """The graph is already written out by the time this runs, so a bundle
+        nobody could remove is untidy rather than dangerous."""
+        for date in ("2026-01-01", "2026-02-01"):
+            (tmp_path / _name("default", date)).write_bytes(b"a bundle")
+
+        import fsspec
+
+        local = fsspec.filesystem("file")
+        monkeypatch.setattr(
+            type(local),
+            "rm",
+            lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("read-only")),
+        )
+
+        report = prune_bundles(str(tmp_path), "default", 1)
+
+        assert report.removed == []
+        assert report.failed == {_name("default", "2026-01-01"): "read-only"}
+        # Still there, so still counted.
+        assert report.kept == 2

@@ -609,6 +609,89 @@ class TestTimepoint:
         assert tp1.id != tp2.id
 
 
+class TestTimepointKind:
+    """`kind` is read off the fields, never handed in, so the two can never
+    disagree about what a point is."""
+
+    def test_start_alone_is_an_instant(self):
+        assert Timepoint(start=datetime(1897, 5, 26, tzinfo=UTC)).kind == "instant"
+
+    def test_start_with_end_is_an_interval(self):
+        tp = Timepoint(
+            start=datetime(1897, 5, 26, tzinfo=UTC),
+            end=datetime(1897, 6, 1, tzinfo=UTC),
+        )
+        assert tp.kind == "interval"
+
+    def test_label_alone_is_vague(self):
+        assert Timepoint(label="during the Terror").kind == "vague"
+
+    def test_a_label_beside_a_date_is_still_an_instant(self):
+        """The label names the point; the date is what places it."""
+        tp = Timepoint(start=datetime(1789, 7, 14, tzinfo=UTC), label="the Bastille")
+        assert tp.kind == "instant"
+
+    def test_a_supplied_kind_is_refused(self):
+        with pytest.raises(ValidationError):
+            Timepoint(start=datetime(1897, 5, 26, tzinfo=UTC), kind="vague")
+
+    def test_a_kind_agreeing_with_the_dates_is_refused_too(self):
+        """Nothing turns on whether the caller guessed right: the field is
+        derived, so supplying it at all is the mistake."""
+        with pytest.raises(ValidationError):
+            Timepoint(start=datetime(1897, 5, 26, tzinfo=UTC), kind="instant")
+
+    def test_kind_is_not_stored(self):
+        """The serialised form never gains a `kind` that could go stale beside
+        the dates, so the bundle format and both backends are unaffected."""
+        dumped = Timepoint(label="afterwards").model_dump(mode="json")
+        assert "kind" not in dumped
+
+    def test_a_record_in_the_old_shape_reads_back_as_the_kind_its_fields_imply(self):
+        """No migration: a row written before `kind` existed loads and derives."""
+        old_interval = {
+            "id": "tp-1",
+            "start": "1897-05-26T00:00:00+00:00",
+            "end": "1897-06-01T00:00:00+00:00",
+            "label": "the voyage",
+            "metadata": {},
+        }
+        old_vague = {"id": "tp-2", "label": "afterwards", "metadata": {}}
+        # A row normalised on write, where a None-valued key is simply absent.
+        old_instant = {"id": "tp-3", "start": "1789-07-14T00:00:00+00:00"}
+
+        restored = Timeline.model_validate(
+            {"id": "tl-1", "name": "old", "timepoints": [old_interval, old_vague, old_instant]}
+        )
+        assert [tp.kind for tp in restored.timepoints] == ["interval", "vague", "instant"]
+
+
+class TestTimepointValidation:
+    def test_an_end_without_a_start_is_refused(self):
+        """`start` is where the mark goes, so an interval that only knows when
+        it stopped has nowhere to be drawn."""
+        with pytest.raises(ValidationError):
+            Timepoint(end=datetime(1897, 6, 1, tzinfo=UTC), label="it ended in June")
+
+    def test_neither_a_date_nor_a_label_is_refused(self):
+        with pytest.raises(ValidationError):
+            Timepoint()
+
+    def test_an_empty_label_is_no_label(self):
+        with pytest.raises(ValidationError):
+            Timepoint(label="   ")
+
+    def test_an_old_record_with_an_end_and_no_start_is_refused_on_read(self):
+        with pytest.raises(ValidationError):
+            Timeline.model_validate(
+                {
+                    "id": "tl-1",
+                    "name": "old",
+                    "timepoints": [{"id": "tp-1", "end": "1897-06-01T00:00:00+00:00"}],
+                }
+            )
+
+
 class TestTimeline:
     def test_creation(self):
         tl = Timeline(name="History of AI", description="Key events in AI")

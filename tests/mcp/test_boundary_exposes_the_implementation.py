@@ -147,6 +147,12 @@ NOT_AGENT_SETTABLE: dict[tuple[str, str], str] = {
     "acting on a backup prompt choose where the whole graph was written",
     (
         "backup_graph",
+        "backup_keep",
+    ): "how many bundles a destination holds, set once in EPIMEMER_BACKUP_KEEP. "
+    "Retention is a property of the folder or bucket rather than of a graph, "
+    "and an agent that could raise the count could also lower it to 1",
+    (
+        "backup_graph",
         "embedding_provider",
     ): "what the graph was embedded with, recorded in the manifest. A fact "
     "about the server, not a per-call choice",
