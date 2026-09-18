@@ -10,22 +10,40 @@ The event schema is the contract between producers (storage, pipeline) and consu
 (any visualization frontend). Renderers are decoupled — they only depend on these types.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from epimemer.core.advisories import AdvisoryAction, AdvisoryKind
 from epimemer.core.types import (
+    DecisionKind,
     EpistemicNode,
     Fact,
     Inference,
     Metacontext,
     NodeEdge,
+    Recurrence,
     RelationLabel,
     Timeline,
     Timepoint,
+    TimepointKind,
     Topic,
+)
+from epimemer.pipelines.timeline.ordering import (
+    Bounds,
+    OrderingGraph,
+    active_timepoints,
+    bounds_for,
+    build_graph,
+    contested_points,
+)
+from epimemer.pipelines.timeline.recurrence import (
+    OCCURRENCE_CAP,
+    Occurrence,
+    materialised_ids,
+    occurrences_in_window,
 )
 
 
@@ -82,15 +100,71 @@ class EdgeView(BaseModel):
 class TimepointView(BaseModel):
     """A point or interval on a timeline.
 
-    `start` is absent for a vague timepoint ("during the Renaissance"), which
-    the frontend must place off the metric axis rather than guess a date for.
+    `start` is absent for a vague timepoint ("during the Renaissance"). Such a
+    point may still have a place: `earliest` and `latest` are where the order
+    sources stated puts it, and a point with either of them is drawn as a band
+    rather than guessed at a date. A point with neither has no coordinate at
+    all and belongs in the tray.
+
+    `earliest` and `latest` are read-time answers, computed from the record and
+    never written into it, so retiring a constraint takes a bound away with it.
+    They are absent for a dated point, which needs no derived position, and for
+    a contested one, whose order cannot be trusted to give it one.
     """
 
     timepoint_id: str
     start: datetime | None = None
     end: datetime | None = None
     label: str | None = None
+    # Derived from the dates every time, so the panel and the tools agree on
+    # what kind of point this is without the record storing an answer.
+    kind: TimepointKind = "vague"
+    earliest: datetime | None = None
+    latest: datetime | None = None
+    # A point whose stated order cannot hold, with the dispute that says so. A
+    # dated contested point keeps its date: what is in doubt is the order, not
+    # the date a source gave.
+    contested: bool = False
+    temporal_contradiction_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class OccurrenceView(BaseModel):
+    """One occurrence of a recurrence rule, as the panel draws it.
+
+    `occurrence_start` is the identity, the start the rule gave it before any
+    move; `start` is where it actually is. `materialised_id` names the timepoint
+    somebody turned it into, when there is one, and the panel draws that
+    occurrence as an ordinary mark rather than as a bead.
+    """
+
+    occurrence_start: datetime
+    start: datetime
+    end: datetime | None = None
+    moved_to: datetime | None = None
+    materialised_id: str | None = None
+
+
+class RecurrenceView(BaseModel):
+    """A rule that says something happens over and over, with what it produced.
+
+    Occurrences are computed and never stored, so the ones here are the ones
+    inside the window this snapshot chose (`_recurrence_window`), enumerated by
+    the same function and under the same cap `query_timeline` uses. `truncated`
+    says the cap fired.
+    """
+
+    recurrence_id: str
+    label: str
+    rule_kind: str
+    # The first and last occurrence the rule still produces, after any bound
+    # change. Either end absent means unbounded in that direction.
+    bounds_start: datetime | None = None
+    bounds_end: datetime | None = None
+    window_start: datetime | None = None
+    window_end: datetime | None = None
+    occurrences: list[OccurrenceView] = Field(default_factory=list)
+    truncated: bool = False
 
 
 class MetacontextView(BaseModel):
@@ -128,6 +202,7 @@ class TimelineView(BaseModel):
     name: str
     description: str = ""
     timepoints: list[TimepointView] = Field(default_factory=list)
+    recurrences: list[RecurrenceView] = Field(default_factory=list)
     # The timeline's own "now". None means it follows the wall clock, and the
     # frontend resolves that at render time rather than being handed a stale
     # timestamp from whenever the snapshot was assembled.
@@ -205,23 +280,142 @@ def relation_label_to_view(label: RelationLabel, graph: str) -> RelationLabelVie
     )
 
 
-def _timepoint_to_view(timepoint: Timepoint) -> TimepointView:
+# How far past the dated points a snapshot looks for the occurrences of a
+# calendar rule. A calendar rule has no period to widen by, and a year brings in
+# the neighbours of anything yearly or finer, which is every rule in practice.
+CALENDAR_WINDOW_PAD = timedelta(days=366)
+
+
+def _timepoint_to_view(
+    timepoint: Timepoint,
+    *,
+    bounds: Bounds | None = None,
+    contradiction_id: str | None = None,
+) -> TimepointView:
     return TimepointView(
         timepoint_id=timepoint.id,
         start=timepoint.start,
         end=timepoint.end,
         label=timepoint.label,
+        kind=timepoint.kind,
+        earliest=None if bounds is None else bounds.earliest,
+        latest=None if bounds is None else bounds.latest,
+        contested=contradiction_id is not None,
+        temporal_contradiction_id=contradiction_id,
         metadata=timepoint.metadata,
     )
 
 
+def _bounds_for_view(
+    timepoint: Timepoint,
+    graph: OrderingGraph,
+    contested: dict[str, str],
+) -> Bounds | None:
+    """Bounds for a point that has somewhere to get them from.
+
+    The same three conditions `query_timeline` applies: a dated point needs no
+    derived position, a contested one is not entitled to the order that would
+    give it one, and a merged point takes no further part in anything.
+    """
+    if timepoint.start is not None or timepoint.id in contested:
+        return None
+    if timepoint.id not in graph.points:
+        return None
+    return bounds_for(graph, timepoint.id)
+
+
+def _recurrence_window(
+    timeline: Timeline, recurrence: Recurrence
+) -> tuple[datetime, datetime] | None:
+    """The window a snapshot enumerates one rule over, or None for no window.
+
+    A snapshot is not a query and nobody named a window, so it takes one from
+    the timeline itself: the span of its dated points, widened on each side by
+    one period of the rule, so the occurrence either side of the data is drawn
+    and the spine visibly carries on past it. A timeline with no dated points
+    falls back to its stated present. With neither there is no window, because
+    enumerating from the wall clock would put occurrences on the axis at a place
+    the graph never said anything about.
+    """
+    moments = [
+        moment
+        for point in active_timepoints(timeline)
+        for moment in (point.start, point.end)
+        if moment is not None
+    ]
+    if not moments:
+        if timeline.reference_time is None:
+            return None
+        moments = [timeline.reference_time]
+    pad = recurrence.rule.period if recurrence.rule.kind == "periodic" else CALENDAR_WINDOW_PAD
+    return min(moments) - pad, max(moments) + pad
+
+
+def _occurrence_to_view(occurrence: Occurrence, materialised_id: str | None) -> OccurrenceView:
+    return OccurrenceView(
+        occurrence_start=occurrence.occurrence_start,
+        start=occurrence.start,
+        end=occurrence.end,
+        moved_to=occurrence.start if occurrence.moved else None,
+        materialised_id=materialised_id,
+    )
+
+
+def _recurrence_to_view(timeline: Timeline, recurrence: Recurrence) -> RecurrenceView:
+    window = _recurrence_window(timeline, recurrence)
+    materialised = materialised_ids(timeline, recurrence.id)
+    enumerated = (
+        occurrences_in_window(
+            recurrence,
+            window_start=window[0],
+            window_end=window[1],
+            cap=OCCURRENCE_CAP,
+        )
+        if window is not None
+        else None
+    )
+    return RecurrenceView(
+        recurrence_id=recurrence.id,
+        label=recurrence.label,
+        rule_kind=recurrence.rule.kind,
+        bounds_start=recurrence.bounds.start,
+        bounds_end=recurrence.effective_end,
+        window_start=None if window is None else window[0],
+        window_end=None if window is None else window[1],
+        occurrences=[
+            _occurrence_to_view(occurrence, materialised.get(occurrence.occurrence_start))
+            for occurrence in (enumerated.occurrences if enumerated else [])
+        ],
+        truncated=enumerated.truncated if enumerated else False,
+    )
+
+
 def timeline_to_view(timeline: Timeline, graph: str) -> TimelineView:
-    """Convert a storage Timeline to a TimelineView for the frontend."""
+    """Convert a storage Timeline to a TimelineView for the frontend.
+
+    Three things are derived here rather than stored: where the order puts a
+    point nobody dated, which points are in a dispute about order, and what a
+    recurrence rule produced inside the window `_recurrence_window` chose. All
+    three go through the functions `query_timeline` calls, so the panel and the
+    tool cannot come to disagree about one point.
+    """
+    ordering = build_graph(timeline)
+    contested = contested_points(timeline)
     return TimelineView(
         timeline_id=timeline.id,
         name=timeline.name,
         description=timeline.description,
-        timepoints=[_timepoint_to_view(tp) for tp in timeline.timepoints],
+        timepoints=[
+            _timepoint_to_view(
+                tp,
+                bounds=_bounds_for_view(tp, ordering, contested),
+                contradiction_id=contested.get(tp.id),
+            )
+            for tp in timeline.timepoints
+        ],
+        recurrences=[
+            _recurrence_to_view(timeline, recurrence) for recurrence in timeline.recurrences
+        ],
         reference_time=timeline.reference_time,
         created_at=timeline.created_at,
         graph=graph,
@@ -301,6 +495,13 @@ class ActionVerb(str, Enum):
     restore plus a new source edge, which is `RESTORED` with the edge in
     `counts` — recorded so nobody mints a `recurs` verb later and splits the
     vocabulary again.
+
+    **A timeline decision takes no verb from here either.** Ordering a pair of
+    points, answering a temporal contradiction, merging two points, and the
+    three recurrence decisions are already named by `DecisionKind`, which is
+    what the journal records them under, so a timeline act carries that value
+    in place of a verb (EVENT_LOG.md §11). Six more members here would be a
+    second set of names for six decisions that already have one.
     """
 
     STORED = "stored"
@@ -336,10 +537,64 @@ class GraphActionRecorded(Event):
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
     event_type: Literal["graph_action_recorded"] = "graph_action_recorded"
     action_id: str
-    verb: ActionVerb
-    subjects: list[str]  # node ids, primary first
+    # A node act names one of the seven verbs; a timeline decision carries the
+    # `DecisionKind` the journal recorded it under. Widened rather than given a
+    # second field, because the log filters and renders one word per act and a
+    # reader should not have to know which of two fields holds it. The two
+    # vocabularies share no value, so what arrives on the wire is unambiguous.
+    verb: ActionVerb | DecisionKind
+    subjects: list[str]  # node ids, or the timeline a decision was about
     counts: dict[str, int]  # {"edges": 3, "nodes": 1} — what it swept up
     summary: str
+    # The agent id the tool named, where it named one. The description digest
+    # stays out: the log shows who, and the journal row is where what they
+    # claimed to be at the time is recorded.
+    judged_by: str | None = None
+
+
+class AdvisoryRaised(Event):
+    """A tool computed a warning, and this says whether the agent was shown it.
+
+    Published from the tool layer rather than from the storage wrapper, the way
+    `RetrievalRecorded` is. A warning is computed one layer above storage, a
+    single call can produce several acts so there is no one act to hang it on,
+    and `reflect` produces warnings with no act at all
+    (`ADVISORIES_DASHBOARD.md` §2.1).
+
+    **Everything computed is published, muted or not.** The dashboard is where a
+    person looks at what the agent was *not* told, so hiding a muted warning
+    here would defeat the point of showing warnings at all. `surfaced` says
+    whether it reached the agent's response and `notify_user` whether the agent
+    was asked to raise it with a person; both follow the same policy the
+    response does, so the two cannot disagree.
+
+    `action_id` is this session's stream position, drawn from the sequence the
+    acts are numbered in. It is not a link to an act, and no such link exists:
+    acts are numbered by the storage wrapper and a tool never sees the number.
+    It is what lets the hub's ring replay warnings and acts in arrival order,
+    and the log deduplicate a replayed one (§3).
+    """
+
+    category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
+    event_type: Literal["advisory_raised"] = "advisory_raised"
+    action_id: str
+    # The tool the warning came from, without the `epimemer.` prefix, e.g.
+    # "record_contradiction". The log line leads with it, because what a warning
+    # means depends on what was being attempted.
+    tool: str
+    kind: AdvisoryKind
+    # The advisory's own sentence, word for word. Rendered where the advisory is
+    # raised, so the dashboard and the agent read the same words.
+    message: str
+    subjects: list[str] = Field(default_factory=list)
+    detail: dict = Field(default_factory=dict)
+    # What the policy in force says about this kind on this graph.
+    action: AdvisoryAction
+    surfaced: bool
+    notify_user: bool
+    # The agent id the call named, as acts carry it. None where a graph
+    # requires no judge.
+    judged_by: str | None = None
 
 
 class RetrievalRecorded(Event):
@@ -540,6 +795,7 @@ GraphEvent = (
     NodeStored
     | NodeStatusChanged
     | GraphActionRecorded
+    | AdvisoryRaised
     | RetrievalRecorded
     | EdgeStored
     | TimelineStored

@@ -113,6 +113,12 @@ block a merge it could have fixed. The advisory arrives instead, **with the
 nomination and in the response, before the content is written**, which is
 the only moment at which it can change the answer.
 
+A graph that mutes the kind is not shown it on the nomination either, so one
+run cannot answer *no warnings* from `record_contradiction` and *here is a
+warning* from `reflect`. The candidate still arrives, so nothing you can act
+on is lost; a kind set explicitly to `flag` outranks the mute; and the
+dashboard shows the muted warning, marked as one the agent was not told.
+
 Going ahead past it is recorded: a `proceeded_despite_advisory` row naming
 the survivor and its sources, written whether or not the graph is set to
 *show* advisories, and read back by `review(mode="advisory")`. That is what
@@ -125,8 +131,11 @@ was nothing to proceed against.
 
 ## 3. What `reflect` returns
 
-One key per phase, and `REFLECT_PHASES` names them in execution order. Each
-is a worklist, not a verdict:
+One key per phase, and `REFLECT_PHASES` names those phases in execution order.
+`temporal_contradictions` is the one worklist that comes from outside the phase
+pipeline: it is one read of each timeline record, with the contradictions
+already stored rather than recomputed, so it is over before a progress strip
+could draw it. Each key is a worklist, not a verdict:
 
 | Key | Nominates | Applied via |
 |---|---|---|
@@ -134,6 +143,7 @@ is a worklist, not a verdict:
 | `split_candidates` | topics whose material bisects into two clusters, skipping any somebody stood behind since its material last moved | `splits` or `splits_declined` |
 | `enrichment_candidates` | topics whose material moved since somebody last stood behind the description, with the change itself; and topics nobody has described yet, with a sample | `enrichments` or `descriptions_confirmed` |
 | `contradictions` | same-metacontext active fact pairs above 0.80, the one nomination bar, which `merge_facts` also gates on, so a pair listed here is mergeable | `record_contradiction`, then `supersessions`; or `similarities` where neither fits |
+| `temporal_contradictions` | open, unheld disagreements about the order of timepoints: a cycle in what sources stated, or a point squeezed until its earliest bound is later than its latest | `resolve_temporal_contradiction`, which is a timeline tool rather than a verdict list on `apply_reflection` |
 | `recurrences` | an active claim beside its own `historical` twin | `restore` |
 | `unsound_inferences` | inferences whose premises no source puts in one period | agent judgment |
 | `inference_merge_candidates` | near-identical active inferences resting on a shared premise, each with the advisory computed before you decide | `merge_inferences`, or `similarities` where they are two claims |
@@ -142,11 +152,22 @@ is a worklist, not a verdict:
 | `archival_candidates` | nodes worth setting aside | `archivals`, `judgments`, `retained` |
 | `similar_relations` | likely-synonymous user relationship labels | `relation_verdicts` |
 
+`temporal_contradictions` is answered by `resolve_temporal_contradiction`
+rather than by `apply_reflection`, because its subjects are ordering
+constraints and timepoints, which are neither nodes nor topics, and because
+the verdict is reached outside a reflect sweep at least as often as inside
+one. One of its three verdicts, *hold*, is how a contradiction stops being
+nominated: the sources genuinely disagree and nothing on hand settles it, so
+the contradiction stays open and its points stay contested while reflect
+leaves it alone. A hold is cleared by new evidence, a constraint or a dated
+point touching any point in the contradiction, and by nothing else. It is not
+a snooze, and nothing reopens it on a schedule.
+
 Two more keys are not worklists. `truncated` names any of the lists that hit
 `max_nominations` and were cut. `relation_pairs_suppressed` counts the label
 pairs that standing verdicts kept out of `similar_relations`; the suppression
-is silent and permanent by design, so without the count an empty list on a
-well-judged graph would look the same as a graph with nothing similar in it.
+is silent by design, so without the count an empty list on a well-judged graph
+would look the same as a graph with nothing similar in it.
 
 **The lists built out of pairs are capped**, and `CAPPED_KEYS` says which:
 pairs grow faster than the node set where every other list is linear in it.
@@ -212,7 +233,7 @@ raises the suggestion and waits: `backup_graph` writes to the destination the
 server was configured with (`EPIMEMER_BACKUP_DESTINATION`) and takes **no
 path**, so an agent acting on the prompt cannot choose where a graph goes. With
 no destination configured it refuses and names the variable. It requires no
-judge, because a backup asserts nothing about the graph — it writes down what
+judge, because a backup asserts nothing about the graph: it writes down what
 is already there.
 
 ---
@@ -402,7 +423,7 @@ judgments name. The guarantee comes from the other end instead: **every
 entry is checked before the first step writes**, and a batch containing one
 that cannot be applied at all is refused whole, with nothing written and
 every problem listed at once. That matters most for `similarities` and
-`relation_verdicts`, which suppress permanently: a half-applied batch would
+`relation_verdicts`, which suppress: a half-applied batch would
 leave the fixed-and-resent version refused as a repeat verdict on the pairs
 that had gone through.
 
@@ -452,7 +473,7 @@ no longer make; re-asserting invents agreement. If the pair really is one
 claim, `merge_facts` is the call that says so.
 
 Suppression is untouched either way. The pair has now been judged twice and
-stays out of every future nomination.
+stays out of every future nomination, until `reopen` puts it back (§6.4).
 
 `because` is required. Anything not recorded comes back in
 `similarities_refused` with a reason rather than being applied to something
@@ -466,7 +487,7 @@ supersession later in the same batch must not turn it into a skip.
 from `similar_relations`: `{pair: [label_a, label_b], kind, verdict:
 "distinct" | "synonymous", because}`, with `kind` copied from the nomination
 and `because` required. Both verdicts suppress the pair from every future
-nomination, permanently, so judge the pair rather than clearing the list.
+nomination, so judge the pair rather than clearing the list.
 What was decided is read back on `list_relations`, where each label carries
 its standing verdicts, and `reflect` counts what suppression held back in
 `relation_pairs_suppressed`. Refusals come back in
@@ -494,6 +515,42 @@ importance is right and the node has been re-read. Raising importance to stop
 a nomination would make one field mean both *how consequential this is* and
 *do not nominate this*. Entries not recorded come back in `retained_skipped`
 with the reason; a node named in both `archivals` and `retained` is archived.
+
+### 6.4 `reopen`: taking a suppression back
+
+A verdict is what stops a question being asked again, and it used to be
+permanent on all three layers: a pair judged `distinct` in error never came
+back, however much later evidence said it should. `reopen` withdraws one
+suppression, and the target says which layer:
+
+| Call | Withdraws | Effect |
+|---|---|---|
+| `reopen(node_ids=[a, b], reason=...)` | the pair's `assessed` edge | the pair is nominated again |
+| `reopen(relation_labels=[a, b], reason=...)` | the pair's standing verdict | the label pair is nominated again |
+| `reopen(node_ids=[node_id], reason=...)` | the node's standing keep | the node returns to the archival worklist |
+
+**It asserts nothing.** It does not record the opposite of the earlier verdict
+and does not say the earlier judge was wrong: it re-asks the question, and
+whoever answers it next does so with the same tools as the first judge. Reach
+for it when later evidence makes a decline look wrong, rather than when you
+disagree with it on the same material.
+
+**Nothing is deleted.** The `assessed` edge is retired and left in the graph,
+the verdict table takes a new row, and the journal records a `reopened`
+decision carrying your `reason`. So a pair reopened and judged `distinct` a
+second time carries both rounds, and the second verdict suppresses it again.
+
+**The nomination says it was reopened**, with the reason, the date and the
+judge, so the next reader sees the history instead of re-deriving it. It
+appears as `reopened` on `similar_pairs`, `contradictions`, `recurrences`,
+`inference_merge_candidates`, `archival_candidates` and `similar_relations`.
+
+**Refused when nothing is suppressed for the target**, naming what it looked
+for: *there was nothing to undo* must not read like *done*. Refused too when
+the pair carries a standing `similarity`, `contradiction` or `variant_of`
+edge, because those assert something about the pair rather than declining it,
+and withdrawing one is a verdict. Recording `distinct` through `similarities`
+is still what withdraws a standing `one_claim`.
 
 ---
 

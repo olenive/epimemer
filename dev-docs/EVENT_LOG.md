@@ -85,10 +85,11 @@ class GraphActionRecorded(Event):
     category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH  # §10
     event_type: Literal["graph_action_recorded"] = "graph_action_recorded"
     action_id: str  # monotonic, assigned at the source (§4.1)
-    verb: ActionVerb  # §11
-    subjects: list[str]  # node ids, primary first
+    verb: ActionVerb | DecisionKind  # §11, §11.2
+    subjects: list[str]  # node ids, or the timeline a decision was about
     counts: dict[str, int]  # {"edges": 3, "nodes": 1}: what it swept up
     summary: str  # pre-rendered one-line text, for display and substring filter
+    judged_by: str | None  # the agent id the tool named
 ```
 
 `instrumented_storage.py` already sits at the transaction boundary and holds
@@ -125,11 +126,11 @@ the numeric one, so the frontend can sort and dedup on it without parsing.
 Every event passes through one line in `hub.py`, where the hub stamps
 `session_id` before fan-out, and `sessions[sid]` is already a per-session
 dict. The ring hangs off it (`visualization/ring.py`, `LOG_RING_CAPACITY =
-512`) and selects on `event_type == "graph_action_recorded"`, not on category
-(§10). A browser receives backfill on subscribe, with no RPC round-trip and
-without waking a session process. `_replay_actions` runs the same
-`_subscribed(payload)` predicate the live path runs, so a replayed entry can
-never reach a browser a live one would not have.
+512`) and selects on `event_type`, not on category (§10): the acts, and the
+warnings that join them in §12. A browser receives backfill on subscribe, with
+no RPC round-trip and without waking a session process. `_replay` runs the
+same `_subscribed(payload)` predicate the live path runs, so a replayed entry
+can never reach a browser a live one would not have.
 
 The ring is values, not a buffer: `remember` returns a new tuple. The hub
 iterates its per-session dict while fanning out, and a ring that mutated in
@@ -262,21 +263,88 @@ entries from another graph never highlight into the viewed one.
 
 ## 8. Tests
 
-`tests/visualization/test_graph_actions.py`, `test_hub.py`, `test_ring.py`,
-`log-store.test.ts` and `graph-panel.test.ts`. The two load-bearing ones are
-named in §4.1 and §6.
+`tests/visualization/test_graph_actions.py`,
+`tests/visualization/test_timeline_actions.py`,
+`tests/visualization/test_reopen_actions.py`,
+`tests/visualization/test_advisory_events.py`, `test_hub.py`, `test_ring.py`,
+`log-store.test.ts`, `log-panel.test.ts` and `graph-panel.test.ts`. The two
+load-bearing ones are named in §4.1 and §6. The timeline boundary's two
+backends are covered by `TestWriteTimelineTx` in
+`tests/storage/test_storage_parity.py`, and the act tests run on both backends
+as well.
 
 ---
 
 ## 9. Where acts are emitted
 
-At the five `_tx` boundaries and nowhere else: `supersede_node_tx`,
+At the nine `_tx` boundaries and nowhere else: `supersede_node_tx`,
 `supersede_by_existing_tx`, `merge_nodes_tx`, `set_node_status_tx`,
-`write_batch_tx`. Single writes (`store_node`, `store_edge`) emit no act: they
-are writes, not transactions, and the production callers of `store_node` are
-source and tag upserts that nobody wants a log line for. Consequence, stated
-rather than hidden: an act performed entirely through single writes would not
-appear in the log. Nothing on the production path does.
+`reverse_merge_tx`, `write_batch_tx`, `write_timeline_tx`, `reopen_tx` and
+`write_verbatim_tx`. Single writes (`store_node`, `store_edge`,
+`store_timeline`) emit no act: they are writes, not transactions, and the
+production callers of `store_node` are source and tag upserts that nobody wants
+a log line for. Consequence, stated rather than hidden: an act performed
+entirely through single writes does not appear in the log.
+
+### 9.1 Timeline decisions, and why they needed a boundary of their own
+
+Six decisions used to be performed entirely through single writes, so the live
+log missed them. A timeline write lands through `store_timeline`, which replaces
+the record whole, and the `TIMELINK` retirement a split or a merge performs
+lands through `store_edge`: neither was a transaction boundary, so
+`order_timepoints`, `resolve_temporal_contradiction`, `merge_timepoints`,
+`add_recurrence`, `end_recurrence` and `record_recurrence_exception` passed the
+log in silence. The journal always had the row, so the durable record was
+complete; what was missing was the live view.
+
+`write_timeline_tx` was the eighth boundary to arrive, and it fixes a second
+thing at the same time. A split or a merge changed the timeline record *and* re-pointed every
+`TIMELINK` naming the point it touched, and those were a `store_timeline`
+followed by two `store_edge` calls per fact. A failure in the middle left the
+record saying the fact had moved while its link still named the old date. The
+tools now plan the moves (`_plan_timelink_moves`) and hand the timeline, the
+retired links and the replacement links to one transaction, which is what those
+writes should always have been. The wrapper publishes one act for the whole
+decision, so a split that moves four facts is one line rather than nine.
+
+`kind`, `counts` and `judge` travel on the write because the wrapper sits at
+this boundary and has no other way to learn which of the six decisions it just
+persisted; a bare backend stores none of them. The act's subject is the
+timeline, its counts are what the tool already reports back (constraints
+written, contradictions opened, points created by a split, links retired and
+rewritten), and `judged_by` is the agent id the tool was given.
+
+**The four mark-placing tools stay silent**, and keep using `store_timeline` and
+`store_edge`: `create_timeline`, `set_reference_time`, `add_timepoint` and
+`create_timelink` name no judge and write no journal row. They record where
+something sits rather than deciding anything about it, and a log line for each
+would bury the six that are decisions. Import stays silent for the same reason
+one step on: a restore replays somebody else's decisions and makes none, so it
+reads as the single `stored` act `write_verbatim_tx` already emits.
+
+### 9.2 `reopen_tx`, the boundary a withdrawal lands through
+
+Withdrawing a suppression is a judgment, and none of the eight boundaries
+before it fitted. The three layers clear differently: a fact pair retires its
+`assessed` edge, a label pair takes a new verdict row, a kept node needs
+neither. What all three share is the journal row, and no other boundary takes
+one.
+
+So `reopen_tx` takes the `DecisionRecord` itself, plus whatever the layer had
+to write, and lands them together. **The row is the act here, not a note about
+one.** Everywhere else the journal is written after the graph write and a lost
+row costs the journal an entry; a reopen whose row was lost would put a
+question back on the worklist with nothing saying it had ever been declined, in
+front of a judge who cannot see the history. That is `record_retention`'s
+argument, one layer over.
+
+Nothing describes the decision beside the record, which is where this differs
+from `write_timeline_tx`: the kind and the judge are fields on the row, so the
+wrapper reads the act straight off what the journal recorded. The subjects are
+the ids the row names, which say which layer it was: two node ids for a pair,
+two label record ids for a label pair, one node id for a kept node. Retired
+edges are republished, because a viewer holding the live edge would go on
+drawing one nobody follows.
 
 ---
 
@@ -312,9 +380,12 @@ CORRECTED, `superseded_by`, terminal) and a world change
 log line reading "superseded 123 → 124" would flatten exactly the distinction
 the graph records. The verbs match the terminal statuses and what
 `events_in_window` emits, so the live log and the durable history speak one
-vocabulary. Recurrence needs no verb of its own: the `recurs` verdict resolves
-as restore plus a new source edge, which is `restored` with the edge in
-`counts`. `test_there_is_no_superseded_verb` guards this.
+vocabulary. Lifecycle recurrence needs no verb of its own: the `recurs`
+verdict, a retired claim becoming true again, resolves as restore plus a new
+source edge, which is `restored` with the edge in `counts`. A timeline
+recurrence rule is a different thing under the same word (`TIMELINES.md` §2.4),
+and it is one of the six decisions §11.2 covers.
+`test_there_is_no_superseded_verb` guards this.
 
 ### 11.1 `undetermined`, and when it goes
 
@@ -345,3 +416,93 @@ removes it owns the read-side question too, since a stored row still carrying
 the string would then fail at the Pydantic boundary. The fall-through has no
 sunset: it answers for statuses that do not exist yet, so
 `ActionVerb.UNDETERMINED` outlives the legacy status it was first written for.
+
+### 11.2 A timeline act carries its `DecisionKind`
+
+The six timeline decisions, and a reopen, take no verb from `ActionVerb`.
+`DecisionKind` already names them (`temporal_order`, `temporal_verdict`, `timepoint_merge`,
+`recurrence`, `recurrence_bound`, `recurrence_exception`), the journal records
+them under those names, and `review` selects on them. Six more members here
+would be a second set of names for six decisions that already have one, and the
+two sets would drift. So `GraphActionRecorded.verb` is `ActionVerb |
+DecisionKind`, and a timeline act carries the kind.
+
+Widened rather than given a second `kind` field: the log filters and renders one
+word per act, and a reader should not have to know which of two fields holds it.
+`verb_for_status` is untouched, still answering `ActionVerb` for a status flip.
+The two vocabularies share no value, so what arrives on the wire is unambiguous,
+and the frontend takes `verb` as a free string and builds its chip row from the
+verbs a log actually holds, so nothing there has to be kept in step with either
+enum.
+
+`reopened` joins them for the same reason: it is already the journal's word for
+the act, and another `ActionVerb` would be a second name for a decision that
+has one.
+Its phrase carries no trailing "on", because a reopen names what it put back
+rather than a record it changed.
+
+A kind is a noun and a log line needs a verb phrase, so `summarise` renders one
+per kind ("merged timepoints on a1b2c3d4", "reopened a1b2c3d4"). The fall-through for a kind with no
+phrase uses the kind's own words rather than the node phrasing, because a line
+saying "1 node" about a timeline would state something false about what was
+touched. Guarded by `tests/visualization/test_timeline_actions.py`, which also
+holds the check that no timeline verb was added to `ActionVerb`.
+
+---
+
+## 12. The second stream: warnings
+
+A warning is computed inside a tool call, before or after the write, from what
+the call was about. It used to reach the agent and stop there: the log showed
+the act and nothing of what the agent was told about it. `advisory_raised` puts
+it in the same log, one event per warning, and `ADVISORIES_DASHBOARD.md` holds
+the design.
+
+```python
+class AdvisoryRaised(Event):
+    """A tool computed a warning, and this says whether the agent was shown it."""
+
+    category: Literal[EventCategory.GRAPH] = EventCategory.GRAPH
+    event_type: Literal["advisory_raised"] = "advisory_raised"
+    action_id: str  # this session's stream position, from §4.1's sequence
+    tool: str  # "record_contradiction"
+    kind: AdvisoryKind  # what sort of thing was pointed out
+    message: str  # the warning's own sentence, word for word
+    subjects: list[str]  # the nodes it is about
+    detail: dict  # structured evidence, per kind
+    action: AdvisoryAction  # proceed | flag, resolved for this kind on this graph
+    surfaced: bool  # was it in the agent's response
+    notify_user: bool  # was the agent told to raise it with the user
+    judged_by: str | None  # the agent id the call named
+```
+
+**Published from the tool layer, not the storage wrapper.** A warning is
+computed one layer above storage; one call can produce several acts, so there
+is no single act to hang it on; and `reflect` produces warnings with no act at
+all. This is the same placement `RetrievalRecorded` has, and for the same
+reason. `carry_advisories` is where it happens, because that is the one
+function holding both the warnings and the policy, so it is the only place that
+can say what the agent was shown. `reflect` publishes its candidates' warnings
+itself.
+
+**Everything computed is published, muted or not.** The dashboard is where a
+person looks at what the agent was *not* told, so dropping the muted ones there
+would remove the point of showing warnings at all. `surfaced` carries the
+difference, and the rule behind it is the one `is_surfaced` states once for
+both the response and the event.
+
+**One sequence, one ring.** `action_id` is drawn from the counter the acts use,
+so a warning takes its place in this session's stream where it arrived. It is
+not a link to an act, and no such link exists: acts are numbered by the storage
+wrapper and a tool never sees the number. Arrival order is what a log needs, and
+the events are published after the acts of the same call, so a warning reads as
+a line after what it was about. The relay keeps warnings and acts in the one
+ring for the same reason: two rings replayed one after the other would put every
+warning after every act.
+
+**A `warned` row, not a panel.** The entry joins the live log with the verb
+`warned`, which the existing verb filter and `verbLabel` handle with no special
+case, and the substring, node id and time filters apply to it as they do to an
+act. There is no unread badge: the dashboard has no notion of *read*, and adding
+one for warnings alone is a separate feature if the log turns out not to be
+enough.

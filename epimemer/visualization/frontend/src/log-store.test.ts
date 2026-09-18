@@ -4,20 +4,24 @@ import {
   NO_LOG_FILTERS,
   applyLogFilters,
   entryFromAction,
+  entryFromAdvisory,
   rememberEntry,
+  verbLabel,
   verbsIn,
   type LogEntry,
 } from "./log-store";
-import type { GraphActionRecorded } from "./types";
+import type { AdvisoryRaised, GraphActionRecorded } from "./types";
 
 const entry = (over: Partial<LogEntry> = {}): LogEntry => ({
   actionId: "000000000001",
   at: Date.parse("2026-08-18T10:00:00Z"),
   graph: "default",
+  kind: "act",
   verb: "stored",
   subjects: ["node-1"],
   counts: { nodes: 1 },
   summary: "stored (1 node)",
+  surfaced: true,
   ...over,
 });
 
@@ -155,6 +159,7 @@ describe("entryFromAction", () => {
       verb: "corrected",
       subjects: ["a", "b"],
       counts: { edges: 2 },
+      judged_by: null,
       summary: "corrected a → b (2 edges)",
     } as GraphActionRecorded;
 
@@ -162,10 +167,14 @@ describe("entryFromAction", () => {
       actionId: "000000000007",
       at: Date.parse("2026-08-18T10:00:00Z"),
       graph: "default",
+      kind: "act",
       verb: "corrected",
       subjects: ["a", "b"],
       counts: { edges: 2 },
       summary: "corrected a → b (2 edges)",
+      // An act is something the agent did, so there is nothing it was kept
+      // from; only a warning can read false here.
+      surfaced: true,
     });
   });
 });
@@ -178,5 +187,137 @@ describe("verbsIn", () => {
       entry({ actionId: "003", verb: "stored" }),
     ];
     expect(verbsIn(entries)).toEqual(["corrected", "stored"]);
+  });
+
+  it("lists a timeline decision beside the node verbs", () => {
+    // A timeline act carries its `DecisionKind` as its verb (EVENT_LOG.md §11),
+    // so the chip row grows by whatever the log actually holds rather than by a
+    // fixed enum the frontend would have to be kept in step with.
+    const entries = [
+      entry({ actionId: "001", verb: "stored" }),
+      entry({ actionId: "002", verb: "temporal_order" }),
+    ];
+    expect(verbsIn(entries)).toEqual(["stored", "temporal_order"]);
+  });
+});
+
+describe("verbLabel", () => {
+  it("reads a chip as the summary reads", () => {
+    expect(verbLabel("world_changed")).toBe("world-change");
+    expect(verbLabel("stored")).toBe("stored");
+  });
+
+  it("does not leave a timeline decision underscored", () => {
+    expect(verbLabel("recurrence_exception")).toBe("recurrence exception");
+  });
+
+  it("leaves a warning's verb alone", () => {
+    expect(verbLabel("warned")).toBe("warned");
+  });
+});
+
+// ADVISORIES_DASHBOARD.md §4: a warning is a line in the story of a session,
+// beside the act it accompanied, so it becomes an entry in the same log.
+const advisory = (over: Partial<AdvisoryRaised> = {}): AdvisoryRaised =>
+  ({
+    timestamp: "2026-09-18T11:00:00Z",
+    category: "graph",
+    event_type: "advisory_raised",
+    graph: "default",
+    action_id: "000000000009",
+    tool: "record_contradiction",
+    kind: "cross_metacontext",
+    message: "a contradiction recorded across metacontexts, which is the wrong tool.",
+    subjects: ["a", "b"],
+    detail: {},
+    action: "proceed",
+    surfaced: true,
+    notify_user: false,
+    judged_by: null,
+    ...over,
+  }) as AdvisoryRaised;
+
+const warned = (over: Partial<LogEntry> = {}): LogEntry =>
+  entry({
+    kind: "warning",
+    verb: "warned",
+    counts: {},
+    summary: "record_variant warned: these facts share a metacontext; the agent proceeded",
+    surfaced: true,
+    ...over,
+  });
+
+describe("entryFromAdvisory", () => {
+  it("renders the tool, the message and what the policy decided", () => {
+    expect(entryFromAdvisory(advisory()).summary).toBe(
+      "record_contradiction warned: a contradiction recorded across " +
+        "metacontexts, which is the wrong tool; the agent proceeded",
+    );
+  });
+
+  it("says when the agent was asked to raise it with the user", () => {
+    expect(entryFromAdvisory(advisory({ action: "flag" })).summary).toContain(
+      "; flagged to the user",
+    );
+  });
+
+  it("is a warning entry, with the verb the chip row shows", () => {
+    const read = entryFromAdvisory(advisory());
+    expect(read.kind).toBe("warning");
+    expect(read.verb).toBe("warned");
+    expect(read.subjects).toEqual(["a", "b"]);
+    expect(read.at).toBe(Date.parse("2026-09-18T11:00:00Z"));
+  });
+
+  it("carries whether the agent saw it, which is why it is on the dashboard", () => {
+    expect(entryFromAdvisory(advisory({ surfaced: false })).surfaced).toBe(false);
+    expect(entryFromAdvisory(advisory()).surfaced).toBe(true);
+  });
+
+  it("takes its place in the sequence the acts are numbered in", () => {
+    // The ring replays acts and warnings as one stream, so the log sorts and
+    // deduplicates both the same way (§3).
+    let entries: LogEntry[] = [];
+    entries = rememberEntry(entries, entry({ actionId: "002" }), 10);
+    entries = rememberEntry(entries, entryFromAdvisory(advisory({ action_id: "001" })), 10);
+    entries = rememberEntry(entries, entryFromAdvisory(advisory({ action_id: "001" })), 10);
+
+    expect(entries.map((e) => e.actionId)).toEqual(["001", "002"]);
+  });
+});
+
+describe("filtering a log that holds warnings", () => {
+  it("offers warned beside the act verbs", () => {
+    expect(verbsIn([entry({ actionId: "001" }), warned({ actionId: "002" })])).toEqual([
+      "stored",
+      "warned",
+    ]);
+  });
+
+  it("can show warnings alone, or leave them out", () => {
+    const entries = [entry({ actionId: "001" }), warned({ actionId: "002" })];
+    expect(
+      applyLogFilters(entries, { ...NO_LOG_FILTERS, verbs: ["warned"] }).map((e) => e.actionId),
+    ).toEqual(["002"]);
+    expect(
+      applyLogFilters(entries, { ...NO_LOG_FILTERS, verbs: ["stored"] }).map((e) => e.actionId),
+    ).toEqual(["001"]);
+  });
+
+  it("applies the substring, id and time filters as it does to acts", () => {
+    const entries = [entry({ actionId: "001" }), warned({ actionId: "002" })];
+    expect(
+      applyLogFilters(entries, { ...NO_LOG_FILTERS, text: "metacontext" }).map((e) => e.actionId),
+    ).toEqual(["002"]);
+    expect(applyLogFilters(entries, { ...NO_LOG_FILTERS, nodeId: "node-1" })).toHaveLength(2);
+    expect(
+      applyLogFilters(entries, {
+        ...NO_LOG_FILTERS,
+        range: {
+          t0: Date.parse("2026-08-01T00:00:00Z"),
+          t1: Date.parse("2026-08-19T00:00:00Z"),
+        },
+      }),
+    ).toHaveLength(2);
   });
 });

@@ -184,8 +184,8 @@ def notify_user(policy: WarningPolicy, advisories: list[Advisory]) -> bool:
     )
 
 
-def surfaced(policy: WarningPolicy, advisories: list[Advisory]) -> list[Advisory]:
-    """The advisories this graph shows the agent.
+def is_surfaced(policy: WarningPolicy, advisory: Advisory) -> bool:
+    """Whether this graph shows the agent this one advisory.
 
     `surface` is the global mute, and **an explicitly named `flag` outranks
     it**. That is the same specific-beats-general rule the `resolve_*` functions
@@ -197,14 +197,19 @@ def surfaced(policy: WarningPolicy, advisories: list[Advisory]) -> list[Advisory
     To quieten a named kind, set it to `proceed` — the escalation then stops
     being somebody's standing instruction, which is the only honest way to
     withdraw one.
+
+    One advisory at a time, because two callers want the answer at two
+    granularities: the response carries the whole shown set, and the
+    `advisory_raised` event reports `surfaced` per warning. One rule, asked
+    twice, so a dashboard and an agent cannot come to disagree about what was
+    shown.
     """
-    if policy.surface:
-        return list(advisories)
-    return [
-        advisory
-        for advisory in advisories
-        if policy.by_kind.get(advisory.kind) is AdvisoryAction.FLAG
-    ]
+    return policy.surface or policy.by_kind.get(advisory.kind) is AdvisoryAction.FLAG
+
+
+def surfaced(policy: WarningPolicy, advisories: list[Advisory]) -> list[Advisory]:
+    """The advisories this graph shows the agent."""
+    return [advisory for advisory in advisories if is_surfaced(policy, advisory)]
 
 
 def objects_to_the_call(advisories: list[Advisory]) -> bool:

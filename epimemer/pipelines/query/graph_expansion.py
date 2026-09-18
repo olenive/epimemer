@@ -9,6 +9,7 @@ from epimemer.core.types import (
     EpistemicNode,
     NodeEdge,
     NodeStatus,
+    edge_is_live,
     traversal_excluded,
 )
 from epimemer.storage.protocol import StorageBackend
@@ -28,12 +29,21 @@ async def expand_via_graph(
     does not fan out from version or source nodes. An explicit
     ``exclude_edge_types`` set overrides that with plain type membership.
 
+    A **retired** edge is skipped either way, and the override does not reach
+    it. The two questions are different: the type filter says which kinds of
+    relation this caller wants to follow, while retirement says a judge decided
+    this particular edge should stop counting. A caller asking for timelinks
+    wants the fact's date, not the date it used to be given before a split moved
+    it.
+
     Only ACTIVE neighbours are traversed; edges leading to superseded, merged or
     missing nodes are dropped along with the node. Seed nodes are the caller's
     responsibility and are returned as given.
     """
 
     def _skip(edge: NodeEdge) -> bool:
+        if not edge_is_live(edge):
+            return True
         if exclude_edge_types is not None:
             return edge.type in exclude_edge_types
         return traversal_excluded(edge)

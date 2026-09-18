@@ -2,8 +2,8 @@
 
 Decisions taken on 2026-09-16, in two rounds: the five that shape the model,
 then eight consequences settled after a first draft raised them (§8). This
-document replaces the *Specialized timelines* entry in `PROPOSED_FEATURES.md`,
-which proposed three timeline types. There will be one. This document records
+document replaced a backlog entry that proposed three timeline types. There
+will be one. This document records
 the decisions, works out what follows from them, defines the tool surface and
 the storage shape, and gives a build order in stages that each ship on their
 own.
@@ -455,9 +455,10 @@ materialising something the graph records as not having happened is always a
 mistake. A moved occurrence materialises at its moved date.
 
 A fact attaches at one of **two levels**, and they mean different things.
-Linked to the **rule**, it holds at every occurrence: "the service is at the
-parish church". Linked to one **occurrence**, which materialises that
-occurrence: "the 1897 service was moved to the hall". Nothing collapses the
+Linked to the **rule**, through `create_timelink` with `recurrence_id`, it
+holds at every occurrence: "the service is at the parish church". Linked to one
+**occurrence**, which materialises that occurrence: "the 1897 service was moved
+to the hall". Nothing collapses the
 second into the first, and a materialised occurrence's validity intervals are
 never combined into the rule (`VALIDITY_DESIGN.md` §3.3).
 
@@ -608,6 +609,11 @@ apply; and for an occurrence, `recurrence_id`, `occurrence_start` and
 `materialised_id` (null until something materialises it). The response keeps
 `reference_time` and gains `truncated` per rule.
 
+Every point also names the facts attached to it, in `linked`. An occurrence
+carries `linked_via_rule` beside it, what was linked to the rule and so holds
+at every occurrence. The two lists stay apart, because only `linked` is
+evidence about that one date.
+
 `propose_timepoints` on `store_decomposition` is **not** changed. It proposes
 dates only. "Before" in prose is narrative order far more often than
 chronology, and a detector that proposed constraints would fill the graph with
@@ -624,11 +630,18 @@ response carries any contradiction the call opened.
 
 ### 4.8 `create_timelink` (changed, write)
 
-Parameters unchanged. The response gains the point's `kind`, its bounds where
-derived, and its `contested` flag, so a caller that has just dated a fact can
-see what it dated it to without a second call. Linking to a contested point is
-allowed without comment: the fact's relation to the point is not what is in
-dispute.
+`timepoint_id` became one of two levels, with `recurrence_id` as the other:
+exactly one is given, and with `recurrence_id` the `TIMELINK` carries the rule
+id in place of a point id. A rule-level link is the "holds at every occurrence"
+half of §3.5, and every reader of `TIMELINK` metadata skips it, because there is
+no point to move, contest or draw.
+
+The response gains `level`, saying which of the two was linked. For a point it
+gives the point's `kind`, its bounds where derived, and its `contested` flag, so
+a caller that has just dated a fact can see what it dated it to without a second
+call. Linking to a contested point is allowed without comment: the fact's
+relation to the point is not what is in dispute. For a rule it gives the rule's
+label and its effective bounds, the end a bound change moved included.
 
 ### 4.9 `reflect` (changed, read)
 
@@ -654,23 +667,34 @@ only for returned nodes that have a timelink, which most do not.
 Pointers into `TIMELINE_VISUALISATION.md` rather than new design. Three things
 change and one deliberately does not.
 
+**This is built.** The snapshot's `TimelineView` carries the derived bounds, the
+contested flag with the contradiction's id, and the timeline's recurrence rules
+with the occurrences inside its window, all of it computed by the functions
+`query_timeline` calls, so the panel and the tool cannot come to disagree about
+one point. `assemble_snapshot` also drops retired edges, so a `TIMELINK` that a
+split or a merge moved no longer puts a fact on two dates at once.
+
 - **The tray empties.** §12.6's undated tray holds points with no coordinate. A
-  partly-dated point now has a bounded position, so it leaves the tray and is
+  partly-dated point has a bounded position, so it leaves the tray and is
   drawn with §13.1's **hatched band**, which is already the mark for "vague
   label, resolved", spanning `earliest` to `latest` with the label written on
   it verbatim. §13.2's rule 3 still holds: resolution adds a position and never
-  replaces the words. What stays in the tray: points nothing constrains,
-  contested points, and points from a different timeline's clock (§12.6's
-  cross-clock chips).
-- **Contested needs a mark.** Red is the contradiction colour in both panels,
-  and a contested point is a contradiction. The mark has to read as "the order
-  here is disputed" rather than "this date is wrong", since §3.2 keeps the
-  date.
-- **Recurrence beads are already designed.** §13.1's beads on a dotted spine
+  replaces the words. With only one bound known the band dissolves toward the
+  open side, which is §13.1's unknown endpoint. What stays in the tray: points
+  nothing constrains, contested points with no date, and points from a different
+  timeline's clock (§12.6's cross-clock chips).
+- **Contested has a mark.** Red is the contradiction colour in both panels,
+  and a contested point is a contradiction. The mark is a zigzag along the axis,
+  which reads as "the order here is disputed" rather than "this date is wrong",
+  since §3.2 keeps the date.
+- **Recurrence beads were already designed.** §13.1's beads on a dotted spine
   were drawn for one node with several validity intervals; the same drawing
   reads correctly for the occurrences of a rule, with the spine meaning "same
-  rule, nothing asserted in between". A materialised occurrence is a full
-  mark; the rest stay beads.
+  rule, nothing asserted in between". A materialised occurrence is an ordinary
+  timepoint already drawn on the axis and keeps that mark; the rest are beads. A
+  snapshot names no window, so it enumerates the span of the timeline's dated
+  points widened by one period of the rule on each side, under the same per-rule
+  cap `query_timeline` uses.
 - **Record order does not change.** `reorder_timepoints` still sorts dated
   points by start and appends vague ones in the order they were added, which
   is the contract §12.6 depends on. Bounds are a read-time answer and the
@@ -707,7 +731,7 @@ tested.
   enumeration, asserted against a daily rule anchored a century before the
   target, so an enumerate-then-sort implementation fails on time rather than
   on output. A cancelled occurrence omitted; a moved one returned at its new
-  date with its original index. Bounds clipping at both ends.
+  date with its original `occurrence_start`. Bounds clipping at both ends.
 - **Materialisation idempotence.** The same occurrence twice gives one id. A
   start the rule does not produce is refused, as is a cancelled occurrence. A
   moved occurrence materialises at `moved_to` and is still found by its
@@ -735,18 +759,20 @@ tested.
 
 ## 7. Build order
 
-Three stages. Each ships alone and each is worth shipping alone.
+Three stages. Each ships alone and each is worth shipping alone. All three
+have shipped.
 
-**(a) Kind, validation, and the range query.** The `kind` field and its
+**(a) Kind, validation, and the range query. Shipped in `289ac03`, released in
+0.2.4.** The `kind` field and its
 derivation, the two tightened refusals, `kind` on every response. In the same
 stage, fix `get_in_range` in `pipelines/timeline/functions.py`: today it
 returns intervals that started before the window *after* the ones inside it,
 so the result is not in chronological order, and it scans every earlier point
 linearly to find them. Both are fixable without changing the interface. This
-stage ships as a better query surface with no new concepts. **Roughly one to
-two days.**
+stage ships as a better query surface with no new concepts.
 
-**(b) Constraints, contradictions, bounds, verdicts, nomination.** The largest
+**(b) Constraints, contradictions, bounds, verdicts, nomination. Shipped in
+`a999484`.** The largest
 stage and the one that pays for the work: `OrderingConstraint`,
 `TemporalContradiction` of both kinds, the cycle and crossing checks on both
 write paths, the closure and bounds computation with the `basis` filter,
@@ -754,29 +780,29 @@ write paths, the closure and bounds computation with the `basis` filter,
 and the `TIMELINK` retirement the split needs, `merge_timepoints`, the
 `query_timeline` ordering modes, the `reflect` nomination, and
 `date_contested` on `search`. Storage parity and the bundle test move with it.
-**Roughly a week and a half.**
 
-**(c) Recurrence.** `Recurrence` with both rule kinds, exceptions, bounds,
-enumeration with its caps, materialisation through `add_timepoint`,
-`add_recurrence`, `end_recurrence`, `record_recurrence_exception`, and
-`reference_time` in the query path. Plus one dependency change, below.
-**Roughly three to four days.**
+**(c) Recurrence. Shipped in `434c329`.** `Recurrence` with both rule kinds,
+exceptions, bounds, enumeration with its caps, materialisation through
+`add_timepoint`, `add_recurrence`, `end_recurrence`,
+`record_recurrence_exception`, and `reference_time` in the query path. Plus
+one dependency change, below.
 
 Stage (c) depends on (a) for `kind` and on nothing in (b). Stage (b) depends
 on (a) only for the refusals it can then assume.
 
 ### `python-dateutil`
 
-It is in the lock file and it is **not** a dependency of Epimemer. Version
-2.9.0.post0 is in the working venv, pulled in three ways, all optional:
-`aiobotocore` and `botocore` under the `s3` extra, and `matplotlib` under
-`notebooks` by way of `petritype[examples]`. A plain `pip install epimemer`
-gets none of them.
+It is a **core dependency** of Epimemer, `python-dateutil>=2.9.0` in
+`pyproject.toml`, and stage (c) is what put it there. `CalendarRule` holds an
+RFC 5545 rrule string and `dateutil.rrule` is what reads one.
 
-So `CalendarRule` requires adding it to the core dependencies in
-`pyproject.toml`. That is cheap: it is pure Python with `six` as its only
-requirement. Relying on the transitive copy would make calendar rules work on
-a developer's machine and fail on a user's.
+It arrived before that only transitively, and every one of those routes was
+optional: `aiobotocore` and `botocore` under the `s3` extra, and `matplotlib`
+under `notebooks` by way of `petritype[examples]`. A plain
+`pip install epimemer` gets none of them, so relying on the transitive copy
+would have made calendar rules work on a developer's machine and fail on a
+user's. Declaring it is cheap: pure Python, with `six` as its only
+requirement.
 
 ---
 

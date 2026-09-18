@@ -123,7 +123,8 @@ epimemer/
     segmentation/: Paragraph split, semantic similarity
     graph_construction/: Edge creation, node versioning
     query/: Vector search, graph expansion, hybrid retrieval
-    reflection/: Topic consolidation, contradiction detection, review, archival
+    reflection/: Topic consolidation, contradiction detection, archival
+    review/: Reading the decision journal back, and what a reviewer concludes
     timeline/: Pure functional timeline operations
     orchestration/: Top-level request routing Petri net
   mcp/: FastMCP server, tool implementations, config

@@ -10,17 +10,34 @@
  */
 
 import type { TimeRange } from "./timeline-filter";
-import type { GraphActionRecorded } from "./types";
+import type { AdvisoryRaised, GraphActionRecorded } from "./types";
 
-/** One act, as the panel holds it. */
+/**
+ * What an entry is: something the agent did, or something it was told.
+ *
+ * A warning is a line in the story of a session, beside the act it accompanied,
+ * so it belongs in this list rather than in a panel of its own
+ * (ADVISORIES_DASHBOARD.md §2.3). One shape carries both, so the filters, the
+ * ordering and the deduplication are written once.
+ */
+export type LogEntryKind = "act" | "warning";
+
+/** One act or one warning, as the panel holds it. */
 export interface LogEntry {
   actionId: string;
   at: number;
   graph: string;
+  kind: LogEntryKind;
   verb: string;
   subjects: string[];
   counts: Record<string, number>;
   summary: string;
+  /**
+   * False only on a warning the agent's response did not carry. An act is
+   * something the agent did, so there is nothing it could have been kept from,
+   * and it always reads true.
+   */
+  surfaced: boolean;
 }
 
 export interface LogFilters {
@@ -52,10 +69,48 @@ export const entryFromAction = (event: GraphActionRecorded): LogEntry => ({
   actionId: event.action_id,
   at: Date.parse(event.timestamp),
   graph: event.graph,
+  kind: "act",
   verb: event.verb,
   subjects: event.subjects,
   counts: event.counts,
   summary: event.summary,
+  surfaced: true,
+});
+
+/** The verb every warning row carries, so the chip row needs no special case. */
+export const WARNED = "warned";
+
+/** What the policy decided, in the words the row ends on. */
+const actionPhrase = (action: string): string =>
+  action === "flag" ? "flagged to the user" : "the agent proceeded";
+
+/**
+ * The warning's sentence with a closing full stop taken off.
+ *
+ * The row appends what the policy decided, and an advisory's message is a
+ * finished sentence, so joining them raw reads ".; the agent proceeded". The
+ * words are untouched: only the punctuation between two clauses moves.
+ */
+const asClause = (message: string): string => message.replace(/\.\s*$/, "");
+
+/**
+ * Read a warning event into an entry.
+ *
+ * The line is assembled here rather than arriving pre-rendered, unlike an act's
+ * summary. The event carries the warning's own message word for word, which is
+ * the part that must not be re-worded; the tool prefix and the closing clause
+ * are the log's framing of it, and they say what the log knows (§4).
+ */
+export const entryFromAdvisory = (event: AdvisoryRaised): LogEntry => ({
+  actionId: event.action_id,
+  at: Date.parse(event.timestamp),
+  graph: event.graph,
+  kind: "warning",
+  verb: WARNED,
+  subjects: event.subjects,
+  counts: {},
+  summary: `${event.tool} warned: ${asClause(event.message)}; ${actionPhrase(event.action)}`,
+  surfaced: event.surfaced,
 });
 
 const matchesVerb = (entry: LogEntry, verbs: readonly string[]): boolean =>
@@ -112,6 +167,12 @@ export const rememberEntry = (
 export const verbsIn = (entries: readonly LogEntry[]): string[] =>
   [...new Set(entries.map((entry) => entry.verb))].sort();
 
-/** "world_changed" → "world-change", so a chip reads as the summary does. */
+/**
+ * "world_changed" → "world-change", so a chip reads as the summary does.
+ *
+ * Everything else loses its underscores, which is what makes a timeline
+ * decision readable: those acts carry the `DecisionKind` the journal recorded
+ * them under, so "recurrence_exception" is the word that arrives.
+ */
 export const verbLabel = (verb: string): string =>
-  verb === "world_changed" ? "world-change" : verb;
+  verb === "world_changed" ? "world-change" : verb.replace(/_/g, " ");

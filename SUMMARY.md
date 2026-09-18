@@ -219,7 +219,9 @@ A `Timeline` is a node type acting as an ordered container of embedded
 
 Other nodes link to specific timepoints via `TIMELINK` edges: the edge points
 at the timeline and names the timepoint in its metadata, so it says which
-moment on which timeline in one hop. A node can have several.
+moment on which timeline in one hop. A node can have several. An edge naming a
+`recurrence_id` in place of a timepoint attaches the node to a rule, where the
+claim holds at every occurrence.
 
 A timeline also carries an optional **`reference_time`**: that clock's own
 *now*, set via `set_reference_time`. It is what makes "current" answerable on
@@ -237,8 +239,51 @@ Properties worth knowing:
   existing links, because links reference the UUID. Removing one orphans its
   links, which is detected and flagged.
 
-Specialised timeline types (precise, vague, cyclical) are a backlog item:
-`dev-docs/PROPOSED_FEATURES.md`, *Specialized timelines*.
+### Stated order
+
+A timeline also holds what sources say about the **order** of its points, which
+is how a point nobody dated gets a place in time. An `OrderingConstraint` is one
+source asserting that one point came before another, with the source named and a
+`basis` saying whether the source stated the order in words or a judge read it
+off tense and context. The ordering a query walks is those constraints plus the
+edges two dated points settle between themselves, so "the fire came before the
+flood" from an undated account still puts the fire between what the flood comes
+after and what it comes before: the answer comes back as `earliest` and `latest`
+on the point, derived on read and never written onto the record.
+
+Where the assertions cannot all hold, the timeline records a
+`TemporalContradiction` rather than refusing the write, in the same spirit as a
+contradiction between claims. Two shapes count: a loop in the order, and a point
+squeezed until everything that must precede it ends after everything that must
+follow it begins. The constraints involved stop counting toward the order, the
+points are reported as contested, and `reflect` nominates the dispute until a
+judge answers it, by retiring one constraint, by deciding the point was really
+two events, or by holding it for want of evidence. Two points that turn out to
+be one event are folded together by `merge_timepoints`. Every one of these is
+append-only: a constraint that moves is retired and a fresh one written beside
+it, and a `TIMELINK` a verdict moves is kept with the link that replaced it.
+
+### Recurrence
+
+A timeline also holds **recurrence rules**: a rule stored once, with its
+occurrences computed when someone asks. A rule repeats either by arithmetic (an
+anchor and a period, which needs no calendar and so works on an invented
+timeline) or by the calendar (an RFC 5545 `rrule`, for "the second Tuesday of
+every month"). An occurrence is named by the start the rule gives it, which is
+unique within one rule, so nothing counts occurrences: a number would need a
+walk from the rule's beginning, and a walk that had to be capped would be
+missing exactly where most queries land.
+
+Occurrences are never stored, because a stored expansion is a second thing that
+can disagree with the rule that made it. What can be stored is one occurrence
+turned into an ordinary timepoint, which `add_timepoint` does on demand and
+idempotently, so that a fact about one occurrence has something to attach to. A
+fact attaches at one of two levels and they mean different things: linked to the
+rule it holds at every occurrence, linked to one occurrence it is about that
+one. Occurrences that broke the pattern are recorded as exceptions, cancelled or
+moved, and a moved one keeps the start the rule gave it as its identity. A rule
+that stops applying gets an appended bound change rather than a retirement,
+because a rule that was true never stops having been true.
 
 ## Metacontext
 
@@ -388,6 +433,15 @@ edges (
                  -- source* asserts the claim held: per source, never unioned
                  -- onto the node, so one careful source and one sloppy one
                  -- cannot produce a period neither claims
+  retired_at,    -- when a judge decided this edge should stop counting, and
+  retired_by     -- who decided it. Edges are never deleted, so this is how one
+                 -- stops being followed while the record still says it was
+                 -- once asserted. Written today on a `timelink` that a
+                 -- timepoint split or merge moved, and on an `assessed` edge
+                 -- that `reopen` withdrew
+  superseded_by  -- the edge written in its place, where the retirement moved
+                 -- the edge rather than withdrawing it. Why is in the journal
+                 -- row the verdict wrote
   -- engine types: about, contains, implies, supports, extracted_under_topic,
   --   abstracts, derived_from,
   --   similarity, contradiction, subtopic_of, superseded_by,
@@ -406,9 +460,26 @@ embeddings (
 )
 
 timelines (
-  id, name, description, implementation_type,
+  id, name, description, metadata, created_at,
+  reference_time,  -- this timeline's "now". Null means follow the wall clock;
+                   -- a fictional timeline's present is a fact about that world
   timepoints: [
-    { id, start, end, label, metadata }  -- start/end optional (vague timepoints)
+    { id, start, end, label, metadata,   -- start/end optional (vague points).
+      split_from,                        -- `kind` is derived from the dates and
+      recurrence_id, occurrence_start,   -- never stored
+      merged_into }
+  ],
+  constraints: [    -- one source asserting that one point came before another
+    { id, earlier_id, later_id, source_id, basis, because,
+      judged_by, asserted_at, retired }
+  ],
+  temporal_contradictions: [  -- constraints that cannot all hold
+    { id, kind, edges, point_id, constraint_ids, sources,
+      found_at, resolutions, held }
+  ],
+  recurrences: [    -- a rule stored once, occurrences computed per query
+    { id, label, rule, duration, bounds, bound_changes, exceptions,
+      source_id, judged_by, asserted_at }
   ]
 )
 
@@ -543,7 +614,9 @@ One phase per worklist, and `REFLECT_PHASES` in `mcp/tools.py` names them in
 execution order. Every nomination has a recordable answer, including the
 negative one (a pair judged distinct, a description confirmed, a split
 declined, a node retained), and a recorded answer is not asked for again until
-something under it changes. Two separations in that list matter: recurrences are
+something under it changes. A suppression that turns out to be wrong is
+withdrawn by `reopen`, which puts the question back on the worklist without
+asserting anything about the answer. Two separations in that list matter: recurrences are
 reported apart from contradictions, because a claim standing beside its own
 successor is not in conflict with it; and cross-metacontext pairs are dropped
 rather than reported, because high similarity across disjoint metacontexts is
@@ -581,9 +654,12 @@ The tools group into: **core memory** (`segment`, `store_decomposition`,
 (`check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`,
 `merge_inferences`, `reverse_merge`, `configure_merge`,
 `configure_warnings`); **reflection** (`reflect`, `configure_reflection`,
-`apply_reflection`); **temporal access** (`graph_as_of`, `query_changes`);
+`apply_reflection`, `reopen`); **temporal access** (`graph_as_of`, `query_changes`);
 **archival** (`archive`, `restore`); **timelines** (`create_timeline`,
-`set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`);
+`set_reference_time`, `add_timepoint`, `order_timepoints`,
+`resolve_temporal_contradiction`, `merge_timepoints`, `add_recurrence`,
+`end_recurrence`, `record_recurrence_exception`, `query_timeline`,
+`create_timelink`);
 **metacontexts** (`create_metacontext`, `get_metacontexts`, `reassign_metacontext`);
 **graph management** (`list_graphs`, `use_graph`, `delete_graph`,
 `backup_graph`, `configure_backup`);
@@ -705,9 +781,19 @@ what it makes visible and why:
 - **A timeline in two modes**, *record time* (when the graph learned each
   node) and *content time* (when the described events happened): the same
   distinction the model draws between transaction and valid time. Vague
-  timepoints get an undated tray rather than an invented date.
+  timepoints get an undated tray rather than an invented date. A point only the
+  stated order places is drawn as a band across the bounds it has, a disputed
+  order is marked beside the point it is about, and a recurrence rule's
+  occurrences are computed into a lane of their own.
 - **An activity log, one entry per transaction**: what the agent stored,
-  corrected, world-changed, merged, archived or restored.
+  corrected, world-changed, merged, archived or restored, with a timeline
+  decision and a `reopen` each under the verb the journal files them by.
+- **Warnings beside the act they accompanied**: every warning a tool computed
+  is a `warned` row in the same log, a muted one included, shown dimmed and
+  labelled *not shown to the agent*, because the dashboard is where a person
+  finds out what the agent was not told. A read-only panel says what this graph
+  does about each kind; `configure_warnings` is what changes it, so the change
+  is recorded against a session and a judge.
 - **Retrieval focus**: pick a recent tool call and everything it did *not*
   return is dimmed, with dimmed nodes still clickable, because the
   interesting click is on a node that did not come back. The response panel

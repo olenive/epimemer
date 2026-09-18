@@ -6,9 +6,14 @@
  * narrow list, and the drawer belongs to node detail (EVENT_LOG.md §10). It is
  * hidden until asked for, so the graph keeps its width by default.
  *
- * Everything it holds arrives on the coarse `graph_action_recorded` stream: one
- * entry per transaction, already summarised. Nothing here reads the
- * fine-grained events.
+ * Everything it holds arrives on two coarse streams: `graph_action_recorded`,
+ * one entry per transaction and already summarised, and `advisory_raised`, one
+ * per warning a tool computed. Nothing here reads the fine-grained events.
+ *
+ * A warning is a line in the story of a session beside the act it accompanied,
+ * which is why it is a row here rather than a panel of its own
+ * (ADVISORIES_DASHBOARD.md §2.3). It carries a `warned` verb, so the chip row
+ * can show warnings alone or leave them out with no special case.
  */
 
 import type { EventRouter } from "./events";
@@ -16,13 +21,15 @@ import {
   NO_LOG_FILTERS,
   applyLogFilters,
   entryFromAction,
+  entryFromAdvisory,
   rememberEntry,
   verbLabel,
   verbsIn,
   type LogEntry,
   type LogFilters,
 } from "./log-store";
-import type { AnyEvent, GraphActionRecorded } from "./types";
+import { currentSemanticPalette } from "./theme";
+import type { AdvisoryRaised, AnyEvent, GraphActionRecorded } from "./types";
 
 /** As many acts as the hub's ring holds, so a backfill is never truncated here. */
 const LOG_CAPACITY = 512;
@@ -65,6 +72,18 @@ const timeLabel = (at: number): string =>
     minute: "2-digit",
     second: "2-digit",
   });
+
+/**
+ * How much a warning the agent never saw fades.
+ *
+ * It is still a row and still clickable: what the agent was *not* shown is the
+ * thing a person opened this panel to find, so it must not disappear. Dim
+ * enough to read as a different state, no dimmer.
+ */
+const UNSURFACED = "opacity-60";
+
+/** Tooltip's first line on such a row, above the node ids. */
+const NOT_SHOWN = "not shown to the agent";
 
 const VERB_CHIP =
   "px-1.5 py-0.5 rounded text-[10px] border transition-colors cursor-pointer";
@@ -148,16 +167,30 @@ export const initLogPanel = (
     // happened. The store keeps action order; only the reading is reversed.
     for (const entry of [...shown].reverse()) {
       const row = document.createElement("button");
+      const hidden = entry.kind === "warning" && !entry.surfaced;
       row.className =
         "w-full text-left px-2 py-1 rounded text-xs transition-colors " +
         (entry.actionId === selectedId
           ? "bg-blue-100 dark:bg-blue-900/40"
-          : "hover:bg-surface-raised-hover");
-      row.title = entry.subjects.join("\n") || "no nodes";
+          : "hover:bg-surface-raised-hover") +
+        (hidden ? ` ${UNSURFACED}` : "");
+      const subjects = entry.subjects.join("\n") || "no nodes";
+      row.title = hidden ? `${NOT_SHOWN}\n${subjects}` : subjects;
 
       const line = document.createElement("div");
       line.className = "text-content-primary break-words";
       line.textContent = entry.summary;
+
+      // A warning carries a marker in the `pending` hue, the one this palette
+      // already uses for something awaiting review. No new colour: a hue
+      // invented here would be a sixth opinion about what amber means.
+      if (entry.kind === "warning") {
+        const marker = document.createElement("span");
+        marker.dataset.warningMarker = "";
+        marker.className = "inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle";
+        marker.style.backgroundColor = currentSemanticPalette().pending;
+        line.prepend(marker);
+      }
 
       const meta = document.createElement("div");
       meta.className = "text-[10px] text-content-muted";
@@ -178,17 +211,27 @@ export const initLogPanel = (
     renderEntries();
   };
 
-  const handleAction = (event: AnyEvent): void => {
-    const entry = entryFromAction(event as GraphActionRecorded);
-    // An entry from graph A must never highlight into graph B (§6). The hub's
-    // subscription already scopes this; the check stays because the panel is
-    // what would show the mistake.
+  /**
+   * Fold one entry in, whichever stream it came from.
+   *
+   * An entry from graph A must never highlight into graph B (§6). The
+   * subscription already scopes this; the check stays because the panel is what
+   * would show the mistake.
+   */
+  const remember = (entry: LogEntry): void => {
     if (viewedGraph && entry.graph && entry.graph !== viewedGraph) return;
     entries = rememberEntry(entries, entry, LOG_CAPACITY);
     render();
   };
 
-  const unsubs = [router.subscribe("graph_action_recorded", handleAction)];
+  const unsubs = [
+    router.subscribe("graph_action_recorded", (event: AnyEvent) =>
+      remember(entryFromAction(event as GraphActionRecorded)),
+    ),
+    router.subscribe("advisory_raised", (event: AnyEvent) =>
+      remember(entryFromAdvisory(event as AdvisoryRaised)),
+    ),
+  ];
 
   for (const input of [elements.nodeId, elements.text]) {
     input.addEventListener("input", renderEntries);

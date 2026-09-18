@@ -11,6 +11,8 @@ still answer *what was decided while nobody was looking* — which is exactly wh
 that question is worth asking.
 """
 
+from datetime import UTC, datetime
+
 import pytest
 from pydantic import ValidationError
 
@@ -26,21 +28,42 @@ from epimemer.core.advisories import (
     resolved_action,
     surfaced,
 )
+from epimemer.core.temporal import (
+    IntervalBasis,
+    PreciseInstant,
+    UnknownInstant,
+    ValidityInterval,
+)
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
+    ClaimKind,
     DecisionKind,
     EdgeType,
+    EmbeddingRecord,
     Fact,
+    Inference,
     JudgeRef,
     Metacontext,
     NodeEdge,
+    RawDocument,
 )
+from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
 from epimemer.pipelines.review.modes import MODE_KINDS, REVIEW_MODES
 from epimemer.storage.protocol import WarningOverrides, resolve_warning_policy
+from epimemer.visualization.event_bus import create_event_bus
 
 CRITIC = JudgeRef(agent_id="a-critic", digest="d1")
+
+# Two inferences an embedding provider cannot tell apart, which is what puts
+# them in front of the merge nominator at all.
+_TWIN = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+
+@pytest.fixture
+def embedding_provider() -> MockEmbeddingProvider:
+    return MockEmbeddingProvider(model_id="mock-embed", dimension=8)
 
 
 async def _fact(storage, content, *, metacontext=BASE_METACONTEXT_ID):
@@ -407,6 +430,45 @@ class TestTheTwoExistingWarningsBecameAdvisories:
         )
 
 
+class TestTheMuteGovernsReflectsCandidateWarnings:
+    """`reflect` attaches a warning to a merge candidate, and the same rule
+    governs it as governs every tool that writes.
+
+    One graph answering *no warnings* from `record_contradiction` and *here is a
+    warning* from `reflect` on the same run made the setting unreliable rather
+    than merely incomplete. The candidate still arrives either way: what the
+    mute takes away is the warning on it, so nothing the agent can act on is
+    lost.
+    """
+
+    async def test_a_muted_graph_gets_no_candidate_warnings_from_reflect(
+        self, storage, embedding_provider
+    ):
+        await _nominated_disjoint_pair(storage, embedding_provider)
+        await tools.configure_warnings(storage, surface=False)
+
+        result, _ = await tools.reflect(storage, embedding_provider)
+
+        assert result["inference_merge_candidates"], "the candidate itself still arrives"
+        assert all(
+            candidate["warnings"] == [] for candidate in result["inference_merge_candidates"]
+        )
+
+    async def test_a_named_flag_still_reaches_reflect(self, storage, embedding_provider):
+        """Naming a kind is the more specific statement, here as everywhere
+        else: muting the graph does not withdraw an escalation somebody asked
+        for by name."""
+        await _nominated_disjoint_pair(storage, embedding_provider)
+        await tools.configure_warnings(
+            storage, surface=False, actions={"disjoint_premises": "flag"}
+        )
+
+        result, _ = await tools.reflect(storage, embedding_provider)
+
+        candidate = result["inference_merge_candidates"][0]
+        assert [warning["kind"] for warning in candidate["warnings"]] == ["disjoint_premises"]
+
+
 class TestTheRecordIsReadBackByReview:
     """One review machine, not two. A `NodeNote` would have been a second
     review-state store with a second *what has nobody looked at* scan, which an
@@ -500,3 +562,140 @@ class TestAStoredOverrideFromANewerBuild:
 
         with pytest.raises(ValidationError):
             await tools.record_contradiction(a.id, b.id, storage)
+
+
+# The keys advisories put on a response, and the only ones this work could have
+# touched. `edge_id` and `created` are left out because both tools are
+# idempotent: a repeat reports `created: false` for that reason, not this one.
+ADVISORY_KEYS = ("warning", "warnings", "notify_user")
+
+
+def _advisory_answer(result: dict) -> dict:
+    return {key: result[key] for key in ADVISORY_KEYS if key in result}
+
+
+class TestWatchingChangesNothingTheAgentIsTold:
+    """A dashboard that altered a tool response would be observing by changing
+    the thing observed.
+
+    The event carries what the agent saw; it never decides it. So the same call
+    with a bus behind it and without one hands back the same keys and the same
+    advisories, on the muted path as well as the plain one.
+    """
+
+    async def test_record_contradiction_answers_the_same(self, storage):
+        a = await _fact(storage, "X is true")
+        b = await _fact(storage, "X is false")
+
+        without, _ = await tools.record_contradiction(a.id, b.id, storage)
+        watched, _ = await tools.record_contradiction(
+            a.id, b.id, storage, event_bus=create_event_bus()
+        )
+
+        assert set(watched) == set(without)
+        assert _advisory_answer(watched) == _advisory_answer(without)
+        assert watched["notify_user"] is True
+
+    async def test_record_variant_answers_the_same(self, storage):
+        a = await _fact(storage, "a")
+        b = await _fact(storage, "b")
+
+        without, _ = await tools.record_variant(a.id, b.id, storage)
+        watched, _ = await tools.record_variant(a.id, b.id, storage, event_bus=create_event_bus())
+
+        assert set(watched) == set(without)
+        assert _advisory_answer(watched) == _advisory_answer(without)
+
+    async def test_a_muted_graph_answers_the_same(self, storage):
+        """The path where a warning is published and the agent is told nothing,
+        which is the one a mistake here would show up on.
+
+        `record_variant` rather than `record_contradiction`, because the
+        contradiction kind is named `flag` by default and a named flag outranks
+        the mute: the agent would still see it, so it would not be this path.
+        """
+        await tools.configure_warnings(storage, surface=False)
+        a = await _fact(storage, "a")
+        b = await _fact(storage, "b")
+
+        without, _ = await tools.record_variant(a.id, b.id, storage)
+        watched, _ = await tools.record_variant(a.id, b.id, storage, event_bus=create_event_bus())
+
+        assert set(watched) == set(without)
+        assert _advisory_answer(watched) == _advisory_answer(without)
+        assert "warnings" not in watched
+
+
+# --- a reflect candidate that carries a warning ---
+
+
+async def _inference(storage, embedding_provider, content):
+    inference = Inference(content=content, source_id="seg-1")
+    await storage.store_node(inference)
+    await storage.store_embedding(
+        EmbeddingRecord(item_id=inference.id, model_id=embedding_provider.model_id, vector=_TWIN)
+    )
+    await storage.store_edge(
+        NodeEdge(src_id=inference.id, dst_id=BASE_METACONTEXT_ID, type=EdgeType.HAS_METACONTEXT)
+    )
+    return inference
+
+
+async def _premise(storage, content):
+    fact = Fact(content=content, source_id="seg-1", claim_kind=ClaimKind.STATE)
+    await storage.store_node(fact)
+    return fact
+
+
+async def _rests_on(storage, inference, premise):
+    await storage.store_edge(
+        NodeEdge(src_id=inference.id, dst_id=premise.id, type=EdgeType.DERIVED_FROM)
+    )
+
+
+async def _dated(storage, premise, name, interval):
+    document = RawDocument(content=f"contents of {name}", source=name)
+    await storage.store_document(document)
+    await storage.store_edge(
+        NodeEdge(
+            src_id=premise.id,
+            dst_id=document.id,
+            type=EdgeType.SOURCED_FROM,
+            validity=[interval],
+        )
+    )
+
+
+def _year(value: int) -> PreciseInstant:
+    return PreciseInstant(at=datetime(value, 1, 1, tzinfo=UTC))
+
+
+async def _nominated_disjoint_pair(storage, embedding_provider):
+    """Two readings resting on a shared premise, over periods no source joins.
+
+    The shared premise is what makes `reflect` look at the pair at all;
+    the two dated premises are what makes the merge worth warning about,
+    since the survivor would rest on a combination nothing puts in one period.
+    """
+    one = await _inference(storage, embedding_provider, "The name changed once")
+    other = await _inference(storage, embedding_provider, "The name has changed once")
+    early = await _premise(storage, "Leningrad is the city's name")
+    late = await _premise(storage, "Saint Petersburg is the city's name")
+    await _dated(
+        storage,
+        early,
+        "atlas-1970",
+        ValidityInterval(start=_year(1924), end=_year(1991), basis=IntervalBasis.STATED),
+    )
+    await _dated(
+        storage,
+        late,
+        "atlas-2020",
+        ValidityInterval(start=_year(1991), end=UnknownInstant(), basis=IntervalBasis.STATED),
+    )
+    await _rests_on(storage, one, early)
+    await _rests_on(storage, other, late)
+    shared = await _premise(storage, "The city was renamed by decree")
+    await _rests_on(storage, one, shared)
+    await _rests_on(storage, other, shared)
+    return one, other

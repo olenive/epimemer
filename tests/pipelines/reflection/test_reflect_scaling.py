@@ -448,6 +448,7 @@ class TestAnswersAreUnchanged:
             "split_candidates",
             "enrichment_candidates",
             "contradictions",
+            "temporal_contradictions",
             "recurrences",
             "unsound_inferences",
             "inference_merge_candidates",

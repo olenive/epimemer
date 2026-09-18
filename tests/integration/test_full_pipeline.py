@@ -184,7 +184,7 @@ class TestFullPipeline:
 
         facts = await storage.query_nodes(node_type=NodeType.FACT)
         if facts:
-            link_result, _ = await create_timelink(facts[0].id, tl_id, tp_id, storage)
+            link_result, _ = await create_timelink(facts[0].id, tl_id, storage, timepoint_id=tp_id)
             assert link_result["timepoint_id"] == tp_id
 
         query_result, _ = await query_timeline(

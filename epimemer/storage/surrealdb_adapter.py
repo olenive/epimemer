@@ -11,7 +11,7 @@ import asyncio
 import contextlib
 import logging
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -44,7 +44,7 @@ from epimemer.core.types import (
     migration_disposition,
     moved_edge_types,
     recorded_relation_label,
-    relation_pair_key,
+    standing_relation_pairs,
     with_retirement,
     with_return,
 )
@@ -2265,6 +2265,69 @@ class SurrealDBStorage:
             return
         await self._run_transaction(statements, params)
 
+    async def write_timeline_tx(
+        self,
+        timeline: Timeline,
+        *,
+        kind: DecisionKind,
+        retired_edges: Sequence[NodeEdge] = (),
+        new_edges: Sequence[NodeEdge] = (),
+        counts: Mapping[str, int] | None = None,
+        judge: JudgeRef | None = None,
+    ) -> None:
+        """One timeline decision and the links it moved. See the protocol.
+
+        Every statement upserts on `uid`, so each gets its own bind parameters:
+        `UPSERT ... WHERE uid` matches a single row and cannot be batched into
+        one insert. `kind`, `counts` and `judge` describe the decision for the
+        event log and are not written here.
+        """
+        statements = [_upsert("timeline", data="timeline", uid="timeline_uid")]
+        params: dict = {"timeline": _serialize(timeline), "timeline_uid": timeline.id}
+
+        for i, edge in enumerate([*new_edges, *retired_edges]):
+            row = _serialize(edge)
+            row["type"] = edge.type.value
+            statements.append(_upsert("node_edge", data=f"edge_{i}", uid=f"edge_uid_{i}"))
+            params[f"edge_{i}"] = row
+            params[f"edge_uid_{i}"] = edge.id
+
+        await self._run_transaction(statements, params)
+
+    async def reopen_tx(
+        self,
+        decision: DecisionRecord,
+        *,
+        retired_edges: Sequence[NodeEdge] = (),
+        relation_verdicts: Sequence[RelationVerdict] = (),
+    ) -> None:
+        """One withdrawn suppression and the row that records it. See the protocol.
+
+        The edges upsert on `uid`, so each needs its own bind parameters; the
+        verdict rows and the journal row are written the way their own methods
+        write them, including `_decision_row`'s padded `decided_at`, which is
+        what keeps a later range query over the journal correct.
+        """
+        statements: list[str] = []
+        params: dict = {}
+
+        for i, edge in enumerate(retired_edges):
+            row = _serialize(edge)
+            row["type"] = edge.type.value
+            statements.append(_upsert("node_edge", data=f"edge_{i}", uid=f"edge_uid_{i}"))
+            params[f"edge_{i}"] = row
+            params[f"edge_uid_{i}"] = edge.id
+
+        for i, verdict in enumerate(relation_verdicts):
+            statements.append(f"CREATE relation_verdict CONTENT $verdict_{i}")
+            params[f"verdict_{i}"] = _serialize(verdict)
+
+        statements.append(_upsert("decision", data="decision", uid="decision_uid"))
+        params["decision"] = _decision_row(decision)
+        params["decision_uid"] = decision.id
+
+        await self._run_transaction(statements, params)
+
     async def write_verbatim_tx(
         self,
         *,
@@ -2658,12 +2721,18 @@ class SurrealDBStorage:
         return verdict.id
 
     async def judged_relation_pairs(self) -> set[tuple[str, str]]:
-        rows = await self._query("SELECT label_ids FROM relation_verdict")
-        return {
-            relation_pair_key(*ids)
-            for row in rows
-            if len(ids := list(row.get("label_ids") or [])) == 2
-        }
+        """The pairs a standing verdict suppresses. See the protocol.
+
+        Whole rows rather than `SELECT label_ids`, because deciding which row is
+        newest is a comparison of timestamps and this backend must not make one
+        in text (`DEVELOPER_GUIDE.md`). Validating each row gives a real
+        datetime, and `standing_relation_pairs` is then the same rule both
+        backends run.
+        """
+        rows = await self._query("SELECT * FROM relation_verdict")
+        return standing_relation_pairs(
+            RelationVerdict.model_validate(_clean_record(r)) for r in rows
+        )
 
     async def relation_verdicts_for(self, label_ids: Sequence[str]) -> Sequence[RelationVerdict]:
         if len(set(label_ids)) != 2:

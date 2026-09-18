@@ -35,7 +35,7 @@ import json
 import re
 import tarfile
 from collections.abc import Iterable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -191,6 +191,12 @@ def _iso(at: datetime) -> str:
     return aware.astimezone(UTC).isoformat(timespec="microseconds")
 
 
+def _duration(length: timedelta) -> str:
+    from pydantic import TypeAdapter
+
+    return TypeAdapter(timedelta).dump_python(length, mode="json")
+
+
 def _json_default(value):
     """The types `model_dump(mode="python")` leaves for `json.dumps` to handle.
 
@@ -201,6 +207,11 @@ def _json_default(value):
     """
     if isinstance(value, datetime):
         return _iso(value)
+    if isinstance(value, timedelta):
+        # ISO-8601, the same spelling Pydantic's JSON mode gives a timedelta, so
+        # a duration reads the same in a bundle as it does anywhere else. It is
+        # a length rather than an instant, so `_iso` has nothing to say about it.
+        return _duration(value)
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, frozenset | set):

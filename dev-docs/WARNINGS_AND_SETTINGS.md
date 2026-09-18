@@ -66,7 +66,7 @@ trip to deliver it would be latency bought for nothing.
 
 ---
 
-## 3. The four kinds and their stance
+## 3. The five kinds and their stance
 
 `AdvisoryKind` is a closed vocabulary because the reviewing agent groups and
 sorts on it, and re-parsing sentences is how that rots. Every kind has a writer,
@@ -79,12 +79,18 @@ nothing and reads as a clean graph.
 | `cross_metacontext` | `record_contradiction` across metacontexts | objects |
 | `same_metacontext_variant` | `record_variant` within one metacontext | objects |
 | `same_metacontext_contradiction` | `record_contradiction` within one metacontext | escalates |
+| `description_not_written` | `store_decomposition`, for a tag this graph already describes | escalates |
 
 `ADVISORY_STANCE` says whether a kind argues with the call (*objects*) or
 reports that the call was right and the result wants a person (*escalates*).
-`same_metacontext_contradiction` is the only escalating kind: a real conflict in one
-world is exactly what is worth putting to a person, and the tool that recorded
-it was the right tool.
+Two kinds escalate, and they do it for different reasons.
+`same_metacontext_contradiction` is a real conflict in one world, which is
+exactly what is worth putting to a person, and the tool that recorded it was
+the right tool. `description_not_written` reports a sentence the graph declined
+to store: the ingest was right, the stored description stands because it is
+judged prose with a history trail, and what the agent needs to know is that the
+words it wrote are not the words the graph now holds. Replacing one goes
+through `apply_reflection`, where the wording it replaced is kept.
 
 The stance decides the journal row. `proceeded_despite_advisory` is written only
 where an advisory objects, because *despite* means something argued against the
@@ -132,6 +138,17 @@ asked for by name. A kind following `default_action` is not named, and is
 silenced. Withdrawing a named escalation means setting that kind to `proceed`.
 Without this rule, `notify_user: true` could arrive with no text to relay.
 
+**The mute governs every path that shows the agent a warning.** `reflect`
+attaches its advisory to a merge candidate rather than to a finished operation,
+and for a while that was the one path the policy never reached, so a muted graph
+could answer *no warnings* from `record_contradiction` and *here is a warning*
+from `reflect` on the same run. It resolves the policy now and strips a muted
+kind from the candidate before answering. Nothing actionable is lost: the
+candidate arrives with its pair, its shared premises and its similarity, and a
+kind named `flag` survives there as it does everywhere. The `advisory_raised`
+event still carries every warning `reflect` computed, with `surfaced` saying
+which of them the agent saw.
+
 **Per-kind resolution merges maps rather than replacing them.** A graph with an
 opinion about one kind has not withdrawn the defaults for the others, and a map
 override that silently drops unnamed keys is the same class of bug as a
@@ -172,18 +189,22 @@ bar: p99 similarity sat between 0.44 and 0.55. The reasoning is in
 
 ---
 
-## 5. Not built
+## 5. On the dashboard, and what is still not built
 
-Both are in `PROPOSED_FEATURES.md` with their open decisions: **advisories on
-the dashboard** (the event bus emits at transaction boundaries and an advisory
-is not a transaction), and **similar-inference edges** for pairs that share no
-premise (which would make agreeing inferences corroborate each other, a live
-change to a number callers read).
+**Advisories reach the dashboard.** A warning is published as its own event,
+`advisory_raised`, from the tool layer rather than from the storage wrapper,
+and becomes a `warned` row in the live log beside the act it accompanied. Every
+warning a call computed is published, muted or not, with `surfaced` saying
+whether the agent's response carried it: the dashboard is where a person looks
+at what the agent was *not* told. The settings panel beside it is read-only, and
+that is a decision rather than a phase, because a write from the browser would
+be the first write into a graph with no author. `ADVISORIES_DASHBOARD.md` holds
+the design and `EVENT_LOG.md` §12 the event.
 
-A settings panel for `configure_warnings` is noted with the dashboard entry: it
-is per graph and must say so, and *inherited* is a fourth visual state beside
-the two actions, because a kind following the default is not the same as one
-explicitly set to the same value.
+**Similar-inference edges** are still not built, and are in
+`PROPOSED_FEATURES.md` with their open decision: edges for pairs that share no
+premise would make agreeing inferences corroborate each other, which is a live
+change to a number callers read.
 
 ---
 

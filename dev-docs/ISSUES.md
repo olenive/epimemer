@@ -156,55 +156,6 @@ nothing and looks like a finding. Pinned in `tests/test_corpus_measure_smoke.py`
 
 ## Open issues
 
-### A suppression has no retraction, so every wrong decline is permanent
-
-🟡 **Open**, waiting on a real case.
-
-**What breaks.** A sweep recomputed from current state that records no
-declines re-offers what was already refused and cannot know it, so every
-nominator here has a suppression index: the `assessed` edge for fact pairs,
-`RelationVerdict` for label pairs (`RELATION_LABELS.md` §4.2), and the
-`retention` journal row for single nodes. None of the three can be withdrawn. A
-pair judged `distinct` in error never returns, however much later evidence says
-it should.
-
-**This is not the affirmative half.** A `one_claim` verdict is retractable, and
-deliberately one way: `distinct` withdraws a standing `one_claim`, and nothing
-re-asserts a withdrawn one, because wrongly withholding a corroboration count
-is cheaper than wrongly inventing agreement. Suppression was left untouched by
-that design on purpose. So the affirmative half is retractable and the
-suppressive half is not, on every layer.
-
-**The fix may legitimately differ per layer.** The affirmative half's asymmetry
-is entirely a property of corroboration. Nothing corroborates on a relation
-label: a wrong `synonymous` invents no support and a wrong `distinct` costs no
-count, so neither failure mode exists there, and a symmetric retraction is a
-live option for labels where it would be wrong for facts. Porting the fact
-shape across unexamined would import a constraint with no justification. That
-conclusion depends on label deprecation staying reversible (`RELATION_LABELS.md`
-§5): ship an irreversible deprecation and the argument needs re-deriving.
-
-**The single-node layer is the mildest.** A node kept for its own sake (the
-`never_retrieved` nomination, whose verdict covers nothing) can never have a
-later reason fail to be covered, so a wrong keep there is permanent exactly as
-a wrong `distinct` is. It costs one idle node lingering in storage, permanence
-in the safe direction. There is a residual case on the anchored branch too:
-the same facts archived, restored and re-archived still match their old
-anchors. A retraction primitive would answer all three layers at once, which is
-the argument for building it in one place rather than three.
-
-**Why it is quiet.** A wrong `distinct` is invisible precisely because
-suppression works, and the largest real graph holds too few labels for a label
-pair to be nominated. That is the corpus arguing, not the design. The refusal
-for a repeated verdict points at this entry by name, so an agent that wants a
-verdict revisited is told where the question lives instead of only *no*.
-
-**Not recommended for building yet.** What it needs first is a case: a
-suppression somebody actually wants undone. The retraction's shape should be
-argued from the real instance rather than guessed at symmetrically.
-
----
-
 ### FTS index backfill runs inside `connect()` with no progress reporting
 
 ⏸ **Deferred**, trigger stated below.

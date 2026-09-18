@@ -20,11 +20,18 @@ def add_timepoint(
     end: datetime | None = None,
     label: str | None = None,
     metadata: dict | None = None,
+    recurrence_id: str | None = None,
+    occurrence_start: datetime | None = None,
 ) -> tuple[Timeline, Timepoint]:
     """Add a timepoint to a timeline, maintaining sorted order.
 
     Timepoints with concrete `start` are sorted by start datetime.
     Vague timepoints (no start) are appended after all concrete ones.
+
+    `recurrence_id` and `occurrence_start` mark a point as one occurrence of a
+    rule. They come from materialisation, which is the one route that sets them,
+    and they change nothing about how the point is stored or sorted: a
+    materialised occurrence is an ordinary dated point.
 
     Returns the updated timeline and the new timepoint.
     """
@@ -33,6 +40,8 @@ def add_timepoint(
         end=end,
         label=label,
         metadata=metadata or {},
+        recurrence_id=recurrence_id,
+        occurrence_start=occurrence_start,
     )
 
     concrete, vague = _split_concrete_vague(timeline.timepoints)

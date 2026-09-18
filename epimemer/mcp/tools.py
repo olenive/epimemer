@@ -7,7 +7,7 @@ calls these and wraps the results.
 
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from petritype.core.executable_graph_components import ExecutableGraph
@@ -19,19 +19,22 @@ from epimemer.core.advisories import (
     AdvisoryAction,
     AdvisoryKind,
     WarningPolicy,
+    is_surfaced,
     notify_user,
     objects_to_the_call,
     resolved_action,
     surfaced,
 )
-from epimemer.core.temporal import ValidityInterval, ValidityVerdict
+from epimemer.core.temporal import IntervalBasis, ValidityInterval, ValidityVerdict
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
     NOMINATED_STATUSES,
     QUARANTINE_METACONTEXT_ID,
+    REOPENED_VERDICT,
     RESTORABLE_STATUSES,
     Agent,
     AgentDescription,
+    CalendarRule,
     ClaimKind,
     DecisionKind,
     DecisionRecord,
@@ -47,8 +50,11 @@ from epimemer.core.types import (
     NodeEdge,
     NodeStatus,
     NodeType,
+    PeriodicRule,
     RawDocument,
+    RecurrenceBounds,
     RelationLabel,
+    RelationVerdict,
     Segment,
     Timeline,
     Timepoint,
@@ -59,6 +65,7 @@ from epimemer.core.types import (
     agent_name,
     current_description,
     description_digest,
+    edge_is_live,
     edge_shape_violation,
     edge_types_joining,
     endpoint_kind_of,
@@ -72,12 +79,14 @@ from epimemer.core.types import (
     reachable_statuses,
     recorded_relation_label,
     reinstated,
+    relation_pair_key,
     renamed,
     resolve_agent,
     retired,
     retired_agents,
     retired_at,
     serving_agents,
+    standing_relation_pairs,
     superseded_status_for,
     supersession_kind,
     timepoint_kind,
@@ -122,8 +131,11 @@ from epimemer.storage.protocol import (
     resolve_require_judge,
     resolve_warning_policy,
     validate_graph_name,
+    warning_settings,
 )
 from epimemer.visualization.event_bus import InProcessEventBus
+from epimemer.visualization.events import AdvisoryRaised
+from epimemer.visualization.graph_actions import next_action_id
 
 
 async def _run_net(
@@ -410,6 +422,81 @@ async def advisory_policy(storage: StorageBackend, default: WarningPolicy) -> Wa
     return resolve_warning_policy(await storage.get_warning_overrides(), default)
 
 
+def _advisory_event(
+    advisory: Advisory,
+    *,
+    graph: str,
+    tool: str,
+    action: AdvisoryAction,
+    shown: bool,
+    asks_for_a_person: bool,
+    judge: JudgeRef | None,
+) -> AdvisoryRaised:
+    """One `advisory_raised`, ready to publish.
+
+    `action_id` comes from the sequence the acts are numbered in, so a replay
+    puts a warning where it arrived rather than at the end.
+    """
+    return AdvisoryRaised(
+        graph=graph,
+        action_id=next_action_id(),
+        tool=tool,
+        kind=advisory.kind,
+        message=advisory.message,
+        subjects=list(advisory.subjects),
+        detail=dict(advisory.detail),
+        action=action,
+        surfaced=shown,
+        notify_user=asks_for_a_person,
+        judged_by=None if judge is None else judge.agent_id,
+    )
+
+
+async def publish_advisories(
+    event_bus: InProcessEventBus | None,
+    policy: WarningPolicy,
+    advisories: Sequence[Advisory],
+    *,
+    graph: str,
+    tool: str,
+    judge: JudgeRef | None,
+) -> None:
+    """Tell a watching dashboard every warning this call computed.
+
+    **Muted warnings are published too** (`ADVISORIES_DASHBOARD.md` §2.2). The
+    dashboard is where a person looks at what the agent was *not* told, so
+    dropping the muted ones there would remove the reason for showing warnings
+    at all. This matches the journal, which already records regardless of the
+    mute, and `surfaced` is what carries the difference.
+
+    One event per warning rather than per call: a call raising two warnings has
+    two things to say, and a reader filters on the kind of each.
+
+    **A warning the agent never saw asks for nobody.** `notify_user` means *the
+    agent was told to raise this with the user*, and an instruction to relay
+    text nobody was handed is one nobody can follow.
+
+    The bus travels as a value and is `None` on a server with visualization off,
+    which is the whole of the branch: no capability flag, nothing to interrogate.
+    """
+    if event_bus is None:
+        return
+    for advisory in advisories:
+        action = resolved_action(policy, advisory.kind)
+        shown = is_surfaced(policy, advisory)
+        await event_bus.publish(
+            _advisory_event(
+                advisory,
+                graph=graph,
+                tool=tool,
+                action=action,
+                shown=shown,
+                asks_for_a_person=shown and action is AdvisoryAction.FLAG,
+                judge=judge,
+            )
+        )
+
+
 async def carry_advisories(
     storage: StorageBackend,
     policy: WarningPolicy,
@@ -417,6 +504,8 @@ async def carry_advisories(
     subject_ids: Sequence[str],
     *,
     judge: JudgeRef | None,
+    tool: str,
+    event_bus: InProcessEventBus | None = None,
 ) -> dict:
     """Record that an operation completed carrying these, and shape the response.
 
@@ -449,6 +538,11 @@ async def carry_advisories(
     answer to the only question the key asks. A key documented in
     `INTEGRATION.md` that is sometimes absent is worse to read than one that is
     sometimes false.
+
+    **Telling the dashboard changes nothing the agent is told.** This is the one
+    function that knows both the warnings and the policy, so it is where a
+    watching browser is told as well; `tool` is the name that leads the log
+    line, because what a warning means depends on what was being attempted.
     """
     if not advisories:
         return {"notify_user": False}
@@ -462,6 +556,14 @@ async def carry_advisories(
                 f"[{advisory.kind.value}] {advisory.message}" for advisory in advisories
             ),
         )
+    await publish_advisories(
+        event_bus,
+        policy,
+        advisories,
+        graph=storage.current_database,
+        tool=tool,
+        judge=judge,
+    )
     shown = surfaced(policy, advisories)
     if not shown:
         return {"notify_user": False}
@@ -1045,6 +1147,10 @@ async def store_decomposition(
     # rather than silently applied: a caller that named `claim-kind` and got
     # `claim_kind` should learn this graph's spelling.
     tags_resolved_to: dict[str, str] = {}
+    # Names minted in this call, each with the description supplied for it.
+    # Reported beside `tags_described` so a caller creating three tags does
+    # not read a zero there as "my descriptions were dropped".
+    tags_created: list[str] = []
     # Topics created from a tag are excluded: a tag is a name, not a statement,
     # and a tag that happens to read as a date would put a mark on the timeline
     # for every node carrying it.
@@ -1102,6 +1208,7 @@ async def store_decomposition(
             judged_by=judge,
         )
         tag_cache[key] = topic
+        tags_created.append(name)
         batch_nodes.append(topic)
         vec = (await embedding_provider.embed([embedding_text(topic)]))[0]
         batch_embeddings.append(
@@ -1406,9 +1513,13 @@ async def store_decomposition(
         "edges_created": len(batch_edges),
         "timepoints_proposed": timepoints_proposed,
         "historical_twins": await _historical_twins(batch_nodes, storage),
-        # Tags that had no description and have one now. Counted rather than
-        # left silent: it is the one case where prose supplied here reaches the
-        # graph on a name somebody else minted.
+        # Two counts, because they answer different questions. `tags_created`
+        # is the names minted here, each carrying the description supplied for
+        # it. `tags_described` is the existing tags that had no description and
+        # have one now: the one case where prose supplied here reaches the graph
+        # on a name somebody else minted. A call that creates three tags and
+        # fills in none reports 3 and 0, and used to report only the 0.
+        "tags_created": len(tags_created),
         "tags_described": len(to_describe),
     } | await carry_advisories(
         storage,
@@ -1418,6 +1529,8 @@ async def store_decomposition(
         advisories,
         [advisory.subjects[0] for advisory in advisories],
         judge=judge,
+        tool="store_decomposition",
+        event_bus=event_bus,
     )
     if tags_resolved_to:
         # Said rather than done silently: a caller that asked for `claim-kind`
@@ -1840,6 +1953,66 @@ async def _record_retrieval(
         await storage.store_node(node)
 
 
+async def _date_contested_for(
+    node_ids: Sequence[str],
+    storage: StorageBackend,
+) -> dict[str, list[dict]]:
+    """Which returned nodes are dated to a point whose place in time is disputed.
+
+    A separate flag from `contested`, which says the claim itself is disputed,
+    and the two must not be run together: an agent reading "the treasury was
+    empty at the coronation" needs to know when the coronation's place in time
+    is in dispute, and must not take that for doubt about the treasury.
+
+    One batched edge read, then one read of each timeline a link actually names,
+    which for most result sets is none: a node with no timelink costs nothing
+    here.
+
+    A link to a recurrence rule is left out: a rule holds no place in the order,
+    so there is nothing about it for two sources to disagree over.
+    """
+    if not node_ids:
+        return {}
+    links = await storage.get_edges_for(node_ids, direction="from", edge_type=EdgeType.TIMELINK)
+    live = {
+        node_id: [
+            edge
+            for edge in edges
+            if edge_is_live(edge) and edge.metadata.get("timepoint_id") is not None
+        ]
+        for node_id, edges in links.items()
+    }
+    named = {edge.dst_id for edges in live.values() for edge in edges}
+    if not named:
+        return {}
+
+    from epimemer.pipelines.timeline.ordering import contested_points
+
+    contested: dict[str, dict[str, str]] = {}
+    for timeline_id in named:
+        timeline = await storage.get_timeline(timeline_id)
+        if timeline is not None:
+            contested[timeline_id] = contested_points(timeline)
+
+    found: dict[str, list[dict]] = {}
+    for node_id, edges in live.items():
+        marks = [
+            {
+                "timeline_id": edge.dst_id,
+                "timepoint_id": edge.metadata["timepoint_id"],
+                "temporal_contradiction_id": contradiction_id,
+            }
+            for edge in edges
+            for contradiction_id in [
+                contested.get(edge.dst_id, {}).get(edge.metadata["timepoint_id"])
+            ]
+            if contradiction_id is not None
+        ]
+        if marks:
+            found[node_id] = marks
+    return found
+
+
 async def search(
     query: str,
     storage: StorageBackend,
@@ -2023,6 +2196,7 @@ async def search(
         if valid_as_of is not None
         else {}
     )
+    date_contested_by_node = await _date_contested_for([n.id for n in nodes], storage)
 
     nodes_data = []
     for node in nodes:
@@ -2045,6 +2219,8 @@ async def search(
             node_dict["corroboration"] = corroboration_by_node[node.id].model_dump(mode="json")
         if node.id in verdicts:
             node_dict["valid_at"] = verdicts[node.id]
+        if node.id in date_contested_by_node:
+            node_dict["date_contested"] = date_contested_by_node[node.id]
         if node.id in query_result.lineage:
             node_dict["earlier_versions"] = [
                 _content_preview(earlier) | {"status": earlier.status.value}
@@ -2339,7 +2515,10 @@ async def find_nodes(
     seen: set[str] = set()
     batch: list[EpistemicNode] = []
     for edge in await storage.get_edges_to(reference_id, edge_type=edge_type):
-        if edge.src_id in seen:
+        # A retired edge is a record of what was once asserted, never a route to
+        # a node: listing by it would answer "what is filed here" with something
+        # a judge took out.
+        if edge.src_id in seen or not edge_is_live(edge):
             continue
         seen.add(edge.src_id)
         node = await storage.get_node(edge.src_id)
@@ -3121,6 +3300,7 @@ async def record_contradiction(
     *,
     judge: JudgeRef | None = None,
     warning_policy: WarningPolicy | None = None,
+    event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Record a genuine contradiction between two facts (both stay active).
 
@@ -3183,7 +3363,15 @@ async def record_contradiction(
         "edge_id": edge_id,
         "created": created,
         "same_metacontext": shares_metacontext,
-    } | await carry_advisories(storage, policy, [advisory], [a_id, b_id], judge=judge)
+    } | await carry_advisories(
+        storage,
+        policy,
+        [advisory],
+        [a_id, b_id],
+        judge=judge,
+        tool="record_contradiction",
+        event_bus=event_bus,
+    )
     meta = ResponseMeta(nodes_returned=2)
     return result, meta
 
@@ -3195,6 +3383,7 @@ async def record_variant(
     *,
     judge: JudgeRef | None = None,
     warning_policy: WarningPolicy | None = None,
+    event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Record that two facts are one proposition resolved differently per metacontext.
 
@@ -3257,7 +3446,15 @@ async def record_variant(
         "edge_id": edge_id,
         "created": created,
         "same_metacontext": shares_metacontext,
-    } | await carry_advisories(storage, policy, advisories, [a_id, b_id], judge=judge)
+    } | await carry_advisories(
+        storage,
+        policy,
+        advisories,
+        [a_id, b_id],
+        judge=judge,
+        tool="record_variant",
+        event_bus=event_bus,
+    )
     meta = ResponseMeta(nodes_returned=2)
     return result, meta
 
@@ -3380,6 +3577,7 @@ async def merge_inferences(
     similarity_threshold: float = SIMILARITY_NOMINATION_THRESHOLD,
     judge: JudgeRef | None = None,
     warning_policy: WarningPolicy | None = None,
+    event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Collapse inferences that state one conclusion into a single node.
 
@@ -3475,7 +3673,15 @@ async def merge_inferences(
         "inference_id": merged.id,
         "source_ids": source_ids,
         "sources_retired": len(sources),
-    } | await carry_advisories(storage, policy, advisories, [merged.id, *source_ids], judge=judge)
+    } | await carry_advisories(
+        storage,
+        policy,
+        advisories,
+        [merged.id, *source_ids],
+        judge=judge,
+        tool="merge_inferences",
+        event_bus=event_bus,
+    )
     meta = ResponseMeta(
         nodes_returned=1,
         source_types={"inferences": 1},
@@ -3683,22 +3889,11 @@ async def configure_warnings(
             )
         )
 
-    overrides = await storage.get_warning_overrides()
-    policy = resolve_warning_policy(overrides, default)
-    result = {
-        "graph": storage.current_database,
-        "surface": policy.surface,
-        "actions": {kind: resolved_action(policy, AdvisoryKind(kind)).value for kind in kinds},
-        # Which of those answers this graph gave, as opposed to inherited. A
-        # kind set explicitly to the value it would have inherited anyway is not
-        # the same as one that is following the default — the first stays put
-        # when the default changes, the second tracks it.
-        "overridden": {
-            key: value
-            for key, value in overrides.model_dump(mode="json", exclude_none=True).items()
-            if value != {}
-        },
-    }
+    # Built by the function the dashboard's read-only panel also calls, so the
+    # agent and a watching person are shown one answer rather than two.
+    result = warning_settings(
+        storage.current_database, await storage.get_warning_overrides(), default
+    )
     return result, ResponseMeta()
 
 
@@ -3786,6 +3981,7 @@ async def reflect(
     similarity_threshold: float = 0.85,
     relation_similarity_threshold: float = 0.9,
     max_nominations: int = MAX_NOMINATIONS,
+    warning_policy: WarningPolicy | None = None,
     event_bus: InProcessEventBus | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Analyse the memory graph and return candidates for the agent to act on.
@@ -3801,6 +3997,8 @@ async def reflect(
     from epimemer.pipelines.reflection.contradiction_detection import detect_contradictions
     from epimemer.pipelines.reflection.inference_dedup import nominate_inference_merges
     from epimemer.pipelines.reflection.relation_consolidation import sweep_similar_relation_pairs
+    from epimemer.pipelines.reflection.reopening import annotate as annotate_reopened
+    from epimemer.pipelines.reflection.reopening import reopen_notes
     from epimemer.pipelines.reflection.review import (
         gather_pending_review,
         metacontext_resolver,
@@ -4062,7 +4260,7 @@ async def reflect(
     async def _pending_review():
         return [
             {
-                "node": {"id": n.id, "content": n.content, "node_type": _node_type_key(n)},
+                "node": _node_summary(n),
                 "review": labels,
             }
             for n, labels in await gather_pending_review(storage)
@@ -4114,11 +4312,25 @@ async def reflect(
         archival_candidates = await phase("archival_nomination", _archival, tokens=len)
         similar_relations = await phase("relation_consolidation", _relations, tokens=len)
 
+    # Outside the phase pipeline, deliberately. Every phase above is a scan
+    # somebody may want to watch; this is one read of each timeline record, with
+    # the contradictions already stored rather than recomputed, so a phase event
+    # for it would report a step that is over before the strip draws it.
+    temporal_contradictions = [
+        _contradiction_payload(timeline.id, contradiction)
+        for timeline in await storage.query_timelines()
+        for contradiction in timeline.temporal_contradictions
+        if contradiction.is_open and not contradiction.held
+    ]
+
     result = {
         "similar_pairs": similar_pairs,
         "split_candidates": split_candidates,
         "enrichment_candidates": enrichment_candidates,
         "contradictions": contradictions,
+        # Beside the claim contradictions and on the same terms: an unanswered
+        # nomination comes back on every reflect until it is answered or held.
+        "temporal_contradictions": temporal_contradictions,
         "recurrences": recurrences,
         "unsound_inferences": unsound_inferences,
         "inference_merge_candidates": inference_merge_candidates,
@@ -4127,6 +4339,25 @@ async def reflect(
         "archival_candidates": archival_candidates,
         "similar_relations": similar_relations,
     }
+
+    # What was declined once and put back. Attached here rather than inside each
+    # nominator, because the question *has this been reopened* has one answer for
+    # the whole graph and six list shapes to reach: the map below is what a
+    # reader consults to see which of them carry the history, and a list added
+    # later that should carry it has to be named here.
+    #
+    # `similar_relations` is missing on purpose: the sweep resolves label names
+    # to records and attaches its own, because nothing out here holds those ids.
+    reopened = await reopen_notes(storage)
+    if reopened:
+        for key, target_of in (
+            ("similar_pairs", lambda c: [c["topic_a"]["id"], c["topic_b"]["id"]]),
+            ("contradictions", lambda c: [c["fact_a"]["id"], c["fact_b"]["id"]]),
+            ("recurrences", lambda c: [c["fact_a"]["id"], c["fact_b"]["id"]]),
+            ("inference_merge_candidates", lambda c: [ref["id"] for ref in c["inferences"]]),
+            ("archival_candidates", lambda c: [c["node_id"]]),
+        ):
+            annotate_reopened(result[key], target_of, reopened)
 
     # Cap the quadratic lists, and say which ones were cut. Applied here,
     # in one place over `CAPPED_KEYS`, rather than inside each phase: the phase
@@ -4159,6 +4390,40 @@ async def reflect(
     # show: label pairs standing relation verdicts kept out of
     # `similar_relations` this pass.
     result["relation_pairs_suppressed"] = relation_pairs_suppressed
+
+    # The warnings a candidate carries, filtered and published from here rather
+    # than from `carry_advisories`: reflect writes nothing, so it never reaches
+    # that function at all. Read off the capped list, because `surfaced` means
+    # *the agent's response carried it* and a candidate the cap cut was never
+    # sent.
+    #
+    # **The mute governs this path like every other.** A graph told not to show
+    # a kind is not shown it here either, so one run cannot answer *no warnings*
+    # from `record_contradiction` and *here is a warning* from `reflect`. The
+    # candidate itself still arrives, so nothing the agent can act on is lost,
+    # and a kind named `flag` outranks the mute, which `is_surfaced` decides for
+    # every caller. Every warning is published all the same, muted ones
+    # included, with `surfaced` carrying the difference
+    # (`ADVISORIES_DASHBOARD.md` §2.2).
+    policy = await advisory_policy(
+        storage, warning_policy if warning_policy is not None else WarningPolicy()
+    )
+    computed = [
+        [Advisory.model_validate(warning) for warning in candidate["warnings"]]
+        for candidate in result["inference_merge_candidates"]
+    ]
+    await publish_advisories(
+        event_bus,
+        policy,
+        [advisory for advisories in computed for advisory in advisories],
+        graph=storage.current_database,
+        tool="reflect",
+        judge=None,
+    )
+    for candidate, advisories in zip(result["inference_merge_candidates"], computed, strict=True):
+        candidate["warnings"] = [
+            advisory.model_dump(mode="json") for advisory in surfaced(policy, advisories)
+        ]
 
     meta = ResponseMeta(
         nodes_returned=nominees_returned,
@@ -5092,6 +5357,203 @@ async def apply_reflection(
     return result, meta
 
 
+# --- Reopen (withdrawing a suppression, `reopening.py`) ---
+
+
+async def reopen(
+    storage: StorageBackend,
+    *,
+    node_ids: Sequence[str] | None = None,
+    relation_labels: Sequence[str] | None = None,
+    reason: str,
+    judge: JudgeRef | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Put a question somebody already answered back on the worklist.
+
+    **It withdraws a suppression and asserts nothing else.** It does not record
+    the opposite of the earlier verdict, does not say the earlier judge was
+    wrong, and changes no claim: the pair or the node is nominated again by the
+    next `reflect` if it still qualifies, and the next judge answers it with the
+    same tools as the first. The earlier verdict stays in the record with its
+    judge and its reason, and the nomination carries the reopening so the next
+    judge can see the history rather than re-deriving it.
+
+    One tool for three layers, which differ only in what they clear:
+
+    - **Two node ids**: a fact, inference or topic pair judged `distinct`. The
+      `assessed` edge is retired the way a moved `TIMELINK` is, stamped with
+      when it stopped counting and by whom, and left in the graph.
+    - **Two relation labels**: a label pair carrying a verdict. A new verdict
+      row says `reopened`, and the sweep reads the newest row for a pair.
+    - **One node id**: a node a `retained` verdict kept. A journal row says the
+      keep no longer covers it.
+
+    Exactly one target: a call naming both, or neither, is refused rather than
+    guessed at. Refused too when nothing is suppressed for the target, naming
+    what was looked for, because *there was nothing to undo* and *it worked*
+    must not read the same.
+
+    **A standing affirmative edge is named rather than withdrawn.** A pair
+    judged `one_claim` carries a `similarity` edge and corroboration counts it;
+    taking that back is the opposite verdict rather than the question again, and
+    `apply_reflection(similarities=[...])` with `distinct` is the call that
+    withdraws a `one_claim`.
+
+    Every reopen writes one `reopened` journal row carrying `reason` as its
+    `certainty_basis`, in the same transaction as the change: here the row *is*
+    the act, so a reopen whose row was lost would leave a question back on the
+    worklist with nothing saying it had ever been declined.
+    """
+    from epimemer.pipelines.reflection.retention import confirmed_reasons_for
+    from epimemer.pipelines.reflection.similarity_decisions import symmetric_edges_between
+
+    nodes = list(node_ids or [])
+    labels = list(relation_labels or [])
+
+    def refused(message: str) -> tuple[dict, ResponseMeta]:
+        return (
+            {"reopened": False, "refused": message},
+            ResponseMeta(retrieved=_declare(nodes)),
+        )
+
+    if bool(nodes) == bool(labels):
+        return refused(
+            "name exactly one target: `node_ids` with one node to withdraw a "
+            "retention, `node_ids` with two to withdraw a pair's assessment, or "
+            "`relation_labels` with two label names."
+        )
+    if not reason.strip():
+        return refused(
+            "`reason` is required: a reopened question goes back in front of the "
+            "next judge, and it has to say why the earlier answer is worth "
+            "revisiting."
+        )
+    if labels and len(labels) != 2:
+        return refused(f"a label pair needs two labels; {len(labels)} were named.")
+    if nodes and len(nodes) not in (1, 2):
+        return refused(
+            f"{len(nodes)} node ids name no target: one node is a retention, two "
+            f"are a pair, and there is no suppression over more."
+        )
+
+    retired_edges: list[NodeEdge] = []
+    verdicts: list[RelationVerdict] = []
+
+    if labels:
+        label_a, label_b = labels
+        if label_a == label_b:
+            return refused("a label is already itself; a pair needs two labels.")
+        kinds = {name: await storage.get_relation_kind(name) for name in labels}
+        unused = [name for name, in_force in kinds.items() if in_force is None]
+        if unused:
+            return refused(
+                f"no edge in this graph carries the relation "
+                f"{', '.join(repr(name) for name in unused)}, so no verdict about "
+                f"the pair can be standing. `list_relations` shows the vocabulary "
+                f"that exists."
+            )
+        records = [await storage.get_relation_label(name, kinds[name]) for name in labels]
+        if any(record is None for record in records):
+            return refused(
+                f"'{label_a}' and '{label_b}' have no verdict between them: a "
+                f"label with no record has never been judged, so there is nothing "
+                f"to reopen."
+            )
+        pair_ids = list(relation_pair_key(records[0].id, records[1].id))
+        standing = await storage.relation_verdicts_for(pair_ids)
+        if tuple(pair_ids) not in standing_relation_pairs(standing):
+            return refused(
+                f"no standing verdict about '{label_a}' and '{label_b}': the pair "
+                f"is already offered by `reflect`, or it has been reopened already."
+            )
+        verdicts.append(
+            RelationVerdict(
+                label_ids=pair_ids,
+                verdict=REOPENED_VERDICT,
+                because=reason,
+                judged_by=judge,
+            )
+        )
+        subjects = pair_ids
+        layer = "relation_pair"
+    else:
+        found = await storage.get_nodes(nodes)
+        missing = [node_id for node_id in nodes if node_id not in found]
+        if missing:
+            return refused(f"no such node: {', '.join(missing)}.")
+        if len(nodes) == 1:
+            node_id = nodes[0]
+            if node_id not in await confirmed_reasons_for([node_id], storage):
+                return refused(
+                    f"no standing retention verdict for {node_id}: nothing is "
+                    f"keeping it out of the archival worklist, so there is "
+                    f"nothing to reopen."
+                )
+            subjects = [node_id]
+            layer = "node"
+        else:
+            a_id, b_id = nodes
+            if a_id == b_id:
+                return refused("a node is already itself; a pair needs two nodes.")
+            assessed = await symmetric_edges_between(a_id, b_id, EdgeType.ASSESSED, storage)
+            if not assessed:
+                return refused(
+                    f"no standing `assessed` edge between {a_id} and {b_id}: the "
+                    f"pair has not been judged here, or it has been reopened "
+                    f"already."
+                )
+            # `reopen` undoes a decline. These three are what somebody asserted
+            # about the pair, and withdrawing one would change what corroboration
+            # counts or what a contradiction says: the opposite verdict rather
+            # than the question again.
+            standing_claims = [
+                f"a `{edge_type.value}` edge ({edge.id})"
+                for edge_type in (
+                    EdgeType.SIMILARITY,
+                    EdgeType.CONTRADICTION,
+                    EdgeType.VARIANT_OF,
+                )
+                for edge in await symmetric_edges_between(a_id, b_id, edge_type, storage)
+            ]
+            if standing_claims:
+                return refused(
+                    f"{'; '.join(standing_claims)} still stands between {a_id} and "
+                    f"{b_id}, and reopening the assessment alone would leave the "
+                    f"pair suppressed by it. That edge is an assertion about the "
+                    f"pair rather than a decline, so withdrawing it is a verdict: "
+                    f"`apply_reflection(similarities=[...])` with 'distinct' is "
+                    f"what withdraws a standing 'one_claim'."
+                )
+            now = datetime.now(UTC)
+            retired_edges = [
+                edge.model_copy(update={"retired_at": now, "retired_by": judge})
+                for edge in assessed
+            ]
+            subjects = sorted(nodes)
+            layer = "fact_pair"
+
+    record = DecisionRecord(
+        kind=DecisionKind.REOPENED,
+        subject_ids=subjects,
+        judged_by=judge,
+        # The prose goes where every journal row carries its prose. `certainty`
+        # stays blank: how sure somebody is that a question is worth asking
+        # again is not a rung on the ladder that measures a judgment.
+        certainty_basis=reason,
+    )
+    await storage.reopen_tx(record, retired_edges=retired_edges, relation_verdicts=verdicts)
+
+    result = {
+        "reopened": True,
+        "layer": layer,
+        "subjects": subjects,
+        "reason": reason,
+        "assessments_retired": [edge.id for edge in retired_edges],
+        "decision_id": record.id,
+    }
+    return result, ResponseMeta(retrieved=_declare(nodes))
+
+
 # --- Review (reading the journal back, REVIEW_MODE.md §6) ---
 
 # One page of decisions, and the cap is the nomination cap applied verbatim: `all`
@@ -6001,6 +6463,11 @@ def _node_type_key(node: EpistemicNode) -> str:
     return "unknown"
 
 
+def _node_summary(node: EpistemicNode) -> dict:
+    """A node as another record's answer names it: enough to read and to fetch."""
+    return {"id": node.id, "content": node.content, "node_type": _node_type_key(node)}
+
+
 def _reconstruct_node(data: dict) -> EpistemicNode:
     """Reconstruct a typed node from a dict.
 
@@ -6091,14 +6558,189 @@ def _reference_time_iso(timeline: Timeline) -> str | None:
     return None if timeline.reference_time is None else timeline.reference_time.isoformat()
 
 
-def _timepoint_payload(timepoint: Timepoint) -> dict:
-    """A timepoint as a caller reads it: its stored fields plus its `kind`.
+def _timepoint_payload(
+    timepoint: Timepoint,
+    *,
+    bounds: object = None,
+    contradiction_id: str | None = None,
+    linked: list[dict] | None = None,
+) -> dict:
+    """A timepoint as a caller reads it: its stored fields plus what was derived.
 
     `kind` is derived rather than stored, so it is added here instead of coming
     out of `model_dump`. That is the point of deriving it: the record cannot
-    hold a kind that disagrees with the dates beside it.
+    hold a kind that disagrees with the dates beside it. `earliest`, `latest`
+    and `contested` are derived the same way and for the same reason, and none
+    of the three is ever written back onto the record.
+
+    `linked` is the facts dated to this point, fetched by the caller and passed
+    in so this stays a function of its arguments.
     """
-    return {**timepoint.model_dump(mode="json"), "kind": timepoint.kind}
+    payload: dict = {**timepoint.model_dump(mode="json"), "kind": timepoint.kind}
+    if linked is not None:
+        payload["linked"] = linked
+    if bounds is not None:
+        payload["earliest"] = None if bounds.earliest is None else bounds.earliest.isoformat()
+        payload["latest"] = None if bounds.latest is None else bounds.latest.isoformat()
+    payload["contested"] = contradiction_id is not None
+    if contradiction_id is not None:
+        payload["temporal_contradiction_id"] = contradiction_id
+    return payload
+
+
+async def _plan_timelink_moves(
+    storage: StorageBackend,
+    *,
+    timeline_id: str,
+    moves: Sequence,
+    judge: JudgeRef | None,
+    at: datetime,
+) -> tuple[list[NodeEdge], list[NodeEdge]]:
+    """Plan each named node's link away from one point and onto another.
+
+    **Retire rather than delete**, because nothing in this graph is deleted and
+    a fact's date is part of what it claims: the old link stays, marked with
+    when it stopped counting, who decided, and which link replaced it. A reader
+    asking what this fact used to be dated to still has an answer.
+
+    Planned rather than written, so the caller can hand the edges to
+    `write_timeline_tx` along with the timeline and land the whole decision at
+    once. A split that wrote the record and then re-pointed the links one call
+    at a time could fail between them, leaving the timeline saying the fact had
+    moved while its link still named the old date.
+
+    Only the two timepoint verdicts move links. There is no general tool for
+    detaching a fact from its date, and adding one would be a way to drop
+    evidence without a decision behind it.
+
+    A link to a recurrence rule names no point, so no split or merge of points
+    moves it: the rule is untouched by either verdict.
+    """
+    retired: list[NodeEdge] = []
+    written: list[NodeEdge] = []
+    for move in moves:
+        for edge in await storage.get_edges_from(move.node_id, edge_type=EdgeType.TIMELINK):
+            if edge.dst_id != timeline_id or not edge_is_live(edge):
+                continue
+            if edge.metadata.get("timepoint_id") != move.from_point_id:
+                continue
+            replacement = NodeEdge(
+                src_id=edge.src_id,
+                dst_id=timeline_id,
+                type=EdgeType.TIMELINK,
+                judged_by=judge,
+                metadata={**edge.metadata, "timepoint_id": move.to_point_id},
+            )
+            retired.append(
+                edge.model_copy(
+                    update={
+                        "retired_at": at,
+                        "retired_by": judge,
+                        "superseded_by": replacement.id,
+                    }
+                )
+            )
+            written.append(replacement)
+    return retired, written
+
+
+async def _nodes_linked_to_point(
+    storage: StorageBackend,
+    *,
+    timeline_id: str,
+    timepoint_id: str,
+) -> list[str]:
+    """Every node whose live `TIMELINK` names this point, in the order found.
+
+    A rule-level link names no point and never matches.
+    """
+    found: list[str] = []
+    for edge in await storage.get_edges_to(timeline_id, edge_type=EdgeType.TIMELINK):
+        if not edge_is_live(edge) or edge.metadata.get("timepoint_id") != timepoint_id:
+            continue
+        if edge.src_id not in found:
+            found.append(edge.src_id)
+    return found
+
+
+async def _timelinked_summaries(
+    storage: StorageBackend, timeline_id: str
+) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
+    """The facts live on this timeline, grouped by rule and by point.
+
+    One edge read for the whole timeline and one batched node read, so an answer
+    covering two hundred occurrences of a rule costs what an answer covering one
+    occurrence costs. A rule-level link is read once and repeated down the
+    answer rather than looked up per occurrence.
+
+    A retired link is the record of what a fact used to be dated to, and a
+    retired node is kept for the audit trail rather than for its content, so
+    neither is listed.
+    """
+    by_recurrence: dict[str, list[str]] = {}
+    by_point: dict[str, list[str]] = {}
+    for edge in await storage.get_edges_to(timeline_id, edge_type=EdgeType.TIMELINK):
+        if not edge_is_live(edge):
+            continue
+        for key, grouped in (
+            (edge.metadata.get("recurrence_id"), by_recurrence),
+            (edge.metadata.get("timepoint_id"), by_point),
+        ):
+            if key is None:
+                continue
+            found = grouped.setdefault(key, [])
+            if edge.src_id not in found:
+                found.append(edge.src_id)
+
+    node_ids = list(
+        dict.fromkeys(
+            node_id
+            for group in (by_recurrence, by_point)
+            for ids in group.values()
+            for node_id in ids
+        )
+    )
+    nodes = await storage.get_nodes(node_ids) if node_ids else {}
+    summaries = {
+        node_id: _node_summary(node)
+        for node_id, node in nodes.items()
+        if node.status is NodeStatus.ACTIVE
+    }
+
+    def rendered(grouped: dict[str, list[str]]) -> dict[str, list[dict]]:
+        return {
+            key: [summaries[node_id] for node_id in ids if node_id in summaries]
+            for key, ids in grouped.items()
+        }
+
+    return rendered(by_recurrence), rendered(by_point)
+
+
+async def _load_timeline(storage: StorageBackend, timeline_id: str) -> Timeline:
+    tl = await storage.get_timeline(timeline_id)
+    if tl is None:
+        raise ValueError(f"Timeline '{timeline_id}' not found")
+    return tl
+
+
+def _contradiction_payload(timeline_id: str, contradiction) -> dict:
+    """One temporal contradiction as a caller reads it.
+
+    The contradiction's own id is spelled `temporal_contradiction_id` rather
+    than `id` throughout, because `reflect` declares every `id` it returns as a
+    node it retrieved, and a contradiction is not a node.
+    """
+    return {
+        "timeline_id": timeline_id,
+        "temporal_contradiction_id": contradiction.id,
+        "kind": contradiction.kind,
+        "edges": [edge.model_dump(mode="json") for edge in contradiction.edges],
+        "point_id": contradiction.point_id,
+        "constraint_ids": list(contradiction.constraint_ids),
+        "sources": list(contradiction.sources),
+        "found_at": contradiction.found_at.isoformat(),
+        "held": contradiction.held,
+    }
 
 
 async def create_timeline(
@@ -6164,35 +6806,732 @@ async def add_timeline_timepoint(
     start: datetime | None = None,
     end: datetime | None = None,
     label: str | None = None,
+    recurrence_id: str | None = None,
+    occurrence_start: datetime | None = None,
 ) -> tuple[dict, ResponseMeta]:
-    """Add a timepoint to an existing timeline.
+    """Add a timepoint to an existing timeline, by its dates or as one occurrence.
 
     The shape of the point is checked before anything is read or written, so a
     malformed request comes back as the same kind of plain refusal as a timeline
     that does not exist, rather than as a validation error raised from inside
     the model.
+
+    **`recurrence_id` with `occurrence_start` names an occurrence instead of
+    dates**, and materialises it: the rule says when it is, so repeating the
+    dates here would be a second answer that could disagree. Materialising is
+    idempotent on the pair, so asking twice gives the same point. This tool's
+    job is already "put a point on this timeline", which is why the second way
+    of naming a point lives here rather than in a tool of its own.
+
+    **A dated point runs the ordering checks.** A new date creates edges against
+    every other dated point, and one of them can complete a loop with constraints
+    already recorded, or squeeze a point until its bounds cross. If this call
+    skipped the checks a contradiction would go unrecorded while the system
+    appeared to be checking for one. A materialised occurrence is a dated point
+    like any other and runs them too. A vague point orders nothing by itself, so
+    it runs nothing.
     """
     from epimemer.pipelines.timeline.functions import add_timepoint
+    from epimemer.pipelines.timeline.ordering import clear_holds, run_checks
+    from epimemer.pipelines.timeline.recurrence import materialise
 
-    kind = timepoint_kind(start, end, label)
+    materialising = recurrence_id is not None or occurrence_start is not None
+    if materialising:
+        if recurrence_id is None or occurrence_start is None:
+            raise ValueError(
+                "Materialising an occurrence needs both `recurrence_id` and "
+                "`occurrence_start`: the rule and the start it gave are what "
+                "identify one occurrence."
+            )
+        if start is not None or end is not None or label is not None:
+            raise ValueError(
+                "An occurrence takes its dates and its words from its rule, so "
+                "pass `recurrence_id` and `occurrence_start` alone. To record a "
+                "point whose dates differ from the rule's, record the move with "
+                "`record_recurrence_exception` and materialise it after."
+            )
 
-    tl = await storage.get_timeline(timeline_id)
-    if tl is None:
-        raise ValueError(f"Timeline '{timeline_id}' not found")
+    tl = await _load_timeline(storage, timeline_id)
+    kind = "instant" if materialising else timepoint_kind(start, end, label)
+    created = True
+    report = None
 
-    tl, tp = add_timepoint(tl, start=start, end=end, label=label)
-    await storage.store_timeline(tl)  # overwrite with updated timeline
+    if materialising:
+        tl, report = materialise(tl, recurrence_id=recurrence_id, occurrence_start=occurrence_start)
+        if report.refused is not None:
+            raise ValueError(report.refused)
+        created = report.created
+        point_id = report.timepoint_id
+        kind = "interval" if report.occurrence.end is not None else "instant"
+        dated = True
+    else:
+        tl, tp = add_timepoint(tl, start=start, end=end, label=label)
+        point_id = tp.id
+        dated = start is not None
+
+    opened = []
+    if dated and created:
+        at = datetime.now(UTC)
+        # A dated point is new evidence about every point it now orders, so a
+        # contradiction being held for want of evidence stops being held.
+        tl = clear_holds(tl, [point.id for point in tl.timepoints])
+        tl, opened = run_checks(tl, at=at)
+    if created:
+        await storage.store_timeline(tl)  # overwrite with updated timeline
 
     result = {
         "timeline_id": tl.id,
-        "timepoint_id": tp.id,
+        "timepoint_id": point_id,
         # What the dates were read as: an instant, an interval, or a vague point
         # that only a label places.
         "kind": kind,
         "timepoints_count": len(tl.timepoints),
+        "temporal_contradictions": [
+            _contradiction_payload(tl.id, contradiction) for contradiction in opened
+        ],
     }
+    if materialising:
+        result |= {
+            "recurrence_id": recurrence_id,
+            "occurrence_start": report.occurrence.occurrence_start.isoformat(),
+            "start": report.occurrence.start.isoformat(),
+            # False when this occurrence already had a point: the call is
+            # idempotent, and a caller repeating it wants to know that the id
+            # it got back is the one it made earlier.
+            "materialised": created,
+        }
     meta = ResponseMeta(nodes_returned=1)
     return result, meta
+
+
+async def order_timepoints(
+    timeline_id: str,
+    storage: StorageBackend,
+    *,
+    pairs: Sequence[dict],
+    source_id: str,
+    basis: str,
+    because: str | None = None,
+    judge: JudgeRef | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Record that a source says these points came in this order.
+
+    A list of pairs with one source and one basis, because a source that states
+    an order usually states several at once, and one reading of one source
+    should be one journal row. That is the rule `store_decomposition` already
+    follows.
+
+    Idempotent on the pair plus the source: asserting the same order twice
+    returns the first constraint rather than a second one.
+
+    Opening a contradiction does not fail the call. The graph holds the
+    disagreement; it does not decide it.
+    """
+    from epimemer.pipelines.timeline.ordering import add_constraints
+
+    try:
+        parsed_basis = IntervalBasis(basis)
+    except ValueError:
+        return (
+            {
+                "ordered": False,
+                "timeline_id": timeline_id,
+                "refused": (
+                    f"`basis` has no default and must be 'stated' or 'inferred', "
+                    f"not {basis!r}. A source that narrates the fire and then the "
+                    f"flood has not stated which came first, so a judge reading "
+                    f"the order off the telling records it as inferred."
+                ),
+            },
+            ResponseMeta(),
+        )
+
+    wanted = [(str(pair.get("earlier_id")), str(pair.get("later_id"))) for pair in pairs]
+    tl = await _load_timeline(storage, timeline_id)
+    at = datetime.now(UTC)
+    tl, report = add_constraints(
+        tl,
+        wanted,
+        source_id=source_id,
+        basis=parsed_basis,
+        because=because,
+        judge=judge,
+        at=at,
+    )
+    await storage.write_timeline_tx(
+        tl,
+        kind=DecisionKind.TEMPORAL_ORDER,
+        counts={"constraints": len(report.outcomes), "contradictions": len(report.opened)},
+        judge=judge,
+    )
+    record = await journal(
+        storage, DecisionKind.TEMPORAL_ORDER, [timeline_id, source_id], judge=judge
+    )
+
+    result = {
+        "ordered": True,
+        "timeline_id": tl.id,
+        "source_id": source_id,
+        "basis": parsed_basis.value,
+        "pairs": [outcome.model_dump(mode="json") for outcome in report.outcomes],
+        "temporal_contradictions": [
+            _contradiction_payload(tl.id, contradiction) for contradiction in report.opened
+        ],
+        "decision_id": record.id if record else None,
+    }
+    return result, ResponseMeta(nodes_returned=len(report.outcomes))
+
+
+async def resolve_temporal_contradiction(
+    timeline_id: str,
+    storage: StorageBackend,
+    *,
+    contradiction_id: str,
+    verdict: str,
+    because: str,
+    constraint_id: str | None = None,
+    point_id: str | None = None,
+    constraints_to_move: Sequence[str] | None = None,
+    nodes_to_move: Sequence[str] | None = None,
+    judge: JudgeRef | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Answer a temporal contradiction with one of three verdicts.
+
+    **retire_constraint**: one source's assertion should not be believed, and
+    `because` says why in the judge's own words. The three real reasons are that
+    the source was misread, that the source is unreliable, or that the order it
+    gives is narrative rather than chronological.
+
+    **not_the_same_event**: both sources are right, and the point is really two
+    events. A new point takes the original's label, the named constraints move
+    to it, and the facts named in `nodes_to_move` move with it, each link
+    retired and rewritten.
+
+    **hold**: the sources genuinely disagree and nothing on hand settles it. The
+    contradiction stays open and the point stays contested, but `reflect` stops
+    nominating it until a new constraint or a new dated point touching it
+    arrives.
+
+    Nothing is deleted and no constraint's stored content is edited: a
+    re-pointed constraint is a retirement plus a fresh one, linked.
+    """
+    from epimemer.pipelines.timeline.ordering import hold, retire_constraint, split_timepoint
+
+    tl = await _load_timeline(storage, timeline_id)
+    at = datetime.now(UTC)
+
+    if verdict == "retire_constraint":
+        if constraint_id is None:
+            updated, report = tl, None
+            refusal = "`retire_constraint` needs the `constraint_id` it withdraws."
+        else:
+            updated, report = retire_constraint(
+                tl,
+                contradiction_id=contradiction_id,
+                constraint_id=constraint_id,
+                because=because,
+                judge=judge,
+                at=at,
+            )
+            refusal = report.refused
+    elif verdict == "not_the_same_event":
+        if point_id is None or not constraints_to_move:
+            updated, report = tl, None
+            refusal = (
+                "`not_the_same_event` needs the `point_id` it splits and the "
+                "`constraints_to_move` that follow the new point."
+            )
+        else:
+            updated, report = split_timepoint(
+                tl,
+                contradiction_id=contradiction_id,
+                point_id=point_id,
+                constraints_to_move=constraints_to_move,
+                nodes_to_move=nodes_to_move or (),
+                because=because,
+                judge=judge,
+                at=at,
+            )
+            refusal = report.refused
+    elif verdict == "hold":
+        updated, report = hold(
+            tl, contradiction_id=contradiction_id, because=because, judge=judge, at=at
+        )
+        refusal = report.refused
+    else:
+        updated, report = tl, None
+        refusal = (
+            f"`verdict` must be 'retire_constraint', 'not_the_same_event' or "
+            f"'hold', not {verdict!r}."
+        )
+
+    if refusal is not None:
+        return (
+            {
+                "resolved": False,
+                "timeline_id": timeline_id,
+                "temporal_contradiction_id": contradiction_id,
+                "refused": refusal,
+            },
+            ResponseMeta(),
+        )
+
+    linked_before = (
+        await _nodes_linked_to_point(storage, timeline_id=timeline_id, timepoint_id=point_id)
+        if verdict == "not_the_same_event" and point_id is not None
+        else []
+    )
+    retired_edges, new_edges = await _plan_timelink_moves(
+        storage,
+        timeline_id=timeline_id,
+        moves=report.link_moves,
+        judge=judge,
+        at=at,
+    )
+    await storage.write_timeline_tx(
+        updated,
+        kind=DecisionKind.TEMPORAL_VERDICT,
+        retired_edges=retired_edges,
+        new_edges=new_edges,
+        counts={
+            "points": 1 if report.new_timepoint_id else 0,
+            "constraints": len(report.moved_constraint_ids),
+            "contradictions": len(report.opened),
+        },
+        judge=judge,
+    )
+    retired_links = [edge.id for edge in retired_edges]
+    rewritten_links = [edge.id for edge in new_edges]
+    # Read before the write, so the nodes that moved are still on the original
+    # point: what is left is what was linked minus what went with the new point.
+    moved_node_ids = {edge.src_id for edge in new_edges}
+    left_on_original = [node_id for node_id in linked_before if node_id not in moved_node_ids]
+    record = await journal(
+        storage,
+        DecisionKind.TEMPORAL_VERDICT,
+        [timeline_id, contradiction_id],
+        judge=judge,
+    )
+
+    result = {
+        "resolved": True,
+        "timeline_id": timeline_id,
+        "temporal_contradiction_id": contradiction_id,
+        "verdict": verdict,
+        "returned_to_live": report.returned_to_live,
+        "still_disputed": report.still_disputed,
+        "new_timepoint_id": report.new_timepoint_id,
+        "moved_constraint_ids": report.moved_constraint_ids,
+        "links_retired": retired_links,
+        "links_written": rewritten_links,
+        "nodes_left_on_original": left_on_original,
+        "temporal_contradictions": [
+            _contradiction_payload(timeline_id, contradiction) for contradiction in report.opened
+        ],
+        "decision_id": record.id if record else None,
+    }
+    return result, ResponseMeta(nodes_returned=1)
+
+
+async def merge_timepoints(
+    timeline_id: str,
+    storage: StorageBackend,
+    *,
+    survivor_id: str,
+    merged_id: str,
+    because: str,
+    judge: JudgeRef | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Two points are one moment, so one of them retires into the other.
+
+    Extraction creates one point per distinct phrase, so "the launch" and "the
+    go-live" from two documents become two points that a judge may later
+    recognise as one event. Every constraint naming the retired point moves to
+    the survivor and **every** link moves with it: a merge asserts the two are
+    one, so every fact about either is a fact about it.
+
+    Refused when a live constraint orders the two points against each other. A
+    source that ordered them said they are not one moment, and that constraint
+    has to be retired with a reason first.
+    """
+    from epimemer.pipelines.timeline.ordering import merge_timepoints as merge_points
+
+    tl = await _load_timeline(storage, timeline_id)
+    at = datetime.now(UTC)
+    linked = await _nodes_linked_to_point(storage, timeline_id=timeline_id, timepoint_id=merged_id)
+    updated, report = merge_points(
+        tl,
+        survivor_id=survivor_id,
+        merged_id=merged_id,
+        linked_node_ids=linked,
+        because=because,
+        judge=judge,
+        at=at,
+    )
+    if report.refused is not None:
+        return (
+            {
+                "merged": False,
+                "timeline_id": timeline_id,
+                "survivor_id": survivor_id,
+                "merged_id": merged_id,
+                "refused": report.refused,
+            },
+            ResponseMeta(),
+        )
+
+    retired_edges, new_edges = await _plan_timelink_moves(
+        storage, timeline_id=timeline_id, moves=report.link_moves, judge=judge, at=at
+    )
+    await storage.write_timeline_tx(
+        updated,
+        kind=DecisionKind.TIMEPOINT_MERGE,
+        retired_edges=retired_edges,
+        new_edges=new_edges,
+        counts={
+            "constraints": len(report.moved_constraint_ids),
+            "contradictions": len(report.opened),
+        },
+        judge=judge,
+    )
+    retired_links = [edge.id for edge in retired_edges]
+    rewritten_links = [edge.id for edge in new_edges]
+    record = await journal(
+        storage,
+        DecisionKind.TIMEPOINT_MERGE,
+        [timeline_id, survivor_id, merged_id],
+        judge=judge,
+    )
+
+    result = {
+        "merged": True,
+        "timeline_id": timeline_id,
+        "survivor_id": survivor_id,
+        "merged_id": merged_id,
+        "moved_constraint_ids": report.moved_constraint_ids,
+        "links_retired": retired_links,
+        "links_written": rewritten_links,
+        "temporal_contradictions": [
+            _contradiction_payload(timeline_id, contradiction) for contradiction in report.opened
+        ],
+        "decision_id": record.id if record else None,
+    }
+    return result, ResponseMeta(nodes_returned=1)
+
+
+def _occurrence_payload(
+    occurrence,
+    *,
+    materialised_id: str | None,
+    label: str,
+    linked: list[dict] | None = None,
+    linked_via_rule: list[dict] | None = None,
+) -> dict:
+    """One computed occurrence, in the shape a timepoint comes back in.
+
+    An occurrence reads as a point because that is what it is to a caller: a
+    thing that happened, with dates, that can be linked once somebody
+    materialises it. What it carries that a stored point does not is the rule it
+    came from, the start that rule gave it, and `materialised_id`, which is null
+    until an occurrence has a record of its own.
+
+    Two lists of facts, kept apart because they say different things. `linked`
+    is what somebody attached to this occurrence alone, which is possible only
+    once it is materialised. `linked_via_rule` is what holds at every occurrence
+    the rule produces, so it repeats down the answer. Merging them would lose
+    which of the two a reader is looking at, and only one of them is evidence
+    about this date.
+    """
+    payload = {
+        "id": materialised_id,
+        "recurrence_id": occurrence.recurrence_id,
+        "occurrence_start": occurrence.occurrence_start.isoformat(),
+        "start": occurrence.start.isoformat(),
+        "end": None if occurrence.end is None else occurrence.end.isoformat(),
+        "kind": "interval" if occurrence.end is not None else "instant",
+        "label": label,
+        "cancelled": occurrence.cancelled,
+        "moved": occurrence.moved,
+        "materialised_id": materialised_id,
+    }
+    if linked is not None:
+        payload["linked"] = linked
+    if linked_via_rule is not None:
+        payload["linked_via_rule"] = linked_via_rule
+    return payload
+
+
+def _recurrence_payload(recurrence) -> dict:
+    """One rule as a caller reads it, with the end a bound change may have moved."""
+    return {
+        "recurrence_id": recurrence.id,
+        "label": recurrence.label,
+        "rule": recurrence.rule.model_dump(mode="json"),
+        # In seconds, and named so: a bare number under `duration` would leave
+        # the unit to be guessed.
+        "duration_seconds": recurrence.duration.total_seconds(),
+        "bounds": {
+            "start": (
+                None if recurrence.bounds.start is None else recurrence.bounds.start.isoformat()
+            ),
+            "end": (
+                None if recurrence.effective_end is None else recurrence.effective_end.isoformat()
+            ),
+        },
+        "exceptions": [exception.model_dump(mode="json") for exception in recurrence.exceptions],
+        "source_id": recurrence.source_id,
+    }
+
+
+async def add_recurrence(
+    timeline_id: str,
+    storage: StorageBackend,
+    *,
+    label: str,
+    duration: timedelta = timedelta(0),
+    anchor: datetime | None = None,
+    period: timedelta | None = None,
+    rrule: str | None = None,
+    bounds_start: datetime | None = None,
+    bounds_end: datetime | None = None,
+    source_id: str | None = None,
+    judge: JudgeRef | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Record a rule for something that happens over and over.
+
+    Two kinds of rule, and exactly one of them per call. A **periodic** rule is
+    `anchor` plus `period`: arithmetic, so "every third day from the founding"
+    works on an invented timeline as well as a real one. A **calendar** rule is
+    an RFC 5545 `rrule` string, which is how "the second Tuesday of every month"
+    is said.
+
+    The occurrences are computed, never stored, so nothing here writes a list
+    that could later disagree with the rule.
+
+    **The response previews the first few occurrences**, because an rrule string
+    is easy to mistype in a way that still parses, and without a preview the
+    mistake stays invisible until someone queries a window months later.
+    """
+    from epimemer.pipelines.timeline.recurrence import (
+        add_recurrence as add_rule,
+    )
+    from epimemer.pipelines.timeline.recurrence import preview
+
+    periodic = anchor is not None or period is not None
+    refusal = None
+    if periodic and rrule is not None:
+        refusal = (
+            "Give either `anchor` with `period` or an `rrule`, not both: a rule "
+            "that repeats by arithmetic and a rule that repeats by the calendar "
+            "are two different rules, and one recurrence holds one."
+        )
+    elif periodic and (anchor is None or period is None):
+        refusal = "A periodic rule needs both `anchor` and `period`."
+    elif not periodic and rrule is None:
+        refusal = (
+            "A recurrence needs a rule: `anchor` with `period` for one that "
+            "repeats by arithmetic, or `rrule` for one that follows the calendar."
+        )
+
+    rule = None
+    if refusal is None:
+        try:
+            rule = (
+                PeriodicRule(anchor=anchor, period=period)
+                if periodic
+                else CalendarRule(rrule=rrule)
+            )
+        except ValidationError as exc:
+            refusal = "; ".join(error["msg"] for error in exc.errors())
+
+    if refusal is not None:
+        return (
+            {"added": False, "timeline_id": timeline_id, "label": label, "refused": refusal},
+            ResponseMeta(),
+        )
+
+    tl = await _load_timeline(storage, timeline_id)
+    at = datetime.now(UTC)
+    tl, recurrence = add_rule(
+        tl,
+        label=label,
+        rule=rule,
+        duration=duration,
+        bounds=RecurrenceBounds(start=bounds_start, end=bounds_end),
+        source_id=source_id,
+        judge=judge,
+        at=at,
+    )
+    await storage.write_timeline_tx(tl, kind=DecisionKind.RECURRENCE, judge=judge)
+    record = await journal(
+        storage,
+        DecisionKind.RECURRENCE,
+        [timeline_id, recurrence.id] + ([source_id] if source_id else []),
+        judge=judge,
+    )
+
+    result = {
+        "added": True,
+        "timeline_id": tl.id,
+        **_recurrence_payload(recurrence),
+        "preview": [
+            _occurrence_payload(occurrence, materialised_id=None, label=recurrence.label)
+            for occurrence in preview(recurrence)
+        ],
+        "decision_id": record.id if record else None,
+    }
+    return result, ResponseMeta(nodes_returned=1)
+
+
+async def end_recurrence(
+    timeline_id: str,
+    storage: StorageBackend,
+    *,
+    recurrence_id: str,
+    ends_at: datetime | None,
+    because: str,
+    judge: JudgeRef | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Say when a rule stopped applying, without retiring it.
+
+    A recurrence such as "Christmas is 24 to 26 December, annually" never stops
+    being true, so a rule has no lifecycle: what a later reading changes is
+    where it ends. Each change is appended, and the most recent one is in force,
+    so "we thought it stopped in 1990, then learned it was 1993" reads as the
+    correction it is rather than overwriting the first answer.
+    """
+    from epimemer.pipelines.timeline.recurrence import end_recurrence as end_rule
+
+    tl = await _load_timeline(storage, timeline_id)
+    at = datetime.now(UTC)
+    tl, report = end_rule(
+        tl,
+        recurrence_id=recurrence_id,
+        ends_at=ends_at,
+        because=because,
+        judge=judge,
+        at=at,
+    )
+    if report.refused is not None:
+        return (
+            {
+                "ended": False,
+                "timeline_id": timeline_id,
+                "recurrence_id": recurrence_id,
+                "refused": report.refused,
+            },
+            ResponseMeta(),
+        )
+
+    await storage.write_timeline_tx(
+        tl,
+        kind=DecisionKind.RECURRENCE_BOUND,
+        counts={"bound_changes": len(report.bound_changes)},
+        judge=judge,
+    )
+    record = await journal(
+        storage, DecisionKind.RECURRENCE_BOUND, [timeline_id, recurrence_id], judge=judge
+    )
+
+    result = {
+        "ended": True,
+        "timeline_id": timeline_id,
+        "recurrence_id": recurrence_id,
+        "effective_end": (
+            None if report.effective_end is None else report.effective_end.isoformat()
+        ),
+        # The whole history, so a second correction shows what it corrected.
+        "bound_changes": [change.model_dump(mode="json") for change in report.bound_changes],
+        "decision_id": record.id if record else None,
+    }
+    return result, ResponseMeta(nodes_returned=1)
+
+
+async def record_recurrence_exception(
+    timeline_id: str,
+    storage: StorageBackend,
+    *,
+    recurrence_id: str,
+    occurrence_start: datetime,
+    kind: str,
+    moved_to: datetime | None = None,
+    source_id: str | None = None,
+    because: str | None = None,
+    judge: JudgeRef | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Record that one occurrence did not happen, or happened elsewhere in time.
+
+    A rule with no way to say "the 1943 service was cancelled" would force a
+    choice between recording something false and abandoning the rule to write
+    every occurrence by hand, and the second is worse: the recurrence is then
+    lost.
+
+    The occurrence is named by `occurrence_start`, the start the rule gives it,
+    which `query_timeline` reports beside every occurrence. A moved occurrence
+    keeps that start as its identity and is reported at `moved_to`.
+    """
+    from epimemer.pipelines.timeline.recurrence import record_exception
+
+    if kind not in ("cancelled", "moved"):
+        return (
+            {
+                "recorded": False,
+                "timeline_id": timeline_id,
+                "recurrence_id": recurrence_id,
+                "refused": (
+                    f"`kind` must be 'cancelled' or 'moved', not {kind!r}. An "
+                    f"occurrence that did not happen is cancelled; one that "
+                    f"happened at another time moved."
+                ),
+            },
+            ResponseMeta(),
+        )
+
+    tl = await _load_timeline(storage, timeline_id)
+    at = datetime.now(UTC)
+    tl, report = record_exception(
+        tl,
+        recurrence_id=recurrence_id,
+        occurrence_start=occurrence_start,
+        kind=kind,
+        moved_to=moved_to,
+        source_id=source_id,
+        because=because,
+        judge=judge,
+        at=at,
+    )
+    if report.refused is not None:
+        return (
+            {
+                "recorded": False,
+                "timeline_id": timeline_id,
+                "recurrence_id": recurrence_id,
+                "refused": report.refused,
+            },
+            ResponseMeta(),
+        )
+
+    await storage.write_timeline_tx(
+        tl,
+        kind=DecisionKind.RECURRENCE_EXCEPTION,
+        counts={"exceptions": 1},
+        judge=judge,
+    )
+    record = await journal(
+        storage,
+        DecisionKind.RECURRENCE_EXCEPTION,
+        [timeline_id, recurrence_id] + ([source_id] if source_id else []),
+        judge=judge,
+    )
+
+    result = {
+        "recorded": True,
+        "timeline_id": timeline_id,
+        "recurrence_id": recurrence_id,
+        "exception": report.exception.model_dump(mode="json"),
+        "decision_id": record.id if record else None,
+    }
+    return result, ResponseMeta(nodes_returned=1)
 
 
 async def query_timeline(
@@ -6203,27 +7542,188 @@ async def query_timeline(
     range_start: datetime | None = None,
     range_end: datetime | None = None,
     k: int = 5,
+    between: Sequence[str] | None = None,
+    before: str | None = None,
+    after: str | None = None,
+    basis: str = "all",
+    include_contested: bool = True,
+    include_recurrences: bool = True,
+    occurrence_cap: int | None = None,
+    next_after: datetime | None = None,
+    now: datetime | None = None,
 ) -> tuple[dict, ResponseMeta]:
-    """Query timepoints on a timeline (nearest or range).
+    """Query timepoints on a timeline, by date or by stated order.
 
     Every returned point carries its `kind`, so a caller can tell an instant
     from an interval, and either from a point that only a label places, without
-    inspecting which date fields came back.
+    inspecting which date fields came back. A point nothing dates carries
+    `earliest` and `latest` where the order could derive them, and every point
+    carries `contested`, which says the order around it is in dispute rather
+    than saying anything about its date.
+
+    The three ordering modes run over the live constraints and the edges the
+    dates settle between themselves. `between` is the intersection of "after A"
+    and "before B": a point that neither reaches is not between them.
+
+    `basis="stated"` builds the order from what sources said in words, leaving
+    out what a judge read off tense or context. That answers "what do the
+    sources actually say about the order", which is the question asked when two
+    accounts disagree. The default counts both, since an inferred constraint is
+    an honest record too.
+
+    **Recurrence occurrences are computed into the answer.** A range query
+    enumerates each rule inside the window, a nearest query gives the nearest
+    occurrence of each, and a query with no window gives the next occurrence of
+    each after this timeline's own present: a timeline whose reference time is
+    May 1897 answers in 1897. `next_after` measures "next" from a moment the
+    caller names instead. The ordering modes leave occurrences out, because an
+    occurrence takes part in the order only once something materialises it.
+
+    **Every point and every occurrence names the facts attached to it.**
+    `linked` is what was dated to that point, and on an occurrence
+    `linked_via_rule` is what was linked to the rule, so a fact that holds at
+    every occurrence is visible on each of them. The two lists stay apart: only
+    `linked` is evidence about that one date.
+
+    The reference time is resolved **once** and passed down, so a long call
+    cannot see two different values of "now".
     """
     from epimemer.pipelines.timeline.functions import find_nearest, get_in_range
+    from epimemer.pipelines.timeline.ordering import (
+        active_timepoints,
+        bounds_for,
+        build_graph,
+        contested_points,
+        points_after,
+        points_before,
+        points_between,
+    )
+    from epimemer.pipelines.timeline.recurrence import (
+        OCCURRENCE_CAP,
+        materialised_ids,
+        nearest_occurrence,
+        next_occurrence,
+        occurrences_in_window,
+        resolve_reference_time,
+    )
+
+    if basis not in ("all", "stated"):
+        raise ValueError(f"`basis` must be 'all' or 'stated', not {basis!r}")
 
     tl = await storage.get_timeline(timeline_id)
     if tl is None:
         raise ValueError(f"Timeline '{timeline_id}' not found")
 
+    graph = build_graph(tl, basis=basis)
+    by_id = {point.id: point for point in active_timepoints(tl)}
+
     timepoints: list = []
-    if target is not None:
+    if between is not None:
+        first, second = list(between)
+        timepoints = [by_id[pid] for pid in points_between(graph, first, second) if pid in by_id]
+    elif after is not None:
+        timepoints = [by_id[pid] for pid in points_after(graph, after) if pid in by_id]
+    elif before is not None:
+        timepoints = [by_id[pid] for pid in points_before(graph, before) if pid in by_id]
+    elif target is not None:
         timepoints = find_nearest(tl, target, k=k)
     elif range_start is not None and range_end is not None:
         timepoints = get_in_range(tl, range_start, range_end)
     else:
-        # Return all timepoints
-        timepoints = tl.timepoints
+        # Everything a merge has not retired.
+        timepoints = list(by_id.values())
+
+    contested = contested_points(tl)
+    if not include_contested:
+        timepoints = [point for point in timepoints if point.id not in contested]
+
+    # Read once for the whole answer, so a window of two hundred occurrences
+    # costs one edge query rather than one per occurrence.
+    linked_by_rule, linked_by_point = await _timelinked_summaries(storage, tl.id)
+
+    payloads = [
+        _timepoint_payload(
+            point,
+            # Only a point nothing dates needs a derived position: a dated
+            # point's position is the date beside it. A contested point gets
+            # none at all, because the order that would place it is the thing in
+            # dispute.
+            bounds=(
+                bounds_for(graph, point.id)
+                if point.start is None and point.id not in contested
+                else None
+            ),
+            contradiction_id=contested.get(point.id),
+            linked=linked_by_point.get(point.id, []),
+        )
+        for point in timepoints
+    ]
+
+    # Resolved once, here, and handed to every rule: an enumerator that read the
+    # clock for itself could answer two different questions in one response.
+    reference = resolve_reference_time(tl, now=now or datetime.now(UTC))
+    measured_from = next_after if next_after is not None else reference
+    # A caller may ask for fewer occurrences and never for more. The cap is what
+    # keeps one query from enumerating a century of a daily rule into a
+    # response, so it is a ceiling rather than a default to be raised.
+    cap = min(occurrence_cap, OCCURRENCE_CAP) if occurrence_cap is not None else OCCURRENCE_CAP
+    ordering_mode = between is not None or before is not None or after is not None
+
+    recurrences: list[dict] = []
+    if include_recurrences and not ordering_mode:
+        for recurrence in tl.recurrences:
+            materialised = materialised_ids(tl, recurrence.id)
+            window = None
+            if range_start is not None and range_end is not None:
+                window = occurrences_in_window(
+                    recurrence, window_start=range_start, window_end=range_end, cap=cap
+                )
+                found = window.occurrences
+            elif target is not None:
+                nearest = nearest_occurrence(recurrence, target)
+                found = [nearest] if nearest is not None else []
+            else:
+                upcoming = next_occurrence(recurrence, measured_from)
+                found = [upcoming] if upcoming is not None else []
+
+            rule_facts = linked_by_rule.get(recurrence.id, [])
+            for occurrence in found:
+                materialised_id = materialised.get(occurrence.occurrence_start)
+                payloads.append(
+                    _occurrence_payload(
+                        occurrence,
+                        materialised_id=materialised_id,
+                        label=recurrence.label,
+                        # Only a materialised occurrence carries facts of its
+                        # own: until there is a point, there is nothing to link
+                        # a fact about one occurrence to.
+                        linked=(
+                            []
+                            if materialised_id is None
+                            else linked_by_point.get(materialised_id, [])
+                        ),
+                        linked_via_rule=rule_facts,
+                    )
+                )
+            recurrences.append(
+                {
+                    **_recurrence_payload(recurrence),
+                    "occurrences_returned": len(found),
+                    # Per rule, because one rule's cap firing says nothing about
+                    # the next rule's answer being complete.
+                    "truncated": bool(window and window.truncated),
+                    "covered_start": (
+                        None
+                        if window is None or window.covered_start is None
+                        else window.covered_start.isoformat()
+                    ),
+                    "covered_end": (
+                        None
+                        if window is None or window.covered_end is None
+                        else window.covered_end.isoformat()
+                    ),
+                }
+            )
 
     result = {
         "timeline_id": tl.id,
@@ -6231,34 +7731,112 @@ async def query_timeline(
         # Reported on every query so a caller reading timepoints can tell which
         # of them are past and which are future without a second call.
         "reference_time": _reference_time_iso(tl),
-        "timepoints": [_timepoint_payload(tp) for tp in timepoints],
+        "basis": basis,
+        "timepoints": payloads,
+        "recurrences": recurrences,
+        # The moment "next" was measured from: this timeline's present, or the
+        # one the caller named.
+        "occurrences_after": measured_from.isoformat(),
+        "occurrence_cap": cap,
     }
-    meta = ResponseMeta(nodes_returned=len(timepoints))
+    meta = ResponseMeta(nodes_returned=len(payloads))
     return result, meta
+
+
+def _known_recurrences(timeline: Timeline) -> str:
+    """The timeline's rules, for a refusal that leaves the caller somewhere to go."""
+    if not timeline.recurrences:
+        return "it has no recurrence rules"
+    named = ", ".join(f"{rule.id} ({rule.label})" for rule in timeline.recurrences)
+    return f"its rules are: {named}"
 
 
 async def create_timelink(
     node_id: str,
     timeline_id: str,
-    timepoint_id: str,
     storage: StorageBackend,
+    *,
+    timepoint_id: str | None = None,
+    recurrence_id: str | None = None,
 ) -> tuple[dict, ResponseMeta]:
-    """Link a node to a specific timepoint on a timeline.
+    """Link a node to one timepoint, or to a recurrence rule, on a timeline.
 
-    The response names the point's `kind`, so a caller that has just dated a
-    fact can see what it dated it to without a second call.
+    **A fact attaches at one of two levels.** Named a `timepoint_id`, it is
+    about that one moment. Named a `recurrence_id`, it holds at every occurrence
+    the rule produces: "market day is held in the square" is a fact about the
+    rule rather than about any one market. Exactly one of the two is given.
+
+    For a point, the response names the point's `kind`, the bounds the order
+    derived for it, and whether it is contested, so a caller that has just dated
+    a fact can see what it dated it to without a second call. For a rule, it
+    names the rule's label and the bounds it is in force between.
+
+    Linking to a contested point is allowed without comment: what is in dispute
+    is where the point sits, and the fact's relation to the point is not part of
+    that. A rule-level link is never contested, because a rule holds no place in
+    the order that two sources could disagree about.
     """
+    if timepoint_id is None and recurrence_id is None:
+        raise ValueError(
+            "Name either `timepoint_id`, for a fact about one moment, or "
+            "`recurrence_id`, for a fact that holds at every occurrence of a rule."
+        )
+    if timepoint_id is not None and recurrence_id is not None:
+        raise ValueError(
+            "Name `timepoint_id` or `recurrence_id`, not both: a link attaches at "
+            "one level, either the rule or one moment."
+        )
+
     # Verify node exists
     node = await storage.get_node(node_id)
     if node is None:
         raise ValueError(f"Node '{node_id}' not found")
 
-    # Verify timeline and timepoint exist
+    # Verify timeline exists
     tl = await storage.get_timeline(timeline_id)
     if tl is None:
         raise ValueError(f"Timeline '{timeline_id}' not found")
 
     from epimemer.pipelines.timeline.functions import get_timepoint
+    from epimemer.pipelines.timeline.ordering import bounds_for, build_graph, contested_points
+    from epimemer.pipelines.timeline.recurrence import find_recurrence
+
+    if recurrence_id is not None:
+        recurrence = find_recurrence(tl, recurrence_id)
+        if recurrence is None:
+            raise ValueError(
+                f"Recurrence '{recurrence_id}' not found on timeline "
+                f"'{timeline_id}': {_known_recurrences(tl)}."
+            )
+        edge = NodeEdge(
+            src_id=node_id,
+            dst_id=timeline_id,
+            type=EdgeType.TIMELINK,
+            metadata={"recurrence_id": recurrence_id},
+        )
+        await storage.store_edge(edge)
+        result = {
+            "edge_id": edge.id,
+            # Which of the two levels the fact now attaches at, said plainly so a
+            # caller reading the response does not have to infer it from which
+            # id came back.
+            "level": "recurrence",
+            "recurrence_id": recurrence_id,
+            "label": recurrence.label,
+            # The end a bound change may have moved, rather than the one first
+            # recorded: that is the end in force.
+            "bounds": {
+                "start": (
+                    None if recurrence.bounds.start is None else recurrence.bounds.start.isoformat()
+                ),
+                "end": (
+                    None
+                    if recurrence.effective_end is None
+                    else recurrence.effective_end.isoformat()
+                ),
+            },
+        }
+        return result, ResponseMeta(nodes_returned=1, retrieved=_declare([node_id]))
 
     tp = get_timepoint(tl, timepoint_id)
     if tp is None:
@@ -6272,7 +7850,24 @@ async def create_timelink(
     )
     await storage.store_edge(edge)
 
-    result = {"edge_id": edge.id, "timepoint_id": timepoint_id, "kind": tp.kind}
+    contested = contested_points(tl)
+    bounds = (
+        bounds_for(build_graph(tl), timepoint_id)
+        if tp.start is None and timepoint_id not in contested
+        else None
+    )
+    earliest = None if bounds is None or bounds.earliest is None else bounds.earliest.isoformat()
+    latest = None if bounds is None or bounds.latest is None else bounds.latest.isoformat()
+    result = {
+        "edge_id": edge.id,
+        "level": "timepoint",
+        "timepoint_id": timepoint_id,
+        "kind": tp.kind,
+        "earliest": earliest,
+        "latest": latest,
+        "contested": timepoint_id in contested,
+        "temporal_contradiction_id": contested.get(timepoint_id),
+    }
     meta = ResponseMeta(nodes_returned=1, retrieved=_declare([node_id]))
     return result, meta
 

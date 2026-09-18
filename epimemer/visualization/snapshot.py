@@ -10,7 +10,13 @@ Kept separate from any transport so both the RPC handler (`hub_client.py`) and
 tests can call them directly.
 """
 
-from epimemer.storage.protocol import StorageBackend, resolve_reflect_threshold
+from epimemer.core.advisories import WarningPolicy
+from epimemer.core.types import live_edges
+from epimemer.storage.protocol import (
+    StorageBackend,
+    resolve_reflect_threshold,
+    warning_settings,
+)
 from epimemer.visualization.events import (
     edge_to_view,
     metacontext_to_view,
@@ -21,16 +27,21 @@ from epimemer.visualization.events import (
 
 
 async def assemble_snapshot(storage: StorageBackend, graph: str) -> dict:
-    """Full snapshot of `graph` — nodes, edges, timelines, metacontexts.
+    """Full snapshot of `graph`: nodes, edges, timelines, metacontexts and
+    relation labels.
 
     Metacontexts ride along because `has_metacontext` edges carry only ids, and
     a metacontext the viewer cannot name is one it cannot offer as a filter.
     Relation labels ride along for the same reason one layer over: an edge
     carries its label as a bare string, so the vocabulary's descriptions live
     nowhere the viewer can reach from the edge alone.
+
+    Retired edges are left out. The dashboard draws what the graph currently
+    says, and a timelink a split or a merge moved would otherwise put the fact
+    on two dates at once: the one it was given and the one a judge moved it to.
     """
     nodes = await storage.viz_list_nodes(graph)
-    edges = await storage.viz_list_edges(graph)
+    edges = live_edges(await storage.viz_list_edges(graph))
     timelines = await storage.viz_list_timelines(graph)
     metacontexts = await storage.viz_list_metacontexts(graph)
     relation_labels = await storage.viz_list_relation_labels(graph)
@@ -74,3 +85,25 @@ async def list_graphs_result(storage: StorageBackend, default_reflect_threshold:
             "suggested": count >= threshold,
         },
     }
+
+
+async def warning_settings_result(storage: StorageBackend, default: WarningPolicy) -> dict:
+    """What the active graph does about advisories, in `configure_warnings`'s shape.
+
+    A read and nothing else. The dashboard's panel shows these settings and
+    never changes one: a write from the browser would be the first write into a
+    graph with no author, and every change today is journalled against a session
+    and a judge (`ADVISORIES_DASHBOARD.md` §2.4).
+
+    It describes the **active** graph, as the reflection pressure above does,
+    because the overrides are read through the session's own connection, which
+    is pointed at that graph. The response names the graph, so a panel titled
+    from it cannot be titled with one it is not showing.
+
+    The process default arrives as a value, the way `ServerConfig` travels
+    everywhere else. A session started without one reports the built-in policy,
+    which is the same answer `configure_warnings` gives in that case.
+    """
+    return warning_settings(
+        storage.current_database, await storage.get_warning_overrides(), default
+    )

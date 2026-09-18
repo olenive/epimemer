@@ -7,14 +7,14 @@ These types serve double duty:
 
 import hashlib
 from collections.abc import Iterable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from epimemer.core.temporal import ImpreciseInstant, ValidityInterval
+from epimemer.core.temporal import ImpreciseInstant, IntervalBasis, ValidityInterval
 
 
 def _now() -> datetime:
@@ -531,13 +531,31 @@ RELATIONSHIP_KIND = "relationship"
 ATTRIBUTION_KIND = "attribution"
 
 
+def edge_is_live(edge: NodeEdge) -> bool:
+    """True unless a judge has retired this edge.
+
+    The one reader of `retired_at`, so that every consumer answers the question
+    the same way and a retired edge is a stored record rather than a followed
+    one.
+    """
+    return edge.retired_at is None
+
+
+def live_edges(edges: Iterable[NodeEdge]) -> list[NodeEdge]:
+    """`edges` with the retired ones left out."""
+    return [edge for edge in edges if edge_is_live(edge)]
+
+
 def traversal_excluded(edge: NodeEdge) -> bool:
     """True when default retrieval should NOT expand through this edge.
 
     Excludes history + review (graph bookkeeping) and provenance/attribution
-    edges (don't fan out from a version or source node). `tagged_with_topic` and
-    relationship-kind edges are followed, like `about`/`supports`.
+    edges (don't fan out from a version or source node), and anything a judge
+    has retired. `tagged_with_topic` and relationship-kind edges are followed,
+    like `about`/`supports`.
     """
+    if not edge_is_live(edge):
+        return True
     if edge.type in NON_KNOWLEDGE_EDGE_TYPES or edge.type in PROVENANCE_EDGE_TYPES:
         return True
     return edge.type == EdgeType.RELATED and edge.kind == ATTRIBUTION_KIND
@@ -1143,6 +1161,20 @@ class NodeEdge(BaseModel):
     # can carry one — a judgment edge because somebody judged, a provenance edge
     # because somebody read the document (step 4).
     judged_by: JudgeRef | None = None
+    # When a judge decided this edge should stop counting, and who decided it.
+    # Edges are never deleted, so retirement is how one stops being followed
+    # while the record still says it was once asserted.
+    #
+    # Written today only on a `TIMELINK` that a timepoint split or merge moved:
+    # a fact's date is part of what it claims, so moving one is a decision, and
+    # the decision has to leave a trace. There is no general tool for detaching a
+    # fact from its date.
+    retired_at: datetime | None = None
+    retired_by: JudgeRef | None = None
+    # The edge written in its place, where the retirement moved the edge rather
+    # than withdrawing it. Why the move happened is in the journal row the
+    # verdict wrote, which is where every reason in this system lives.
+    superseded_by: str | None = None
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
 
@@ -1357,6 +1389,26 @@ class Timepoint(BaseModel):
     start: datetime | None = None  # concrete start (optional)
     end: datetime | None = None  # concrete end (optional, for intervals)
     label: str | None = None  # free-text (e.g., "during the Renaissance")
+    # The point this one was split off from, when a judge decided two sources
+    # were each right about a different occurrence of the thing the original
+    # names. Kept on the new point rather than as a list on the original: a
+    # split can happen more than once, and each child knows its one parent.
+    split_from: str | None = None
+    # The recurrence rule this point is one occurrence of, and the start that
+    # rule gave it before any move. Both are set together, by materialisation,
+    # and they are the key it is idempotent on: asking for the same occurrence
+    # twice finds this point rather than writing a second one.
+    #
+    # A materialised occurrence is not a fourth kind of point. It has real
+    # dates and behaves as a point in every query, so `kind` reads `instant` or
+    # `interval` from the dates as it does for anything else.
+    recurrence_id: str | None = None
+    occurrence_start: datetime | None = None
+    # The survivor a merge folded this point into. A merged point is kept and
+    # takes no further part in ordering, bounds or queries: nothing here is
+    # deleted, so the record still says what was once believed to be a separate
+    # event.
+    merged_into: str | None = None
     metadata: dict = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -1367,6 +1419,366 @@ class Timepoint(BaseModel):
     @property
     def kind(self) -> TimepointKind:
         return timepoint_kind(self.start, self.end, self.label)
+
+
+class OrderingEdge(BaseModel):
+    """One step of "this came before that", as the ordering graph holds it.
+
+    Two things produce a step and both are this shape. A **constraint** is a
+    source asserting the order, and names it in `constraint_id`. A
+    **date-derived** edge is read off the points' own dates and names no
+    constraint, because no source asserted the pair: the dates settle it.
+
+    One model for both so that a contradiction's path reads the same whichever
+    kind of step it passed through, and a reader never has to hold two shapes in
+    mind to follow a cycle round.
+    """
+
+    earlier_id: str
+    later_id: str
+    constraint_id: str | None = None
+
+
+class ConstraintRetirement(BaseModel):
+    """A judge's decision that an ordering constraint should stop counting.
+
+    Retirement is the only way a constraint leaves the live graph permanently,
+    and it never removes it: the record still says which source asserted the
+    order and who read the source that way. What the retirement adds is a judge
+    saying the assertion should not be believed, and why.
+    """
+
+    because: str
+    judged_by: JudgeRef | None = None
+    at: datetime = Field(default_factory=_now)
+    # The contradiction whose verdict retired it, where one did. A merge and a
+    # split retire constraints too, and those leave this empty.
+    contradiction_id: str | None = None
+    # The constraint written in its place, when it was re-pointed at a different
+    # timepoint by a split or a merge rather than withdrawn outright. This is
+    # what keeps re-pointing append-only: the stored constraint is never edited,
+    # a replacement is written, and the two are linked.
+    superseded_by: str | None = None
+
+
+class OrderingConstraint(BaseModel):
+    """One source asserting that one timepoint came before another.
+
+    The same shape of thing as a validity interval: an assertion by one source,
+    read by one judge. The source says; the judge read the source and decided
+    that it said that, so both are named and they are different people.
+
+    Two sources disagreeing is two constraints, both kept, and a source
+    contradicting itself is also two constraints, both kept. The graph holds the
+    disagreement instead of picking a winner, which is what
+    `record_contradiction` already does for claims.
+
+    **`disputed` is not a field here.** A constraint is disputed while an open
+    contradiction lists it, and that is a fact about the timeline's
+    contradictions rather than about the constraint, so it is derived by
+    `disputed_constraint_ids` below. Storing it would be a second copy that a
+    resolution has to remember to clear.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=_new_id)
+    earlier_id: str
+    later_id: str
+    source_id: str
+    # The same meaning and the same no-default rule as on a validity interval.
+    # `stated` means the source says the order in words; `inferred` means the
+    # judge read it off tense or context. The distinction matters because a
+    # source that narrates the fire and then the flood has not stated which came
+    # first: narrative order is not chronological order.
+    basis: IntervalBasis
+    because: str | None = None
+    judged_by: JudgeRef | None = None
+    asserted_at: datetime = Field(default_factory=_now)
+    retired: ConstraintRetirement | None = None
+
+
+TemporalContradictionKind = Literal["cycle", "crossed_bounds"]
+
+TemporalVerdict = Literal["retire_constraint", "not_the_same_event", "hold"]
+
+
+class TemporalResolution(BaseModel):
+    """One verdict a judge recorded on a temporal contradiction."""
+
+    verdict: TemporalVerdict
+    because: str
+    judged_by: JudgeRef | None = None
+    at: datetime = Field(default_factory=_now)
+    # `retire_constraint` names the constraint it withdrew.
+    constraint_id: str | None = None
+    # `not_the_same_event` names the point it split and what came of the split.
+    point_id: str | None = None
+    new_timepoint_id: str | None = None
+    moved_constraint_ids: list[str] = Field(default_factory=list)
+    moved_node_ids: list[str] = Field(default_factory=list)
+
+
+class TemporalContradiction(BaseModel):
+    """A set of ordering assertions that cannot all hold.
+
+    Recorded when a write creates it rather than found by a later sweep, so the
+    constraint and the contradiction it caused are written in one record and are
+    never seen apart.
+
+    Two kinds. A **cycle** is a loop in the ordering: follow the steps and you
+    arrive back where you started, which says a point came before itself.
+    **Crossed bounds** is a point squeezed to nothing: everything that must come
+    before it ends later than everything that must come after it begins. The
+    second has no loop for the cycle check to find, which is why it is checked
+    separately.
+
+    **`resolutions` is append-only and `resolution` is derived from it.** A hold
+    is a verdict that leaves the contradiction open, so a contradiction can
+    carry several verdicts over its life and the history of them is worth
+    reading. `resolution` is the one that closed it, or None while it is open.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=_new_id)
+    kind: TemporalContradictionKind
+    # The steps involved, in order round the loop for a cycle. For crossed
+    # bounds they are the two paths that squeezed the point.
+    edges: list[OrderingEdge] = Field(default_factory=list)
+    # For crossed bounds, the squeezed point.
+    point_id: str | None = None
+    # The constraints involved: these are what `disputed` marks.
+    constraint_ids: list[str] = Field(default_factory=list)
+    # The source ids behind those constraints.
+    sources: list[str] = Field(default_factory=list)
+    found_at: datetime = Field(default_factory=_now)
+    resolutions: list[TemporalResolution] = Field(default_factory=list)
+    # True after a hold verdict: still open, but not nominated, until a new
+    # constraint or a new dated point touching it arrives. This is stored rather
+    # than derived because what clears it is evidence, not another verdict.
+    held: bool = False
+
+    @property
+    def resolution(self) -> TemporalResolution | None:
+        """The verdict that closed this, or None while it is open."""
+        for entry in reversed(self.resolutions):
+            if entry.verdict != "hold":
+                return entry
+        return None
+
+    @property
+    def is_open(self) -> bool:
+        return self.resolution is None
+
+
+def disputed_constraint_ids(
+    contradictions: Sequence[TemporalContradiction],
+) -> set[str]:
+    """The constraints an open contradiction lists, which are the disputed ones.
+
+    A constraint returns to live when no open contradiction lists it, so one
+    caught in two cycles stays disputed until both are resolved. That follows
+    from deriving the set rather than storing a flag, and needs no special case.
+    """
+    return {
+        constraint_id
+        for contradiction in contradictions
+        if contradiction.is_open
+        for constraint_id in contradiction.constraint_ids
+    }
+
+
+def contradiction_points(contradiction: TemporalContradiction) -> set[str]:
+    """Every timepoint a contradiction touches.
+
+    What "touching" means for clearing a hold: new evidence about any of these
+    points is new evidence about the disagreement.
+    """
+    points = {contradiction.point_id} if contradiction.point_id else set()
+    for edge in contradiction.edges:
+        points.add(edge.earlier_id)
+        points.add(edge.later_id)
+    return points
+
+
+class PeriodicRule(BaseModel):
+    """Every `period` from `anchor`, forwards and backwards.
+
+    Occurrence `n` is `anchor + n * period`, where `n` is an integer and may be
+    negative. This is arithmetic on coordinates and knows nothing about months
+    or weekdays, so it works on any timeline, an invented one included: "every
+    third day from the founding" needs no calendar.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["periodic"] = "periodic"
+    anchor: datetime
+    period: timedelta
+
+    @model_validator(mode="after")
+    def _period_moves_forward(self) -> PeriodicRule:
+        if self.period <= timedelta(0):
+            raise ValueError(
+                "A recurrence period has to be positive: a rule that repeats "
+                "every zero seconds produces every instant, and a negative one "
+                "produces the same occurrences written backwards."
+            )
+        return self
+
+
+class CalendarRule(BaseModel):
+    """An RFC 5545 recurrence rule, the format calendar software uses.
+
+    "The second Tuesday of every month" is a statement about the Gregorian
+    calendar, which is the only calendar timepoints have, so every timeline may
+    use one and no flag distinguishes the ones that do.
+
+    **The string is parsed when the rule is built**, so a mistyped rule is
+    refused at write time rather than coming back as an empty window months
+    later, which is the failure a preview alone would not catch.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["calendar"] = "calendar"
+    rrule: str
+
+    @model_validator(mode="after")
+    def _the_rule_parses(self) -> CalendarRule:
+        from dateutil.rrule import rrulestr
+
+        try:
+            rrulestr(self.rrule)
+        except Exception as exc:
+            raise ValueError(
+                f"This is not a recurrence rule dateutil can read: {exc}. An "
+                f"RFC 5545 rule looks like "
+                f"'DTSTART:19000101T000000Z\\nRRULE:FREQ=MONTHLY;BYDAY=2TU'."
+            ) from exc
+        return self
+
+
+# The discriminator is the stored `kind`, so a rule read back from a record
+# rebuilds as the same class it was written as, without either model having to
+# be tried and rejected first.
+RecurrenceRule = Annotated[PeriodicRule | CalendarRule, Field(discriminator="kind")]
+
+RecurrenceExceptionKind = Literal["cancelled", "moved"]
+
+
+class RecurrenceException(BaseModel):
+    """One occurrence that did not happen, or happened somewhere else in time.
+
+    Included from the start because a rule with no way to say "the 1943 service
+    was cancelled" forces a caller to choose between recording something false
+    and abandoning the rule to write every occurrence by hand. The second is
+    worse, because the recurrence is then lost.
+
+    **A moved occurrence keeps its original `occurrence_start` as its
+    identity** and is reported at `moved_to`. The identity has to survive the
+    move, or materialising it before and after the move would produce two
+    points for one occurrence.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    occurrence_start: datetime
+    kind: RecurrenceExceptionKind
+    moved_to: datetime | None = None
+    source_id: str | None = None
+    because: str | None = None
+    judged_by: JudgeRef | None = None
+    at: datetime = Field(default_factory=_now)
+
+    @model_validator(mode="after")
+    def _a_move_says_where_to(self) -> RecurrenceException:
+        if self.kind == "moved" and self.moved_to is None:
+            raise ValueError(
+                "A moved occurrence needs `moved_to`: an occurrence that moved "
+                "to nowhere is a cancellation, and the two mean different things."
+            )
+        if self.kind == "cancelled" and self.moved_to is not None:
+            raise ValueError("A cancelled occurrence has no `moved_to`: it did not happen.")
+        return self
+
+
+class RecurrenceBounds(BaseModel):
+    """The first and last occurrence a rule produces, either end optional.
+
+    Absent means unbounded in that direction, which is the honest answer for a
+    rule whose beginning nobody recorded.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: datetime | None = None
+    end: datetime | None = None
+
+
+class BoundChange(BaseModel):
+    """A judge saying when a rule stopped applying, appended rather than written over.
+
+    The effective end is the most recent entry, so "we thought it stopped in
+    1990, then learned it was 1993" is readable rather than overwritten. This is
+    also why a rule never retires through supersession: a recurrence such as
+    "Christmas is 24 to 26 December, annually" never stops being true, so it has
+    no lifecycle, only bounds that a later reading can correct.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    ends_at: datetime | None = None
+    because: str
+    judged_by: JudgeRef | None = None
+    at: datetime = Field(default_factory=_now)
+
+
+class Recurrence(BaseModel):
+    """A rule that says a thing happens over and over, stored once.
+
+    **Occurrences are computed and never stored.** A rule plus a window gives a
+    list; keeping the list would make the rule and its expansion two things that
+    can disagree. What is stored is the rule, how long one occurrence lasts,
+    where it begins and ends, and the occurrences that broke the pattern.
+
+    An occurrence is identified within its rule by `occurrence_start`, the start
+    the rule produces for it. That is unique within one rule and needs no
+    counting. There is no occurrence number: for a calendar rule the number
+    would need a walk from the rule's first occurrence, cheap near it and not
+    cheap a century later, so a number that had to be capped would be missing
+    exactly where most queries land.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=_new_id)
+    label: str
+    rule: RecurrenceRule
+    # How long one occurrence lasts. Zero makes each occurrence an instant,
+    # which is what "market day opens at nine" wants.
+    duration: timedelta = timedelta(0)
+    bounds: RecurrenceBounds = Field(default_factory=RecurrenceBounds)
+    bound_changes: list[BoundChange] = Field(default_factory=list)
+    exceptions: list[RecurrenceException] = Field(default_factory=list)
+    # Provenance, as on an ordering constraint: the source says the thing
+    # recurs, the judge read the source and decided that it said so.
+    source_id: str | None = None
+    judged_by: JudgeRef | None = None
+    asserted_at: datetime = Field(default_factory=_now)
+
+    @property
+    def effective_end(self) -> datetime | None:
+        """The last occurrence the rule still produces, after any bound change.
+
+        The most recent `bound_changes` entry wins, and it can widen as well as
+        narrow: a correction saying the rule ran three years longer than anyone
+        thought is the same kind of entry as the one that ended it.
+        """
+        if self.bound_changes:
+            return self.bound_changes[-1].ends_at
+        return self.bounds.end
 
 
 class Timeline(BaseModel):
@@ -1381,6 +1793,24 @@ class Timeline(BaseModel):
     name: str
     description: str = ""
     timepoints: list[Timepoint] = Field(default_factory=list)
+    # What sources say about the order of points nobody dated, and the
+    # disagreements that came of it. Both live in this record rather than in a
+    # table of their own: one row is atomic, so a constraint and the
+    # contradiction it caused are never seen apart, and the bundle format needs
+    # no version bump because adding fields to a section is not a format change.
+    #
+    # The cost is that adding one constraint rewrites every constraint. At the
+    # few hundred points and constraints this is designed for that is a couple
+    # of hundred kilobytes per write, which is fine for a tool call. At ten
+    # thousand points it would not be, and the change to make then is a
+    # timepoint table keyed by timeline id.
+    constraints: list[OrderingConstraint] = Field(default_factory=list)
+    temporal_contradictions: list[TemporalContradiction] = Field(default_factory=list)
+    # The rules for what happens over and over on this timeline. Their
+    # occurrences are computed per query and are not in this list: what is
+    # stored is the rule, and the only occurrences that become timepoints are
+    # the ones somebody materialised.
+    recurrences: list[Recurrence] = Field(default_factory=list)
     # This timeline's "now" — the instant a viewer should be centred on and
     # measure "past" and "future" against. A fictional timeline's present is a
     # fact about that world ("the novel opens in May 1897"), not a viewer
@@ -1499,6 +1929,13 @@ def recorded_relation_label(
 
 RELATION_VERDICTS: tuple[str, ...] = ("distinct", "synonymous")
 
+# The third thing a verdict row can say, and the only one no agent may pass to
+# `apply_relation_verdict`: it is written by `reopen` alone. Out of
+# `RELATION_VERDICTS` deliberately, because that tuple is the vocabulary of
+# *answers* about a pair and this is the withdrawal of one: offering it beside
+# `distinct` and `synonymous` would read as a third answer.
+REOPENED_VERDICT = "reopened"
+
 
 def relation_pair_key(a_id: str, b_id: str) -> tuple[str, str]:
     """The one key for a label pair, whichever order it was judged in.
@@ -1543,11 +1980,13 @@ class RelationVerdict(BaseModel):
     Whatever consolidates labels can then act on standing verdicts rather than
     re-asking.
 
-    **Suppression is permanent**, inherited from the fact-pair layer
-    deliberately rather than by accident, so a wrong `distinct` silences a pair
-    for good. That is the dual of the futile-cycle rule and both are stated in
-    `RELATION_LABELS.md` §4.2; the retraction question for both layers lives in
-    `ISSUES.md`.
+    **A suppression stands until it is reopened.** `reopen` appends a row whose
+    verdict is `reopened`, and the sweep reads the newest row for a pair: while
+    that row is the newest, the pair is nominated again. Nothing is withdrawn
+    and nothing is overruled, because a reopen says only *ask this again*. The
+    earlier verdict stays in the table with its judge and its reason, and a
+    fresh `distinct` appends a newer row that suppresses the pair once more.
+    `RELATION_LABELS.md` §4.2 has the read.
     """
 
     id: str = Field(default_factory=_new_id)
@@ -1556,13 +1995,36 @@ class RelationVerdict(BaseModel):
     # have made the journal row's subjects strings too — the second namespace
     # the label record exists to avoid.
     label_ids: list[str]
-    verdict: Literal["distinct", "synonymous"]
+    # `reopened` is the withdrawal of a suppression rather than an answer about
+    # the pair, and only `reopen` writes it: `apply_relation_verdict` refuses
+    # anything outside `RELATION_VERDICTS`.
+    verdict: Literal["distinct", "synonymous", "reopened"]
     # Required by every writer, for the same reason a verdict does: no reason marks
     # the pair judged, so the next agent skips it without knowing whether it was
     # examined or waved through.
     because: str
     judged_by: JudgeRef | None = None
     decided_at: datetime = Field(default_factory=_now)
+
+
+def standing_relation_pairs(verdicts: Iterable[RelationVerdict]) -> set[tuple[str, str]]:
+    """The label pairs a standing verdict keeps out of the nomination sweep.
+
+    The newest row for a pair decides: a `distinct` or a `synonymous` suppresses
+    it, a `reopened` puts it back. Both backends read the table and call this,
+    rather than each writing the rule as a query, because a suppression index
+    the two backends spell differently is one that can disagree about what has
+    been judged.
+
+    Ties are broken by id so the two agree on an order the clock does not
+    settle. The tiebreak is arbitrary and only has to be the same on both sides.
+    """
+    newest: dict[tuple[str, str], RelationVerdict] = {}
+    for verdict in sorted(verdicts, key=lambda row: (row.decided_at, row.id)):
+        if len(verdict.label_ids) != 2:
+            continue
+        newest[relation_pair_key(*verdict.label_ids)] = verdict
+    return {pair for pair, row in newest.items() if row.verdict != REOPENED_VERDICT}
 
 
 # --- Agents: who judged this (REVIEW_MODE.md §2) ---
@@ -2055,6 +2517,43 @@ class DecisionKind(str, Enum):
     METACONTEXT_REASSIGNMENT = "metacontext_reassignment"
     INTERVAL_CORRECTION = "interval_correction"
 
+    # What a source says about the order of things that happened, and what
+    # becomes of the disagreements that follow. Three kinds rather than one,
+    # because review selects on kind and the three answer different questions:
+    # what order has been asserted, which disputes have been settled, and which
+    # points turned out to be one event.
+    #
+    # `TEMPORAL_ORDER` is one row per `order_timepoints` call rather than per
+    # pair, on the `INGEST` rule: a source that states an order usually states
+    # several at once, and one reading of one source is one judgment.
+    TEMPORAL_ORDER = "temporal_order"
+    TEMPORAL_VERDICT = "temporal_verdict"
+    # Two timepoints judged to be one moment. Not `MERGE`, whose subjects are
+    # nodes and which retires one of them: a reviewer auditing what claims were
+    # consolidated does not want marks on a timeline mixed in, and nothing here
+    # touches a node.
+    TIMEPOINT_MERGE = "timepoint_merge"
+
+    # What a source says recurs, and the two things that can happen to a rule
+    # afterwards. Three kinds rather than one, for the reason the three above
+    # are three: review selects on kind, and a reviewer asking which rules were
+    # recorded does not want the corrections to their end dates mixed in, nor
+    # the occurrences that broke the pattern.
+    #
+    # Materialising an occurrence writes no row of its own. It asserts nothing
+    # the rule did not already say, and `add_timepoint` — the one route to it —
+    # has never named a judge.
+    RECURRENCE = "recurrence"
+    # A rule's end date moved, appended to its history rather than written over
+    # it. Not `CORRECTION`, whose subjects are a retired node and its
+    # replacement: nothing here is retired, because a rule that was true never
+    # stops having been true.
+    RECURRENCE_BOUND = "recurrence_bound"
+    # One occurrence cancelled or moved. Its own kind because it is a statement
+    # about a single occurrence rather than about the rule, and a reviewer
+    # auditing what a rule says should not have to read past them.
+    RECURRENCE_EXCEPTION = "recurrence_exception"
+
     # Everything else an agent asserts about the graph.
     RELATION = "relation"
     # Prose about what one of this graph's relationship labels *means*.
@@ -2109,6 +2608,20 @@ class DecisionKind(str, Enum):
     # `claim_kind`, `confidence`, `confidence_basis`. Never a supersession: the
     # wording is unchanged, so nothing was corrected and nothing moved on.
     REJUDGMENT = "rejudgment"
+
+    # A suppression withdrawn: the question goes back on the worklist and
+    # nothing is said about the answer. One kind for all three suppression
+    # layers, because a reviewer asking *what has been put back in front of
+    # somebody* wants the fact pairs, the label pairs and the kept nodes
+    # together; the subjects say which layer it was.
+    #
+    # Not `RETRACTION`, whose subjects are a pair whose `one_claim` was
+    # **withdrawn**: that changes what corroboration counts, and a reviewer
+    # auditing withdrawn support would get rows where nothing was withdrawn.
+    # Not `REVERSAL` either, which undoes a merge and destroys the survivor.
+    # Nothing here retires a node, moves a value or takes back a claim: what it
+    # takes back is a silence.
+    REOPENED = "reopened"
 
 
 class DecisionRecord(BaseModel):

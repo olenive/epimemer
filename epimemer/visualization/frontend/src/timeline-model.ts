@@ -50,6 +50,18 @@ export const sideForTypes = (nodeTypes: readonly string[]): Side => {
   return "axis";
 };
 
+/**
+ * Where the order puts a point nobody dated, in milliseconds.
+ *
+ * Either end can be null and an absent end is a real answer, not a failure: a
+ * point with only successors is "before 1897, we do not know when". Both null
+ * is not a band at all, and such a point keeps its place in the tray.
+ */
+export interface Band {
+  earliest: number | null;
+  latest: number | null;
+}
+
 export interface TimelineMark extends FilterableMark {
   id: string;
   side: Side;
@@ -59,6 +71,21 @@ export interface TimelineMark extends FilterableMark {
   detail: string;
   /** Nodes this mark stands for — the bridge to the graph panel. */
   nodeIds: string[];
+  /**
+   * Set when the mark is on the axis because the order placed it rather than
+   * because a source dated it. The panel draws these as a hatched band, which
+   * is the mark for "somewhere in here", never a point, which would claim a
+   * date nobody gave.
+   */
+  band: Band | null;
+  /**
+   * The order around this point is disputed, and the dispute that says so.
+   *
+   * A dated contested point keeps its date: what two sources disagree about is
+   * the order, and a date is what one source said about this point alone.
+   */
+  contested: boolean;
+  contradictionId: string | null;
 }
 
 /**
@@ -71,13 +98,45 @@ export interface DatedMark extends TimelineMark {
   start: number;
 }
 
+/**
+ * One occurrence of a rule, placed.
+ *
+ * `at` is where it is drawn and `occurrenceStart` is what names it: the two
+ * differ only for an occurrence somebody moved, and the identity has to survive
+ * the move or the same occurrence would be two.
+ */
+export interface OccurrenceMark {
+  id: string;
+  at: number;
+  end: number | null;
+  occurrenceStart: number;
+  /** The timepoint this occurrence was turned into, when somebody turned it. */
+  materialisedId: string | null;
+  moved: boolean;
+}
+
+/** A rule and what it produced inside the window the snapshot enumerated. */
+export interface RecurrenceSpine {
+  id: string;
+  label: string;
+  ruleKind: string;
+  /** The per-rule cap fired, so there are more occurrences than these. */
+  truncated: boolean;
+  occurrences: OccurrenceMark[];
+}
+
 export interface TimelineRow {
   id: string;
   name: string;
-  /** Marks with a real coordinate, in time order. */
+  /**
+   * Marks with a coordinate, in time order. A date is one way to have one and
+   * a band derived from the order is the other, so this holds both.
+   */
   dated: DatedMark[];
-  /** Marks with no date, in the order the timeline lists them. */
+  /** Marks with nowhere to be, in the order the timeline lists them. */
   undated: TimelineMark[];
+  /** The rules on this timeline that produced something inside the window. */
+  spines: RecurrenceSpine[];
 }
 
 const isDated = (mark: TimelineMark): mark is DatedMark => mark.start !== null;
@@ -163,7 +222,13 @@ const facetsFromNodes = (
   label: unique(extraLabels.filter((l) => l !== "")),
 });
 
-/** Nodes linked to one timepoint, via TIMELINK edges carrying its id. */
+/**
+ * Nodes linked to one timepoint, via TIMELINK edges carrying its id.
+ *
+ * A TIMELINK may instead carry a `recurrence_id`, which attaches a fact to a
+ * whole rule rather than to a moment. There is no mark to draw it on, so the
+ * id comparison leaves it out.
+ */
 const nodesForTimepoint = (
   resolver: Resolver,
   edges: readonly EdgeView[],
@@ -180,18 +245,33 @@ const nodesForTimepoint = (
     .map((e) => resolver.nodes.get(e.src_id))
     .filter((n): n is NodeView => n !== undefined);
 
+/**
+ * What the mark says about when, in words.
+ *
+ * A point the order placed says so, and says the bounds are read off the order
+ * rather than stated by anyone: "somewhere in here" and "on this date" are
+ * different claims, and the tooltip is where the difference is spelt out.
+ */
+const whenOf = (point: TimepointView): string => {
+  if (point.start !== null) {
+    return point.end ? `${point.start} → ${point.end}` : point.start;
+  }
+  const after = point.earliest === null ? null : `after ${point.earliest}`;
+  const before = point.latest === null ? null : `before ${point.latest}`;
+  const placed = [after, before].filter((part) => part !== null).join(", ");
+  return placed === "" ? "undated" : `${placed} (from the order)`;
+};
+
 const describeTimepoint = (
   point: TimepointView,
   timeline: TimelineView,
   linked: readonly NodeView[],
 ): string => {
-  const when =
-    point.start === null
-      ? "undated"
-      : point.end
-        ? `${point.start} → ${point.end}`
-        : point.start;
+  const when = whenOf(point);
   const lines = [`${timeline.name} — ${when}`];
+  if (point.contested) {
+    lines.push(`order disputed: contradiction ${point.temporal_contradiction_id ?? "unnamed"}`);
+  }
   if (point.label) lines.push(point.label);
   if (linked.length > 0) {
     lines.push("", ...linked.map((n) => `[${n.node_type}] ${n.content}`));
@@ -202,6 +282,19 @@ const describeTimepoint = (
 const timepointTitle = (point: TimepointView, linked: readonly NodeView[]): string =>
   point.label ?? linked[0]?.content ?? "(untitled)";
 
+/**
+ * The band a point gets from the order, or null when it has no place.
+ *
+ * A dated point never gets one: it has a coordinate of its own, and drawing a
+ * derived span around it would blur a date a source actually gave.
+ */
+const bandFor = (point: TimepointView): Band | null => {
+  if (point.start !== null) return null;
+  const earliest = parseTime(point.earliest);
+  const latest = parseTime(point.latest);
+  return earliest === null && latest === null ? null : { earliest, latest };
+};
+
 const markForTimepoint = (
   resolver: Resolver,
   edges: readonly EdgeView[],
@@ -209,14 +302,27 @@ const markForTimepoint = (
   point: TimepointView,
 ): TimelineMark => {
   const linked = nodesForTimepoint(resolver, edges, timeline.timeline_id, point.timepoint_id);
+  const band = bandFor(point);
   return {
     id: point.timepoint_id,
     side: sideForTypes(linked.map((n) => n.node_type)),
-    start: parseTime(point.start),
-    end: parseTime(point.end),
+    // A band's own coordinate is its first known edge, so the scale can place
+    // it and the axis can break around it like anything else. Only a band with
+    // both edges is a span; one edge says where an edge is, not how long
+    // anything ran.
+    start: band === null ? parseTime(point.start) : (band.earliest ?? band.latest),
+    end:
+      band === null
+        ? parseTime(point.end)
+        : band.earliest !== null && band.latest !== null
+          ? band.latest
+          : null,
     title: timepointTitle(point, linked),
     detail: describeTimepoint(point, timeline, linked),
     nodeIds: linked.map((n) => n.node_id),
+    band,
+    contested: point.contested,
+    contradictionId: point.temporal_contradiction_id,
     facets: facetsFromNodes(resolver, linked, [point.label ?? "", timeline.name]),
   };
 };
@@ -224,10 +330,45 @@ const markForTimepoint = (
 /**
  * Content-time rows: one per timeline.
  *
- * Undated timepoints keep the order the timeline lists them in, which is the
- * order `reorder_timepoints` establishes on the backend — the panel does not
- * get to invent a second answer to "what order is this timeline in?".
+ * Timepoints with nowhere to be keep the order the timeline lists them in,
+ * which is the order `reorder_timepoints` establishes on the backend: the
+ * panel does not get to invent a second answer to "what order is this timeline
+ * in?". A point the order places is a different thing: the record still lists
+ * it where it was authored, and the band is a reading of that record made here,
+ * at render time, exactly as `query_timeline` makes it at query time.
  */
+/**
+ * A rule's occurrences, placed.
+ *
+ * A rule that produced nothing inside the window is left out rather than
+ * carried as an empty spine: a spine says "same rule, nothing asserted in
+ * between", and a spine with no beads would say that about nothing at all.
+ */
+const spinesFor = (timeline: TimelineView): RecurrenceSpine[] =>
+  timeline.recurrences
+    .map((rule) => ({
+      id: rule.recurrence_id,
+      label: rule.label,
+      ruleKind: rule.rule_kind,
+      truncated: rule.truncated,
+      occurrences: rule.occurrences.flatMap((occurrence) => {
+        const at = parseTime(occurrence.start);
+        const occurrenceStart = parseTime(occurrence.occurrence_start);
+        if (at === null || occurrenceStart === null) return [];
+        return [
+          {
+            id: `${rule.recurrence_id}@${occurrence.occurrence_start}`,
+            at,
+            end: parseTime(occurrence.end),
+            occurrenceStart,
+            materialisedId: occurrence.materialised_id,
+            moved: occurrence.moved_to !== null,
+          },
+        ];
+      }),
+    }))
+    .filter((spine) => spine.occurrences.length > 0);
+
 export const buildContentRows = (snapshot: SnapshotLike): TimelineRow[] => {
   const resolver = makeResolver(snapshot);
   return (snapshot.timelines ?? []).map((timeline) => {
@@ -239,6 +380,7 @@ export const buildContentRows = (snapshot: SnapshotLike): TimelineRow[] => {
       name: timeline.name,
       dated: marks.filter(isDated).sort((a, b) => a.start - b.start),
       undated: marks.filter((m) => !isDated(m)),
+      spines: spinesFor(timeline),
     };
   });
 };
@@ -274,6 +416,11 @@ const markForNode = (resolver: Resolver, node: NodeView): DatedMark => {
     title: node.content,
     detail: describeNode(node),
     nodeIds: [node.node_id],
+    // Record time is a node's own two timestamps. Nothing about it is derived
+    // from an order, so nothing here is ever a band or in dispute about one.
+    band: null,
+    contested: false,
+    contradictionId: null,
     facets: facetsFromNodes(resolver, [node]),
   };
 };
@@ -296,7 +443,9 @@ export const buildRecordRows = (snapshot: SnapshotLike): TimelineRow[] => {
     .map((n) => markForNode(resolver, n))
     .sort((a, b) => a.start - b.start);
   if (dated.length === 0) return [];
-  return [{ id: RECORD_ROW_ID, name: "All nodes", dated, undated: [] }];
+  // No spines: a recurrence is a claim about when things happened, and record
+  // time is about when the graph was told.
+  return [{ id: RECORD_ROW_ID, name: "All nodes", dated, undated: [], spines: [] }];
 };
 
 export const buildRows = (snapshot: SnapshotLike, mode: TimeMode): TimelineRow[] =>

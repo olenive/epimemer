@@ -8,7 +8,7 @@ corpus on every call (`storage/bm25.py`) rather than maintaining an index.
 
 import copy
 import math
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal, TypeVar
@@ -40,7 +40,7 @@ from epimemer.core.types import (
     migration_disposition,
     node_judge_ids,
     recorded_relation_label,
-    relation_pair_key,
+    standing_relation_pairs,
     with_retirement,
     with_return,
 )
@@ -871,6 +871,77 @@ class InMemoryStorage:
                     self._g.timelines[timeline_id] = previous
             raise
 
+    async def write_timeline_tx(
+        self,
+        timeline: Timeline,
+        *,
+        kind: DecisionKind,
+        retired_edges: Sequence[NodeEdge] = (),
+        new_edges: Sequence[NodeEdge] = (),
+        counts: Mapping[str, int] | None = None,
+        judge: JudgeRef | None = None,
+    ) -> None:
+        """One timeline decision and the links it moved. See the protocol.
+
+        `kind`, `counts` and `judge` describe the decision for the event log and
+        change nothing here, which is why this backend reads none of them.
+
+        Undoing means putting back what each id held, not removing it: the
+        timeline upserts, and a retired link is a rewrite of an edge that was
+        already there.
+        """
+        previous_timeline = self._g.timelines.get(timeline.id)
+        previous_edges: list[tuple[str, NodeEdge | None]] = []
+        try:
+            self._g.timelines[timeline.id] = _store(timeline)
+            for edge in [*new_edges, *retired_edges]:
+                previous_edges.append((edge.id, self._g.edges.get(edge.id)))
+                _put_edge(self._g, _store(edge))
+        except Exception:
+            if previous_timeline is None:
+                self._g.timelines.pop(timeline.id, None)
+            else:
+                self._g.timelines[timeline.id] = previous_timeline
+            for edge_id, previous in reversed(previous_edges):
+                if previous is None:
+                    _drop_edge(self._g, edge_id)
+                else:
+                    _put_edge(self._g, previous)
+            raise
+
+    async def reopen_tx(
+        self,
+        decision: DecisionRecord,
+        *,
+        retired_edges: Sequence[NodeEdge] = (),
+        relation_verdicts: Sequence[RelationVerdict] = (),
+    ) -> None:
+        """One withdrawn suppression and the row that records it. See the protocol.
+
+        Undoing means putting each edge back as it was rather than removing it:
+        a retired `assessed` edge is a rewrite of one that was already there.
+        """
+        previous_edges: list[tuple[str, NodeEdge | None]] = []
+        appended = 0
+        try:
+            for edge in retired_edges:
+                previous_edges.append((edge.id, self._g.edges.get(edge.id)))
+                _put_edge(self._g, _store(edge))
+            for verdict in relation_verdicts:
+                self._g.relation_verdicts.append(_store(verdict))
+                appended += 1
+            self._g.decisions[decision.id] = _store(decision)
+        except Exception:
+            self._g.decisions.pop(decision.id, None)
+            for _ in range(appended):
+                self._g.relation_verdicts.pop()
+            for edge_id, previous in reversed(previous_edges):
+                if previous is None:
+                    _drop_edge(self._g, edge_id)
+                else:
+                    _put_edge(self._g, previous)
+            raise
+
     async def write_verbatim_tx(
         self,
         *,
@@ -1097,11 +1168,7 @@ class InMemoryStorage:
         return verdict.id
 
     async def judged_relation_pairs(self) -> set[tuple[str, str]]:
-        return {
-            relation_pair_key(*v.label_ids)
-            for v in self._g.relation_verdicts
-            if len(v.label_ids) == 2
-        }
+        return standing_relation_pairs(self._g.relation_verdicts)
 
     async def relation_verdicts_for(self, label_ids: Sequence[str]) -> Sequence[RelationVerdict]:
         wanted = set(label_ids)

@@ -1,6 +1,6 @@
 [project]
 name = "epimemer"
-version = "0.2.4"
+version = "0.2.5"
 description = "Epistemic memory for AI agents over MCP: a typed graph of claims with provenance, metacontexts, validity in time, and a review loop"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -34,6 +34,12 @@ dependencies = [
     # local path has to work out of the box: the cloud drivers are the heavy
     # part, and they are the extras below.
     "fsspec>=2024.6.0",
+    # Calendar recurrence rules ("the second Tuesday of every month") are RFC
+    # 5545 strings, and this is what reads them. Core rather than transitive:
+    # it arrives today only under the s3 and notebooks extras, so relying on
+    # that copy would make calendar rules work on a developer's machine and
+    # fail on a plain `pip install epimemer`. Pure Python, one requirement.
+    "python-dateutil>=2.9.0",
 ]
 
 [project.optional-dependencies]

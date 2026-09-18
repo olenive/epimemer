@@ -63,6 +63,12 @@ RPC_TIMEOUT_SECONDS = 10.0
 # would remember the firehose EVENT_LOG.md §3 refused to ship.
 ACTION_EVENT_TYPE = "graph_action_recorded"
 
+# The warnings the log reads, in the same ring as the acts and never a second
+# one. Replay has to reproduce arrival order, and two rings replayed one after
+# the other would put every warning after every act
+# (`ADVISORIES_DASHBOARD.md` §3).
+ADVISORY_EVENT_TYPE = "advisory_raised"
+
 # Retrieval records, mirrored here so the selector, focus mode and the Response
 # tab survive the session's death — the hub keeps disconnected sessions, but
 # RPC to one raises, which is exactly the "open the dashboard after noticing"
@@ -73,13 +79,22 @@ RETRIEVAL_EVENT_TYPE = "retrieval_recorded"
 # Both rings hang off `sessions[sid]`; this says which event fills which, and
 # how deep. Keeping the pair in one place is what stops a third ring arriving
 # with a capacity nobody chose.
-_RING_KEYS = {ACTION_EVENT_TYPE: "actions", RETRIEVAL_EVENT_TYPE: "retrievals"}
+_RING_KEYS = {
+    ACTION_EVENT_TYPE: "actions",
+    ADVISORY_EVENT_TYPE: "actions",
+    RETRIEVAL_EVENT_TYPE: "retrievals",
+}
+
+# The rings, each named once, in the order a browser replays them. Derived from
+# the map above rather than written out again, so a ring cannot be added to one
+# and forgotten in the other; two event types sharing a ring appear here once.
+_RING_ORDER = tuple(dict.fromkeys(_RING_KEYS.values()))
 
 
 def _ring_capacity(event_type: str) -> int:
     """Read at call time, not captured — the capacities are module constants a
     test may substitute, and a table built at import would not see it."""
-    return LOG_RING_CAPACITY if event_type == ACTION_EVENT_TYPE else RETRIEVAL_RING_CAPACITY
+    return RETRIEVAL_RING_CAPACITY if event_type == RETRIEVAL_EVENT_TYPE else LOG_RING_CAPACITY
 
 
 try:
@@ -188,7 +203,7 @@ def create_hub_app() -> Starlette:
         sess = sessions.get(st["session"] or "")
         if sess is None:
             return
-        for ring_key in _RING_KEYS.values():
+        for ring_key in _RING_ORDER:
             for payload in backfill(sess[ring_key]):
                 if _subscribed(payload)(st) and not await _send(ws, st, payload):
                     browsers.pop(ws, None)
@@ -385,6 +400,19 @@ def create_hub_app() -> Starlette:
             return JSONResponse({"error": "Missing 'session' query parameter"}, status_code=400)
         return await _rpc_endpoint(session_id, "list_graphs", {})
 
+    async def api_warnings(request: Request) -> JSONResponse:
+        """What this session's active graph does about advisories.
+
+        Read-only, and the dashboard's panel is too: a write from the browser
+        would be the first write into a graph with no author, and every change
+        today is journalled against a session and a judge
+        (`ADVISORIES_DASHBOARD.md` §2.4).
+        """
+        session_id = request.query_params.get("session")
+        if not session_id:
+            return JSONResponse({"error": "Missing 'session' query parameter"}, status_code=400)
+        return await _rpc_endpoint(session_id, "warnings", {})
+
     async def api_snapshot(request: Request) -> JSONResponse:
         session_id = request.query_params.get("session")
         graph = request.query_params.get("graph")
@@ -439,6 +467,7 @@ def create_hub_app() -> Starlette:
         Route("/api/health", api_health),
         Route("/api/sessions", api_sessions),
         Route("/api/graphs", api_graphs),
+        Route("/api/warnings", api_warnings),
         Route("/api/snapshot", api_snapshot),
         Route("/api/retrievals", api_retrievals),
         WebSocketRoute("/ws", handle_browser),

@@ -627,6 +627,21 @@ class TestWhatANewTagIsWrittenWith:
 
         assert (await _named(storage, "issue-53")).description == "Everything filed under issue-53."
 
+    async def test_the_response_counts_it_as_created_and_not_as_described(
+        self, storage, embedder, config
+    ):
+        """`tags_described` counts existing tags that were filled in, so a call
+        minting a tag used to report 0 there and nothing else, which read as the
+        description having been dropped. `tags_created` says what happened."""
+        stored = await _ingest(storage, embedder, config, "A document.", tags=["issue-53"])
+
+        assert stored["tags_created"] == 1
+        assert stored["tags_described"] == 0
+
+        again = await _ingest(storage, embedder, config, "Another.", tags=["issue-53"])
+
+        assert again["tags_created"] == 0
+
     async def test_it_is_reviewed_as_of_its_creation(self, storage, embedder, config):
         """The writer has just looked at it, so there is nothing for reflect to
         ask about until the material moves."""

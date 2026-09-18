@@ -51,6 +51,34 @@ def _parse_utc(value: str) -> datetime:
     return parsed.astimezone(UTC)
 
 
+def _parse_duration(value: str) -> timedelta:
+    """Parse a length of time, as ISO-8601 ("P3D", "PT90M") or as seconds.
+
+    Both spellings because both are natural to write: a recurrence every three
+    days is `P3D` to anyone who has met the format and `259200` to anyone who
+    has not, and refusing one of them would be a spelling test rather than a
+    check on the value.
+    """
+    from pydantic import TypeAdapter
+
+    text = value.strip()
+    try:
+        return TypeAdapter(timedelta).validate_python(float(text) if _is_number(text) else text)
+    except Exception as exc:
+        raise ValueError(
+            f"{value!r} is not a length of time. Write it as ISO-8601 ('P3D' for "
+            f"three days, 'PT90M' for ninety minutes) or as a number of seconds."
+        ) from exc
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
 def _resolve_windows(
     now: datetime,
     *,
@@ -153,6 +181,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             viz_session,
             ingest_url,
             default_reflect_threshold=config.reflect_threshold,
+            default_warning_policy=config.warning_policy,
             records=lambda: [
                 json.loads(record.model_dump_json()) for record in records_of(retrievals)
             ],
@@ -729,6 +758,7 @@ async def memory_store_decomposition(
             f"graph={r['active_graph']} nodes={m.nodes_returned} "
             f"edges={r['edges_created']} timepoints={r['timepoints_proposed']} "
             f"reflect={r['stores_since_reflect']}/{r['reflect_threshold']}"
+            + (f" tags_created={r['tags_created']}" if r["tags_created"] else "")
             + (f" described={r['tags_described']}" if r["tags_described"] else "")
             + (f" warnings={len(r['warnings'])}" if r.get("warnings") else "")
         ),
@@ -1257,6 +1287,7 @@ async def memory_record_contradiction(
             storage=deps["storage"],
             judge=judge,
             warning_policy=deps["config"].warning_policy,
+            event_bus=deps.get("event_bus"),
         ),
         ctx,
         f"{a_id}<->{b_id}",
@@ -1301,6 +1332,7 @@ async def memory_record_variant(
             storage=deps["storage"],
             judge=judge,
             warning_policy=deps["config"].warning_policy,
+            event_bus=deps.get("event_bus"),
         ),
         ctx,
         f"{a_id}<->{b_id}",
@@ -1440,6 +1472,7 @@ async def memory_merge_inferences(
             embedding_provider=deps["embedding_provider"],
             judge=judge,
             warning_policy=deps["config"].warning_policy,
+            event_bus=deps.get("event_bus"),
         ),
         ctx,
         f"sources={len(source_ids)}",
@@ -1642,6 +1675,10 @@ async def memory_reflect(
       fits. One you leave unanswered comes back on every reflect
     - Potential contradictions between facts (same-metacontext only) — both sides
       active, since that is what makes them rivals
+    - temporal_contradictions: open disputes about the order of timepoints, on
+      the same terms as the contradictions between claims. Answer each with
+      resolve_temporal_contradiction; one left unanswered comes back on every
+      reflect until it is answered or held
     - recurrences: a live fact saying what a `historical` one said, meaning the
       claim is true again rather than in conflict. Resolve with restore
       (node_ids=[the historical id], sourced_from=<the document>) — not with
@@ -1712,6 +1749,7 @@ async def memory_reflect(
             similarity_threshold=similarity_threshold,
             relation_similarity_threshold=relation_similarity_threshold,
             max_nominations=max_nominations,
+            warning_policy=deps["config"].warning_policy,
             event_bus=deps.get("event_bus"),
         )
         result["stores_since_last_reflect"] = await deps["storage"].reset_reflect_counter()
@@ -1986,6 +2024,75 @@ async def memory_apply_reflection(
     )
 
 
+@mcp.tool(name="reopen")
+async def epimemer_reopen(
+    reason: str,
+    ctx: Context,
+    node_ids: list[str] | None = None,
+    relation_labels: list[str] | None = None,
+    expected_graph: str | None = None,
+) -> str:
+    """Put a question somebody already answered back in front of a judge.
+
+    Recording a verdict suppresses the pair or the node from every future
+    `reflect`, which is what stops the same question coming back for ever. This
+    is how a suppression is taken back when later evidence says the question is
+    worth asking again.
+
+    **It asserts nothing.** It does not record the opposite of the earlier
+    verdict and it does not say the earlier judge was wrong: it only makes
+    `reflect` offer the question again, with the reopening attached so the next
+    judge can see the history. The earlier verdict stays in the record.
+
+    Name exactly one target:
+
+    - `node_ids` with **two** ids: a fact, inference or topic pair judged
+      `distinct` through `apply_reflection(similarities=[...])`.
+    - `relation_labels` with **two** label names: a pair judged through
+      `apply_reflection(relation_verdicts=[...])`.
+    - `node_ids` with **one** id: a node kept through
+      `apply_reflection(retained=[...])`.
+
+    Refused when nothing is suppressed for the target, and the refusal says what
+    it looked for. Refused too where the pair carries a standing `similarity`,
+    `contradiction` or `variant_of` edge: those assert something about the pair
+    rather than declining it, and withdrawing one is a verdict rather than a
+    question. Use `apply_reflection(similarities=[...])` with `distinct` to
+    withdraw a standing `one_claim`.
+
+    Args:
+        reason: Why the earlier answer is worth revisiting. Required, and
+            recorded on the journal row and on the next nomination.
+        node_ids: One node to withdraw a keep, or two to withdraw a pair's
+            assessment.
+        relation_labels: The two relation label names whose verdict to withdraw.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else, so naming it turns
+            a wrong-graph call from silent into refused.
+    """
+    deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx, expected_graph)
+    if refused is not None:
+        return refused
+    return await _run_with_timeout(
+        "epimemer.reopen",
+        lambda: tools.reopen(
+            storage=deps["storage"],
+            node_ids=node_ids,
+            relation_labels=relation_labels,
+            reason=reason,
+            judge=judge,
+        ),
+        ctx,
+        f"{node_ids or relation_labels}",
+        lambda r, m: (
+            f"reopened={','.join(r['subjects'])} layer={r['layer']}" if r["reopened"] else "refused"
+        ),
+        expected_graph=expected_graph,
+    )
+
+
 @mcp.tool(name="review")
 async def epimemer_review(
     ctx: Context,
@@ -2012,6 +2119,7 @@ async def epimemer_review(
     - `by_agent` — needs `agent_id`; check everything one judge did
     - `since` — needs `since`; add `until` for a closed window (exclusive)
     - `unreviewed` — decisions no other record points back at
+    - `advisory`: operations that went ahead against an objecting advisory
 
     Ordering is two tiers and never one blended score. A decision whose agent
     declared a low `certainty` comes first; everything unrated follows, ordered
@@ -2046,7 +2154,7 @@ async def epimemer_review(
     fewer than 12 once you switch to it. Wider, never narrower.
 
     Args:
-        mode: all | by_agent | since | unreviewed.
+        mode: all | by_agent | since | unreviewed | advisory.
         agent_id: Restrict to one judge. Required by mode="by_agent".
         since: ISO-8601 lower bound on when the decision was made, inclusive.
         until: ISO-8601 upper bound, exclusive.
@@ -2884,9 +2992,11 @@ async def memory_add_timepoint(
     start: str | None = None,
     end: str | None = None,
     label: str | None = None,
+    recurrence_id: str | None = None,
+    occurrence_start: str | None = None,
     expected_graph: str | None = None,
 ) -> str:
-    """Add a timepoint to a timeline.
+    """Add a timepoint to a timeline, by its dates or as one occurrence of a rule.
 
     A timepoint is one of three kinds, and the response says which it turned out
     to be: an **instant** (`start` alone), an **interval** (`start` and `end`),
@@ -2897,11 +3007,28 @@ async def memory_add_timepoint(
     An `end` with no `start` is refused, because `start` is where the mark goes,
     and so is a point with neither a date nor a label.
 
+    **To put one occurrence of a recurrence on the timeline**, pass
+    `recurrence_id` and `occurrence_start` instead of dates. The rule says when
+    the occurrence is, so the point takes its dates and its words from the rule.
+    Do this when a fact is about that one occurrence ("the 1897 service was
+    moved to the hall"); a fact true of every occurrence links to the rule
+    instead. Asking twice gives the same point back.
+
+    Adding a **dated** point re-checks the timeline's stated order, because a
+    new date can contradict an order a source asserted. Any contradiction that
+    opens comes back in `temporal_contradictions`; the point is still added.
+
     Args:
         timeline_id: The timeline to add to.
         start: Optional ISO datetime string for the start.
         end: Optional ISO datetime string for the end (for intervals).
         label: Optional descriptive label (e.g., "during the Renaissance").
+        recurrence_id: The rule this point is one occurrence of, from
+            `add_recurrence` or `query_timeline`.
+        occurrence_start: ISO datetime — which occurrence, named by the start
+            the rule gives it. `query_timeline` reports it beside every
+            occurrence. For an occurrence that moved, this is still the start
+            the rule gave, and the point lands on the date it moved to.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
@@ -2910,6 +3037,7 @@ async def memory_add_timepoint(
     deps = ctx.lifespan_context
     parsed_start = _parse_utc(start) if start else None
     parsed_end = _parse_utc(end) if end else None
+    parsed_occurrence = _parse_utc(occurrence_start) if occurrence_start else None
     return await _run_with_timeout(
         "epimemer.add_timepoint",
         lambda: tools.add_timeline_timepoint(
@@ -2918,6 +3046,8 @@ async def memory_add_timepoint(
             start=parsed_start,
             end=parsed_end,
             label=label,
+            recurrence_id=recurrence_id,
+            occurrence_start=parsed_occurrence,
         ),
         ctx,
         f"timeline={timeline_id}",
@@ -2934,19 +3064,51 @@ async def memory_query_timeline(
     range_start: str | None = None,
     range_end: str | None = None,
     k: int = 5,
+    between: list[str] | None = None,
+    before: str | None = None,
+    after: str | None = None,
+    basis: str = "all",
+    include_contested: bool = True,
+    include_recurrences: bool = True,
+    occurrence_cap: int | None = None,
+    next_after: str | None = None,
     expected_graph: str | None = None,
 ) -> str:
-    """Query timepoints on a timeline.
+    """Query timepoints on a timeline, by date or by stated order.
 
-    Either find nearest to a target datetime, or get all in a range. Passing
-    neither returns every point on the timeline.
+    Find nearest to a target datetime, get all in a range, or ask what the
+    order puts before, after or between named points. Passing none of them
+    returns every point on the timeline.
 
     Each returned point carries its `kind`: `instant`, `interval`, or `vague`
     for one that only a label places. A range query answers in chronological
     order and includes intervals that began before the window and were still
     running when it opened. Vague points have no coordinate, so a range or
-    nearest query leaves them out. The response also carries the timeline's
-    `reference_time`, its own "now", which is null when it follows the clock.
+    nearest query leaves them out, but the ordering modes answer for them and
+    give them `earliest` and `latest` where the order could derive a position.
+
+    `contested` on a point means the order around it is in dispute, which is a
+    statement about the order and not about the point's date: a contested point
+    keeps any date it has and gets no derived position. The response also
+    carries the timeline's `reference_time`, its own "now", which is null when
+    it follows the clock.
+
+    **Occurrences of recurrence rules are computed into the answer**, marked
+    with the rule they came from, the `occurrence_start` that names them, and
+    `materialised_id`, which is null until something has made that occurrence a
+    point of its own. A range query enumerates each rule inside the window, a
+    nearest query gives the nearest occurrence of each, and a query with no
+    window gives the next one after this timeline's present, so a timeline
+    anchored in May 1897 answers in 1897.
+
+    **Every point and every occurrence names the facts attached to it.**
+    `linked` lists what was dated to that point. On an occurrence,
+    `linked_via_rule` lists what was linked to the rule, which holds at every
+    occurrence and so repeats down the answer, and `linked` lists what was
+    attached to that occurrence alone, which is possible only once it is
+    materialised. The two lists stay apart: only `linked` says anything about
+    that one date. Retired facts and retired links are left out, and a
+    cancelled occurrence is absent altogether.
 
     Args:
         timeline_id: The timeline to query.
@@ -2954,6 +3116,25 @@ async def memory_query_timeline(
         range_start: ISO datetime — start of range query.
         range_end: ISO datetime — end of range query.
         k: Number of nearest results (default 5).
+        between: Two timepoint ids — the points the order puts after the first
+            and before the second. A point that neither reaches is not between
+            them.
+        before: A timepoint id — the points the order puts before it.
+        after: A timepoint id — the points the order puts after it.
+        basis: "all" (default) or "stated". "stated" builds the order from what
+            sources said in words, leaving out what a judge read off tense or
+            context. Ask for it when two accounts disagree and you want to see
+            only what was actually asserted.
+        include_contested: Pass false to leave out points whose order is in
+            dispute.
+        include_recurrences: Pass false to leave out computed occurrences and
+            answer from stored points alone.
+        occurrence_cap: How many occurrences of one rule to return, at most.
+            There is a ceiling, and asking for more than it gets the ceiling:
+            a rule can produce occurrences without end, and the response says
+            `truncated` per rule with the window it did cover.
+        next_after: ISO datetime — measure "the next occurrence" from this
+            moment instead of from the timeline's own present.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
@@ -2963,6 +3144,7 @@ async def memory_query_timeline(
     parsed_target = _parse_utc(target) if target else None
     parsed_start = _parse_utc(range_start) if range_start else None
     parsed_end = _parse_utc(range_end) if range_end else None
+    parsed_next_after = _parse_utc(next_after) if next_after else None
     return await _run_with_timeout(
         "epimemer.query_timeline",
         lambda: tools.query_timeline(
@@ -2972,6 +3154,14 @@ async def memory_query_timeline(
             range_start=parsed_start,
             range_end=parsed_end,
             k=k,
+            between=between,
+            before=before,
+            after=after,
+            basis=basis,
+            include_contested=include_contested,
+            include_recurrences=include_recurrences,
+            occurrence_cap=occurrence_cap,
+            next_after=parsed_next_after,
         ),
         ctx,
         f"timeline={timeline_id}",
@@ -2980,23 +3170,463 @@ async def memory_query_timeline(
     )
 
 
+@mcp.tool(name="order_timepoints")
+async def memory_order_timepoints(
+    timeline_id: str,
+    pairs: list[dict],
+    source_id: str,
+    basis: str,
+    ctx: Context,
+    because: str | None = None,
+    expected_graph: str | None = None,
+) -> str:
+    """Record that a source says these timepoints came in this order.
+
+    This is how a point nobody dated gets a place in time: "the fire came before
+    the flood" from a source that dated neither still puts the fire between
+    whatever the flood comes after and whatever it comes before.
+
+    Nothing here lets the graph assert an order no source stated. The source
+    says it, you record that it said it, and `basis` says which of those two it
+    was.
+
+    Recording an order that cannot hold does not fail the call. The graph keeps
+    both sides of the disagreement and opens a temporal contradiction, which
+    comes back in the response and which `reflect` will nominate until a judge
+    answers it with `resolve_temporal_contradiction`.
+
+    Args:
+        timeline_id: The timeline the points sit on.
+        pairs: The orderings this source states, each
+            `{"earlier_id": ..., "later_id": ...}`. A list rather than one pair
+            because a source that states an order usually states several at
+            once, and one reading of one source is one judgment.
+        source_id: The document or node that asserts the order. The source says;
+            you read the source and decided that it said this, and the two are
+            different people.
+        basis: "stated" or "inferred", with no default. "stated" means the
+            source says the order in words. "inferred" means you read it off
+            tense or context. A source that narrates the fire and then the flood
+            has not stated which came first: narrative order is not
+            chronological order.
+        because: One line on how you read the source, optional.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else — naming it turns a
+            wrong-graph call from silent into refused.
+    """
+    deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx, expected_graph)
+    if refused is not None:
+        return refused
+    return await _run_with_timeout(
+        "epimemer.order_timepoints",
+        lambda: tools.order_timepoints(
+            timeline_id=timeline_id,
+            storage=deps["storage"],
+            pairs=pairs,
+            source_id=source_id,
+            basis=basis,
+            because=because,
+            judge=judge,
+        ),
+        ctx,
+        f"timeline={timeline_id} pairs={len(pairs)}",
+        lambda r, m: (
+            f"refused timeline={timeline_id}"
+            if not r["ordered"]
+            else f"pairs={len(r['pairs'])} contradictions={len(r['temporal_contradictions'])}"
+        ),
+        expected_graph=expected_graph,
+    )
+
+
+@mcp.tool(name="resolve_temporal_contradiction")
+async def memory_resolve_temporal_contradiction(
+    timeline_id: str,
+    contradiction_id: str,
+    verdict: str,
+    because: str,
+    ctx: Context,
+    constraint_id: str | None = None,
+    point_id: str | None = None,
+    constraints_to_move: list[str] | None = None,
+    nodes_to_move: list[str] | None = None,
+    expected_graph: str | None = None,
+) -> str:
+    """Answer a temporal contradiction: two orderings that cannot both hold.
+
+    Three verdicts, and `because` is required for all of them because the
+    sentence is the judgment.
+
+    **retire_constraint** — one source's assertion should not be believed. The
+    three real reasons are that the source was misread, that the source is
+    unreliable, or that the order it gives is narrative rather than
+    chronological. Needs `constraint_id`.
+
+    **not_the_same_event** — both sources are right, and the point is really two
+    events. A new point takes the original's label, the constraints you name
+    move to it, and so do the facts you name. Needs `point_id` and
+    `constraints_to_move`.
+
+    **hold** — the sources genuinely disagree and nothing you have settles it.
+    The contradiction stays open and the point stays contested, but reflect
+    stops nominating it until a new constraint or a new dated point touching it
+    arrives. That is what a hold waits for; nothing reopens it on a schedule.
+
+    Nothing is deleted and nothing is edited in place. A constraint that moves
+    is retired and a fresh one written, linked to it.
+
+    Args:
+        timeline_id: The timeline holding the contradiction.
+        contradiction_id: Which contradiction you are answering, from
+            `query_timeline`, `reflect`, or the response that opened it.
+        verdict: "retire_constraint", "not_the_same_event", or "hold".
+        because: Why. Required, and it is the judgment rather than a note about
+            it.
+        constraint_id: For retire_constraint, the constraint you are
+            withdrawing.
+        point_id: For not_the_same_event, the point that is really two events.
+        constraints_to_move: For not_the_same_event, the constraints that follow
+            the new point.
+        nodes_to_move: For not_the_same_event, the facts whose date moves to the
+            new point. Facts move one by one, by your decision: a fact's date is
+            part of what it claims. Anything you do not name stays where it is.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else — naming it turns a
+            wrong-graph call from silent into refused.
+    """
+    deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx, expected_graph)
+    if refused is not None:
+        return refused
+    return await _run_with_timeout(
+        "epimemer.resolve_temporal_contradiction",
+        lambda: tools.resolve_temporal_contradiction(
+            timeline_id=timeline_id,
+            storage=deps["storage"],
+            contradiction_id=contradiction_id,
+            verdict=verdict,
+            because=because,
+            constraint_id=constraint_id,
+            point_id=point_id,
+            constraints_to_move=constraints_to_move,
+            nodes_to_move=nodes_to_move,
+            judge=judge,
+        ),
+        ctx,
+        f"timeline={timeline_id} contradiction={contradiction_id} verdict={verdict}",
+        lambda r, m: (
+            f"refused contradiction={contradiction_id}"
+            if not r["resolved"]
+            else f"verdict={verdict} live_again={len(r['returned_to_live'])}"
+        ),
+        expected_graph=expected_graph,
+    )
+
+
+@mcp.tool(name="merge_timepoints")
+async def memory_merge_timepoints(
+    timeline_id: str,
+    survivor_id: str,
+    merged_id: str,
+    because: str,
+    ctx: Context,
+    expected_graph: str | None = None,
+) -> str:
+    """Two timepoints are one moment: fold one into the other.
+
+    Extraction makes one point per distinct phrase, so "the launch" and "the
+    go-live" out of two documents are two marks for one event. This says they
+    are one. Every constraint naming the retired point moves to the survivor,
+    and every fact dated to it moves as well: a merge asserts the two are one,
+    so every fact about either is a fact about it.
+
+    Refused when a live constraint orders the two against each other. A source
+    that said one came before the other said they are not one moment, and that
+    constraint has to be retired with a reason first.
+
+    Args:
+        timeline_id: The timeline holding both points.
+        survivor_id: The point that stays.
+        merged_id: The point that retires into it. It is kept, marked with the
+            survivor it became, and takes no further part in queries.
+        because: Why these are one moment. Required.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else — naming it turns a
+            wrong-graph call from silent into refused.
+    """
+    deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx, expected_graph)
+    if refused is not None:
+        return refused
+    return await _run_with_timeout(
+        "epimemer.merge_timepoints",
+        lambda: tools.merge_timepoints(
+            timeline_id=timeline_id,
+            storage=deps["storage"],
+            survivor_id=survivor_id,
+            merged_id=merged_id,
+            because=because,
+            judge=judge,
+        ),
+        ctx,
+        f"timeline={timeline_id} {merged_id}->{survivor_id}",
+        lambda r, m: (
+            f"refused merge={merged_id}"
+            if not r["merged"]
+            else f"survivor={survivor_id} links={len(r['links_written'])}"
+        ),
+        expected_graph=expected_graph,
+    )
+
+
+@mcp.tool(name="add_recurrence")
+async def memory_add_recurrence(
+    timeline_id: str,
+    label: str,
+    ctx: Context,
+    duration: str | None = None,
+    anchor: str | None = None,
+    period: str | None = None,
+    rrule: str | None = None,
+    bounds_start: str | None = None,
+    bounds_end: str | None = None,
+    source_id: str | None = None,
+    expected_graph: str | None = None,
+) -> str:
+    """Record a rule for something that happens over and over.
+
+    A market every seventh day, a service every Sunday, a festival on the second
+    Tuesday of each month. The rule is stored once and its occurrences are
+    worked out when someone asks, so nothing here writes a list of dates that
+    could later disagree with the rule that made them.
+
+    Two kinds of rule, and one call gives exactly one of them:
+
+    **By arithmetic** — `anchor` and `period`. "Every third day from the
+    founding" needs no calendar, so this works on an invented timeline as well
+    as a real one.
+
+    **By the calendar** — `rrule`, an RFC 5545 string such as
+    `DTSTART:18900105T090000Z\\nRRULE:FREQ=MONTHLY;BYDAY=2TU`. Use it for
+    anything said in months and weekdays.
+
+    A fact can attach at two levels, and they mean different things. Linked to
+    the **rule**, it holds at every occurrence ("the service is at the parish
+    church"). Linked to **one occurrence**, which `add_timepoint` materialises,
+    it is about that one ("the 1897 service was moved to the hall").
+
+    The response previews the first few occurrences. Read it: an rrule string is
+    easy to mistype in a way that still parses, and the preview is where that
+    shows up.
+
+    Args:
+        timeline_id: The timeline the rule belongs to.
+        label: What the recurrence is called, in the source's words
+            ("the Sunday service", "market day").
+        duration: How long one occurrence lasts, as ISO-8601 ("PT1H", "P3D") or
+            a number of seconds. Omit it for something instantaneous.
+        anchor: ISO datetime — one occurrence the arithmetic counts from. Every
+            other occurrence is a whole number of periods from it, before or
+            after.
+        period: How long between occurrences, ISO-8601 or seconds.
+        rrule: An RFC 5545 recurrence rule, instead of anchor and period.
+        bounds_start: ISO datetime — the first occurrence, if the source says
+            when the pattern began.
+        bounds_end: ISO datetime — the last one. To end a rule later, use
+            `end_recurrence`, which keeps the history of what was thought before.
+        source_id: The document or node that says this recurs. The source says;
+            you read the source and decided that it said this.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else — naming it turns a
+            wrong-graph call from silent into refused.
+    """
+    deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx, expected_graph)
+    if refused is not None:
+        return refused
+    return await _run_with_timeout(
+        "epimemer.add_recurrence",
+        lambda: tools.add_recurrence(
+            timeline_id=timeline_id,
+            storage=deps["storage"],
+            label=label,
+            duration=_parse_duration(duration) if duration else timedelta(0),
+            anchor=_parse_utc(anchor) if anchor else None,
+            period=_parse_duration(period) if period else None,
+            rrule=rrule,
+            bounds_start=_parse_utc(bounds_start) if bounds_start else None,
+            bounds_end=_parse_utc(bounds_end) if bounds_end else None,
+            source_id=source_id,
+            judge=judge,
+        ),
+        ctx,
+        f"timeline={timeline_id} label={label}",
+        lambda r, m: (
+            f"refused timeline={timeline_id}"
+            if not r["added"]
+            else f"recurrence={r['recurrence_id']} preview={len(r['preview'])}"
+        ),
+        expected_graph=expected_graph,
+    )
+
+
+@mcp.tool(name="end_recurrence")
+async def memory_end_recurrence(
+    timeline_id: str,
+    recurrence_id: str,
+    because: str,
+    ctx: Context,
+    ends_at: str | None = None,
+    expected_graph: str | None = None,
+) -> str:
+    """Say when a recurrence stopped applying.
+
+    The rule is not retired and nothing is overwritten. "Christmas is 24 to 26
+    December, annually" never stops being true, so a rule has no lifecycle: what
+    a later reading changes is where it ends.
+
+    Each change is appended and the most recent one is in force, so a second
+    correction shows what it corrected: "we thought it stopped in 1990, then
+    learned it was 1993" reads as two entries rather than as one answer that
+    quietly replaced another. The response gives the whole history.
+
+    Args:
+        timeline_id: The timeline holding the rule.
+        recurrence_id: The rule that stopped.
+        because: What says so. Required, and it is the judgment rather than a
+            note about it.
+        ends_at: ISO datetime of the last occurrence. Omit it to say the rule
+            has no end after all, which is how an end recorded in error is
+            taken back.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else — naming it turns a
+            wrong-graph call from silent into refused.
+    """
+    deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx, expected_graph)
+    if refused is not None:
+        return refused
+    return await _run_with_timeout(
+        "epimemer.end_recurrence",
+        lambda: tools.end_recurrence(
+            timeline_id=timeline_id,
+            storage=deps["storage"],
+            recurrence_id=recurrence_id,
+            ends_at=_parse_utc(ends_at) if ends_at else None,
+            because=because,
+            judge=judge,
+        ),
+        ctx,
+        f"timeline={timeline_id} recurrence={recurrence_id} ends_at={ends_at}",
+        lambda r, m: (
+            f"refused recurrence={recurrence_id}"
+            if not r["ended"]
+            else f"ends={r['effective_end']} changes={len(r['bound_changes'])}"
+        ),
+        expected_graph=expected_graph,
+    )
+
+
+@mcp.tool(name="record_recurrence_exception")
+async def memory_record_recurrence_exception(
+    timeline_id: str,
+    recurrence_id: str,
+    occurrence_start: str,
+    kind: str,
+    ctx: Context,
+    moved_to: str | None = None,
+    source_id: str | None = None,
+    because: str | None = None,
+    expected_graph: str | None = None,
+) -> str:
+    """Record one occurrence that did not happen, or happened at another time.
+
+    Without this, a rule that held except for one year would force a choice
+    between recording something false and abandoning the rule to write every
+    occurrence by hand. The second is worse: the recurrence is then lost.
+
+    A **moved** occurrence keeps the start the rule gave it as its identity and
+    is reported at its new date, so materialising it before and after the move
+    gives one point rather than two.
+
+    Args:
+        timeline_id: The timeline holding the rule.
+        recurrence_id: The rule this occurrence belongs to.
+        occurrence_start: ISO datetime — which occurrence, named by the start
+            the rule gives it, as `query_timeline` reports it. A start the rule
+            does not produce is refused.
+        kind: "cancelled" for one that did not happen, "moved" for one that
+            happened at another time.
+        moved_to: ISO datetime — where a moved occurrence actually was.
+            Required for "moved".
+        source_id: The document or node that says so.
+        because: One line on how you read the source, optional.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else — naming it turns a
+            wrong-graph call from silent into refused.
+    """
+    deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx, expected_graph)
+    if refused is not None:
+        return refused
+    return await _run_with_timeout(
+        "epimemer.record_recurrence_exception",
+        lambda: tools.record_recurrence_exception(
+            timeline_id=timeline_id,
+            storage=deps["storage"],
+            recurrence_id=recurrence_id,
+            occurrence_start=_parse_utc(occurrence_start),
+            kind=kind,
+            moved_to=_parse_utc(moved_to) if moved_to else None,
+            source_id=source_id,
+            because=because,
+            judge=judge,
+        ),
+        ctx,
+        f"timeline={timeline_id} recurrence={recurrence_id} {kind}={occurrence_start}",
+        lambda r, m: (
+            f"refused recurrence={recurrence_id}"
+            if not r["recorded"]
+            else f"recurrence={recurrence_id} kind={kind}"
+        ),
+        expected_graph=expected_graph,
+    )
+
+
 @mcp.tool(name="create_timelink")
 async def memory_create_timelink(
     node_id: str,
     timeline_id: str,
-    timepoint_id: str,
     ctx: Context,
+    timepoint_id: str | None = None,
+    recurrence_id: str | None = None,
     expected_graph: str | None = None,
 ) -> str:
-    """Link a node to a specific timepoint on a timeline.
+    """Link a node to one timepoint, or to a recurrence rule, on a timeline.
 
-    The response names the point's `kind`, so a fact just dated can be checked
-    against what it was dated to without a second call.
+    A fact attaches at one of two levels. Give `timepoint_id` for a fact about
+    one moment, or `recurrence_id` for one that holds at every occurrence of a
+    rule, such as "market day is held in the square". Exactly one of the two.
+
+    For a point the response names its `kind`, the bounds the stated order
+    derived for it, and whether it is contested, so a fact just dated can be
+    checked against what it was dated to without a second call. Linking to a
+    contested point is fine: what is in dispute is where the point sits, not the
+    fact's relation to it. For a rule the response names the rule's label and
+    the bounds it is in force between.
 
     Args:
         node_id: The node to link.
-        timeline_id: The timeline containing the timepoint.
-        timepoint_id: The specific timepoint within the timeline.
+        timeline_id: The timeline holding the timepoint or the rule.
+        timepoint_id: The one timepoint the fact is about.
+        recurrence_id: The rule the fact holds at every occurrence of.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
@@ -3009,11 +3639,16 @@ async def memory_create_timelink(
             node_id=node_id,
             timeline_id=timeline_id,
             timepoint_id=timepoint_id,
+            recurrence_id=recurrence_id,
             storage=deps["storage"],
         ),
         ctx,
-        f"{node_id}->{timeline_id}:{timepoint_id}",
-        lambda r, m: f"edge={r['edge_id']} kind={r['kind']}",
+        f"{node_id}->{timeline_id}:{timepoint_id or recurrence_id}",
+        lambda r, m: (
+            f"edge={r['edge_id']} recurrence={r['recurrence_id']}"
+            if r["level"] == "recurrence"
+            else f"edge={r['edge_id']} kind={r['kind']}"
+        ),
         expected_graph=expected_graph,
     )
 

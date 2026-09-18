@@ -152,6 +152,16 @@ by default:
   `kind` is `attribution`. Expanding into these would return the publisher of
   everything that matched.
 
+A caller can replace those two default families with its own list, by passing
+`exclude_edge_types`. One skip is not a default and cannot be turned off: a
+**retired edge** is never followed. An edge with `retired_at` set is one a
+judge decided should stop counting, which today means a `timelink` a timepoint
+split or merge moved, or an `assessed` edge `reopen` withdrew, and expansion
+checks that before it looks at `exclude_edge_types` at all. So a fact whose
+date moved to a new point is reached through its new link and never through
+the old one, while the old one is still in the record saying what was once
+asserted.
+
 `tagged_with_topic` and relationship-kind user edges *are* followed,
 alongside `about` and `extracted_under_topic`: they say what a node is about,
 which is what expansion is for. `supports` is followed too, and says
@@ -225,6 +235,17 @@ the unmarked name would inherit the default reading.
 - **Computed review labels**: `superseded_candidate`, `evidence_stale`,
   `evidence_merged`, `contested`, derived at read time from edges, never
   stored. See [REFLECTION.md](REFLECTION.md#4-review-labels).
+- **`date_contested`**, on a node linked by `timelink` to a timepoint whose
+  place in time is disputed, and present only when the list is non-empty. It
+  is a list of `{timeline_id, timepoint_id, temporal_contradiction_id}`, one
+  entry per live link to a contested point. It says something different from
+  `contested`, and the two must not be read together: `contested` means the
+  claim itself has a contradiction edge, while `date_contested` means the
+  claim stands and only its position in time is in dispute. An agent reading
+  "the treasury was empty at the coronation" needs to know when the
+  coronation's place in time is disputed, and must not take that for doubt
+  about the treasury. The cost is one read of each timeline a returned node
+  actually links to, which for most result sets is none.
 - **Hierarchy neighbours** on topics that sit in a split hierarchy
   (`parents` and `subtopics`, as id plus preview), so a caller can drill via
   `topic_tree` rather than be handed the whole subtree.
@@ -364,7 +385,7 @@ that?* is answered for every passage that matched.
 `find_nodes`, `query_graph` and `topic_tree` take the same `metacontexts` list,
 with the same meaning: a union the caller states, no metacontext inheriting
 another, and every id refused unless it resolves in the active graph. They need
-it for the same reason `search` does, and `query_graph` most of all — a walk
+it for the same reason `search` does, and `query_graph` most of all: a walk
 from a topic node created from a tag reaches every world that tag was ever
 applied in.
 

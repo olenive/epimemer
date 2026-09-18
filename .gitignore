@@ -8,7 +8,7 @@ __pycache__
 build
 
 # Node — installed from package-lock.json, never committed.
-node_modules/
+node_modules
 
 # The visualization bundle is build output: `make build-frontend` writes it,
 # and the release workflow builds it into the wheel. Its inputs under

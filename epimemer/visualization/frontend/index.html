@@ -36,10 +36,20 @@
               <option value="">No sessions</option>
             </select>
           </div>
-          <div class="flex items-center gap-1.5 text-xs text-content-muted">
+          <div class="relative flex items-center gap-1.5 text-xs text-content-muted">
             <span>MCP:</span>
             <span id="mcp-active-graph" class="text-content-secondary" title="active graph (backend) of the selected session">-</span>
             <span id="reflect-badge" class="px-1.5 py-0.5 rounded text-xs bg-surface-raised text-content-muted" title="Reflection pressure not yet known for this session">reflect —</span>
+            <!-- What this graph does about warnings. Read-only: a write from
+                 the browser would be the first write into a graph with no
+                 author (ADVISORIES_DASHBOARD.md §2.4). -->
+            <button id="btn-warnings" class="px-1.5 py-0.5 rounded text-xs bg-surface-raised hover:bg-surface-raised-hover text-content-secondary transition-colors" title="What this graph does about warnings">warnings</button>
+            <div id="warnings-panel" class="hidden absolute top-full left-0 mt-1 z-20 w-80 rounded border border-line bg-surface-chrome shadow-lg p-2 flex flex-col gap-1">
+              <div id="warnings-title" class="text-xs font-medium text-content-primary">Warnings</div>
+              <div id="warnings-mute" class="text-[10px] text-content-secondary"></div>
+              <div id="warnings-rows" class="flex flex-col gap-0.5 pt-1 border-t border-line"></div>
+              <div class="text-[10px] text-content-muted pt-1">Shown, not changed. Use configure_warnings to set one.</div>
+            </div>
           </div>
           <div class="flex items-center gap-1.5 text-xs">
             <span class="text-content-muted">Viewing:</span>

@@ -71,11 +71,14 @@ class RpcRequest(BaseModel):
     ``retrievals`` takes none and answers with this session's own retrieval
     records, payloads included — the route that keeps working when the hub
     holds structural metadata only (`RETRIEVAL_PROVENANCE.md` §3.2).
+    ``warnings`` takes none and answers with what the active graph does about
+    advisories, in the shape ``configure_warnings`` returns; it is a read, and
+    nothing on the dashboard writes a setting (`ADVISORIES_DASHBOARD.md` §2.4).
     """
 
     type: Literal["rpc_request"] = "rpc_request"
     request_id: str
-    method: Literal["list_graphs", "snapshot", "retrievals"]
+    method: Literal["list_graphs", "snapshot", "retrievals", "warnings"]
     params: dict = Field(default_factory=dict)
 
 

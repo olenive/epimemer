@@ -116,8 +116,13 @@ class TestNothingIsWrittenBeforeTheBatchIsChecked:
         assert "wrote nothing" in message
         assert "relation_verdicts[0]: 'pair' is required" in message
 
-    async def test_the_permanent_suppression_is_named(self, storage, embedding_provider):
-        """The refusal has to say why a partial write would have been costly."""
+    async def test_the_suppression_is_named(self, storage, embedding_provider):
+        """The refusal has to say why a partial write would have been costly.
+
+        The cost is the resend meeting a refusal on the entries that did land,
+        which `reopen` can undo but which an agent that does not know they
+        landed has no cause to reach for.
+        """
         with pytest.raises(ValueError) as caught:
             await tools.apply_reflection(
                 storage,
@@ -125,7 +130,7 @@ class TestNothingIsWrittenBeforeTheBatchIsChecked:
                 similarities=[{"verdict": "distinct", "because": "x"}],
             )
         message = str(caught.value)
-        assert "permanent" in message
+        assert "suppress" in message
         assert "repeat verdict" in message
 
     async def test_a_valid_batch_still_applies(self, storage, embedding_provider):

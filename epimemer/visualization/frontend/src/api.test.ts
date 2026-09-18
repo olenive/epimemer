@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fetchGraphs, fetchSessions, fetchSnapshot } from "./api";
+import { fetchGraphs, fetchSessions, fetchSnapshot, fetchWarningSettings } from "./api";
 
 let requested: string[] = [];
 
@@ -119,5 +119,27 @@ describe("fetchSnapshot", () => {
     await expect(fetchSnapshot("session-a", "archive")).rejects.toThrow(
       "Failed to fetch snapshot for 'archive': 500",
     );
+  });
+});
+
+describe("fetchWarningSettings", () => {
+  it("asks the session for the graph's advisory policy", async () => {
+    respondWith({
+      graph: "memory",
+      surface: true,
+      actions: { cross_metacontext: "proceed" },
+      overridden: {},
+    });
+
+    const result = await fetchWarningSettings("session-a");
+
+    expect(requested).toEqual(["/api/warnings?session=session-a"]);
+    expect(result.graph).toBe("memory");
+  });
+
+  it("carries the hub's reason on failure", async () => {
+    respondWith({ error: "session 'session-a' not connected" }, false, 404);
+
+    await expect(fetchWarningSettings("session-a")).rejects.toThrow("not connected");
   });
 });

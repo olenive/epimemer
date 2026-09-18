@@ -285,15 +285,14 @@ ship without noticing:
   `assessed` edge is the fix for fact pairs, `RelationVerdict` for label
   pairs, and the `retention` journal row for single nodes: a suppression
   index the sweep reads, separate from the journal that audits it.
-- **And its dual: a suppression with no retraction makes every wrong decline
-  permanent by construction.** `assessed` is deliberately terminal
-  (`similarity_decisions.py`), and the `one_claim` retraction left it
-  untouched on purpose. That is a choice, not an oversight, and a new
-  nominator inherits it knowingly or decides otherwise, but not by copying.
-  The `one_claim` retraction is one-way because a false unification
-  manufactures agreement while a withdrawal only under-counts; where neither
-  failure applies, a one-way retraction buys nothing for the permanence it
-  costs. `ISSUES.md` carries the open question.
+- **And its dual: a suppression with no way back makes every wrong decline
+  permanent by construction.** `reopen` is the way back for all three
+  indexes: it retires the `assessed` edge the way a moved `TIMELINK` is
+  retired, so the pair is nominated again and nothing is asserted about the
+  answer (`reopening.py`). A new nominator needs its own way back, or it
+  inherits the permanence knowingly. The `one_claim` retraction stays
+  one-way, because a false unification manufactures agreement while a
+  withdrawal only under-counts.
 
 **A cycle in a feature nobody has built is a precondition, not a defect.**
 Record it against the thing that would create it rather than in a shared
@@ -318,6 +317,21 @@ print(f"Timepoints: {[(tp.label, tp.start) for tp in tl.timepoints]}")
 nearest = find_nearest(tl, datetime(2024, 1, 1, tzinfo=timezone.utc), k=1)
 print(f"Nearest to 2024-01-01: {nearest[0].label}")
 ```
+
+Two more modules sit beside `functions.py`, on the same terms: a pure function
+of a `Timeline` and its inputs, returning a new `Timeline` and a report, so the
+reasoning can be tested without a backend.
+
+- `ordering.py` holds stated order: the ordering graph built from live
+  constraints and edges read off two points' dates, the cycle and crossed-bound
+  checks that run after a write, the bounds a vague point derives from its
+  neighbours, and the verdicts that answer a contradiction, including the split
+  and the merge.
+- `recurrence.py` holds what repeats: the two rule kinds, enumeration into a
+  window and the nearest occurrence to a moment, both entered by arithmetic
+  rather than by walking a rule from its beginning, exceptions for occurrences
+  that were cancelled or moved, and materialising one occurrence into an
+  ordinary timepoint.
 
 ### Orchestration net
 
@@ -538,7 +552,7 @@ Two things move it, and that is the whole list:
 | Mover | Why it moves | Who takes the turn |
 |---|---|---|
 | `switch_database` | `use_graph`, permanently | the method itself |
-| `viz_list_*` | borrowing the connection so a dashboard can snapshot a graph this session is not on | the method itself, and `hub_client.py` for the four reads of one snapshot |
+| `viz_list_*` | borrowing the connection so a dashboard can snapshot a graph this session is not on | the method itself, and `hub_client.py` for the five reads of one snapshot |
 
 `storage/active_graph.py` has the guard. Everything else takes the other side:
 

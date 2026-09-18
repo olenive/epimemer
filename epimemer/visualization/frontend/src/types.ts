@@ -84,14 +84,63 @@ export interface EdgeView {
  * A point or interval on a timeline.
  *
  * `start` is null for a vague timepoint ("during the Renaissance"). Such a
- * point has no coordinate and must never be placed on the metric axis.
+ * point has no date, but it may still have a place: `earliest` and `latest` are
+ * where the order sources stated puts it, and a point with either of them is
+ * drawn as a band spanning them. A point with neither has no coordinate at all
+ * and must never be placed on the metric axis.
+ *
+ * Both are derived on read and never stored, so they come and go as the
+ * constraints behind them do. They are null for a dated point, which needs no
+ * derived position, and for a contested one, whose order cannot be trusted to
+ * give it one.
  */
 export interface TimepointView {
   timepoint_id: string;
   start: string | null;
   end: string | null;
   label: string | null;
+  kind: "instant" | "interval" | "vague";
+  earliest: string | null;
+  latest: string | null;
+  /** The order around this point is disputed. Its date, if it has one, stands. */
+  contested: boolean;
+  temporal_contradiction_id: string | null;
   metadata: Record<string, unknown>;
+}
+
+/**
+ * One occurrence of a recurrence rule.
+ *
+ * `occurrence_start` is the identity, the start the rule gave it before any
+ * move; `start` is where it actually is. `materialised_id` names the timepoint
+ * somebody turned it into, and such an occurrence is drawn as an ordinary mark
+ * rather than as a bead.
+ */
+export interface OccurrenceView {
+  occurrence_start: string;
+  start: string;
+  end: string | null;
+  moved_to: string | null;
+  materialised_id: string | null;
+}
+
+/**
+ * A rule that says something happens over and over, with what it produced.
+ *
+ * Occurrences are computed and never stored, so these are the ones inside the
+ * window the snapshot chose: the span of the timeline's dated points widened by
+ * one period on each side. `truncated` says the per-rule cap fired.
+ */
+export interface RecurrenceView {
+  recurrence_id: string;
+  label: string;
+  rule_kind: string;
+  bounds_start: string | null;
+  bounds_end: string | null;
+  window_start: string | null;
+  window_end: string | null;
+  occurrences: OccurrenceView[];
+  truncated: boolean;
 }
 
 export interface TimelineView {
@@ -99,6 +148,7 @@ export interface TimelineView {
   name: string;
   description: string;
   timepoints: TimepointView[];
+  recurrences: RecurrenceView[];
   /**
    * The timeline's own "now" — what the view centres on and measures past and
    * future against. `null` means follow the wall clock; resolve it at render
@@ -166,12 +216,65 @@ export interface GraphActionRecorded extends BaseEvent {
   category: "graph";
   event_type: "graph_action_recorded";
   action_id: string;
-  /** stored | corrected | world_changed | merged | archived | restored | retired */
+  /**
+   * What the act did. A node act uses one of the seven verbs: stored,
+   * corrected, world_changed, merged, archived, restored, undetermined. A
+   * timeline decision carries instead the kind the journal recorded it under,
+   * temporal_order, temporal_verdict, timepoint_merge, recurrence,
+   * recurrence_bound, recurrence_exception, so the log and the durable history
+   * name it with one word. Kept a free string here: the chip row is built from
+   * the verbs a log actually holds, so the frontend never has to be kept in
+   * step with an enum.
+   */
   verb: string;
-  /** Node ids, primary first. */
+  /** Node ids, primary first, or the timeline a decision was about. */
   subjects: string[];
   counts: Record<string, number>;
   summary: string;
+  /** The agent id the tool named, null where it named none. */
+  judged_by: string | null;
+}
+
+/**
+ * A warning a tool computed, and whether the agent was shown it.
+ *
+ * Every warning a call computed arrives here, muted or not: the dashboard is
+ * where a person looks at what the agent was *not* told, so `surfaced: false`
+ * is the interesting case rather than one to filter out
+ * (ADVISORIES_DASHBOARD.md §2.2).
+ *
+ * `action_id` comes from the sequence the acts are numbered in. It is a place
+ * in this session's stream, not a link to an act, and it is what lets the log
+ * hold warnings and acts in one list.
+ */
+export interface AdvisoryRaised extends BaseEvent {
+  category: "graph";
+  event_type: "advisory_raised";
+  action_id: string;
+  /** The tool the warning came from, e.g. "record_contradiction". */
+  tool: string;
+  /**
+   * What sort of thing was pointed out: disjoint_premises, cross_metacontext,
+   * same_metacontext_variant, same_metacontext_contradiction,
+   * description_not_written. A free string here for the reason a verb is one:
+   * the panel groups by whatever arrives rather than by an enum the frontend
+   * would have to be kept in step with.
+   */
+  kind: string;
+  /** The warning's own sentence, word for word. */
+  message: string;
+  /** The nodes it is about. Clicking the row highlights these. */
+  subjects: string[];
+  /** Structured evidence, per kind. Rendered by nothing yet. */
+  detail: Record<string, unknown>;
+  /** proceed | flag: what the policy in force says about this kind here. */
+  action: string;
+  /** Whether the agent's response carried it. */
+  surfaced: boolean;
+  /** Whether the agent was told to raise it with the user. */
+  notify_user: boolean;
+  /** The agent id the call named, null where it named none. */
+  judged_by: string | null;
 }
 
 /** One node a response named, and how it was reached. */
@@ -262,6 +365,26 @@ export interface GraphSwitched extends BaseEvent {
   new_graph: string;
 }
 
+/**
+ * What a graph does about advisories, as `configure_warnings` reports it.
+ *
+ * `actions` is every kind with the action in force; `overridden` is the subset
+ * this graph answered for itself. A kind missing from `overridden.by_kind` is
+ * inherited from the process default, which is a different state from one set
+ * explicitly to the same value: the first tracks the default, the second stays
+ * put when it changes.
+ */
+export interface WarningSettings {
+  graph: string;
+  surface: boolean;
+  actions: Record<string, string>;
+  overridden: {
+    surface?: boolean;
+    default_action?: string;
+    by_kind?: Record<string, string>;
+  };
+}
+
 /** How close a graph is to a suggested reflect. */
 export interface ReflectPressure {
   count: number;
@@ -279,6 +402,7 @@ export type GraphEvent =
   | ReflectCounterUpdated
   | NodeStatusChanged
   | GraphActionRecorded
+  | AdvisoryRaised
   | RetrievalRecorded
   | EdgeStored
   | TimelineStored

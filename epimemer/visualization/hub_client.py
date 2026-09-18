@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Callable
 
 from websockets.asyncio.client import connect as ws_connect
 
+from epimemer.core.advisories import WarningPolicy
 from epimemer.storage.protocol import StorageBackend
 from epimemer.visualization.event_bus import InProcessEventBus
 from epimemer.visualization.events import Event
@@ -31,7 +32,11 @@ from epimemer.visualization.protocol import (
     RpcResponse,
     SessionInfo,
 )
-from epimemer.visualization.snapshot import assemble_snapshot, list_graphs_result
+from epimemer.visualization.snapshot import (
+    assemble_snapshot,
+    list_graphs_result,
+    warning_settings_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +50,7 @@ async def start_hub_client(
     info: SessionInfo,
     hub_url: str,
     default_reflect_threshold: int = 10,
+    default_warning_policy: WarningPolicy | None = None,
     records: Callable[[], list[dict]] | None = None,
 ) -> Callable[[], Awaitable[None]]:
     """Start forwarding this session to the hub. Returns an async ``stop()``.
@@ -54,6 +60,10 @@ async def start_hub_client(
     endpoint (e.g. ``ws://127.0.0.1:8765/ingest``).
     ``default_reflect_threshold`` is the server default reported with the
     active graph's reflection pressure, unless that graph overrides it.
+    ``default_warning_policy`` is the process-wide advisory policy the
+    ``warnings`` RPC lays the active graph's overrides over, passed as a value
+    like every other setting; omitting it reports the built-in policy, which is
+    what ``configure_warnings`` reports in that case too.
     ``records`` returns this session's retrieval records, already serialized;
     the ``retrievals`` RPC answers from it, payloads included, which is the
     route that still works when the hub's mirror is guarded. It is a callable
@@ -70,7 +80,7 @@ async def start_hub_client(
     # during that borrow lands in the graph being snapshotted.
     #
     # It is one turn for the whole handler rather than one per `viz_list_*`, so
-    # the four reads behind a snapshot describe a single instant.
+    # every read behind a snapshot describes a single instant.
     read_turn = raw_storage.graph_guard.moving
 
     # Per-connection outbound queue; None while disconnected so the bus handler
@@ -91,6 +101,13 @@ async def start_hub_client(
             async with read_turn():
                 if req.method == "list_graphs":
                     result = await list_graphs_result(raw_storage, default_reflect_threshold)
+                elif req.method == "warnings":
+                    result = await warning_settings_result(
+                        raw_storage,
+                        default_warning_policy
+                        if default_warning_policy is not None
+                        else WarningPolicy(),
+                    )
                 elif req.method == "snapshot":
                     result = await assemble_snapshot(raw_storage, req.params["graph"])
                 elif req.method == "retrievals":

@@ -9,11 +9,18 @@
 
 import "./style.css";
 
-import { fetchGraphs, fetchRetrievals, fetchSessions, fetchSnapshot } from "./api";
+import {
+  fetchGraphs,
+  fetchRetrievals,
+  fetchSessions,
+  fetchSnapshot,
+  fetchWarningSettings,
+} from "./api";
 import { initDrawer, nodeDetailBody, notRetrievedMarker } from "./drawer";
 import { createEventRouter } from "./events";
 import { highlightNote, initGraphPanel } from "./graph-panel";
 import { initLogPanel } from "./log-panel";
+import { initWarningSettings } from "./warning-settings";
 import { initPipelineStrip } from "./pipeline-strip";
 import { initRetrievalSelector } from "./retrieval-selector";
 import { responseText, type RecordEntry } from "./retrieval-store";
@@ -252,6 +259,24 @@ const logPanel = initLogPanel(
 );
 
 $("btn-toggle-log").addEventListener("click", () => logPanel.toggle());
+
+// --- Warning settings ---
+//
+// A read-only view of the active graph's advisory policy, beside the reflect
+// badge because both describe the session's graph rather than the viewed one.
+// It re-reads itself on a graph switch; nothing here writes a setting.
+const warningsPanel = initWarningSettings(
+  {
+    panel: $("warnings-panel"),
+    title: $("warnings-title"),
+    mute: $("warnings-mute"),
+    rows: $("warnings-rows"),
+  },
+  router,
+  fetchWarningSettings,
+);
+
+$("btn-warnings").addEventListener("click", () => warningsPanel.toggle());
 
 // --- Retrieval provenance: focus mode ---
 
@@ -512,6 +537,7 @@ const selectSession = async (sessionId: string): Promise<boolean> => {
     // from here.
     reflectState = seedReflectState(reflect);
     renderReflectBadge();
+    warningsPanel.setSession(sessionId);
     renderGraphList({ kind: "ready", graphs, active: active_graph });
     await switchViewedGraph(active_graph);
     await loadRetrievals(sessionId);
@@ -527,6 +553,7 @@ const selectSession = async (sessionId: string): Promise<boolean> => {
     updateMcpLabel();
     reflectState = unknownReflectState();
     renderReflectBadge();
+    warningsPanel.setSession(null);
     renderGraphList({ kind: "unavailable", reason: hubErrorText(err) });
     populateSessionSelector();
     return false;

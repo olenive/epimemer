@@ -6,7 +6,7 @@ in-memory, or anything else can implement it.
 """
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Literal, Protocol, TypeVar
 
@@ -16,6 +16,7 @@ from epimemer.core.advisories import (
     AdvisoryAction,
     AdvisoryKind,
     WarningPolicy,
+    resolved_action,
 )
 from epimemer.core.types import (
     DEFAULT_MERGE_CYCLE_LIMIT,
@@ -179,6 +180,33 @@ def resolve_warning_policy(
         ),
         by_kind={**default.by_kind, **overrides.by_kind},
     )
+
+
+def warning_settings(graph: str, overrides: WarningOverrides, default: WarningPolicy) -> dict:
+    """What is in force about advisories on `graph`, and what this graph chose.
+
+    Pure, and the single shape for the answer: `configure_warnings` returns it
+    to the agent and the dashboard's read-only panel asks for the same thing
+    over the visualization hub. Two renderings of one policy is how a panel
+    comes to disagree with the tool about what a graph is set to.
+
+    `overridden` is what makes *inherited* a state the reader can see. A kind
+    set explicitly to the value it would have inherited anyway is not the same
+    as one following the default: the first stays put when the default changes,
+    the second tracks it.
+    """
+    policy = resolve_warning_policy(overrides, default)
+    kinds = sorted(kind.value for kind in AdvisoryKind)
+    return {
+        "graph": graph,
+        "surface": policy.surface,
+        "actions": {kind: resolved_action(policy, AdvisoryKind(kind)).value for kind in kinds},
+        "overridden": {
+            key: value
+            for key, value in overrides.model_dump(mode="json", exclude_none=True).items()
+            if value != {}
+        },
+    }
 
 
 def drop_none_values(value):
@@ -742,6 +770,82 @@ class StorageBackend(Protocol):
         """
         ...
 
+    async def write_timeline_tx(
+        self,
+        timeline: Timeline,
+        *,
+        kind: DecisionKind,
+        retired_edges: Sequence[NodeEdge] = (),
+        new_edges: Sequence[NodeEdge] = (),
+        counts: Mapping[str, int] | None = None,
+        judge: JudgeRef | None = None,
+    ) -> None:
+        """Atomically write one timeline decision, with any links it moved.
+
+        The sixth transaction boundary, and the one a timeline decision lands
+        through. A split or a merge changes the timeline record *and* re-points
+        every `TIMELINK` naming the point it touched, and those used to be a
+        `store_timeline` followed by two `store_edge` calls per fact: a failure
+        between them left the record saying the fact had moved while its link
+        still pointed at the old date.
+
+        `timeline` upserts, on `write_batch_tx`'s terms: a timeline is one
+        record holding its points, its constraints and its rules, so every
+        change to it is a replacement of the whole row. `new_edges` are the
+        replacement links and `retired_edges` are the originals stamped with
+        when they stopped counting; both upsert, since a retirement is a rewrite
+        of an edge that already exists. Nothing here is deleted.
+
+        `kind`, `counts` and `judge` describe the decision rather than the
+        write, and a bare backend does nothing with them: they are what the
+        instrumented wrapper publishes as one act, so the live log names the
+        decision with the same word the journal does (EVENT_LOG.md §9). They
+        travel on the write because the wrapper sits at this boundary and has
+        no other way to learn which of the six decisions it just persisted.
+
+        The four tools that place a mark (creating a timeline, setting its
+        reference time, adding a timepoint, linking a fact to one) keep using
+        `store_timeline` and `store_edge`. They name no judge and record no
+        journal row, so there is no decision here for them to announce.
+        """
+        ...
+
+    async def reopen_tx(
+        self,
+        decision: DecisionRecord,
+        *,
+        retired_edges: Sequence[NodeEdge] = (),
+        relation_verdicts: Sequence[RelationVerdict] = (),
+    ) -> None:
+        """Atomically withdraw one suppression, with the journal row that says so.
+
+        The ninth transaction boundary, and the one a `reopen` lands through.
+        None of the eight before it fitted: the three suppression layers clear
+        differently, a fact pair retires its `assessed` edge, a label pair takes
+        a new verdict row and a kept node needs neither, and the one thing all
+        three share is the journal row, which no other boundary takes.
+
+        **The row is the act, not a note about one.** Everywhere else the
+        journal is written after the graph write and a lost row costs the
+        journal an entry. Here a reopen whose row failed to store would leave a
+        pair nominable with nothing saying why, in front of a judge who cannot
+        see it was ever declined, which is the argument `record_retention` makes
+        for raising rather than swallowing. So the row lands with the change or
+        neither does.
+
+        `retired_edges` are `assessed` edges stamped with when they stopped
+        counting and by whom; they upsert, since a retirement is a rewrite of an
+        edge that already exists, and nothing here is deleted.
+        `relation_verdicts` are appended, on `record_relation_verdict`'s terms:
+        the table is append-only and a reopen is a row like any other.
+
+        `decision` carries its own kind and judge, so nothing describing the act
+        travels beside it: the instrumented wrapper publishes one act read
+        straight off the row the journal recorded (`EVENT_LOG.md` §9), and the
+        live log names the decision with the word the journal uses.
+        """
+        ...
+
     async def write_verbatim_tx(
         self,
         *,
@@ -1049,6 +1153,12 @@ class StorageBackend(Protocol):
 
         Keyed by `relation_pair_key`, so a pair judged as `(b, a)` suppresses a
         nomination of `(a, b)`.
+
+        **A pair whose newest row is `reopened` is not in the set**, which is
+        how `reopen` puts a label pair back on the worklist. Both backends
+        derive this through `standing_relation_pairs` rather than expressing it
+        as a query, because a suppression index the two spell differently is one
+        that can disagree about what has been judged.
         """
         ...
 

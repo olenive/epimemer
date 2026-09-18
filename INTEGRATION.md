@@ -41,7 +41,9 @@ inferences from text is the agent's job, done through the two-step ingest
 `segment` then `store_decomposition` (see *Available Tools*).
 
 With visualization enabled, open http://127.0.0.1:8765 in your browser to see
-the knowledge graph and pipeline execution as they happen.
+the knowledge graph and pipeline execution as they happen, alongside a timeline
+of what the graph knows about when, and a log of every decision and every
+warning the agent was given.
 
 ### Configuration
 
@@ -52,12 +54,12 @@ and `EPIMEMER_GRAPH` (see *Which graph a server opens* below).
 
 ### Verify Connection
 
-In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 48 tools.
+In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 55 tools.
 
 ## Available Tools
 
 Claude Code prefixes each tool as `mcp__epimemer__<name>`. This table is
-the canonical list of the 48 tools; other docs link here rather than
+the canonical list of the 55 tools; other docs link here rather than
 restate the count.
 
 ### Core Memory Operations
@@ -66,7 +68,7 @@ restate the count.
 |------|---------|
 | `segment` | Split text into chunks (step 1 of ingest) |
 | `store_decomposition` | Store the topics, facts and inferences you extracted (step 2 of ingest). `metacontext_id` is required: `the-real` for base reality |
-| `search` | Hybrid retrieval: embedding similarity and keyword matching run separately, their rankings are fused, then graph expansion adds what the winners connect to. Pass exact identifiers as `terms`. `include_corroboration=True` adds how many independent publishers back each result. `metacontexts` scopes the whole response, edges and matched passages included. See [docs/RETRIEVAL.md](docs/RETRIEVAL.md) |
+| `search` | Hybrid retrieval: embedding similarity and keyword matching run separately, their rankings are fused, then graph expansion adds what the winners connect to. Pass exact identifiers as `terms`. `include_corroboration=True` adds how many independent publishers back each result. `metacontexts` scopes the whole response, edges and matched passages included. A result dated to a timepoint whose order is in dispute carries `date_contested`, which is doubt about the date rather than about the claim. See [docs/RETRIEVAL.md](docs/RETRIEVAL.md) |
 | `link` | Create a typed edge between two nodes |
 | `update` | Create a new version of a node; the old one is kept as history. `because` is required: `"it_was_wrong"` or `"the_world_changed"` |
 | `supersede_by` | Retire a node in favour of one that already exists. `because` as above. If you cannot tell which happened, use `record_contradiction` instead of guessing |
@@ -101,9 +103,10 @@ restate the count.
 
 | Tool | Purpose |
 |------|---------|
-| `reflect` | Analyse the graph for consolidation and cleanup candidates. Reads only |
+| `reflect` | Analyse the graph for consolidation and cleanup candidates, including open disputes about the order of timepoints. Reads only |
 | `configure_reflection` | Set or clear this graph's store threshold for suggesting a reflect |
 | `apply_reflection` | Apply your decisions from a reflection, including user-approved archivals |
+| `reopen` | Put a question a verdict suppressed back on the worklist: two node ids for a pair judged `distinct`, two relation label names for a label pair, one node id for a node a `retained` verdict kept. Asserts nothing about the answer, and a `reason` is required |
 
 ### Review
 
@@ -139,9 +142,15 @@ and when. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 |------|---------|
 | `create_timeline` | Create a named timeline, optionally anchored to its own "now" |
 | `set_reference_time` | Set or clear a timeline's "now", which past and future are measured against |
-| `add_timepoint` | Add a timepoint to a timeline; the response says which kind the dates made it, `instant`, `interval` or `vague` |
-| `query_timeline` | Find the nearest timepoints, or query a time range; each point comes back with its kind, and a range answers in chronological order |
-| `create_timelink` | Link a node to a specific timepoint on a timeline, and report that point's kind |
+| `add_timepoint` | Add a timepoint to a timeline; the response says which kind the dates made it, `instant`, `interval` or `vague`, and names any contradiction a new date opened. `recurrence_id` with `occurrence_start` in place of dates materialises one occurrence of a rule, idempotently |
+| `order_timepoints` | Record that a source says these points came in this order, so a point nobody dated still gets a place in time |
+| `resolve_temporal_contradiction` | Answer a dispute about the order: retire the constraint, split the point into two events, or hold it for want of evidence |
+| `merge_timepoints` | Two points are one moment: fold one into the other, moving every constraint and every fact dated to it |
+| `query_timeline` | Find the nearest timepoints, query a time range, or ask what the order puts before, after or between named points; each point comes back with its kind, its derived bounds and whether its order is contested, and the facts attached to it in `linked`. Occurrences of recurrence rules are computed in, marked with the rule, the `occurrence_start` that names them and the point that materialised them, with the rule's own facts in `linked_via_rule` on each of them; `next_after` moves the moment "next" is measured from |
+| `add_recurrence` | Record a rule for something that happens over and over, by arithmetic (`anchor` and `period`) or by the calendar (an RFC 5545 `rrule`); the response previews the first few occurrences |
+| `end_recurrence` | Say when a rule stopped applying. The rule is not retired and nothing is overwritten: each change is appended, and the response gives the whole history |
+| `record_recurrence_exception` | One occurrence cancelled, or moved to another date under the identity the rule gave it |
+| `create_timelink` | Link a node to one timepoint (`timepoint_id`), reporting that point's kind, bounds and whether it is contested, or to a recurrence rule (`recurrence_id`), where the fact holds at every occurrence and the response gives the rule's label and the bounds it is in force between. Exactly one of the two |
 
 ### Metacontext Operations
 
@@ -234,7 +243,7 @@ instructions. It comes in two sizes:
   `expected_graph`, claim a judge, name the metacontext, record every verdict,
   read `warnings` first.
 - **The guide**, `epimemer_prompts/DEFAULT.md`, is the MCP prompt `guide`:
-  about 50 KB, when to ingest, search, reflect and review, and what each
+  about 60 KB, when to ingest, search, reflect and review, and what each
   warning means. Claude Code lists it as the slash command
   `/mcp__epimemer__guide`; an agent should pull it before nontrivial memory
   work rather than hold it in every context.

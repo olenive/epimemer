@@ -31,9 +31,17 @@ their evidence and to keep asking whether they still stand.
 - **Validity in time.** Each source records when it says a claim held, so a
   fact read in 1997 and one read in 2024 can be one condition with two
   periods, or two events that must never merge.
+- **Timelines.** Points on a timeline carry the dates their sources gave them.
+  A source can also state an order between two points nobody dated, which
+  gives an undated point a position between the dated ones. When the stated
+  orders cannot all hold, the graph records the disagreement and asks a judge
+  rather than refusing the write. A rule such as "the second Tuesday of every
+  month" is stored once and its occurrences are computed on demand. See
+  [docs/TIMELINES.md](https://github.com/olenive/epimemer/blob/main/docs/TIMELINES.md).
 - **A review loop.** `reflect` nominates near-duplicates, contradictions,
   stale evidence and never-retrieved nodes. `apply_reflection` records the
-  agent's verdict on each, and a recorded verdict is never asked for again.
+  agent's verdict on each, and a recorded verdict settles the question until
+  `reopen` puts it back.
 - **A decision journal.** Every judgment names the judge that made it.
   `review` reads the journal back, least certain first, so a different agent
   or a person can check what an earlier one decided.
@@ -151,10 +159,10 @@ Tools exposed via the Model Context Protocol (Claude Code prefixes each as
 - **Core memory**: `segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`, `judge_importance`
 - **Discovery & stats**: `query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `describe_relation`, `graph_stats`
 - **Conflict handling**: `check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`, `merge_inferences`, `reverse_merge`, `configure_merge`, `configure_warnings`
-- **Reflection**: `reflect`, `configure_reflection`, `apply_reflection`
+- **Reflection**: `reflect`, `configure_reflection`, `apply_reflection`, `reopen`
 - **Temporal access**: `graph_as_of`, `query_changes`
 - **Archival**: `archive`, `restore`
-- **Timelines**: `create_timeline`, `set_reference_time`, `add_timepoint`, `query_timeline`, `create_timelink`
+- **Timelines**: `create_timeline`, `set_reference_time`, `add_timepoint`, `order_timepoints`, `resolve_temporal_contradiction`, `merge_timepoints`, `add_recurrence`, `end_recurrence`, `record_recurrence_exception`, `query_timeline`, `create_timelink`
 - **Metacontexts**: `create_metacontext`, `get_metacontexts`
 - **Graph management**: `list_graphs`, `use_graph`, `delete_graph`, `backup_graph`, `configure_backup`
 - **Agents**: `claim_agent` says which judge you are. The user picks the
@@ -190,8 +198,20 @@ be watched from one page.
   my graph".
 - **Activity log**: one entry per transaction, saying what the agent stored,
   corrected, world-changed, merged, archived or restored, filterable by verb,
-  node id, text and time. Click an entry to highlight the nodes it acted on;
-  click a node to filter the log to it.
+  node id, text and time. A timeline decision and a `reopen` each carry their
+  own verb, the one the decision journal files them under. Click an entry to
+  highlight the nodes it acted on; click a node to filter the log to it.
+- **Warnings in the log**: every warning a tool computed appears as a `warned`
+  row beside the act it accompanied, saying which tool raised it, what it said
+  and whether the agent was asked to raise it with you. A warning this graph
+  has muted is shown too, dimmed and labelled *not shown to the agent*, because
+  the dashboard is where you find out what the agent was not told. Filter to
+  `warned` to read them alone.
+- **Warning settings**: the **warnings** button beside the reflect badge shows
+  what this graph does about each kind, and whether that answer is the process
+  default or something set on this graph. It is a view, not a control: use the
+  `configure_warnings` tool to change one, so the change is recorded against a
+  session and a judge the way every other change is.
 - **Retrieval focus**: pick a recent tool call and everything it did *not*
   return is dimmed. Dimmed nodes stay clickable, since the interesting click
   is on one that did not come back, and the drawer's **Response** tab shows
@@ -199,7 +219,11 @@ be watched from one page.
 - **Timeline**: one timeline at a time on a vertical axis, in *record time*
   (when the graph learned each node) or *content time* (when the described
   events happened). Large gaps collapse to a labelled break; vague timepoints
-  sit in an *undated* tray rather than being given an invented date.
+  sit in an *undated* tray rather than being given an invented date. A point
+  only the stated order places is drawn as a hatched band across the bounds it
+  has, a point whose order is disputed carries a mark beside it, and a
+  recurrence rule's occurrences are beads on a dotted spine in a lane of their
+  own, computed for the window on screen and never stored.
 
 > **`EPIMEMER_VIZ_HOST` is a privacy setting as well as a network one.** On
 > the default loopback bind the hub keeps whole retrieval records, so they
@@ -252,9 +276,9 @@ epimemer graphs import <bundle> --graph <name> # rebuild it as a new graph
 epimemer graphs verify <bundle>                # check one, then drop the copy
 ```
 
-A bundle is one JSON Lines file per section — metacontexts, judges, nodes,
+A bundle is one JSON Lines file per section (metacontexts, judges, nodes,
 edges, the decision journal, the relation vocabulary, timelines, documents and
-segments, and the graph's own settings — plus a manifest, compressed into
+segments, and the graph's own settings), plus a manifest, compressed into
 `<graph>-<YYYY-MM-DD>.epimemer.tar.gz`. `--plain` writes the directory
 uncompressed for reading or diffing, and import accepts either.
 
@@ -291,7 +315,7 @@ graph goes. `EPIMEMER_BACKUP_THRESHOLD` sets how often it asks.
 
 - **Dual-space**: vector embeddings as the primary representation, with a typed graph derived on top
 - **Three node types**: Topics (themes), Facts (atomic statements), Inferences (provisional derivations)
-- **Timelines**: ordered containers of timepoints for temporal relationships
+- **Timelines**: one record holding timepoints, the ordering constraints sources have asserted between them, the temporal contradictions those constraints opened, and recurrence rules whose occurrences are computed per query
 - **Metacontexts**: they separate fiction from fact, and one source or perspective from another
 - **Petri nets**: all pipelines are executable, typed, visualizable Petri nets via [Petritype](https://github.com/olenive/petritype)
 - **Immutable history**: a node's *content* is never mutated; an update creates a new version joined to the old one by a history edge. Lifecycle metadata such as `status` and value signals is mutated in place
@@ -304,6 +328,7 @@ graph goes. `EPIMEMER_BACKUP_THRESHOLD` sets how often it asks.
 - [INTEGRATION.md](https://github.com/olenive/epimemer/blob/main/INTEGRATION.md): Claude Code integration, agent guidance and the canonical tool table
 - [docs/RETRIEVAL.md](https://github.com/olenive/epimemer/blob/main/docs/RETRIEVAL.md): how `search` is answered: the two arms, rank fusion, result provenance, lineage collapse
 - [docs/VALIDITY.md](https://github.com/olenive/epimemer/blob/main/docs/VALIDITY.md): when a claim was true: intervals per source, correction versus world-change, recurrence, the soundness check
+- [docs/TIMELINES.md](https://github.com/olenive/epimemer/blob/main/docs/TIMELINES.md): when something happened and in what order: dated points, the order a source states between undated ones, temporal contradictions and their verdicts, recurrence rules
 - [docs/REFLECTION.md](https://github.com/olenive/epimemer/blob/main/docs/REFLECTION.md): the review loop: verdicts, what `reflect` nominates, what `apply_reflection` writes
 - [docs/ATTRIBUTION.md](https://github.com/olenive/epimemer/blob/main/docs/ATTRIBUTION.md): who judged this: the agent registry, why the user assigns the id, how approval reaches an agent, the append-only journal of every decision, and reading it back with `review`, `apply_review` and `rejudge`
 

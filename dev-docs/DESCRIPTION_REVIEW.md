@@ -153,7 +153,7 @@ is absent on old rows and reads back `None`, which is the never-reviewed case.
 
 ## 3. Backfill on an existing graph
 
-**Run on `memory`, 2026-09-12.** Every topic written before the field existed
+**Run on `notes`, 2026-09-12.** Every topic written before the field existed
 has `description_reviewed_at` unset, so the first reflect after shipping ran
 the ratio path over all of them and nominated 306 topics: 98 topic nodes
 created from tags and 208 statement topics. One sitting answered all of them:
@@ -250,8 +250,8 @@ with no new tags needs no dict.
 **The warning is an advisory**, through the mechanism every other one uses:
 `AdvisoryKind.DESCRIPTION_NOT_WRITTEN`, classified `escalates`, so the response
 carries it in `warnings` and nothing is journalled against the ingest. That
-classification is the one the stance field actually decides — *does this argue
-the call was wrong* — and the answer is no: the ingest stands, and one write
+classification is the one the stance field actually decides, *does this argue
+the call was wrong*, and the answer is no: the ingest stands, and one write
 inside it was declined. Journalling it would put a
 `proceeded_despite_advisory` row on every ingest by an agent that re-sends its
 whole tag dictionary, which is exactly the swamping the kind was kept narrow to

@@ -269,7 +269,7 @@ class RelationVerdict(BaseModel):
     id: str = Field(default_factory=_new_id)
     # Sorted, so (a, b) and (b, a) are one pair rather than two.
     label_ids: list[str]
-    verdict: Literal["distinct", "synonymous"]
+    verdict: Literal["distinct", "synonymous", "reopened"]
     because: str
     judged_by: JudgeRef | None = None
     decided_at: datetime = Field(default_factory=_now)
@@ -277,7 +277,11 @@ class RelationVerdict(BaseModel):
 
 ```python
 async def record_relation_verdict(self, verdict: RelationVerdict) -> str: ...
-async def judged_relation_pairs(self) -> set[tuple[str, str]]: ...  # the sweep's read
+async def judged_relation_pairs(self) -> set[tuple[str, str]]:
+    ...  # the sweep's read
+    # (newest row per pair)
+
+
 async def relation_verdicts_for(self, label_ids) -> Sequence[...]: ...  # the writer's read
 async def query_relation_verdicts(self) -> Sequence[...]: ...  # the reader's read
 ```
@@ -293,7 +297,10 @@ once on each side, free to disagree.
 
 The sweep resolves each label name to a record, drops any pair whose two ids
 are already judged, and suppresses nothing for a pair either of whose sides
-has no record.
+has no record. Both backends derive the judged set through
+`standing_relation_pairs`, a pure function over the rows, rather than each
+writing the rule as a query: a suppression index the two spell differently is
+one that can disagree about what has been judged.
 
 **What was written is readable where the next agent looks.** Each
 `list_relations` row carries the standing verdicts naming its label: the
@@ -308,20 +315,35 @@ This is a denormalised suppression index, and legitimate as one for
 `similarity_decisions.py`'s reason: it is immutable and append-only, so it
 cannot drift from the journal row that also records the act.
 
-**Suppression is permanent**, inherited deliberately from the fact-pair
-layer, so a wrong `distinct` silences a pair for good. That is the dual of
-§6's rule: a suppression with no retraction makes every wrong decline
-permanent by construction, exactly as a sweep with no memory makes every
-right decline futile. Both are stated; neither is fixed here, and
-`ISSUES.md` holds the open question. If a retraction is ever built for
-labels, the fact layer's one-directional shape must not be copied across
-unexamined. It is one-directional there because a false unification
-manufactures agreement while a withdrawal merely under-counts. Neither
-failure exists here: nothing corroborates on a label, so a wrong
-`synonymous` invents no support and a wrong `distinct` costs no count, and a
-symmetric retraction may well be right. That conclusion holds only while
-nothing acts irreversibly on `synonymous`; ship an irreversible deprecation
-and it needs re-deriving.
+**A suppression stands until it is reopened.** `reopen` appends a row whose
+verdict is `reopened`, and `standing_relation_pairs` reads the newest row for
+each pair: while that row is the newest, the pair is nominated again. Nothing
+is withdrawn and nothing is overruled, which is what keeps the table
+append-only and the rule symmetric. That symmetry is the right one here and
+would be wrong on the fact layer, for the reason that layer is
+one-directional: a false unification manufactures agreement while a
+withdrawal merely under-counts. Neither failure exists on a label, because
+nothing corroborates on one, so a wrong `synonymous` invents no support and a
+wrong `distinct` costs no count. That holds only while nothing acts
+irreversibly on `synonymous`; ship an irreversible deprecation (§5) and it
+needs re-deriving.
+
+Two consequences follow, and both are load-bearing:
+
+- **A verdict recorded after a reopen is a fresh decision, never a retry.**
+  `_since_the_last_reopen` drops the rows the newest reopen set aside before
+  the retry and confirmation checks run. Without it the second judge's answer
+  reads as a repeat of the first one's, no row is written, and the pair stays
+  nominated for ever while the call reports success.
+- **`reopened` is not in `RELATION_VERDICTS`.** That tuple is the vocabulary
+  of *answers* about a pair, and `apply_relation_verdict` refuses anything
+  outside it: a withdrawal offered beside `distinct` and `synonymous` would
+  read as a third answer. `reopen` is the only writer.
+
+The nomination carries the reopening, so the next judge sees the reason and
+the date rather than re-deriving why the pair is back. It is attached in the
+sweep, which is where the label names are resolved to the record ids the
+reopen named.
 
 ### 4.3 The journal row
 
@@ -336,6 +358,11 @@ identity is worth nothing until the reader dereferences it.
 
 Its own kind rather than `SIMILARITY`: review selects on kind, and a reviewer
 auditing judgments about claims does not want judgments about vocabulary.
+
+A reopen writes `DecisionKind.REOPENED` over the same two subjects, in the
+same transaction as the verdict row, rather than a `RELATION_VERDICT` with a
+withdrawal in its prose: a reviewer asking what has been decided about the
+vocabulary should not get the rows where a decision was taken back.
 
 ---
 

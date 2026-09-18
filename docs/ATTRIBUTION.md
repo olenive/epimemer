@@ -221,7 +221,12 @@ thing the decision landed on:
 | `segment`, `store_decomposition` | every node and edge the ingest creates, as `judged_by`, including the priors `claim_kind`, `confidence` and `importance`, which nothing downstream re-makes |
 | `link` coining a relation label for the first time | the label's record, as `judged_by`: **the coiner, never the describer**. `describe_relation`, a verdict, or a backfill creates a record carrying no judge at all, since none of them is claiming to have introduced the word |
 | `reassign_metacontext`, `correct_interval`, `describe_relation` | nothing on the node or edge; each journals its own row instead, because the thing being revised was somebody else's judgment and overwriting their name would hide that |
+| `order_timepoints` | the ordering constraint, as `judged_by`, beside the `source_id` of whoever asserted the order. The source says; the judge read the source and decided that it said that, so both are named and they are different people |
+| `resolve_temporal_contradiction` | the resolution appended to the contradiction, as `judged_by`, and where the verdict retired a constraint, that retirement too. Where a split moved a fact's date, the old `timelink` as `retired_by` and the new one as `judged_by` |
+| `merge_timepoints` | the retirement of every constraint it re-pointed, and the old and new `timelink` of every fact it moved, the same way a split does |
+| `add_recurrence`, `end_recurrence`, `record_recurrence_exception` | the rule, the appended bound change, and the exception, each as `judged_by` on the record it wrote |
 | `apply_reflection`'s enrichments | its own journal row; where the enrichment replaced an earlier description, that wording's `description_history` entry too. The node's `judged_by` names whoever wrote its **name**, which an enrichment does not touch, so it stays where it is |
+| `reopen` | the withdrawn `assessed` edge, as `retired_by`, for a pair of nodes, and the `reopened` verdict row, as `judged_by`, for a pair of relation labels. Withdrawing a node's retention lands in the journal alone, because a keep is a journal row rather than a field on the node |
 
 Three things follow that are easy to get wrong:
 
@@ -274,6 +279,24 @@ reason attached, because they are opposite claims about what happened and a
 reviewer asking for one does not want the other. And a **reversal**, undoing
 a merge, is the one row that both `reviews` and `supersedes` the record it
 overturns.
+
+**Six kinds record judgments about time**, one per writer, because review
+selects on kind and a reviewer asking which orders were asserted does not want
+the disputes, the merges or the recurrence rules mixed in:
+
+| Kind | Written by | Records |
+|---|---|---|
+| `temporal_order` | `order_timepoints` | what a source says about the order of points nobody dated. One row per call rather than per pair, on the `ingest` rule: a source that states an order usually states several at once, and one reading of one source is one judgment |
+| `temporal_verdict` | `resolve_temporal_contradiction` | a disagreement about order settled, held, or answered by splitting a point that turned out to be two events |
+| `timepoint_merge` | `merge_timepoints` | two timepoints judged to be one moment. Not `merge`, whose subjects are nodes and which retires one of them: nothing here touches a node |
+| `recurrence` | `add_recurrence` | a rule a source stated, such as "the second Tuesday of every month" |
+| `recurrence_bound` | `end_recurrence` | a rule's end date moved, appended to its history. Not `correction`, whose subjects are a retired node and its replacement: nothing here is retired, because a rule that was true never stops having been true |
+| `recurrence_exception` | `record_recurrence_exception` | one occurrence cancelled or moved, which is a statement about that occurrence rather than about the rule |
+
+**Materialising an occurrence writes no row and names no judge.** Turning one
+occurrence of a rule into a real timepoint goes through `add_timepoint`, which
+has never named a judge, and it asserts nothing the rule did not already say.
+The judgment was made when the rule was recorded.
 
 **Re-recording a verdict writes a confirmation.** A second agent calling
 `record_contradiction` on a pair that already has one leaves the edge alone
@@ -518,16 +541,22 @@ EPIMEMER_REQUIRE_JUDGE=true           # every graph this server opens
 
 With it on, a write from a session that has not claimed an approved identity
 is **refused**, with a message naming `claim_agent` and this graph's approved
-judges. It covers the tools that create, retire or revise epistemic content;
-timelines and metacontexts are scaffolding rather than claims and stay
-outside it.
+judges. It covers the tools that create, retire or revise epistemic content.
+Metacontexts are scaffolding rather than claims and stay outside it, and so do
+the four timeline tools that only put marks on an axis: `create_timeline`,
+`set_reference_time`, `add_timepoint` and `create_timelink`. The six timeline
+tools that assert something now go through the same gate as any other write:
+`order_timepoints`, `resolve_temporal_contradiction`, `merge_timepoints`,
+`add_recurrence`, `end_recurrence` and `record_recurrence_exception`. Each of
+them records what a source said or what a judge decided, which is a claim,
+and a claim is what the requirement is for.
 
 Three things about it are deliberate:
 
-- **No MCP tool can change it.** `configure_reflection`, `configure_backup`
-  and `configure_merge` are agent-callable because they tune how eagerly the
-  system nominates or suggests things. This is a gate on the agent itself, and
-  a gate the agent can open is decoration.
+- **No MCP tool can change it.** `configure_reflection`, `configure_backup`,
+  `configure_merge` and `configure_warnings` are agent-callable because they
+  tune how eagerly the system nominates, suggests or warns. This is a gate on
+  the agent itself, and a gate the agent can open is decoration.
 - **It is not retroactive.** Turning it on says nothing about earlier writes:
   the rows that had no judge still have none, and still mean unknown.
 - **Turning it on before approving a judge refuses everything**, so the

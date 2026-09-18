@@ -27,7 +27,9 @@ from epimemer.core.temporal import (
 from epimemer.core.types import (
     Agent,
     AgentDescription,
+    BoundChange,
     ClaimKind,
+    ConstraintRetirement,
     DecisionKind,
     DecisionRecord,
     EdgeType,
@@ -39,10 +41,18 @@ from epimemer.core.types import (
     Metacontext,
     NodeEdge,
     NodeStatus,
+    OrderingConstraint,
+    OrderingEdge,
+    PeriodicRule,
     RawDocument,
+    Recurrence,
+    RecurrenceBounds,
+    RecurrenceException,
     RelationLabel,
     RelationVerdict,
     Segment,
+    TemporalContradiction,
+    TemporalResolution,
     Timeline,
     Timepoint,
     Topic,
@@ -317,6 +327,19 @@ async def build_rich_graph(store) -> dict:
             type=EdgeType.SUBTOPIC_OF,
             created_at=AT,
         ),
+        # Retired rather than deleted: a split moved this fact's date, and the
+        # link it used to have is kept with the one that replaced it.
+        NodeEdge(
+            id="edge-9",
+            src_id=fact.id,
+            dst_id="timeline-1",
+            type=EdgeType.TIMELINK,
+            created_at=AT,
+            metadata={"timepoint_id": "timepoint-2"},
+            retired_at=ON_THE_SECOND,
+            retired_by=OTHER_JUDGE,
+            superseded_by="edge-7",
+        ),
     ]
     for edge in edges:
         await store.store_edge(edge)
@@ -332,6 +355,124 @@ async def build_rich_graph(store) -> dict:
             timepoints=[
                 Timepoint(id="timepoint-1", start=AT, end=ON_THE_SECOND, label="Tuesday"),
                 Timepoint(id="timepoint-2", label="afterwards", metadata={"vague": True}),
+                Timepoint(id="timepoint-3", label="afterwards", split_from="timepoint-2"),
+                Timepoint(id="timepoint-4", label="the same storm", merged_into="timepoint-1"),
+                Timepoint(
+                    id="timepoint-5",
+                    start=AT,
+                    end=ON_THE_SECOND,
+                    label="the watch",
+                    recurrence_id="recurrence-1",
+                    occurrence_start=AT,
+                ),
+            ],
+            recurrences=[
+                Recurrence(
+                    id="recurrence-1",
+                    label="the watch",
+                    rule=PeriodicRule(anchor=AT, period=timedelta(days=1)),
+                    duration=timedelta(hours=1),
+                    bounds=RecurrenceBounds(start=AT),
+                    bound_changes=[
+                        BoundChange(
+                            ends_at=ON_THE_SECOND,
+                            because="the log stops there",
+                            judged_by=OTHER_JUDGE,
+                            at=ON_THE_SECOND,
+                        )
+                    ],
+                    exceptions=[
+                        RecurrenceException(
+                            occurrence_start=ON_THE_SECOND,
+                            kind="moved",
+                            moved_to=ON_THE_SECOND,
+                            source_id="doc-1",
+                            because="the storm moved it",
+                            judged_by=JUDGE,
+                            at=ON_THE_SECOND,
+                        )
+                    ],
+                    source_id="doc-1",
+                    judged_by=JUDGE,
+                    asserted_at=AT,
+                )
+            ],
+            constraints=[
+                OrderingConstraint(
+                    id="constraint-1",
+                    earlier_id="timepoint-1",
+                    later_id="timepoint-2",
+                    source_id="doc-1",
+                    basis=IntervalBasis.STATED,
+                    because="the report gives the order in words",
+                    judged_by=JUDGE,
+                    asserted_at=AT,
+                ),
+                OrderingConstraint(
+                    id="constraint-2",
+                    earlier_id="timepoint-2",
+                    later_id="timepoint-1",
+                    source_id="doc-1",
+                    basis=IntervalBasis.INFERRED,
+                    asserted_at=AT,
+                    retired=ConstraintRetirement(
+                        because="read off the tense, and the tense was wrong",
+                        judged_by=OTHER_JUDGE,
+                        at=ON_THE_SECOND,
+                        contradiction_id="contradiction-1",
+                        superseded_by="constraint-3",
+                    ),
+                ),
+            ],
+            temporal_contradictions=[
+                TemporalContradiction(
+                    id="contradiction-1",
+                    kind="cycle",
+                    edges=[
+                        OrderingEdge(
+                            earlier_id="timepoint-1",
+                            later_id="timepoint-2",
+                            constraint_id="constraint-1",
+                        ),
+                        OrderingEdge(
+                            earlier_id="timepoint-2",
+                            later_id="timepoint-1",
+                            constraint_id="constraint-2",
+                        ),
+                    ],
+                    constraint_ids=["constraint-1", "constraint-2"],
+                    sources=["doc-1"],
+                    found_at=AT,
+                    resolutions=[
+                        TemporalResolution(
+                            verdict="hold",
+                            because="nothing on hand settles it",
+                            judged_by=JUDGE,
+                            at=AT,
+                        )
+                    ],
+                    held=True,
+                ),
+                TemporalContradiction(
+                    id="contradiction-2",
+                    kind="crossed_bounds",
+                    point_id="timepoint-2",
+                    constraint_ids=["constraint-1"],
+                    sources=["doc-1"],
+                    found_at=ON_THE_SECOND,
+                    resolutions=[
+                        TemporalResolution(
+                            verdict="not_the_same_event",
+                            because="two storms, and each report saw one",
+                            judged_by=OTHER_JUDGE,
+                            at=ON_THE_SECOND,
+                            point_id="timepoint-2",
+                            new_timepoint_id="timepoint-3",
+                            moved_constraint_ids=["constraint-1"],
+                            moved_node_ids=[fact.id],
+                        )
+                    ],
+                ),
             ],
         )
     )

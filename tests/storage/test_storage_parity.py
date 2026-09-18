@@ -24,6 +24,9 @@ from epimemer.core.temporal import (
 )
 from epimemer.core.types import (
     Agent,
+    BoundChange,
+    CalendarRule,
+    ConstraintRetirement,
     DecisionKind,
     DecisionRecord,
     EdgeType,
@@ -36,10 +39,18 @@ from epimemer.core.types import (
     NodeEdge,
     NodeStatus,
     NodeType,
+    OrderingConstraint,
+    OrderingEdge,
+    PeriodicRule,
     RawDocument,
+    Recurrence,
+    RecurrenceBounds,
+    RecurrenceException,
     RelationLabel,
     RelationVerdict,
     Segment,
+    TemporalContradiction,
+    TemporalResolution,
     Timeline,
     Timepoint,
     Topic,
@@ -760,6 +771,344 @@ class TestTimelineToolsPersist:
         )
         returned_ids = {tp["id"] for tp in queried["timepoints"]}
         assert returned_ids == {first["timepoint_id"], second["timepoint_id"]}
+
+
+class TestOrderingSurvivesStorage:
+    """The constraints and the disagreements ride in the timeline record.
+
+    Nothing about them is a separate table, so what has to be true is that a
+    whole-record write carries them and a read gives them back unchanged. A
+    backend that dropped a list would lose what the sources said about the order
+    with nothing to say it had.
+    """
+
+    def _timeline(self):
+        contradiction = TemporalContradiction(
+            id="tc-1",
+            kind="cycle",
+            edges=[
+                OrderingEdge(earlier_id="fire", later_id="flood", constraint_id="c-1"),
+                OrderingEdge(earlier_id="flood", later_id="fire", constraint_id="c-2"),
+            ],
+            constraint_ids=["c-1", "c-2"],
+            sources=["doc-1", "doc-2"],
+            found_at=datetime(2026, 9, 17, tzinfo=UTC),
+            resolutions=[
+                TemporalResolution(
+                    verdict="hold",
+                    because="nothing on hand settles it",
+                    judged_by=JudgeRef(agent_id="archivist", digest="d1"),
+                    at=datetime(2026, 9, 17, tzinfo=UTC),
+                )
+            ],
+            held=True,
+        )
+        return Timeline(
+            id="tl-order",
+            name="the parish",
+            timepoints=[
+                Timepoint(id="fire", label="the fire"),
+                Timepoint(id="flood", label="the flood", split_from="fire"),
+                Timepoint(id="storm", label="the storm", merged_into="fire"),
+            ],
+            constraints=[
+                OrderingConstraint(
+                    id="c-1",
+                    earlier_id="fire",
+                    later_id="flood",
+                    source_id="doc-1",
+                    basis=IntervalBasis.STATED,
+                    because="the chronicle says so in words",
+                    judged_by=JudgeRef(agent_id="archivist", digest="d1"),
+                    asserted_at=datetime(2026, 9, 17, tzinfo=UTC),
+                ),
+                OrderingConstraint(
+                    id="c-2",
+                    earlier_id="flood",
+                    later_id="fire",
+                    source_id="doc-2",
+                    basis=IntervalBasis.INFERRED,
+                    retired=ConstraintRetirement(
+                        because="the second source narrates rather than orders",
+                        judged_by=JudgeRef(agent_id="archivist", digest="d1"),
+                        at=datetime(2026, 9, 17, tzinfo=UTC),
+                        contradiction_id="tc-1",
+                        superseded_by="c-3",
+                    ),
+                ),
+            ],
+            temporal_contradictions=[contradiction],
+        )
+
+    async def test_constraints_and_contradictions_round_trip(self, store):
+        written = self._timeline()
+        await store.store_timeline(written)
+
+        got = await store.get_timeline("tl-order")
+        assert got is not None
+        assert got.model_dump(mode="json") == written.model_dump(mode="json")
+
+    async def test_the_derived_state_reads_back_the_same(self, store):
+        await store.store_timeline(self._timeline())
+
+        got = await store.get_timeline("tl-order")
+        assert got.temporal_contradictions[0].is_open is True
+        assert got.temporal_contradictions[0].resolution is None
+        assert got.temporal_contradictions[0].held is True
+        assert got.constraints[1].retired.superseded_by == "c-3"
+        assert [tp.split_from for tp in got.timepoints] == [None, "fire", None]
+        assert [tp.merged_into for tp in got.timepoints] == [None, None, "fire"]
+
+    async def test_an_existing_record_reads_back_with_the_lists_empty(self, store):
+        """A timeline written before any of this existed must still load."""
+        await store.store_timeline(Timeline(id="tl-old", name="written earlier"))
+
+        got = await store.get_timeline("tl-old")
+        assert got.constraints == []
+        assert got.temporal_contradictions == []
+
+    async def test_write_batch_tx_carries_them_and_rolls_them_back(self, store):
+        await store.store_timeline(Timeline(id="tl-order", name="the parish"))
+
+        def boom_embeddings():
+            raise RuntimeError("injected failure")
+            yield  # pragma: no cover - generator body, never reached
+
+        with pytest.raises(RuntimeError, match="injected failure"):
+            await store.write_batch_tx(timelines=[self._timeline()], embeddings=boom_embeddings())
+        rolled_back = await store.get_timeline("tl-order")
+        assert rolled_back.constraints == []
+
+        await store.write_batch_tx(timelines=[self._timeline()])
+        committed = await store.get_timeline("tl-order")
+        assert [c.id for c in committed.constraints] == ["c-1", "c-2"]
+        assert [c.id for c in committed.temporal_contradictions] == ["tc-1"]
+
+
+class TestWriteTimelineTx:
+    """The sixth transaction boundary: one timeline decision, however many
+    writes it takes.
+
+    A split or a merge used to store the timeline and then upsert each moved
+    `TIMELINK` in separate calls, so a failure between them left the record
+    saying the fact had moved while the link still pointed at the old date.
+    """
+
+    def _moved(self, timeline_id: str):
+        original = NodeEdge(
+            id="link-old",
+            src_id="fact-1",
+            dst_id=timeline_id,
+            type=EdgeType.TIMELINK,
+            metadata={"timepoint_id": "fire"},
+        )
+        replacement = NodeEdge(
+            id="link-new",
+            src_id="fact-1",
+            dst_id=timeline_id,
+            type=EdgeType.TIMELINK,
+            metadata={"timepoint_id": "fire-2"},
+        )
+        retired = original.model_copy(
+            update={
+                "retired_at": datetime(2026, 9, 17, tzinfo=UTC),
+                "retired_by": JudgeRef(agent_id="archivist", digest="d1"),
+                "superseded_by": replacement.id,
+            }
+        )
+        return original, replacement, retired
+
+    async def test_the_timeline_and_its_moved_links_land_together(self, store):
+        timeline = Timeline(id="tl-split", name="the parish")
+        await store.store_timeline(timeline)
+        original, replacement, retired = self._moved(timeline.id)
+        await store.store_edge(original)
+
+        await store.write_timeline_tx(
+            timeline.model_copy(update={"timepoints": [Timepoint(id="fire-2", label="the fire")]}),
+            kind=DecisionKind.TEMPORAL_VERDICT,
+            retired_edges=[retired],
+            new_edges=[replacement],
+            counts={"points": 1},
+            judge=JudgeRef(agent_id="archivist", digest="d1"),
+        )
+
+        got = await store.get_timeline("tl-split")
+        assert [tp.id for tp in got.timepoints] == ["fire-2"]
+        links = {edge.id: edge for edge in await store.get_edges_from("fact-1")}
+        assert links["link-old"].retired_at is not None
+        assert links["link-old"].superseded_by == "link-new"
+        assert links["link-new"].metadata["timepoint_id"] == "fire-2"
+
+    async def test_a_timeline_with_no_links_to_move_is_the_ordinary_case(self, store):
+        """Four of the six decisions touch no edge at all."""
+        await store.store_timeline(Timeline(id="tl-rule", name="the parish"))
+
+        await store.write_timeline_tx(
+            Timeline(id="tl-rule", name="the parish", description="revised"),
+            kind=DecisionKind.RECURRENCE,
+        )
+
+        got = await store.get_timeline("tl-rule")
+        assert got.description == "revised"
+
+
+class TestRecurrenceSurvivesStorage:
+    """The rules ride in the timeline record too, with both kinds of rule.
+
+    A rule is a discriminated union, so what has to be true is that a periodic
+    rule reads back as one and a calendar rule as the other: a backend that gave
+    back either as a bare dictionary, or as the wrong half of the union, would
+    turn "every seventh day" into a rule nothing can enumerate.
+    """
+
+    def _timeline(self):
+        return Timeline(
+            id="tl-recurrence",
+            name="the parish",
+            timepoints=[
+                Timepoint(
+                    id="the-1897-service",
+                    start=datetime(1897, 5, 9, tzinfo=UTC),
+                    end=datetime(1897, 5, 9, 1, tzinfo=UTC),
+                    label="the service",
+                    recurrence_id="weekly",
+                    occurrence_start=datetime(1897, 5, 9, tzinfo=UTC),
+                )
+            ],
+            recurrences=[
+                Recurrence(
+                    id="weekly",
+                    label="the service",
+                    rule=PeriodicRule(
+                        anchor=datetime(1890, 1, 1, tzinfo=UTC), period=timedelta(days=7)
+                    ),
+                    duration=timedelta(hours=1),
+                    bounds=RecurrenceBounds(start=datetime(1890, 1, 1, tzinfo=UTC)),
+                    bound_changes=[
+                        BoundChange(
+                            ends_at=datetime(1990, 1, 1, tzinfo=UTC),
+                            because="the register stops in 1990",
+                            judged_by=JudgeRef(agent_id="archivist", digest="d1"),
+                            at=datetime(2026, 9, 17, tzinfo=UTC),
+                        )
+                    ],
+                    exceptions=[
+                        RecurrenceException(
+                            occurrence_start=datetime(1943, 1, 3, tzinfo=UTC),
+                            kind="cancelled",
+                            source_id="doc-2",
+                            because="the register says it was called off",
+                            judged_by=JudgeRef(agent_id="archivist", digest="d1"),
+                            at=datetime(2026, 9, 17, tzinfo=UTC),
+                        ),
+                        RecurrenceException(
+                            occurrence_start=datetime(1897, 5, 16, tzinfo=UTC),
+                            kind="moved",
+                            moved_to=datetime(1897, 5, 18, tzinfo=UTC),
+                            source_id="doc-2",
+                            at=datetime(2026, 9, 17, tzinfo=UTC),
+                        ),
+                    ],
+                    source_id="doc-1",
+                    judged_by=JudgeRef(agent_id="archivist", digest="d1"),
+                    asserted_at=datetime(2026, 9, 17, tzinfo=UTC),
+                ),
+                Recurrence(
+                    id="monthly",
+                    label="the second Tuesday",
+                    rule=CalendarRule(
+                        rrule="DTSTART:19000101T000000Z\nRRULE:FREQ=MONTHLY;BYDAY=2TU"
+                    ),
+                    asserted_at=datetime(2026, 9, 17, tzinfo=UTC),
+                ),
+            ],
+        )
+
+    async def test_recurrences_round_trip(self, store):
+        written = self._timeline()
+        await store.store_timeline(written)
+
+        got = await store.get_timeline("tl-recurrence")
+        assert got is not None
+        assert got.model_dump(mode="json") == written.model_dump(mode="json")
+
+    async def test_each_rule_reads_back_as_its_own_kind(self, store):
+        await store.store_timeline(self._timeline())
+
+        got = await store.get_timeline("tl-recurrence")
+        periodic, calendar = got.recurrences
+        assert isinstance(periodic.rule, PeriodicRule)
+        assert periodic.rule.period == timedelta(days=7)
+        assert periodic.effective_end == datetime(1990, 1, 1, tzinfo=UTC)
+        assert isinstance(calendar.rule, CalendarRule)
+        assert [exception.kind for exception in periodic.exceptions] == ["cancelled", "moved"]
+        assert periodic.exceptions[1].moved_to == datetime(1897, 5, 18, tzinfo=UTC)
+
+    async def test_a_materialised_occurrence_keeps_its_identity(self, store):
+        await store.store_timeline(self._timeline())
+
+        got = await store.get_timeline("tl-recurrence")
+        point = got.timepoints[0]
+        assert point.recurrence_id == "weekly"
+        assert point.occurrence_start == datetime(1897, 5, 9, tzinfo=UTC)
+        assert point.kind == "interval"
+
+    async def test_an_existing_record_reads_back_with_no_recurrences(self, store):
+        """A timeline written before any of this existed must still load."""
+        await store.store_timeline(Timeline(id="tl-older", name="written earlier"))
+
+        got = await store.get_timeline("tl-older")
+        assert got.recurrences == []
+
+    async def test_write_batch_tx_carries_them_and_rolls_them_back(self, store):
+        await store.store_timeline(Timeline(id="tl-recurrence", name="the parish"))
+
+        def boom_embeddings():
+            raise RuntimeError("injected failure")
+            yield  # pragma: no cover - generator body, never reached
+
+        with pytest.raises(RuntimeError, match="injected failure"):
+            await store.write_batch_tx(timelines=[self._timeline()], embeddings=boom_embeddings())
+        rolled_back = await store.get_timeline("tl-recurrence")
+        assert rolled_back.recurrences == []
+
+        await store.write_batch_tx(timelines=[self._timeline()])
+        committed = await store.get_timeline("tl-recurrence")
+        assert [r.id for r in committed.recurrences] == ["weekly", "monthly"]
+
+
+class TestEdgeRetirementSurvivesStorage:
+    """An edge is never deleted, so retirement is a state it has to carry."""
+
+    async def test_a_retired_edge_round_trips_with_who_and_when(self, store):
+        at = datetime(2026, 9, 17, tzinfo=UTC)
+        judge = JudgeRef(agent_id="archivist", digest="d1")
+        edge = NodeEdge(
+            src_id="fact-1",
+            dst_id="tl-1",
+            type=EdgeType.TIMELINK,
+            metadata={"timepoint_id": "fire"},
+            retired_at=at,
+            retired_by=judge,
+            superseded_by="edge-2",
+        )
+        await store.store_edge(edge)
+
+        got = await store.get_edges_from("fact-1", edge_type=EdgeType.TIMELINK)
+        assert len(got) == 1
+        assert got[0].retired_at == at
+        assert got[0].retired_by.agent_id == "archivist"
+        assert got[0].superseded_by == "edge-2"
+
+    async def test_a_live_edge_carries_none_of_it(self, store):
+        edge = NodeEdge(src_id="fact-1", dst_id="tl-1", type=EdgeType.TIMELINK)
+        await store.store_edge(edge)
+
+        got = await store.get_edges_from("fact-1", edge_type=EdgeType.TIMELINK)
+        assert got[0].retired_at is None
+        assert got[0].retired_by is None
+        assert got[0].superseded_by is None
 
 
 class TestWriteBatchTxTimelines:

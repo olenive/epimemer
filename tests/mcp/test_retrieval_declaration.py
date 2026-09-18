@@ -254,7 +254,48 @@ def _args(tool: str, seeded: dict) -> dict:
         "create_timeline": {"name": "Another"},
         "set_reference_time": {"timeline_id": seeded["timeline_id"]},
         "add_timepoint": {"timeline_id": seeded["timeline_id"], "label": "the outage"},
+        "order_timepoints": {
+            "timeline_id": seeded["timeline_id"],
+            "pairs": [],
+            "source_id": seeded["document_id"],
+            "basis": "stated",
+        },
+        # Refused — the seeded timeline carries no contradiction — and a refusal
+        # still names ids back at the agent, which is the property under test.
+        "resolve_temporal_contradiction": {
+            "timeline_id": seeded["timeline_id"],
+            "contradiction_id": "not-a-contradiction",
+            "verdict": "hold",
+            "because": "checking the shape",
+        },
+        # Refused for the same reason: one of the two points does not exist.
+        "merge_timepoints": {
+            "timeline_id": seeded["timeline_id"],
+            "survivor_id": seeded["timepoint_id"],
+            "merged_id": "not-a-timepoint",
+            "because": "checking the shape",
+        },
         "query_timeline": {"timeline_id": seeded["timeline_id"]},
+        "add_recurrence": {
+            "timeline_id": seeded["timeline_id"],
+            "label": "the standup",
+            "anchor": "2024-01-01T09:00:00Z",
+            "period": "P1D",
+        },
+        # Refused — the seeded timeline carries no rule — and a refusal still
+        # names ids back at the agent, which is the property under test.
+        "end_recurrence": {
+            "timeline_id": seeded["timeline_id"],
+            "recurrence_id": "not-a-recurrence",
+            "because": "checking the shape",
+        },
+        # Refused for the same reason.
+        "record_recurrence_exception": {
+            "timeline_id": seeded["timeline_id"],
+            "recurrence_id": "not-a-recurrence",
+            "occurrence_start": "2024-01-02T09:00:00Z",
+            "kind": "cancelled",
+        },
         "create_timelink": {
             "node_id": facts[0],
             "timeline_id": seeded["timeline_id"],
@@ -287,6 +328,9 @@ def _args(tool: str, seeded: dict) -> dict:
         # Not a merge survivor, so this refuses — and a refusal still names the
         # id back at the agent, which is the property under test.
         "reverse_merge": {"survivor_id": facts[0]},
+        # Refused: nothing has judged this pair, so there is no suppression to
+        # withdraw. A refusal naming both ids is still a response carrying them.
+        "reopen": {"node_ids": [facts[0], inferences[0]], "reason": "worth another look"},
         "configure_merge": {},
         "configure_warnings": {},
         "configure_reflection": {"threshold": 7},
@@ -331,6 +375,7 @@ ALL_TOOLS = [
     "configure_warnings",
     "reflect",
     "apply_reflection",
+    "reopen",
     "review",
     "apply_review",
     "rejudge",
@@ -349,6 +394,12 @@ ALL_TOOLS = [
     "create_timeline",
     "set_reference_time",
     "add_timepoint",
+    "order_timepoints",
+    "resolve_temporal_contradiction",
+    "merge_timepoints",
+    "add_recurrence",
+    "end_recurrence",
+    "record_recurrence_exception",
     "query_timeline",
     "create_timelink",
     "create_metacontext",

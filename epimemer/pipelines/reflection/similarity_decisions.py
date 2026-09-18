@@ -55,6 +55,13 @@ because it is immutable and append-only: it cannot drift from the decision
 journal that will also record it (§3.4). The journal is the audit record; this
 edge is what the sweep reads without a journal query.
 
+**A suppression can be taken back, and only by `reopen`.** It retires the
+`assessed` edge the way a moved `TIMELINK` is retired, so the pair is nominated
+again and nothing is asserted about the answer; `already_judged_pairs` reads
+`edge_is_live`, which is why retiring it is enough. The edge stays in the graph,
+and a `distinct` recorded afterwards writes a fresh one, so both rounds are
+readable. See `reopening.py`.
+
 **Nothing here writes on its own initiative.** These edges record a *judgment*.
 A sweep that wrote them for every pair over the bar would fill the graph with
 assertions nobody made, and suppress its own future nominations while doing it.
@@ -70,6 +77,7 @@ from epimemer.core.types import (
     EdgeType,
     JudgeRef,
     NodeEdge,
+    edge_is_live,
     edge_shape_violation,
     endpoint_kind_of,
 )
@@ -119,6 +127,8 @@ async def already_judged_pairs(
             found = await storage.get_edges_for(ids, direction=direction, edge_type=edge_type)
             for edges in found.values():
                 for edge in edges:
+                    if not edge_is_live(edge):
+                        continue
                     judged.add(frozenset({edge.src_id, edge.dst_id}))
     return judged
 
@@ -178,17 +188,30 @@ class SimilarityRecorded(BaseModel):
     retracted: bool = False
 
 
+async def symmetric_edges_between(
+    a_id: str, b_id: str, edge_type: EdgeType, storage: StorageBackend
+) -> list[NodeEdge]:
+    """Every live edge of ``edge_type`` between a and b, in either direction.
+
+    Retired edges are left out, on `edge_is_live`'s terms: a retired edge is a
+    stored record of what was once asserted rather than something still in
+    force. That matters here because `reopen` retires an `assessed` edge, and a
+    verdict recorded afterwards has to write a fresh one: reusing the retired
+    edge would report success while the pair stayed reopened.
+    """
+    found = [edge for edge in await storage.get_edges_from(a_id, edge_type=edge_type)]
+    found += [edge for edge in await storage.get_edges_from(b_id, edge_type=edge_type)]
+    return [
+        edge for edge in found if edge_is_live(edge) and {edge.src_id, edge.dst_id} == {a_id, b_id}
+    ]
+
+
 async def symmetric_edge_between(
     a_id: str, b_id: str, edge_type: EdgeType, storage: StorageBackend
 ) -> NodeEdge | None:
-    """An existing edge of ``edge_type`` between a and b, in either direction."""
-    for edge in await storage.get_edges_from(a_id, edge_type=edge_type):
-        if edge.dst_id == b_id:
-            return edge
-    for edge in await storage.get_edges_from(b_id, edge_type=edge_type):
-        if edge.dst_id == a_id:
-            return edge
-    return None
+    """The live edge of ``edge_type`` between a and b, in either direction."""
+    found = await symmetric_edges_between(a_id, b_id, edge_type, storage)
+    return found[0] if found else None
 
 
 async def apply_similarity_decision(

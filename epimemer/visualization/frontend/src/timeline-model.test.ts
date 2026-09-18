@@ -9,7 +9,14 @@ import {
   sideForTypes,
   type SnapshotLike,
 } from "./timeline-model";
-import type { EdgeView, NodeView, TimelineView, TimepointView } from "./types";
+import type {
+  EdgeView,
+  NodeView,
+  OccurrenceView,
+  RecurrenceView,
+  TimelineView,
+  TimepointView,
+} from "./types";
 
 const node = (over: Partial<NodeView> & { node_id: string }): NodeView => ({
   node_type: "fact",
@@ -39,7 +46,36 @@ const point = (over: Partial<TimepointView> & { timepoint_id: string }): Timepoi
   start: null,
   end: null,
   label: null,
+  kind: over.start ? (over.end ? "interval" : "instant") : "vague",
+  earliest: null,
+  latest: null,
+  contested: false,
+  temporal_contradiction_id: null,
   metadata: {},
+  ...over,
+});
+
+const occurrence = (
+  over: Partial<OccurrenceView> & { occurrence_start: string },
+): OccurrenceView => ({
+  start: over.occurrence_start,
+  end: null,
+  moved_to: null,
+  materialised_id: null,
+  ...over,
+});
+
+const recurrence = (
+  over: Partial<RecurrenceView> & { recurrence_id: string },
+): RecurrenceView => ({
+  label: "the weekly service",
+  rule_kind: "periodic",
+  bounds_start: null,
+  bounds_end: null,
+  window_start: null,
+  window_end: null,
+  occurrences: [],
+  truncated: false,
   ...over,
 });
 
@@ -47,6 +83,7 @@ const timeline = (over: Partial<TimelineView> & { timeline_id: string }): Timeli
   name: "History",
   description: "",
   timepoints: [],
+  recurrences: [],
   reference_time: null,
   created_at: "2024-01-01T00:00:00Z",
   graph: "default",
@@ -306,6 +343,210 @@ describe("buildContentRows", () => {
 
     const [mark] = buildContentRows(snapshot)[0].dated;
     expect(mark.end).toBe(Date.parse("2024-06-01T00:00:00Z"));
+  });
+});
+
+describe("a point the order places", () => {
+  const bounded = (over: Partial<TimepointView>): SnapshotLike => ({
+    nodes: [],
+    edges: [],
+    timelines: [
+      timeline({
+        timeline_id: "t1",
+        timepoints: [
+          point({ timepoint_id: "p1", label: "the quarrel", ...over }),
+        ],
+      }),
+    ],
+  });
+
+  it("leaves the tray for the axis when both bounds are known", () => {
+    const [row] = buildContentRows(
+      bounded({ earliest: "1890-01-01T00:00:00Z", latest: "1900-01-01T00:00:00Z" }),
+    );
+
+    expect(row.undated).toHaveLength(0);
+    const [mark] = row.dated;
+    expect(mark.band).toEqual({
+      earliest: Date.parse("1890-01-01T00:00:00Z"),
+      latest: Date.parse("1900-01-01T00:00:00Z"),
+    });
+    expect(mark.start).toBe(Date.parse("1890-01-01T00:00:00Z"));
+    expect(mark.end).toBe(Date.parse("1900-01-01T00:00:00Z"));
+  });
+
+  it("takes one bound as a place too", () => {
+    const [row] = buildContentRows(bounded({ latest: "1897-05-01T00:00:00Z" }));
+
+    expect(row.undated).toHaveLength(0);
+    const [mark] = row.dated;
+    expect(mark.band).toEqual({ earliest: null, latest: Date.parse("1897-05-01T00:00:00Z") });
+    expect(mark.start).toBe(Date.parse("1897-05-01T00:00:00Z"));
+    // No interval: one bound says where an edge is, not how long anything ran.
+    expect(mark.end).toBeNull();
+  });
+
+  it("keeps the label word for word", () => {
+    const [row] = buildContentRows(
+      bounded({
+        label: "during the Renaissance, or thereabouts, as the chronicler has it",
+        earliest: "1400-01-01T00:00:00Z",
+      }),
+    );
+
+    expect(row.dated[0].title).toBe(
+      "during the Renaissance, or thereabouts, as the chronicler has it",
+    );
+  });
+
+  it("stays in the tray when nothing constrains it", () => {
+    const [row] = buildContentRows(bounded({}));
+
+    expect(row.dated).toHaveLength(0);
+    expect(row.undated[0].band).toBeNull();
+  });
+
+  it("leaves a dated point unbanded", () => {
+    const [row] = buildContentRows(
+      bounded({ start: "1890-01-01T00:00:00Z", kind: "instant" }),
+    );
+
+    expect(row.dated[0].band).toBeNull();
+  });
+
+  it("says in the detail that the bounds came from the order", () => {
+    const [row] = buildContentRows(
+      bounded({ earliest: "1890-01-01T00:00:00Z", latest: "1900-01-01T00:00:00Z" }),
+    );
+
+    expect(row.dated[0].detail).toContain("after 1890-01-01T00:00:00Z");
+    expect(row.dated[0].detail).toContain("before 1900-01-01T00:00:00Z");
+  });
+});
+
+describe("a point whose order is disputed", () => {
+  const disputed = (over: Partial<TimepointView>): SnapshotLike => ({
+    nodes: [],
+    edges: [],
+    timelines: [
+      timeline({
+        timeline_id: "t1",
+        timepoints: [
+          point({
+            timepoint_id: "p1",
+            label: "the quarrel",
+            contested: true,
+            temporal_contradiction_id: "c1",
+            ...over,
+          }),
+        ],
+      }),
+    ],
+  });
+
+  it("carries the dispute on a dated point, which keeps its date", () => {
+    const [row] = buildContentRows(disputed({ start: "1890-01-01T00:00:00Z", kind: "instant" }));
+
+    const [mark] = row.dated;
+    expect(mark.start).toBe(Date.parse("1890-01-01T00:00:00Z"));
+    expect(mark.contested).toBe(true);
+    expect(mark.contradictionId).toBe("c1");
+  });
+
+  it("carries the dispute into the tray on a point with no place", () => {
+    const [row] = buildContentRows(disputed({}));
+
+    expect(row.dated).toHaveLength(0);
+    expect(row.undated[0].contested).toBe(true);
+    expect(row.undated[0].contradictionId).toBe("c1");
+  });
+
+  it("leaves an undisputed point saying so", () => {
+    const [row] = buildContentRows({
+      nodes: [],
+      edges: [],
+      timelines: [
+        timeline({
+          timeline_id: "t1",
+          timepoints: [point({ timepoint_id: "p1", start: "1890-01-01T00:00:00Z" })],
+        }),
+      ],
+    });
+
+    expect(row.dated[0].contested).toBe(false);
+    expect(row.dated[0].contradictionId).toBeNull();
+  });
+});
+
+describe("what a rule says happens over and over", () => {
+  const withRule = (over: Partial<RecurrenceView>): SnapshotLike => ({
+    nodes: [],
+    edges: [],
+    timelines: [
+      timeline({
+        timeline_id: "t1",
+        timepoints: [point({ timepoint_id: "p1", start: "1897-01-01T00:00:00Z" })],
+        recurrences: [recurrence({ recurrence_id: "r1", ...over })],
+      }),
+    ],
+  });
+
+  it("makes a spine with a bead per occurrence", () => {
+    const [row] = buildContentRows(
+      withRule({
+        occurrences: [
+          occurrence({ occurrence_start: "1897-01-01T00:00:00Z" }),
+          occurrence({ occurrence_start: "1897-01-08T00:00:00Z" }),
+        ],
+      }),
+    );
+
+    const [spine] = row.spines;
+    expect(spine.id).toBe("r1");
+    expect(spine.label).toBe("the weekly service");
+    expect(spine.occurrences.map((o) => o.at)).toEqual([
+      Date.parse("1897-01-01T00:00:00Z"),
+      Date.parse("1897-01-08T00:00:00Z"),
+    ]);
+  });
+
+  it("names the timepoint a materialised occurrence became", () => {
+    const [row] = buildContentRows(
+      withRule({
+        occurrences: [
+          occurrence({ occurrence_start: "1897-01-01T00:00:00Z", materialised_id: "p1" }),
+        ],
+      }),
+    );
+
+    expect(row.spines[0].occurrences[0].materialisedId).toBe("p1");
+  });
+
+  it("puts a moved occurrence where it moved to, keeping its identity", () => {
+    const [row] = buildContentRows(
+      withRule({
+        occurrences: [
+          occurrence({
+            occurrence_start: "1897-01-08T00:00:00Z",
+            start: "1897-01-09T00:00:00Z",
+            moved_to: "1897-01-09T00:00:00Z",
+          }),
+        ],
+      }),
+    );
+
+    const [bead] = row.spines[0].occurrences;
+    expect(bead.at).toBe(Date.parse("1897-01-09T00:00:00Z"));
+    expect(bead.occurrenceStart).toBe(Date.parse("1897-01-08T00:00:00Z"));
+    expect(bead.moved).toBe(true);
+  });
+
+  it("makes no spine for a rule with nothing in the window", () => {
+    expect(buildContentRows(withRule({ occurrences: [] }))[0].spines).toEqual([]);
+  });
+
+  it("gives record time no spines at all", () => {
+    expect(buildRecordRows({ nodes: [node({ node_id: "n1" })], edges: [] })[0].spines).toEqual([]);
   });
 });
 

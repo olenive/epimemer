@@ -64,6 +64,10 @@ rather than *nothing obviously missing*.
   an explicit `+00:00`. Pydantic's JSON mode drops the fractional part when it
   is zero and renders UTC as `Z`, so without this the same instant comes back
   spelled two ways depending on the clock it was written by.
+- Lengths of time (a recurrence's period and duration) are rendered as ISO-8601
+  durations, the same spelling Pydantic's JSON mode gives a `timedelta`, so one
+  reads the same in a bundle as it does anywhere else. A length is not an
+  instant, so the datetime rule has nothing to say about it.
 - Floats go through Python's `repr`, which is what `json.dumps` does. A float
   written that way and read back is exactly equal.
 - Models are dumped with `mode="python"` and rendered by `_json_default`, so the
@@ -96,7 +100,7 @@ atomic, and it is implemented on both backends with parity tests in
 
 Two renderings survive inside it and are not stamps: an edge's `type` is written
 as the enum's value, and a journal row's `decided_at` goes through
-`_decision_row`. The second is required — `decided_at` is indexed and compared
+`_decision_row`. The second is required: `decided_at` is indexed and compared
 as text, so the padded rendering is what makes a later range query correct.
 
 `set_reflect_counter` and `set_backup_counter` exist for the same reason and
@@ -134,8 +138,8 @@ a section is* is the thing that would drift.
 
 - **Newer than the code** is refused outright, by `read_bundle`. Nothing is
   coerced and nothing is guessed at.
-- **Older** imports, with model defaults filling in whatever it does not carry —
-  the same thing an old storage row does when a field is added — and
+- **Older** imports, with model defaults filling in whatever it does not carry,
+  the same thing an old storage row does when a field is added, and
   `ImportReport.older_format` says so, which the CLI prints.
 
 Bump the version when a reader of the current code could not make sense of what
@@ -156,7 +160,7 @@ the re-embedded vectors equal the originals under the same provider.
 
 The graph is built by hand rather than driven through the tools, and that is the
 point: the fields an export can silently drop are the ones the tools do not
-routinely write — a closed lifecycle episode, a second retirement, a value
+routinely write: a closed lifecycle episode, a second retirement, a value
 signal with every clock set, a relation label with a description, a timeline
 with a reference time, a journal row with no judge. `test_every_section_actually_carries_something`
 is the control, since every other assertion passes over an empty graph.
@@ -178,8 +182,8 @@ epimemer graphs verify /tmp/<graph>-<date>.epimemer.tar.gz
 exports that, compares every file, and drops the scratch graph whether the
 comparison passed or not. A mismatch names the sections that came back
 different. Run it against the largest graph available: the classes of bug it
-catches — a field nobody thought to read, a timestamp one backend renders
-differently — do not appear on a graph built by a test.
+catches, a field nobody thought to read or a timestamp one backend renders
+differently, do not appear on a graph built by a test.
 
 ---
 

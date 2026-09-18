@@ -4,6 +4,227 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.5] — 2026-09-18
+
+**A wrong decline is no longer permanent: `reopen` puts the question back.**
+Recording a verdict stops a pair or a node being nominated again, which is what
+keeps `reflect` worth running twice, and until now none of the three
+suppressions could be taken back. A pair judged *distinct* in error never came
+back, however much later evidence said it should. `reopen` withdraws one
+suppression and does nothing else: it never records the opposite of the earlier
+verdict and never says the earlier judge was wrong, it only makes `reflect`
+offer the question again. One tool covers all three layers, and which one it is
+follows from the target: two node ids for a pair judged *distinct*, two relation
+label names for a label pair, one node id for a node a `retained` verdict kept.
+
+- Nothing is deleted. The `assessed` edge is retired the way a timeline link is,
+  stamped with when it stopped counting and by whom; the verdict table takes a
+  new row saying `reopened` rather than losing one; the journal only grows. A
+  pair reopened and judged *distinct* a second time carries both rounds, and the
+  second verdict suppresses it again.
+- The nomination says it was reopened, with the reason and the date, so the next
+  judge sees the history instead of re-deriving it. It reaches the similar-pair,
+  contradiction, recurrence, inference-merge, archival and relation-label
+  nominations.
+- Refused when nothing is suppressed for the target, naming what it looked for,
+  because *there was nothing to undo* must not read like *done*. Refused too
+  when the pair carries a standing `similarity`, `contradiction` or `variant_of`
+  edge: those assert something about the pair rather than declining it, so
+  withdrawing one is a verdict. `apply_reflection(similarities=[...])` with
+  *distinct* is still what withdraws a standing *one_claim*.
+- Every reopen is journalled as a `reopened` decision carrying the reason, and
+  reaches the live log as one act naming the judge. The row lands in the same
+  transaction as the change, because here the row is the act: a reopen whose row
+  was lost would put a question back on the worklist with nothing saying it had
+  ever been declined.
+- The refusal an agent gets for repeating a verdict it has already recorded now
+  points at `reopen` rather than at the open question it used to name.
+
+**A warning the agent was given now reaches the dashboard, including one the
+agent was not given.** Until now a warning was computed inside a tool call,
+handed to the agent, journalled where it objected to the call, and that was the
+end of it: the live log showed the act and nothing of what the agent had been
+told about it, and a graph with warnings muted showed nothing anywhere. Each
+warning is now published as its own event and becomes a `warned` row in the log
+beside the act it accompanied, saying which tool raised it, what it said word
+for word, and whether the agent was asked to raise it with the user. Every
+warning a call computed is published, muted or not: a muted one draws dimmer
+and says *not shown to the agent* in its tooltip, because the dashboard is where
+a person looks at what the agent was not told. `warned` joins the verb filter,
+so warnings can be read alone or left out, and clicking one highlights the nodes
+it was about. The tool responses are untouched, and a test asserts it: the event
+reports what the agent saw and never decides it.
+
+- A read-only **Warnings on <graph>** panel sits beside the reflect badge,
+  showing the mute in words and, per kind, the action in force and whether it is
+  inherited from the process default or set on this graph. It is a view rather
+  than a control on purpose: a write from the browser would be the first write
+  into a graph with no author, and every change today is recorded against a
+  session and a judge. `configure_warnings` is still how a setting changes.
+- `configure_warnings` and the panel are built from one function, so the agent
+  and a watching person cannot be shown two different answers about what a graph
+  is set to.
+- A graph that muted its warnings is no longer shown them by `reflect`. The
+  merge candidates it nominates carried their warnings whatever the graph was
+  set to, so one run could answer *no warnings* from `record_contradiction` and
+  *here is a warning* from `reflect`. `reflect` now reads the same setting as
+  every other tool: a muted kind is dropped from the candidate, the candidate
+  itself still arrives with everything there is to act on, and a kind set to
+  `flag` by name survives the mute here as it does everywhere. The dashboard
+  still hears about every one, with *not shown to the agent* on the ones that
+  were dropped.
+
+**The timeline panel draws what the order, the disputes and the rules say.**
+Until now the dashboard drew dates and nothing else: a point the graph could
+place was still a chip in a tray, a disputed order looked exactly like an
+agreed one, and a recurrence rule was invisible. The snapshot now carries what
+`query_timeline` answers, computed by the same functions, so the panel and the
+tool cannot disagree about a point. A point with derived bounds is drawn as a
+hatched band spanning them, its label written on it word for word, fading out
+on the side where the bound is unknown. A contested point keeps its place and
+gains a red zigzag that says the order is disputed rather than that the date is
+wrong, since the date a source gave is kept either way. A rule's occurrences are
+beads on a dotted spine, the dots meaning nothing is asserted between one and
+the next, with a materialised occurrence drawn as the ordinary point it became
+and a moved one drawn where it moved to. Occurrences are computed rather than
+stored, so a snapshot picks its own window: the span of the timeline's dated
+points widened by one period of the rule on each side, under the same per-rule
+cap. What is left in the tray is what the panel has nowhere honest to put:
+points nothing constrains, contested points with no date, and points on another
+timeline's clock.
+
+**A source can now say what order things came in, and a point nobody dated gets
+a place in time.** Until now a timeline could hold "during the Renaissance" but
+had nowhere to put it: the point sat in a tray with no position on the axis, and
+nothing could say it came after one thing and before another. `order_timepoints`
+records that a source asserts an order between two points, with the source named
+and a `basis` saying whether the source stated it in words or a judge read it off
+tense and context. That distinction matters because narrative order is not
+chronological order: a document that tells of the fire and then the flood has
+stated nothing about which came first. Nothing lets the graph assert an order no
+source stated, and extraction still proposes dates only.
+
+- `query_timeline` gained three ordering modes, `before`, `after` and `between`,
+  which walk the stated order rather than the dates, and `between` answers with
+  the points that both come after the first and before the second. A point with
+  no date of its own now comes back with the `earliest` and `latest` the order
+  derived for it, computed on read and never written onto the record, so
+  retiring a constraint later takes its bound away with it. `basis="stated"`
+  builds the answer from what sources said in words alone, and
+  `include_contested=False` leaves out the points whose order is in dispute.
+- **Two orderings that cannot both hold are kept, both of them.** A loop in the
+  order, or a point squeezed until everything before it ends after everything
+  after it begins, opens a temporal contradiction naming the steps, the
+  constraints and the sources behind them. The write still succeeds: the graph
+  holds the disagreement rather than deciding it. Dates take part in the check,
+  so a source claiming the flood came before a fire dated earlier is caught, and
+  adding a dated point re-runs the check because a new date can close a loop that
+  the constraints alone did not.
+- `resolve_temporal_contradiction` answers one with three verdicts. Retire the
+  constraint that should not be believed, and every other constraint in the
+  dispute returns to live unless a second contradiction still holds it. Decide
+  the two sources are each right about a different occurrence, which splits the
+  point in two, moves the constraints named and moves the facts named with it.
+  Or hold it, when nothing on hand settles the disagreement, which stops the
+  nomination until a new constraint or a new dated point touching it arrives.
+  Nothing is deleted and no stored constraint is edited: a constraint that moves
+  is retired and a fresh one written, linked to it.
+- `merge_timepoints` is the reverse of the split, for the two marks extraction
+  makes when two documents call one event by different names. Every constraint
+  and every fact dated to the retired point moves to the survivor, since a merge
+  asserts the two are one. It refuses while a source's constraint orders the two
+  against each other, because a source that ordered them said they are not one
+  moment.
+- **An edge can now be retired.** A `TIMELINK` a split or a merge moves is kept
+  with when it stopped counting, who decided, and the link written in its place,
+  and retrieval, graph queries, `find_nodes` and the dashboard all stop following
+  it. There is still no general tool for detaching a fact from its date: a fact's
+  date is part of what it claims, so moving one takes a decision.
+- `reflect` nominates open disputes about order in `temporal_contradictions`,
+  beside the contradictions between claims, and `search` marks a result dated to
+  a contested point with `date_contested`. That is deliberately a separate flag
+  from `contested`: doubt about when the coronation happened must never be read
+  as doubt about the treasury being empty at it.
+- Graph bundles carry the new lists without a format change, since adding fields
+  to an existing section is not one.
+
+**A timeline can now hold what recurs, as a rule rather than as a row of dates.**
+`add_recurrence` records that something happens over and over, either by
+arithmetic (an anchor and a period, which needs no calendar and so works on an
+invented timeline as well as a real one) or by the calendar (an RFC 5545 `rrule`,
+for "the second Tuesday of every month"). The occurrences are worked out when
+somebody asks and are never stored, because a stored expansion is a second thing
+that can disagree with the rule that made it. Until now the only way to record a
+weekly service was to write every service by hand, or to leave the pattern out of
+the graph entirely.
+
+- An occurrence is named by the start the rule gives it, and nothing counts
+  occurrences. A number would need a walk from the rule's beginning, cheap near
+  it and not cheap a century later, so a number that had to be capped would be
+  missing exactly where most queries land.
+- `query_timeline` computes occurrences into its answer, marked with the rule
+  they came from, the `occurrence_start` that names them, and the point that
+  materialised them where one has. A range query enumerates each rule inside the
+  window, a nearest query gives the nearest occurrence of each, and a query with
+  no window gives the next one after the timeline's own present: a timeline
+  anchored in May 1897 answers in 1897, and `next_after` measures from a moment
+  you name instead. This is the first thing `reference_time` decides rather than
+  merely reports.
+- **There is a cap, per rule per call.** One plausible query over a daily rule
+  would otherwise enumerate without end; when the cap fires the answer says
+  `truncated` for that rule and names the window it did cover. Finding the
+  nearest occurrence enumerates nothing at all: one division for a periodic rule,
+  one step each way for a calendar one.
+- `add_timepoint` gained `recurrence_id` with `occurrence_start` in place of
+  dates, which turns one occurrence into an ordinary timepoint that can be
+  linked, ordered and disputed like any other, and takes part in the ordering
+  checks the same way. It is idempotent on the pair, so asking twice gives the
+  same point. This is what lets a fact attach at either of two levels: to the
+  rule, where it holds at every occurrence, or to one occurrence, where it is
+  about that one.
+- `create_timelink` gained `recurrence_id`, the other of those two levels, for a
+  fact that holds at every occurrence: "market day is held in the square" is
+  about the rule rather than about any one market. Exactly one of
+  `timepoint_id` and `recurrence_id` is given, and the response says which level
+  the fact now attaches at. A rule-level link holds no place in the order, so
+  nothing can contest its date, a split or a merge of points leaves it where it
+  is, and the dashboard carries it without drawing it on a mark.
+- `query_timeline` now names the facts attached to every point and every
+  occurrence it returns. `linked` is what was dated to that point, and on an
+  occurrence `linked_via_rule` is what was linked to the rule, so a fact that
+  holds at every occurrence is visible on each of them instead of only on the
+  rule. The two lists stay apart, because only one of them says anything about
+  that one date.
+- `record_recurrence_exception` records an occurrence that did not happen or
+  happened at another time. Without it a rule that held except for one year would
+  force a choice between recording something false and abandoning the rule, and
+  the second is worse because the recurrence is then lost. A moved occurrence
+  keeps the start the rule gave it as its identity, so materialising it before
+  and after the move gives one point rather than two.
+- `end_recurrence` says when a rule stopped applying and never retires it: a
+  recurrence that was true does not stop having been true. Each end date is
+  appended with its reason, and the most recent is in force, so "we thought it
+  stopped in 1990, then learned it was 1993" reads as the correction it is.
+- `python-dateutil` is now a dependency rather than something three optional
+  extras happened to pull in, so calendar rules work on a plain install instead
+  of only on a machine that had one of those extras.
+
+**The dashboard's log now shows the six timeline decisions**, which used to pass
+it in silence: ordering points, answering a dispute about order, merging two
+points, and the three recurrence decisions. Each reads as one line naming the
+timeline, the judge, and what it wrote. A split that moves a fact from one date
+to another now also lands as a single transaction, timeline and links together,
+where before a failure part-way through could leave the record saying the fact
+had moved while its link still named the old date. Creating a timeline, setting
+its present, adding a point and linking a fact to one stay out of the log, since
+they record where something sits rather than deciding anything about it.
+
+`store_decomposition` now reports `tags_created`, how many tags this call
+minted, beside `tags_described`, which counts only existing tags that had no
+description and got one. A call creating three tags used to report
+`tags_described: 0` and nothing else, which read as the descriptions having been
+dropped; it now reports `tags_created: 3` beside it.
+
 ## [0.2.4] — 2026-09-16
 
 **A timepoint now says what kind of thing it is, and a range query answers in

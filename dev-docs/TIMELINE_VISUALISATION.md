@@ -2,8 +2,9 @@
 
 A timeline panel in the dashboard: a vertical axis with events as marks,
 hover detail, filtering, zoom, and a split pane beside the graph. The panel
-is built, including extraction proposing timepoints (§7). The valid-time
-grammar (§13) is designed and not built.
+is built, including extraction proposing timepoints (§7), the band for a point
+the order places, the mark for a disputed order, and the beads for a rule's
+occurrences (§12.6). The valid-time grammar (§13) is designed and not built.
 
 ---
 
@@ -17,7 +18,9 @@ grammar (§13) is designed and not built.
 | How many timelines at once? | **One**, chosen from a selector. Comparing timelines is a different feature (§12.2) |
 | What does left and right mean? | Facts and topics **left**, inferences **right**, mixed marks **straddle** the axis (§12.3) |
 | Where is "now"? | A per-timeline `reference_time` stored **in the graph**, not the browser (§6.4, §12.5) |
-| Vague timepoints | In a dedicated **tray**, in authored order. Never a fake coordinate on the axis (§12.6) |
+| Vague timepoints | A point the order places is drawn on the axis as a **hatched band** from `earliest` to `latest`, label verbatim on it. A point nothing constrains goes to the **tray**, in authored order, never a fake coordinate (§12.6) |
+| Disputed order | A **contested mark** in the contradiction hue beside the point, which keeps whatever place it had. The mark says the order is disputed, not that the date is wrong (§12.6) |
+| Recurrence | A rule's occurrences are **beads on a dotted spine** in a lane beside the axis, one lane per rule. A materialised occurrence is drawn as the ordinary point it became (§12.6, §13.1) |
 | Large gaps | **Break the axis** where a gap is far above the local spacing (§4) |
 | Zoom | Per-timeline zoom and pan, recomputing breaks from the visible domain; wheel **pans**, ⌘/ctrl-wheel zooms (§12.4) |
 | Timepoint population | Extraction **proposes** timepoints as well as manual curation (§7) |
@@ -272,10 +275,11 @@ temporal comes back as a label with no dates. Out of scope on purpose:
   symmetric.
 - **Clock times**, and anything needing the reader's present.
 
-Two guards matter more than they look. A bare four-digit number is a year
-only when a preposition metacontexts it or a date pattern surrounds it; otherwise
-`3000 troops` and `error code 1997` become dates. And the preposition needs a
-word boundary in front of it, or "versi*on* 2024" reads as "on 2024".
+Two guards matter more than they look. A bare four-digit number is a year only
+when a preposition in front of it says so ("in 1897", "by 1897") or a date
+pattern surrounds it; otherwise `3000 troops` and `error code 1997` become
+dates. And the preposition needs a word boundary in front of it, or
+"versi*on* 2024" reads as "on 2024".
 
 ---
 
@@ -299,6 +303,13 @@ without a DOM.
 
 Backend: `protocol.py`, `memory.py`, `surrealdb_adapter.py`,
 `instrumented_storage.py`, `snapshot.py`, `events.py`.
+
+`assemble_snapshot` in `snapshot.py` filters retired edges out before the
+snapshot is built, so `timeline-model.ts` never sees a `TIMELINK` that a
+timepoint split or merge moved. That filter is what keeps a moved fact off two
+dates at once, the one its original link gave it and the one a judge moved it
+to, and it belongs on the server rather than in the model: the dashboard draws
+what the graph currently says.
 
 ---
 
@@ -436,14 +447,53 @@ hidden.
 
 ### 12.6 The undated tray
 
-A timepoint with no `start` gets no coordinate; placing it anywhere on the
-axis would assert something false. "Below the axis" means "later" on a
-vertical axis, so undated chips sit in a visually separate tray, a bordered,
-labelled block outside the scrolling axis. Order is authored order within the
+A timepoint with no `start` and nothing constraining it gets no coordinate;
+placing it anywhere on the axis would assert something false. "Below the axis"
+means "later" on a vertical axis, so such chips sit in a visually separate tray,
+a bordered, labelled block outside the scrolling axis. Order is authored order within the
 timeline, which is what `reorder_timepoints` establishes (concrete points
 sorted by start, vague ones appended in their original sequence), so the
 panel and the backend agree on what "the order of a timeline" means. Chips
 are interactive on the same terms as marks and obey the same filters.
+
+**What leaves the tray.** A point with no `start` can still have a position, if
+a source stated that it came after one dated point and before another. The
+snapshot carries the derived `earliest` and `latest` for it (`TIMELINES.md`
+§3.3), computed by the same `bounds_for` that answers `query_timeline`, and such
+a point is drawn on the axis as §13.1's hatched band spanning the two, with its
+label written on it word for word. §13.2's rule 3 still holds: resolution adds a
+position and never replaces the words. With only one bound known the band runs a
+short way past it and dissolves, which is §13.1's unknown endpoint: "after the
+fire, we do not know when" is fog below a known edge, not a bar stopping
+somewhere nobody asserted.
+
+**What the contested mark says.** A point whose stated order contradicts another
+source's, or its own dates, is reported as contested and gets no derived
+position. It keeps whatever place it had, a date or the tray, and gains a
+zigzag in the contradiction hue beside it. The shape matters: the stroke runs
+along the axis, the direction time runs in, and doubles back, so what reads as
+tangled is the sequence. A cross or a ring over the mark would put the doubt on
+the date, and a dispute about order is exactly what leaves a date standing.
+
+**What stays in the tray**: points nothing constrains, contested points with no
+date, and points from another timeline's clock (§13.2's rule 6).
+
+**Recurrence beads.** A rule's occurrences are drawn as §13.1's beads on a
+hairline dotted spine, in a lane left of the axis, one lane per rule. The spine
+means "same rule, nothing asserted in between". A materialised occurrence gets
+no bead: materialising turns it into an ordinary timepoint, which is already on
+the axis as a full mark, and a bead as well would draw one date twice. A moved
+occurrence's bead sits at the date it moved to.
+
+**The window a snapshot enumerates.** Occurrences are computed and never stored,
+and a snapshot is not a query, so nobody named a window. It takes one from the
+timeline: the span of the dated points, widened by one period of the rule on
+each side, so the occurrence either side of the data is drawn and the spine
+visibly carries on past it. A calendar rule has no period to widen by and gets a
+year. A timeline with no dated points falls back to its stated present, and with
+neither there is no window and no beads, because enumerating from the wall clock
+would put occurrences at a place the graph never spoke about. The per-rule cap
+is `OCCURRENCE_CAP`, the one `query_timeline` uses.
 
 ### 12.7 Split pane
 
@@ -530,6 +580,11 @@ The validity model is built; the viz snapshot carries no validity yet, so the
 grammar has nothing to draw (`PROPOSED_FEATURES.md`). It was designed early
 because it exposed two rendering decisions (gaps, the now-line) that would
 otherwise be made by accident in code.
+
+Two of the marks below are built already, for the other thing each was right
+for: the hatched band draws a point the order places, and the beads on a dotted
+spine draw a rule's occurrences (§12.6). Both are in `timeline-panel.ts`, so
+when validity does reach the snapshot the shapes are there to reuse.
 
 **A rendered mock of every mark in this section is checked in at
 `dev-docs/mockups/valid-time-grammar.html`**: self-contained, theme-aware, no

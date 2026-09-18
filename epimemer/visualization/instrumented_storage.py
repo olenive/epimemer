@@ -14,7 +14,7 @@ Usage:
 """
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Literal
 
@@ -278,6 +278,7 @@ class InstrumentedStorage:
                 verb=verb_for_status(status),
                 subjects=[old_node.id, new_node.id],
                 counts={"nodes": 1, "edges": 1 + len(evidence_edges)},
+                judged_by=judge,
             )
         )
 
@@ -322,6 +323,7 @@ class InstrumentedStorage:
                 verb=verb_for_status(status),
                 subjects=[old_node.id, existing_id],
                 counts={"edges": 1 + len(evidence_edges)},
+                judged_by=judge,
             )
         )
 
@@ -355,6 +357,7 @@ class InstrumentedStorage:
                     verb=verb_for_status(status),
                     subjects=[node.id for node in nodes],
                     counts={"nodes": len(nodes)},
+                    judged_by=judge,
                 )
             )
 
@@ -400,6 +403,7 @@ class InstrumentedStorage:
                 # where the content went is the part worth reading.
                 subjects=[merged_node.id, *(s.id for s in source_nodes)],
                 counts={"nodes": 1, "edges": len(lineage_edges) + len(evidence_edges)},
+                judged_by=judge,
             )
         )
 
@@ -445,6 +449,7 @@ class InstrumentedStorage:
                 verb=ActionVerb.RESTORED,
                 subjects=[source.id for source in source_nodes],
                 counts={"nodes": len(source_nodes), "edges": len(restored_edges)},
+                judged_by=judge,
             )
         )
 
@@ -498,6 +503,91 @@ class InstrumentedStorage:
             )
         except Exception:
             logger.exception("write_batch_tx event emission failed; write already committed")
+
+    async def write_timeline_tx(
+        self,
+        timeline: Timeline,
+        *,
+        kind: DecisionKind,
+        retired_edges: Sequence[NodeEdge] = (),
+        new_edges: Sequence[NodeEdge] = (),
+        counts: Mapping[str, int] | None = None,
+        judge: JudgeRef | None = None,
+    ) -> None:
+        """Delegate the write, then announce the decision it recorded.
+
+        One act for the whole decision, whatever it took: a split changes the
+        timeline and re-points every link naming the point it touched, and that
+        is one judgment a person reads as one line, not one line per edge.
+
+        The verb is the `DecisionKind` the journal recorded, not a verb minted
+        here. The six kinds are already the durable history's names for these
+        decisions, so the live log borrows them and the two surfaces keep
+        speaking one vocabulary (EVENT_LOG.md §11).
+        """
+        await self._inner.write_timeline_tx(
+            timeline,
+            kind=kind,
+            retired_edges=retired_edges,
+            new_edges=new_edges,
+            counts=counts,
+            judge=judge,
+        )
+        graph = self._inner.current_database
+        await self._bus.publish(
+            TimelineStored(graph=graph, timeline=timeline_to_view(timeline, graph))
+        )
+        for edge in [*new_edges, *retired_edges]:
+            await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
+        await self._bus.publish(
+            graph_action(
+                graph=graph,
+                verb=kind,
+                subjects=[timeline.id],
+                counts={
+                    **(counts or {}),
+                    "retired_links": len(retired_edges),
+                    "new_links": len(new_edges),
+                },
+                judged_by=judge,
+            )
+        )
+
+    async def reopen_tx(
+        self,
+        decision: DecisionRecord,
+        *,
+        retired_edges: Sequence[NodeEdge] = (),
+        relation_verdicts: Sequence[RelationVerdict] = (),
+    ) -> None:
+        """Delegate the write, then announce the suppression it withdrew.
+
+        One act for the whole reopen, whatever layer it was: the verb is the
+        `DecisionKind` the journal recorded, and the subjects are the ids that
+        row names, so the live log and the durable history point at the same
+        thing (`EVENT_LOG.md` §9).
+
+        The retired edges are republished, because a viewer holding the live
+        edge would otherwise go on drawing one nobody follows any more.
+        """
+        await self._inner.reopen_tx(
+            decision, retired_edges=retired_edges, relation_verdicts=relation_verdicts
+        )
+        graph = self._inner.current_database
+        for edge in retired_edges:
+            await self._bus.publish(EdgeStored(graph=graph, edge=edge_to_view(edge, graph)))
+        await self._bus.publish(
+            graph_action(
+                graph=graph,
+                verb=decision.kind,
+                subjects=list(decision.subject_ids),
+                counts={
+                    "retired edges": len(retired_edges),
+                    "verdicts": len(relation_verdicts),
+                },
+                judged_by=decision.judged_by,
+            )
+        )
 
     async def write_verbatim_tx(
         self,

@@ -101,6 +101,13 @@ NOT_AGENT_SETTABLE: dict[tuple[str, str], str] = {
     "resolves the per-graph override from it; an agent choosing its own "
     "advisory policy is a gate it can open",
     ("record_contradiction", "warning_policy"): "as merge_inferences",
+    (
+        "reflect",
+        "warning_policy",
+    ): "as merge_inferences, for the warnings reflect attaches to a merge "
+    "candidate: the graph's own setting decides which of them it is shown, "
+    "and a caller that could pass its own would be unmuting a graph that "
+    "asked to be quiet",
     ("record_variant", "warning_policy"): "as merge_inferences",
     ("store_decomposition", "warning_policy"): "as merge_inferences",
     (
@@ -164,6 +171,12 @@ NOT_AGENT_SETTABLE: dict[tuple[str, str], str] = {
         "backup_graph",
         "default_backup_threshold",
     ): "as graph_stats",
+    (
+        "query_timeline",
+        "now",
+    ): "the clock, injected for tests. A caller that wants occurrences measured "
+    "from some other moment passes `next_after`, which is exposed: `now` is "
+    "only what an unset reference time falls back to",
 }
 
 # Supplied by the boundary for every tool, and never interesting here.

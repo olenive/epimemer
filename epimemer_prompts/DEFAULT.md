@@ -74,9 +74,14 @@ visualisation hub, the process the dashboard connects to.
   description a tag is embedded on its own characters, so two dated sessions
   score 0.99 against each other and every reflect asks you to merge two
   different days of work. An entry for a tag that is already described is not
-  written and comes back in `warnings` — changing a live description is
+  written and comes back in `warnings`: changing a live description is
   enrichment, through `apply_reflection`. An entry for an existing tag that has
   no description yet *is* written, which is how a graph fills in as it is used.
+  The response counts the two separately: `tags_created` is how many names this
+  call minted, `tags_described` is how many existing tags had no description and
+  have one now. A call that mints three new tags reports `tags_created: 3` and
+  `tags_described: 0`, so read the second as *no existing tag needed filling in*
+  rather than as *your descriptions were dropped*.
 - **Give every fact a `claim_kind`** (`{"content": ..., "claim_kind":
   "state"}`). Facts only; it is an error on a topic or an inference. Ask what
   kind of thing is being claimed:
@@ -505,7 +510,7 @@ if useful.
 - **`inference_merge_candidates`** names two near-identical active
   inferences resting on at least one common premise, the shape a fact merge
   produces. Each candidate carries `shared_premises`, a `similarity`, and
-  any `warnings` computed for the merge that would result. Act with
+  any `warnings` this graph shows you about the merge that would result. Act with
   `merge_inferences(source_ids, content)` where they are one conclusion, or
   record `apply_reflection(similarities=[{pair, verdict: "distinct",
   because}])` where they are two. Two inferences agreeing is **not**
@@ -571,6 +576,16 @@ if useful.
   re-asserts `one_claim` afterwards, because a wrong withdrawal only
   withholds support while a wrong re-assertion invents it. If they really
   are one claim, `merge_facts` is the call.
+
+  **To take back the suppression itself, call `reopen`.** `reopen(node_ids=[a,
+  b], reason=...)` retires the `assessed` edge, so the next `reflect` offers
+  the pair again, carrying `reopened` with your reason and the date. It
+  asserts nothing: it does not record the opposite verdict and does not say
+  the first judge was wrong, it only re-asks the question. Reach for it when
+  later evidence makes a decline look wrong, not when you disagree with it on
+  the same material. It is refused where the pair still carries a `similarity`,
+  `contradiction` or `variant_of` edge, because those assert something about
+  the pair and withdrawing one is a verdict rather than a question.
 - **Source, topic and entity consolidation** is ordinary topic merge:
   they are Topics, so pass `merges=[...]` for synonymous ones.
 - **Judge every relation pair you are shown, including the ones you
@@ -582,8 +597,10 @@ if useful.
   simply skip is re-offered on **every** reflect, for ever, to an agent who
   cannot see that you already considered it, while merging removes a label
   and quietly suppresses itself, so skipping pushes the graph toward the
-  answer that tidies the list. Both verdicts stop the nomination, and
-  **there is no undo**: judge the pair rather than clearing it.
+  answer that tidies the list. Both verdicts stop the nomination. A verdict
+  that later looks wrong is put back with `reopen(relation_labels=[a, b],
+  reason=...)`, which appends a row saying the pair is open again and asserts
+  nothing about which answer is right.
 
 ### Cleanup (archival_candidates, then apply_reflection archivals)
 Trivial knowledge is the counterpart to *wrong* knowledge, and it is handled
@@ -621,6 +638,10 @@ by the same loop: nomination proposes, you judge, the **user approves**.
   it for a `never_retrieved` nominee, which names no reason. A reason a
   standing keep already covers is neither listed nor accepted again, and a
   premise that changes later is a new reason the old keep does not cover.
+- **A keep that turns out to be wrong is withdrawn with
+  `reopen(node_ids=[node_id], reason=...)`.** The node goes back on the
+  archival worklist with the reason attached. It archives nothing and decides
+  nothing: the user still approves anything that is then archived.
 - `evidence_merged` in `pending_review` asks for a re-read, not a
   re-derivation: the premise absorbed another claim, so check the inference
   still says what the survivor's wording supports, then record the re-read
@@ -642,6 +663,57 @@ the graph learned it.
 - Expect to set it *after* ingesting enough of a source to know the anchor,
   and to revise it when you learn you read it wrong. `set_reference_time`
   with no timestamp clears it.
+- **`order_timepoints` is how a point nobody dated gets a place in time.** A
+  source saying "the fire came before the flood" is recorded with that source
+  and a `basis` of `stated` or `inferred`: `stated` when the source says the
+  order in words, `inferred` when you read it off tense or context. Narrative
+  order is not chronological order, so a document that tells of the fire and
+  then the flood has stated nothing. Ask `query_timeline` for `before`,
+  `after` or `between`, and a point with no date of its own comes back with
+  `earliest` and `latest` the order derived for it.
+- **`contested` on a point means the order around it is in dispute**, never
+  that its date is wrong. A contested point keeps any date it has and gets no
+  derived position, and `search` marks a fact dated to one with
+  `date_contested`, which is separate from `contested` on the claim itself.
+- Answer a dispute with `resolve_temporal_contradiction`, which takes three
+  verdicts. **retire_constraint** when one source's assertion should not be
+  believed, because it was misread, because the source is unreliable, or
+  because the order is narrative. **not_the_same_event** when both sources are
+  right and the point is really two events: a new point takes the label and
+  the constraints and facts you name move to it. **hold** when they genuinely
+  disagree and nothing you have settles it, which stops the nomination until
+  new evidence about one of those points arrives.
+- `merge_timepoints` is the reverse: two marks for one event, folded into one,
+  with every constraint and every fact dated to the retired point moved over.
+  It refuses while a source's constraint orders the two against each other.
+- `reflect` nominates open disputes about order in `temporal_contradictions`,
+  beside the contradictions between claims, and keeps nominating one until it
+  is answered or held.
+- **`add_recurrence` records something that happens over and over**, as a rule
+  rather than as a row of dates. Two kinds: by arithmetic (`anchor` and
+  `period`, which needs no calendar, so it works on an invented timeline), or
+  by the calendar (`rrule`, an RFC 5545 string, for "the second Tuesday of
+  every month"). Occurrences are worked out when you ask, so `query_timeline`
+  returns them beside the stored points, each named by the `occurrence_start`
+  the rule gave it. Read the preview in the response: a mistyped rule is
+  easiest to catch there.
+- **A fact attaches at one of two levels.** Linked to the rule, it holds at
+  every occurrence: "the service is at the parish church". Linked to one
+  occurrence, it is about that one: "the 1897 service was moved to the hall".
+  For the first, call `create_timelink` with `recurrence_id` in place of
+  `timepoint_id`. For the second, call `add_timepoint` with `recurrence_id` and
+  `occurrence_start` in place of dates, which turns that occurrence into a
+  point you can link, order and dispute. Asking twice gives the same point.
+  `query_timeline` shows both levels on every occurrence it returns: the rule's
+  facts under `linked_via_rule` and that occurrence's own under `linked`.
+- **`record_recurrence_exception` is for an occurrence that broke the
+  pattern**: `cancelled` for one that did not happen, `moved` with `moved_to`
+  for one that happened at another time. A moved occurrence keeps the start
+  the rule gave it as its identity, so it is still the same occurrence.
+- **`end_recurrence` says when a rule stopped applying, and never retires
+  it.** "Christmas is 24 to 26 December, annually" does not stop being true,
+  so each end date is appended with its reason and the most recent one is in
+  force: a later correction shows what it corrected.
 
 ### Metacontexts
 - **Absence names no metacontext.** A node with no metacontext is one nobody said

@@ -50,6 +50,7 @@ from pydantic import BaseModel
 
 from epimemer.core.types import (
     RELATION_VERDICTS,
+    REOPENED_VERDICT,
     JudgeRef,
     RelationLabel,
     RelationVerdict,
@@ -89,6 +90,22 @@ class RelationVerdictRecorded(BaseModel):
     verdict_id: str | None = None
     created: bool = True
     labels_created: list[str] = []
+
+
+def _since_the_last_reopen(verdicts: Sequence[RelationVerdict]) -> list[RelationVerdict]:
+    """The rows still standing: those decided after the newest reopen, if any.
+
+    A reopen withdraws the suppression without answering anything, so an earlier
+    `distinct` is a record of what was once decided rather than a verdict the
+    pair still carries. Reading it as standing would turn the next judge's
+    answer into a retry or a confirmation, and the pair would stay reopened
+    while the call said it had been judged.
+    """
+    reopened_at = [v.decided_at for v in verdicts if v.verdict == REOPENED_VERDICT]
+    if not reopened_at:
+        return list(verdicts)
+    newest = max(reopened_at)
+    return [v for v in verdicts if v.decided_at > newest]
 
 
 def _same_judge(a: JudgeRef | None, b: JudgeRef | None) -> bool:
@@ -229,15 +246,21 @@ async def apply_relation_verdict(
     ]
 
     standing: Sequence[RelationVerdict] = await storage.relation_verdicts_for(label_ids)
-    agreeing = [v for v in standing if v.verdict == verdict]
+    # Only rows the newest reopen has not already set aside count as standing. A
+    # pair somebody reopened is being asked again, so the answer it gets is a
+    # fresh decision even where it repeats the earlier one, and it has to write a
+    # row: treating it as a retry would report success and leave the pair
+    # nominated for ever.
+    agreeing = [v for v in _since_the_last_reopen(standing) if v.verdict == verdict]
     if any(_same_judge(v.judged_by, judge) for v in agreeing):
         return RelationVerdictRefused(
             pair=pair,
             reason=(
                 f"you have already judged this pair '{verdict}', and a retry is "
                 f"not a second opinion. The pair is suppressed; nothing further "
-                f"is needed. A verdict that should be revisited is "
-                f"`ISSUES.md`, not a second row."
+                f"is needed. A verdict that should be revisited is `reopen`, "
+                f"which puts the pair back in front of a judge without asserting "
+                f"the opposite, not a second row."
             ),
         )
     if agreeing:

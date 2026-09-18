@@ -6,7 +6,7 @@ assembly that used to live in the embedded server's `/api/snapshot` and
 here directly, against storage.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -14,14 +14,23 @@ from epimemer.core.types import (
     EdgeType,
     Fact,
     Inference,
+    IntervalBasis,
     NodeEdge,
     NodeStatus,
+    PeriodicRule,
     RelationLabel,
     Timeline,
     Topic,
     ValueSignal,
 )
 from epimemer.pipelines.timeline.functions import add_timepoint
+from epimemer.pipelines.timeline.ordering import add_constraints
+from epimemer.pipelines.timeline.recurrence import (
+    OCCURRENCE_CAP,
+    add_recurrence,
+    materialise,
+    record_exception,
+)
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization.events import edge_to_view, node_to_view
 from epimemer.visualization.snapshot import assemble_snapshot, list_graphs_result
@@ -202,6 +211,283 @@ class TestSnapshotAssembly:
 
         await assemble_snapshot(storage, "other")
         assert storage.current_database == "default"
+
+
+# --- Order, dispute and recurrence in the snapshot ---
+
+
+def _dated(timeline: Timeline, start: datetime, label: str) -> tuple[Timeline, str]:
+    timeline, point = add_timepoint(timeline, start=start, label=label)
+    return timeline, point.id
+
+
+class TestSnapshotOrderAndRecurrence:
+    """What the panel needs in order to draw bounds, disputes and occurrences.
+
+    All of it is a read-time answer computed from the timeline record, through
+    the same pure functions `query_timeline` calls, so the dashboard and the
+    tool can never give two answers about one point.
+    """
+
+    async def test_a_partly_dated_point_carries_its_derived_bounds(self, storage):
+        timeline = Timeline(name="History")
+        timeline, before_id = _dated(timeline, datetime(1890, 1, 1, tzinfo=UTC), "the fire")
+        timeline, after_id = _dated(timeline, datetime(1900, 1, 1, tzinfo=UTC), "the flood")
+        timeline, vague = add_timepoint(timeline, label="the quarrel")
+        timeline, _ = add_constraints(
+            timeline,
+            [(before_id, vague.id), (vague.id, after_id)],
+            source_id="s1",
+            basis=IntervalBasis.STATED,
+            at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        await storage.store_timeline(timeline)
+
+        data = await assemble_snapshot(storage, "default")
+
+        [point] = [p for p in data["timelines"][0]["timepoints"] if p["timepoint_id"] == vague.id]
+        assert point["kind"] == "vague"
+        assert point["earliest"] == "1890-01-01T00:00:00Z"
+        assert point["latest"] == "1900-01-01T00:00:00Z"
+        assert point["contested"] is False
+
+    async def test_a_point_nothing_constrains_has_no_bounds(self, storage):
+        timeline, _ = add_timepoint(Timeline(name="History"), label="long ago")
+        await storage.store_timeline(timeline)
+
+        data = await assemble_snapshot(storage, "default")
+
+        [point] = data["timelines"][0]["timepoints"]
+        assert point["earliest"] is None
+        assert point["latest"] is None
+
+    async def test_a_dated_point_carries_its_kind_and_no_bounds(self, storage):
+        timeline, _ = add_timepoint(
+            Timeline(name="History"),
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            end=datetime(2024, 2, 1, tzinfo=UTC),
+            label="the siege",
+        )
+        await storage.store_timeline(timeline)
+
+        data = await assemble_snapshot(storage, "default")
+
+        [point] = data["timelines"][0]["timepoints"]
+        assert point["kind"] == "interval"
+        assert point["earliest"] is None and point["latest"] is None
+
+    async def test_a_contested_point_carries_the_flag_and_the_contradiction(self, storage):
+        """Two sources whose orders close a loop. Both points are in dispute."""
+        timeline = Timeline(name="History")
+        timeline, first = add_timepoint(timeline, label="the fire")
+        timeline, second = add_timepoint(timeline, label="the flood")
+        timeline, _ = add_constraints(
+            timeline,
+            [(first.id, second.id)],
+            source_id="s1",
+            basis=IntervalBasis.STATED,
+            at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        timeline, report = add_constraints(
+            timeline,
+            [(second.id, first.id)],
+            source_id="s2",
+            basis=IntervalBasis.STATED,
+            at=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+        [contradiction] = report.opened
+        await storage.store_timeline(timeline)
+
+        data = await assemble_snapshot(storage, "default")
+
+        points = {p["timepoint_id"]: p for p in data["timelines"][0]["timepoints"]}
+        assert points[first.id]["contested"] is True
+        assert points[first.id]["temporal_contradiction_id"] == contradiction.id
+        assert points[second.id]["contested"] is True
+
+    async def test_an_undisputed_point_names_no_contradiction(self, storage):
+        timeline, _ = add_timepoint(Timeline(name="History"), label="long ago")
+        await storage.store_timeline(timeline)
+
+        [point] = (await assemble_snapshot(storage, "default"))["timelines"][0]["timepoints"]
+        assert point["contested"] is False
+        assert point["temporal_contradiction_id"] is None
+
+    async def test_a_rules_occurrences_ride_along_with_the_timeline(self, storage):
+        timeline = Timeline(name="Parish")
+        timeline, _ = _dated(timeline, datetime(1897, 1, 1, tzinfo=UTC), "the first service")
+        timeline, _ = _dated(timeline, datetime(1897, 1, 20, tzinfo=UTC), "the last service")
+        timeline, recurrence = add_recurrence(
+            timeline,
+            label="the weekly service",
+            rule=PeriodicRule(anchor=datetime(1897, 1, 1, tzinfo=UTC), period=timedelta(days=7)),
+            at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        await storage.store_timeline(timeline)
+
+        data = await assemble_snapshot(storage, "default")
+
+        [rule] = data["timelines"][0]["recurrences"]
+        assert rule["recurrence_id"] == recurrence.id
+        assert rule["label"] == "the weekly service"
+        assert rule["rule_kind"] == "periodic"
+        starts = [o["occurrence_start"] for o in rule["occurrences"]]
+        assert "1897-01-01T00:00:00Z" in starts
+        assert "1897-01-15T00:00:00Z" in starts
+        assert rule["truncated"] is False
+
+    async def test_the_occurrence_cap_is_the_one_query_timeline_uses(self, storage):
+        timeline = Timeline(name="Market")
+        timeline, _ = _dated(timeline, datetime(2000, 1, 1, tzinfo=UTC), "the first market")
+        timeline, _ = _dated(timeline, datetime(2010, 1, 1, tzinfo=UTC), "the last market")
+        timeline, _ = add_recurrence(
+            timeline,
+            label="market day",
+            rule=PeriodicRule(anchor=datetime(2000, 1, 1, tzinfo=UTC), period=timedelta(days=1)),
+            at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        await storage.store_timeline(timeline)
+
+        data = await assemble_snapshot(storage, "default")
+
+        [rule] = data["timelines"][0]["recurrences"]
+        assert len(rule["occurrences"]) == OCCURRENCE_CAP
+        assert rule["truncated"] is True
+
+    async def test_a_cancelled_occurrence_is_absent(self, storage):
+        timeline = Timeline(name="Parish")
+        timeline, _ = _dated(timeline, datetime(1897, 1, 1, tzinfo=UTC), "the first service")
+        timeline, _ = _dated(timeline, datetime(1897, 1, 20, tzinfo=UTC), "the last service")
+        timeline, recurrence = add_recurrence(
+            timeline,
+            label="the weekly service",
+            rule=PeriodicRule(anchor=datetime(1897, 1, 1, tzinfo=UTC), period=timedelta(days=7)),
+            at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        timeline, _ = record_exception(
+            timeline,
+            recurrence_id=recurrence.id,
+            occurrence_start=datetime(1897, 1, 8, tzinfo=UTC),
+            kind="cancelled",
+            because="the roof fell in",
+            at=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+        await storage.store_timeline(timeline)
+
+        data = await assemble_snapshot(storage, "default")
+
+        [rule] = data["timelines"][0]["recurrences"]
+        starts = [o["occurrence_start"] for o in rule["occurrences"]]
+        assert "1897-01-08T00:00:00Z" not in starts
+        assert "1897-01-15T00:00:00Z" in starts
+
+    async def test_a_moved_occurrence_says_where_it_went(self, storage):
+        timeline = Timeline(name="Parish")
+        timeline, _ = _dated(timeline, datetime(1897, 1, 1, tzinfo=UTC), "the first service")
+        timeline, _ = _dated(timeline, datetime(1897, 1, 20, tzinfo=UTC), "the last service")
+        timeline, recurrence = add_recurrence(
+            timeline,
+            label="the weekly service",
+            rule=PeriodicRule(anchor=datetime(1897, 1, 1, tzinfo=UTC), period=timedelta(days=7)),
+            at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        timeline, _ = record_exception(
+            timeline,
+            recurrence_id=recurrence.id,
+            occurrence_start=datetime(1897, 1, 8, tzinfo=UTC),
+            kind="moved",
+            moved_to=datetime(1897, 1, 9, tzinfo=UTC),
+            at=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+        await storage.store_timeline(timeline)
+
+        data = await assemble_snapshot(storage, "default")
+
+        [rule] = data["timelines"][0]["recurrences"]
+        [moved] = [
+            o for o in rule["occurrences"] if o["occurrence_start"] == "1897-01-08T00:00:00Z"
+        ]
+        assert moved["moved_to"] == "1897-01-09T00:00:00Z"
+        assert moved["start"] == "1897-01-09T00:00:00Z"
+
+    async def test_a_materialised_occurrence_names_its_timepoint(self, storage):
+        timeline = Timeline(name="Parish")
+        timeline, _ = _dated(timeline, datetime(1897, 1, 1, tzinfo=UTC), "the first service")
+        timeline, _ = _dated(timeline, datetime(1897, 1, 20, tzinfo=UTC), "the last service")
+        timeline, recurrence = add_recurrence(
+            timeline,
+            label="the weekly service",
+            rule=PeriodicRule(anchor=datetime(1897, 1, 1, tzinfo=UTC), period=timedelta(days=7)),
+            at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        timeline, report = materialise(
+            timeline,
+            recurrence_id=recurrence.id,
+            occurrence_start=datetime(1897, 1, 15, tzinfo=UTC),
+        )
+        await storage.store_timeline(timeline)
+
+        data = await assemble_snapshot(storage, "default")
+
+        [rule] = data["timelines"][0]["recurrences"]
+        by_start = {o["occurrence_start"]: o for o in rule["occurrences"]}
+        assert by_start["1897-01-15T00:00:00Z"]["materialised_id"] == report.timepoint_id
+        assert by_start["1897-01-01T00:00:00Z"]["materialised_id"] is None
+
+    async def test_a_plain_timeline_gains_only_empty_and_null_fields(self, storage):
+        """Nothing the frontend already reads changes shape.
+
+        A timeline with no order, no dispute and no rule has to serialise the
+        way it did before, or every mark the panel draws today moves.
+        """
+        timeline, _ = add_timepoint(
+            Timeline(name="History"),
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            label="the beginning",
+        )
+        await storage.store_timeline(timeline)
+
+        [view] = (await assemble_snapshot(storage, "default"))["timelines"]
+
+        assert view["recurrences"] == []
+        [point] = view["timepoints"]
+        assert point["start"] == "2024-01-01T00:00:00Z"
+        assert point["label"] == "the beginning"
+        assert point["kind"] == "instant"
+        assert point["earliest"] is None
+        assert point["latest"] is None
+        assert point["contested"] is False
+        assert point["temporal_contradiction_id"] is None
+
+    async def test_a_rule_on_a_timeline_with_no_dates_enumerates_nothing(self, storage):
+        """A snapshot has no query window, so it takes one from the dated points.
+
+        With none, and no stated present either, there is nothing to centre a
+        window on, and enumerating from the wall clock would put a snapshot's
+        occurrences somewhere the graph never said.
+        """
+        timeline, _ = add_recurrence(
+            Timeline(name="Parish"),
+            label="the weekly service",
+            rule=PeriodicRule(anchor=datetime(1897, 1, 1, tzinfo=UTC), period=timedelta(days=7)),
+            at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        await storage.store_timeline(timeline)
+
+        [rule] = (await assemble_snapshot(storage, "default"))["timelines"][0]["recurrences"]
+        assert rule["occurrences"] == []
+
+    async def test_a_stated_present_is_window_enough(self, storage):
+        timeline, _ = add_recurrence(
+            Timeline(name="Parish", reference_time=datetime(1897, 5, 1, tzinfo=UTC)),
+            label="the weekly service",
+            rule=PeriodicRule(anchor=datetime(1897, 1, 1, tzinfo=UTC), period=timedelta(days=7)),
+            at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        await storage.store_timeline(timeline)
+
+        [rule] = (await assemble_snapshot(storage, "default"))["timelines"][0]["recurrences"]
+        assert len(rule["occurrences"]) > 0
 
 
 # --- Conversion helper tests ---

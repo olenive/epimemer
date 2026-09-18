@@ -11,7 +11,9 @@ from types import SimpleNamespace
 
 from websockets.asyncio.server import serve
 
+from epimemer.core.advisories import AdvisoryAction, AdvisoryKind, WarningPolicy
 from epimemer.storage.memory import InMemoryStorage
+from epimemer.storage.protocol import WarningOverrides
 from epimemer.visualization.event_bus import InProcessEventBus
 from epimemer.visualization.events import NodeStatusChanged
 from epimemer.visualization.hub_client import start_hub_client
@@ -83,6 +85,59 @@ async def test_client_registers_forwards_event_and_answers_rpc():
         assert resp["result"]["backend"] == "memory"
         assert isinstance(resp["result"]["graphs"], list)
         assert "active_graph" in resp["result"]
+    finally:
+        await stop()
+        await _close(hub)
+
+
+async def test_the_warnings_rpc_answers_without_writing_anything():
+    """`ADVISORIES_DASHBOARD.md` §5: the panel is read-only, so this returns the
+    settings `configure_warnings` reports and touches nothing.
+
+    The process default travels as a value, the way every other setting does,
+    and the graph's own overrides are laid over it here.
+    """
+    hub = await _make_fake_hub()
+    storage = InMemoryStorage()
+    stop = await start_hub_client(
+        InProcessEventBus(),
+        storage,
+        _info(),
+        hub.url,
+        default_warning_policy=WarningPolicy(surface=False),
+    )
+    try:
+        await asyncio.wait_for(hub.received.get(), timeout=3)  # the register
+
+        await hub.state["ws"].send(RpcRequest(request_id="r1", method="warnings").model_dump_json())
+        resp = await asyncio.wait_for(hub.received.get(), timeout=3)
+
+        assert resp["result"]["graph"] == storage.current_database
+        assert resp["result"]["surface"] is False
+        assert resp["result"]["actions"]["cross_metacontext"] == "proceed"
+        assert resp["result"]["overridden"] == {}
+        # Read-only: the graph has still never been configured.
+        assert await storage.get_warning_overrides() == WarningOverrides()
+    finally:
+        await stop()
+        await _close(hub)
+
+
+async def test_the_warnings_rpc_reports_what_this_graph_set_for_itself():
+    hub = await _make_fake_hub()
+    storage = InMemoryStorage()
+    await storage.set_warning_overrides(
+        WarningOverrides(by_kind={AdvisoryKind.CROSS_METACONTEXT: AdvisoryAction.FLAG})
+    )
+    stop = await start_hub_client(InProcessEventBus(), storage, _info(), hub.url)
+    try:
+        await asyncio.wait_for(hub.received.get(), timeout=3)  # the register
+
+        await hub.state["ws"].send(RpcRequest(request_id="r1", method="warnings").model_dump_json())
+        resp = await asyncio.wait_for(hub.received.get(), timeout=3)
+
+        assert resp["result"]["actions"]["cross_metacontext"] == "flag"
+        assert resp["result"]["overridden"]["by_kind"] == {"cross_metacontext": "flag"}
     finally:
         await stop()
         await _close(hub)

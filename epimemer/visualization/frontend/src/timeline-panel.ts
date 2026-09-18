@@ -35,6 +35,7 @@ import {
   allMarks,
   buildRows,
   type DatedMark,
+  type RecurrenceSpine,
   type SnapshotLike,
   type TimeMode,
   type TimelineMark,
@@ -89,6 +90,22 @@ const CARD_LINE_HEIGHT = 12;
 const CARD_PADDING = 5;
 /** Selected cards are drawn in the left column when the mark straddles the axis. */
 const CARD_SUFFIX = ":card";
+/** How wide a derived band is drawn, and the least height it may collapse to. */
+const BAND_WIDTH = 15;
+const BAND_MIN_HEIGHT = 10;
+/**
+ * How far an open edge takes to dissolve, and how long a one-sided band runs.
+ *
+ * §13.1: an unknown endpoint is a bar fading to nothing over roughly 24px, "the
+ * edge is somewhere in this fog". A one-sided band is all fog past its one
+ * known edge, so the fade is the whole of it.
+ */
+const FADE_PX = 24;
+/** A bead is a small mark: an occurrence a rule computed, not a point recorded. */
+const BEAD_RADIUS = 2.6;
+/** How far the first spine sits from the axis, and how far apart two spines are. */
+const SPINE_INSET = 22;
+const SPINE_GAP = 9;
 /** One wheel notch while zooming. Below 1 zooms in. */
 const WHEEL_STEP = 0.85;
 /** One wheel notch while panning, as a fraction of the visible span. */
@@ -119,6 +136,26 @@ export const markFillFor = (kind: string, theme: Theme, inFocus: boolean): strin
 
 export const selectedMarkColor = (theme: Theme): string =>
   semanticPaletteFor(theme).selection;
+
+export const contestedColor = (theme: Theme): string =>
+  semanticPaletteFor(theme).contradiction;
+
+/**
+ * The contested glyph: a kink in the axis direction.
+ *
+ * Red is the contradiction hue in both panels, and a disputed order is a
+ * contradiction. The shape is what keeps it from reading as "this date is
+ * wrong": the stroke runs along the axis, which is the direction time runs in,
+ * and doubles back on itself. What is tangled is the sequence. A cross or a
+ * ring over the mark would put the doubt on the date instead, and the date is
+ * exactly what a dispute about order leaves standing.
+ */
+const CONTESTED_PATH = "M 0 -5 L 4 -2 L -4 2 L 0 5";
+const CONTESTED_OFFSET = 11;
+
+/** What the glyph says when the pointer rests on it. */
+export const contestedDetail = (contradictionId: string | null): string =>
+  `order disputed: contradiction ${contradictionId ?? "unnamed"}`;
 
 interface View {
   domain: Domain;
@@ -410,7 +447,18 @@ export const initTimelinePanel = (
         );
   };
 
-  const bindMark = (element: SVGElement, mark: TimelineMark): void => {
+  /**
+   * Make an element stand for a mark: hover, click, and the detail on hover.
+   *
+   * `tooltip` is off where the element's own text is the thing being read. A
+   * `<title>` is a child node, so it lands inside `textContent` and would make
+   * a label that has to be verbatim read as the label plus its own tooltip.
+   */
+  const bindMark = (
+    element: SVGElement,
+    mark: TimelineMark,
+    { tooltip = true }: { tooltip?: boolean } = {},
+  ): void => {
     element.setAttribute("class", "cursor-pointer");
     element.addEventListener("mouseenter", () => onSelect(mark));
     element.addEventListener("click", (e) => {
@@ -419,9 +467,178 @@ export const initTimelinePanel = (
       onSelect(state.selectedMarkId === null ? null : mark);
       render();
     });
+    if (!tooltip) return;
     const title = svg("title", {});
     title.textContent = mark.detail;
     element.appendChild(title);
+  };
+
+  /**
+   * The fills a band needs: 45° hatching per side, and the two fade masks.
+   *
+   * Hatching is the §13.1 mark for "resolved vague label", a span the graph
+   * derived rather than a date a source gave, and it is per side because a
+   * pattern's colour is fixed where it is defined, not where it is used. The
+   * masks are how an unknown endpoint dissolves: white is kept, transparent is
+   * dropped, so the bar loses weight toward the open side instead of stopping
+   * at an edge nobody asserted.
+   */
+  const renderDefs = (parent: SVGSVGElement): void => {
+    const theme = currentTheme();
+    const defs = svg("defs", {});
+
+    for (const kind of ["fact", "inference"] as const) {
+      const pattern = svg("pattern", {
+        id: `timeline-hatch-${kind}`,
+        width: 5,
+        height: 5,
+        patternUnits: "userSpaceOnUse",
+        patternTransform: "rotate(45)",
+      });
+      pattern.appendChild(
+        svg("path", {
+          d: "M 0 0 L 0 5",
+          stroke: markColor(kind, theme),
+          "stroke-width": 2,
+          "stroke-opacity": 0.75,
+        }),
+      );
+      defs.appendChild(pattern);
+    }
+
+    for (const [name, from, to] of [
+      ["timeline-fade-later", 1, 0],
+      ["timeline-fade-earlier", 0, 1],
+    ] as const) {
+      const gradient = svg("linearGradient", {
+        id: `${name}-gradient`,
+        x1: 0,
+        y1: 0,
+        x2: 0,
+        y2: 1,
+      });
+      for (const [offset, opacity] of [
+        [0, from],
+        [1, to],
+      ] as const) {
+        gradient.appendChild(
+          svg("stop", {
+            offset,
+            "stop-color": "#ffffff",
+            "stop-opacity": opacity,
+          }),
+        );
+      }
+      defs.appendChild(gradient);
+
+      const mask = svg("mask", { id: name, maskContentUnits: "objectBoundingBox" });
+      mask.appendChild(
+        svg("rect", { x: 0, y: 0, width: 1, height: 1, fill: `url(#${name}-gradient)` }),
+      );
+      defs.appendChild(mask);
+    }
+
+    parent.appendChild(defs);
+  };
+
+  /**
+   * A point the order placed: a hatched band from `earliest` to `latest`.
+   *
+   * With one bound known the band runs a fixed distance into the unknown and
+   * dissolves, which is §13.1's unknown endpoint: "after the fire, we do not
+   * know when" is fog below a known edge, not a bar ending somewhere.
+   *
+   * The label goes on the band verbatim (§13.2's rule 3): resolving a vague
+   * label adds a position, it never replaces the words.
+   */
+  const renderBand = (
+    group: SVGGElement,
+    scale: Scale,
+    mark: DatedMark,
+    band: NonNullable<DatedMark["band"]>,
+    axisX: number,
+  ): void => {
+    const palette = currentPalette();
+    const kind = mark.side === "right" ? "inference" : "fact";
+    const isSelected = mark.id === state.selectedMarkId;
+
+    const known =
+      band.earliest !== null ? timeToPos(scale, band.earliest) : timeToPos(scale, band.latest!);
+    const top = band.earliest !== null ? known : known - FADE_PX;
+    const bottom = band.latest !== null ? timeToPos(scale, band.latest) : known + FADE_PX;
+    const height = Math.max(BAND_MIN_HEIGHT, bottom - top);
+
+    const shape = svg("rect", {
+      x: axisX - BAND_WIDTH / 2,
+      y: top,
+      width: BAND_WIDTH,
+      height,
+      fill: `url(#timeline-hatch-${kind})`,
+      "fill-opacity": markInFocus(mark) ? 1 : 0.35,
+      ...(isSelected
+        ? { stroke: selectedMarkColor(currentTheme()), "stroke-width": 1 }
+        : {}),
+    });
+    if (band.earliest === null) shape.setAttribute("mask", "url(#timeline-fade-earlier)");
+    if (band.latest === null) shape.setAttribute("mask", "url(#timeline-fade-later)");
+    bindMark(shape, mark);
+    shape.setAttribute("class", "timeline-band cursor-pointer");
+    group.appendChild(shape);
+
+    const isLeft = mark.side !== "right";
+    const label = svg("text", {
+      class: "timeline-band-label cursor-pointer",
+      x: isLeft ? axisX - BAND_WIDTH : axisX + BAND_WIDTH,
+      y: top + height / 2 + 3.5,
+      fill: palette.nodeLabel,
+      "font-size": 10,
+      "text-anchor": isLeft ? "end" : "start",
+    });
+    // Room is what the column has; the words are what the source wrote, and
+    // truncating them here would leave the panel showing a label no document
+    // contains. A label too long for the column runs off it.
+    label.textContent = mark.title;
+    bindMark(label, mark, { tooltip: false });
+    label.setAttribute("class", "timeline-band-label cursor-pointer");
+    group.appendChild(label);
+  };
+
+  /** The glyph itself, wherever it is drawn: on the axis or inside a chip. */
+  const contestedGlyph = (mark: TimelineMark, x: number, y: number): SVGPathElement => {
+    const glyph = svg("path", {
+      class: "timeline-contested",
+      d: CONTESTED_PATH,
+      transform: `translate(${x}, ${y})`,
+      fill: "none",
+      stroke: contestedColor(currentTheme()),
+      "stroke-width": 1.6,
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+    });
+    const title = svg("title", {});
+    title.textContent = contestedDetail(mark.contradictionId);
+    glyph.appendChild(title);
+    return glyph;
+  };
+
+  /**
+   * The dispute mark beside a mark on the axis.
+   *
+   * Beside, never instead: the point keeps whatever place it had, because a
+   * dispute about order is not a reason to move a date or to take a derived
+   * band away that the server already withheld.
+   */
+  const renderContested = (
+    group: SVGGElement,
+    scale: Scale,
+    mark: DatedMark,
+    axisX: number,
+  ): void => {
+    if (!mark.contested) return;
+    const side = mark.side === "right" ? 1 : -1;
+    group.appendChild(
+      contestedGlyph(mark, axisX + side * CONTESTED_OFFSET, timeToPos(scale, mark.start)),
+    );
   };
 
   const renderMark = (
@@ -430,6 +647,11 @@ export const initTimelinePanel = (
     mark: DatedMark,
     axisX: number,
   ): void => {
+    renderContested(group, scale, mark, axisX);
+    if (mark.band !== null) {
+      renderBand(group, scale, mark, mark.band, axisX);
+      return;
+    }
     const y = timeToPos(scale, mark.start);
     const isSelected = mark.id === state.selectedMarkId;
     const fill = markFill(mark);
@@ -473,6 +695,72 @@ export const initTimelinePanel = (
           });
     bindMark(shape, mark);
     group.appendChild(shape);
+  };
+
+  /**
+   * One rule's occurrences: beads on a hairline dotted spine.
+   *
+   * The spine means "same rule, nothing asserted in between" (§13.1), which is
+   * why it is dotted rather than drawn: an occurrence is what the rule
+   * produces, and between two of them the graph has said nothing at all.
+   *
+   * A materialised occurrence gets no bead. Materialising turns it into an
+   * ordinary timepoint, and that point is already on the axis as a full mark,
+   * so a bead as well would draw one date twice.
+   *
+   * Spines sit in lanes left of the axis, one lane per rule. Left is where what
+   * the graph was told goes, and a rule is a source saying a thing recurs.
+   */
+  const renderSpine = (
+    group: SVGGElement,
+    scale: Scale,
+    spine: RecurrenceSpine,
+    lane: number,
+    axisX: number,
+  ): void => {
+    const palette = currentPalette();
+    const theme = currentTheme();
+    const x = axisX - SPINE_INSET - lane * SPINE_GAP;
+    const inside = spine.occurrences.filter(
+      (occurrence) =>
+        occurrence.at >= scale.domain.t0 && occurrence.at <= scale.domain.t1,
+    );
+    if (inside.length === 0) return;
+
+    const positions = inside.map((occurrence) => timeToPos(scale, occurrence.at));
+    group.appendChild(
+      svg("line", {
+        class: "timeline-spine",
+        x1: x,
+        y1: Math.min(...positions),
+        x2: x,
+        y2: Math.max(...positions),
+        stroke: palette.tick,
+        "stroke-width": 1,
+        "stroke-dasharray": "1 3",
+      }),
+    );
+
+    inside.forEach((occurrence, index) => {
+      if (occurrence.materialisedId !== null) return;
+      const bead = svg("circle", {
+        class: "timeline-bead",
+        cx: x,
+        cy: positions[index],
+        r: BEAD_RADIUS,
+        fill: markColor("fact", theme),
+        "fill-opacity": 0.8,
+      });
+      const title = svg("title", {});
+      title.textContent = [
+        spine.label,
+        occurrence.moved
+          ? `moved to ${new Date(occurrence.at).toISOString()}`
+          : new Date(occurrence.at).toISOString(),
+      ].join("\n");
+      bead.appendChild(title);
+      group.appendChild(bead);
+    });
   };
 
   /**
@@ -665,6 +953,9 @@ export const initTimelinePanel = (
     const plain: LabelRequest[] = [];
 
     for (const mark of marks) {
+      // A band carries its label on itself, verbatim. A second, truncated copy
+      // in the side column would be the same point twice, said differently.
+      if (mark.band !== null) continue;
       const anchor = timeToPos(scale, mark.start);
       const isSelected = mark.id === state.selectedMarkId;
 
@@ -871,7 +1162,23 @@ export const initTimelinePanel = (
             "dark:bg-pink-900/60 dark:text-pink-200 dark:border-pink-700"
           : "px-1.5 py-0.5 text-[10px] rounded border bg-surface-raised text-content-secondary " +
             "border-line hover:bg-surface-raised-hover";
-      chip.textContent = truncate(mark.title, 34);
+      chip.classList.add("inline-flex", "items-center", "gap-1");
+      const text = document.createElement("span");
+      text.textContent = truncate(mark.title, 34);
+      chip.appendChild(text);
+      if (mark.contested) {
+        // A chip cannot carry the glyph beside it the way an axis mark can, so
+        // it carries it inside. Same glyph, same hue: a tray full of chips has
+        // to say which of them are disputed.
+        const badge = svg("svg", {
+          width: 9,
+          height: 11,
+          viewBox: "-5 -6 10 12",
+          "aria-hidden": "true",
+        });
+        badge.appendChild(contestedGlyph(mark, 0, 0));
+        chip.appendChild(badge);
+      }
       chip.title = mark.detail;
       chip.addEventListener("mouseenter", () => onSelect(mark));
       chip.addEventListener("click", () => {
@@ -928,11 +1235,15 @@ export const initTimelinePanel = (
     element.setAttribute("height", String(height));
     element.setAttribute("class", "block touch-none select-none cursor-grab");
 
+    renderDefs(element);
     const group = svg("g", { transform: `translate(0, ${AXIS_PADDING})` });
     const axisX = Math.round(width / 2);
 
     const tickLabels = renderAxis(group, scale, axisX, usable);
     renderReferenceRule(group, scale, width, referenceTime());
+    filtered.spines.forEach((spine, lane) =>
+      renderSpine(group, scale, spine, lane, axisX),
+    );
     for (const mark of filtered.dated) renderMark(group, scale, mark, axisX);
     const hidden = renderLabels(group, scale, filtered.dated, axisX, width, usable);
     // Last, so the marks sharing the axis column cannot bury them.

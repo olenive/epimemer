@@ -120,8 +120,13 @@ class RpcResponse(BaseModel):  # session → hub
 - `GET /api/sessions`: `SessionInfo` list with `connected` and
   `last_event_at`.
 - `GET /api/graphs?session=<id>`: RPC `list_graphs` to that session.
+- `GET /api/warnings?session=<id>`: RPC `warnings`, answering what that
+  session's active graph does about advisories in `configure_warnings`'s own
+  response shape. A read, and the panel behind it is read-only
+  (`ADVISORIES_DASHBOARD.md` §2.4).
 - `GET /api/snapshot?session=<id>&graph=<g>`: RPC `snapshot`, shape
-  `{"graph", "nodes", "edges"}`.
+  `{"graph", "nodes", "edges", "timelines", "metacontexts",
+  "relation_labels"}`.
 - `GET /api/retrievals?session=<id>`: the retrieval records
   (`RETRIEVAL_PROVENANCE.md`).
 
@@ -129,7 +134,9 @@ State is a plain dict `session_id -> {ws, info, pending_rpcs, connected,
 last_event_at, rings}` captured in closures, on one asyncio loop, with no
 locks beyond what the relay needs. The per-session rings for graph actions
 and retrieval records are described in `EVENT_LOG.md` §4 and
-`RETRIEVAL_PROVENANCE.md` §3.2.
+`RETRIEVAL_PROVENANCE.md` §3.2. Acts and warnings share the first ring rather
+than having one each: replay has to reproduce arrival order, and two rings
+replayed one after the other would put every warning after every act.
 
 The `__main__` entry (`python -m epimemer.visualization.hub`, also the
 `epimemer-viz` console script):
@@ -161,7 +168,7 @@ async def start_hub_client(
   `RpcRequest`s.
 - RPC handlers run in this process against `raw_storage`: `list_graphs` is
   `list_databases()` plus `current_database` and the backend label;
-  `snapshot` is `viz_list_nodes` / `viz_list_edges` through
+  `snapshot` is the five `viz_list_*` reads through
   `visualization/snapshot.py`. A snapshot of a graph this session is not on
   takes the storage `graph_guard`'s mover turn for its reads
   (`DEVELOPER_GUIDE.md`, *The active graph holds still*).
@@ -216,7 +223,7 @@ viz_status() -> {
   "connected": true,            # this session's ingest socket state
   "session_id": "...",
   "backend": "surrealdb",
-  "active_graph": "memory",
+  "active_graph": "default",
   "sessions_on_hub": 2
 }
 ```
@@ -227,7 +234,8 @@ graph": the tool names the session to select in the UI dropdown.
 ## A.7 Frontend
 
 - `api.ts`: `fetchSessions()`; `fetchGraphs(sessionId)`,
-  `fetchSnapshot(sessionId, graph)` take the session.
+  `fetchWarningSettings(sessionId)` and `fetchSnapshot(sessionId, graph)` take
+  the session.
 - `session-select.ts`: the header's session selector, populated from
   `/api/sessions` and refreshed on `session_connected` /
   `session_disconnected`. Option label `{backend}:{active_graph} (pid
@@ -240,15 +248,28 @@ graph": the tool names the session to select in the UI dropdown.
   moved by `reflect_counter_updated` events. Seeding matters: events alone
   would leave a browser that connected to a graph already at 7 of 10 showing
   nothing until the next store.
+- A `warnings` button beside the badge opens a small read-only panel
+  (`warning-settings.ts`) titled *Warnings on <graph>*: the mute in words, then
+  one row per advisory kind with the action in force and whether that answer is
+  inherited from the process default or set on this graph. It re-reads on
+  `graph_switched` for the watched session, as the badge does. Nothing on the
+  dashboard writes a setting, because a write from the browser would be the
+  first write into a graph with no author (`ADVISORIES_DASHBOARD.md` §2.4).
+- `log-panel.ts` reads two coarse streams: acts, and the warnings a tool
+  computed. A warning is a row with the verb `warned`, marked in the `pending`
+  hue, dimmed with *not shown to the agent* in its tooltip when the agent's
+  response did not carry it, and clickable to highlight the nodes it was about
+  (`EVENT_LOG.md` §12).
 - `events.ts` passes `session_id` through and drops events from non-selected
   sessions defensively; `graph_switched` acts only when the event's session
   matches the selected one.
 
 ## A.8 Tests
 
-`tests/visualization/test_hub.py`, `test_hub_client.py`, and the `viz_status`
-and `backend_name` coverage in `tests/mcp/` and the storage suite,
-parameterised over both backends.
+`tests/visualization/test_hub.py`, `test_hub_client.py`,
+`test_advisory_events.py`, `log-panel.test.ts`, `warning-settings.test.ts`, and
+the `viz_status` and `backend_name` coverage in `tests/mcp/` and the storage
+suite, parameterised over both backends.
 
 ---
 

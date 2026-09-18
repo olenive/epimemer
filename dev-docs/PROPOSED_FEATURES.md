@@ -31,17 +31,6 @@ Claim an entry by name in your commit message.
 
 ---
 
-## Ready to build
-
-### Specialized timelines
-
-**Picked up, and designed in `TIMELINES.md`.** Decisions taken 2026-09-16: one
-`Timeline` rather than the three specialised types this entry proposed, with
-those three becoming capabilities of it. That document carries the model, the
-tool surface, the storage shape and a three-stage build order.
-
----
-
 ## Needs a decision before it needs code
 
 ### Sharing a graph between users
@@ -124,31 +113,6 @@ assumes a date where a number would do.
 
 **Blockers.** A graph that needs one. Decided on 2026-09-16 not to build it
 alongside `TIMELINES.md`.
-
----
-
-### Advisories on the dashboard
-
-**The state.** Advisories exist, are recorded, and reach the agent. Nothing
-shows them to a person watching the graph.
-
-**The obstacle is one decision, not the work.** The event bus emits at the five
-`_tx` boundaries (`EVENT_LOG.md`), and an advisory is not a transaction: it is
-computed before one and may accompany a call that writes nothing. So this needs
-either a new event kind or a deliberate choice to carry the advisory on the act
-that triggered it. The second is cheaper and couples the two; the first is
-honest about what an advisory is.
-
-**Also worth deciding at the same time**: the settings panel for
-`configure_warnings`. It is per graph and has to say so on its face; the
-dashboard follows a `use_graph` switch, and a panel that looks global while
-writing per-graph state is a trap. *Inherited* is a fourth visual state beside
-the two actions, because a kind following the process default is not the same
-as one explicitly set to the same value: only the first tracks a changed
-default, and without showing which, clearing an override is impossible through
-the UI. Reuse `SemanticPalette` in `theme.ts` rather than minting colours.
-
-**Cost.** Small once the event decision is made.
 
 ---
 

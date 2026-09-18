@@ -15,6 +15,7 @@ import type {
   RetrievalRecordWire,
   SessionInfo,
   TimelineView,
+  WarningSettings,
 } from "./types";
 
 export interface GraphListResponse {
@@ -61,6 +62,19 @@ export const fetchSessions = async (): Promise<SessionInfo[]> => {
 export const fetchGraphs = async (session: string): Promise<GraphListResponse> => {
   const resp = await fetch(`/api/graphs?session=${encodeURIComponent(session)}`);
   if (!resp.ok) throw await failure(resp, "Failed to fetch graphs");
+  return resp.json();
+};
+
+/**
+ * What this session's active graph does about advisories.
+ *
+ * A read, and the only one the settings panel makes: nothing on the dashboard
+ * writes a setting, because a write from the browser would be the first write
+ * into a graph with no author (ADVISORIES_DASHBOARD.md §2.4).
+ */
+export const fetchWarningSettings = async (session: string): Promise<WarningSettings> => {
+  const resp = await fetch(`/api/warnings?session=${encodeURIComponent(session)}`);
+  if (!resp.ok) throw await failure(resp, "Failed to fetch warning settings");
   return resp.json();
 };
 

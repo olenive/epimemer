@@ -181,6 +181,24 @@ def _action(action_id: str, *, graph: str = "memory", verb: str = "stored") -> d
     }
 
 
+def _advisory(action_id: str, *, graph: str = "memory", tool: str = "record_variant") -> dict:
+    return {
+        "category": "graph",
+        "event_type": "advisory_raised",
+        "graph": graph,
+        "action_id": action_id,
+        "tool": tool,
+        "kind": "same_metacontext_variant",
+        "message": "these facts share a metacontext",
+        "subjects": ["n1", "n2"],
+        "detail": {},
+        "action": "proceed",
+        "surfaced": True,
+        "notify_user": False,
+        "judged_by": None,
+    }
+
+
 async def _subscribe(browser, session: str, graphs=None) -> None:
     await browser.send(json.dumps({"subscribe": {"session": session, "graphs": graphs}}))
 
@@ -231,6 +249,95 @@ async def test_the_ring_keeps_only_the_coarse_stream(hub):
                 await asyncio.wait_for(browser.recv(), timeout=0.3)
 
     assert [m["event_type"] for m in replayed] == ["graph_action_recorded"]
+
+
+async def test_warnings_and_acts_replay_as_one_sequence(hub):
+    """`ADVISORIES_DASHBOARD.md` §3: the ring keeps both, because replay has to
+    reproduce arrival order and a warning reads as a line after what it was
+    about."""
+    async with websockets.connect(hub.ingest) as sess:
+        await _register(sess, _session("s-a"))
+        await _wait(lambda: _pred_len(hub.addr, 1))
+
+        await sess.send(PublishEvent(payload=_action("001")).model_dump_json())
+        await sess.send(PublishEvent(payload=_advisory("002")).model_dump_json())
+        await sess.send(PublishEvent(payload=_action("003")).model_dump_json())
+        await asyncio.sleep(0.1)
+
+        async with websockets.connect(hub.ws) as browser:
+            await _subscribe(browser, "s-a")
+            replayed = await _drain(browser, 3)
+
+    assert [m["action_id"] for m in replayed] == ["001", "002", "003"]
+    assert [m["event_type"] for m in replayed] == [
+        "graph_action_recorded",
+        "advisory_raised",
+        "graph_action_recorded",
+    ]
+
+
+async def test_a_warning_relays_live_to_a_subscribed_browser(hub):
+    async with websockets.connect(hub.ingest) as sess:
+        await _register(sess, _session("s-a"))
+        await _wait(lambda: _pred_len(hub.addr, 1))
+
+        async with websockets.connect(hub.ws) as browser:
+            await _subscribe(browser, "s-a")
+            await sess.send(PublishEvent(payload=_advisory("001")).model_dump_json())
+            (relayed,) = await _drain(browser, 1)
+
+    assert relayed["event_type"] == "advisory_raised"
+    assert relayed["session_id"] == "s-a"
+
+
+async def test_a_warning_stays_inside_the_viewed_graph(hub):
+    """The same rule acts follow: a warning about graph A must not reach a
+    browser watching graph B, live or replayed."""
+    async with websockets.connect(hub.ingest) as sess:
+        await _register(sess, _session("s-a"))
+        await _wait(lambda: _pred_len(hub.addr, 1))
+
+        await sess.send(PublishEvent(payload=_advisory("001", graph="alpha")).model_dump_json())
+        await sess.send(PublishEvent(payload=_advisory("002", graph="beta")).model_dump_json())
+        await asyncio.sleep(0.1)
+
+        async with websockets.connect(hub.ws) as browser:
+            await _subscribe(browser, "s-a", graphs=["beta"])
+            replayed = await _drain(browser, 1)
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(browser.recv(), timeout=0.3)
+
+    assert [m["action_id"] for m in replayed] == ["002"]
+
+
+async def test_the_warning_settings_rpc_reaches_the_session(hub):
+    """Read-only, and answered where the graph's overrides live (§5)."""
+    async with websockets.connect(hub.ingest) as sess:
+        await _register(sess, _session("s-a"))
+        await _wait(lambda: _pred_len(hub.addr, 1))
+
+        pending = asyncio.create_task(_http_get(hub.addr, "/api/warnings?session=s-a"))
+        req = json.loads(await asyncio.wait_for(sess.recv(), timeout=3))
+        assert req["method"] == "warnings"
+        canned = {
+            "graph": "memory",
+            "surface": True,
+            "actions": {"cross_metacontext": "proceed"},
+            "overridden": {},
+        }
+        await sess.send(RpcResponse(request_id=req["request_id"], result=canned).model_dump_json())
+
+        status, body = await asyncio.wait_for(pending, timeout=3)
+
+    assert status == 200
+    assert json.loads(body) == canned
+
+
+async def test_the_warning_settings_route_needs_a_session(hub):
+    status, body = await _http_get(hub.addr, "/api/warnings")
+
+    assert status == 400
+    assert "session" in json.loads(body)["error"]
 
 
 async def test_backfill_stays_inside_the_viewed_graph(hub):

@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from epimemer.core.types import EdgeType, NodeEdge, relation_pair_key
 from epimemer.embeddings.protocol import EmbeddingProvider
+from epimemer.pipelines.reflection.reopening import reopen_notes
 from epimemer.storage.protocol import StorageBackend
 
 
@@ -140,6 +141,11 @@ async def sweep_similar_relation_pairs(
     ids_by = {
         (record.name, record.kind): record.id for record in await storage.query_relation_labels()
     }
+    # A pair somebody declined and then reopened comes back here, and the next
+    # judge is owed the history: attached in the sweep rather than by `reflect`,
+    # because the label record ids the reopen named are resolved here and
+    # nowhere else.
+    reopened = await reopen_notes(storage)
 
     pairs: list[dict] = []
     suppressed = 0
@@ -153,16 +159,18 @@ async def sweep_similar_relation_pairs(
                     continue
                 sim = _cosine_similarity(vec_by[a], vec_by[b])
                 if sim >= similarity_threshold:
-                    pairs.append(
-                        {
-                            "label_a": a[0],
-                            "label_b": b[0],
-                            "kind": a[1],
-                            "count_a": counts[a],
-                            "count_b": counts[b],
-                            "similarity": round(sim, 4),
-                        }
-                    )
+                    pair = {
+                        "label_a": a[0],
+                        "label_b": b[0],
+                        "kind": a[1],
+                        "count_a": counts[a],
+                        "count_b": counts[b],
+                        "similarity": round(sim, 4),
+                    }
+                    note = reopened.get(frozenset({id_a, id_b})) if id_a and id_b else None
+                    if note is not None:
+                        pair["reopened"] = note.model_dump(mode="json")
+                    pairs.append(pair)
 
     pairs.sort(key=lambda p: p["similarity"], reverse=True)
     return RelationPairSweep(pairs=pairs, suppressed=suppressed)

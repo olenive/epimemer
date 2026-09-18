@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { EventRouter } from "./events";
-import { paletteFor } from "./theme";
+import { paletteFor, semanticPaletteFor } from "./theme";
 import type { TimelineMark } from "./timeline-model";
 import {
   centredOn,
@@ -12,7 +12,15 @@ import {
   type TimelinePanelControls,
   type TimelinePanelHandle,
 } from "./timeline-panel";
-import type { AnyEvent, EdgeView, NodeView, TimelineView } from "./types";
+import type {
+  AnyEvent,
+  EdgeView,
+  NodeView,
+  OccurrenceView,
+  RecurrenceView,
+  TimelineView,
+  TimepointView,
+} from "./types";
 
 /** jsdom has no ResizeObserver, and the panel observes its row container. */
 class StubResizeObserver {
@@ -63,18 +71,54 @@ const edge = (over: Partial<EdgeView> & { src_id: string; dst_id: string }): Edg
   ...over,
 });
 
-const timepoint = (id: string, start: string | null, label: string | null) => ({
+const timepoint = (
+  id: string,
+  start: string | null,
+  label: string | null,
+  over: Partial<TimepointView> = {},
+): TimepointView => ({
   timepoint_id: id,
   start,
   end: null,
   label,
+  kind: start === null ? "vague" : "instant",
+  earliest: null,
+  latest: null,
+  contested: false,
+  temporal_contradiction_id: null,
   metadata: {},
+  ...over,
+});
+
+const occurrence = (
+  over: Partial<OccurrenceView> & { occurrence_start: string },
+): OccurrenceView => ({
+  start: over.occurrence_start,
+  end: null,
+  moved_to: null,
+  materialised_id: null,
+  ...over,
+});
+
+const recurrence = (
+  over: Partial<RecurrenceView> & { recurrence_id: string },
+): RecurrenceView => ({
+  label: "the weekly service",
+  rule_kind: "periodic",
+  bounds_start: null,
+  bounds_end: null,
+  window_start: null,
+  window_end: null,
+  occurrences: [],
+  truncated: false,
+  ...over,
 });
 
 const timeline = (over: Partial<TimelineView> & { timeline_id: string }): TimelineView => ({
   name: "History",
   description: "",
   timepoints: [],
+  recurrences: [],
   reference_time: null,
   created_at: "2024-01-01T00:00:00Z",
   graph: "default",
@@ -310,6 +354,251 @@ describe("content mode", () => {
 
     expect(document.querySelectorAll("#body rect.cursor-pointer")).toHaveLength(1);
     expect(document.querySelectorAll("#body circle")).toHaveLength(1);
+  });
+});
+
+describe("a point the order places", () => {
+  const band = (): SVGElement | null =>
+    document.querySelector<SVGElement>("#body rect.timeline-band");
+
+  const withBounds = (over: Partial<TimepointView>): void => {
+    panel.loadSnapshot({
+      nodes: [],
+      edges: [],
+      timelines: [
+        timeline({
+          timeline_id: "t1",
+          timepoints: [
+            timepoint("p1", "1890-01-01T00:00:00Z", "the fire"),
+            timepoint("p2", "1900-01-01T00:00:00Z", "the flood"),
+            timepoint("p3", null, "the quarrel", over),
+          ],
+        }),
+      ],
+    });
+    useContentMode();
+  };
+
+  it("draws a hatched band across the two bounds instead of a chip", () => {
+    withBounds({ earliest: "1890-01-01T00:00:00Z", latest: "1900-01-01T00:00:00Z" });
+
+    const drawn = band();
+    expect(drawn).not.toBeNull();
+    expect(drawn!.getAttribute("fill")).toContain("timeline-hatch");
+    expect(Number(drawn!.getAttribute("height"))).toBeGreaterThan(0);
+    // Nothing left for the tray: the point has a place now.
+    expect(el("undated").classList.contains("hidden")).toBe(true);
+  });
+
+  it("writes the label on the band word for word", () => {
+    withBounds({
+      earliest: "1890-01-01T00:00:00Z",
+      latest: "1900-01-01T00:00:00Z",
+      label: "the quarrel between the abbot and the miller",
+    });
+
+    const label = document.querySelector("#body text.timeline-band-label");
+    expect(label?.textContent).toBe("the quarrel between the abbot and the miller");
+  });
+
+  it("dissolves toward the later side when only the earliest is known", () => {
+    // "After the fire, we do not know when." The edge is in the fog below.
+    withBounds({ earliest: "1890-01-01T00:00:00Z" });
+
+    expect(band()!.getAttribute("mask")).toContain("timeline-fade-later");
+  });
+
+  it("dissolves toward the earlier side when only the latest is known", () => {
+    withBounds({ latest: "1900-01-01T00:00:00Z" });
+
+    expect(band()!.getAttribute("mask")).toContain("timeline-fade-earlier");
+  });
+
+  it("leaves a point nothing constrains in the tray", () => {
+    withBounds({});
+
+    expect(band()).toBeNull();
+    expect(el("undated").textContent).toContain("the quarrel");
+  });
+});
+
+describe("a point whose order is disputed", () => {
+  const load = (over: Partial<TimepointView>): void => {
+    panel.loadSnapshot({
+      nodes: [],
+      edges: [],
+      timelines: [
+        timeline({
+          timeline_id: "t1",
+          timepoints: [
+            timepoint("p1", "1890-01-01T00:00:00Z", "the fire"),
+            timepoint("p2", "1900-01-01T00:00:00Z", "the flood"),
+            timepoint("p3", null, "the quarrel", over),
+          ],
+        }),
+      ],
+    });
+    useContentMode();
+  };
+
+  const contestedMarks = (root: string): SVGElement[] => [
+    ...document.querySelectorAll<SVGElement>(`${root} .timeline-contested`),
+  ];
+
+  const disputed = { contested: true, temporal_contradiction_id: "c1" };
+
+  /** The mark standing for one timepoint, found by the detail on its tooltip. */
+  const markTitled = (text: string): SVGElement | undefined =>
+    [...document.querySelectorAll<SVGElement>("#body circle")].find((mark) =>
+      (mark.textContent ?? "").includes(text),
+    );
+
+  it("keeps a dated point where its date puts it and marks it beside", () => {
+    load({ start: "1895-01-01T00:00:00Z", kind: "instant" });
+    const undisputedY = markTitled("the quarrel")?.getAttribute("cy");
+    expect(undisputedY).not.toBeUndefined();
+
+    load({ start: "1895-01-01T00:00:00Z", kind: "instant", ...disputed });
+
+    // The date a source gave is kept. What is in doubt is the order.
+    expect(markTitled("the quarrel")?.getAttribute("cy")).toBe(undisputedY);
+    expect(contestedMarks("#body")).toHaveLength(1);
+  });
+
+  it("marks a point with no place in the tray, where it stays", () => {
+    load(disputed);
+
+    expect(el("undated").textContent).toContain("the quarrel");
+    expect(contestedMarks("#undated")).toHaveLength(1);
+  });
+
+  it("draws the mark in the palette's contradiction hue, minting nothing", () => {
+    load({ start: "1895-01-01T00:00:00Z", kind: "instant", ...disputed });
+
+    expect(contestedMarks("#body")[0].getAttribute("stroke")).toBe(
+      semanticPaletteFor("light").contradiction,
+    );
+  });
+
+  it("names the dispute on hover", () => {
+    load({ start: "1895-01-01T00:00:00Z", kind: "instant", ...disputed });
+
+    const [glyph] = contestedMarks("#body");
+    expect(glyph.textContent ?? "").toContain("c1");
+  });
+
+  it("marks nothing when nothing is disputed", () => {
+    load({ start: "1895-01-01T00:00:00Z", kind: "instant" });
+
+    expect(contestedMarks("#body")).toHaveLength(0);
+  });
+});
+
+describe("what a rule says happens over and over", () => {
+  const beads = (): SVGElement[] => [
+    ...document.querySelectorAll<SVGElement>("#body circle.timeline-bead"),
+  ];
+  const spine = (): SVGElement | null =>
+    document.querySelector<SVGElement>("#body line.timeline-spine");
+
+  /** Two dated points give the axis a span; the rule fills it. */
+  const withRule = (
+    occurrences: OccurrenceView[],
+    timepoints = [
+      timepoint("p1", "1897-01-01T00:00:00Z", "the first service"),
+      timepoint("p2", "1897-02-01T00:00:00Z", "the last service"),
+    ],
+  ): void => {
+    panel.loadSnapshot({
+      nodes: [],
+      edges: [],
+      timelines: [
+        timeline({
+          timeline_id: "t1",
+          timepoints,
+          recurrences: [recurrence({ recurrence_id: "r1", occurrences })],
+        }),
+      ],
+    });
+    useContentMode();
+  };
+
+  it("threads a bead onto a dotted spine for each occurrence", () => {
+    withRule([
+      occurrence({ occurrence_start: "1897-01-08T00:00:00Z" }),
+      occurrence({ occurrence_start: "1897-01-15T00:00:00Z" }),
+      occurrence({ occurrence_start: "1897-01-22T00:00:00Z" }),
+    ]);
+
+    expect(beads()).toHaveLength(3);
+    // Dotted, because the spine says "same rule" and asserts nothing between.
+    expect(spine()?.getAttribute("stroke-dasharray")).not.toBeNull();
+  });
+
+  it("spans the spine from the first occurrence to the last", () => {
+    withRule([
+      occurrence({ occurrence_start: "1897-01-08T00:00:00Z" }),
+      occurrence({ occurrence_start: "1897-01-15T00:00:00Z" }),
+      occurrence({ occurrence_start: "1897-01-22T00:00:00Z" }),
+    ]);
+
+    const drawn = beads().map((bead) => Number(bead.getAttribute("cy")));
+    expect(Number(spine()!.getAttribute("y1"))).toBeCloseTo(Math.min(...drawn), 5);
+    expect(Number(spine()!.getAttribute("y2"))).toBeCloseTo(Math.max(...drawn), 5);
+  });
+
+  it("leaves a materialised occurrence to its own mark rather than a bead", () => {
+    // Materialising turns an occurrence into an ordinary point, and an ordinary
+    // point is already drawn. A bead beside it would be one date drawn twice.
+    withRule(
+      [
+        occurrence({ occurrence_start: "1897-01-08T00:00:00Z", materialised_id: "p3" }),
+        occurrence({ occurrence_start: "1897-01-15T00:00:00Z" }),
+      ],
+      [
+        timepoint("p1", "1897-01-01T00:00:00Z", "the first service"),
+        timepoint("p2", "1897-02-01T00:00:00Z", "the last service"),
+        timepoint("p3", "1897-01-08T00:00:00Z", "the weekly service"),
+      ],
+    );
+
+    expect(beads()).toHaveLength(1);
+    const marked = [
+      ...document.querySelectorAll<SVGElement>("#body circle:not(.timeline-bead)"),
+    ].filter((c) => (c.textContent ?? "").includes("the weekly service"));
+    expect(marked).toHaveLength(1);
+  });
+
+  it("puts a moved occurrence's bead on the date it moved to", () => {
+    withRule(
+      [
+        occurrence({
+          occurrence_start: "1897-01-08T00:00:00Z",
+          start: "1897-01-09T00:00:00Z",
+          moved_to: "1897-01-09T00:00:00Z",
+        }),
+      ],
+      [
+        timepoint("p1", "1897-01-01T00:00:00Z", "the first service"),
+        timepoint("p2", "1897-02-01T00:00:00Z", "the last service"),
+        timepoint("p3", "1897-01-09T00:00:00Z", "the ninth"),
+      ],
+    );
+
+    const ninth = [...document.querySelectorAll<SVGElement>("#body circle")].find((c) =>
+      (c.textContent ?? "").includes("the ninth"),
+    );
+    expect(Number(beads()[0].getAttribute("cy"))).toBeCloseTo(
+      Number(ninth!.getAttribute("cy")),
+      5,
+    );
+  });
+
+  it("draws nothing for a rule with no occurrences in the window", () => {
+    withRule([]);
+
+    expect(beads()).toHaveLength(0);
+    expect(spine()).toBeNull();
   });
 });
 

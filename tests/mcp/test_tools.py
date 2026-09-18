@@ -2405,7 +2405,7 @@ class TestTimelineTools:
         )
         tp_id = tp_result["timepoint_id"]
 
-        result, _ = await create_timelink(t.id, tl_id, tp_id, storage)
+        result, _ = await create_timelink(t.id, tl_id, storage, timepoint_id=tp_id)
         assert result["edge_id"]
         assert result["timepoint_id"] == tp_id
 
@@ -2417,14 +2417,18 @@ class TestTimelineTools:
     async def test_create_timelink_nonexistent_node(self, storage):
         tl_result, _ = await create_timeline("test", storage)
         with pytest.raises(ValueError, match="Node"):
-            await create_timelink("nonexistent", tl_result["timeline_id"], "tp-1", storage)
+            await create_timelink(
+                "nonexistent", tl_result["timeline_id"], storage, timepoint_id="tp-1"
+            )
 
     async def test_create_timelink_nonexistent_timepoint(self, storage):
         t = Topic(content="topic", source_id="s1")
         await storage.store_node(t)
         tl_result, _ = await create_timeline("test", storage)
         with pytest.raises(ValueError, match="Timepoint"):
-            await create_timelink(t.id, tl_result["timeline_id"], "nonexistent", storage)
+            await create_timelink(
+                t.id, tl_result["timeline_id"], storage, timepoint_id="nonexistent"
+            )
 
 
 class TestTimepointKindOnResponses:
@@ -2499,7 +2503,7 @@ class TestTimepointKindOnResponses:
             label="the Terror",
         )
 
-        result, _ = await create_timelink(t.id, tl_id, point["timepoint_id"], storage)
+        result, _ = await create_timelink(t.id, tl_id, storage, timepoint_id=point["timepoint_id"])
 
         assert result["kind"] == "interval"
 

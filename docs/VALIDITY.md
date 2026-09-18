@@ -160,6 +160,13 @@ therefore be cycle-safe.
 
 ### Recurrence
 
+The word names two unrelated things in this codebase. This section is about
+**lifecycle recurrence**: a claim that was retired becomes true again, and
+`restore` puts it back with the `recurs` verdict. A **recurrence rule** is a
+pattern on a timeline, "the second Tuesday of every month", added with
+`add_recurrence` and expanded into occurrences when a query asks; that is
+[TIMELINES.md](TIMELINES.md).
+
 Because a world-change is reversible, a claim can become true again.
 `historical` is restorable and `corrected` is not.
 

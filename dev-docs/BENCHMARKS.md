@@ -286,7 +286,7 @@ and contraindicated by the degree-10 one, which is why it was left alone.
 ## What real text looks like
 
 Two questions turned on what real text does rather than generated text, so
-these were taken from graphs of real ingested content (`epimemer/memory`, 568
+these were taken from graphs of real ingested content (`epimemer/notes`, 568
 nodes and 80 segments at the time; `epimemer/petritype-server`, 136 nodes and
 28 segments), read without opening a storage backend, since those namespaces
 must not be written to. `scripts/corpus_measure.py`.
@@ -325,9 +325,9 @@ so this is the distribution `reflect` sees:
 | corpus | items | pairs | survivors | rate | median pair similarity | p99.9 |
 |---|---|---|---|---|---|---|
 | bench fact text (control) | 400 | 79,800 | 887 | 1.11% | 0.500 | 0.883 |
-| real facts, `memory` | 277 | 38,226 | 4 | **0.0105%** | **0.164** | 0.683 |
+| real facts, `notes` | 277 | 38,226 | 4 | **0.0105%** | **0.164** | 0.683 |
 | real facts, `petritype-server` | 73 | 2,628 | 0 | **0.0%** | 0.160 | 0.720 |
-| real topics, `memory` | 112 | 6,216 | 1 | 0.0161% | 0.153 | 0.707 |
+| real topics, `notes` | 112 | 6,216 | 1 | 0.0161% | 0.153 | 0.707 |
 
 Read the distribution, not the rate. Four survivors is too few to trust as a
 rate, but 38,226 pairs is plenty to locate the distribution, and it sits
@@ -395,7 +395,7 @@ would put it. 1,200 facts, real embeddings:
 | diverse | 9 | **0.0013%** | 0 |
 | diverse, 60 clusters of 10 | 2,712 | 0.377% | 2,700 |
 
-Real facts in the `memory` graph sit at 0.0105%, so the diverse base is on the
+Real facts in the `notes` graph sit at 0.0105%, so the diverse base is on the
 right side of real prose. The planting is exact: 2,700 planted gives 2,712
 survivors, 80 gives 81, one clique of 50 (1,225 planted) gives 1,226. The
 generator contributes a residue in the single digits and everything else is

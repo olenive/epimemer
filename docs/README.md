@@ -5,8 +5,9 @@ How the built system works, and why it works that way.
 | Page | Covers |
 |---|---|
 | [RETRIEVAL.md](RETRIEVAL.md) | How `search` is answered: the vector and keyword arms, rank fusion, segment hits, result provenance, lineage collapse, valid-time buckets |
-| [VALIDITY.md](VALIDITY.md) | When a claim was true: intervals per source, the two clocks, correction against world-change, recurrence, the soundness check, boundary proposals, and correcting a period that is present and wrong |
-| [REFLECTION.md](REFLECTION.md) | The review loop: the verdict taxonomy, what `reflect` nominates, what `apply_reflection` writes, archival |
+| [VALIDITY.md](VALIDITY.md) | When a claim was true: intervals per source, the two clocks, correction against world-change, lifecycle recurrence (a retired claim becoming true again, restored with the `recurs` verdict, which is a different thing from the timeline recurrence rules below), the soundness check, boundary proposals, and correcting a period that is present and wrong |
+| [TIMELINES.md](TIMELINES.md) | When something happened and in what order: dated points and their kinds, the order a source states between points nobody dated, the contradictions that follow and how a judge answers them, and recurrence rules whose occurrences are computed rather than stored |
+| [REFLECTION.md](REFLECTION.md) | The review loop: the verdict taxonomy, what `reflect` nominates, what `apply_reflection` writes, archival, and taking a suppression back with `reopen` |
 | [ATTRIBUTION.md](ATTRIBUTION.md) | Who judged this: the agent registry, why the user assigns the id, how approval reaches them, what a self-description is worth, the append-only journal that answers *what did this agent judge*, reading it back with `review`, `apply_review` and `rejudge`, and the two revisions with their own tools, `reassign_metacontext` and `correct_interval` |
 
 Start with [SUMMARY.md](../SUMMARY.md) for the architecture as a whole; these

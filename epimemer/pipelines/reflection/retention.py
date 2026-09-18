@@ -58,6 +58,12 @@ success would put the node back on every reflect, in front of an agent told the
 work was done. So the exception propagates, and the caller reports the node as
 skipped.
 
+**A keep that turns out to be wrong is withdrawn by `reopen`**, which appends a
+`reopened` row the index below reads as clearing the node's entry. That is the
+one case anchoring cannot answer: a `never_retrieved` keep covers nothing, so no
+reason arriving later can outrank it, and without a withdrawal it would be
+permanent exactly as a wrong `distinct` was. See `reopening.py`.
+
 **Nothing here retires, archives, or moves a value.** A retention says a node
 was looked at. That is all it says, and keeping it to that is what stops it
 becoming the next field with two meanings.
@@ -161,14 +167,35 @@ async def confirmed_reasons_for(
     A row with empty `covers` is that second answer, and it is read back as the
     node's own id: the pure predicates below then compare like with like, and
     `retention_covers` needs no branch for the shape with no reasons.
+
+    **A `reopened` row clears what stands and nothing more.** `reopen` withdraws
+    a keep so the node is offered again, and the two kinds are replayed in the
+    order they were decided: a keep adds its anchors, a reopen drops the node's
+    whole entry, and a keep written afterwards is a fresh verdict that stands on
+    its own. Both rows survive in the journal either way; what changes is what
+    the nominator reads.
+
+    **A reopen naming two subjects is not about a node**, so it is skipped here.
+    One subject is how the retention layer is addressed and two is how a fact
+    pair is, which is the same distinction `reopen` validates on the way in: a
+    pair has no keep to withdraw, and treating one as if it did would silently
+    un-keep both of its nodes.
     """
     ids = list(node_ids)
     if not ids:
         return {}
     wanted = set(ids)
-    rows = await storage.query_decisions(kinds=[DecisionKind.RETENTION], subject_ids=ids)
+    rows = await storage.query_decisions(
+        kinds=[DecisionKind.RETENTION, DecisionKind.REOPENED], subject_ids=ids
+    )
     covered: dict[str, set[str]] = {}
-    for row in rows:
+    # `query_decisions` answers newest first; replaying needs oldest first,
+    # because a keep and the reopen that withdraws it differ only in order.
+    for row in reversed(rows):
+        if row.kind is DecisionKind.REOPENED:
+            if len(row.subject_ids) == 1 and row.subject_ids[0] in wanted:
+                covered.pop(row.subject_ids[0], None)
+            continue
         for node_id in row.subject_ids:
             if node_id not in wanted:
                 continue

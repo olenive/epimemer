@@ -10,9 +10,11 @@ similarity verdict beside a `relation_verdicts` entry with no `pair` left one
 `similarity` row written and reported the call as a total failure.
 
 That reading is not merely incomplete, it is actively misleading, because a
-similarity verdict is **permanently suppressing**. The obvious next move — fix
-the malformed entry, resend the batch — is then the move that meets a refusal
-the agent has no reason to expect, on the one entry that did land.
+similarity verdict **suppresses**. The obvious next move, fix the malformed
+entry and resend the batch, is then the move that meets a refusal the agent has
+no reason to expect, on the one entry that did land. `reopen` would undo that
+suppression, but an agent that does not know a verdict landed has no cause to
+reach for it.
 
 **The fix is not a transaction**, since the step order has to stay. It is that
 everything which could raise from inside the loops is settled before the first
@@ -199,6 +201,6 @@ def refusal_message(found: Sequence[MalformedEntry]) -> str:
         "The whole batch is checked before the first step applies, so nothing "
         "in it landed and resending the corrected batch meets no half-applied "
         "state. That matters most for `similarities` and `relation_verdicts`, "
-        "whose suppressions are permanent: had the valid entries applied, the "
-        "resend would be refused as a repeat verdict on exactly those."
+        "which suppress: had the valid entries applied, the resend would be "
+        "refused as a repeat verdict on exactly those."
     )
