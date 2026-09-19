@@ -109,7 +109,7 @@ against the merge: the agent writes fresh content asserting one claim over
 both, so if the premises never held together the result is *genuinely*
 unsound rather than falsely flagged. The honest response is usually to narrow
 the merged wording or its period, which the agent writes, so refusing would
-block a merge it could have fixed. The advisory arrives instead, **with the
+block a merge it could have fixed. The warning arrives instead, **with the
 nomination and in the response, before the content is written**, which is
 the only moment at which it can change the answer.
 
@@ -119,10 +119,10 @@ warning* from `reflect`. The candidate still arrives, so nothing you can act
 on is lost; a kind set explicitly to `flag` outranks the mute; and the
 dashboard shows the muted warning, marked as one the agent was not told.
 
-Going ahead past it is recorded: a `proceeded_despite_advisory` row naming
+Going ahead past it is recorded: a `proceeded_despite_warning` row naming
 the survivor and its sources, written whether or not the graph is set to
-*show* advisories, and read back by `review(mode="advisory")`. That is what
-makes proceeding cost something. It applies to advisories that **object**;
+*show* warnings, and read back by `review(mode="warning")`. That is what
+makes proceeding cost something. It applies to warnings that **object**;
 one that merely escalates a correct call (a same-metacontext contradiction is the
 only kind that does) sets `notify_user` and journals nothing, because there
 was nothing to proceed against.
@@ -146,7 +146,7 @@ could draw it. Each key is a worklist, not a verdict:
 | `temporal_contradictions` | open, unheld disagreements about the order of timepoints: a cycle in what sources stated, or a point squeezed until its earliest bound is later than its latest | `resolve_temporal_contradiction`, which is a timeline tool rather than a verdict list on `apply_reflection` |
 | `recurrences` | an active claim beside its own `historical` twin | `restore` |
 | `unsound_inferences` | inferences whose premises no source puts in one period | agent judgment |
-| `inference_merge_candidates` | near-identical active inferences resting on a shared premise, each with the advisory computed before you decide | `merge_inferences`, or `similarities` where they are two claims |
+| `inference_merge_candidates` | near-identical active inferences resting on a shared premise, each with the warning computed before you decide | `merge_inferences`, or `similarities` where they are two claims |
 | `boundary_proposals` | where a succession lets a period close or open | `boundaries` |
 | `pending_review` | active nodes already carrying review state | `supersessions`, `record_variant`, `retained` |
 | `archival_candidates` | nodes worth setting aside | `archivals`, `judgments`, `retained` |
@@ -206,7 +206,7 @@ destroy:
 `unsound_inferences` and `boundary_proposals` are covered in
 [VALIDITY.md](VALIDITY.md#7-what-reflect-does-with-validity). The
 disjointness that makes an inference unsound is the same computation that
-produces an `inference_merge_candidate`'s advisory, one asked of an inference
+produces an `inference_merge_candidate`'s warning, one asked of an inference
 that exists, the other of one that would.
 
 ### When it runs

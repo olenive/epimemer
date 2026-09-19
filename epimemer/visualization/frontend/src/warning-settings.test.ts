@@ -2,7 +2,7 @@
 /**
  * The read-only warning settings panel.
  *
- * `ADVISORIES_DASHBOARD.md` §5: it shows the mute and, per kind, the action in
+ * `WARNINGS_DASHBOARD.md` §5: it shows the mute and, per kind, the action in
  * force and whether that answer is inherited from the process default or set on
  * this graph. Nothing here writes a setting, because a write from the browser
  * would be the first write into a graph with no author.

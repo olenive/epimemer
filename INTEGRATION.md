@@ -83,7 +83,7 @@ restate the count.
 | `find_nodes` | Return the nodes linked to a source document or a topic node, by following edges rather than by similarity. `metacontexts` scopes the listing |
 | `list_sources` | List the distinct source nodes, with reference counts |
 | `list_relations` | List the distinct user-defined relationship labels, with usage counts and descriptions |
-| `describe_relation` | Say what one of this graph's relationship labels means here: advisory prose the next agent reads before coining a label |
+| `describe_relation` | Say what one of this graph's relationship labels means here: guidance the next agent reads before coining a label |
 | `graph_stats` | Node and edge counts, type breakdown, and reflection pressure for the active graph |
 
 ### Conflict Handling
@@ -97,7 +97,7 @@ restate the count.
 | `reverse_merge` | Undo a merge: restore the sources with their own edges and destroy the survivor. The only tool that deletes a node. Refuses when anything has been added to the survivor since the merge |
 | `merge_inferences` | Collapse inferences that state one conclusion into a single node. The survivor rests on the union of the sources' premises. Where those premises are dated and fall clear of each other, the response says so in `warnings` rather than refusing |
 | `configure_merge` | Read or set this graph's `merge_undo_depth` (how far back a merge stays reversible) and `merge_cycle_limit` (how many merge and un-merge rounds before a merge refuses) |
-| `configure_warnings` | Read or set what this graph does about advisories: per-kind `proceed` or `flag`, and `surface`, the global mute. The mute governs whether you are *shown* advisories, never whether they are recorded. A kind explicitly set to `flag` outranks the mute; one following the default does not |
+| `configure_warnings` | Read or set what this graph does about warnings: per-kind `proceed` or `flag`, and `surface`, the global mute. The mute governs whether you are *shown* warnings, never whether they are recorded. A kind explicitly set to `flag` outranks the mute; one following the default does not |
 
 ### Reflection
 
@@ -116,7 +116,7 @@ and when. See [docs/ATTRIBUTION.md](docs/ATTRIBUTION.md).
 
 | Tool | Purpose |
 |------|---------|
-| `review` | This graph's decisions, least certain first: a declared low `certainty` before anything unrated, then by derived difficulty (thin sources, wide merges, open contradictions, ground that moved since). Modes: `all`, `by_agent`, `since`, `unreviewed`, `advisory` (operations that completed against an objecting advisory; an advisory that only escalated a correct call writes no row). Narrow by `agent_id` (a judge's name, its key, or a key it used to be recorded under), by `since` and `until`, and by `certainty_ceiling`. Read-only, capped, and one graph wide: `graph` names which, and `elsewhere` counts the journal in every other graph so a reviewer knows where else to look |
+| `review` | This graph's decisions, least certain first: a declared low `certainty` before anything unrated, then by derived difficulty (thin sources, wide merges, open contradictions, ground that moved since). Modes: `all`, `by_agent`, `since`, `unreviewed`, `warning` (operations that completed against an objecting warning; a warning that only escalated a correct call writes no row). Narrow by `agent_id` (a judge's name, its key, or a key it used to be recorded under), by `since` and `until`, and by `certainty_ceiling`. Read-only, capped, and one graph wide: `graph` names which, and `elsewhere` counts the journal in every other graph so a reviewer knows where else to look |
 | `apply_review` | Record that you checked decisions and what you concluded: `confirmations` and `dissents`, each with a required `because`. Neither changes the graph. A dissent records the finding; the undo is `reverse_merge`, `restore`, `apply_reflection` or `rejudge` |
 | `reassign_metacontext` | Withdraw a metacontext from a node, or move it to another metacontext in one call |
 | `correct_interval` | Replace what one source is recorded as asserting about when a claim held |
@@ -212,13 +212,20 @@ graphs can unbind a judge.
 
 | Tool | Purpose |
 |------|---------|
-| `claim_agent` | Propose a name and a self-description; binds this session to the judge the user picks. Returns both `name` (say this to a person) and `agent_id` (an opaque key, for `review`) |
+| `claim_agent` | Propose a name and a self-description; binds this session to the judge the user picks. Returns `name` (say this to a person), `agent_id` (an opaque key, for `review`) and `judge_token` (pass it as `judge_token` on every write) |
 
 Approval reaches the user through the client's approval prompt, through
 `EPIMEMER_APPROVED_AGENTS`, or through `epimemer agents confirm <id>` (served
 SurrealDB only, since an embedded store lives inside the server process). No
 MCP tool can approve an id: a tool the agent calls cannot prove that the user
 called it.
+
+Several agents can share one connection, a subagent beside the agent that
+spawned it. Each claims its own judge and passes the `judge_token` its claim
+returned on every write, which is what credits the write to that agent's judge
+rather than to whichever of them claimed last. A write carrying no token is
+credited to the most recent claim; a token the connection never issued is
+refused.
 
 Every write records the claimed identity, and every decision is also appended
 to a journal, so *what did this agent judge* is one query. A graph can be set

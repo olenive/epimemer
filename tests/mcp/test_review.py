@@ -46,8 +46,10 @@ from epimemer.pipelines.review.modes import (
     MODE_REQUIRES,
     REVIEW_MODES,
     UNBUILT_MODES,
+    canonical_mode,
     mode_refusal,
     passes_ceiling,
+    rename_note,
 )
 
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
@@ -414,14 +416,28 @@ class TestModesSelectAndArgumentsNarrow:
             refusal = mode_refusal(mode, agent_id="a1", since_given=True)
             assert refusal is not None and reason in refusal
 
-    def test_advisory_selects_a_kind_that_has_a_writer(self):
+    def test_warning_selects_a_kind_that_has_a_writer(self):
         """The rule `DecisionKind` states, arriving on a mode: a selection over
         a kind nothing produces returns an empty list that reads as a clean
-        graph. The mode was refused on exactly those grounds until advisories
-        were built, so the guard is now the inverse — it is a mode, and the kind
+        graph. The mode was refused on exactly those grounds until warnings
+        were built, so the guard is now the inverse: it is a mode, and the kind
         it names exists."""
+        assert mode_refusal("warning", agent_id=None, since_given=False) is None
+        assert MODE_KINDS["warning"] == [DecisionKind.PROCEEDED_DESPITE_WARNING]
+
+    def test_a_renamed_mode_is_accepted_rather_than_refused(self):
+        """The refusal runs on the canonical name, so the old spelling has to
+        reach it translated or an agent that learned it is told the mode does
+        not exist."""
         assert mode_refusal("advisory", agent_id=None, since_given=False) is None
-        assert MODE_KINDS["advisory"] == [DecisionKind.PROCEEDED_DESPITE_ADVISORY]
+        assert canonical_mode("advisory") == "warning"
+        assert rename_note("advisory") is not None
+
+    def test_a_name_nothing_ever_had_is_still_refused(self):
+        """The alias is a short list, not a fallback: a typo has to refuse."""
+        refusal = mode_refusal("advisries", agent_id=None, since_given=False)
+
+        assert refusal is not None and "not a mode" in refusal
 
     def test_every_mode_that_selects_a_kind_names_one_that_exists(self):
         """A mode selecting a kind no member matches is the same silent-empty

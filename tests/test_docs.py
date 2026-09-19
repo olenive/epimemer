@@ -25,6 +25,7 @@ import re
 from pathlib import Path
 
 from epimemer.mcp.server import mcp as epimemer_mcp
+from epimemer.pipelines.review.modes import REVIEW_MODES
 
 ROOT = Path(__file__).resolve().parent.parent
 README = ROOT / "README.md"
@@ -51,8 +52,69 @@ DOCUMENTS_LISTING_TOOLS = (INTEGRATION, README, SUMMARY)
 SURREAL_START = re.compile(r"start\s+--user\s+root\s+--pass\s+root([^\n]*)")
 
 
-# terminology-guard: off — from here to the end of the file, naming the retired
-# words is the job.
+# terminology-guard: off. The guards below name the words they retire, which
+# is what they are for.
+PROMPTS = ROOT / "epimemer_prompts"
+
+# What a tool tells an agent before it decides is a **warning**, and it was two
+# words until 2026-09-18: `warning` on the response key and the dashboard panel,
+# `advisory` on the review mode, the journal kind and most of the prose. Two
+# names for one thing is what sends an agent looking for a second mechanism, and
+# the second one is never there.
+#
+# `Advisory` survives as a Python class because `Warning` is a builtin, which is
+# why this reads the surfaces an agent or a person is handed rather than the
+# source: the guide, the rules, the canonical tool reference, the descriptions
+# the server actually serves, and the mode names `review` will answer to.
+# `dev-docs/WARNINGS_AND_SETTINGS.md` is where the internal name is recorded.
+RETIRED_WARNING_WORD = re.compile(r"advisor\w*", re.IGNORECASE)
+
+# The pages an agent is given, as opposed to the ones a maintainer goes looking
+# for. RULES.md is the instructions string in every context window, DEFAULT.md
+# is the `guide` prompt, and INTEGRATION.md calls itself the canonical tool
+# reference.
+AGENT_FACING_PAGES = (PROMPTS / "RULES.md", PROMPTS / "DEFAULT.md", INTEGRATION)
+
+
+def test_no_page_an_agent_is_handed_says_advisory():
+    """Checked per line, so a failure names the place rather than the file."""
+    offenders: list[str] = []
+    for path in AGENT_FACING_PAGES:
+        for number, line in enumerate(path.read_text().splitlines(), start=1):
+            for found in RETIRED_WARNING_WORD.finditer(line):
+                relative = path.relative_to(ROOT).as_posix()
+                offenders.append(f"{relative}:{number}: {found.group(0)!r}")
+
+    assert not offenders, (
+        "the note a tool attaches to a call is a warning on every surface an "
+        "agent reads; `Advisory` is the Python class and stays out of the "
+        "guidance.\n" + "\n".join(offenders)
+    )
+
+
+async def test_no_tool_description_the_server_serves_says_advisory():
+    """The registry rather than the source file, for `_registered_tool_names`'s
+    reason: what a tool's schema says is the only authority on what an agent is
+    told, and an argument's own description is part of it."""
+    offenders: list[str] = []
+    for tool in await epimemer_mcp.list_tools():
+        served = f"{tool.description or ''}\n{tool.parameters}"
+        for found in RETIRED_WARNING_WORD.finditer(served):
+            offenders.append(f"{tool.name}: {found.group(0)!r}")
+
+    assert not offenders, "a served tool description still says advisory: " + ", ".join(offenders)
+
+
+def test_the_review_modes_are_spelled_the_way_the_word_is():
+    """The list `review` refuses against and prints back, which is what an agent
+    that guessed wrong is handed."""
+    assert "warning" in REVIEW_MODES
+    offenders = [mode for mode in REVIEW_MODES if RETIRED_WARNING_WORD.search(mode)]
+
+    assert not offenders, f"a review mode is still spelled the old way: {offenders}"
+
+
+# From here to the end of the file, naming the retired words is the job.
 #
 # The words the 0.2.0 rename removed. They read as general graph vocabulary —
 # one as a loose synonym for context, the other as any well-connected node — so
@@ -75,7 +137,7 @@ HUB_DIRECTORIES = ("epimemer/visualization/", "tests/visualization/")
 HUB_FILES = frozenset(
     {
         "README.md",
-        "dev-docs/ADVISORIES_DASHBOARD.md",
+        "dev-docs/WARNINGS_DASHBOARD.md",
         "dev-docs/EVENT_LOG.md",
         "dev-docs/ISSUES.md",
         "dev-docs/RETRIEVAL_PROVENANCE.md",

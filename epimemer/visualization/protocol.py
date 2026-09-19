@@ -73,7 +73,7 @@ class RpcRequest(BaseModel):
     holds structural metadata only (`RETRIEVAL_PROVENANCE.md` §3.2).
     ``warnings`` takes none and answers with what the active graph does about
     advisories, in the shape ``configure_warnings`` returns; it is a read, and
-    nothing on the dashboard writes a setting (`ADVISORIES_DASHBOARD.md` §2.4).
+    nothing on the dashboard writes a setting (`WARNINGS_DASHBOARD.md` §2.4).
     """
 
     type: Literal["rpc_request"] = "rpc_request"

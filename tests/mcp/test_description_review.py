@@ -688,14 +688,14 @@ class TestADescriptionForATagTheGraphAlreadyHas:
 
     async def test_nothing_is_journalled_against_it(self, storage, embedder, config):
         """The ingest was right, so there was nothing to proceed against, and a
-        `proceeded_despite_advisory` row for every re-sent description would
+        `proceeded_despite_warning` row for every re-sent description would
         swamp exactly the review that kind exists for."""
         await _ingest(storage, embedder, config, "First.", tags=["issue-53"])
 
         stored = await _resend_description(storage, embedder, config, "Something else entirely.")
 
         assert stored["notify_user"] is False
-        assert await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY]) == []
+        assert await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_WARNING]) == []
 
     async def test_an_ordinary_ingest_raises_nothing(self, storage, embedder, config):
         stored = await _ingest(storage, embedder, config, "A document.", tags=["issue-53"])

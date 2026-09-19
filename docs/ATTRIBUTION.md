@@ -1,9 +1,10 @@
 # Attribution: who judged this
 
-An agent can be given an identity. The user assigns it, a session is bound to
-it, and every decision that session makes, during review and at ingest,
-carries it. Every decision is also appended to a journal, so *what did this
-agent judge* is one query. `review` reads that journal back, least certain
+An agent can be given an identity. The user assigns it, the claim binds it
+to the session and hands back a token the agent carries on its writes, and
+every decision made under it, at ingest and during review, names it. Every
+decision is also appended to a journal, so *what did this agent judge* is one
+query. `review` reads that journal back, least certain
 first; `apply_review` records that somebody checked a decision; `rejudge`
 revises a judgment made at ingest without touching the claim. Design notes:
 `dev-docs/REVIEW_MODE.md`.
@@ -20,8 +21,9 @@ review.
 ## Identity is assigned, not minted
 
 An agent **proposes a name** and describes itself; the **user** picks which
-judge it is, from the judges this graph already knows, or names a new one.
-What the user picked is what gets recorded.
+judge it is, from the judges this graph already knows, from the name the agent
+proposed, or from a new one they type. What the user picked is what gets
+recorded.
 
 ```
 claim_agent(agent_id="olegs-critic", description="Claude Opus, running as the reviewer pass")
@@ -206,6 +208,35 @@ Ids from `EPIMEMER_APPROVED_AGENTS` are applied to whatever graph the server
 lands on, and applied *before* the judge is re-checked; otherwise
 configuration would clear a judge it was about to admit.
 
+## Several agents on one connection
+
+A claim also hands back a `judge_token`, and a write that carries it is
+credited to the judge that claim named. That matters because a client can give
+more than one agent the same MCP connection: Claude Code hands a subagent the
+connection the agent that spawned it is already using. Both claim, the session
+binding holds whichever claimed last, and without a token every later write
+from either of them is credited to that one judge. A review by agent then
+answers for the wrong model.
+
+So each agent claims its own judge and carries its own token, and a token names
+that one claim for as long as the connection lasts. A write carrying no token
+is credited to the most recent claim, which is what a single agent has always
+had. A token this connection never issued **refuses the write**, with a message
+naming `claim_agent`: falling back to the most recent claim is the thing the
+token exists to prevent, and a refused write is visible where a misattributed
+one is not.
+
+Approval is re-checked behind a token exactly as it is behind the binding, so a
+token carried into a graph that does not approve its judge records unknown, or
+is refused where the graph requires a judge. Tokens survive a `use_graph` for
+that reason: what a token names is a claim, and which graph will accept that
+claim is decided at the moment of the write.
+
+The prompt the user answers says which of them is asking: it opens with the
+Epimemer version, then names the judge the agent proposes, and where the
+connection already judges as somebody a second line names them, so a subagent's
+claim is told apart from its parent's.
+
 ## What a decision records
 
 Once a session has claimed an identity, these writers record it, each on the
@@ -217,7 +248,7 @@ thing the decision landed on:
 | `restore`, `reverse_merge` | the same episode, as `restored_by`: a separate field, because returning is a separate decision |
 | `record_contradiction`, `record_variant`, `link`, `apply_reflection`'s similarity verdicts | the edge, as `judged_by` |
 | `judge_importance` | the value signal, as the latest judge; every entry in the node's reinforcement trail names its own |
-| content written during reflect (synthesised parents, splits, merge survivors) and `update`'s replacement | the new node, as `judged_by` |
+| content written during reflect (synthesised parents, splits, merge survivors) and `update`'s replacement | the new node, as `judged_by`. A topic merge also writes every description it did not lead with into the survivor's `description_history`, each entry naming the merging judge, the way an enrichment does |
 | `segment`, `store_decomposition` | every node and edge the ingest creates, as `judged_by`, including the priors `claim_kind`, `confidence` and `importance`, which nothing downstream re-makes |
 | `link` coining a relation label for the first time | the label's record, as `judged_by`: **the coiner, never the describer**. `describe_relation`, a verdict, or a backfill creates a record carrying no judge at all, since none of them is claiming to have introduced the word |
 | `reassign_metacontext`, `correct_interval`, `describe_relation` | nothing on the node or edge; each journals its own row instead, because the thing being revised was somebody else's judgment and overwriting their name would hide that |
@@ -370,19 +401,19 @@ one call rather than three vocabularies.
 | `by_agent` | one judge's decisions | `agent_id` |
 | `since` | a time window; `until` is exclusive | `since` |
 | `unreviewed` | rows no other record points back at | nothing |
-| `advisory` | operations that went ahead against an objecting advisory | nothing |
+| `warning` | operations that went ahead against an objecting warning | nothing |
 
-`advisory` is the one mode that is a selection on **kind**
-(`proceeded_despite_advisory`), and it answers a question none of the others
+`warning` is the one mode that is a selection on **kind**
+(`proceeded_despite_warning`), and it answers a question none of the others
 can: *what was decided against advice?* Its rows sit beside the decision they
-accompany rather than replacing it, and the advisory's own text is in
+accompany rather than replacing it, and the warning's own text is in
 `certainty_basis`, so a reviewer sees what the decider saw. `certainty` stays
 blank on these, because nobody rated them.
 
-**Only an advisory that *objects* writes a row.** *Despite* means something
+**Only a warning that *objects* writes a row.** *Despite* means something
 only where there was something to proceed against, so a same-metacontext
-contradiction, where the tool was right and the advisory is escalating the
-finding, sets `notify_user` and journals nothing. A row for every advisory
+contradiction, where the tool was right and the warning is escalating the
+finding, sets `notify_user` and journals nothing. A row for every warning
 would double the journal on the commonest path there is, which degrades
 exactly the review this mode exists for.
 

@@ -11,7 +11,7 @@ alone. `docs/ATTRIBUTION.md` is the behaviour a caller sees.
 
 Design it depends on: `REVIEW_EPISTEMIC.md` §3 (the verdict taxonomy),
 `EVENT_LOG.md` (the durable change path this extends), and
-`WARNINGS_AND_SETTINGS.md` (advisories, whose journal rows this reads).
+`WARNINGS_AND_SETTINGS.md` (warnings, whose journal rows this reads).
 
 ---
 
@@ -178,6 +178,35 @@ keyed on the identity, because a memo meaning *this session confirmed
 something* would let an agent be approved as one judge and bind silently as
 another. A changed description is still put to the user.
 
+**The prompt says which agent is asking.** Its first line names the judge the
+agent proposes, and where this connection already judges as somebody, a second
+line names them and says whether this is a second agent beside the first or
+that one claiming again. One connection carries several agents, a subagent
+beside the agent that spawned it, and the user answering otherwise had no way
+to tell which of them the question came from. The proposal is shown by name
+even where the agent passed the key a previous claim handed it, resolved the
+way the claim behind the prompt resolves it, and a handle this graph has never
+seen is shown as it came because there is nothing else to show. The
+self-description stays last, because the terminal cuts the end and the name
+being proposed is the part that must survive the cut. Ahead of all of it comes
+the Epimemer version, on every prompt in the claim flow, so that a user placing
+a judge can see which server is asking.
+
+**The proposed name is a choice wherever a picker is drawn**, a line of its
+own rather than a blank field behind *a new judge*. A client is free to draw
+free text as a required field, and Claude Code does, so `Accept to use 'X'`
+named a gesture the client would not let the user make: the one way to take
+the proposed name was to retype it. A picker says the same thing in a gesture
+every client that draws one can make. In a graph with no judges yet the whole
+picker is those two lines, the proposal and a name the user types. In a graph
+that has judges the proposed line sits under the roster, and it is left off
+where the proposal resolves to a judge already on that list, since that judge
+is there to be picked and a second line offering its name as new is how a
+history gets split. The free-text prompt whose Accept means the proposal
+survives only where no picker can be drawn at all, a bare Accept being the one
+gesture such a client has left; where the user has chosen to type a name,
+typing none is a refusal rather than agreement.
+
 Two states are distinct: **declined** (the question reached a person and they
 said no) refuses even a pre-approved id; **unavailable** (no elicitation
 channel exists) falls back to the approved list, since that approval is the
@@ -295,13 +324,22 @@ every write, and a revoked id records as unknown rather than raising.
 
 The obvious implementation is an ambient "current agent". That is a
 singleton and this project does not have those. `storage` is already passed
-explicitly into every tool; `claim_agent` binds the session; the resolved
-judge rides down as one more explicit parameter, `judge: JudgeRef | None`,
-resolved once at the tool boundary and never a module global. Whether a
+explicitly into every tool; `claim_agent` binds the session and hands back a
+`judge_token` naming that claim, which the agent passes on every write; the
+resolved judge rides down as one more explicit parameter,
+`judge: JudgeRef | None`, resolved once at the tool boundary and never a module
+global. The token is what lets one connection carry several agents: a subagent
+is given the connection its parent is already using, so both claim, and a write
+that names its own token is credited to the judge that claimed it rather than
+to whichever claimed last. A token the session never issued refuses the write,
+since falling back to the binding is the misattribution the token prevents.
+Tokens live in session state beside the binding, as a dict keyed by token, so
+one connection's token means nothing on another. Whether a
 blank is accepted is the graph's policy, not the signature's (§3.3). Where a
 transport has no session concept at all, a fallback binding held on the
 lifespan is used, per-server state reached through `ctx.lifespan_context`,
-which a successful session binding clears. Ingest stamps its edges once,
+which a successful session binding clears; tokens are held the same way, for
+the same reason. Ingest stamps its edges once,
 after the batch is assembled, rather than at each place it builds them.
 
 ### 3.3 What absence means
@@ -509,7 +547,7 @@ and *whether* the list is narrowed further.
 | `by_agent` | `judged_by` among a judge's keys | *"check everything this judge did"* |
 | `since` | `decided_at` in range | *"review yesterday's session"* |
 | `unreviewed` | no record `reviews` this one | *"what has nobody looked at"* |
-| `advisory` | `kind` is `proceeded_despite_advisory` | the contested-decisions worklist |
+| `warning` | `kind` is `proceeded_despite_warning` | the contested-decisions worklist |
 | `all` | every record | the full audit |
 
 **A mode names the selection; every argument narrows whatever it selected.**
@@ -912,15 +950,15 @@ graph as it was.
 
 ---
 
-## 9. Advisories are decision records
+## 9. Warnings are decision records
 
 "I was warned and proceeded anyway" is a judgment with a judge, a date and a
-subject, so it is a `DecisionRecord(kind="proceeded_despite_advisory")` and
+subject, so it is a `DecisionRecord(kind="proceeded_despite_warning")` and
 nothing else: no per-node note list, no second *what has nobody looked at*
 scan, no `reviewed_at`. A node's notes are a derived view over records whose
 `subject_ids` contain it, and the contested-decisions worklist is
-`review(mode="advisory")`. Two review-state machines would both be written
-to by an agent proceeding past an advisory, which is two shapes for one
+`review(mode="warning")`. Two review-state machines would both be written
+to by an agent proceeding past a warning, which is two shapes for one
 question (`WARNINGS_AND_SETTINGS.md`).
 
 ---
@@ -1046,4 +1084,4 @@ out a subject the moment somebody clicked the decision naming it.
 - **An inference-only reversal guard** (§7.5).
 - **A field-listed `MergedEdge`** (§7.9).
 - **A warning instead of a refusal for merge oscillation** (§7.8).
-- **A per-node note list for advisories** (§9).
+- **A per-node note list for warnings** (§9).

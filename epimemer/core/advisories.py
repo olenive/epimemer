@@ -74,7 +74,7 @@ class AdvisoryStance(str, Enum):
     bought.
 
     The distinction is not cosmetic: it decides whether a
-    `proceeded_despite_advisory` row is written. *Despite* is meaningful only
+    `proceeded_despite_warning` row is written. *Despite* is meaningful only
     where there was something to proceed against, and a row for every correct
     call degrades the review the kind exists for.
 
@@ -215,7 +215,7 @@ def surfaced(policy: WarningPolicy, advisories: list[Advisory]) -> list[Advisory
 def objects_to_the_call(advisories: list[Advisory]) -> bool:
     """Whether any of these argues the operation may be wrong.
 
-    What decides a `proceeded_despite_advisory` row. Read over **every**
+    What decides a `proceeded_despite_warning` row. Read over **every**
     advisory rather than the surfaced ones, because recording is unconditional:
     a graph with warnings muted should still answer *what was decided while
     nobody was looking*.

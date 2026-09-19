@@ -73,6 +73,7 @@ from epimemer.core.types import (
     judge_is_unused,
     lineage_edge_type_for,
     live_agents,
+    merged_description,
     merged_value_signal,
     name_holder,
     new_agent_id,
@@ -118,8 +119,10 @@ from epimemer.pipelines.review.difficulty import (
 from epimemer.pipelines.review.modes import (
     MODE_KINDS,
     REVIEW_MODES,
+    canonical_mode,
     mode_refusal,
     passes_ceiling,
+    rename_note,
 )
 from epimemer.storage.protocol import (
     MergeOverrides,
@@ -409,7 +412,7 @@ async def journal(
     return record
 
 
-# --- Advisories (what an operation was told before it made it) ---
+# --- Warnings (what an operation was told before it made it) ---
 
 
 async def advisory_policy(storage: StorageBackend, default: WarningPolicy) -> WarningPolicy:
@@ -463,7 +466,7 @@ async def publish_advisories(
 ) -> None:
     """Tell a watching dashboard every warning this call computed.
 
-    **Muted warnings are published too** (`ADVISORIES_DASHBOARD.md` §2.2). The
+    **Muted warnings are published too** (`WARNINGS_DASHBOARD.md` §2.2). The
     dashboard is where a person looks at what the agent was *not* told, so
     dropping the muted ones there would remove the reason for showing warnings
     at all. This matches the journal, which already records regardless of the
@@ -509,11 +512,11 @@ async def carry_advisories(
 ) -> dict:
     """Record that an operation completed carrying these, and shape the response.
 
-    **Only an advisory that *objects* writes a row.** *Despite* is meaningful
-    only where there was something to proceed against, so an advisory that
-    merely escalates a correct call — a same-metacontext contradiction is the one that
-    does — keeps its `notify_user` and journals nothing. The first version wrote
-    a row for every advisory, which doubled the journal on the commonest path
+    **Only a warning that *objects* writes a row.** *Despite* is meaningful
+    only where there was something to proceed against, so a warning that merely
+    escalates a correct call, a same-metacontext contradiction being the one
+    that does, keeps its `notify_user` and journals nothing. The first version
+    wrote a row for every warning, which doubled the journal on the commonest path
     and degraded exactly the review the kind exists for. The classification is
     per kind in `ADVISORY_STANCE`, so there is no special case here.
 
@@ -522,9 +525,9 @@ async def carry_advisories(
     while nobody was looking*, which is exactly when the question matters most —
     so `surface` gates the response and never the journal row.
 
-    One row per operation rather than per advisory: the agent made one decision.
+    One row per operation rather than per warning: the agent made one decision.
     The kinds and their messages go in `certainty_basis`, which is the row's own
-    prose and is what `review(mode="advisory")` renders — so the reviewer sees
+    prose and is what `review(mode="warning")` renders, so the reviewer sees
     what the decider was told without a second store to keep in step.
 
     `certainty` stays blank, and deliberately: nobody rated this. A row invented
@@ -532,9 +535,9 @@ async def carry_advisories(
     the agent never made.
 
     **`notify_user` is always present and always a boolean**, including when
-    there is no advisory at all. Omitting it where nothing escalates leaks which
-    branch ran — and it leaked in three shapes before this was made total, since
-    *no advisory*, *advisory muted* and *advisory shown but quiet* are the same
+    there is no warning at all. Omitting it where nothing escalates leaks which
+    branch ran, and it leaked in three shapes before this was made total, since
+    *no warning*, *warning muted* and *warning shown but quiet* are the same
     answer to the only question the key asks. A key documented in
     `INTEGRATION.md` that is sometimes absent is worse to read than one that is
     sometimes false.
@@ -549,7 +552,7 @@ async def carry_advisories(
     if objects_to_the_call(advisories):
         await journal(
             storage,
-            DecisionKind.PROCEEDED_DESPITE_ADVISORY,
+            DecisionKind.PROCEEDED_DESPITE_WARNING,
             list(subject_ids),
             judge=judge,
             certainty_basis=" ".join(
@@ -570,7 +573,7 @@ async def carry_advisories(
     return {
         # The user's vocabulary on the wire; only the Python class is `Advisory`.
         "warnings": [advisory.model_dump(mode="json") for advisory in shown],
-        # The first advisory's message, kept because it is the key the agent
+        # The first warning's message, kept because it is the key the agent
         # guidance and INTEGRATION.md already document. Breaking it to tidy an
         # internal representation would cost more than it buys.
         "warning": shown[0].message,
@@ -2690,7 +2693,7 @@ async def describe_relation(
 ) -> tuple[dict, ResponseMeta]:
     """Say what one of this graph's relationship labels means here.
 
-    Advisory prose, not a schema. It is free to say *"in the Court context this
+    Guidance, not a schema. It is free to say *"in the Court context this
     means X; for corporate contracts use Y"* — the system never enforces it, and
     making it enforceable is the step that would turn a vocabulary into a
     schema. It describes the shared **label**, never one edge: per-edge meaning
@@ -3308,11 +3311,11 @@ async def record_contradiction(
     direction). Both facts remain ACTIVE and retrievable; retrieval flags them
     contested so nothing downstream trusts a contested fact blindly.
 
-    **Both outcomes raise an advisory, and they are opposite ones.** A same-metacontext
+    **Both outcomes raise a warning, and they are opposite ones.** A same-metacontext
     pair is a real conflict and is `flag` by default, which is what sets
     `notify_user` — the trigger `notify_user` has always had, now expressed as a
     policy a graph can change rather than as a hard-wired condition. A
-    cross-metacontext pair is *not* a genuine contradiction, and its advisory says so.
+    cross-metacontext pair is *not* a genuine contradiction, and its warning says so.
     Either way the call goes through: the graph records what the agent asserted
     and records that it was told.
     """
@@ -3420,7 +3423,7 @@ async def record_variant(
     )
 
     # Only the same-metacontext case raises one: a cross-metacontext variant is the correct
-    # use of the tool, and an advisory on it would be noise on the happy path.
+    # use of the tool, and a warning on it would be noise on the happy path.
     # Its own kind rather than the contradiction one, which it shared until the
     # two were found to give opposite advice: here the tool was the wrong one,
     # there the tool was right and the finding wants a person.
@@ -3591,11 +3594,11 @@ async def merge_inferences(
     **The survivor rests on the union of the sources' premises**, which is a
     combination neither original had. Usually that is two pieces of evidence for
     one conclusion. Where the premises are dated and provably fall clear of each
-    other it is not, and that is reported as an advisory rather than a refusal:
+    other it is not, and that is reported as a warning rather than a refusal:
     the honest answer to *these never held together* is often to narrow the
     merged wording or its period, which the agent does by writing content — so
     refusing would block a merge the agent could have fixed. Nomination carries
-    the same advisory, so an agent that reached here from `reflect` has already
+    the same warning, so an agent that reached here from `reflect` has already
     seen it.
 
     **No `claim_kind` gate**, unlike facts, and that is a decision: `claim_kind`
@@ -3834,14 +3837,14 @@ async def configure_warnings(
     actions: dict[str, str] | None = None,
     clear: bool = False,
 ) -> tuple[dict, ResponseMeta]:
-    """Read or change what this graph does about advisories.
+    """Read or change what this graph does about warnings.
 
     Called with nothing but the storage it reports what is in force, which is
     the graph's own answers laid over the process default.
 
     **`surface` governs surfacing only, never recording.** A graph with it off
     still journals every operation that went ahead against an objecting
-    advisory, so `review(mode="advisory")` keeps answering *what was decided
+    warning, so `review(mode="warning")` keeps answering *what was decided
     while nobody was looking* — which is exactly when that question is worth
     asking. Label it for what it does; it is not "turn off warnings".
 
@@ -3866,11 +3869,11 @@ async def configure_warnings(
     parsed: dict[AdvisoryKind, AdvisoryAction] = {}
     for kind, action in (actions or {}).items():
         if kind not in kinds:
-            raise ValueError(f"'{kind}' is not an advisory kind. Known kinds: {', '.join(kinds)}.")
+            raise ValueError(f"'{kind}' is not a warning kind. Known kinds: {', '.join(kinds)}.")
         if action not in allowed:
             raise ValueError(
                 f"'{action}' is not an action for '{kind}'. Available: "
-                f"{', '.join(allowed)}. 'reject' does not exist — an advisory "
+                f"{', '.join(allowed)}. 'reject' does not exist: a warning "
                 f"reaches the agent before it decides, so there is nothing here "
                 f"that refuses on one."
             )
@@ -4229,7 +4232,7 @@ async def reflect(
         ]
 
     # 5c-ii. Near-identical active inferences resting on a shared premise, each
-    #     carrying its advisory. **Scoped to shared evidence rather than swept
+    #     carrying its warning. **Scoped to shared evidence rather than swept
     #     globally**: a fact merge collects duplicate inferences onto one
     #     survivor, which is the population worth reviewing and the only one
     #     that exists — a global sweep over all inference pairs was measured at
@@ -4404,7 +4407,7 @@ async def reflect(
     # and a kind named `flag` outranks the mute, which `is_surfaced` decides for
     # every caller. Every warning is published all the same, muted ones
     # included, with `surfaced` carrying the difference
-    # (`ADVISORIES_DASHBOARD.md` §2.2).
+    # (`WARNINGS_DASHBOARD.md` §2.2).
     policy = await advisory_policy(
         storage, warning_policy if warning_policy is not None else WarningPolicy()
     )
@@ -4993,7 +4996,7 @@ async def apply_reflection(
         source_ids: list[str] = merge_spec["source_ids"]
         content = merge_spec["content"]
 
-        sources: list[EpistemicNode] = []
+        sources: list[Topic] = []
         for sid in source_ids:
             node = await storage.get_node(sid)
             if isinstance(node, Topic):
@@ -5045,15 +5048,24 @@ async def apply_reflection(
         # reset both value clocks, leaving merged nodes permanently exempt from
         # archival nomination.
         merged_value = merged_value_signal([s.value for s in sources])
+        # Shared for the same reason, and added for the same reason: this
+        # rebuild named `content` and the value and nothing else, so a merge
+        # was the one operation holding two descriptions and keeping neither.
+        description = merged_description(sources, judge=judge)
         merged_topic = Topic(
             content=content,
             source_id=sources[0].source_id,
+            description=description.description,
+            description_reviewed_at=description.description_reviewed_at,
             value=merged_value,
             # Merging names yields a name, so the survivor of an all-tag merge
             # is a tag: `created_from_tag` must still recognise it next time.
             extraction_method=TAG_EXTRACTION_METHOD if merging_tags else "agent:merge",
             judged_by=judge,
-            metadata={"merged_from": source_ids},
+            metadata={
+                "merged_from": source_ids,
+                **({"description_history": description.history} if description.history else {}),
+            },
         )
         await merge_nodes(sources, merged_topic, storage, embedding_provider, judge=judge)
         await journal(
@@ -5661,6 +5673,12 @@ async def review(
     if refusal is not None:
         return {"refused": refusal, "modes": list(REVIEW_MODES)}, ResponseMeta()
 
+    # A name this release still answers to is run under the name it now has,
+    # and the caller is told once. Refusing the old spelling would break every
+    # agent that learned it; accepting it silently would keep teaching it.
+    note = rename_note(mode)
+    mode = canonical_mode(mode)
+
     # One scan, narrowed by whatever the caller supplied. `unreviewed` is the
     # only mode that is not a field filter, so it is applied below against a
     # reviewed-set covering the **whole** selection rather than the page: a
@@ -5798,6 +5816,12 @@ async def review(
             "unreadable": [name for name in others if name not in counts],
         },
     }
+
+    if note is not None:
+        # Above `judge`, and unconditional on anything the caller asked about:
+        # what it says is that this call was not spelled the way the schema
+        # spells it, which is true whatever else was passed.
+        result["note"] = note
 
     if agent_id is not None:
         # What the handle turned out to name. A handle that resolves to
@@ -8241,8 +8265,9 @@ class ApprovalOutcome(BaseModel):
 # `ApprovalOutcome`.
 ApproveId = Callable[[str, str], Awaitable[ApprovalOutcome]]
 
-# Asks the user to confirm a *new self-description* for an id they have already
-# admitted. Separate from `ApproveId` because the two questions have different
+# Asks the user to confirm a *new self-description* for a judge they have
+# already admitted, named by the name they know it by rather than by its key.
+# Separate from `ApproveId` because the two questions have different
 # consequences: an unanswered id question refuses the claim, an unanswered
 # description question records the version unconfirmed, which is a real
 # epistemic object rather than a failure (§2.4).
@@ -8345,6 +8370,11 @@ _ROSTER_LINE_BUDGET = 88
 # would be a string somebody could legitimately be called.
 JUDGE_CHOICE_PREFIX = "use:"
 NEW_JUDGE_CHOICE = "new:"
+# Take the name the agent proposed, offered on every picker where that name
+# does not already belong to a judge on the list. It is a choice rather than an
+# empty text box because a client that renders free text as a required field
+# gives the user no way to say *that one*.
+PROPOSED_JUDGE_CHOICE = "proposed:"
 RENAME_JUDGE_CHOICE = "rename:"
 RETIRED_JUDGE_CHOICE = "retired:"
 

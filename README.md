@@ -166,7 +166,9 @@ Tools exposed via the Model Context Protocol (Claude Code prefixes each as
 - **Metacontexts**: `create_metacontext`, `get_metacontexts`
 - **Graph management**: `list_graphs`, `use_graph`, `delete_graph`, `backup_graph`, `configure_backup`
 - **Agents**: `claim_agent` says which judge you are. The user picks the
-  judge, and can rename it later without disturbing any decision
+  judge, and can rename it later without disturbing any decision. The claim
+  returns a `judge_token` to pass on every write, so two agents sharing one
+  connection each keep their own judge
 - **Review**: `review` lists the decisions this graph has recorded, least
   certain first; `apply_review` records that you checked one, and whether you
   agree; `rejudge` revises a judgment made at ingest without touching the

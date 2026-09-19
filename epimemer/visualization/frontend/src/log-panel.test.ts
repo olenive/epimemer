@@ -4,7 +4,7 @@
  *
  * The rest of the rail is covered by `log-store.test.ts`, which owns the
  * entries and the filters. What needs a DOM is the three things
- * `ADVISORIES_DASHBOARD.md` §4 asks for: the row text, the dimmer draw for a
+ * `WARNINGS_DASHBOARD.md` §4 asks for: the row text, the dimmer draw for a
  * warning the agent never saw, and the click that highlights its subjects.
  */
 

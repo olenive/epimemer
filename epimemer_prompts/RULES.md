@@ -14,6 +14,10 @@ hold on every call:
 - Claim a judge with `claim_agent` once per session before writing, and again
   after `use_graph` or a reconnect. Use whatever judge the user hands back. A
   refusal here goes to the user, never worked around.
+- Carry the `judge_token` your claim returns as `judge_token` on every write.
+  Several agents can share one connection, a subagent beside the agent that
+  spawned it, and each claims its own judge and carries its own token; a write
+  without one is credited to the most recent claim on the connection.
 - Every `store_decomposition` names its metacontext (`metacontext_id`):
   `the-real` for real-world claims, one metacontext per call, so a mixed
   document is two calls.

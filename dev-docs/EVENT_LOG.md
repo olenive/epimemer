@@ -455,7 +455,7 @@ holds the check that no timeline verb was added to `ActionVerb`.
 A warning is computed inside a tool call, before or after the write, from what
 the call was about. It used to reach the agent and stop there: the log showed
 the act and nothing of what the agent was told about it. `advisory_raised` puts
-it in the same log, one event per warning, and `ADVISORIES_DASHBOARD.md` holds
+it in the same log, one event per warning, and `WARNINGS_DASHBOARD.md` holds
 the design.
 
 ```python

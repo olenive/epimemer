@@ -12,7 +12,7 @@
  *
  * A warning is a line in the story of a session beside the act it accompanied,
  * which is why it is a row here rather than a panel of its own
- * (ADVISORIES_DASHBOARD.md §2.3). It carries a `warned` verb, so the chip row
+ * (WARNINGS_DASHBOARD.md §2.3). It carries a `warned` verb, so the chip row
  * can show warnings alone or leave them out with no special case.
  */
 

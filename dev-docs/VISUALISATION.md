@@ -121,9 +121,9 @@ class RpcResponse(BaseModel):  # session → hub
   `last_event_at`.
 - `GET /api/graphs?session=<id>`: RPC `list_graphs` to that session.
 - `GET /api/warnings?session=<id>`: RPC `warnings`, answering what that
-  session's active graph does about advisories in `configure_warnings`'s own
+  session's active graph does about warnings in `configure_warnings`'s own
   response shape. A read, and the panel behind it is read-only
-  (`ADVISORIES_DASHBOARD.md` §2.4).
+  (`WARNINGS_DASHBOARD.md` §2.4).
 - `GET /api/snapshot?session=<id>&graph=<g>`: RPC `snapshot`, shape
   `{"graph", "nodes", "edges", "timelines", "metacontexts",
   "relation_labels"}`.
@@ -250,11 +250,11 @@ graph": the tool names the session to select in the UI dropdown.
   nothing until the next store.
 - A `warnings` button beside the badge opens a small read-only panel
   (`warning-settings.ts`) titled *Warnings on <graph>*: the mute in words, then
-  one row per advisory kind with the action in force and whether that answer is
+  one row per warning kind with the action in force and whether that answer is
   inherited from the process default or set on this graph. It re-reads on
   `graph_switched` for the watched session, as the badge does. Nothing on the
   dashboard writes a setting, because a write from the browser would be the
-  first write into a graph with no author (`ADVISORIES_DASHBOARD.md` §2.4).
+  first write into a graph with no author (`WARNINGS_DASHBOARD.md` §2.4).
 - `log-panel.ts` reads two coarse streams: acts, and the warnings a tool
   computed. A warning is a row with the verb `warned`, marked in the `pending`
   hue, dimmed with *not shown to the agent* in its tooltip when the agent's

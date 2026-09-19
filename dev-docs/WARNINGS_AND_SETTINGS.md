@@ -1,14 +1,21 @@
-# Advisories, warning settings, and inference merge
+# Warnings, their settings, and inference merge
 
-An advisory is a typed message a tool attaches to its response when the graph
+A warning is a typed message a tool attaches to its response when the graph
 can compute something the agent cannot: that two premises never held together,
 that a contradiction was recorded across metacontexts, and so on. A warning policy,
-per process with per-graph overrides, decides which advisories are surfaced and
+per process with per-graph overrides, decides which warnings are surfaced and
 whether they ask for a person. This document holds the reasoning behind that
 design. The mechanics live in code and are not repeated here:
 `epimemer/core/advisories.py` for the shape and vocabulary,
 `epimemer/pipelines/reflection/inference_dedup.py` for the merge gate and
 nomination, `epimemer/storage/protocol.py` for how a per-graph setting resolves.
+
+**The word is warning everywhere a person or an agent reads it.** Inside Python
+the class is called `Advisory`, because `Warning` is a builtin and a model
+shadowing it makes every module importing both read ambiguously, and the module
+is `core/advisories.py` for the same reason. That is the whole of the
+translation: the wire, the docs, the tool descriptions and the review mode all
+say warning.
 
 ---
 
@@ -22,13 +29,12 @@ nomination, `epimemer/storage/protocol.py` for how a per-graph setting resolves.
 | `configure_warnings` | `mcp/tools.py`, `mcp/server.py` |
 | `merge_inferences(source_ids, content)` | `mcp/tools.py` |
 | `inference_merge_candidates` | a `reflect` phase, in `REFLECT_PHASES` |
-| `DecisionKind.PROCEEDED_DESPITE_ADVISORY` | `core/types.py` |
-| `review(mode="advisory")` | `pipelines/review/modes.py` |
+| `DecisionKind.PROCEEDED_DESPITE_WARNING` | `core/types.py` |
+| `review(mode="warning")` | `pipelines/review/modes.py` |
 
-The response keys `warning` and `notify_user` predate advisories and keep
-their meaning: `warning` is the
-first surfaced advisory's message, and `notify_user` is true when any surfaced
-advisory resolves to `flag`. Both are documented in the agent guidance and in
+The response keys `warning` and `notify_user` predate the policy and keep
+their meaning: `warning` is the first surfaced warning's message, and
+`notify_user` is true when any surfaced warning resolves to `flag`. Both are documented in the agent guidance and in
 `INTEGRATION.md`, so their meaning is fixed even though what produces them is
 now a policy.
 
@@ -60,7 +66,7 @@ is the shape of thing a warning addresses and a rule does not:
 - Warning before hands the agent the one thing it cannot compute for itself, at
   the moment it is choosing what to write.
 
-The advisory therefore rides along with the nomination as well as the response.
+The warning therefore rides along with the nomination as well as the response.
 It is computable from the graph before anything is proposed, so a second round
 trip to deliver it would be latency bought for nothing.
 
@@ -92,8 +98,8 @@ judged prose with a history trail, and what the agent needs to know is that the
 words it wrote are not the words the graph now holds. Replacing one goes
 through `apply_reflection`, where the wording it replaced is kept.
 
-The stance decides the journal row. `proceeded_despite_advisory` is written only
-where an advisory objects, because *despite* means something argued against the
+The stance decides the journal row. `proceeded_despite_warning` is written only
+where a warning objects, because *despite* means something argued against the
 call. Without the split, a correct same-metacontext contradiction would write a row
 claiming the agent had overridden advice it never received, doubling the journal
 on the commonest path and degrading the review the kind exists for. Two
@@ -108,7 +114,7 @@ exists to prevent. A test asserts both directions.
 
 ## 4. Policy decisions and their reasons
 
-**`proceed` is the default, and `reject` does not exist.** The advisory reaches
+**`proceed` is the default, and `reject` does not exist.** The warning reaches
 the agent before it decides; an agent that has been told why the merge is
 questionable and has written its content accordingly is not a caller who needs
 stopping. `reject` is not reserved-but-unimplemented either: a value nothing can
@@ -139,7 +145,7 @@ silenced. Withdrawing a named escalation means setting that kind to `proceed`.
 Without this rule, `notify_user: true` could arrive with no text to relay.
 
 **The mute governs every path that shows the agent a warning.** `reflect`
-attaches its advisory to a merge candidate rather than to a finished operation,
+attaches its warning to a merge candidate rather than to a finished operation,
 and for a while that was the one path the policy never reached, so a muted graph
 could answer *no warnings* from `record_contradiction` and *here is a warning*
 from `reflect` on the same run. It resolves the policy now and strips a muted
@@ -164,10 +170,10 @@ with one.
 **One review machine, not two.** Review state lives on `DecisionRecord` only,
 and it is derived: a record is reviewed when another record points back at it.
 A separate typed note list on the node, with its own `reviewed_at`, was
-rejected because an agent proceeding past an advisory would have written to
+rejected because an agent proceeding past a warning would have written to
 both, and two *what has nobody looked at* scans is two shapes for one question.
 
-**One journal row per operation, not per advisory.** The agent made one
+**One journal row per operation, not per warning.** The agent made one
 decision; splitting it invites acting on it several times. The kinds and their
 messages go in `certainty_basis`, which review already renders, so the reviewer
 sees what the decider was told without a second store to keep in step.
@@ -191,14 +197,14 @@ bar: p99 similarity sat between 0.44 and 0.55. The reasoning is in
 
 ## 5. On the dashboard, and what is still not built
 
-**Advisories reach the dashboard.** A warning is published as its own event,
+**Warnings reach the dashboard.** A warning is published as its own event,
 `advisory_raised`, from the tool layer rather than from the storage wrapper,
 and becomes a `warned` row in the live log beside the act it accompanied. Every
 warning a call computed is published, muted or not, with `surfaced` saying
 whether the agent's response carried it: the dashboard is where a person looks
 at what the agent was *not* told. The settings panel beside it is read-only, and
 that is a decision rather than a phase, because a write from the browser would
-be the first write into a graph with no author. `ADVISORIES_DASHBOARD.md` holds
+be the first write into a graph with no author. `WARNINGS_DASHBOARD.md` holds
 the design and `EVENT_LOG.md` §12 the event.
 
 **Similar-inference edges** are still not built, and are in
@@ -210,7 +216,7 @@ change to a number callers read.
 
 ## 6. One question left open
 
-**Should a fact merge against an advisory be possible at all?** `merge_facts`
+**Should a fact merge against a warning be possible at all?** `merge_facts`
 refuses rather than warns in every case, and nothing about it produces an
-advisory. The facility is general and the question is whether any of those
+warning. The facility is general and the question is whether any of those
 refusals is really a warning wearing the wrong clothes. Nobody has needed it.

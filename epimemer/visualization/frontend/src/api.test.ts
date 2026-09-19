@@ -123,7 +123,7 @@ describe("fetchSnapshot", () => {
 });
 
 describe("fetchWarningSettings", () => {
-  it("asks the session for the graph's advisory policy", async () => {
+  it("asks the session for the graph's warning policy", async () => {
     respondWith({
       graph: "memory",
       surface: true,

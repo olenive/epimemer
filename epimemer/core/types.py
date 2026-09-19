@@ -1016,6 +1016,76 @@ class Topic(BaseModel):
     created_at: datetime = Field(default_factory=_now)
 
 
+class MergedDescription(BaseModel):
+    """The description fields the survivor of a topic merge carries.
+
+    Three fields written together because they are one decision: which wording
+    leads, when somebody last stood behind that wording, and what the survivor
+    keeps of the wordings it did not lead with. Splitting them across three
+    expressions at the call site is how a rebuild comes to carry a description
+    without the moment it was reviewed.
+    """
+
+    description: str = ""
+    description_reviewed_at: datetime | None = None
+    # Entries shaped exactly as `described()` writes them, so one topic's trail
+    # reads the same however the wording got displaced.
+    history: list[dict] = Field(default_factory=list)
+
+
+def merged_description(
+    sources: Sequence[Topic], *, judge: JudgeRef | None = None
+) -> MergedDescription:
+    """Which wording a merged topic leads with, and what it keeps of the rest.
+
+    Beside `merged_value_signal` and by the same argument: a merge builds a
+    *fresh* node, so every field it forgets to name resets, and the description
+    is the field that was forgotten. Both merge sites reach for this rather than
+    spelling the rule twice.
+
+    **Confidence picks the leading wording**, the same rule that picks the
+    primary content: the survivor's `value.confidence` is the highest of its
+    sources', so leading with any other source's prose would claim a strength
+    for wording the node no longer leads with. An unrated source reads as the
+    default rather than losing outright, because this is a choice between two
+    pieces of text and one of them has to lead. **A tie goes to the source named
+    first in `source_ids`**, which is the rule `source_id` already follows at
+    the merge site.
+
+    **Every other non-empty description is kept**, in the order its source was
+    named, in the append-only trail enrichment writes. A source with no
+    description contributes nothing: an empty description means *undescribed*,
+    which is a state rather than a wording, and recording it as a replacement
+    would put an empty string in the trail.
+
+    **`description_reviewed_at` travels with the wording it stamps.** Merging is
+    not reviewing: nobody re-read this prose against the material the merge
+    brought under it, so the moment somebody last stood behind it is the moment
+    that still holds, and reflect measures the next change from there. Stamping
+    the merge's own moment would claim a reading nobody did and exempt the
+    survivor from the next nomination.
+    """
+    described = [source for source in sources if source.description]
+    if not described:
+        return MergedDescription()
+    leading = max(
+        range(len(described)),
+        key=lambda i: rated_confidence(described[i].value.confidence),
+    )
+    return MergedDescription(
+        description=described[leading].description,
+        description_reviewed_at=described[leading].description_reviewed_at,
+        history=[
+            {
+                "replaced": source.description,
+                "judged_by": judge.model_dump(mode="json") if judge else None,
+            }
+            for i, source in enumerate(described)
+            if i != leading
+        ],
+    )
+
+
 class Fact(BaseModel):
     """Atomic, verifiable, grounded statement.
 
@@ -2427,6 +2497,20 @@ def judge_is_unused(usage: JudgeUsage) -> bool:
 # --- The decision journal (REVIEW_MODE.md §4) ---
 
 
+# What a stored kind used to be called, and what it is called now. Read by
+# `DecisionKind._missing_`, so every reader of stored data normalises without
+# knowing this is here: a bundle exported before a rename, a SurrealDB graph
+# that has not been reopened since, and the in-memory store, which keeps no
+# version marker to migrate against.
+#
+# The SurrealDB migration rewrites the stored string too, so a graph stops
+# depending on this the first time it is opened. This stays because a bundle is
+# a file, and a file on somebody's disk is never migrated.
+RETIRED_DECISION_KINDS: dict[str, str] = {
+    "proceeded_despite_advisory": "proceeded_despite_warning",
+}
+
+
 class DecisionKind(str, Enum):
     """What sort of judgment a journal row records.
 
@@ -2571,15 +2655,18 @@ class DecisionKind(str, Enum):
     RELATION_VERDICT = "relation_verdict"
     IMPORTANCE = "importance"
 
-    # An operation that completed while carrying an advisory — the record that
+    # An operation that completed while carrying a warning: the record that
     # makes proceeding past one cost something. Its own kind rather than a flag
     # on the decision it accompanies, because review *selects* on kind and
     # *what was decided against advice* is the question this exists to answer.
     #
-    # One row per operation rather than per advisory: the agent made one
+    # One row per operation rather than per warning: the agent made one
     # decision, and splitting it invites acting on it several times. The kinds
     # it carried are in `certainty_basis`, which is the row's own prose.
-    PROCEEDED_DESPITE_ADVISORY = "proceeded_despite_advisory"
+    #
+    # The Python class behind it is `Advisory`, since `Warning` is a builtin;
+    # `dev-docs/WARNINGS_AND_SETTINGS.md` records that translation.
+    PROCEEDED_DESPITE_WARNING = "proceeded_despite_warning"
 
     # One declaration sweep: a user stating, through the CLI, which metacontext the
     # nodes of a graph that predate the requirement were always in. One row per
@@ -2622,6 +2709,19 @@ class DecisionKind(str, Enum):
     # Nothing here retires a node, moves a value or takes back a claim: what it
     # takes back is a silence.
     REOPENED = "reopened"
+
+    @classmethod
+    def _missing_(cls, value: object) -> DecisionKind | None:
+        """Read a kind stored under a name this vocabulary has since retired.
+
+        The one home for it, reached by every reader that parses a stored row,
+        so a bundle written last month and a graph opened for the first time
+        this morning agree about what a row says. Anything not in
+        `RETIRED_DECISION_KINDS` is still an error, which is what keeps this
+        from swallowing a typo.
+        """
+        renamed = RETIRED_DECISION_KINDS.get(value) if isinstance(value, str) else None
+        return cls(renamed) if renamed is not None else None
 
 
 class DecisionRecord(BaseModel):

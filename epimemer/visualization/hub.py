@@ -66,7 +66,7 @@ ACTION_EVENT_TYPE = "graph_action_recorded"
 # The warnings the log reads, in the same ring as the acts and never a second
 # one. Replay has to reproduce arrival order, and two rings replayed one after
 # the other would put every warning after every act
-# (`ADVISORIES_DASHBOARD.md` §3).
+# (`WARNINGS_DASHBOARD.md` §3).
 ADVISORY_EVENT_TYPE = "advisory_raised"
 
 # Retrieval records, mirrored here so the selector, focus mode and the Response
@@ -406,7 +406,7 @@ def create_hub_app() -> Starlette:
         Read-only, and the dashboard's panel is too: a write from the browser
         would be the first write into a graph with no author, and every change
         today is journalled against a session and a judge
-        (`ADVISORIES_DASHBOARD.md` §2.4).
+        (`WARNINGS_DASHBOARD.md` §2.4).
         """
         session_id = request.query_params.get("session")
         if not session_id:

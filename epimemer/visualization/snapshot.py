@@ -93,7 +93,7 @@ async def warning_settings_result(storage: StorageBackend, default: WarningPolic
     A read and nothing else. The dashboard's panel shows these settings and
     never changes one: a write from the browser would be the first write into a
     graph with no author, and every change today is journalled against a session
-    and a judge (`ADVISORIES_DASHBOARD.md` §2.4).
+    and a judge (`WARNINGS_DASHBOARD.md` §2.4).
 
     It describes the **active** graph, as the reflection pressure above does,
     because the overrides are read through the session's own connection, which

@@ -91,7 +91,7 @@ async def test_client_registers_forwards_event_and_answers_rpc():
 
 
 async def test_the_warnings_rpc_answers_without_writing_anything():
-    """`ADVISORIES_DASHBOARD.md` §5: the panel is read-only, so this returns the
+    """`WARNINGS_DASHBOARD.md` §5: the panel is read-only, so this returns the
     settings `configure_warnings` reports and touches nothing.
 
     The process default travels as a value, the way every other setting does,

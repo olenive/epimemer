@@ -246,7 +246,7 @@ other is being stored.
 `merge_inferences` collapses two derivations into one node resting on the
 **union** of their premises. So the same question, do these premises fall
 clear of each other, can be asked of a survivor that does not exist yet, and
-it is: `inference_merge_candidates` carries the answer as an advisory, and so
+it is: `inference_merge_candidates` carries the answer as a warning, and so
 does the merge's own response.
 
 The two are one computation with one implementation, and the reason for
@@ -255,7 +255,7 @@ the merge lands, the `derived_from` edges have migrated and nothing
 distinguishes *these premises arrived from two inferences* from *this one
 was drawn on both*.
 
-It is an advisory rather than a refusal because the honest response is
+It is a warning rather than a refusal because the honest response is
 usually to narrow the merged claim's wording or period, which the agent does
 by writing content. Refusing would block a merge it could have fixed.
 

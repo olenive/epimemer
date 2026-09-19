@@ -292,7 +292,7 @@ against (§4.2).
 - **Notify on genuine same-metacontext contradictions**: "new fact conflicts with
   existing fact X in the same context; how should I resolve it?" Cross-metacontext
   "conflicts" do not interrupt the user; at most a quiet "stated in Y". The
-  advisory policy (`WARNINGS_AND_SETTINGS.md`) is what makes this a setting a
+  warning policy (`WARNINGS_AND_SETTINGS.md`) is what makes this a setting a
   graph can change rather than a hard-coding.
 - **Metacontext-crossing consultation**: when a metacontext-scoped answer looks thin or
   an associated metacontext may be relevant, the agent proposes consulting it and

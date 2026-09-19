@@ -1,6 +1,6 @@
 """A warning reaches the dashboard, whether or not the agent was shown it.
 
-`ADVISORIES_DASHBOARD.md` §2.2: the dashboard is where a person looks at what
+`WARNINGS_DASHBOARD.md` §2.2: the dashboard is where a person looks at what
 the agent was *not* told, so a muted graph publishes its warnings all the same
 and `surfaced` says the agent never saw them. That matches the journal, which
 already records regardless of the mute.

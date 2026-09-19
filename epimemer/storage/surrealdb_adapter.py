@@ -394,7 +394,7 @@ def _upsert(table: str, *, data: str = "data", uid: str = "uid") -> str:
 # is deletable once no graph older than the release that added it is expected to
 # be opened.
 _SCHEMA_VERSION_RECORD = "schema_version:current"
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 _SCHEMA_VERSION_GET = f"SELECT VALUE version FROM {_SCHEMA_VERSION_RECORD};"
 _SCHEMA_VERSION_SET = f"UPSERT {_SCHEMA_VERSION_RECORD} SET version = $version;"
@@ -638,6 +638,19 @@ async def _move_reassignment_trails(query: Callable[..., Awaitable[Any]]) -> int
     return moved
 
 
+# Version 6: the note a tool attaches to a call is called a warning on every
+# surface an agent or a person reads, and `proceeded_despite_advisory` was the
+# last stored string still spelling it the other way. A row left under the old
+# kind drops out of `review` and out of `query_decisions`, so a graph where
+# something was decided against advice would answer that nothing was.
+#
+# One way, like the rename before it: 0.2.5 has no step that puts it back.
+_RENAME_PROCEEDED_KIND = (
+    "UPDATE decision SET kind = 'proceeded_despite_warning' "
+    "WHERE kind = 'proceeded_despite_advisory' RETURN VALUE uid;"
+)
+
+
 async def _migrate_schema(
     query: Callable[..., Awaitable[Any]], database: str, storage: StorageBackend
 ) -> None:
@@ -731,6 +744,15 @@ async def _migrate_schema(
                 database,
                 len(stamped.topic_ids),
                 stamped.edges_written,
+            )
+
+    if version < 6:
+        proceeded = await query(_RENAME_PROCEEDED_KIND)
+        if proceeded:
+            logger.info(
+                "graph %s: renamed %d journal rows to the proceeded_despite_warning kind",
+                database,
+                len(proceeded),
             )
 
     await query(_SCHEMA_VERSION_SET, {"version": _SCHEMA_VERSION})

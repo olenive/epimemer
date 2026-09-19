@@ -95,7 +95,7 @@ means. §2.3 and §6 say what still has to be measured before acting on that.
 ```python
 class Topic(BaseModel):
     content: str  # the name; the join key
-    description: str = ""  # advisory prose; empty means undescribed
+    description: str = ""  # guidance; empty means undescribed
 ```
 
 Two precedents in the same file: `Metacontext.content` with
@@ -190,7 +190,7 @@ it does today.
 
 **In place, rather than a new version.** `Topic.judged_by` is fixed at creation
 and never edited, because a new wording is a new node. That rule is about the
-claim. A description is advisory prose about a name that has not changed, and
+claim. A description is guidance about a name that has not changed, and
 `describe_relation` already set the precedent for prose: it replaces the text
 and journals a second row; the first row is not edited, and the record's
 `judged_by` never moves.

@@ -179,7 +179,7 @@ async def test_an_embedded_graph_stamps_its_tags_on_open(embedded_url):
     # says nothing about: a name used from nowhere.
     assert await reopened.count_nodes_without_metacontext() == 1
     stored = await reopened.db.query("SELECT VALUE version FROM schema_version:current")
-    assert int(stored[0]) == 5
+    assert int(stored[0]) == 6
     await reopened.close()
 
     # A second open changes nothing: the marker stops the step running, and it

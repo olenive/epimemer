@@ -1,7 +1,7 @@
 /**
- * What this graph does about advisories, shown and never changed.
+ * What this graph does about warnings, shown and never changed.
  *
- * Read-only on purpose (ADVISORIES_DASHBOARD.md §2.4). A write from the browser
+ * Read-only on purpose (WARNINGS_DASHBOARD.md §2.4). A write from the browser
  * would be the first write into a graph with no author: every change today is
  * journalled against a session and a judge, and a browser has neither. That
  * identity question is parked under "Sharing a graph between users" in

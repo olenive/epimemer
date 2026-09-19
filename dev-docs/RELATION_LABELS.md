@@ -79,7 +79,7 @@ class RelationLabel(BaseModel):
     # its string; edges are not re-pointed at ids (§9).
     name: str
     kind: Literal["relationship", "attribution"] = "relationship"
-    # Advisory prose an agent reads before coining (§3). Empty means
+    # Guidance an agent reads before coining (§3). Empty means
     # undescribed, which is a true and useful state.
     description: str = ""
     # The coiner, and never the describer. A later agent may describe this
@@ -180,7 +180,7 @@ one per edge, because it must survive a rename that touched zero edges.
 
 ## 3. Descriptions
 
-### 3.1 Advisory prose, not a schema
+### 3.1 Guidance, not a schema
 
 One description per label per graph, because the same words mean different
 things in different graphs. It will not partition the servant case from the

@@ -216,7 +216,7 @@ describe("verbLabel", () => {
   });
 });
 
-// ADVISORIES_DASHBOARD.md §4: a warning is a line in the story of a session,
+// WARNINGS_DASHBOARD.md §4: a warning is a line in the story of a session,
 // beside the act it accompanied, so it becomes an entry in the same log.
 const advisory = (over: Partial<AdvisoryRaised> = {}): AdvisoryRaised =>
   ({

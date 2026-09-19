@@ -559,7 +559,7 @@ class AdvisoryRaised(Event):
     `RetrievalRecorded` is. A warning is computed one layer above storage, a
     single call can produce several acts so there is no one act to hang it on,
     and `reflect` produces warnings with no act at all
-    (`ADVISORIES_DASHBOARD.md` §2.1).
+    (`WARNINGS_DASHBOARD.md` §2.1).
 
     **Everything computed is published, muted or not.** The dashboard is where a
     person looks at what the agent was *not* told, so hiding a muted warning

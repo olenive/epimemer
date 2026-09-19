@@ -1,4 +1,4 @@
-# Advisories on the dashboard
+# Warnings on the dashboard
 
 **Status: built**, 2026-09-18. The event, the warning rows in the log and the
 read-only settings panel are all in the code; §7 names the documents that
@@ -17,7 +17,7 @@ that provably never overlapped in time, a contradiction recorded across
 metacontexts, a variant recorded inside one metacontext, a contradiction
 recorded inside one metacontext, and a tag description that was supplied but
 kept as the graph already had it. The tool returns the warning to the agent,
-journals a "proceeded despite advisory" row when the warning objects to the
+journals a "proceeded despite warning" row when the warning objects to the
 call, and that is where it stops. The dashboard shows the act (the write) and
 nothing of the warning.
 

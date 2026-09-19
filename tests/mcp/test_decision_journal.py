@@ -843,7 +843,7 @@ class TestNoKindGoesUnwritten:
         has a writer, so it is a member rather than a paragraph.
         """
         assert "relation_merge" in DecisionKind.__doc__
-        assert "proceeded_despite_advisory" not in DecisionKind.__doc__
+        assert "proceeded_despite_warning" not in DecisionKind.__doc__
 
 
 class TestAFailedJournalWriteDoesNotUndoTheDecision:

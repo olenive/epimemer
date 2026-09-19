@@ -51,6 +51,9 @@ async def _test_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         "viz_session": None,
         "viz_hub_url": None,
         "retrievals": new_record_log(),
+        # The real lifespan reads this off the installed package; every judge
+        # prompt opens with it.
+        "version": "9.9.9",
     }
 
 

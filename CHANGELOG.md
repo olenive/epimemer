@@ -4,6 +4,49 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.6] — 2026-09-19
+
+**One word for what a tool tells you before you decide: a warning.** The same
+note was called a warning in some places and an advisory in others, so an agent
+reading the guide and an agent reading a response were learning two names for
+one thing, and a person reading the dashboard was reading a third. It is a
+warning everywhere any of them looks: in a response, in the journal, in the
+guide, in the tool descriptions, in the review modes and on the dashboard.
+
+- The journal kind `proceeded_despite_advisory` is now
+  `proceeded_despite_warning`. A graph already holding rows under the old name
+  rewrites them the first time this version opens it, so there is nothing to
+  migrate by hand and nothing drops out of `review`. A bundle exported before
+  the rename imports as it stands: the old name is read and stored under the
+  new one.
+- `review(mode="advisory")` is now `review(mode="warning")`. The old spelling
+  still selects the same decisions for this release and the answer says the
+  name moved, so an agent that learned it keeps working rather than being
+  refused. It goes in the next release.
+- Inside Python the class is still `Advisory`, because `Warning` is a builtin
+  and a model shadowing it makes every module importing both read ambiguously.
+  `dev-docs/WARNINGS_AND_SETTINGS.md` is the one place that says so, and
+  `dev-docs/ADVISORIES_DASHBOARD.md` is now `dev-docs/WARNINGS_DASHBOARD.md`.
+
+- A topic merge keeps the best-supported description on the survivor and the
+  others in its history; before, both were dropped.
+- `claim_agent` returns a `judge_token`, and a write that carries it as
+  `judge_token` is credited to that claim's judge. Several agents sharing one
+  MCP connection, a subagent beside the agent that spawned it, no longer
+  overwrite each other's judge. A write without a token is credited to the most
+  recent claim, as before; a token the connection never issued is refused.
+- The judge picker opens with the name the agent proposes and says when the
+  connection already judges as someone, so a subagent's claim is told apart
+  from its parent's. A proposal given as a key is shown by its name: an agent
+  passing back the key its last claim handed it used to put a bare UUID in
+  front of the user, who then picked the wrong judge. The proposed name is
+  offered as new only while no judge on the list already holds it, so nobody is
+  invited to mint a second record under a name that is taken.
+- Every judge prompt opens with the Epimemer version, and every judge picker
+  offers the proposed name as a choice of its own. Before, taking that name
+  meant retyping it: the prompt behind *a new judge* said Accept would use it
+  while the client drew the field as required.
+
 ## [0.2.5] — 2026-09-18
 
 **A wrong decline is no longer permanent: `reopen` puts the question back.**

@@ -26,6 +26,7 @@ from epimemer.core.types import (
     EmbeddingRecord,
     Fact,
     Inference,
+    JudgeRef,
     Metacontext,
     NodeEdge,
     NodeStatus,
@@ -1802,8 +1803,24 @@ class TestApplyReflectionArchivals:
 
 
 class TestApplyReflectionMerge:
-    async def _store_topic(self, storage, embedding_provider, content, vector):
-        t = Topic(content=content, source_id="s1")
+    async def _store_topic(
+        self,
+        storage,
+        embedding_provider,
+        content,
+        vector,
+        *,
+        description="",
+        confidence=None,
+        description_reviewed_at=None,
+    ):
+        t = Topic(
+            content=content,
+            source_id="s1",
+            description=description,
+            description_reviewed_at=description_reviewed_at,
+            value=ValueSignal(confidence=confidence),
+        )
         await storage.store_node(t)
         await storage.store_embedding(
             EmbeddingRecord(item_id=t.id, model_id=embedding_provider.model_id, vector=vector)
@@ -1880,6 +1897,82 @@ class TestApplyReflectionMerge:
         assert merged.value.importance == pytest.approx(0.9)
         assert merged.value.importance_judged_at == judged_at
         assert merged.value.retrieved_at == retrieved_at
+
+    async def test_topic_merge_keeps_a_source_description(self, storage, embedding_provider):
+        """The one operation holding two descriptions must hand one to the survivor.
+
+        A tag merge is where a description is worth most, since the name alone
+        says nothing. A source with no description contributes nothing, so the
+        only wording in hand wins whatever the order of `source_ids`.
+        """
+        reviewed_at = datetime.now(UTC) - timedelta(days=5)
+        a = await self._store_topic(storage, embedding_provider, "visualisation", [1.0, 0.0])
+        b = await self._store_topic(
+            storage,
+            embedding_provider,
+            "visualization",
+            [1.0, 0.0],
+            description="Drawing a graph so a person can see its shape.",
+            description_reviewed_at=reviewed_at,
+        )
+
+        result, _ = await apply_reflection(
+            storage,
+            embedding_provider,
+            merges=[{"source_ids": [a.id, b.id], "content": "visualisation"}],
+            merge_similarity_threshold=0.9,
+        )
+
+        assert result["topics_merged"] == 1
+        merged = (await storage.query_nodes(node_type=NodeType.TOPIC))[0]
+        assert merged.description == "Drawing a graph so a person can see its shape."
+        # The stamp travels with the wording: the merge did not re-read it, so
+        # the moment somebody last stood behind it is the moment that holds.
+        assert merged.description_reviewed_at == reviewed_at
+        # Nothing was displaced, so there is no trail to write.
+        assert "description_history" not in merged.metadata
+
+    async def test_topic_merge_keeps_the_losing_description_in_history(
+        self, storage, embedding_provider
+    ):
+        """Confidence picks the survivor's wording, and the other is kept, not dropped.
+
+        `source_ids` names the weaker source first, so passing this needs the
+        confidences read rather than the order.
+        """
+        weaker = "A weaker reading of what this covers."
+        better = "Drawing a graph so a person can see its shape."
+        a = await self._store_topic(
+            storage,
+            embedding_provider,
+            "visualization",
+            [1.0, 0.0],
+            description=weaker,
+            confidence=0.55,
+        )
+        b = await self._store_topic(
+            storage,
+            embedding_provider,
+            "visualisation",
+            [1.0, 0.0],
+            description=better,
+            confidence=0.9,
+        )
+
+        result, _ = await apply_reflection(
+            storage,
+            embedding_provider,
+            merges=[{"source_ids": [a.id, b.id], "content": "visualisation"}],
+            merge_similarity_threshold=0.9,
+            judge=JudgeRef(agent_id="critic", digest="d1"),
+        )
+
+        assert result["topics_merged"] == 1
+        merged = (await storage.query_nodes(node_type=NodeType.TOPIC))[0]
+        assert merged.description == better
+        history = merged.metadata["description_history"]
+        assert [entry["replaced"] for entry in history] == [weaker]
+        assert history[0]["judged_by"]["agent_id"] == "critic"
 
     async def test_merge_refused_without_embeddings(self, storage, embedding_provider):
         # Similarity cannot be verified without embeddings → refuse.

@@ -5,11 +5,13 @@ query_graph, archive, restore) via the Model Context Protocol.
 """
 
 import asyncio
+import importlib.metadata
 import json
 import logging
 import os
+import secrets
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -17,7 +19,7 @@ from uuid import uuid4
 from fastmcp import Context, FastMCP
 from fastmcp.server.elicitation import AcceptedElicitation
 
-from epimemer.core.types import JudgeRef
+from epimemer.core.types import Agent, JudgeRef
 from epimemer.logging.structured import ToolInvocationLog, log_tool_call, setup_logging
 from epimemer.mcp import guidance, tools
 from epimemer.mcp.config import (
@@ -132,6 +134,17 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
     embedding_provider = create_embedding_provider(config)
 
+    # Which Epimemer the user is talking to, read once here and carried as a
+    # value like everything else in this dict. It opens every prompt that asks
+    # the user to place a judge, because a person answering that question wants
+    # to know which server put it. Running from a source tree with nothing
+    # installed has no metadata to read, and "unknown" is a truthful answer to
+    # a question that costs nothing to get wrong.
+    try:
+        version = importlib.metadata.version("epimemer")
+    except importlib.metadata.PackageNotFoundError:
+        version = "unknown"
+
     # Optional: publish visualization events to the standalone hub. This process
     # never binds the viz port itself — it dials out to the hub (auto-spawning one
     # if none is running), so stale MCP orphans become dead sessions rather than a
@@ -197,6 +210,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             "storage": storage,
             "embedding_provider": embedding_provider,
             "config": config,
+            "version": version,
             "event_bus": event_bus,
             "viz_session": viz_session,
             "viz_hub_url": viz_hub_url,
@@ -470,6 +484,7 @@ async def memory_segment(
     metadata: dict | None = None,
     segmentation_strategy: str | None = None,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Segment text and store the document. Returns segment IDs for you to decompose.
 
@@ -504,9 +519,13 @@ async def memory_segment(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -543,6 +562,7 @@ async def memory_store_decomposition(
     timeline_id: str | None = None,
     propose_timepoints: bool = True,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Store your decomposition of segments into topics, facts, and inferences.
 
@@ -713,9 +733,13 @@ async def memory_store_decomposition(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
 
@@ -941,6 +965,7 @@ async def memory_link(
     weight: float = 1.0,
     metadata: dict | None = None,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Create an edge between two existing nodes.
 
@@ -968,9 +993,13 @@ async def memory_link(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1000,6 +1029,7 @@ async def memory_update(
     because: str,
     ctx: Context,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Update a node by creating a new version (immutable history).
 
@@ -1008,6 +1038,14 @@ async def memory_update(
     correction, `temporally_followed_by` for a world-change. The second states
     temporal order rather than replacement, so a claim that becomes true again
     later does not contradict it.
+
+    Note on world-changes: the replacement's sources are its own, and this tool
+    writes content *you* authored, so a world-change resolved here can leave the
+    new node with no source at all. Prefer ingesting the document that reports
+    the change and resolving with `supersede_by` against the fact it produced.
+    Reach for `update` with "the_world_changed" when you can genuinely attribute
+    the new content; if you cannot say where it came from, that is worth
+    noticing rather than working around.
 
     Args:
         node_id: ID of the node to update.
@@ -1027,21 +1065,17 @@ async def memory_update(
             and a guessed `because` reads afterwards as a judgment someone made.
             Record a `record_contradiction` instead and leave the pair contested
             for whoever can resolve it.
-
-    Note on world-changes: the replacement's sources are its own, and this tool
-    writes content *you* authored, so a world-change resolved here can leave the
-    new node with no source at all. Prefer ingesting the document that reports
-    the change and resolving with `supersede_by` against the fact it produced.
-    Reach for `update` with "the_world_changed" when you can genuinely attribute
-    the new content; if you cannot say where it came from, that is worth
-    noticing rather than working around.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1068,6 +1102,7 @@ async def memory_supersede_by(
     because: str,
     ctx: Context,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Supersede a node by an already-existing node (resolve outdated/contradiction).
 
@@ -1078,6 +1113,11 @@ async def memory_supersede_by(
     The existing node is unchanged. Use when the current truth is already in the
     graph; use `update` when you have new content.
 
+    On "the_world_changed", the retired node keeps its own sources, tags and
+    relationships: it is still true of its period, and what its sources said
+    about it stays said about it. `existing_id` is untouched, since its
+    provenance is its own.
+
     Args:
         old_id: The node being retired.
         existing_id: The existing node that supersedes it.
@@ -1086,18 +1126,17 @@ async def memory_supersede_by(
             period, just not current). No default, and no guessing: if you
             cannot tell the two apart, `record_contradiction` and leave the pair
             contested rather than inventing a reason. See `update`.
-
-    On "the_world_changed", the retired node keeps its own sources, tags and
-    relationships — it is still true of its period, and what its sources said
-    about it stays said about it. `existing_id` is untouched: its provenance is
-    its own.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1124,6 +1163,7 @@ async def memory_judge_importance(
     ctx: Context,
     related_id: str | None = None,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Record that a node matters more — or less — than its importance says.
 
@@ -1157,9 +1197,13 @@ async def memory_judge_importance(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1259,6 +1303,7 @@ async def memory_record_contradiction(
     b_id: str,
     ctx: Context,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Record a genuine contradiction between two facts (both stay active).
 
@@ -1274,9 +1319,13 @@ async def memory_record_contradiction(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1302,6 +1351,7 @@ async def memory_record_variant(
     b_id: str,
     ctx: Context,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Record that two facts are the same proposition resolved differently per metacontext.
 
@@ -1319,9 +1369,13 @@ async def memory_record_variant(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1347,6 +1401,7 @@ async def memory_merge_facts(
     content: str,
     ctx: Context,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Collapse facts that restate one claim into a single node.
 
@@ -1387,9 +1442,13 @@ async def memory_merge_facts(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1418,6 +1477,7 @@ async def memory_merge_inferences(
     content: str,
     ctx: Context,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Collapse inferences that state one conclusion into a single node.
 
@@ -1458,9 +1518,13 @@ async def memory_merge_inferences(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1491,6 +1555,7 @@ async def memory_reverse_merge(
     survivor_id: str,
     ctx: Context,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Undo a merge: restore the merged facts and remove the survivor.
 
@@ -1524,9 +1589,13 @@ async def memory_reverse_merge(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -1599,27 +1668,27 @@ async def memory_configure_warnings(
     clear: bool = False,
     expected_graph: str | None = None,
 ) -> str:
-    """Read or change what this graph does about advisories.
+    """Read or change what this graph does about warnings.
 
     Called with no arguments it reports what is in force. Ask the user before
     changing anything here — it is policy about what the graph tells you, which
     is not the agent's call to make alone.
 
-    An advisory is what the system knows and you cannot compute: that a merge
+    A warning is what the system knows and you cannot compute: that a merge
     would rest on premises no source puts in one period, or that a pair you
     called a contradiction stands in two different metacontexts. It arrives before you
     decide, and nothing here refuses on one.
 
     Args:
-        surface: The global mute (default true). **It does not stop advisories
+        surface: The global mute (default true). **It does not stop warnings
             being recorded**: with this off, an operation that went ahead
             against one is still journalled and still shows up in
-            review(mode="advisory"). Turning it off makes the graph quiet, not
+            review(mode="warning"). Turning it off makes the graph quiet, not
             clean. A kind explicitly set to "flag" outranks it and still
             reaches you; a kind following the default does not. To silence a
             flagged kind, set that kind to "proceed".
         actions: Per-kind overrides, e.g. {"same_metacontext_contradiction":
-            "proceed"}. "proceed" surfaces the advisory; "flag" also sets
+            "proceed"}. "proceed" surfaces the warning; "flag" also sets
             notify_user, meaning you are expected to raise it with the user.
             Merged over what is already set rather than replacing it.
         clear: Return every setting to the process default.
@@ -1788,6 +1857,7 @@ async def memory_apply_reflection(
     boundaries: list[dict] | None = None,
     similarities: list[dict] | None = None,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Apply your reflection decisions to the memory graph.
 
@@ -1947,6 +2017,10 @@ async def memory_apply_reflection(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
 
     A **malformed** entry — one missing a required key, or not an object at all
     — refuses the whole call and writes nothing, listing every problem it found
@@ -1955,7 +2029,7 @@ async def memory_apply_reflection(
     entry and comes back in the matching `*_refused` list.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
 
@@ -2031,6 +2105,7 @@ async def epimemer_reopen(
     node_ids: list[str] | None = None,
     relation_labels: list[str] | None = None,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Put a question somebody already answered back in front of a judge.
 
@@ -2070,9 +2145,13 @@ async def epimemer_reopen(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else, so naming it turns
             a wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -2119,7 +2198,7 @@ async def epimemer_review(
     - `by_agent` — needs `agent_id`; check everything one judge did
     - `since` — needs `since`; add `until` for a closed window (exclusive)
     - `unreviewed` — decisions no other record points back at
-    - `advisory`: operations that went ahead against an objecting advisory
+    - `warning`: operations that went ahead against an objecting warning
 
     Ordering is two tiers and never one blended score. A decision whose agent
     declared a low `certainty` comes first; everything unrated follows, ordered
@@ -2154,7 +2233,7 @@ async def epimemer_review(
     fewer than 12 once you switch to it. Wider, never narrower.
 
     Args:
-        mode: all | by_agent | since | unreviewed | advisory.
+        mode: all | by_agent | since | unreviewed | warning.
         agent_id: Restrict to one judge. Required by mode="by_agent".
         since: ISO-8601 lower bound on when the decision was made, inclusive.
         until: ISO-8601 upper bound, exclusive.
@@ -2197,6 +2276,7 @@ async def epimemer_apply_review(
     confirmations: list[dict] | None = None,
     dissents: list[dict] | None = None,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Record that you checked decisions `review` returned, and what you concluded.
 
@@ -2236,9 +2316,13 @@ async def epimemer_apply_review(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -2270,6 +2354,7 @@ async def epimemer_rejudge(
     certainty: float | None = None,
     certainty_basis: str | None = None,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Revise a judgment you made at ingest, without changing the claim itself.
 
@@ -2310,9 +2395,13 @@ async def epimemer_rejudge(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -2347,6 +2436,7 @@ async def memory_reassign_metacontext(
     ctx: Context,
     assign: str | None = None,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Withdraw a metacontext from a node, optionally putting another in its place.
 
@@ -2375,9 +2465,13 @@ async def memory_reassign_metacontext(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -2412,6 +2506,7 @@ async def memory_correct_interval(
     because: str,
     ctx: Context,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Replace what one source is recorded as asserting about when a claim held.
 
@@ -2440,9 +2535,13 @@ async def memory_correct_interval(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -2772,10 +2871,11 @@ async def memory_describe_relation(
     ctx: Context,
     kind: str = "relationship",
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Say what one of this graph's relationship labels means here.
 
-    Advisory prose the next agent reads before coining a label, free to say "in
+    Guidance the next agent reads before coining a label, free to say "in
     the Court context this means X; for corporate contracts use Y". Nothing
     enforces it — it describes the shared label, not any one edge.
 
@@ -2792,9 +2892,13 @@ async def memory_describe_relation(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -2852,6 +2956,7 @@ async def memory_restore(
     sourced_from: str | None = None,
     validity: list[dict] | None = None,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Bring nodes back — from an archive, or when a retired claim is true again.
 
@@ -2883,9 +2988,13 @@ async def memory_restore(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -3179,6 +3288,7 @@ async def memory_order_timepoints(
     ctx: Context,
     because: str | None = None,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Record that a source says these timepoints came in this order.
 
@@ -3214,9 +3324,13 @@ async def memory_order_timepoints(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -3253,6 +3367,7 @@ async def memory_resolve_temporal_contradiction(
     constraints_to_move: list[str] | None = None,
     nodes_to_move: list[str] | None = None,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Answer a temporal contradiction: two orderings that cannot both hold.
 
@@ -3296,9 +3411,13 @@ async def memory_resolve_temporal_contradiction(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -3334,6 +3453,7 @@ async def memory_merge_timepoints(
     because: str,
     ctx: Context,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Two timepoints are one moment: fold one into the other.
 
@@ -3357,9 +3477,13 @@ async def memory_merge_timepoints(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -3396,6 +3520,7 @@ async def memory_add_recurrence(
     bounds_end: str | None = None,
     source_id: str | None = None,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Record a rule for something that happens over and over.
 
@@ -3444,9 +3569,13 @@ async def memory_add_recurrence(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -3483,6 +3612,7 @@ async def memory_end_recurrence(
     ctx: Context,
     ends_at: str | None = None,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Say when a recurrence stopped applying.
 
@@ -3507,9 +3637,13 @@ async def memory_end_recurrence(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -3544,6 +3678,7 @@ async def memory_record_recurrence_exception(
     source_id: str | None = None,
     because: str | None = None,
     expected_graph: str | None = None,
+    judge_token: str | None = None,
 ) -> str:
     """Record one occurrence that did not happen, or happened at another time.
 
@@ -3571,9 +3706,13 @@ async def memory_record_recurrence_exception(
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
             wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
     """
     deps = ctx.lifespan_context
-    judge, refused = await _judge_for_write(ctx, expected_graph)
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
     if refused is not None:
         return refused
     return await _run_with_timeout(
@@ -3928,16 +4067,17 @@ async def epimemer_list_graphs(
 JUDGE_STATE_KEY = "epimemer.judge"
 # Which identity this session has already had confirmed, per graph.
 JUDGE_CONFIRMED_STATE_KEY = "epimemer.judge_confirmed"
+# Every judge claimed on this session, keyed by the token its claim handed back.
+# One connection carries several agents: Claude Code gives a subagent the same
+# MCP connection its parent is already using, so both claim here and a single
+# binding can hold only the last of them. A token names one claim, so a write
+# that carries one is credited to the judge that claimed it rather than to
+# whoever claimed most recently.
+JUDGE_TOKENS_STATE_KEY = "epimemer.judge_tokens"
 
 
-async def _bound_judge(ctx: Context) -> JudgeRef | None:
-    """The judge bound to this session, or None if nothing has claimed one.
-
-    Session state needs a session: called outside a request context — a direct
-    invocation, or a transport that has not opened one — FastMCP raises rather
-    than returning nothing. No session is genuinely no binding, so that reads as
-    None here. It must not read as an error, or a graph switch would fail over
-    an identity feature the caller never used.
+async def _approved_judge(ctx: Context, stored: object) -> JudgeRef | None:
+    """A stored judge, re-checked against the graph this write lands in.
 
     **Approval is re-checked here, on every write.** `use_graph` checks too, and
     this is what keeps that from being a single point of failure (§10.3): a
@@ -3946,17 +4086,10 @@ async def _bound_judge(ctx: Context) -> JudgeRef | None:
     *unknown* rather than raising — recording the name would assert an approval
     that no longer exists, and refusing would be the graph-level policy talking,
     which is not this function's to hold (§3.3).
+
+    One function for both ways a write names a judge, the session binding and a
+    token, so the two cannot come to disagree about what approval means.
     """
-    try:
-        stored = await ctx.get_state(JUDGE_STATE_KEY)
-    except RuntimeError:
-        # No session to read from, so fall back to the one this process was
-        # told about (see `_bind_judge`). Reachable only where session state
-        # does not exist at all, which today means a single-client transport —
-        # so "the process" and "the client" are the same thing, and this is not
-        # a shared binding two callers could confuse. It is per-server state
-        # passed through the lifespan, never a module global.
-        stored = ctx.lifespan_context.get("fallback_judge")
     if stored is None:
         return None
     judge = JudgeRef.model_validate(stored)
@@ -3969,6 +4102,93 @@ async def _bound_judge(ctx: Context) -> JudgeRef | None:
         )
         return None
     return judge
+
+
+async def _bound_judge(ctx: Context) -> JudgeRef | None:
+    """The judge bound to this session, or None if nothing has claimed one.
+
+    Session state needs a session: called outside a request context, a direct
+    invocation or a transport that has not opened one, FastMCP raises rather
+    than returning nothing. No session is genuinely no binding, so that reads as
+    None here. It must not read as an error, or a graph switch would fail over
+    an identity feature the caller never used.
+
+    This is the *most recent* claim on the connection, which is what a write
+    carrying no `judge_token` is credited to.
+    """
+    return await _approved_judge(ctx, await _judge_state(ctx))
+
+
+async def _judge_state(ctx: Context) -> object:
+    """What this connection holds as its judge, before any approval check.
+
+    Separated from `_bound_judge` because two callers want different things
+    from it: a write wants a judge the active graph still approves, and the
+    picker wants to report the binding as it stands. Both read it from here, so
+    they cannot come to disagree about where the binding lives.
+    """
+    try:
+        return await ctx.get_state(JUDGE_STATE_KEY)
+    except RuntimeError:
+        # No session to read from, so fall back to the one this process was
+        # told about (see `_bind_judge`). Reachable only where session state
+        # does not exist at all, which today means a single-client transport,
+        # so "the process" and "the client" are the same thing, and this is not
+        # a shared binding two callers could confuse. It is per-server state
+        # passed through the lifespan, never a module global.
+        return ctx.lifespan_context.get("fallback_judge")
+
+
+async def _judge_tokens(ctx: Context) -> dict[str, dict]:
+    """Every judge claimed on this session, by the token that names the claim.
+
+    Session-scoped like the binding, and for the same reason: a token another
+    connection could resolve would be a bearer credential for an identity the
+    user approved for somebody else.
+    """
+    try:
+        stored = await ctx.get_state(JUDGE_TOKENS_STATE_KEY)
+    except RuntimeError:
+        # Nowhere session-scoped to read from, so the tokens sit on the lifespan
+        # beside `fallback_judge` and for the reason given there: such a
+        # transport has one client, so the process and the client are the same
+        # thing. Per-server state passed through the lifespan, never a module
+        # global.
+        stored = ctx.lifespan_context.get("fallback_judge_tokens")
+    return dict(stored) if isinstance(stored, dict) else {}
+
+
+async def _mint_judge_token(ctx: Context, judge: JudgeRef) -> str:
+    """Mint a token for this claim and remember which judge it names.
+
+    Opaque and random, because it travels out through the agent and back. A
+    token derived from the judge would let an agent write as any judge whose id
+    it could guess, which is the approval gate opened from the other side.
+
+    Kept per claim rather than per session: the point is that the agent that
+    claimed first goes on writing as itself after its neighbour claims.
+    """
+    token = secrets.token_urlsafe(24)
+    tokens = await _judge_tokens(ctx)
+    tokens[token] = judge.model_dump(mode="json")
+    try:
+        await ctx.set_state(JUDGE_TOKENS_STATE_KEY, tokens)
+    except RuntimeError:
+        ctx.lifespan_context["fallback_judge_tokens"] = tokens
+        return token
+    ctx.lifespan_context["fallback_judge_tokens"] = None
+    return token
+
+
+# What a write carrying a token nobody issued is told. It names the way out,
+# because the agent reading it can do nothing else about it.
+_UNKNOWN_JUDGE_TOKEN = (
+    "judge_token is not one this session issued. Call claim_agent and pass the "
+    "judge_token it returns on every write. A token names one claim on this "
+    "connection, so one from another session, or from before a reconnect, "
+    "cannot be resolved here. This write was refused rather than credited to "
+    "whichever judge claimed most recently."
+)
 
 
 async def _bind_judge(ctx: Context, judge: JudgeRef | None) -> bool:
@@ -4044,7 +4264,7 @@ async def _remember_judge_confirmed(ctx: Context, agent_id: str) -> None:
 
 
 async def _judge_for_write(
-    ctx: Context, expected_graph: str | None = None
+    ctx: Context, expected_graph: str | None = None, *, judge_token: str | None = None
 ) -> tuple[JudgeRef | None, str | None]:
     """The judge for this write, or the refusal to return instead of doing it.
 
@@ -4052,6 +4272,22 @@ async def _judge_for_write(
     require-a-judge policy is read (§3.3.1). A backend that refused on its own
     account would be a second home for the policy, and the two could differ
     without anybody noticing.
+
+    **Which claim, when one connection carries several agents.** Claude Code
+    hands a subagent the MCP connection its parent is already using, so both
+    claim here and the session binding holds only whichever claimed last. The
+    rule:
+
+    - A `judge_token` this session issued is credited to that claim's judge,
+      approval re-checked exactly as the binding's is, so a judge the active
+      graph no longer approves reads as unknown either way.
+    - A `judge_token` this session never issued **refuses the write**. It never
+      falls back to the binding: falling back silently is the defect the token
+      exists to close, and it would credit one agent's writes to another's
+      judge.
+    - No `judge_token` takes the session binding, which is the most recent
+      claim. That is what every client did before tokens existed, and it still
+      does it.
 
     Absent and *permitted* is the default and not a degraded mode: the write
     goes through and records an unknown judge, which is what blank has always
@@ -4080,7 +4316,13 @@ async def _judge_for_write(
     if mismatch is not None:
         result, meta = mismatch
         return None, _build_response(result, meta, 0.0)
-    judge = await _bound_judge(ctx)
+    if judge_token is None:
+        judge = await _bound_judge(ctx)
+    else:
+        tokens = await _judge_tokens(ctx)
+        if judge_token not in tokens:
+            return None, _error_response(_UNKNOWN_JUDGE_TOKEN)
+        judge = await _approved_judge(ctx, tokens[judge_token])
     if judge is not None:
         return judge, None
     if not await tools.judge_required(
@@ -4098,28 +4340,120 @@ _NO_CHANNEL = tools.ApprovalOutcome(channel_available=False)
 _DECLINED = tools.ApprovalOutcome()
 
 
-async def _elicit_new_judge_name(
-    ctx: Context, proposed: str, description: str
-) -> tools.ApprovalOutcome:
-    """The free-text half: name a judge that does not exist yet.
+def _prompt_opening(version: str, first_line: str) -> str:
+    """The first line of a prompt the user reads, opening with the version.
 
-    Reached only by choosing *a new judge* in the picker, or where the graph
-    knows none to pick from. Keeping it off the common path is the point — free
-    text is what let one keystroke mint a permanent second judge.
+    The user asked to see which Epimemer they are talking to while they are
+    placing a judge. It goes before the question rather than after the prose
+    because it is short and a terminal truncates the end of a long message
+    rather than the start: put first it displaces nothing, put last it is the
+    first thing lost.
+
+    One helper for every prompt in the claim flow, so they cannot drift into a
+    version on some and not the others, which a user reads as a difference
+    between the prompts rather than as one server answering.
+    """
+    return f"Epimemer {version}. {first_line}"
+
+
+def _proposal_label(agents: Sequence[Agent], proposed: str) -> str:
+    """What to call the handle an agent proposed, in a prompt a person reads.
+
+    A claim hands back an opaque key, and an agent that passes that key back on
+    its next claim is proposing an id rather than a name. A user shown a UUID
+    has nothing to recognise a judge by: one of them read
+    `An agent proposing '5124f64a...' asks which judge it is` and picked the
+    wrong judge. So the handle is resolved the way `claim_agent` resolves it, by
+    key, by name, and by any key the judge used to be recorded under, and shown
+    under the name the roster shows.
+
+    A handle that resolves to nothing is shown as it came. A graph that has
+    never seen it has no name to put in its place, which covers both a name
+    nobody has claimed yet and a key from somewhere else.
+
+    Every prompt that names the proposal goes through here, so none of them can
+    drift into showing a key while the others show a name.
+    """
+    holder = tools.resolve_agent(agents, proposed)
+    return tools.agent_name(holder) if holder is not None else proposed.strip()
+
+
+async def _connection_judge_line(ctx: Context, proposed: str) -> str | None:
+    """What this connection already judges as, for the user reading the prompt.
+
+    One MCP connection carries several agents: Claude Code hands a subagent the
+    connection the agent that spawned it is already using, and each of them
+    claims. The prompt on its own says only that *an agent* is asking, so a
+    user watching a subagent claim beside its parent could not tell which of
+    the two the question came from. Naming the judge the connection holds gives
+    them that, and says which of the two cases this is: a second agent arriving
+    beside the first, or the first one claiming again.
+
+    **The raw session state rather than `_bound_judge`.** The sentence reports
+    what the connection holds, and a judge the active graph has stopped
+    approving is still what it holds. Re-checking approval here would drop the
+    line exactly where the user most needs to be told that something is odd.
+
+    None where nothing has claimed yet, which is the ordinary first claim and
+    calls for no sentence at all.
+    """
+    stored = await _judge_state(ctx)
+    if stored is None:
+        return None
+    bound = JudgeRef.model_validate(stored)
+    agents = await ctx.lifespan_context["storage"].list_agents()
+    # Resolved the way `claim_agent` resolves the handle it is handed, so the
+    # prompt and the claim behind it agree about when two handles are one judge.
+    # An approved id nothing has claimed has no record to resolve, so it stands
+    # in as its own key and its own name, which is what `approved_labels` shows.
+    holder = tools.resolve_agent(agents, bound.agent_id)
+    name = _proposal_label(agents, bound.agent_id)
+    held = holder.id if holder is not None else bound.agent_id
+    claimed = tools.resolve_agent(agents, proposed)
+    claiming = claimed.id if claimed is not None else proposed.strip()
+    already = f"This connection already judges as '{name}', so this is "
+    if claiming.casefold() == held.casefold():
+        return f"{already}a re-claim of the same judge."
+    return f"{already}most likely a second agent beside it."
+
+
+async def _elicit_judge_name(
+    ctx: Context,
+    proposed: str,
+    description: str,
+    *,
+    first_line: str,
+    empty_is_the_proposal: bool,
+) -> tools.ApprovalOutcome:
+    """The free-text half: type a name for a judge that does not exist yet.
+
+    Kept off the common path, which is the point: free text is what let one
+    keystroke mint a permanent second judge.
 
     **What comes back is a handle, not a decision to mint.** Typing the name of
     a judge that already exists joins it, because `claim_agent` resolves the
-    answer the same way it resolves the proposal — which is right, and is the
+    answer the same way it resolves the proposal, which is right, and is the
     case this prompt used to get wrong.
 
     **A raise here is the elicitation-less client**, and it is reported as
     *unavailable* rather than as a refusal, because the two have opposite
     consequences for a judge the user already approved out of band.
+
+    It names the judge this connection already holds for the same reason the
+    picker does, and in the same words: a user told who is asking in one prompt
+    and not the other learns to trust neither. The proposal is shown through
+    `_proposal_label` for the same reason, so a handle that came in as a key
+    reads as a name here too.
+
+    `empty_is_the_proposal` says what an accepted but empty answer means, and
+    the two callers below mean opposite things by it. Each says why.
     """
+    already = await _connection_judge_line(ctx, proposed)
     try:
         answer = await ctx.elicit(
-            f"Name the new judge. Accept to use '{proposed}', or type another "
-            f"name.\n\nA name can be changed later and the decisions follow it, "
+            _prompt_opening(ctx.lifespan_context["version"], first_line)
+            + (f"\n{already}" if already else "")
+            + f"\n\nA name can be changed later and the decisions follow it, "
             f"so it does not have to be right for ever.\n\nIt describes itself "
             f"as: {description}",
             response_type=str,
@@ -4127,12 +4461,118 @@ async def _elicit_new_judge_name(
     except Exception:
         _tool_logger.info("claim_agent: no elicitation channel to the user for '%s'", proposed)
         return _NO_CHANNEL
-    if isinstance(answer, AcceptedElicitation):
-        # An accepted-but-empty answer is agreement with the prompt, which named
-        # the proposal. Reading it as a blank name would refuse the thing the
-        # user just approved.
-        return tools.ApprovalOutcome(chosen=(answer.data or "").strip() or proposed)
+    if not isinstance(answer, AcceptedElicitation):
+        return _DECLINED
+    typed = (answer.data or "").strip()
+    if typed:
+        return tools.ApprovalOutcome(chosen=typed)
+    if empty_is_the_proposal:
+        # The handle goes back rather than the label shown, and `claim_agent`
+        # resolves the two to the same judge.
+        return tools.ApprovalOutcome(chosen=proposed)
     return _DECLINED
+
+
+async def _elicit_new_judge_name(
+    ctx: Context, proposed: str, description: str
+) -> tools.ApprovalOutcome:
+    """Name a new judge where no picker was drawn: an empty Accept takes the proposal.
+
+    Reached only from the `except` arm of a picker, which is a client that
+    cannot render a choice schema. Every picker in this flow now carries the
+    proposed name on a line of its own, so where the choices did render the
+    user takes the proposal by choosing it and this prompt is never put. Where
+    they did not, its prompt offers the proposal and a bare Accept is the only
+    gesture such a client has left for *yes, that name*: reading an empty
+    answer as a blank name would refuse what the user just approved.
+    """
+    agents = await ctx.lifespan_context["storage"].list_agents()
+    label = _proposal_label(agents, proposed)
+    return await _elicit_judge_name(
+        ctx,
+        proposed,
+        description,
+        first_line=f"Name the new judge. Accept to use '{label}', or type another name.",
+        empty_is_the_proposal=True,
+    )
+
+
+async def _elicit_typed_judge_name(
+    ctx: Context, proposed: str, description: str
+) -> tools.ApprovalOutcome:
+    """Name a new judge after the user chose to type one: an empty answer declines.
+
+    Reached from the entry that asks for a typed name in either picker, *Type
+    another name* where the graph has no judges yet and *a new judge, with a
+    name you type* where it has, so the proposal was on the screen a moment ago
+    and the user passed it over, or it resolves to a judge already on the
+    roster. Answering nothing is a refusal to name anything, and binding the
+    proposal on it would bind the name they had just declined.
+
+    The prompt asks for a name and promises nothing about Accept, which is
+    where the old wording went wrong here: Claude Code draws a bare string as a
+    required field, so `Accept to use 'X'` named a gesture the client would not
+    let the user make.
+    """
+    return await _elicit_judge_name(
+        ctx,
+        proposed,
+        description,
+        first_line="Type the name for the new judge.",
+        empty_is_the_proposal=False,
+    )
+
+
+async def _elicit_first_judge(
+    ctx: Context, proposed: str, description: str
+) -> tools.ApprovalOutcome:
+    """Which judge, in a graph that has none yet: the proposal, or a name to type.
+
+    A picker rather than a text box, and the same shape as the main one, because
+    the empty graph was the one place this question was free text: `Accept to
+    use 'X', or type another name` promised an Accept that Claude Code refuses,
+    rendering a bare string as a required field. Two choices say the same thing
+    in a gesture every client that draws a picker can make.
+
+    Every arm returns, so `_PICKER_ROUNDS` is none of its business: nothing here
+    renames or reinstates, and those are the two answers that put a picker back
+    up. A client that cannot draw it lands on the free text this replaced.
+    """
+    storage = ctx.lifespan_context["storage"]
+    label = _proposal_label(await storage.list_agents(), proposed)
+    choices: dict[str, dict[str, str]] = {
+        tools.PROPOSED_JUDGE_CHOICE: {"title": f"Use '{label}'"},
+        tools.NEW_JUDGE_CHOICE: {"title": "Type another name"},
+    }
+    already = await _connection_judge_line(ctx, proposed)
+    message = (
+        _prompt_opening(
+            ctx.lifespan_context["version"],
+            f"An agent proposing '{label}' asks which judge it is, in graph "
+            f"'{storage.current_database}'.",
+        )
+        + (f"\n{already}" if already else "")
+        + f"\n\nThis graph has no judges yet, so this claim starts one. Decline "
+        f"to refuse it an identity. Nothing verifies what an agent says about "
+        f"itself; it is recorded as a claim, not a credential.\n\nIt describes "
+        f"itself as: {description}"
+    )
+    try:
+        answer = await ctx.elicit(message, response_type=choices)
+    except Exception:
+        _tool_logger.info(
+            "claim_agent: could not offer the first-judge picker; falling back to free text"
+        )
+        return await _elicit_new_judge_name(ctx, proposed, description)
+    if not isinstance(answer, AcceptedElicitation):
+        return _DECLINED
+    if str(answer.data or "") == tools.PROPOSED_JUDGE_CHOICE:
+        # The handle as it came rather than the label shown: `claim_agent`
+        # resolves the two to one judge, and the handle is what the agent holds.
+        return tools.ApprovalOutcome(chosen=proposed)
+    # *Type another name*, and anything else a client sends back, which is
+    # safest read as the answer that asks rather than the one that binds.
+    return await _elicit_typed_judge_name(ctx, proposed, description)
 
 
 async def _elicit_rename(ctx: Context, roster: list[tools.JudgeChoice]) -> str | None:
@@ -4149,9 +4589,12 @@ async def _elicit_rename(ctx: Context, roster: list[tools.JudgeChoice]) -> str |
     the same judge. That last one is the repair for a split history, arriving
     exactly where the split is visible.
     """
+    version = ctx.lifespan_context["version"]
     choices = {choice.key: {"title": choice.title} for choice in roster}
     try:
-        picked = await ctx.elicit("Which judge should be renamed?", response_type=choices)
+        picked = await ctx.elicit(
+            _prompt_opening(version, "Which judge should be renamed?"), response_type=choices
+        )
     except Exception:
         return None
     if not isinstance(picked, AcceptedElicitation):
@@ -4161,7 +4604,9 @@ async def _elicit_rename(ctx: Context, roster: list[tools.JudgeChoice]) -> str |
         return None
 
     try:
-        typed = await ctx.elicit("What should it be called?", response_type=str)
+        typed = await ctx.elicit(
+            _prompt_opening(version, "What should it be called?"), response_type=str
+        )
     except Exception:
         return None
     if not isinstance(typed, AcceptedElicitation):
@@ -4177,7 +4622,7 @@ async def _elicit_rename(ctx: Context, roster: list[tools.JudgeChoice]) -> str |
 
     try:
         same = await ctx.elicit(
-            f"{result['reason']}\n\nAccept if they are the same judge.",
+            _prompt_opening(version, result["reason"]) + "\n\nAccept if they are the same judge.",
             response_type=None,
         )
     except Exception:
@@ -4204,8 +4649,11 @@ async def _elicit_reinstate(ctx: Context, retired: list[tools.JudgeChoice]) -> s
     choices = {choice.key: {"title": choice.title} for choice in retired}
     try:
         picked = await ctx.elicit(
-            "Which retired judge should be brought back? It returns to the "
-            "list, and you then choose it there.",
+            _prompt_opening(
+                ctx.lifespan_context["version"],
+                "Which retired judge should be brought back? It returns to the "
+                "list, and you then choose it there.",
+            ),
             response_type=choices,
         )
     except Exception:
@@ -4236,23 +4684,34 @@ async def _elicit_agent_id(ctx: Context, proposed: str, description: str) -> too
     lets `confirmed_at` mean what it says: no path exists by which the agent
     alone sets it.
 
-    **A picker over the judges this graph already knows**. It used to be a
-    free-text box naming only the proposed id, so the one place a human chooses
-    an identity was the one place the existing identities were invisible — and
-    what the user typed had to match an existing judge character for character
-    or it silently became a second one with a permanently separate history.
+    **A picker over the judges this graph already knows**, then the name the
+    agent proposed where the graph has never seen it, then a new judge the user
+    names, then renaming and any retired judge. It used to be a free-text box
+    naming only the proposed id, so the one place a human chooses an identity
+    was the one place the existing identities were invisible, and what the user
+    typed had to match an existing judge character for character or it silently
+    became a second one with a permanently separate history.
     That is how `Opus 5 Judge` and `Opus 5` both came to exist on this
     repository's own graph. `list_agents` had the answer the whole time and no
     consumer outside the CLI.
 
     **Lines carry names, never ids.** Since the three-layer split the key is a
-    UUID, and a picker offering those would be unusable — which is why the earlier
-    proposal
-    rejected an opaque id, and why the picker had to come first.
+    UUID, and a picker offering those would be unusable, which is why the
+    earlier proposal rejected an opaque id and why the picker had to come first.
+    That holds for the handle the agent proposes too: a claim hands back a key
+    and an agent may propose that key on its next claim, so it is resolved
+    through `_proposal_label` before any line names it. A handle this graph has
+    never seen is shown as it came, since there is nothing else to show.
 
-    **The question comes first and the self-description last**, because the
-    terminal cuts the end: what gets lost is prose the user may weigh, never the
-    thing being asked.
+    **The version, then the question, and the self-description last**, because
+    the terminal cuts the end: what gets lost is prose the user may weigh, never
+    the thing being asked. The proposed name rides in that first line rather
+    than beside the description, since it is short and is the one thing a
+    truncated message must not lose: with several agents on one connection, the
+    name being proposed is how a user tells a subagent's claim from its
+    parent's. The server version goes ahead of even the question, through
+    `_prompt_opening`, because the user asked to see which Epimemer is asking
+    and it costs a few characters at the end that nothing is holding.
 
     **A picker that fails degrades to free text rather than to a refusal.**
     Rendering a choice schema is the client's business and not every client will
@@ -4268,27 +4727,51 @@ async def _elicit_agent_id(ctx: Context, proposed: str, description: str) -> too
         # paid every time.
         retired = await tools.retired_judge_roster(storage)
         if not roster and not retired:
-            # Nothing to pick from — a graph nobody has judged in yet.
-            return await _elicit_new_judge_name(ctx, proposed, description)
+            # A graph nobody has judged in yet: nothing to pick from, so the
+            # question is the proposal or a name the user types.
+            return await _elicit_first_judge(ctx, proposed, description)
+
+        # Re-read each round rather than once: a rename from inside the picker
+        # changes both the name the proposal is shown under and the name the
+        # binding is.
+        agents = await storage.list_agents()
+        label = _proposal_label(agents, proposed)
 
         choices: dict[str, dict[str, str]] = {
             choice.key: {"title": choice.title} for choice in roster
         }
-        choices[tools.NEW_JUDGE_CHOICE] = {"title": f"A new judge — proposed: {proposed}"}
+        # A proposal the graph already knows is on the list above as itself, so
+        # a second line offering that name as new would invite the user to mint
+        # a second record with it, which is the split this picker exists to
+        # stop. Where the graph has never seen the handle, the name the agent
+        # proposed gets its own line: rolled into *a new judge* it led to a text
+        # box, and a client is free to draw free text as a required field, as
+        # Claude Code does, so taking the proposed name meant retyping it.
+        known = tools.resolve_agent(agents, proposed)
+        if known is None:
+            choices[tools.PROPOSED_JUDGE_CHOICE] = {"title": f"A new judge: '{label}'"}
+        # *A new judge* stays either way, since naming one is still an answer,
+        # and it asks for a name rather than offering one that is taken.
+        choices[tools.NEW_JUDGE_CHOICE] = {"title": "A new judge, with a name you type"}
         if roster:
             choices[tools.RENAME_JUDGE_CHOICE] = {
-                "title": "Rename a judge — decisions follow the new name"
+                "title": "Rename a judge: decisions follow the new name"
             }
         if retired:
             choices[tools.RETIRED_JUDGE_CHOICE] = {
-                "title": "A retired judge… — reinstate one and pick it"
+                "title": "A retired judge…, reinstate one and pick it"
             }
+        already = await _connection_judge_line(ctx, proposed)
         message = (
-            f"Which judge is this agent, in graph '{storage.current_database}'?"
-            f"\n\nDecline to refuse it an identity. Nothing verifies what an "
+            _prompt_opening(
+                ctx.lifespan_context["version"],
+                f"An agent proposing '{label}' asks which judge it is, in graph "
+                f"'{storage.current_database}'.",
+            )
+            + (f"\n{already}" if already else "")
+            + f"\n\nDecline to refuse it an identity. Nothing verifies what an "
             f"agent says about itself; it is recorded as a claim, not a "
-            f"credential.\n\nIt proposes '{proposed}' and describes itself as: "
-            f"{description}"
+            f"credential.\n\nIt describes itself as: {description}"
         )
         try:
             answer = await ctx.elicit(message, response_type=choices)
@@ -4300,6 +4783,11 @@ async def _elicit_agent_id(ctx: Context, proposed: str, description: str) -> too
         if not isinstance(answer, AcceptedElicitation):
             return _DECLINED
         key = str(answer.data or "")
+        if key == tools.PROPOSED_JUDGE_CHOICE:
+            # The handle as it came rather than the label shown: `claim_agent`
+            # resolves the two to one judge, and the handle is what the agent
+            # holds.
+            return tools.ApprovalOutcome(chosen=proposed)
         if key == tools.RENAME_JUDGE_CHOICE:
             note = await _elicit_rename(ctx, roster)
             _tool_logger.info("claim_agent: rename from the picker: %s", note)
@@ -4315,21 +4803,28 @@ async def _elicit_agent_id(ctx: Context, proposed: str, description: str) -> too
             continue
         chosen = tools.selected_judge_id(key)
         if chosen is None:
-            return await _elicit_new_judge_name(ctx, proposed, description)
+            # *A new judge, with a name you type*, and anything else a client
+            # sends back, which is safest read as the answer that asks rather
+            # than the one that binds.
+            return await _elicit_typed_judge_name(ctx, proposed, description)
         return tools.ApprovalOutcome(chosen=chosen)
     return _DECLINED
 
 
-async def _elicit_description_confirmation(ctx: Context, agent_id: str, description: str) -> bool:
-    """Ask the user to vouch for a *new* self-description under a known id.
+async def _elicit_description_confirmation(ctx: Context, name: str, description: str) -> bool:
+    """Ask the user to vouch for a *new* self-description under a known judge.
 
     Softer than the id question by design: declining costs the confirmation, not
     the claim. The version is recorded either way, and *self-described,
     unconfirmed* is a different epistemic object rather than a failure (§2.4).
+
+    `claim_agent` hands this the judge's name rather than its key, so this line
+    carries a name like every other line the user reads.
     """
     try:
         answer = await ctx.elicit(
-            f"'{agent_id}' now describes itself as:\n\n{description}\n\n"
+            _prompt_opening(ctx.lifespan_context["version"], f"'{name}' now describes itself as:")
+            + f"\n\n{description}\n\n"
             f"Accept to record this description as confirmed by you. Decline and "
             f"it is still recorded, marked self-reported — only your "
             f"confirmation is at stake.",
@@ -4379,6 +4874,13 @@ async def memory_claim_agent(
     last week was made by whatever you claimed to be last week. Approval is per
     graph, so switching graphs can unbind you; claim again after a use_graph.
 
+    **Carry the `judge_token` this returns on every write.** It names this
+    claim, and a write that passes it is credited to the judge you just
+    claimed. Several agents can share one MCP connection, a subagent beside the
+    agent that spawned it, and each claims its own judge and carries its own
+    token. A write that carries none is credited to the most recent claim on
+    the connection, which is what a single agent has always got.
+
     Args:
         agent_id: What you propose to be called, or the `agent_id` a previous
             claim handed back. Either works: it is resolved against this
@@ -4400,8 +4902,8 @@ async def memory_claim_agent(
             agent_id=agent_id,
             description=description,
             approve_id=lambda proposed, text: _elicit_agent_id(ctx, proposed, text),
-            confirm_description=lambda claimed_id, text: _elicit_description_confirmation(
-                ctx, claimed_id, text
+            confirm_description=lambda claimed_name, text: _elicit_description_confirmation(
+                ctx, claimed_name, text
             ),
             confirmed_identity=await _confirmed_judge_here(ctx),
         )
@@ -4409,9 +4911,11 @@ async def memory_claim_agent(
             # The binding is the point of the call, and it is written only after
             # the record is, so a failed upsert cannot leave a session judging
             # under an agent the graph does not have.
-            result["session_bound"] = await _bind_judge(
-                ctx, JudgeRef(agent_id=result["agent_id"], digest=result["digest"])
-            )
+            judge = JudgeRef(agent_id=result["agent_id"], digest=result["digest"])
+            result["session_bound"] = await _bind_judge(ctx, judge)
+            # And a token naming this claim, so an agent sharing the connection
+            # with another can write as itself after that one has claimed too.
+            result["judge_token"] = await _mint_judge_token(ctx, judge)
             # Remembered under the id that was *chosen*, which the picker may
             # have made a different one from the id proposed.
             await _remember_judge_confirmed(ctx, result["agent_id"])
@@ -4459,6 +4963,13 @@ async def epimemer_use_graph(
             seed_agent_ids=deps["config"].approved_agents,
         )
         if result.get("judge_cleared"):
+            # The binding goes and the tokens stay. Approval is per graph and
+            # every write re-checks the judge behind a token against the graph
+            # it lands in, so a token carried into a graph that does not approve
+            # its judge already records unknown, exactly as the binding would.
+            # Clearing them would refuse writes from an agent whose judge the
+            # new graph does approve, and the only cure for a cleared token is
+            # claiming again, which that agent can do in either case.
             await _bind_judge(ctx, None)
         return result, meta
 

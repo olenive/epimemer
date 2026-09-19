@@ -17,7 +17,7 @@ import type { AdvisoryRaised, GraphActionRecorded } from "./types";
  *
  * A warning is a line in the story of a session, beside the act it accompanied,
  * so it belongs in this list rather than in a panel of its own
- * (ADVISORIES_DASHBOARD.md §2.3). One shape carries both, so the filters, the
+ * (WARNINGS_DASHBOARD.md §2.3). One shape carries both, so the filters, the
  * ordering and the deduplication are written once.
  */
 export type LogEntryKind = "act" | "warning";
@@ -87,7 +87,7 @@ const actionPhrase = (action: string): string =>
 /**
  * The warning's sentence with a closing full stop taken off.
  *
- * The row appends what the policy decided, and an advisory's message is a
+ * The row appends what the policy decided, and a warning's message is a
  * finished sentence, so joining them raw reads ".; the agent proceeded". The
  * words are untouched: only the punctuation between two clauses moves.
  */

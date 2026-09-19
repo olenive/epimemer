@@ -206,7 +206,7 @@ class TestEachKindGivesExactlyOneKindOfAdvice:
     both where the tool was right and where it was wrong, so one kind carried
     opposite advice — the *field that needs "or" to describe it* tell.
 
-    The classification decides whether a `proceeded_despite_advisory` row is
+    The classification decides whether a `proceeded_despite_warning` row is
     written, so a kind added without one would silently take the safer-sounding
     half of a question nobody asked.
     """
@@ -298,7 +298,7 @@ class TestConfigureWarnings:
         assert result["actions"]["disjoint_premises"] == "flag"
 
     async def test_an_unknown_kind_is_refused_by_name(self, storage):
-        with pytest.raises(ValueError, match="is not an advisory kind"):
+        with pytest.raises(ValueError, match="is not a warning kind"):
             await tools.configure_warnings(storage, actions={"nonsense": "flag"})
 
     async def test_reject_is_refused_and_says_why(self, storage):
@@ -378,7 +378,7 @@ class TestTheTwoExistingWarningsBecameAdvisories:
         a = await _fact(storage, "a")
         b = await _fact(storage, "b")
         await tools.record_variant(a.id, b.id, storage)
-        objections = await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY])
+        objections = await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_WARNING])
         assert len(objections) == 1
 
         c = await _fact(storage, "X is true")
@@ -386,7 +386,7 @@ class TestTheTwoExistingWarningsBecameAdvisories:
         await tools.record_contradiction(c.id, d.id, storage)
 
         assert (
-            len(await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY])) == 1
+            len(await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_WARNING])) == 1
         )
 
     async def test_a_graph_can_turn_the_notification_off_as_a_decision(self, storage):
@@ -426,7 +426,7 @@ class TestTheTwoExistingWarningsBecameAdvisories:
         assert result["notify_user"] is False
         # Muted, and recorded anyway: that separation is the load-bearing part.
         assert (
-            len(await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY])) == 1
+            len(await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_WARNING])) == 1
         )
 
 
@@ -474,20 +474,20 @@ class TestTheRecordIsReadBackByReview:
     review-state store with a second *what has nobody looked at* scan, which an
     agent proceeding past an advisory would have written into as well."""
 
-    async def test_the_mode_selects_only_advisory_rows(self, storage):
+    async def test_the_mode_selects_only_warning_rows(self, storage):
         a = await _fact(storage, "real")
         b = await _fact(storage, "fictional", metacontext=None)
         await _elsewhere(storage, b, "Fiction")
         await tools.record_contradiction(a.id, b.id, storage, judge=CRITIC)
 
         every, _ = await tools.review(storage)
-        only, _ = await tools.review(storage, mode="advisory")
+        only, _ = await tools.review(storage, mode="warning")
 
         assert {d["kind"] for d in every["decisions"]} == {
             "contradiction",
-            "proceeded_despite_advisory",
+            "proceeded_despite_warning",
         }
-        assert {d["kind"] for d in only["decisions"]} == {"proceeded_despite_advisory"}
+        assert {d["kind"] for d in only["decisions"]} == {"proceeded_despite_warning"}
 
     async def test_the_commonest_path_does_not_double_the_journal(self, storage):
         """A same-metacontext contradiction is the ordinary, correct use of the tool.
@@ -501,7 +501,7 @@ class TestTheRecordIsReadBackByReview:
 
         every, _ = await tools.review(storage)
         assert {d["kind"] for d in every["decisions"]} == {"contradiction"}
-        assert (await tools.review(storage, mode="advisory"))[0]["decisions"] == []
+        assert (await tools.review(storage, mode="warning"))[0]["decisions"] == []
 
     async def test_the_row_carries_what_the_decider_was_told(self, storage):
         a = await _fact(storage, "real")
@@ -509,7 +509,7 @@ class TestTheRecordIsReadBackByReview:
         await _elsewhere(storage, b, "Fiction")
         await tools.record_contradiction(a.id, b.id, storage, judge=CRITIC)
 
-        result, _ = await tools.review(storage, mode="advisory")
+        result, _ = await tools.review(storage, mode="warning")
 
         row = result["decisions"][0]
         assert row["judged_by"] == "a-critic"
@@ -518,14 +518,58 @@ class TestTheRecordIsReadBackByReview:
 
     async def test_an_unwritten_kind_would_have_read_as_a_clean_graph(self):
         """Why the mode was refused until now, kept as the guard on the pair."""
-        assert "advisory" in REVIEW_MODES
-        assert MODE_KINDS["advisory"] == [DecisionKind.PROCEEDED_DESPITE_ADVISORY]
+        assert "warning" in REVIEW_MODES
+        assert MODE_KINDS["warning"] == [DecisionKind.PROCEEDED_DESPITE_WARNING]
 
     async def test_nothing_contested_is_an_empty_list_rather_than_a_refusal(self, storage):
-        result, _ = await tools.review(storage, mode="advisory")
+        result, _ = await tools.review(storage, mode="warning")
 
         assert result["decisions"] == []
         assert "refused" not in result
+
+
+class TestTheModeAnswersToTheNameItUsedToHave:
+    """`advisory` was the mode's name until the word became `warning`. An agent
+    that learned the old one keeps working for a release and is told once."""
+
+    async def _contested(self, storage):
+        a = await _fact(storage, "real")
+        b = await _fact(storage, "fictional", metacontext=None)
+        await _elsewhere(storage, b, "Fiction")
+        await tools.record_contradiction(a.id, b.id, storage, judge=CRITIC)
+
+    async def test_both_spellings_select_the_same_decisions(self, storage):
+        await self._contested(storage)
+
+        old, _ = await tools.review(storage, mode="advisory")
+        new, _ = await tools.review(storage, mode="warning")
+
+        assert [d["decision_id"] for d in old["decisions"]] == [
+            d["decision_id"] for d in new["decisions"]
+        ]
+        assert {d["kind"] for d in old["decisions"]} == {"proceeded_despite_warning"}
+
+    async def test_the_answer_names_the_mode_it_ran_under(self, storage):
+        """The response says `warning` whichever spelling was passed, so the
+        name in the answer is the name in the schema."""
+        await self._contested(storage)
+
+        old, _ = await tools.review(storage, mode="advisory")
+
+        assert old["mode"] == "warning"
+
+    async def test_the_old_spelling_is_answered_with_a_note(self, storage):
+        old, _ = await tools.review(storage, mode="advisory")
+
+        assert "advisory" in old["note"]
+        assert "warning" in old["note"]
+
+    async def test_the_new_spelling_carries_no_note(self, storage):
+        """Nothing to say, so nothing is said: a note on every call is one the
+        reader stops seeing."""
+        current, _ = await tools.review(storage, mode="warning")
+
+        assert "note" not in current
 
 
 class TestAStoredOverrideFromANewerBuild:

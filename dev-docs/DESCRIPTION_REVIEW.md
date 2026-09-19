@@ -247,13 +247,13 @@ description and the call warns; an existing undescribed tag takes the
 description; a tag on a topic entry is covered by the call-level dict; a call
 with no new tags needs no dict.
 
-**The warning is an advisory**, through the mechanism every other one uses:
+**It goes out as a warning**, through the mechanism every other one uses:
 `AdvisoryKind.DESCRIPTION_NOT_WRITTEN`, classified `escalates`, so the response
 carries it in `warnings` and nothing is journalled against the ingest. That
 classification is the one the stance field actually decides, *does this argue
 the call was wrong*, and the answer is no: the ingest stands, and one write
 inside it was declined. Journalling it would put a
-`proceeded_despite_advisory` row on every ingest by an agent that re-sends its
+`proceeded_despite_warning` row on every ingest by an agent that re-sends its
 whole tag dictionary, which is exactly the swamping the kind was kept narrow to
 avoid. A blank line is treated as no description, so the requirement cannot be
 met by a key with nothing in it.

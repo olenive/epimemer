@@ -252,7 +252,7 @@ async def test_the_ring_keeps_only_the_coarse_stream(hub):
 
 
 async def test_warnings_and_acts_replay_as_one_sequence(hub):
-    """`ADVISORIES_DASHBOARD.md` §3: the ring keeps both, because replay has to
+    """`WARNINGS_DASHBOARD.md` §3: the ring keeps both, because replay has to
     reproduce arrival order and a warning reads as a line after what it was
     about."""
     async with websockets.connect(hub.ingest) as sess:

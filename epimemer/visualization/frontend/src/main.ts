@@ -262,7 +262,7 @@ $("btn-toggle-log").addEventListener("click", () => logPanel.toggle());
 
 // --- Warning settings ---
 //
-// A read-only view of the active graph's advisory policy, beside the reflect
+// A read-only view of the active graph's warning policy, beside the reflect
 // badge because both describe the session's graph rather than the viewed one.
 // It re-reads itself on a graph switch; nothing here writes a setting.
 const warningsPanel = initWarningSettings(

@@ -165,7 +165,7 @@ change retrieval scope; these do not.
 - **Say what a label means here, once, with `describe_relation(name,
   description)`.** The same word means different things in different graphs
   (`advised` is a retainer in one and employment in another), and the
-  description is advisory prose the next agent reads, never a schema. `link`
+  description is guidance the next agent reads, never a schema. `link`
   hands it back to you when you reuse a described label, so you learn what
   the word already means at the moment you use it. Nothing steers your
   coinage: reuse the label if it fits, coin a new one if the distinction is
@@ -383,11 +383,11 @@ similarity neighbourhood.
   `evidence_stale`). On `"the_world_changed"` the retired node keeps its own
   sources: it is still true of its period, and its sources are what say so.
 
-**Advisories: what the graph tells you before you decide.**
+**Warnings: what the graph tells you before you decide.**
 Some calls come back with `warnings`: a list of things the system knows and
 you cannot compute, delivered *before* the decision rather than after it.
 Each has a `kind`, a one-sentence `message` and structured `detail`. Nothing
-here refuses on one. An advisory reaches you while you are still choosing
+here refuses on one. A warning reaches you while you are still choosing
 what to write, which is the only moment at which it can change the answer,
 so **read it and write differently** rather than reading it and proceeding.
 
@@ -395,7 +395,7 @@ so **read it and write differently** rather than reading it and proceeding.
 `disjoint_premises`, `cross_metacontext` and `same_metacontext_variant` say *this may be
 the wrong call*; proceeding past one is journalled, whether or not the graph
 was set to show it to you, and a later agent reads those back with
-`review(mode="advisory")`. Two say the reverse, that the call was right and
+`review(mode="warning")`. Two say the reverse, that the call was right and
 nothing is recorded against it: `same_metacontext_contradiction`, where the
 conflict found wants a person, and `description_not_written`, where a
 `tag_descriptions` entry named a tag the graph already describes and the stored
@@ -796,10 +796,17 @@ the graph learned it.
   overstate it. Re-describing appends a version and never edits one.
 - Approval is per graph. After `use_graph`, check whether the response says
   your judge was unbound, and claim again if it did.
+- **Carry the `judge_token` the claim returns on every write.** It names your
+  claim, so the write is credited to the judge you claimed even where another
+  agent has claimed on the same connection since. Several agents can share one
+  connection, a subagent beside the agent that spawned it, and each claims its
+  own judge and carries its own token. A write carrying no token is credited to
+  the most recent claim on the connection; a token that connection never issued
+  is refused, with a message naming `claim_agent`.
 - Once you have claimed one, the decisions you make carry it: who retired a
   node, who brought it back, who asserted a contradiction, who wrote a
-  synthesised topic, and every node and prior you supply at ingest. You pass
-  nothing; it comes from the session.
+  synthesised topic, and every node and prior you supply at ingest. Pass your
+  `judge_token` and the rest follows from the claim.
 - If a graph requires a judge, a write without one is refused and the
   message names `claim_agent`. That is not something to work around; put it
   to the user, since only they can approve a judge or turn the requirement
@@ -841,8 +848,8 @@ the graph learned it.
   be full of judgments `review` will never show.
 - **Modes select; the other arguments narrow whatever was selected.** `all`,
   `by_agent` (needs `agent_id`), `since` (needs `since`; `until` is
-  exclusive), `unreviewed`, and `advisory` (operations that went ahead
-  against an objecting advisory). So *"what did agent-1 decide yesterday
+  exclusive), `unreviewed`, and `warning` (operations that went ahead
+  against an objecting warning). So *"what did agent-1 decide yesterday
   that nobody checked"* is one call. `by_agent` and `since` exist to make
   their argument mandatory: asking for `all` with an `agent_id` you forgot
   to pass returns everything, which reads as an answer.

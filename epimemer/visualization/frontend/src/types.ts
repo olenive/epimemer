@@ -241,7 +241,7 @@ export interface GraphActionRecorded extends BaseEvent {
  * Every warning a call computed arrives here, muted or not: the dashboard is
  * where a person looks at what the agent was *not* told, so `surfaced: false`
  * is the interesting case rather than one to filter out
- * (ADVISORIES_DASHBOARD.md §2.2).
+ * (WARNINGS_DASHBOARD.md §2.2).
  *
  * `action_id` comes from the sequence the acts are numbered in. It is a place
  * in this session's stream, not a link to an act, and it is what lets the log
@@ -366,7 +366,7 @@ export interface GraphSwitched extends BaseEvent {
 }
 
 /**
- * What a graph does about advisories, as `configure_warnings` reports it.
+ * What a graph does about warnings, as `configure_warnings` reports it.
  *
  * `actions` is every kind with the action in force; `overridden` is the subset
  * this graph answered for itself. A kind missing from `overridden.by_kind` is

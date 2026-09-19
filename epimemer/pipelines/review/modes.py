@@ -9,7 +9,7 @@ the first and the third.
 is how §6.1's *"modes compose — `by_agent` and `since` is the ordinary case"*
 survives a single `mode` string: `agent_id`, `since` and `until` are available
 under every mode. Most modes are the thing that cannot be expressed as a field
-filter; `advisory` is the exception and is a selection on kind, which is data in
+filter; `warning` is the exception and is a selection on kind, which is data in
 `MODE_KINDS` rather than a branch. One further name exists only to **refuse**.
 
 **`by_agent` and `since` are sugar over a required argument, and the refusal is
@@ -21,11 +21,14 @@ argument mandatory, so the mistake refuses instead of answering wrongly.
 
 **One designed name is refused rather than admitted.** `between` is not a
 second mode: it is `since` with an `until`, and two names for one selection is
-the *"two shapes for one question"* defect §6.6 names. (`advisory` was
-refused here on the same
-grounds until advisories were built — it selected on a `DecisionKind` nothing
-wrote, so it would have returned an empty list reading as *nothing is
-contested*. The kind has a writer now, so the mode is real.)
+the *"two shapes for one question"* defect §6.6 names. (`warning` was refused
+here on the same grounds until warnings were built: it selected on a
+`DecisionKind` nothing wrote, so it would have returned an empty list reading as
+*nothing is contested*. The kind has a writer now, so the mode is real.)
+
+**A renamed mode answers to both spellings for one release.** `RENAMED_MODES`
+is the whole of that, and the response says which name it ran under, so an agent
+that learned the old one keeps working and is told once rather than refused.
 """
 
 from epimemer.core.types import DecisionKind, DecisionRecord
@@ -36,15 +39,21 @@ REVIEW_MODES: tuple[str, ...] = (
     "by_agent",
     "since",
     "unreviewed",
-    "advisory",
+    "warning",
 )
+
+# A mode that was renamed, and the name it answers to now. The old spelling
+# still selects, so nothing that learned it breaks, and `rename_note` is what
+# stops the acceptance being silent. One release: this empties when the next
+# one ships.
+RENAMED_MODES: dict[str, str] = {"advisory": "warning"}
 
 # The modes that are a selection on kind, and which kinds. A mode absent from
 # this map selects every kind. Data rather than a branch in the tool, for the
 # reason `MODE_REQUIRES` is data: adding one is a line, and the tool keeps one
 # path through it.
 MODE_KINDS: dict[str, list[DecisionKind]] = {
-    "advisory": [DecisionKind.PROCEEDED_DESPITE_ADVISORY],
+    "warning": [DecisionKind.PROCEEDED_DESPITE_WARNING],
 }
 
 # Which argument each mode cannot answer without. A mode absent from this map
@@ -66,6 +75,29 @@ UNBUILT_MODES: dict[str, str] = {
 }
 
 
+def canonical_mode(mode: str) -> str:
+    """The name this mode is listed under. Every current name is already it.
+
+    One home for the translation, so the selection, the refusal and the response
+    all run on the same string and a renamed mode cannot half-work.
+    """
+    return RENAMED_MODES.get(mode, mode)
+
+
+def rename_note(mode: str) -> str | None:
+    """What to tell a caller that used a name this release still answers to.
+
+    None for every name that was not renamed, which is all of them but one.
+    """
+    renamed = RENAMED_MODES.get(mode)
+    if renamed is None:
+        return None
+    return (
+        f"mode='{mode}' is now mode='{renamed}'. The two select the same "
+        f"decisions in this release; the old spelling goes in the next one."
+    )
+
+
 def mode_refusal(mode: str, *, agent_id: str | None, since_given: bool) -> str | None:
     """Why this call cannot be answered as asked, or None.
 
@@ -75,11 +107,12 @@ def mode_refusal(mode: str, *, agent_id: str | None, since_given: bool) -> str |
     """
     if mode in UNBUILT_MODES:
         return f"'{mode}' is not a mode this server implements. {UNBUILT_MODES[mode]}"
+    mode = canonical_mode(mode)
     if mode not in REVIEW_MODES:
         return (
             f"'{mode}' is not a mode. Available: {', '.join(REVIEW_MODES)}. "
             f"Also designed but not modes here: "
-            f"{', '.join(sorted(UNBUILT_MODES))} — ask about either by name."
+            f"{', '.join(sorted(UNBUILT_MODES))}; ask about either by name."
         )
     required = MODE_REQUIRES.get(mode)
     supplied = {"agent_id": agent_id is not None, "since": since_given}

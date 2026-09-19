@@ -308,7 +308,7 @@ class TestTheAdvisoryRidesWithTheMerge:
 
         result, _ = await _merge(storage, embedding_provider, [one, other], judge=CRITIC)
 
-        rows = await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY])
+        rows = await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_WARNING])
         assert len(rows) == 1
         assert rows[0].subject_ids[0] == result["inference_id"]
         assert AdvisoryKind.DISJOINT_PREMISES.value in rows[0].certainty_basis
@@ -330,7 +330,7 @@ class TestTheAdvisoryRidesWithTheMerge:
         # *advisory shown but quiet* are one answer to the only question this
         # key asks, and three response shapes for it leak which branch ran.
         assert result["notify_user"] is False
-        assert await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY]) == []
+        assert await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_WARNING]) == []
 
     async def test_surfacing_off_still_records(self, storage, embedding_provider):
         """The load-bearing separation: a graph whose warnings were off for a
@@ -344,7 +344,7 @@ class TestTheAdvisoryRidesWithTheMerge:
         assert "warnings" not in result and "warning" not in result
         assert result["notify_user"] is False
         assert (
-            len(await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_ADVISORY])) == 1
+            len(await storage.query_decisions(kinds=[DecisionKind.PROCEEDED_DESPITE_WARNING])) == 1
         )
 
     async def test_a_graph_can_escalate_the_kind(self, storage, embedding_provider):
