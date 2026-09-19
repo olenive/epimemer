@@ -15,11 +15,13 @@ import {
 import type {
   AnyEvent,
   EdgeView,
+  ImpreciseInstantView,
   NodeView,
   OccurrenceView,
   RecurrenceView,
   TimelineView,
   TimepointView,
+  ValidityIntervalView,
 } from "./types";
 
 /** jsdom has no ResizeObserver, and the panel observes its row container. */
@@ -32,7 +34,7 @@ vi.stubGlobal("ResizeObserver", StubResizeObserver);
 const MARKUP = `
   <select id="mode"><option value="record">r</option><option value="content">c</option></select>
   <select id="type"><option value="all">all</option><option value="fact">fact</option><option value="topic">topic</option></select>
-  <select id="status"><option value="all">all</option><option value="active">active</option><option value="superseded">superseded</option></select>
+  <select id="status"><option value="all">all</option><option value="active">active</option><option value="superseded">superseded</option><option value="historical">historical</option><option value="corrected">corrected</option></select>
   <select id="mc"><option value="all">all</option></select>
   <input id="query" type="search" />
   <input id="range-start" type="date" />
@@ -65,6 +67,7 @@ const edge = (over: Partial<EdgeView> & { src_id: string; dst_id: string }): Edg
   edge_id: `${over.src_id}->${over.dst_id}`,
   edge_type: "timelink",
   weight: 1,
+  validity: [],
   created_at: "2024-01-01T00:00:00Z",
   graph: "default",
   metadata: {},
@@ -1155,5 +1158,521 @@ describe("the expanded card's geometry", () => {
       expect(x + Number(card.getAttribute("width"))).toBeLessThanOrEqual(600);
       click(mark);
     }
+  });
+});
+
+// --- Valid time (§13) ---
+
+const CLOCK = "tl-westminster";
+
+const stated = (iso: string, label: string | null = null): ImpreciseInstantView => ({
+  instant_kind: "precise",
+  at: iso,
+  label,
+});
+
+const UNKNOWN_EDGE: ImpreciseInstantView = { instant_kind: "unknown" };
+const NO_EDGE: ImpreciseInstantView = { instant_kind: "unbounded" };
+
+const period = (over: Partial<ValidityIntervalView> = {}): ValidityIntervalView => ({
+  start: stated("1997-05-02T00:00:00Z"),
+  end: stated("2010-05-11T00:00:00Z"),
+  timeline_id: null,
+  witnessed_at: null,
+  basis: "stated",
+  ...over,
+});
+
+const sourced = (src: string, dst: string, validity: ValidityIntervalView[]): EdgeView =>
+  edge({ src_id: src, dst_id: dst, edge_type: "sourced_from", validity });
+
+const linked = (src: string, timepointId: string): EdgeView =>
+  edge({
+    src_id: src,
+    dst_id: CLOCK,
+    edge_type: "timelink",
+    metadata: { timepoint_id: timepointId },
+  });
+
+const follows = (from: string, to: string): EdgeView =>
+  edge({ src_id: from, dst_id: to, edge_type: "temporally_followed_by" });
+
+/**
+ * A timeline running 1990 to 2026, so the domain holds the periods below
+ * whatever the filters do to the marks.
+ */
+const showValidity = (
+  edges: EdgeView[],
+  facts: NodeView[] = [node({ node_id: "f1", content: "Labour is in government" })],
+  over: Partial<TimelineView> = {},
+): void => {
+  useContentMode();
+  panel.loadSnapshot({
+    nodes: [
+      ...facts,
+      node({ node_id: "doc-a", node_type: "document", content: "almanac, 2011" }),
+      node({ node_id: "doc-b", node_type: "document", content: "a blog" }),
+    ],
+    edges,
+    timelines: [
+      timeline({
+        timeline_id: CLOCK,
+        name: "Westminster",
+        timepoints: [
+          timepoint("tp-early", "1990-01-01T00:00:00Z", "the record opens"),
+          timepoint("tp-late", "2026-01-01T00:00:00Z", "the record closes"),
+        ],
+        ...over,
+      }),
+    ],
+  });
+};
+
+const found = <T extends SVGElement>(selector: string): T[] => [
+  ...document.querySelectorAll<T>(`#body ${selector}`),
+];
+
+const strips = (): SVGRectElement[] => found<SVGRectElement>("rect.timeline-strip");
+
+const box = (element: SVGElement): { top: number; bottom: number } => ({
+  top: Number(element.getAttribute("y")),
+  bottom: Number(element.getAttribute("y")) + Number(element.getAttribute("height")),
+});
+
+describe("per-source validity strips", () => {
+  it("draws a strip for every source and period, and no union bar", () => {
+    showValidity([
+      linked("f1", "tp-early"),
+      sourced("f1", "doc-a", [period()]),
+      sourced("f1", "doc-b", [period({ start: stated("1995-05-01T00:00:00Z") })]),
+    ]);
+
+    expect(strips()).toHaveLength(2);
+    // Two sources, two lanes: the disagreement about where this episode began
+    // is what a merged bar would erase.
+    expect(new Set(strips().map((s) => s.getAttribute("x"))).size).toBe(2);
+    expect(found("rect.timeline-envelope")).toHaveLength(0);
+  });
+
+  it("keeps several periods from one source in that source's lane", () => {
+    showValidity([
+      linked("f1", "tp-early"),
+      sourced("f1", "doc-a", [
+        period(),
+        period({ start: stated("2024-07-05T00:00:00Z"), end: UNKNOWN_EDGE }),
+      ]),
+    ]);
+
+    expect(strips()).toHaveLength(2);
+    expect(new Set(strips().map((s) => s.getAttribute("x"))).size).toBe(1);
+  });
+
+  it("names each lane after its source, on the strip itself", () => {
+    showValidity([
+      linked("f1", "tp-early"),
+      sourced("f1", "doc-a", [period()]),
+      sourced("f1", "doc-b", [period()]),
+    ]);
+
+    const names = found("text.timeline-strip-label").map((t) => t.textContent);
+    expect(names).toContain("almanac, 2011");
+    expect(names).toContain("a blog");
+  });
+
+  it("steps the side text out past the lanes", () => {
+    showValidity([linked("f1", "tp-early")]);
+    const bare = Math.min(...labels().map((t) => Number(t.getAttribute("x"))));
+
+    showValidity([linked("f1", "tp-early"), sourced("f1", "doc-a", [period()])]);
+    const beside = Math.min(...labels().map((t) => Number(t.getAttribute("x"))));
+
+    expect(beside).toBeLessThan(bare);
+  });
+
+  it("counts the strips a side has no lane left for", () => {
+    showValidity([
+      linked("f1", "tp-early"),
+      ...["doc-a", "doc-b", "doc-c", "doc-d"].map((doc) =>
+        sourced("f1", doc, [period()]),
+      ),
+    ]);
+
+    expect(strips()).toHaveLength(3);
+    expect(el("body").textContent).toContain("1 source strip hidden");
+  });
+
+  it("draws nothing in record time, which measures a different clock", () => {
+    showValidity([linked("f1", "tp-early"), sourced("f1", "doc-a", [period()])]);
+    controls.modeSelect.value = "record";
+    change(controls.modeSelect);
+
+    expect(strips()).toHaveLength(0);
+  });
+});
+
+describe("the mark each endpoint kind gets", () => {
+  const withPeriod = (over: Partial<ValidityIntervalView>): void =>
+    showValidity([linked("f1", "tp-early"), sourced("f1", "doc-a", [period(over)])]);
+
+  it("caps a stated edge", () => {
+    withPeriod({});
+
+    expect(found("line.timeline-strip-cap")).toHaveLength(2);
+    expect(found("rect.timeline-strip-fade")).toHaveLength(0);
+  });
+
+  it("dissolves an unknown edge", () => {
+    withPeriod({ end: UNKNOWN_EDGE });
+
+    const fade = found<SVGRectElement>("rect.timeline-strip-fade");
+    expect(fade).toHaveLength(1);
+    expect(fade[0].getAttribute("mask")).toBe("url(#timeline-fade-later)");
+    expect(found("path.timeline-strip-exit")).toHaveLength(0);
+  });
+
+  it("runs an unbounded edge off the panel at full weight", () => {
+    withPeriod({ end: NO_EDGE });
+
+    expect(found("path.timeline-strip-exit")).toHaveLength(1);
+    // The distinction the endpoint type exists to keep: no fog where there is
+    // no edge to be uncertain about (§13.2 rule 2).
+    expect(found("rect.timeline-strip-fade")).toHaveLength(0);
+  });
+
+  it("hatches an edge resolved from the source's own words", () => {
+    withPeriod({ start: stated("1997-05-02T00:00:00Z", "the second Blair ministry") });
+
+    const soft = found<SVGRectElement>("rect.timeline-strip-soft");
+    expect(soft).toHaveLength(1);
+    expect(soft[0].getAttribute("fill")).toBe("url(#timeline-strip-hatch-0)");
+  });
+
+  it("marks a witnessed moment with a dot and a halo", () => {
+    withPeriod({ witnessed_at: stated("2001-06-07T00:00:00Z") });
+
+    const dot = found("circle.timeline-witness");
+    const halo = found("circle.timeline-witness-halo");
+    expect(dot).toHaveLength(1);
+    expect(halo).toHaveLength(1);
+    expect(dot[0].getAttribute("cy")).toBe(halo[0].getAttribute("cy"));
+  });
+
+  it("collapses onto the witness when neither edge is known", () => {
+    withPeriod({
+      start: UNKNOWN_EDGE,
+      end: UNKNOWN_EDGE,
+      witnessed_at: stated("2001-06-07T00:00:00Z"),
+    });
+
+    const fades = found<SVGRectElement>("rect.timeline-strip-fade");
+    expect(fades).toHaveLength(2);
+    const dot = Number(found("circle.timeline-witness")[0].getAttribute("cy"));
+    expect(box(fades[0]).bottom).toBeCloseTo(dot);
+    expect(box(fades[1]).top).toBeCloseTo(dot);
+  });
+
+  it("draws a stated period solid and an inferred one hollow and dashed", () => {
+    showValidity([
+      linked("f1", "tp-early"),
+      sourced("f1", "doc-a", [period()]),
+      sourced("f1", "doc-b", [period({ basis: "inferred" })]),
+    ]);
+
+    const [hollow, solid] = [
+      strips().find((s) => s.classList.contains("timeline-strip-inferred"))!,
+      strips().find((s) => !s.classList.contains("timeline-strip-inferred"))!,
+    ];
+    expect(hollow.getAttribute("stroke-dasharray")).toBe("3 2");
+    expect(solid.getAttribute("stroke-dasharray")).toBeNull();
+    expect(Number(hollow.getAttribute("fill-opacity"))).toBeLessThan(
+      Number(solid.getAttribute("fill-opacity")),
+    );
+  });
+});
+
+describe("the rules a reasonable rendering would break", () => {
+  it("leaves the gap between two periods empty", () => {
+    // Open world: outside a stated interval is no assertion, so anything drawn
+    // across the gap would be a claim nobody made (§13.2 rule 1).
+    showValidity([
+      linked("f1", "tp-early"),
+      sourced("f1", "doc-a", [
+        period(),
+        period({ start: stated("2024-07-05T00:00:00Z"), end: UNKNOWN_EDGE }),
+      ]),
+    ]);
+
+    const [first, second] = strips().map(box);
+    const midGap = (first.bottom + second.top) / 2;
+    // Every filled shape the grammar draws: two bodies and the fog past the
+    // open end of the second period, and nothing else.
+    const drawn = found<SVGRectElement>("rect").filter((r) =>
+      [...r.classList].some((name) => name.startsWith("timeline-strip")),
+    );
+    expect(drawn).toHaveLength(3);
+    expect(drawn.some((r) => box(r).top <= midGap && box(r).bottom >= midGap)).toBe(
+      false,
+    );
+
+    const spine = found("line.timeline-claim-spine");
+    expect(spine).toHaveLength(1);
+    expect(spine[0].getAttribute("stroke-dasharray")).toBe("1 3");
+  });
+
+  it("fades through the now-line rather than stopping at it", () => {
+    showValidity(
+      [
+        linked("f1", "tp-early"),
+        sourced("f1", "doc-a", [
+          period({
+            start: stated("2024-01-01T00:00:00Z"),
+            end: UNKNOWN_EDGE,
+            // The timeline states a present, so it keeps its own clock and a
+            // period drawn on it has to name that clock.
+            timeline_id: CLOCK,
+          }),
+        ]),
+      ],
+      undefined,
+      { reference_time: "2024-06-01T00:00:00Z" },
+    );
+
+    const rule = found<SVGLineElement>("line").find(
+      (l) => l.getAttribute("stroke-dasharray") === "4 3",
+    )!;
+    const now = Number(rule.getAttribute("y1"));
+    const fade = box(found("rect.timeline-strip-fade")[0]);
+
+    expect(fade.top).toBeLessThan(now);
+    expect(fade.bottom).toBeGreaterThan(now);
+  });
+
+  it("drains a strip the retrieval did not return, and keeps it drawn", () => {
+    // Focus owns saturation, status owns opacity, so "not returned" and "no
+    // longer current" never arrive at the same appearance.
+    showValidity([linked("f1", "tp-early"), sourced("f1", "doc-a", [period()])]);
+    const lit = strips()[0].getAttribute("fill");
+
+    panel.setFocus(["somebody-else"]);
+
+    expect(strips()).toHaveLength(1);
+    expect(strips()[0].getAttribute("fill")).not.toBe(lit);
+    expect(strips()[0].getAttribute("fill-opacity")).toBe("0.85");
+  });
+
+  it("keeps a historical claim on the panel, at lower volume", () => {
+    showValidity(
+      [linked("f1", "tp-early"), sourced("f1", "doc-a", [period()])],
+      [node({ node_id: "f1", status: "historical" })],
+    );
+
+    expect(strips()).toHaveLength(1);
+    expect(strips()[0].classList.contains("timeline-strip-historical")).toBe(true);
+    expect(Number(strips()[0].getAttribute("fill-opacity"))).toBeLessThan(0.85);
+  });
+
+  it("hides a corrected claim until the status filter asks for it", () => {
+    showValidity(
+      [
+        linked("f1", "tp-early"),
+        linked("f1", "tp-late"),
+        sourced("f1", "doc-a", [period()]),
+      ],
+      [node({ node_id: "f1", status: "corrected" })],
+    );
+
+    expect(strips()).toHaveLength(0);
+
+    controls.statusSelect.value = "corrected";
+    change(controls.statusSelect);
+
+    expect(strips()).toHaveLength(1);
+    // Summoned, not believed.
+    expect(found("line.timeline-strip-struck")).toHaveLength(1);
+  });
+
+  it("puts no flag on a premise", () => {
+    // A soundness flag belongs on the inference that drew the conclusion, not
+    // on the facts it drew it from (§13.2 rule 8).
+    showValidity([linked("f1", "tp-early"), sourced("f1", "doc-a", [period()])]);
+
+    const pending = semanticPaletteFor("light").pending;
+    const flagged = found("*").some(
+      (e) => e.getAttribute("fill") === pending || e.getAttribute("stroke") === pending,
+    );
+    expect(flagged).toBe(false);
+  });
+});
+
+describe("periods with no place on this axis", () => {
+  it("sends an unresolved label to the tray, words intact", () => {
+    showValidity([
+      linked("f1", "tp-early"),
+      sourced("f1", "doc-a", [
+        period({ start: { instant_kind: "named", label: "under the USSR" } }),
+      ]),
+    ]);
+
+    expect(strips()).toHaveLength(0);
+    const chips = [...document.querySelectorAll("#undated .timeline-validity-chip")];
+    expect(chips).toHaveLength(1);
+    expect(chips[0].textContent).toContain("under the USSR");
+  });
+
+  it("sends a claim measured on another clock to the tray, with a clock badge", () => {
+    showValidity([
+      linked("f1", "tp-early"),
+      sourced("f1", "doc-a", [period({ timeline_id: "in-universe" })]),
+    ]);
+
+    const chips = [...document.querySelectorAll("#undated .timeline-validity-chip")];
+    expect(strips()).toHaveLength(0);
+    expect(chips).toHaveLength(1);
+    expect(chips[0].textContent).toContain("⧗");
+  });
+
+  it("draws a claim that names this timeline's own clock", () => {
+    showValidity([
+      linked("f1", "tp-early"),
+      sourced("f1", "doc-a", [period({ timeline_id: CLOCK })]),
+    ]);
+
+    expect(strips()).toHaveLength(1);
+  });
+
+  it("sends a real-world claim to the tray on a timeline with its own present", () => {
+    // A timeline that states a present keeps its own clock, so a period
+    // measured against the wall clock asserts a mapping nobody made.
+    showValidity(
+      [linked("f1", "tp-early"), sourced("f1", "doc-a", [period()])],
+      undefined,
+      { reference_time: "1850-01-01T00:00:00Z" },
+    );
+
+    const chips = [...document.querySelectorAll("#undated .timeline-validity-chip")];
+    expect(strips()).toHaveLength(0);
+    expect(chips).toHaveLength(1);
+    expect(chips[0].textContent).toContain("⧗");
+  });
+
+  it("draws a claim that names that timeline, present or no present", () => {
+    showValidity(
+      [linked("f1", "tp-early"), sourced("f1", "doc-a", [period({ timeline_id: CLOCK })])],
+      undefined,
+      { reference_time: "1850-01-01T00:00:00Z" },
+    );
+
+    expect(strips()).toHaveLength(1);
+  });
+});
+
+describe("the record behind a strip", () => {
+  it("says the source, both edges, the basis, the witness and the clock", () => {
+    showValidity([
+      linked("f1", "tp-early"),
+      sourced("f1", "doc-a", [
+        period({
+          end: UNKNOWN_EDGE,
+          witnessed_at: stated("2001-06-07T00:00:00Z"),
+          basis: "inferred",
+        }),
+      ]),
+    ]);
+
+    const detail = strips()[0].querySelector("title")!.textContent!;
+    expect(detail).toContain("almanac, 2011");
+    expect(detail).toContain("1997-05-02T00:00:00Z");
+    // The word, never a date invented for it.
+    expect(detail).toContain("unknown");
+    expect(detail).toContain("inferred");
+    expect(detail).toContain("2001-06-07T00:00:00Z");
+    expect(detail).toContain("default wall clock");
+  });
+
+  it("summarises a fact's sources as a hollow envelope, on demand", () => {
+    showValidity([
+      linked("f1", "tp-early"),
+      sourced("f1", "doc-a", [period()]),
+      sourced("f1", "doc-b", [period({ start: stated("1995-05-01T00:00:00Z") })]),
+    ]);
+    click(strips()[0]);
+
+    const envelope = found<SVGRectElement>("rect.timeline-envelope");
+    expect(envelope).toHaveLength(1);
+    // Outline only, so it can never be read as a period somebody stated.
+    expect(envelope[0].getAttribute("fill")).toBe("none");
+    expect(envelope[0].querySelector("title")!.textContent).toBe("any source asserts");
+  });
+});
+
+describe("temporally_followed_by", () => {
+  const naming = (): EdgeView[] => [
+    linked("f1", "tp-early"),
+    linked("f2", "tp-late"),
+    sourced("f1", "doc-a", [period()]),
+    sourced("f2", "doc-b", [
+      period({ start: stated("2010-05-11T00:00:00Z"), end: UNKNOWN_EDGE }),
+    ]),
+  ];
+
+  const two = (): NodeView[] => [
+    node({ node_id: "f1", content: "Labour is in government" }),
+    node({ node_id: "f2", content: "the Coalition is in government" }),
+  ];
+
+  it("elbows from one claim's end to the next one's start", () => {
+    showValidity([...naming(), follows("f1", "f2")], two());
+
+    expect(found("path.timeline-succession")).toHaveLength(1);
+    expect(found("circle.timeline-succession-dot")).toHaveLength(1);
+  });
+
+  it("draws each step of a cycle once and stops", () => {
+    // Recurrence makes a cycle legal for this edge, so the walk has to end.
+    showValidity(
+      [
+        linked("f1", "tp-early"),
+        linked("f2", "tp-early"),
+        linked("f3", "tp-late"),
+        sourced("f1", "doc-a", [period()]),
+        sourced("f2", "doc-b", [period({ start: stated("2011-01-01T00:00:00Z") })]),
+        sourced("f3", "doc-a", [period({ start: stated("2015-01-01T00:00:00Z") })]),
+        follows("f1", "f2"),
+        follows("f2", "f3"),
+        follows("f3", "f1"),
+      ],
+      [...two(), node({ node_id: "f3", content: "a third turn" })],
+    );
+
+    expect(found("path.timeline-succession")).toHaveLength(3);
+  });
+
+  it("leaves out a step whose other end has nothing drawn", () => {
+    showValidity([...naming().slice(0, 3), follows("f1", "f2")], two());
+
+    expect(found("path.timeline-succession")).toHaveLength(0);
+  });
+});
+
+describe("recurrence beads beside the strips", () => {
+  it("keeps drawing a rule's occurrences", () => {
+    showValidity(
+      [linked("f1", "tp-early"), sourced("f1", "doc-a", [period()])],
+      undefined,
+      {
+        recurrences: [
+          recurrence({
+            recurrence_id: "r1",
+            occurrences: [
+              occurrence({ occurrence_start: "2000-01-01T00:00:00Z" }),
+              occurrence({ occurrence_start: "2001-01-01T00:00:00Z" }),
+            ],
+          }),
+        ],
+      },
+    );
+
+    expect(found("circle.timeline-bead")).toHaveLength(2);
+    expect(strips()).toHaveLength(1);
   });
 });

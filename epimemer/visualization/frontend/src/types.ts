@@ -69,12 +69,61 @@ export interface NodeView {
   metadata: Record<string, unknown>;
 }
 
+/**
+ * A moment that may be imprecise, as a validity interval's endpoint.
+ *
+ * Four shapes for three states: a boundary located on the timeline, a boundary
+ * the source named but did not locate ("during the Renaissance"), a boundary
+ * whose place is unknown, and no boundary at all ("water is H2O" has no start).
+ * Unknown and unbounded stay apart on purpose: one says the edge is somewhere,
+ * the other says there is no edge, and the marks for them differ.
+ *
+ * `label` on a located boundary keeps the source's own words where a named
+ * endpoint was later resolved to a date, so the phrase behind the date stays
+ * readable.
+ */
+export type ImpreciseInstantView =
+  | { instant_kind: "precise"; at: string; label: string | null }
+  | { instant_kind: "named"; label: string }
+  | { instant_kind: "unknown" }
+  | { instant_kind: "unbounded" };
+
+/**
+ * A period one source asserts a claim was true, on one clock.
+ *
+ * Half-open, `[start, end)`: an instant belongs to the period that starts on
+ * it. `timeline_id` is the clock, null for the default wall-clock one.
+ * `witnessed_at` is the moment the source asserts the interval contains, which
+ * is how two undated claims can be shown to overlap. `basis` says whether the
+ * dates came from the text (`stated`) or from reading tense and context
+ * (`inferred`), so a viewer can keep the two apart.
+ *
+ * Open world: a moment outside every interval here is unknown rather than
+ * false, so a gap must never be drawn as a claim that the fact was untrue.
+ */
+export interface ValidityIntervalView {
+  start: ImpreciseInstantView;
+  end: ImpreciseInstantView;
+  timeline_id: string | null;
+  witnessed_at: ImpreciseInstantView | null;
+  basis: "stated" | "inferred";
+}
+
 export interface EdgeView {
   edge_id: string;
   src_id: string;
   dst_id: string;
   edge_type: string;
   weight: number;
+  /**
+   * When the source this edge names asserts the claim was true.
+   *
+   * One list per `sourced_from` edge, so every period stays attributable to
+   * the source that asserted it; empty on every other edge type. Several
+   * intervals are several disjoint periods one source claims, never a range to
+   * be combined into one.
+   */
+  validity: ValidityIntervalView[];
   created_at: string;
   graph: string;
   metadata: Record<string, unknown>;

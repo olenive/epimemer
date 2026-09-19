@@ -4,8 +4,21 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.7] — 2026-09-19
 
+- The visualisation snapshot now carries validity intervals: every
+  `sourced_from` edge brings the periods its source asserts the claim was true,
+  one list per source, and the live `edge_stored` event carries the same.
+- The timeline panel draws those periods, one lane per source and one strip per
+  period, each lane named after its source. A stated date gets a crisp cap, an
+  unknown edge dissolves into fog, an edge that does not exist keeps full weight
+  and runs off the panel, and a date resolved from the source's own words keeps
+  a hatched, soft edge. A witnessed moment is a dot with a halo, a period read
+  from tense rather than stated is hollow and dashed, and the space between two
+  periods stays empty, because outside a stated period the graph says nothing
+  rather than "false". A period nobody has dated, and one measured on another
+  clock, go to the tray with their words intact. A historical claim is drawn
+  quietly and a corrected one waits until the status filter asks for it.
 - A server that fails to start writes why to `EPIMEMER_LOG_FILE` before
   exiting, and a successful start logs the version, backend and embedding
   provider. CI starts the server and checks both.

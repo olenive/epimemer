@@ -126,7 +126,11 @@ class RpcResponse(BaseModel):  # session → hub
   (`WARNINGS_DASHBOARD.md` §2.4).
 - `GET /api/snapshot?session=<id>&graph=<g>`: RPC `snapshot`, shape
   `{"graph", "nodes", "edges", "timelines", "metacontexts",
-  "relation_labels"}`.
+  "relation_labels"}`. Each edge carries `validity`, the periods its source
+  asserts the claim was true: a list of `ValidityInterval` as the graph stores
+  them, filled on a `sourced_from` edge and empty on every other type
+  (`VALIDITY_DESIGN.md`). The live `edge_stored` event carries the same list,
+  so a browser that stays open and one that reloads see one shape.
 - `GET /api/retrievals?session=<id>`: the retrieval records
   (`RETRIEVAL_PROVENANCE.md`).
 
@@ -566,7 +570,8 @@ rather than a thing in the data, so it is a dashed neutral rule
 (`--text-secondary` stroke, `--text-strong` label) and does not compete with
 a semantic hue. Source strips are outside this palette: a per-source strip is
 always direct-labelled, so its colour carries no meaning and draws from a
-plain rotation whose only requirement is that adjacent strips differ.
+plain rotation whose only requirement is that adjacent strips differ, which is
+`stripHue` in `theme.ts`.
 
 Making the semantic hues settable (C4) needs an answer to "what happens when
 two of them are set to the same value", which is a different question from

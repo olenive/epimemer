@@ -3,8 +3,8 @@
 A timeline panel in the dashboard: a vertical axis with events as marks,
 hover detail, filtering, zoom, and a split pane beside the graph. The panel
 is built, including extraction proposing timepoints (§7), the band for a point
-the order places, the mark for a disputed order, and the beads for a rule's
-occurrences (§12.6). The valid-time grammar (§13) is designed and not built.
+the order places, the mark for a disputed order, the beads for a rule's
+occurrences (§12.6), and the valid-time grammar (§13).
 
 ---
 
@@ -291,6 +291,7 @@ dates. And the preposition needs a word boundary in front of it, or
 | `timeline-filter.ts` | query parsing, mark predicates | no |
 | `timeline-model.ts` | snapshot → marks, for both modes; side per mark; facet gathering | no |
 | `timeline-labels.ts` | label layout and text wrapping (§12.10, §12.11) | no |
+| `timeline-validity.ts` | validity intervals → lanes, strip geometry, endpoint marks, succession order (§13) | no |
 | `timeline-panel.ts` | SVG rendering, pointer handling, wiring to the event router | yes |
 | `split-pane.ts` | the graph/timeline divider (§12.7) | yes |
 
@@ -573,18 +574,22 @@ converges; it was removed.
 
 ---
 
-## 13. Valid-time grammar (designed, not built)
+## 13. Valid-time grammar
 
-How the panel would draw **validity intervals**, per `VALIDITY_DESIGN.md`.
-The validity model is built; the viz snapshot carries no validity yet, so the
-grammar has nothing to draw (`PROPOSED_FEATURES.md`). It was designed early
-because it exposed two rendering decisions (gaps, the now-line) that would
-otherwise be made by accident in code.
+How the panel draws **validity intervals**, per `VALIDITY_DESIGN.md`. The
+validity model is built, the snapshot carries per-source intervals on each
+`sourced_from` edge (`EdgeView.validity` is a list of `ValidityInterval`, in
+the snapshot payload and on the live `edge_stored` event, with
+`ValidityIntervalView` in `types.ts` as its wire shape), and the grammar below
+is built on top of it: `timeline-validity.ts` decides what each interval is and
+where it goes, `timeline-panel.ts` draws it. It was designed early because it
+exposed two rendering decisions (gaps, the now-line) that would otherwise have
+been made by accident in code.
 
-Two of the marks below are built already, for the other thing each was right
-for: the hatched band draws a point the order places, and the beads on a dotted
-spine draw a rule's occurrences (§12.6). Both are in `timeline-panel.ts`, so
-when validity does reach the snapshot the shapes are there to reuse.
+Two of the marks below were built first for the other thing each was right for:
+the hatched band draws a point the order places, and the beads on a dotted
+spine draw a rule's occurrences (§12.6). Both are in `timeline-panel.ts`, and
+the valid-time marks reuse the shapes.
 
 **A rendered mock of every mark in this section is checked in at
 `dev-docs/mockups/valid-time-grammar.html`**: self-contained, theme-aware, no
@@ -665,20 +670,49 @@ to data throughout: no bold, no semantic hue on axis furniture.
 **Source strips do not draw from this table.** A strip is always
 direct-labelled, so its hue carries no meaning and must not compete with one
 that does. They take a plain rotation whose only requirement is that adjacent
-strips in a stack differ.
+strips in a stack differ; it is `stripHue` in `theme.ts`, deliberately outside
+`SemanticPalette`.
 
 ### 13.4 Implementation notes
 
 - **Fits the existing panel.** Vertical axis, past at top; facts left,
   inferences right; the undated tray absorbs unresolved labels and cross-clock
-  chips; the reference-time marker *is* the now-line. Bars become vertical
-  spans in lanes beside the axis.
+  chips; the reference-time marker *is* the now-line. Bars are vertical spans
+  in lanes beside the axis, and the side text steps out past however many lanes
+  a side is using.
 - **Gradients and hatching** are plain SVG `linearGradient` / `pattern` fills
   referencing the CSS variables; the mock has working markup.
-- **Every `temporally_followed_by` walk must be cycle-safe.** The elbow
-  renderer and any lineage layout must terminate on revisited nodes.
+- **Every `temporally_followed_by` walk must be cycle-safe.** `successionOrder`
+  draws each step once and stops on a step it has already drawn, so a chain
+  that returns to its own lane terminates.
 - **The tooltip layer** carries what the mark compresses: the `(source,
   interval)` pairs verbatim, endpoint kinds by name, `stated`/`inferred`, and
   the witness date. The mark is the summary; the tooltip is the record.
-- **Two parts before any of this draws**: per-source intervals into
-  `snapshot.py`, then the SVG grammar.
+- **Content time only.** These are periods the world was in, so they belong on
+  the axis that measures when things happened. Plotting them against
+  `created_at` would put a date on the wrong clock.
+- **Historical is dimmed rather than desaturated.** The table above says
+  desaturated, and the rule that has since settled across both panels gives
+  saturation to focus and opacity to status (`RETRIEVAL_PROVENANCE.md` §4.1).
+  A strip follows the later rule, so a claim the retrieval missed and a claim
+  that is history never arrive at the same appearance.
+- **Lanes are reused down the axis**, since column position carries no meaning:
+  a lane is free again once the period above it has ended. A side draws three
+  lanes at once and counts the rest, the way the label layout counts the labels
+  it could not place.
+- **The envelope appears on selection.** It is the optional summary, and
+  selecting a mark is the gesture this panel already uses for detail on demand
+  (§12.10), so it needed no control of its own. It is drawn for a selected fact
+  with more than one source, where there is a disagreement to summarise.
+- **A bare named endpoint takes its whole interval to the tray**, even when the
+  other endpoint carries a date. Drawing the dated half and fading away from it
+  would put the unknown mark on a named thing, which reads as "we do not know
+  where this edge is" when the source said exactly where: it said "the
+  Renaissance". The chip keeps both endpoints' words, and resolving the label
+  brings the interval to the axis.
+- **A timeline with a stated `reference_time` keeps its own clock.** An
+  interval naming no clock is measured against the default wall-clock timeline,
+  which is the one that states no present (`VALIDITY_DESIGN.md` §2.5), so it
+  draws on a timeline that follows the wall clock and on no other. An interval
+  naming this timeline always draws. Anything else is cross-clock and goes to
+  the tray with the clock badge.

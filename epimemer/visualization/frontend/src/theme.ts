@@ -262,6 +262,25 @@ export const semanticPaletteFor = (theme: Theme): SemanticPalette =>
   theme === "dark" ? SEMANTIC_DARK : SEMANTIC_LIGHT;
 
 /**
+ * The rotation a stack of per-source validity strips takes.
+ *
+ * Deliberately outside `SemanticPalette`: every strip is direct-labelled with
+ * its source, so its hue carries no meaning, and a hue that means nothing must
+ * not sit in the table of hues that do, where it would compete with them
+ * (TIMELINE_VISUALISATION.md §13.3). The only requirement on the rotation is
+ * that neighbouring lanes differ, which is why it is short and wraps.
+ */
+const STRIP_HUES: Record<Theme, readonly string[]> = {
+  light: ["#2a78d6", "#eb6834", "#1baf7a"],
+  dark: ["#3987e5", "#d95926", "#199e70"],
+};
+
+export const stripHue = (theme: Theme, lane: number): string => {
+  const hues = STRIP_HUES[theme];
+  return hues[((lane % hues.length) + hues.length) % hues.length];
+};
+
+/**
  * The same hue, drained of colour — how focus mode dims.
  *
  * Focus owns **saturation**; status owns **opacity** (RETRIEVAL_PROVENANCE.md

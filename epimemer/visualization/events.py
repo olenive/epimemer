@@ -17,6 +17,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from epimemer.core.advisories import AdvisoryAction, AdvisoryKind
+from epimemer.core.temporal import ValidityInterval
 from epimemer.core.types import (
     DecisionKind,
     EpistemicNode,
@@ -92,6 +93,15 @@ class EdgeView(BaseModel):
     dst_id: str
     edge_type: str
     weight: float = 1.0
+    # When the source this edge names asserts the claim was true. A list,
+    # because one source can assert several disjoint periods, and empty on
+    # every edge type but `sourced_from`, which the edge model enforces.
+    #
+    # The core model travels as it is rather than through a parallel view type.
+    # A view would be a second place the endpoint shapes are written down, and
+    # adding a shape would then mean editing both. Here the frontend receives
+    # `ValidityInterval` as the graph stores it.
+    validity: list[ValidityInterval] = Field(default_factory=list)
     created_at: datetime
     graph: str
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -253,6 +263,7 @@ def edge_to_view(edge: NodeEdge, graph: str) -> EdgeView:
         dst_id=edge.dst_id,
         edge_type=edge.type.value,
         weight=edge.weight,
+        validity=edge.validity,
         created_at=edge.created_at,
         graph=graph,
         metadata=edge.metadata,

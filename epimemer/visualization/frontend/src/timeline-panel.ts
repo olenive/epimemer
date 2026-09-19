@@ -59,10 +59,26 @@ import {
   type Scale,
 } from "./timeline-scale";
 import {
+  intervalSpan,
+  packSlots,
+  stripGeometry,
+  successionOrder,
+  unionEnvelope,
+  validityLayout,
+  type AxisClock,
+  type StripBounds,
+  type StripGeometry,
+  type ValidityChip,
+  type ValidityLane,
+  type ValidityLayout,
+  type ValidityStrip,
+} from "./timeline-validity";
+import {
   currentPalette,
   currentTheme,
   desaturate,
   semanticPaletteFor,
+  stripHue,
   type Theme,
 } from "./theme";
 import type { AnyEvent, NodeStatusChanged, NodeStored, TimelineStored } from "./types";
@@ -101,6 +117,27 @@ const BAND_MIN_HEIGHT = 10;
  * known edge, so the fade is the whole of it.
  */
 const FADE_PX = 24;
+/**
+ * Per-source validity lanes (§13): how far the first sits from the axis, and
+ * the pitch from one to the next, which is a strip plus room for its name.
+ *
+ * Lanes are reused down the axis, so the pitch buys a column rather than a
+ * source: a side runs out of room at `STRIP_SLOTS` lanes overlapping in time,
+ * and the strips past that are counted rather than stacked into the labels.
+ */
+const STRIP_INSET = 13;
+const STRIP_PITCH = 16;
+const STRIP_WIDTH = 5;
+const STRIP_SLOTS = 3;
+/** Room two strips sharing a lane need, so a gap never reads as one bar. */
+const STRIP_SLOT_GAP = 6;
+/** Half the width of an endpoint cap, and the witness dot with its halo. */
+const CAP_REACH = 4;
+const WITNESS_RADIUS = 3;
+const WITNESS_HALO = 5.5;
+/** The terminal dot on a succession elbow, and how far its curve bows. */
+const ELBOW_DOT = 2.5;
+const ELBOW_BOW = 14;
 /** A bead is a small mark: an occurrence a rule computed, not a point recorded. */
 const BEAD_RADIUS = 2.6;
 /** How far the first spine sits from the axis, and how far apart two spines are. */
@@ -506,6 +543,27 @@ export const initTimelinePanel = (
       defs.appendChild(pattern);
     }
 
+    // One hatch per lane, in that lane's hue: a soft edge is a date resolved
+    // from the source's own words, and it stays soft (§13.1).
+    for (let slot = 0; slot < STRIP_SLOTS; slot++) {
+      const pattern = svg("pattern", {
+        id: `timeline-strip-hatch-${slot}`,
+        width: 4,
+        height: 4,
+        patternUnits: "userSpaceOnUse",
+        patternTransform: "rotate(45)",
+      });
+      pattern.appendChild(
+        svg("path", {
+          d: "M 0 0 L 0 4",
+          stroke: stripHue(theme, slot),
+          "stroke-width": 1.6,
+          "stroke-opacity": 0.75,
+        }),
+      );
+      defs.appendChild(pattern);
+    }
+
     for (const [name, from, to] of [
       ["timeline-fade-later", 1, 0],
       ["timeline-fade-earlier", 0, 1],
@@ -697,6 +755,468 @@ export const initTimelinePanel = (
     group.appendChild(shape);
   };
 
+  // --- Valid time: what each source says about when (§13) ---
+
+  /** One period one source asserts, placed. */
+  interface PlacedStrip {
+    strip: ValidityStrip;
+    geometry: StripGeometry;
+  }
+
+  /** One source's lane, with the column it was given and everything in it. */
+  interface PlacedLane {
+    lane: ValidityLane;
+    slot: number;
+    strips: PlacedStrip[];
+    span: StripBounds;
+  }
+
+  interface PlacedValidity {
+    lanes: PlacedLane[];
+    chips: ValidityChip[];
+    /** Strips there was no column left for. */
+    hidden: number;
+    /** Columns each side is using, which is how far its labels have to move. */
+    slots: { left: number; right: number };
+  }
+
+  /** A lane sits on its mark's side; a straddling mark's lanes go left. */
+  const columnFor = (side: TimelineMark["side"]): "left" | "right" =>
+    side === "right" ? "right" : "left";
+
+  /**
+   * Where every source's periods go, in columns beside the axis.
+   *
+   * **Content mode only.** These are periods the world was in, and the record
+   * axis measures when the graph was told things: a 1924 interval plotted
+   * against `created_at` would be a date on the wrong clock entirely.
+   *
+   * A claim we were wrong about is left out unless the status filter asks for
+   * it by name, which is this panel's version of `include_corrected` (§13.2
+   * rule 5).
+   */
+  /**
+   * The clock the axis keeps: this timeline, and whether it has a present.
+   *
+   * The raw field rather than the resolved instant, because what matters here
+   * is whether the timeline states one at all. A stated present makes it a
+   * clock of its own; without one it follows the wall clock, which is the
+   * timeline real-world periods are measured against.
+   */
+  const axisClock = (): AxisClock => {
+    const timelineId = currentRow()?.id ?? null;
+    const timeline = (state.snapshot.timelines ?? []).find(
+      (t) => t.timeline_id === timelineId,
+    );
+    return { timelineId, referenceTime: timeline?.reference_time ?? null };
+  };
+
+  const layoutValidity = (marks: readonly DatedMark[]): ValidityLayout => {
+    if (state.mode !== "content") return { lanes: [], chips: [] };
+    return validityLayout(
+      state.snapshot,
+      marks,
+      axisClock(),
+      // The panel's `include_corrected`: naming the status is how a mistake is
+      // summoned, and nothing else brings it back.
+      state.filters.statuses?.has("corrected") ?? false,
+    );
+  };
+
+  const placeValidity = (
+    { lanes, chips }: ValidityLayout,
+    scale: Scale,
+    height: number,
+  ): PlacedValidity => {
+    const bounds = { top: 0, bottom: height };
+    const placed = lanes.flatMap((lane) => {
+      const strips = lane.strips.flatMap((strip) => {
+        const span = intervalSpan(strip.interval);
+        // Off-screen periods take no column: `timeToPos` pins anything outside
+        // the domain to an edge, so keeping them would pile flat strips there.
+        if (span === null || span.to < scale.domain.t0 || span.from > scale.domain.t1) {
+          return [];
+        }
+        const geometry = stripGeometry(
+          strip.interval,
+          (at) => timeToPos(scale, at),
+          bounds,
+          FADE_PX,
+        );
+        return geometry === null ? [] : [{ strip, geometry }];
+      });
+      const span = unionEnvelope(strips.map((s) => s.geometry));
+      return span === null ? [] : [{ lane, strips, span }];
+    });
+
+    const slots = { left: 0, right: 0 };
+    const drawn: PlacedLane[] = [];
+    let hidden = 0;
+    for (const column of ["left", "right"] as const) {
+      const here = placed
+        .filter((p) => columnFor(p.lane.side) === column)
+        .sort((a, b) => a.span.top - b.span.top);
+      const assigned = packSlots(
+        here.map((p) => p.span),
+        STRIP_SLOT_GAP,
+      );
+      here.forEach((p, index) => {
+        const slot = assigned[index];
+        if (slot >= STRIP_SLOTS) {
+          hidden += p.strips.length;
+          return;
+        }
+        slots[column] = Math.max(slots[column], slot + 1);
+        drawn.push({ ...p, slot });
+      });
+    }
+    return { lanes: drawn, chips, hidden, slots };
+  };
+
+  const laneX = (placed: PlacedLane, axisX: number): number =>
+    axisX +
+    (columnFor(placed.lane.side) === "right" ? 1 : -1) *
+      (STRIP_INSET + placed.slot * STRIP_PITCH);
+
+  /** Hover and click reach the mark; the tooltip carries the interval itself. */
+  const bindStrip = (
+    element: SVGElement,
+    className: string,
+    detail: string,
+    markId: string,
+  ): void => {
+    element.setAttribute("class", `${className} cursor-pointer`);
+    const title = svg("title", {});
+    title.textContent = detail;
+    element.appendChild(title);
+    const mark = currentRow()?.dated.find((m) => m.id === markId);
+    if (mark === undefined) return;
+    element.addEventListener("mouseenter", () => onSelect(mark));
+    element.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.selectedMarkId = state.selectedMarkId === mark.id ? null : mark.id;
+      onSelect(state.selectedMarkId === null ? null : mark);
+      render();
+    });
+  };
+
+  /**
+   * One period, with a mark per endpoint kind.
+   *
+   * Solid for `stated` and a soft tint under a dashed outline for `inferred`,
+   * so squinting performs the stated-only filter the API offers. A stated date
+   * gets a crisp cap; an unknown edge dissolves over `FADE_PX`, past the
+   * now-line if that is where it falls, because stopping at the rule would
+   * assert an endpoint nobody stated; an unbounded edge keeps full weight and
+   * leaves the panel; a date resolved from the source's words keeps a hatched,
+   * soft edge.
+   */
+  const renderStrip = (
+    group: SVGGElement,
+    placed: PlacedLane,
+    { strip, geometry }: PlacedStrip,
+    x: number,
+    height: number,
+  ): void => {
+    // Focus owns saturation and status owns opacity (RETRIEVAL_PROVENANCE.md
+    // §4.1), so a strip the retrieval missed and a strip that is history stay
+    // distinguishable from each other.
+    const lit = focused === null || focused.has(placed.lane.nodeId);
+    const plain = stripHue(currentTheme(), placed.slot);
+    const hue = lit ? plain : desaturate(plain);
+    const muted = placed.lane.status === "historical";
+    const inferred = strip.interval.basis === "inferred";
+    const alpha = muted ? 0.45 : 1;
+    const left = x - STRIP_WIDTH / 2;
+    const bodyHeight = Math.max(1, geometry.bodyBottom - geometry.bodyTop);
+
+    const body = svg("rect", {
+      x: left,
+      y: geometry.bodyTop,
+      width: STRIP_WIDTH,
+      height: bodyHeight,
+      rx: 1.5,
+      fill: hue,
+      "fill-opacity": (inferred ? 0.2 : 0.85) * alpha,
+      ...(inferred
+        ? {
+            stroke: hue,
+            "stroke-width": 1,
+            "stroke-dasharray": "3 2",
+            "stroke-opacity": 0.9 * alpha,
+          }
+        : {}),
+    });
+    bindStrip(
+      body,
+      `timeline-strip${inferred ? " timeline-strip-inferred" : ""}${
+        muted ? " timeline-strip-historical" : ""
+      }`,
+      strip.detail,
+      placed.lane.markId,
+    );
+    group.appendChild(body);
+
+    for (const [endpoint, y, direction] of [
+      [geometry.startMark, geometry.bodyTop, -1],
+      [geometry.endMark, geometry.bodyBottom, 1],
+    ] as const) {
+      if (endpoint === "cap") {
+        group.appendChild(
+          svg("line", {
+            class: "timeline-strip-cap",
+            x1: x - CAP_REACH,
+            y1: y,
+            x2: x + CAP_REACH,
+            y2: y,
+            stroke: hue,
+            "stroke-width": 2,
+            "stroke-opacity": alpha,
+          }),
+        );
+      }
+      if (endpoint === "soft") {
+        const reach = Math.min(FADE_PX, bodyHeight);
+        group.appendChild(
+          svg("rect", {
+            class: "timeline-strip-soft",
+            x: left,
+            y: direction === -1 ? y : y - reach,
+            width: STRIP_WIDTH,
+            height: reach,
+            fill: `url(#timeline-strip-hatch-${placed.slot})`,
+            "fill-opacity": alpha,
+          }),
+        );
+      }
+      if (endpoint === "fade") {
+        const reach = direction === -1 ? geometry.fadeAbove : geometry.fadeBelow;
+        group.appendChild(
+          svg("rect", {
+            class: "timeline-strip-fade",
+            x: left,
+            y: direction === -1 ? y - reach : y,
+            width: STRIP_WIDTH,
+            height: reach,
+            fill: hue,
+            "fill-opacity": alpha,
+            mask: `url(#timeline-fade-${direction === -1 ? "earlier" : "later"})`,
+          }),
+        );
+      }
+      if (endpoint === "exit") {
+        // The bar already runs to the edge; the head says it keeps going.
+        const rim = direction === -1 ? 0 : height;
+        const tip = rim + direction * 5;
+        group.appendChild(
+          svg("path", {
+            class: "timeline-strip-exit",
+            d: `M ${left - 2} ${rim} L ${left + STRIP_WIDTH + 2} ${rim} L ${x} ${tip} Z`,
+            fill: hue,
+            "fill-opacity": alpha,
+          }),
+        );
+      }
+    }
+
+    if (geometry.witnessAt !== null) {
+      // The one moment a source actually stood behind, so the one part of the
+      // mark drawn at full confidence.
+      group.appendChild(
+        svg("circle", {
+          class: "timeline-witness-halo",
+          cx: x,
+          cy: geometry.witnessAt,
+          r: WITNESS_HALO,
+          fill: "none",
+          stroke: hue,
+          "stroke-width": 2,
+          "stroke-opacity": 0.35 * alpha,
+        }),
+      );
+      const dot = svg("circle", {
+        class: "timeline-witness",
+        cx: x,
+        cy: geometry.witnessAt,
+        r: WITNESS_RADIUS,
+        fill: hue,
+        "fill-opacity": alpha,
+      });
+      bindStrip(dot, "timeline-witness", strip.detail, placed.lane.markId);
+      group.appendChild(dot);
+    }
+
+    if (placed.lane.status === "corrected") {
+      // Summoned rather than believed: struck through, the way the retrieval
+      // surface shows what we thought and had to take back.
+      group.appendChild(
+        svg("line", {
+          class: "timeline-strip-struck",
+          x1: x,
+          y1: geometry.bodyTop,
+          x2: x,
+          y2: geometry.bodyBottom,
+          stroke: currentPalette().surfaceChrome,
+          "stroke-width": 1.5,
+        }),
+      );
+    }
+  };
+
+  /**
+   * One source's lane: its periods, the hairline between them, and its name.
+   *
+   * The hairline is the only thing drawn between two periods. Outside a stated
+   * interval is *no assertion* (§13.2 rule 1), so a shaded or coloured gap
+   * would draw a claim nobody made; a dotted spine says "same claim, nothing
+   * asserted here" and no more.
+   *
+   * The name is rotated to read outward from the axis, which is where a lane
+   * has room. Direct labelling is what lets a strip's hue mean nothing (§13.3).
+   */
+  const renderLane = (
+    group: SVGGElement,
+    placed: PlacedLane,
+    axisX: number,
+    height: number,
+  ): void => {
+    const palette = currentPalette();
+    const x = laneX(placed, axisX);
+
+    if (placed.strips.length > 1) {
+      group.appendChild(
+        svg("line", {
+          class: "timeline-claim-spine",
+          x1: x,
+          y1: placed.span.top,
+          x2: x,
+          y2: placed.span.bottom,
+          stroke: palette.tick,
+          "stroke-width": 1,
+          "stroke-dasharray": "1 3",
+        }),
+      );
+    }
+
+    for (const strip of placed.strips) renderStrip(group, placed, strip, x, height);
+
+    const reach = placed.span.bottom - placed.span.top;
+    if (reach < 20) return;
+    const outward = columnFor(placed.lane.side) === "right" ? 1 : -1;
+    const label = svg("text", {
+      class: "timeline-strip-label",
+      transform: `translate(${x + outward * (STRIP_WIDTH / 2 + 3)}, ${
+        outward === 1 ? placed.span.top : placed.span.bottom
+      }) rotate(${outward * 90})`,
+      fill: palette.nodeLabel,
+      "font-size": 9,
+      "text-anchor": "start",
+    });
+    label.textContent = truncate(placed.lane.sourceLabel, Math.floor(reach / CHAR_WIDTH));
+    group.appendChild(label);
+  };
+
+  /**
+   * The summary the selected fact's sources add up to, as an outline.
+   *
+   * Hollow and dashed, never filled (§13.2 rule 4): "any source asserts" is a
+   * reading made here, and a solid bar would show it as a period somebody
+   * stated. Drawn only for a selected fact with more than one source, where
+   * there is a disagreement to summarise.
+   */
+  const renderEnvelope = (
+    group: SVGGElement,
+    lanes: readonly PlacedLane[],
+    axisX: number,
+  ): void => {
+    const byNode = new Map<string, PlacedLane[]>();
+    for (const placed of lanes) {
+      if (placed.lane.markId !== state.selectedMarkId) continue;
+      const bucket = byNode.get(placed.lane.nodeId);
+      if (bucket) bucket.push(placed);
+      else byNode.set(placed.lane.nodeId, [placed]);
+    }
+
+    for (const stack of byNode.values()) {
+      if (stack.length < 2) continue;
+      const span = unionEnvelope(stack.map((p) => p.span))!;
+      const xs = stack.map((p) => laneX(p, axisX));
+      const left = Math.min(...xs) - STRIP_WIDTH;
+      const right = Math.max(...xs) + STRIP_WIDTH;
+      const outline = svg("rect", {
+        class: "timeline-envelope",
+        x: left,
+        y: span.top - 3,
+        width: right - left,
+        height: span.bottom - span.top + 6,
+        rx: 3,
+        fill: "none",
+        stroke: currentPalette().tick,
+        "stroke-width": 1.2,
+        "stroke-dasharray": "1 3",
+      });
+      const title = svg("title", {});
+      title.textContent = "any source asserts";
+      outline.appendChild(title);
+      group.appendChild(outline);
+    }
+  };
+
+  /**
+   * `temporally_followed_by`, as an elbow from one claim's end to the next's
+   * start.
+   *
+   * Order, not replacement, so it is a thin connector rather than anything that
+   * reads as a correction. Recurrence makes a cycle legal for this edge, and
+   * `successionOrder` draws each step once, so a chain that returns to its own
+   * lane is drawn calmly instead of hanging the renderer.
+   */
+  const renderSuccession = (
+    group: SVGGElement,
+    lanes: readonly PlacedLane[],
+    axisX: number,
+  ): void => {
+    const extent = new Map<string, { x: number; top: number; bottom: number }>();
+    for (const placed of lanes) {
+      const x = laneX(placed, axisX);
+      const known = extent.get(placed.lane.nodeId);
+      extent.set(placed.lane.nodeId, {
+        // The lane nearest the axis speaks for the claim, so a fact with
+        // several sources still gets one connector rather than one per source.
+        x: known === undefined ? x : Math.abs(x - axisX) < Math.abs(known.x - axisX) ? x : known.x,
+        top: Math.min(known?.top ?? Infinity, placed.span.top),
+        bottom: Math.max(known?.bottom ?? -Infinity, placed.span.bottom),
+      });
+    }
+
+    const palette = currentPalette();
+    for (const step of successionOrder(state.snapshot.edges, new Set(extent.keys()))) {
+      const from = extent.get(step.from)!;
+      const to = extent.get(step.to)!;
+      group.appendChild(
+        svg("path", {
+          class: "timeline-succession",
+          d:
+            `M ${from.x} ${from.bottom} ` +
+            `C ${from.x} ${from.bottom + ELBOW_BOW}, ${to.x} ${to.top - ELBOW_BOW}, ` +
+            `${to.x} ${to.top}`,
+          fill: "none",
+          stroke: palette.tick,
+          "stroke-width": 1.2,
+        }),
+      );
+      group.appendChild(
+        svg("circle", {
+          class: "timeline-succession-dot",
+          cx: to.x,
+          cy: to.top,
+          r: ELBOW_DOT,
+          fill: palette.tick,
+        }),
+      );
+    }
+  };
+
   /**
    * One rule's occurrences: beads on a hairline dotted spine.
    *
@@ -717,10 +1237,11 @@ export const initTimelinePanel = (
     spine: RecurrenceSpine,
     lane: number,
     axisX: number,
+    inset: number,
   ): void => {
     const palette = currentPalette();
     const theme = currentTheme();
-    const x = axisX - SPINE_INSET - lane * SPINE_GAP;
+    const x = axisX - inset - lane * SPINE_GAP;
     const inside = spine.occurrences.filter(
       (occurrence) =>
         occurrence.at >= scale.domain.t0 && occurrence.at <= scale.domain.t1,
@@ -914,15 +1435,40 @@ export const initTimelinePanel = (
     group.appendChild(label);
   };
 
+  /**
+   * How far a column's text starts from the axis.
+   *
+   * Source lanes take the gutter first, so the text steps out past however many
+   * of them the side is using. With no validity to draw, nothing moves.
+   */
+  type Insets = { left: number; right: number };
+
+  const insetsFor = (slots: Insets): Insets => ({
+    left: LABEL_INSET + slots.left * STRIP_PITCH,
+    right: LABEL_INSET + slots.right * STRIP_PITCH,
+  });
+
   /** Pixels available for a label in the given column, measured from its edge. */
-  const roomFor = (column: "left" | "right", axisX: number, width: number): number =>
-    column === "left" ? axisX - LABEL_INSET : width - axisX - LABEL_INSET - 4;
+  const roomFor = (
+    column: "left" | "right",
+    axisX: number,
+    width: number,
+    inset: number,
+  ): number => (column === "left" ? axisX - inset : width - axisX - inset - 4);
 
   /** Characters that fit in one line of a label in the given column. */
-  const charBudget = (column: "left" | "right", axisX: number, width: number): number =>
+  const charBudget = (
+    column: "left" | "right",
+    axisX: number,
+    width: number,
+    inset: number,
+  ): number =>
     // The card's padding comes out of the text budget, so a full-width line
     // plus its border still fits inside the panel.
-    Math.max(8, Math.floor((roomFor(column, axisX, width) - CARD_PADDING * 2) / CHAR_WIDTH));
+    Math.max(
+      8,
+      Math.floor((roomFor(column, axisX, width, inset) - CARD_PADDING * 2) / CHAR_WIDTH),
+    );
 
   /**
    * Place and draw the side text. Returns how many labels there was no room for.
@@ -945,6 +1491,7 @@ export const initTimelinePanel = (
     axisX: number,
     width: number,
     height: number,
+    insets: Insets,
   ): number => {
     const palette = currentPalette();
     const byRequest = new Map<string, DatedMark>();
@@ -975,7 +1522,11 @@ export const initTimelinePanel = (
         plain.push({ id, anchor, height: LABEL_HEIGHT, column });
         continue;
       }
-      const lines = wrapText(mark.detail, charBudget(column, axisX, width), CARD_LINES);
+      const lines = wrapText(
+        mark.detail,
+        charBudget(column, axisX, width, insets[column]),
+        CARD_LINES,
+      );
       cards.set(id, lines);
       expanded.push({
         id,
@@ -996,7 +1547,8 @@ export const initTimelinePanel = (
       if (mark === undefined || label.column === "axis") continue;
 
       const isLeft = label.column === "left";
-      const labelX = isLeft ? axisX - LABEL_INSET : axisX + LABEL_INSET;
+      const inset = insets[label.column];
+      const labelX = isLeft ? axisX - inset : axisX + inset;
 
       const leader = leaderPoints(label, { axisX, labelX });
       if (leader.length > 0) {
@@ -1013,7 +1565,15 @@ export const initTimelinePanel = (
 
       const lines = cards.get(label.id);
       if (lines !== undefined) {
-        renderCard(group, label, mark, lines, labelX, isLeft, roomFor(label.column, axisX, width));
+        renderCard(
+          group,
+          label,
+          mark,
+          lines,
+          labelX,
+          isLeft,
+          roomFor(label.column, axisX, width, inset),
+        );
         continue;
       }
 
@@ -1024,7 +1584,10 @@ export const initTimelinePanel = (
         "font-size": 10,
         "text-anchor": isLeft ? "end" : "start",
       });
-      text.textContent = truncate(mark.title, charBudget(label.column, axisX, width));
+      text.textContent = truncate(
+        mark.title,
+        charBudget(label.column, axisX, width, inset),
+      );
       bindMark(text, mark);
       group.appendChild(text);
     }
@@ -1143,10 +1706,13 @@ export const initTimelinePanel = (
    * The tray sits outside the axis rather than below it, because "below" now
    * means "later" — chips at the bottom would read as far-future.
    */
-  const renderUndated = (marks: readonly TimelineMark[]): void => {
+  const renderUndated = (
+    marks: readonly TimelineMark[],
+    chips: readonly ValidityChip[] = [],
+  ): void => {
     controls.undated.innerHTML = "";
-    controls.undated.classList.toggle("hidden", marks.length === 0);
-    if (marks.length === 0) return;
+    controls.undated.classList.toggle("hidden", marks.length + chips.length === 0);
+    if (marks.length + chips.length === 0) return;
 
     const caption = document.createElement("span");
     caption.className =
@@ -1188,6 +1754,25 @@ export const initTimelinePanel = (
       });
       controls.undated.appendChild(chip);
     }
+
+    // A period with no honest place on the axis keeps its words instead: a
+    // label nobody has resolved, and a claim measured on another clock, which
+    // comparison leaves unknown by definition (§13.2 rules 3 and 6).
+    for (const chip of chips) {
+      const el = document.createElement("span");
+      el.className =
+        "timeline-validity-chip px-1.5 py-0.5 text-[10px] rounded border border-dashed " +
+        "bg-surface-raised text-content-secondary border-line inline-flex items-center gap-1";
+      const text = document.createElement("span");
+      text.textContent = truncate(chip.label, 40);
+      el.appendChild(text);
+      const badge = document.createElement("span");
+      badge.className = "text-content-muted";
+      badge.textContent = chip.reason === "other clock" ? "⧗" : "?";
+      el.appendChild(badge);
+      el.title = chip.detail;
+      controls.undated.appendChild(el);
+    }
   };
 
   const render = (): void => {
@@ -1215,7 +1800,8 @@ export const initTimelinePanel = (
       return;
     }
     controls.empty.classList.add("hidden");
-    renderUndated(filtered.undated);
+    const layout = layoutValidity(filtered.dated);
+    renderUndated(filtered.undated, layout.chips);
 
     const width = controls.body.clientWidth;
     const height = controls.body.clientHeight;
@@ -1239,24 +1825,45 @@ export const initTimelinePanel = (
     const group = svg("g", { transform: `translate(0, ${AXIS_PADDING})` });
     const axisX = Math.round(width / 2);
 
+    const validity = placeValidity(layout, scale, usable);
+    // Source lanes take the gutter beside the axis, so the recurrence spines
+    // and the side text both step out past them.
+    const insets = insetsFor(validity.slots);
+
     const tickLabels = renderAxis(group, scale, axisX, usable);
     renderReferenceRule(group, scale, width, referenceTime());
     filtered.spines.forEach((spine, lane) =>
-      renderSpine(group, scale, spine, lane, axisX),
+      renderSpine(
+        group,
+        scale,
+        spine,
+        lane,
+        axisX,
+        SPINE_INSET + validity.slots.left * STRIP_PITCH,
+      ),
     );
+    renderSuccession(group, validity.lanes, axisX);
+    renderEnvelope(group, validity.lanes, axisX);
+    for (const placed of validity.lanes) renderLane(group, placed, axisX, usable);
     for (const mark of filtered.dated) renderMark(group, scale, mark, axisX);
-    const hidden = renderLabels(group, scale, filtered.dated, axisX, width, usable);
+    const hidden = renderLabels(group, scale, filtered.dated, axisX, width, usable, insets);
     // Last, so the marks sharing the axis column cannot bury them.
     group.appendChild(tickLabels);
 
-    if (hidden > 0) {
+    const notes = [
+      hidden > 0 ? `+${hidden} label${hidden === 1 ? "" : "s"} hidden` : null,
+      validity.hidden > 0
+        ? `+${validity.hidden} source strip${validity.hidden === 1 ? "" : "s"} hidden`
+        : null,
+    ].filter((note): note is string => note !== null);
+    if (notes.length > 0) {
       const note = svg("text", {
         x: 4,
         y: usable - 2,
         fill: currentPalette().tickLabel,
         "font-size": 9,
       });
-      note.textContent = `+${hidden} label${hidden === 1 ? "" : "s"} hidden — zoom in`;
+      note.textContent = `${notes.join(", ")} — zoom in`;
       group.appendChild(note);
     }
 

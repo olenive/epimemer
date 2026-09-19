@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { nodeColor } from "./graph-panel";
 import { markColor } from "./timeline-panel";
-import { semanticPaletteFor, type Theme } from "./theme";
+import { semanticPaletteFor, stripHue, type Theme } from "./theme";
 
 const THEMES: Theme[] = ["light", "dark"];
 
@@ -57,5 +57,30 @@ describe("semanticPaletteFor", () => {
     expect(light.fact).not.toBe(dark.fact);
     expect(light.inference).not.toBe(dark.inference);
     expect(light.topic).not.toBe(dark.topic);
+  });
+});
+
+describe("source strip hues", () => {
+  for (const theme of THEMES) {
+    it(`gives neighbouring lanes different hues (${theme})`, () => {
+      // A strip's hue says nothing, because the source's name is on the strip
+      // itself, so the only thing asked of the rotation is that two lanes side
+      // by side can be told apart (§13.3).
+      for (const lane of [0, 1, 2, 3, 4]) {
+        expect(stripHue(theme, lane)).not.toBe(stripHue(theme, lane + 1));
+      }
+    });
+
+    it(`answers for any lane number (${theme})`, () => {
+      expect(stripHue(theme, 97)).toMatch(/^#[0-9a-f]{6}$/i);
+    });
+  }
+
+  it("stays out of the semantic table, which is where meaning lives", () => {
+    // Sharing a value with `fact` or `inference` would have a strip's hue read
+    // as a kind, which is what direct-labelling the strips avoids.
+    const palette = semanticPaletteFor("light");
+    expect(stripHue("light", 1)).not.toBe(palette.fact);
+    expect(stripHue("light", 1)).not.toBe(palette.inference);
   });
 });

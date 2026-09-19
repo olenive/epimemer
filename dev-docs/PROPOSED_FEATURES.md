@@ -210,12 +210,3 @@ first.
   gains concurrent clients.
 - **Native HNSW vector indexes**: the `TODO` in `surrealdb_adapter.py`'s
   vector search. Waiting on SurrealDB, not on us.
-- **Valid-time rendering on the timeline panel**: designed in
-  `TIMELINE_VISUALISATION.md` §13, with a checked-in visual reference at
-  `dev-docs/mockups/valid-time-grammar.html`. The validity model it renders is
-  built, but the viz snapshot carries no validity yet, so two parts remain:
-  per-source intervals into `snapshot.py`, then the SVG grammar. The grammar was
-  designed early because it pins two decisions (gaps are never styled as false,
-  bars fade through the now-line) that would otherwise be made by accident in
-  the first renderer. Its colour set is already shared with the graph panel as
-  `SemanticPalette` in `theme.ts` (`VISUALISATION.md` C.6).

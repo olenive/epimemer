@@ -36,6 +36,7 @@ const edge = (over: Partial<EdgeView> & { src_id: string; dst_id: string }): Edg
   edge_id: `${over.src_id}->${over.dst_id}`,
   edge_type: "timelink",
   weight: 1,
+  validity: [],
   created_at: "2024-01-01T00:00:00Z",
   graph: "default",
   metadata: {},

@@ -10,6 +10,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from epimemer.core.temporal import (
+    NamedInstant,
+    PreciseInstant,
+    UnboundedInstant,
+    UnknownInstant,
+    ValidityInterval,
+)
 from epimemer.core.types import (
     EdgeType,
     Fact,
@@ -32,7 +39,9 @@ from epimemer.pipelines.timeline.recurrence import (
     record_exception,
 )
 from epimemer.storage.memory import InMemoryStorage
-from epimemer.visualization.events import edge_to_view, node_to_view
+from epimemer.visualization.event_bus import create_event_bus
+from epimemer.visualization.events import EdgeStored, edge_to_view, node_to_view
+from epimemer.visualization.instrumented_storage import instrument_storage
 from epimemer.visualization.snapshot import assemble_snapshot, list_graphs_result
 
 
@@ -565,3 +574,154 @@ class TestViewConversion:
         assert view.edge_type == "supports"
         assert view.weight == 0.8
         assert view.graph == "my-graph"
+
+
+# --- Per-source validity in the snapshot ---
+
+
+def _sourced_edge(**kwargs) -> NodeEdge:
+    return NodeEdge(src_id="fact-1", dst_id="doc-1", type=EdgeType.SOURCED_FROM, **kwargs)
+
+
+class TestValidityReachesTheSnapshot:
+    """What a source asserts about when a claim was true, as the panel gets it.
+
+    Validity rides on the `sourced_from` edge naming the source, which is where
+    the validity model put it: an interval is one source's assertion, and a
+    node-level set would have to combine what several sources say into a period
+    none of them claims. The snapshot relays the intervals one per source,
+    exactly as stored.
+    """
+
+    async def test_a_sourced_from_edge_carries_every_interval_its_source_asserts(self, storage):
+        """One source, two disjoint periods, both arriving whole.
+
+        A party in government over two separate spans is one claim, so the list
+        is the unit rather than the interval, and the view has to keep both.
+        """
+        edge = _sourced_edge(
+            validity=[
+                ValidityInterval(
+                    start=PreciseInstant(at=datetime(1924, 1, 22, tzinfo=UTC)),
+                    end=PreciseInstant(at=datetime(1924, 11, 4, tzinfo=UTC)),
+                    basis=IntervalBasis.STATED,
+                    witnessed_at=PreciseInstant(at=datetime(1924, 6, 1, tzinfo=UTC)),
+                    timeline_id="westminster",
+                ),
+                ValidityInterval(
+                    start=NamedInstant(label="the second Baldwin government"),
+                    end=UnknownInstant(),
+                    basis=IntervalBasis.INFERRED,
+                ),
+            ]
+        )
+        await storage.store_edge(edge)
+
+        data = await assemble_snapshot(storage, "default")
+
+        [stored] = data["edges"]
+        first, second = stored["validity"]
+        assert first["start"]["at"] == "1924-01-22T00:00:00Z"
+        assert first["end"]["at"] == "1924-11-04T00:00:00Z"
+        assert first["witnessed_at"]["at"] == "1924-06-01T00:00:00Z"
+        assert first["timeline_id"] == "westminster"
+        assert first["basis"] == "stated"
+        assert second["start"]["label"] == "the second Baldwin government"
+        assert second["basis"] == "inferred"
+        assert second["timeline_id"] is None
+        assert second["witnessed_at"] is None
+
+    async def test_the_endpoint_kinds_arrive_by_name(self, storage):
+        """The panel reads which sort of endpoint it has from the payload.
+
+        A located boundary, a boundary the source only named, a boundary whose
+        place is unknown and no boundary at all are four different claims, and
+        the marks for them differ. Collapsing any pair here would leave the
+        panel drawing a date the source never gave.
+        """
+        edge = _sourced_edge(
+            validity=[
+                ValidityInterval(
+                    start=PreciseInstant(
+                        at=datetime(1703, 5, 27, tzinfo=UTC), label="its founding"
+                    ),
+                    end=UnboundedInstant(),
+                    basis=IntervalBasis.STATED,
+                ),
+                ValidityInterval(
+                    start=NamedInstant(label="the Renaissance"),
+                    end=UnknownInstant(),
+                    basis=IntervalBasis.INFERRED,
+                ),
+            ]
+        )
+        await storage.store_edge(edge)
+
+        data = await assemble_snapshot(storage, "default")
+
+        [stored] = data["edges"]
+        kinds = [
+            (interval["start"]["instant_kind"], interval["end"]["instant_kind"])
+            for interval in stored["validity"]
+        ]
+        assert kinds == [("precise", "unbounded"), ("named", "unknown")]
+        assert stored["validity"][0]["start"]["label"] == "its founding"
+
+    async def test_an_edge_with_no_source_to_assert_anything_carries_an_empty_list(self, storage):
+        """Only a provenance edge can hold validity, so every other edge shows
+        an empty list rather than a missing key."""
+        await storage.store_edge(
+            NodeEdge(src_id="fact-1", dst_id="topic-1", type=EdgeType.TAGGED_WITH_TOPIC)
+        )
+
+        data = await assemble_snapshot(storage, "default")
+
+        [stored] = data["edges"]
+        assert stored["validity"] == []
+
+    async def test_the_live_edge_event_carries_the_intervals_too(self):
+        """A browser open while the edge is written sees what a reload would
+        show it, so the event view and the snapshot view stay one shape."""
+        bus = create_event_bus()
+        wrapped = instrument_storage(InMemoryStorage(), bus)
+        received: list[EdgeStored] = []
+        bus.subscribe(EdgeStored, handler=lambda e: received.append(e))
+
+        await wrapped.store_edge(
+            _sourced_edge(
+                validity=[
+                    ValidityInterval(
+                        start=PreciseInstant(at=datetime(1991, 9, 6, tzinfo=UTC)),
+                        end=UnboundedInstant(),
+                        basis=IntervalBasis.STATED,
+                    )
+                ]
+            )
+        )
+
+        [event] = received
+        [interval] = event.edge.validity
+        assert interval.basis == IntervalBasis.STATED
+        assert event.edge.model_dump(mode="json")["validity"][0]["start"]["at"] == (
+            "1991-09-06T00:00:00Z"
+        )
+
+    async def test_a_retired_provenance_edge_stays_out_of_the_snapshot(self, storage):
+        """Retirement withdraws the edge, and its intervals go with it: they are
+        what that source asserted through an edge nobody follows any more."""
+        await storage.store_edge(
+            _sourced_edge(
+                retired_at=datetime(2024, 3, 1, tzinfo=UTC),
+                validity=[
+                    ValidityInterval(
+                        start=PreciseInstant(at=datetime(1917, 11, 7, tzinfo=UTC)),
+                        end=UnknownInstant(),
+                        basis=IntervalBasis.STATED,
+                    )
+                ],
+            )
+        )
+
+        data = await assemble_snapshot(storage, "default")
+
+        assert data["edges"] == []

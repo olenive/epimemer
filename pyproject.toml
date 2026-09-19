@@ -1,6 +1,6 @@
 [project]
 name = "epimemer"
-version = "0.2.6"
+version = "0.2.7"
 description = "Epistemic memory for AI agents over MCP: a typed graph of claims with provenance, metacontexts, validity in time, and a review loop"
 readme = "README.md"
 requires-python = ">=3.14"
