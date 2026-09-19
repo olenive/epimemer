@@ -4,6 +4,12 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+- A server that fails to start writes why to `EPIMEMER_LOG_FILE` before
+  exiting, and a successful start logs the version, backend and embedding
+  provider. CI starts the server and checks both.
+
 ## [0.2.6] — 2026-09-19
 
 **One word for what a tool tells you before you decide: a warning.** The same

@@ -149,7 +149,13 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_VIZ_PORT` | `8765` | Visualization hub port |
 | `EPIMEMER_VIZ_AUTOSPAWN` | `true` | Spawn a hub automatically if none is running |
 | `EPIMEMER_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `EPIMEMER_LOG_FILE` | (stderr) | Path to log file |
+| `EPIMEMER_LOG_FILE` | (stderr) | Path to log file. A server that cannot start writes the reason here before it exits, and a server that starts logs its version, storage backend and embedding provider |
+
+**Set `EPIMEMER_LOG_FILE`.** When a client reports nothing beyond a connection
+that failed, this file is where the reason is: a server that dies during
+startup has nowhere else to put it, since everything on stderr goes with the
+process. `python scripts/check_server_starts.py` asks the same question from a
+shell, and prints what the server wrote.
 
 ## MCP Tools
 

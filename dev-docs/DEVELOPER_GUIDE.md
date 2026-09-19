@@ -393,6 +393,30 @@ async def main():
 asyncio.run(main())
 ```
 
+### A server that will not start
+
+Read `EPIMEMER_LOG_FILE`. A client has one thing to say about a server that
+died on the way up, that the connection failed, and everything the process put
+on stderr went with it; the lifespan writes the reason and the traceback to
+that file at ERROR before it re-raises, and writes one INFO line naming the
+version, storage backend and embedding provider when it gets through. An empty
+file means the failure came before logging was configured, which in practice
+means the log path itself could not be opened.
+
+```bash
+# Start the server the way a client does, and print what it wrote
+python scripts/check_server_starts.py
+
+# Whatever interpreter you want to ask about, including a bare install
+/path/to/venv/bin/python scripts/check_server_starts.py
+```
+
+The lifespan is built for the first call that needs it rather than at connect,
+so a handshake alone proves nothing: the script calls a tool, which is what
+makes startup happen. `tests/mcp/test_server_starts.py` does the same from the
+suite, and the `server-starts` CI job does it from a plain install with no
+optional extras.
+
 ## Petri net visualisation
 
 Any Petri net can be visualised via Petritype's built-in Graphviz support:

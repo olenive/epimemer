@@ -31,6 +31,45 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y graphviz
       - run: uv run --no-sync python -m pytest tests/ -q
 
+  # Its own job rather than a step in the one above, because the environment is
+  # the point: a plain install with no dev dependencies and no optional extra.
+  # `tests/mcp/test_server_starts.py` launches the server too and runs in the
+  # suite, but always from the development environment, and what went wrong was
+  # an install that had everything except the `sentence-transformers` extra.
+  server-starts:
+    name: The server starts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          python-version: "3.14"
+
+      - name: Install the way a user does
+        run: |
+          uv venv clean-install
+          uv pip install --python clean-install/bin/python -e .
+
+      # In-memory storage and the mock embedding provider are the script's
+      # defaults, so this downloads no model and opens no database. It completes
+      # the MCP handshake over stdio, calls a tool, and checks the tool count
+      # against the number INTEGRATION.md calls canonical.
+      - name: It starts, and serves every tool
+        run: clean-install/bin/python scripts/check_server_starts.py
+
+      # The same install asked for the default provider, which it cannot build.
+      # A client reports only that the connection failed, so what this proves is
+      # that the log file holds the reason. The grep is deliberately separate:
+      # it is the user's own way of reading that file.
+      - name: Without the extra, the log file says why it did not
+        env:
+          EPIMEMER_EMBEDDING_PROVIDER: sentence-transformers
+          EPIMEMER_LOG_FILE: startup-failure.log
+        run: |
+          clean-install/bin/python scripts/check_server_starts.py --expect-failure
+          grep -q "failed to start" "$EPIMEMER_LOG_FILE"
+
   lint:
     name: Ruff
     runs-on: ubuntu-latest

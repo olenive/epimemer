@@ -102,3 +102,27 @@ class TestLogToolCall:
             assert record.structured_data["nodes_touched"] == 6
         finally:
             logger.removeHandler(handler)
+
+
+def test_every_documented_log_level_still_records_an_error(tmp_path):
+    """A level that filtered ERROR would hide the one message worth keeping.
+
+    `EPIMEMER_LOG_LEVEL` takes the four names the README lists, and the line a
+    server writes when it cannot start has to survive all of them.
+    """
+    logger = logging.getLogger("epimemer")
+    handlers, level = logger.handlers[:], logger.level
+    try:
+        for name in ["DEBUG", "INFO", "WARNING", "ERROR"]:
+            log_file = tmp_path / f"{name}.log"
+            setup_logging(level=name, log_file=str(log_file))
+            logging.getLogger("epimemer.mcp.server").error("Epimemer failed to start: %s", "why")
+
+            # Read before closing anything: a FileHandler flushes each record as
+            # it writes it, which is what lets a failing process be read after.
+            assert "failed to start: why" in log_file.read_text(), f"{name} swallowed it"
+    finally:
+        for handler in logger.handlers:
+            handler.close()
+        logger.handlers[:] = handlers
+        logger.setLevel(level)

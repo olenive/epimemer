@@ -36,6 +36,11 @@ class JSONFormatter(logging.Formatter):
         # If the record has structured data attached, include it
         if hasattr(record, "structured_data"):
             entry["data"] = record.structured_data
+        # The traceback is the half of an error that says where it came from,
+        # and a JSON record built only from the message would drop it. One
+        # field, so the line stays one line.
+        if record.exc_info:
+            entry["traceback"] = self.formatException(record.exc_info)
         return json.dumps(entry, default=str)
 
 

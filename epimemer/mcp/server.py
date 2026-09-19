@@ -116,94 +116,119 @@ def _resolve_windows(
 
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
-    """Initialize providers and yield them as lifespan context."""
+    """Initialize providers and yield them as lifespan context.
+
+    Everything between the logger and the yield runs inside one try: a client
+    whose server never starts shows the user a failed connection and nothing
+    else, so the reason has to reach the log file before the process goes.
+    """
     config = load_config()
     setup_logging(config.log_level, config.log_file)
+    # Named, not `__name__`. A client launches this module as
+    # `python -m epimemer.mcp.server`, which makes `__name__` equal to
+    # "__main__", and a logger by that name is no descendant of "epimemer": it
+    # would miss the handler `setup_logging` just attached and go nowhere.
+    logger = logging.getLogger("epimemer.mcp.server")
 
-    storage = create_storage(config)
-
-    # Every backend implements connect (no-op where there's nothing to open).
-    await storage.connect()
-
-    # Ids the user admitted before this process started (REVIEW_MODE.md §10.3).
-    # Seeded here rather than read at every check so that one channel writes the
-    # approved list and everything else reads it — and because on an embedded
-    # backend this is the *only* channel that reaches the running server, the
-    # `epimemer agents confirm` CLI being a separate store.
-    await tools.seed_approved_judges(storage, config.approved_agents)
-
-    embedding_provider = create_embedding_provider(config)
-
-    # Which Epimemer the user is talking to, read once here and carried as a
-    # value like everything else in this dict. It opens every prompt that asks
-    # the user to place a judge, because a person answering that question wants
-    # to know which server put it. Running from a source tree with nothing
-    # installed has no metadata to read, and "unknown" is a truthful answer to
-    # a question that costs nothing to get wrong.
     try:
-        version = importlib.metadata.version("epimemer")
-    except importlib.metadata.PackageNotFoundError:
-        version = "unknown"
+        storage = create_storage(config)
 
-    # Optional: publish visualization events to the standalone hub. This process
-    # never binds the viz port itself — it dials out to the hub (auto-spawning one
-    # if none is running), so stale MCP orphans become dead sessions rather than a
-    # stray server answering on the port with the wrong graph.
-    stop_viz_client = None
-    event_bus = None
-    viz_session = None
-    viz_hub_url = None
-    # Written at the tool choke point, read by the hub's `retrievals` RPC. It
-    # exists whether or not visualization is on: the record is what the agent
-    # was handed, and that is worth keeping even with nobody watching.
-    retrievals = new_record_log()
-    if config.viz_enabled:
-        from epimemer.visualization.event_bus import create_event_bus
-        from epimemer.visualization.hub import ensure_hub_running
-        from epimemer.visualization.hub_client import start_hub_client
-        from epimemer.visualization.instrumented_storage import instrument_storage
-        from epimemer.visualization.protocol import SessionInfo
+        # Every backend implements connect (no-op where there's nothing to open).
+        await storage.connect()
 
-        logger = logging.getLogger(__name__)
-        event_bus = create_event_bus()
-        raw_storage = storage  # pre-instrumentation, for viz snapshot reads
-        storage = instrument_storage(storage, event_bus, default_threshold=config.reflect_threshold)
+        # Ids the user admitted before this process started (REVIEW_MODE.md §10.3).
+        # Seeded here rather than read at every check so that one channel writes the
+        # approved list and everything else reads it, and because on an embedded
+        # backend this is the *only* channel that reaches the running server, the
+        # `epimemer agents confirm` CLI being a separate store.
+        await tools.seed_approved_judges(storage, config.approved_agents)
 
-        viz_session = SessionInfo(
-            session_id=uuid4().hex,
-            pid=os.getpid(),
-            backend=raw_storage.backend_name,
-            active_graph=raw_storage.current_database,
-        )
-        viz_hub_url = f"http://{config.viz_host}:{config.viz_port}"
-        ingest_url = f"ws://{config.viz_host}:{config.viz_port}/ingest"
+        embedding_provider = create_embedding_provider(config)
 
-        reachable = await ensure_hub_running(
-            config.viz_host, config.viz_port, autospawn=config.viz_autospawn
-        )
-        if not reachable:
-            logger.warning(
-                "Visualization hub not reachable at %s and not spawned "
-                "(autospawn=%s). Publishing will retry in the background.",
-                viz_hub_url,
-                config.viz_autospawn,
+        # Which Epimemer the user is talking to, read once here and carried as a
+        # value like everything else in this dict. It opens every prompt that asks
+        # the user to place a judge, because a person answering that question wants
+        # to know which server put it. Running from a source tree with nothing
+        # installed has no metadata to read, and "unknown" is a truthful answer to
+        # a question that costs nothing to get wrong.
+        try:
+            version = importlib.metadata.version("epimemer")
+        except importlib.metadata.PackageNotFoundError:
+            version = "unknown"
+
+        # Optional: publish visualization events to the standalone hub. This process
+        # never binds the viz port itself, it dials out to the hub (auto-spawning one
+        # if none is running), so stale MCP orphans become dead sessions rather than a
+        # stray server answering on the port with the wrong graph.
+        stop_viz_client = None
+        event_bus = None
+        viz_session = None
+        viz_hub_url = None
+        # Written at the tool choke point, read by the hub's `retrievals` RPC. It
+        # exists whether or not visualization is on: the record is what the agent
+        # was handed, and that is worth keeping even with nobody watching.
+        retrievals = new_record_log()
+        if config.viz_enabled:
+            from epimemer.visualization.event_bus import create_event_bus
+            from epimemer.visualization.hub import ensure_hub_running
+            from epimemer.visualization.hub_client import start_hub_client
+            from epimemer.visualization.instrumented_storage import instrument_storage
+            from epimemer.visualization.protocol import SessionInfo
+
+            event_bus = create_event_bus()
+            raw_storage = storage  # pre-instrumentation, for viz snapshot reads
+            storage = instrument_storage(
+                storage, event_bus, default_threshold=config.reflect_threshold
             )
-        stop_viz_client = await start_hub_client(
-            event_bus,
-            raw_storage,
-            viz_session,
-            ingest_url,
-            default_reflect_threshold=config.reflect_threshold,
-            default_warning_policy=config.warning_policy,
-            records=lambda: [
-                json.loads(record.model_dump_json()) for record in records_of(retrievals)
-            ],
-        )
+
+            viz_session = SessionInfo(
+                session_id=uuid4().hex,
+                pid=os.getpid(),
+                backend=raw_storage.backend_name,
+                active_graph=raw_storage.current_database,
+            )
+            viz_hub_url = f"http://{config.viz_host}:{config.viz_port}"
+            ingest_url = f"ws://{config.viz_host}:{config.viz_port}/ingest"
+
+            reachable = await ensure_hub_running(
+                config.viz_host, config.viz_port, autospawn=config.viz_autospawn
+            )
+            if not reachable:
+                logger.warning(
+                    "Visualization hub not reachable at %s and not spawned "
+                    "(autospawn=%s). Publishing will retry in the background.",
+                    viz_hub_url,
+                    config.viz_autospawn,
+                )
+            stop_viz_client = await start_hub_client(
+                event_bus,
+                raw_storage,
+                viz_session,
+                ingest_url,
+                default_reflect_threshold=config.reflect_threshold,
+                default_warning_policy=config.warning_policy,
+                records=lambda: [
+                    json.loads(record.model_dump_json()) for record in records_of(retrievals)
+                ],
+            )
+            logger.info(
+                "Visualization: publishing to hub at %s (session %s)",
+                viz_hub_url,
+                viz_session.session_id,
+            )
+
         logger.info(
-            "Visualization: publishing to hub at %s (session %s)",
-            viz_hub_url,
-            viz_session.session_id,
+            "Epimemer %s started: storage backend %s, embedding provider %s.",
+            version,
+            storage.backend_name,
+            config.embedding_provider,
         )
+    except Exception as exc:
+        # `setup_logging` above is the one step whose failure goes unlogged, and
+        # there is nowhere to log it: the handler it was opening is the thing
+        # that did not open. Everything after it lands in the file.
+        logger.exception("Epimemer failed to start: %s", exc)
+        raise
 
     try:
         yield {
