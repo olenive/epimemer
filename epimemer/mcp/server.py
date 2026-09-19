@@ -2755,13 +2755,22 @@ async def memory_query_changes(
     `counterpart` id that did. A node that retired, came back and retired again
     reports all three events, not only the last.
 
-    Specify windows one of three ways (precedence in this order):
-      - windows: explicit [[startISO, endISO], ...]; a missing/empty end means now.
-      - last_hours / last_days: a single trailing window ending now.
-      - nothing: defaults to the last 24 hours.
+    Specify windows one of three ways, in this order of precedence: `windows`,
+    then `last_hours` / `last_days`, then nothing, which defaults to the last 24
+    hours. All times are normalized to UTC.
 
-    All times are normalized to UTC. node_types optionally filters to
-    "topic"/"fact"/"inference".
+    Args:
+        last_hours: A single trailing window of this many hours, ending now.
+            Read when `windows` is empty.
+        last_days: A single trailing window of this many days, ending now. Read
+            when `windows` and `last_hours` are both empty.
+        windows: Explicit windows, [[startISO, endISO], ...]; a missing or empty
+            end means now. Takes precedence over the trailing windows above.
+        node_types: Filter to "topic"/"fact"/"inference".
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else: naming it turns a
+            wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
     resolved = _resolve_windows(
@@ -2853,6 +2862,12 @@ async def memory_list_sources(
     Returns the documents nodes are `sourced_from`, plus publishing entities,
     each with how many nodes reference it — so you can see what exists before
     find_nodes(sourced_from=...).
+
+    Args:
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else: naming it turns a
+            wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -2877,6 +2892,12 @@ async def memory_list_relations(
     also carries the standing relation verdicts that name it — the other label,
     the verdict, the reason, who judged it and when — so a pair reflect no
     longer nominates can be read back rather than re-asked.
+
+    Args:
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else: naming it turns a
+            wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(
@@ -3916,6 +3937,12 @@ async def epimemer_graph_stats(
     stores_since_backup, backup_threshold and backup_suggested say the same
     about backing the graph up. When backup_suggested is true, raise it with the
     user and call backup_graph if they agree.
+
+    Args:
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else: naming it turns a
+            wrong-graph call from silent into refused.
     """
     deps = ctx.lifespan_context
     return await _run_with_timeout(

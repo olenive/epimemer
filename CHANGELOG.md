@@ -9,6 +9,8 @@ All notable changes to this project are recorded here. The format follows
 - A server that fails to start writes why to `EPIMEMER_LOG_FILE` before
   exiting, and a successful start logs the version, backend and embedding
   provider. CI starts the server and checks both.
+- `review(mode="advisory")` is gone; it was accepted for one release after the
+  rename to `warning`, and 0.2.6 was that release.
 
 ## [0.2.6] — 2026-09-19
 

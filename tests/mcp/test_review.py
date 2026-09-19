@@ -46,10 +46,8 @@ from epimemer.pipelines.review.modes import (
     MODE_REQUIRES,
     REVIEW_MODES,
     UNBUILT_MODES,
-    canonical_mode,
     mode_refusal,
     passes_ceiling,
-    rename_note,
 )
 
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
@@ -425,13 +423,16 @@ class TestModesSelectAndArgumentsNarrow:
         assert mode_refusal("warning", agent_id=None, since_given=False) is None
         assert MODE_KINDS["warning"] == [DecisionKind.PROCEEDED_DESPITE_WARNING]
 
-    def test_a_renamed_mode_is_accepted_rather_than_refused(self):
-        """The refusal runs on the canonical name, so the old spelling has to
-        reach it translated or an agent that learned it is told the mode does
-        not exist."""
-        assert mode_refusal("advisory", agent_id=None, since_given=False) is None
-        assert canonical_mode("advisory") == "warning"
-        assert rename_note("advisory") is not None
+    def test_the_name_this_mode_used_to_have_is_refused(self):
+        """`advisory` was this mode's name until the word became `warning`, and
+        it was answered alongside the new spelling for the one release that has
+        now shipped. It is an unknown mode from here, and the refusal lists the
+        modes, which is what an agent that learned the old name needs."""
+        refusal = mode_refusal("advisory", agent_id=None, since_given=False)
+
+        assert refusal is not None and "not a mode" in refusal
+        for mode in REVIEW_MODES:
+            assert mode in refusal
 
     def test_a_name_nothing_ever_had_is_still_refused(self):
         """The alias is a short list, not a fallback: a typo has to refuse."""

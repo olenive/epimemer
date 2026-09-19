@@ -528,48 +528,24 @@ class TestTheRecordIsReadBackByReview:
         assert "refused" not in result
 
 
-class TestTheModeAnswersToTheNameItUsedToHave:
-    """`advisory` was the mode's name until the word became `warning`. An agent
-    that learned the old one keeps working for a release and is told once."""
+class TestTheNameTheModeUsedToHave:
+    """`advisory` was the mode's name until the word became `warning`, and it
+    was answered under both spellings for one release. That release has
+    shipped, so a call still using it is refused and shown the modes: an
+    unknown name answered as though it were `warning` would go on teaching a
+    spelling the schema has dropped."""
 
-    async def _contested(self, storage):
+    async def test_the_old_spelling_is_refused_and_the_modes_are_listed(self, storage):
         a = await _fact(storage, "real")
         b = await _fact(storage, "fictional", metacontext=None)
         await _elsewhere(storage, b, "Fiction")
         await tools.record_contradiction(a.id, b.id, storage, judge=CRITIC)
 
-    async def test_both_spellings_select_the_same_decisions(self, storage):
-        await self._contested(storage)
+        result, _ = await tools.review(storage, mode="advisory")
 
-        old, _ = await tools.review(storage, mode="advisory")
-        new, _ = await tools.review(storage, mode="warning")
-
-        assert [d["decision_id"] for d in old["decisions"]] == [
-            d["decision_id"] for d in new["decisions"]
-        ]
-        assert {d["kind"] for d in old["decisions"]} == {"proceeded_despite_warning"}
-
-    async def test_the_answer_names_the_mode_it_ran_under(self, storage):
-        """The response says `warning` whichever spelling was passed, so the
-        name in the answer is the name in the schema."""
-        await self._contested(storage)
-
-        old, _ = await tools.review(storage, mode="advisory")
-
-        assert old["mode"] == "warning"
-
-    async def test_the_old_spelling_is_answered_with_a_note(self, storage):
-        old, _ = await tools.review(storage, mode="advisory")
-
-        assert "advisory" in old["note"]
-        assert "warning" in old["note"]
-
-    async def test_the_new_spelling_carries_no_note(self, storage):
-        """Nothing to say, so nothing is said: a note on every call is one the
-        reader stops seeing."""
-        current, _ = await tools.review(storage, mode="warning")
-
-        assert "note" not in current
+        assert "'advisory' is not a mode" in result["refused"]
+        assert result["modes"] == list(REVIEW_MODES)
+        assert "decisions" not in result
 
 
 class TestAStoredOverrideFromANewerBuild:

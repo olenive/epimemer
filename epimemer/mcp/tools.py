@@ -119,10 +119,8 @@ from epimemer.pipelines.review.difficulty import (
 from epimemer.pipelines.review.modes import (
     MODE_KINDS,
     REVIEW_MODES,
-    canonical_mode,
     mode_refusal,
     passes_ceiling,
-    rename_note,
 )
 from epimemer.storage.protocol import (
     MergeOverrides,
@@ -5673,12 +5671,6 @@ async def review(
     if refusal is not None:
         return {"refused": refusal, "modes": list(REVIEW_MODES)}, ResponseMeta()
 
-    # A name this release still answers to is run under the name it now has,
-    # and the caller is told once. Refusing the old spelling would break every
-    # agent that learned it; accepting it silently would keep teaching it.
-    note = rename_note(mode)
-    mode = canonical_mode(mode)
-
     # One scan, narrowed by whatever the caller supplied. `unreviewed` is the
     # only mode that is not a field filter, so it is applied below against a
     # reviewed-set covering the **whole** selection rather than the page: a
@@ -5816,12 +5808,6 @@ async def review(
             "unreadable": [name for name in others if name not in counts],
         },
     }
-
-    if note is not None:
-        # Above `judge`, and unconditional on anything the caller asked about:
-        # what it says is that this call was not spelled the way the schema
-        # spells it, which is true whatever else was passed.
-        result["note"] = note
 
     if agent_id is not None:
         # What the handle turned out to name. A handle that resolves to
