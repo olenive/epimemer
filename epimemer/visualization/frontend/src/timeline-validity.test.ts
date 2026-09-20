@@ -14,7 +14,13 @@ import {
   type AxisClock,
   type EndpointMark,
 } from "./timeline-validity";
-import type { EdgeView, ImpreciseInstantView, NodeView, ValidityIntervalView } from "./types";
+import type {
+  BoundaryProposalView,
+  EdgeView,
+  ImpreciseInstantView,
+  NodeView,
+  ValidityIntervalView,
+} from "./types";
 
 // --- Fixtures ---
 
@@ -26,6 +32,9 @@ const at = (iso: string, label: string | null = null): ImpreciseInstantView => (
 
 const UNKNOWN: ImpreciseInstantView = { instant_kind: "unknown" };
 const UNBOUNDED: ImpreciseInstantView = { instant_kind: "unbounded" };
+
+/** An edge the source named rather than dated: "the Renaissance". */
+const named = (label: string): ImpreciseInstantView => ({ instant_kind: "named", label });
 
 const interval = (over: Partial<ValidityIntervalView> = {}): ValidityIntervalView => ({
   start: at("1997-05-02T00:00:00Z"),
@@ -67,6 +76,21 @@ const mark = (id: string, nodeIds: string[], side: "left" | "right" | "axis" = "
   side,
 });
 
+/** A date reflect read off the claim on the other side of a succession. */
+const proposal = (
+  over: Partial<BoundaryProposalView> = {},
+): BoundaryProposalView => ({
+  node_id: "f1",
+  source_id: "doc-a",
+  endpoint: "end",
+  at: "2018-01-01T00:00:00Z",
+  timeline_id: null,
+  because_id: "f2",
+  because_source_id: "doc-b",
+  graph: "default",
+  ...over,
+});
+
 /** No timeline chosen, so the axis is the wall clock the real world keeps. */
 const NO_CLOCK: AxisClock = { timelineId: null, referenceTime: null };
 
@@ -99,7 +123,7 @@ describe("the mark an endpoint gets", () => {
     expect(endpointMark(at("1400-01-01T00:00:00Z", "the Renaissance"))).toBe("soft");
   });
 
-  it("gives an unresolved label no place on the axis", () => {
+  it("gives a named edge a mark of its own, the labelled edge", () => {
     expect(endpointMark({ instant_kind: "named", label: "under the USSR" })).toBe(
       EXPECTED.named,
     );
@@ -212,12 +236,83 @@ describe("where a strip is drawn", () => {
     expect(geometry.witnessAt).toBeNull();
   });
 
-  it("refuses to place an interval whose edge is only a label", () => {
-    // §13.2 rule 3: resolution adds a position, and until it does there is
-    // none. Guessing one here is the fabrication the rule exists to stop.
-    const named = interval({ start: { instant_kind: "named", label: "the Renaissance" } });
+  it("draws a named end as a stub with the source's words at its end", () => {
+    // §13.2 rule 3: the date goes where dates go, and the word is drawn where
+    // the edge would be. A fade here would say "we do not know", about an edge
+    // the source named.
+    const geometry = stripGeometry(
+      interval({ end: named("the Renaissance") }),
+      place,
+      BOUNDS,
+      FADE,
+    )!;
 
-    expect(stripGeometry(named, place, BOUNDS, FADE)).toBeNull();
+    expect(geometry.endMark).toBe("named");
+    expect(geometry.labelBelow).toEqual({ reach: FADE, label: "the Renaissance" });
+    expect(geometry.fadeBelow).toBe(0);
+    // The dated edge keeps the mark it earned.
+    expect(geometry.startMark).toBe("cap");
+    expect(geometry.bodyTop).toBe(0);
+  });
+
+  it("draws a named start as a stub above the body", () => {
+    const geometry = stripGeometry(
+      interval({ start: named("the Renaissance") }),
+      place,
+      BOUNDS,
+      FADE,
+    )!;
+
+    expect(geometry.startMark).toBe("named");
+    expect(geometry.labelAbove).toEqual({ reach: FADE, label: "the Renaissance" });
+    expect(geometry.labelBelow).toBeNull();
+    expect(geometry.endMark).toBe("cap");
+    // Nothing places the start, so the body collapses onto the dated end, the
+    // way it does for an unknown edge.
+    expect(geometry.bodyTop).toBe(geometry.bodyBottom);
+    expect(geometry.bodyBottom).toBeCloseTo(place(Date.parse("2010-05-11T00:00:00Z")));
+  });
+
+  it("counts a stub into the strip's extent, so a lane makes room for it", () => {
+    const above = stripGeometry(interval({ start: named("then") }), place, BOUNDS, FADE)!;
+    const below = stripGeometry(interval({ end: named("then") }), place, BOUNDS, FADE)!;
+
+    expect(above.top).toBe(above.bodyTop - FADE);
+    expect(above.bottom).toBe(above.bodyBottom);
+    expect(below.bottom).toBe(below.bodyBottom + FADE);
+    expect(below.top).toBe(below.bodyTop);
+  });
+
+  it("draws a named edge on a bar a witness alone places", () => {
+    const geometry = stripGeometry(
+      interval({
+        start: named("under the USSR"),
+        end: UNKNOWN,
+        witnessed_at: at("1970-03-01T00:00:00Z"),
+      }),
+      place,
+      BOUNDS,
+      FADE,
+    )!;
+    const witness = place(Date.parse("1970-03-01T00:00:00Z"));
+
+    expect(geometry.bodyTop).toBeCloseTo(witness);
+    expect(geometry.labelAbove!.label).toBe("under the USSR");
+    // Each endpoint wears its own mark: a stub above, fog below.
+    expect(geometry.fadeBelow).toBe(FADE);
+    expect(geometry.fadeAbove).toBe(0);
+  });
+
+  it("refuses an interval a word is the only thing at either edge of", () => {
+    // Two words, or a word beside an edge that places nothing: there is no
+    // date anywhere, so there is no honest place to draw the stub.
+    for (const nowhere of [
+      interval({ start: named("the Renaissance"), end: named("the Enlightenment") }),
+      interval({ start: named("the Renaissance"), end: UNKNOWN }),
+      interval({ start: named("the Renaissance"), end: UNBOUNDED }),
+    ]) {
+      expect(stripGeometry(nowhere, place, BOUNDS, FADE)).toBeNull();
+    }
   });
 
   it("refuses to place an interval with no date at either edge and no witness", () => {
@@ -260,13 +355,54 @@ describe("the stretch of time an interval covers", () => {
     expect(span.to).toBe(Date.parse("1997-05-02T00:00:00Z"));
   });
 
+  it("collapses a named edge onto the date that places the interval", () => {
+    // The stub is a fixed length in pixels, so it claims no time: the span
+    // stops at the date, exactly as it does past an unknown edge.
+    const span = intervalSpan(interval({ end: named("the Renaissance") }))!;
+
+    expect(span.from).toBe(Date.parse("1997-05-02T00:00:00Z"));
+    expect(span.to).toBe(Date.parse("1997-05-02T00:00:00Z"));
+  });
+
+  it("places an interval a witness alone dates, whatever its edges say", () => {
+    const span = intervalSpan(
+      interval({
+        start: named("under the USSR"),
+        end: UNKNOWN,
+        witnessed_at: at("1970-03-01T00:00:00Z"),
+      }),
+    )!;
+
+    expect(span.from).toBe(Date.parse("1970-03-01T00:00:00Z"));
+  });
+
   it("agrees with the geometry about what has no place at all", () => {
+    // The panel reserves a lane for whatever the span accepts, so the two
+    // refusing different things would leave an empty column beside the axis.
     for (const nowhere of [
-      interval({ start: { instant_kind: "named", label: "the Renaissance" } }),
+      interval({ start: named("the Renaissance"), end: named("the Enlightenment") }),
+      interval({ start: named("the Renaissance"), end: UNKNOWN }),
+      interval({ start: named("the Renaissance"), end: UNBOUNDED }),
+      interval({ start: UNBOUNDED, end: named("the Renaissance") }),
       interval({ start: UNKNOWN, end: UNKNOWN }),
     ]) {
       expect(intervalSpan(nowhere)).toBeNull();
       expect(stripGeometry(nowhere, place, BOUNDS, FADE)).toBeNull();
+    }
+  });
+
+  it("agrees with the geometry about what a word at one edge still places", () => {
+    for (const drawn of [
+      interval({ start: named("the Renaissance") }),
+      interval({ end: named("the Renaissance") }),
+      interval({
+        start: named("the Renaissance"),
+        end: UNKNOWN,
+        witnessed_at: at("1970-03-01T00:00:00Z"),
+      }),
+    ]) {
+      expect(intervalSpan(drawn)).not.toBeNull();
+      expect(stripGeometry(drawn, place, BOUNDS, FADE)).not.toBeNull();
     }
   });
 });
@@ -452,6 +588,157 @@ describe("what the tooltip says", () => {
   });
 });
 
+
+describe("a boundary reflect proposes", () => {
+  const PROPOSED = Date.parse("2018-01-01T00:00:00Z");
+
+  it("replaces the fade below an open end and reaches out to the date", () => {
+    const open = interval({ end: UNKNOWN });
+
+    const geometry = stripGeometry(open, place, BOUNDS, FADE, [proposal()])!;
+
+    expect(geometry.endMark).toBe("proposed");
+    // One mark per endpoint: the fog goes when the offer arrives.
+    expect(geometry.fadeBelow).toBe(0);
+    expect(geometry.proposedBelow).not.toBeNull();
+    expect(geometry.proposedBelow!.at).toBeCloseTo(place(PROPOSED));
+    expect(geometry.proposedBelow!.label).toBe("2018-01-01T00:00:00Z");
+    expect(geometry.proposedBelow!.because).toBe("f2");
+    // Counted into the extent, so lanes and the envelope leave room for it.
+    expect(geometry.bottom).toBeCloseTo(place(PROPOSED));
+  });
+
+  it("does the same above an open start", () => {
+    const open = interval({ start: UNKNOWN });
+    const earlier = proposal({ endpoint: "start", at: "1990-02-03T00:00:00Z" });
+
+    const geometry = stripGeometry(open, place, BOUNDS, FADE, [earlier])!;
+
+    expect(geometry.startMark).toBe("proposed");
+    expect(geometry.fadeAbove).toBe(0);
+    expect(geometry.proposedAbove!.at).toBeCloseTo(place(Date.parse("1990-02-03T00:00:00Z")));
+    expect(geometry.top).toBeCloseTo(place(Date.parse("1990-02-03T00:00:00Z")));
+  });
+
+  it("leaves the solid body exactly where the record's own dates put it", () => {
+    // §13.2 rule 9: a proposal never thickens the body. The solid part stops at
+    // the last date the source gave, whatever is offered past it.
+    const open = interval({ end: UNKNOWN });
+    const bare = stripGeometry(open, place, BOUNDS, FADE)!;
+
+    const offered = stripGeometry(open, place, BOUNDS, FADE, [proposal()])!;
+
+    expect(offered.bodyTop).toBe(bare.bodyTop);
+    expect(offered.bodyBottom).toBe(bare.bodyBottom);
+  });
+
+  it("ignores a proposal measured on another clock", () => {
+    // There is no conversion between an in-universe date and a real one, so a
+    // proposal from another clock places nothing here.
+    const open = interval({ end: UNKNOWN });
+
+    const geometry = stripGeometry(open, place, BOUNDS, FADE, [
+      proposal({ timeline_id: "in-universe" }),
+    ])!;
+
+    expect(geometry.endMark).toBe("fade");
+    expect(geometry.proposedBelow).toBeNull();
+    expect(geometry.fadeBelow).toBe(FADE);
+  });
+
+  it("ignores a proposal for an edge that already has a date", () => {
+    // Defensive: the server proposes only against an open edge. Drawing one
+    // here would show a date nobody accepted over a date somebody stated.
+    const geometry = stripGeometry(interval(), place, BOUNDS, FADE, [proposal()])!;
+
+    expect(geometry.endMark).toBe("cap");
+    expect(geometry.proposedBelow).toBeNull();
+    expect(geometry.bottom).toBe(geometry.bodyBottom);
+  });
+
+  it("ignores a proposal for the other endpoint", () => {
+    const open = interval({ end: UNKNOWN });
+
+    const geometry = stripGeometry(open, place, BOUNDS, FADE, [
+      proposal({ endpoint: "start" }),
+    ])!;
+
+    expect(geometry.endMark).toBe("fade");
+    expect(geometry.proposedAbove).toBeNull();
+    expect(geometry.proposedBelow).toBeNull();
+  });
+
+  it("leaves an interval nothing dates in the tray, with the offer flagged", () => {
+    // An offer is not a date the graph holds, so it cannot place what the
+    // record leaves unplaced (§13.4).
+    const unplaced = { ...interval({ start: UNKNOWN, end: UNKNOWN }), witnessed_at: null };
+    const snapshot = {
+      nodes: [
+        node({ node_id: "f1" }),
+        node({ node_id: "doc-a", node_type: "document", content: "almanac, 2011" }),
+      ],
+      edges: [edge({ src_id: "f1", dst_id: "doc-a", validity: [unplaced] })],
+      boundary_proposals: [proposal()],
+    };
+
+    const { lanes, chips } = validityLayout(snapshot, [mark("tp1", ["f1"])], NO_CLOCK, false);
+
+    expect(lanes).toHaveLength(0);
+    expect(chips).toHaveLength(1);
+    expect(chips[0].reason).toBe("unplaced");
+    expect(chips[0].proposed).toBe(true);
+  });
+
+  it("flags no chip when nothing has been offered", () => {
+    const unplaced = { ...interval({ start: UNKNOWN, end: UNKNOWN }), witnessed_at: null };
+    const snapshot = {
+      nodes: [
+        node({ node_id: "f1" }),
+        node({ node_id: "doc-a", node_type: "document", content: "almanac, 2011" }),
+      ],
+      edges: [edge({ src_id: "f1", dst_id: "doc-a", validity: [unplaced] })],
+    };
+
+    const { chips } = validityLayout(snapshot, [mark("tp1", ["f1"])], NO_CLOCK, false);
+
+    expect(chips[0].proposed).toBe(false);
+  });
+
+  it("hands a strip only the offers made about its own claim and source", () => {
+    const snapshot = {
+      nodes: [
+        node({ node_id: "f1" }),
+        node({ node_id: "doc-a", node_type: "document", content: "almanac, 2011" }),
+        node({ node_id: "doc-b", node_type: "document", content: "a blog" }),
+      ],
+      edges: [
+        edge({ src_id: "f1", dst_id: "doc-a", validity: [interval({ end: UNKNOWN })] }),
+        edge({ src_id: "f1", dst_id: "doc-b", validity: [interval({ end: UNKNOWN })] }),
+      ],
+      boundary_proposals: [proposal({ source_id: "doc-b" })],
+    };
+
+    const { lanes } = validityLayout(snapshot, [mark("tp1", ["f1"])], NO_CLOCK, false);
+
+    const [blog, almanac] = lanes;
+    expect(blog.sourceLabel).toBe("a blog");
+    expect(blog.strips[0].proposals).toHaveLength(1);
+    expect(almanac.strips[0].proposals).toHaveLength(0);
+  });
+
+  it("says in the tooltip what was offered and where it was read from", () => {
+    const text = describeInterval("almanac, 2011", interval({ end: UNKNOWN }), [proposal()]);
+
+    expect(text).toContain("unknown (proposed 2018-01-01T00:00:00Z from f2)");
+  });
+
+  it("still says plain unknown for an edge nobody has offered a date for", () => {
+    expect(describeInterval("almanac, 2011", interval({ end: UNKNOWN }))).toContain(
+      "end       unknown",
+    );
+  });
+});
+
 // --- The layout ---
 
 describe("laying out what the sources assert", () => {
@@ -552,24 +839,83 @@ describe("laying out what the sources assert", () => {
     expect(validityLayout(wrong, [mark("tp1", ["f1"])], NO_CLOCK, true).lanes).toHaveLength(2);
   });
 
-  it("sends an unresolved label to the tray with its words intact", () => {
-    const vague = {
-      nodes: [node({ node_id: "f1" })],
-      edges: [
-        edge({
-          src_id: "f1",
-          dst_id: "doc-a",
-          validity: [interval({ start: { instant_kind: "named", label: "under the USSR" } })],
-        }),
-      ],
-    };
+  const oneInterval = (over: Partial<ValidityIntervalView>) => ({
+    nodes: [node({ node_id: "f1" })],
+    edges: [edge({ src_id: "f1", dst_id: "doc-a", validity: [interval(over)] })],
+  });
 
-    const { lanes, chips } = validityLayout(vague, [mark("tp1", ["f1"])], NO_CLOCK, false);
+  it("sends a label nothing else places to the tray with its words intact", () => {
+    const { lanes, chips } = validityLayout(
+      oneInterval({ start: named("under the USSR"), end: UNKNOWN }),
+      [mark("tp1", ["f1"])],
+      NO_CLOCK,
+      false,
+    );
 
     expect(lanes).toEqual([]);
     expect(chips).toHaveLength(1);
     expect(chips[0].reason).toBe("unresolved");
     expect(chips[0].label).toContain("under the USSR");
+  });
+
+  it("sends a label beside an unbounded edge to the tray", () => {
+    // "No boundary" places the bar at the edge of the panel and says nothing
+    // about where the named edge is, so no date is left anywhere.
+    const { lanes, chips } = validityLayout(
+      oneInterval({ start: named("under the USSR"), end: UNBOUNDED }),
+      [mark("tp1", ["f1"])],
+      NO_CLOCK,
+      false,
+    );
+
+    expect(lanes).toEqual([]);
+    expect(chips.map((chip) => chip.reason)).toEqual(["unresolved"]);
+  });
+
+  it("sends an interval named at both edges to the tray", () => {
+    const { lanes, chips } = validityLayout(
+      oneInterval({ start: named("the Renaissance"), end: named("the Enlightenment") }),
+      [mark("tp1", ["f1"])],
+      NO_CLOCK,
+      false,
+    );
+
+    expect(lanes).toEqual([]);
+    expect(chips.map((chip) => chip.reason)).toEqual(["unresolved"]);
+  });
+
+  it("draws an interval a date places, whichever edge the word is at", () => {
+    for (const over of [
+      { start: named("under the USSR") },
+      { end: named("under the USSR") },
+      {
+        start: named("under the USSR"),
+        end: UNKNOWN,
+        witnessed_at: at("1970-03-01T00:00:00Z"),
+      },
+    ]) {
+      const { lanes, chips } = validityLayout(
+        oneInterval(over),
+        [mark("tp1", ["f1"])],
+        NO_CLOCK,
+        false,
+      );
+
+      expect(lanes).toHaveLength(1);
+      expect(lanes[0].strips).toHaveLength(1);
+      expect(chips).toEqual([]);
+    }
+  });
+
+  it("still says the word is a word in the record behind the mark", () => {
+    const { lanes } = validityLayout(
+      oneInterval({ start: named("under the USSR") }),
+      [mark("tp1", ["f1"])],
+      NO_CLOCK,
+      false,
+    );
+
+    expect(lanes[0].strips[0].detail).toContain('"under the USSR" (named, no date)');
   });
 
   it("sends a claim measured on another clock to the tray", () => {

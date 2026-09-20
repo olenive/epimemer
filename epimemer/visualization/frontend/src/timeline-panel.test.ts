@@ -14,6 +14,7 @@ import {
 } from "./timeline-panel";
 import type {
   AnyEvent,
+  BoundaryProposalView,
   EdgeView,
   ImpreciseInstantView,
   NodeView,
@@ -1173,6 +1174,10 @@ const stated = (iso: string, label: string | null = null): ImpreciseInstantView 
 
 const UNKNOWN_EDGE: ImpreciseInstantView = { instant_kind: "unknown" };
 const NO_EDGE: ImpreciseInstantView = { instant_kind: "unbounded" };
+const NAMED_EDGE: ImpreciseInstantView = {
+  instant_kind: "named",
+  label: "the Renaissance",
+};
 
 const period = (over: Partial<ValidityIntervalView> = {}): ValidityIntervalView => ({
   start: stated("1997-05-02T00:00:00Z"),
@@ -1185,6 +1190,19 @@ const period = (over: Partial<ValidityIntervalView> = {}): ValidityIntervalView 
 
 const sourced = (src: string, dst: string, validity: ValidityIntervalView[]): EdgeView =>
   edge({ src_id: src, dst_id: dst, edge_type: "sourced_from", validity });
+
+/** A date reflect read off the claim on the other side of a succession. */
+const offered = (over: Partial<BoundaryProposalView> = {}): BoundaryProposalView => ({
+  node_id: "f1",
+  source_id: "doc-a",
+  endpoint: "end",
+  at: "2018-01-01T00:00:00Z",
+  timeline_id: null,
+  because_id: "f2",
+  because_source_id: "doc-b",
+  graph: "default",
+  ...over,
+});
 
 const linked = (src: string, timepointId: string): EdgeView =>
   edge({
@@ -1205,6 +1223,7 @@ const showValidity = (
   edges: EdgeView[],
   facts: NodeView[] = [node({ node_id: "f1", content: "Labour is in government" })],
   over: Partial<TimelineView> = {},
+  proposals: BoundaryProposalView[] = [],
 ): void => {
   useContentMode();
   panel.loadSnapshot({
@@ -1214,6 +1233,7 @@ const showValidity = (
       node({ node_id: "doc-b", node_type: "document", content: "a blog" }),
     ],
     edges,
+    boundary_proposals: proposals,
     timelines: [
       timeline({
         timeline_id: CLOCK,
@@ -1238,6 +1258,17 @@ const box = (element: SVGElement): { top: number; bottom: number } => ({
   top: Number(element.getAttribute("y")),
   bottom: Number(element.getAttribute("y")) + Number(element.getAttribute("height")),
 });
+
+/** Where a rotated label is pinned, read back out of its transform. */
+const anchorOf = (element: SVGElement): { x: number; y: number } => {
+  const at = /translate\(([-\d.]+),\s*([-\d.]+)\)/.exec(
+    element.getAttribute("transform") ?? "",
+  );
+  return { x: Number(at?.[1]), y: Number(at?.[2]) };
+};
+
+const anchorX = (element: SVGElement): number => anchorOf(element).x;
+const anchorY = (element: SVGElement): number => anchorOf(element).y;
 
 describe("per-source validity strips", () => {
   it("draws a strip for every source and period, and no union bar", () => {
@@ -1345,6 +1376,64 @@ describe("the mark each endpoint kind gets", () => {
     const soft = found<SVGRectElement>("rect.timeline-strip-soft");
     expect(soft).toHaveLength(1);
     expect(soft[0].getAttribute("fill")).toBe("url(#timeline-strip-hatch-0)");
+  });
+
+  it("draws a named edge as a stub at full weight, with no tick and no fog", () => {
+    // §13.1: the edge is a word, and the word is drawn where the edge would be.
+    withPeriod({ end: NAMED_EDGE });
+
+    const stub = found<SVGRectElement>("rect.timeline-strip-named");
+    expect(stub).toHaveLength(1);
+    expect(stub[0].getAttribute("fill-opacity")).toBe(
+      strips()[0].getAttribute("fill-opacity"),
+    );
+    expect(stub[0].getAttribute("mask")).toBeNull();
+    // Square: the stub ends where it ends, without a cap saying a date is there.
+    expect(stub[0].getAttribute("rx")).toBeNull();
+    expect(found("rect.timeline-strip-fade")).toHaveLength(0);
+    expect(found("line.timeline-strip-cap")).toHaveLength(1);
+  });
+
+  it("writes the stored words at the end of the stub, verbatim and in mono", () => {
+    withPeriod({ end: NAMED_EDGE });
+
+    const stub = box(found<SVGRectElement>("rect.timeline-strip-named")[0]);
+    const label = found<SVGTextElement>("text.timeline-strip-named-label");
+    expect(label).toHaveLength(1);
+    expect(label[0].textContent).toBe("the Renaissance");
+    expect(label[0].getAttribute("font-family")).toContain("mono");
+    expect(anchorY(label[0])).toBeCloseTo(stub.bottom);
+  });
+
+  it("puts the stub above the body when the start is the named edge", () => {
+    withPeriod({ start: NAMED_EDGE });
+
+    const body = box(strips()[0]);
+    const stub = box(found<SVGRectElement>("rect.timeline-strip-named")[0]);
+    expect(stub.bottom).toBeCloseTo(body.top);
+    expect(anchorY(found<SVGTextElement>("text.timeline-strip-named-label")[0])).toBeCloseTo(
+      stub.top,
+    );
+  });
+
+  it("keeps the stub inside its own lane, clear of the next one's strip", () => {
+    showValidity([
+      linked("f1", "tp-early"),
+      sourced("f1", "doc-a", [period({ end: NAMED_EDGE })]),
+      sourced("f1", "doc-b", [period()]),
+    ]);
+
+    const label = found<SVGTextElement>("text.timeline-strip-named-label")[0];
+    const lane = Number(
+      found<SVGRectElement>("rect.timeline-strip-named")[0].getAttribute("x"),
+    );
+    const neighbour = strips()
+      .map((s) => Number(s.getAttribute("x")))
+      .filter((x) => x !== lane);
+
+    // Rotated into its lane's own column, the way a lane wears its source name.
+    expect(label.getAttribute("transform")).toContain("rotate(");
+    for (const x of neighbour) expect(Math.abs(anchorX(label) - x)).toBeGreaterThan(9);
   });
 
   it("marks a witnessed moment with a dot and a halo", () => {
@@ -1505,11 +1594,14 @@ describe("the rules a reasonable rendering would break", () => {
 });
 
 describe("periods with no place on this axis", () => {
-  it("sends an unresolved label to the tray, words intact", () => {
+  it("sends a label nothing else places to the tray, words intact", () => {
     showValidity([
       linked("f1", "tp-early"),
       sourced("f1", "doc-a", [
-        period({ start: { instant_kind: "named", label: "under the USSR" } }),
+        period({
+          start: { instant_kind: "named", label: "under the USSR" },
+          end: UNKNOWN_EDGE,
+        }),
       ]),
     ]);
 
@@ -1517,6 +1609,19 @@ describe("periods with no place on this axis", () => {
     const chips = [...document.querySelectorAll("#undated .timeline-validity-chip")];
     expect(chips).toHaveLength(1);
     expect(chips[0].textContent).toContain("under the USSR");
+  });
+
+  it("draws an interval a date places and leaves the tray empty", () => {
+    showValidity([
+      linked("f1", "tp-early"),
+      sourced("f1", "doc-a", [period({ start: NAMED_EDGE })]),
+    ]);
+
+    expect(strips()).toHaveLength(1);
+    expect(found("rect.timeline-strip-named")).toHaveLength(1);
+    expect(
+      [...document.querySelectorAll("#undated .timeline-validity-chip")],
+    ).toHaveLength(0);
   });
 
   it("sends a claim measured on another clock to the tray, with a clock badge", () => {
@@ -1563,6 +1668,148 @@ describe("periods with no place on this axis", () => {
     );
 
     expect(strips()).toHaveLength(1);
+  });
+});
+
+
+describe("a boundary reflect proposes", () => {
+  const open = (): EdgeView[] => [
+    linked("f1", "tp-early"),
+    sourced("f1", "doc-a", [period({ end: UNKNOWN_EDGE })]),
+  ];
+
+  it("runs a hollow dashed extension out to a dashed cap, with a chip", () => {
+    showValidity(open(), undefined, {}, [offered()]);
+
+    const extension = found<SVGRectElement>("rect.timeline-strip-proposed");
+    expect(extension).toHaveLength(1);
+    // Hollow and dashed: the reading it would get once accepted, since an
+    // accepted boundary makes the interval inferred (§13.2 rule 9).
+    expect(extension[0].getAttribute("stroke-dasharray")).toBe("4 3");
+    expect(extension[0].getAttribute("stroke")).toBe(
+      semanticPaletteFor("light").pending,
+    );
+    expect(extension[0].getAttribute("fill")).toBe(
+      semanticPaletteFor("light").pendingSurface,
+    );
+    expect(found("line.timeline-strip-proposed-cap")).toHaveLength(1);
+    const chip = found<SVGGElement>("g.timeline-strip-proposed-chip");
+    expect(chip).toHaveLength(1);
+    expect(chip[0].querySelector("text")!.textContent).toBe("proposed · review");
+  });
+
+  it("replaces the fade that edge would otherwise wear", () => {
+    // One mark per endpoint: fog and an offer never share an edge.
+    showValidity(open(), undefined, {}, [offered()]);
+
+    expect(found("rect.timeline-strip-fade")).toHaveLength(0);
+  });
+
+  it("leaves the solid body where the record's own dates put it", () => {
+    showValidity(open());
+    const bare = box(strips()[0]);
+
+    showValidity(open(), undefined, {}, [offered()]);
+
+    expect(box(strips()[0])).toEqual(bare);
+  });
+
+  it("ends the extension at the proposed date, past the body", () => {
+    // A dated witness gives the body real height, so the joint between the two
+    // is a coordinate rather than the one-pixel floor a collapsed bar gets.
+    showValidity(
+      [
+        linked("f1", "tp-early"),
+        sourced("f1", "doc-a", [
+          period({ end: UNKNOWN_EDGE, witnessed_at: stated("2005-06-01T00:00:00Z") }),
+        ]),
+      ],
+      undefined,
+      {},
+      [offered()],
+    );
+
+    const body = box(strips()[0]);
+    const extension = box(found<SVGRectElement>("rect.timeline-strip-proposed")[0]);
+    const cap = Number(
+      found<SVGLineElement>("line.timeline-strip-proposed-cap")[0].getAttribute("y1"),
+    );
+
+    expect(extension.top).toBeCloseTo(body.bottom);
+    expect(extension.bottom).toBeGreaterThan(body.bottom);
+    expect(cap).toBeCloseTo(extension.bottom);
+  });
+
+  it("draws none of it when nothing has been offered", () => {
+    showValidity(open());
+
+    expect(found("rect.timeline-strip-proposed")).toHaveLength(0);
+    expect(found("line.timeline-strip-proposed-cap")).toHaveLength(0);
+    expect(found("g.timeline-strip-proposed-chip")).toHaveLength(0);
+    expect(found("rect.timeline-strip-fade")).toHaveLength(1);
+  });
+
+  it("carries the record behind the offer, the claim it was read from included", () => {
+    showValidity(open(), undefined, {}, [offered()]);
+
+    const detail = found("rect.timeline-strip-proposed")[0].querySelector("title")!
+      .textContent!;
+    expect(detail).toContain("proposed 2018-01-01T00:00:00Z from f2");
+  });
+
+  it("makes the envelope reach the proposed date", () => {
+    // The envelope is taken from what is drawn, so an extension past the body
+    // has to move it: a summary that stopped short would claim an edge the
+    // strips inside it left open.
+    showValidity(
+      [
+        linked("f1", "tp-early"),
+        sourced("f1", "doc-a", [period({ end: UNKNOWN_EDGE })]),
+        sourced("f1", "doc-b", [period()]),
+      ],
+      undefined,
+      {},
+      [offered()],
+    );
+    click(strips()[0]);
+
+    const envelope = box(found<SVGRectElement>("rect.timeline-envelope")[0]);
+    const cap = Number(
+      found<SVGLineElement>("line.timeline-strip-proposed-cap")[0].getAttribute("y1"),
+    );
+    expect(envelope.bottom).toBeGreaterThanOrEqual(cap);
+  });
+
+  it("badges a tray chip whose period the offer cannot place", () => {
+    // An offer is not a date the graph holds, so the period stays in the tray
+    // and the badge says there is something there to review (§13.4).
+    showValidity(
+      [
+        linked("f1", "tp-early"),
+        sourced("f1", "doc-a", [period({ start: UNKNOWN_EDGE, end: UNKNOWN_EDGE })]),
+      ],
+      undefined,
+      {},
+      [offered()],
+    );
+
+    const chips = [...document.querySelectorAll("#undated .timeline-validity-chip")];
+    expect(strips()).toHaveLength(0);
+    expect(chips).toHaveLength(1);
+    expect(chips[0].querySelector(".timeline-validity-chip-proposed")!.textContent).toBe(
+      "proposed",
+    );
+  });
+
+  it("leaves an unoffered tray chip unbadged", () => {
+    showValidity([
+      linked("f1", "tp-early"),
+      sourced("f1", "doc-a", [period({ start: UNKNOWN_EDGE, end: UNKNOWN_EDGE })]),
+    ]);
+
+    const chips = [...document.querySelectorAll("#undated .timeline-validity-chip")];
+    expect(chips).toHaveLength(1);
+    expect(chips[0].querySelector(".timeline-validity-chip-proposed")).toBeNull();
   });
 });
 

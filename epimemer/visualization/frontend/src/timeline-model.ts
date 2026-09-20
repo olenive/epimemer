@@ -14,6 +14,7 @@
 
 import type { Facets, FilterableMark } from "./timeline-filter";
 import type {
+  BoundaryProposalView,
   EdgeView,
   MetacontextView,
   NodeView,
@@ -146,6 +147,7 @@ export interface SnapshotLike {
   edges: EdgeView[];
   timelines?: TimelineView[];
   metacontexts?: MetacontextView[];
+  boundary_proposals?: BoundaryProposalView[];
 }
 
 const EDGE_TIMELINK = "timelink";

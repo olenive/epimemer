@@ -131,8 +131,26 @@ const STRIP_WIDTH = 5;
 const STRIP_SLOTS = 3;
 /** Room two strips sharing a lane need, so a gap never reads as one bar. */
 const STRIP_SLOT_GAP = 6;
+/**
+ * The face §13.1 writes an endpoint in, so a date and a name read alike.
+ *
+ * The panel names a face only here: everything else inherits the page's, and
+ * an endpoint is the one place the grammar asks for a particular one.
+ */
+const MONO_FACE = "ui-monospace, SFMono-Regular, Menlo, monospace";
 /** Half the width of an endpoint cap, and the witness dot with its halo. */
 const CAP_REACH = 4;
+/**
+ * The chip beside a proposed boundary: its words, and the plate behind them.
+ *
+ * "Review" is the whole of what the chip asks for. Accepting a boundary goes
+ * through `apply_reflection`, so the dashboard shows the offer and an agent
+ * makes the decision (§13.4).
+ */
+const PROPOSED_WORDS = "proposed · review";
+const PROPOSED_CHIP_HEIGHT = 13;
+/** Room for the words, plus a little on each side of them. */
+const PROPOSED_CHIP_PAD = 5;
 const WITNESS_RADIUS = 3;
 const WITNESS_HALO = 5.5;
 /** The terminal dot on a succession elbow, and how far its curve bows. */
@@ -842,6 +860,7 @@ export const initTimelinePanel = (
           (at) => timeToPos(scale, at),
           bounds,
           FADE_PX,
+          strip.proposals,
         );
         return geometry === null ? [] : [{ strip, geometry }];
       });
@@ -878,17 +897,26 @@ export const initTimelinePanel = (
     (columnFor(placed.lane.side) === "right" ? 1 : -1) *
       (STRIP_INSET + placed.slot * STRIP_PITCH);
 
-  /** Hover and click reach the mark; the tooltip carries the interval itself. */
+  /**
+   * Hover and click reach the mark; the tooltip carries the interval itself.
+   *
+   * Text asks for `tooltip: false`: a `title` child counts as part of a text
+   * element's content, so the record would be read out as if the source had
+   * written it into its own label.
+   */
   const bindStrip = (
     element: SVGElement,
     className: string,
     detail: string,
     markId: string,
+    { tooltip = true }: { tooltip?: boolean } = {},
   ): void => {
     element.setAttribute("class", `${className} cursor-pointer`);
-    const title = svg("title", {});
-    title.textContent = detail;
-    element.appendChild(title);
+    if (tooltip) {
+      const title = svg("title", {});
+      title.textContent = detail;
+      element.appendChild(title);
+    }
     const mark = currentRow()?.dated.find((m) => m.id === markId);
     if (mark === undefined) return;
     element.addEventListener("mouseenter", () => onSelect(mark));
@@ -909,7 +937,8 @@ export const initTimelinePanel = (
    * now-line if that is where it falls, because stopping at the rule would
    * assert an endpoint nobody stated; an unbounded edge keeps full weight and
    * leaves the panel; a date resolved from the source's words keeps a hatched,
-   * soft edge.
+   * soft edge; an edge the source named wears a stub the length of a fade with
+   * the word at the end of it.
    */
   const renderStrip = (
     group: SVGGElement,
@@ -929,6 +958,8 @@ export const initTimelinePanel = (
     const alpha = muted ? 0.45 : 1;
     const left = x - STRIP_WIDTH / 2;
     const bodyHeight = Math.max(1, geometry.bodyBottom - geometry.bodyTop);
+    /** How solid the bar is: hollow when inferred, quieter when historical. */
+    const weight = (inferred ? 0.2 : 0.85) * alpha;
 
     const body = svg("rect", {
       x: left,
@@ -937,7 +968,7 @@ export const initTimelinePanel = (
       height: bodyHeight,
       rx: 1.5,
       fill: hue,
-      "fill-opacity": (inferred ? 0.2 : 0.85) * alpha,
+      "fill-opacity": weight,
       ...(inferred
         ? {
             stroke: hue,
@@ -961,6 +992,123 @@ export const initTimelinePanel = (
       [geometry.startMark, geometry.bodyTop, -1],
       [geometry.endMark, geometry.bodyBottom, 1],
     ] as const) {
+      const named = direction === -1 ? geometry.labelAbove : geometry.labelBelow;
+      if (endpoint === "named" && named !== null) {
+        // The edge is a word, so the word is drawn where the edge would be: the
+        // bar keeps full weight for a fixed stub and ends square, with no tick
+        // and no date. Fog here would say we do not know where an edge is that
+        // the source named (§13.2 rule 3).
+        group.appendChild(
+          svg("rect", {
+            class: "timeline-strip-named",
+            x: left,
+            y: direction === -1 ? y - named.reach : y,
+            width: STRIP_WIDTH,
+            height: named.reach,
+            fill: hue,
+            "fill-opacity": weight,
+          }),
+        );
+
+        const outward = columnFor(placed.lane.side) === "right" ? 1 : -1;
+        const label = svg("text", {
+          // Rotated into the lane's own column, the way the lane wears its
+          // source name, and running away from the body: a horizontal word
+          // would cross whatever the neighbouring lanes are drawing.
+          transform: `translate(${x + outward * (STRIP_WIDTH / 2 + 3)}, ${
+            direction === -1 ? y - named.reach : y + named.reach
+          }) rotate(${outward * 90})`,
+          fill: currentPalette().nodeLabel,
+          "font-size": 9,
+          "font-family": MONO_FACE,
+          "text-anchor": outward === direction ? "start" : "end",
+        });
+        // Verbatim: the words are what the source wrote, and a shortened one
+        // would leave the panel showing a label no document contains.
+        label.textContent = named.label;
+        // Hovering the word reaches the mark the way the bar does; the record
+        // that calls it a word rather than a date stays on the bar.
+        bindStrip(label, "timeline-strip-named-label", strip.detail, placed.lane.markId, {
+          tooltip: false,
+        });
+        group.appendChild(label);
+      }
+      const proposed = direction === -1 ? geometry.proposedAbove : geometry.proposedBelow;
+      if (endpoint === "proposed" && proposed !== null) {
+        // What reflect offers, drawn as the reading it would get once accepted:
+        // hollow, dashed and in the pending colour, because an accepted
+        // boundary makes the interval `inferred` and until then it is not the
+        // record at all (§13.2 rule 9). It replaces the fade this edge would
+        // otherwise wear, so the endpoint still carries one mark.
+        const pending = semanticPaletteFor(currentTheme());
+        const reach = Math.max(1, Math.abs(proposed.at - y));
+        const extension = svg("rect", {
+          x: left,
+          y: Math.min(y, proposed.at),
+          width: STRIP_WIDTH,
+          height: reach,
+          rx: 1.5,
+          fill: pending.pendingSurface,
+          "fill-opacity": alpha,
+          stroke: pending.pending,
+          "stroke-width": 1,
+          "stroke-dasharray": "4 3",
+          "stroke-opacity": alpha,
+        });
+        bindStrip(extension, "timeline-strip-proposed", strip.detail, placed.lane.markId);
+        group.appendChild(extension);
+
+        const cap = svg("line", {
+          x1: x - CAP_REACH,
+          y1: proposed.at,
+          x2: x + CAP_REACH,
+          y2: proposed.at,
+          stroke: pending.pending,
+          "stroke-width": 2,
+          "stroke-dasharray": "3 3",
+          "stroke-opacity": alpha,
+        });
+        bindStrip(cap, "timeline-strip-proposed-cap", strip.detail, placed.lane.markId);
+        group.appendChild(cap);
+
+        const outward = columnFor(placed.lane.side) === "right" ? 1 : -1;
+        // Away from the body, in the lane's own column, the way the labelled
+        // edge wears its word: a horizontal chip would cross the neighbours.
+        const run = outward === direction ? 1 : -1;
+        const width = PROPOSED_WORDS.length * CHAR_WIDTH + PROPOSED_CHIP_PAD * 2;
+        const chip = svg("g", {
+          transform: `translate(${x + outward * (STRIP_WIDTH / 2 + 3)}, ${
+            proposed.at
+          }) rotate(${outward * 90})`,
+        });
+        chip.appendChild(
+          svg("rect", {
+            x: run === 1 ? 0 : -width,
+            y: -PROPOSED_CHIP_HEIGHT / 2,
+            width,
+            height: PROPOSED_CHIP_HEIGHT,
+            rx: PROPOSED_CHIP_HEIGHT / 2,
+            fill: pending.pendingSurface,
+            "fill-opacity": alpha,
+            stroke: pending.pending,
+            "stroke-width": 1,
+            "stroke-opacity": 0.6 * alpha,
+          }),
+        );
+        const words = svg("text", {
+          x: run * PROPOSED_CHIP_PAD,
+          y: 3.2,
+          fill: pending.pending,
+          "fill-opacity": alpha,
+          "font-size": 9,
+          "font-family": MONO_FACE,
+          "text-anchor": run === 1 ? "start" : "end",
+        });
+        words.textContent = PROPOSED_WORDS;
+        chip.appendChild(words);
+        bindStrip(chip, "timeline-strip-proposed-chip", strip.detail, placed.lane.markId);
+        group.appendChild(chip);
+      }
       if (endpoint === "cap") {
         group.appendChild(
           svg("line", {
@@ -1770,6 +1918,18 @@ export const initTimelinePanel = (
       badge.className = "text-content-muted";
       badge.textContent = chip.reason === "other clock" ? "⧗" : "?";
       el.appendChild(badge);
+      if (chip.proposed) {
+        // Reflect has offered a date for one of this period's open edges. The
+        // chip stays in the tray, because an offer is not a date the graph
+        // holds, and the badge is how the tray says there is something here to
+        // review (§13.4).
+        const pending = document.createElement("span");
+        pending.className =
+          "timeline-validity-chip-proposed px-1 rounded text-[9px] " +
+          "bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200";
+        pending.textContent = "proposed";
+        el.appendChild(pending);
+      }
       el.title = chip.detail;
       controls.undated.appendChild(el);
     }

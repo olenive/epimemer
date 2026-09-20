@@ -31,7 +31,7 @@ Every proposal is `inferred` per §8 and **nothing is written here**: this modul
 reads, and `apply_reflection(boundaries=[...])` is the only thing that writes.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 
 from pydantic import BaseModel
@@ -160,7 +160,7 @@ def _proposal(
 def _across_one_succession(
     earlier: EpistemicNode,
     later: EpistemicNode,
-    validity: dict[str, list[SourceValidity]],
+    validity: Mapping[str, list[SourceValidity]],
 ) -> list[BoundaryProposal]:
     """Both directions of §9's relation, for one `A → B` succession.
 
@@ -237,13 +237,59 @@ def _across_one_succession(
     return proposals
 
 
+def succession_holders(nodes: Iterable[EpistemicNode]) -> dict[str, EpistemicNode]:
+    """The nodes among these that a succession can be about, keyed by id.
+
+    A topic is a subject rather than an assertion, so there is nothing there to
+    be true and nothing to be true *during*; a claim outside
+    `SUCCESSION_STATUSES` has been merged away or concluded wrong, and neither
+    is something to align a period to.
+    """
+    return {
+        node.id: node
+        for node in nodes
+        if isinstance(node, _CAN_BE_TRUE) and node.status in SUCCESSION_STATUSES
+    }
+
+
+def boundary_proposals_from(
+    holders: Mapping[str, EpistemicNode],
+    successions: Sequence[NodeEdge],
+    validity: Mapping[str, list[SourceValidity]],
+) -> list[BoundaryProposal]:
+    """The rule itself, over data somebody has already read.
+
+    Pure, and the only place the rule is written. `reflect` reaches it through
+    `propose_boundaries`, which does the reading; a visualization snapshot
+    reaches it from the nodes and edges it has already loaded, so the strips it
+    draws and the proposals beside them describe one instant rather than two.
+
+    `successions` may be any edges at all: the succession edges are picked out
+    here, and a step whose other end is not a holder is dropped, since that end
+    is a claim the graph no longer carries.
+    """
+    pairs = [
+        (holders[edge.src_id], holders[edge.dst_id])
+        for edge in successions
+        if edge.type is EdgeType.TEMPORALLY_FOLLOWED_BY
+        and edge.src_id in holders
+        and edge.dst_id in holders
+    ]
+    return [
+        proposal
+        for earlier, later in pairs
+        for proposal in _across_one_succession(earlier, later, validity)
+    ]
+
+
 async def propose_boundaries(
     storage: StorageBackend,
 ) -> list[BoundaryProposal]:
     """Where a succession lets one claim's period close and the next one's open.
 
     Reads only, in four batched queries: the claims on both sides of a
-    succession, their lineage edges, and their validity.
+    succession, their lineage edges, and their validity. The rule those reads
+    feed is `boundary_proposals_from`.
 
     A proposal needs a succession edge *and* a date, so a graph with either and
     not the other produces nothing. That is the common case and stays the common
@@ -251,34 +297,26 @@ async def propose_boundaries(
     """
     holders: dict[str, EpistemicNode] = {}
     for status in sorted(SUCCESSION_STATUSES, key=lambda s: s.value):
-        for node in await storage.query_nodes(status=status):
-            if isinstance(node, _CAN_BE_TRUE):
-                holders[node.id] = node
+        holders.update(succession_holders(await storage.query_nodes(status=status)))
     if not holders:
         return []
 
-    successions = await storage.get_edges_for(
+    by_node = await storage.get_edges_for(
         list(holders), direction="from", edge_type=EdgeType.TEMPORALLY_FOLLOWED_BY
     )
+    successions = [edge for edges in by_node.values() for edge in edges]
     pairs = [
-        (holders[edge.src_id], holders[edge.dst_id])
-        for edges in successions.values()
-        for edge in edges
-        # A successor the graph no longer holds as a live or historical claim —
-        # merged away, or corrected — is not something to align a period to.
-        if edge.dst_id in holders
+        (edge.src_id, edge.dst_id)
+        for edge in successions
+        if {edge.src_id, edge.dst_id} <= holders.keys()
     ]
     if not pairs:
         return []
 
     validity = await validity_for(
-        list(dict.fromkeys(node.id for pair in pairs for node in pair)), storage
+        list(dict.fromkeys(node_id for pair in pairs for node_id in pair)), storage
     )
-    return [
-        proposal
-        for earlier, later in pairs
-        for proposal in _across_one_succession(earlier, later, validity)
-    ]
+    return boundary_proposals_from(holders, successions, validity)
 
 
 class BoundaryRefused(BaseModel):

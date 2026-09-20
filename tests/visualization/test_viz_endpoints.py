@@ -39,6 +39,7 @@ from epimemer.pipelines.timeline.recurrence import (
     record_exception,
 )
 from epimemer.storage.memory import InMemoryStorage
+from epimemer.storage.surrealdb_adapter import SurrealDBStorage
 from epimemer.visualization.event_bus import create_event_bus
 from epimemer.visualization.events import EdgeStored, edge_to_view, node_to_view
 from epimemer.visualization.instrumented_storage import instrument_storage
@@ -725,3 +726,150 @@ class TestValidityReachesTheSnapshot:
         data = await assemble_snapshot(storage, "default")
 
         assert data["edges"] == []
+
+
+# --- Boundaries reflect would propose, worked out for the snapshot ---
+
+
+@pytest.fixture(params=["memory", "surrealdb"])
+async def either_backend(request):
+    """Both stores, for the reads the proposals add.
+
+    The rest of this module is in-memory, because it is checking the shape of a
+    payload. This part reads nodes by status and edges by type on the way to a
+    derived answer, which is exactly where the two backends have diverged
+    before.
+    """
+    if request.param == "memory":
+        yield InMemoryStorage()
+    else:
+        store = SurrealDBStorage(url="mem://")
+        await store.connect()
+        yield store
+        await store.close()
+
+
+async def _renaming(storage):
+    """The worked case: an open period, and a successor that names its date."""
+    leningrad = Fact(content="the city is called Leningrad", source_id="seg-1")
+    petersburg = Fact(content="the city is called Saint Petersburg", source_id="seg-1")
+    for fact in (leningrad, petersburg):
+        await storage.store_node(fact)
+    await storage.store_edge(
+        NodeEdge(
+            src_id=leningrad.id,
+            dst_id="doc-1970",
+            type=EdgeType.SOURCED_FROM,
+            validity=[
+                ValidityInterval(
+                    start=PreciseInstant(at=datetime(1924, 1, 26, tzinfo=UTC)),
+                    end=UnknownInstant(),
+                    basis=IntervalBasis.STATED,
+                )
+            ],
+        )
+    )
+    await storage.store_edge(
+        NodeEdge(
+            src_id=petersburg.id,
+            dst_id="doc-2000",
+            type=EdgeType.SOURCED_FROM,
+            validity=[
+                ValidityInterval(
+                    start=PreciseInstant(at=datetime(1991, 9, 6, tzinfo=UTC)),
+                    end=UnknownInstant(),
+                    basis=IntervalBasis.STATED,
+                )
+            ],
+        )
+    )
+    await storage.set_node_status_tx(
+        [leningrad], status=NodeStatus.HISTORICAL, at=datetime(2001, 1, 1, tzinfo=UTC)
+    )
+    await storage.store_edge(
+        NodeEdge(
+            src_id=leningrad.id,
+            dst_id=petersburg.id,
+            type=EdgeType.TEMPORALLY_FOLLOWED_BY,
+        )
+    )
+    return leningrad, petersburg
+
+
+class TestBoundaryProposalsRideAlong:
+    """Where reflect would offer a date, worked out fresh for every snapshot.
+
+    Derived rather than stored: a stored answer would be a photograph of a
+    derivation that goes stale the moment either claim changes. The panel draws
+    what is here beside the periods from the same reads, so the two describe one
+    instant.
+
+    Each backend opens on a graph of its own name, so the tests ask the store
+    which one it is on rather than naming it.
+    """
+
+    async def test_the_key_is_there_when_there_is_nothing_to_propose(self, either_backend):
+        data = await assemble_snapshot(either_backend, either_backend.current_database)
+
+        assert data["boundary_proposals"] == []
+
+    async def test_a_succession_with_no_date_anywhere_proposes_nothing(self, either_backend):
+        earlier = Fact(content="a claim", source_id="seg-1")
+        later = Fact(content="the next claim", source_id="seg-1")
+        for fact in (earlier, later):
+            await either_backend.store_node(fact)
+        await either_backend.store_edge(
+            NodeEdge(src_id=earlier.id, dst_id=later.id, type=EdgeType.TEMPORALLY_FOLLOWED_BY)
+        )
+
+        data = await assemble_snapshot(either_backend, either_backend.current_database)
+
+        assert data["boundary_proposals"] == []
+
+    async def test_a_dated_successor_closes_the_claim_it_followed(self, either_backend):
+        graph = either_backend.current_database
+        leningrad, petersburg = await _renaming(either_backend)
+
+        data = await assemble_snapshot(either_backend, graph)
+
+        [proposal] = data["boundary_proposals"]
+        assert proposal["node_id"] == leningrad.id
+        assert proposal["source_id"] == "doc-1970"
+        assert proposal["endpoint"] == "end"
+        assert proposal["at"].startswith("1991-09-06")
+        assert proposal["timeline_id"] is None
+        # The evidence: the claim the date was read from, and the source dating it.
+        assert proposal["because_id"] == petersburg.id
+        assert proposal["because_source_id"] == "doc-2000"
+        assert proposal["graph"] == graph
+
+    async def test_the_claim_it_touches_is_still_open_in_the_snapshot(self, either_backend):
+        """A proposal is an offer, so the periods beside it are untouched."""
+        graph = either_backend.current_database
+        leningrad, _ = await _renaming(either_backend)
+
+        data = await assemble_snapshot(either_backend, graph)
+
+        [edge] = [
+            e
+            for e in data["edges"]
+            if e["src_id"] == leningrad.id and e["edge_type"] == "sourced_from"
+        ]
+        assert edge["validity"][0]["end"]["instant_kind"] == "unknown"
+
+    async def test_it_describes_the_graph_asked_for_rather_than_the_active_one(
+        self, either_backend
+    ):
+        """The dashboard asks one session for any graph it can see."""
+        home = either_backend.current_database
+        await either_backend.switch_database("other")
+        leningrad, _ = await _renaming(either_backend)
+        await either_backend.switch_database(home)
+
+        data = await assemble_snapshot(either_backend, "other")
+
+        [proposal] = data["boundary_proposals"]
+        assert proposal["node_id"] == leningrad.id
+        assert proposal["graph"] == "other"
+        assert either_backend.current_database == home
+        assert (await assemble_snapshot(either_backend, home))["boundary_proposals"] == []

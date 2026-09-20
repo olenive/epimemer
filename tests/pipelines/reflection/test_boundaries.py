@@ -32,9 +32,12 @@ from epimemer.core.types import (
     Topic,
     ValueSignal,
 )
+from epimemer.pipelines.query.validity import SourceValidity
 from epimemer.pipelines.reflection.boundaries import (
     apply_boundary,
+    boundary_proposals_from,
     propose_boundaries,
+    succession_holders,
 )
 
 
@@ -308,6 +311,97 @@ class TestWhatItRefusesToPropose:
         await _succeeds(storage, earlier, later)
 
         assert await propose_boundaries(storage) == []
+
+
+class TestTheRuleOnItsOwn:
+    """The pure core, over data a caller already holds.
+
+    `reflect` reaches it by reading storage; a visualization snapshot reaches it
+    from the nodes and edges it has already loaded, so both see one rule. These
+    tests hand it the Leningrad case directly, with no storage in sight.
+    """
+
+    def test_the_successors_start_closes_the_earlier_period(self):
+        leningrad = Fact(content="the city is called Leningrad", source_id="seg-1")
+        petersburg = Fact(content="the city is called Saint Petersburg", source_id="seg-1")
+        succession = NodeEdge(
+            src_id=leningrad.id,
+            dst_id=petersburg.id,
+            type=EdgeType.TEMPORALLY_FOLLOWED_BY,
+        )
+
+        [proposal] = boundary_proposals_from(
+            {leningrad.id: leningrad, petersburg.id: petersburg},
+            [succession],
+            {
+                leningrad.id: [
+                    SourceValidity(source_id="doc-1970", intervals=[_period(start=_at(1924))])
+                ],
+                petersburg.id: [
+                    SourceValidity(source_id="doc-2000", intervals=[_period(start=_at(1991))])
+                ],
+            },
+        )
+
+        assert proposal.node.id == leningrad.id
+        assert proposal.endpoint == "end"
+        assert proposal.at.year == 1991
+        assert proposal.source_id == "doc-1970"
+        assert proposal.because.id == petersburg.id
+        assert proposal.because_source_id == "doc-2000"
+
+    def test_an_edge_that_is_not_a_succession_licenses_nothing(self):
+        """The whole edge list can be handed over, so the type is checked here."""
+        leningrad = Fact(content="the city is called Leningrad", source_id="seg-1")
+        petersburg = Fact(content="the city is called Saint Petersburg", source_id="seg-1")
+
+        assert (
+            boundary_proposals_from(
+                {leningrad.id: leningrad, petersburg.id: petersburg},
+                [NodeEdge(src_id=leningrad.id, dst_id=petersburg.id, type=EdgeType.SUPERSEDED_BY)],
+                {
+                    leningrad.id: [
+                        SourceValidity(source_id="doc-1970", intervals=[_period(start=_at(1924))])
+                    ],
+                    petersburg.id: [
+                        SourceValidity(source_id="doc-2000", intervals=[_period(start=_at(1991))])
+                    ],
+                },
+            )
+            == []
+        )
+
+    def test_a_step_whose_other_end_the_graph_no_longer_holds(self):
+        leningrad = Fact(content="the city is called Leningrad", source_id="seg-1")
+
+        assert (
+            boundary_proposals_from(
+                {leningrad.id: leningrad},
+                [
+                    NodeEdge(
+                        src_id=leningrad.id,
+                        dst_id="a claim that was merged away",
+                        type=EdgeType.TEMPORALLY_FOLLOWED_BY,
+                    )
+                ],
+                {
+                    leningrad.id: [
+                        SourceValidity(source_id="doc-1970", intervals=[_period(start=_at(1924))])
+                    ]
+                },
+            )
+            == []
+        )
+
+    def test_only_a_claim_with_a_live_status_can_hold_a_period(self):
+        """What `succession_holders` keeps, which is what the snapshot hands over."""
+        live = Fact(content="a claim", source_id="seg-1")
+        retired = Fact(
+            content="a claim we took back", source_id="seg-1", status=NodeStatus.CORRECTED
+        )
+        subject = Topic(content="the city", source_id="seg-1")
+
+        assert succession_holders([live, retired, subject]) == {live.id: live}
 
 
 class TestAcceptingOne:

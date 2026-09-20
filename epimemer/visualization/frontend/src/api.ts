@@ -7,6 +7,7 @@
  */
 
 import type {
+  BoundaryProposalView,
   EdgeView,
   MetacontextView,
   NodeView,
@@ -35,6 +36,14 @@ export interface SnapshotResponse {
   metacontexts?: MetacontextView[];
   /** Absent from a hub that predates the relation label record (#74). */
   relation_labels?: RelationLabelView[];
+  /**
+   * Where reflect would offer a date for an edge a source left open.
+   *
+   * Worked out by the session answering this read, from the same nodes and
+   * edges above, so the periods and the proposals beside them describe one
+   * instant. Absent from a hub that predates the proposed boundary.
+   */
+  boundary_proposals?: BoundaryProposalView[];
 }
 
 /**

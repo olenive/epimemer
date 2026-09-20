@@ -109,6 +109,33 @@ export interface ValidityIntervalView {
   basis: "stated" | "inferred";
 }
 
+/**
+ * A boundary reflect offers for an edge a source left open.
+ *
+ * Derived for every snapshot and never stored: a stored answer would be a
+ * photograph of a derivation that goes stale the moment either claim changes
+ * (`TIMELINE_VISUALISATION.md` §13.4). The date is the successor's own start,
+ * or the predecessor's own end, read across a succession the agent judged.
+ *
+ * Flat: a strip finds its own by `(node_id, source_id, timeline_id)` and then
+ * by endpoint, which is what addresses one period.
+ *
+ * Passive. The dashboard is the read side, so accepting one goes through
+ * `apply_reflection` and never through this panel.
+ */
+export interface BoundaryProposalView {
+  node_id: string;
+  source_id: string;
+  endpoint: "start" | "end";
+  /** The proposed date, ISO-8601. */
+  at: string;
+  timeline_id: string | null;
+  /** The claim the date was read from, and the source that dated it. */
+  because_id: string;
+  because_source_id: string;
+  graph: string;
+}
+
 export interface EdgeView {
   edge_id: string;
   src_id: string;

@@ -4,6 +4,23 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.8] — 2026-09-21
+
+- The timeline panel shows where reflect would propose a boundary: an open edge
+  a succession gives a date for is drawn as a hollow pending extension out to a
+  dashed cap, with a "proposed · review" chip beside it, and the solid bar still
+  stops where the source's own dates stop. A period the offer cannot place stays
+  in the tray with a pending badge. Every proposal is worked out afresh for each
+  snapshot rather than stored, so it follows the claims on both sides, and
+  accepting one still goes through `apply_reflection`.
+- The timeline panel draws an interval with a named endpoint whenever a date at
+  the other edge or a dated witness places it, with the source's own words at
+  the edge instead of sending the whole interval to the tray. Only an interval
+  nothing dates still goes there.
+- This is the first release on PyPI since 0.2.6, so it carries everything
+  listed under 0.2.7 as well: that tag was pushed, but its publish job timed
+  out talking to TestPyPI before uploading.
+
 ## [0.2.7] — 2026-09-19
 
 - The visualisation snapshot now carries validity intervals: every

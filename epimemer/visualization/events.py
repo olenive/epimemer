@@ -32,6 +32,7 @@ from epimemer.core.types import (
     TimepointKind,
     Topic,
 )
+from epimemer.pipelines.reflection.boundaries import BoundaryProposal
 from epimemer.pipelines.timeline.ordering import (
     Bounds,
     OrderingGraph,
@@ -177,6 +178,34 @@ class RecurrenceView(BaseModel):
     truncated: bool = False
 
 
+class BoundaryProposalView(BaseModel):
+    """A boundary reflect offers for an edge a source left open.
+
+    Worked out fresh for every snapshot and never stored: a stored answer would
+    be a photograph of a derivation that goes stale the moment either claim
+    changes (`TIMELINE_VISUALISATION.md` §13.4).
+
+    Flat, and matched to a strip by `(node_id, source_id, timeline_id)` and then
+    by endpoint, because that quadruple is what addresses one period: a claim
+    with two sources has two periods, and a source can assert several on
+    different clocks.
+
+    Passive, too. The dashboard is the read side, so this says what reflect
+    would offer and accepting still goes through `apply_reflection`.
+    """
+
+    node_id: str
+    source_id: str
+    endpoint: Literal["start", "end"]
+    at: datetime
+    timeline_id: str | None = None
+    # The claim the date was read from, and the source that dated it. The
+    # evidence is a node in the graph, so a reviewer can go and read it.
+    because_id: str
+    because_source_id: str
+    graph: str
+
+
 class MetacontextView(BaseModel):
     """A metacontext, so the dashboard can name one rather than show a uuid."""
 
@@ -287,6 +316,25 @@ def relation_label_to_view(label: RelationLabel, graph: str) -> RelationLabelVie
         name=label.name,
         kind=label.kind,
         description=label.description,
+        graph=graph,
+    )
+
+
+def boundary_proposal_to_view(proposal: BoundaryProposal, graph: str) -> BoundaryProposalView:
+    """Flatten one proposal for the wire.
+
+    The revised interval travels no further than the server: the panel draws
+    where the boundary would fall, and it already holds the period the boundary
+    would change.
+    """
+    return BoundaryProposalView(
+        node_id=proposal.node.id,
+        source_id=proposal.source_id,
+        endpoint="start" if proposal.endpoint == "start" else "end",
+        at=proposal.at,
+        timeline_id=proposal.timeline_id,
+        because_id=proposal.because.id,
+        because_source_id=proposal.because_source_id,
         graph=graph,
     )
 

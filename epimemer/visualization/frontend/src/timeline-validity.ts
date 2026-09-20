@@ -10,16 +10,21 @@
  *
  * The grammar is `TIMELINE_VISUALISATION.md` §13. Its load-bearing part is that
  * nothing is drawn the data does not assert: an unknown edge dissolves, an
- * unbounded one leaves the panel at full weight, a label nobody has resolved
- * gets no coordinate at all, and the space between two periods stays empty
- * because outside a stated interval is *no assertion* rather than false.
+ * unbounded one leaves the panel at full weight, an edge the source named
+ * wears its word rather than a date, and the space between two periods stays
+ * empty because outside a stated interval is *no assertion* rather than false.
  *
  * Pure: pixels in, pixels out, no DOM. The parts most likely to be wrong are
  * here, where they can be tested without a browser.
  */
 
 import type { Side, SnapshotLike } from "./timeline-model";
-import type { EdgeView, ImpreciseInstantView, ValidityIntervalView } from "./types";
+import type {
+  BoundaryProposalView,
+  EdgeView,
+  ImpreciseInstantView,
+  ValidityIntervalView,
+} from "./types";
 
 const EDGE_SOURCED_FROM = "sourced_from";
 const EDGE_TEMPORAL_SUCCESSION = "temporally_followed_by";
@@ -30,11 +35,16 @@ const STATUS_CORRECTED = "corrected";
 /**
  * What an endpoint gets drawn as.
  *
- * Five marks for four kinds, because a `precise` endpoint carrying the source's
- * own words is a resolved label rather than a date anybody stated: resolution
- * added a position and left the words standing, so the edge stays soft.
+ * Six marks for four kinds. A `precise` endpoint carrying the source's own
+ * words is a resolved label rather than a date anybody stated: resolution added
+ * a position and left the words standing, so the edge stays soft. And an
+ * `unknown` edge reflect has offered a date for wears `proposed` instead of
+ * `fade`, so an endpoint still carries one mark (§13.1).
+ *
+ * Every mark here is drawn, `named` included: it is the labelled edge, a stub
+ * of fixed length with the source's word at the end of it (§13.1).
  */
-export type EndpointMark = "cap" | "soft" | "fade" | "exit" | "named";
+export type EndpointMark = "cap" | "soft" | "fade" | "exit" | "named" | "proposed";
 
 const unhandled = (endpoint: never): never => {
   throw new Error(`an endpoint kind the grammar does not draw: ${JSON.stringify(endpoint)}`);
@@ -84,26 +94,70 @@ export const endpointWords = (endpoint: ImpreciseInstantView): string => {
   }
 };
 
+/** What a proposed boundary says, in the words the tooltip uses. */
+export interface ProposedWords {
+  /** The date itself, as this module renders a precise endpoint. */
+  label: string;
+  /** The claim the date was read from, which a reviewer can go and read. */
+  because: string;
+}
+
 /**
  * An endpoint as the tooltip states it: the words for what has no date.
  *
  * Never a date the model does not hold. "Unknown" printed as a timestamp is
- * the collapse the three endpoint states exist to prevent.
+ * the collapse the three endpoint states exist to prevent. A proposal is said
+ * as a proposal, beside the word `unknown` rather than in place of it: the
+ * record holds no date for this edge, and holds none until somebody accepts
+ * the offer.
  */
-export const describeEndpoint = (endpoint: ImpreciseInstantView): string => {
+export const describeEndpoint = (
+  endpoint: ImpreciseInstantView,
+  proposed: ProposedWords | null = null,
+): string => {
   switch (endpoint.instant_kind) {
     case "precise":
       return endpoint.label === null ? endpoint.at : `${endpoint.at} ("${endpoint.label}")`;
     case "named":
       return `"${endpoint.label}" (named, no date)`;
     case "unknown":
-      return "unknown";
+      return proposed === null
+        ? "unknown"
+        : `unknown (proposed ${proposed.label} from ${proposed.because})`;
     case "unbounded":
       return "unbounded";
     default:
       return unhandled(endpoint);
   }
 };
+
+/**
+ * The proposal for one endpoint of one period, or null where there is none.
+ *
+ * Three refusals, each load-bearing. A proposal only ever lands on an edge the
+ * record leaves **unknown**, which is the only edge the server offers a date
+ * for; an edge that already has one has an answer, and replacing it here would
+ * show a date nobody accepted. It must be on the period's **own clock**, since
+ * there is no conversion between an in-universe date and a real one. And it
+ * must name this **endpoint**: closing a period and opening it are different
+ * offers.
+ */
+export const proposalFor = (
+  interval: ValidityIntervalView,
+  proposals: readonly BoundaryProposalView[],
+  endpoint: "start" | "end",
+): BoundaryProposalView | null => {
+  if (interval[endpoint].instant_kind !== "unknown") return null;
+  return (
+    proposals.find(
+      (proposal) =>
+        proposal.endpoint === endpoint && proposal.timeline_id === interval.timeline_id,
+    ) ?? null
+  );
+};
+
+const wordsFor = (proposal: BoundaryProposalView | null): ProposedWords | null =>
+  proposal === null ? null : { label: proposal.at, because: proposal.because_id };
 
 const field = (name: string, value: string): string => `${name.padEnd(9)} ${value}`;
 
@@ -116,11 +170,18 @@ const field = (name: string, value: string): string => `${name.padEnd(9)} ${valu
 export const describeInterval = (
   sourceLabel: string,
   interval: ValidityIntervalView,
+  proposals: readonly BoundaryProposalView[] = [],
 ): string =>
   [
     sourceLabel,
-    field("start", describeEndpoint(interval.start)),
-    field("end", describeEndpoint(interval.end)),
+    field(
+      "start",
+      describeEndpoint(interval.start, wordsFor(proposalFor(interval, proposals, "start"))),
+    ),
+    field(
+      "end",
+      describeEndpoint(interval.end, wordsFor(proposalFor(interval, proposals, "end"))),
+    ),
     field("basis", interval.basis),
     field(
       "witnessed",
@@ -163,33 +224,117 @@ export interface StripBounds {
   bottom: number;
 }
 
+/** What an interval offers the axis: the mark each edge wears, and the instants. */
+interface Anchors {
+  startMark: EndpointMark;
+  endMark: EndpointMark;
+  startAt: number | null;
+  endAt: number | null;
+  witnessAt: number | null;
+}
+
+const anchorsOf = (interval: ValidityIntervalView): Anchors => ({
+  startMark: endpointMark(interval.start),
+  endMark: endpointMark(interval.end),
+  startAt: endpointAt(interval.start),
+  endAt: endpointAt(interval.end),
+  witnessAt: endpointAt(interval.witnessed_at),
+});
+
+/**
+ * Whether anything gives this interval a place on the axis.
+ *
+ * A date at either edge or on the witness does, and each endpoint then wears
+ * its own mark, however soft the other one is (§13.2 rule 3). An unbounded edge
+ * does too, on its own: "there is no boundary" says where the bar goes, which
+ * is off the panel at full weight.
+ *
+ * A word does not, and an unknown edge does not. So a word beside one of those
+ * leaves no date anywhere, and the interval goes to the tray whole: the stub is
+ * drawn where the edge would be, and nothing says where that is.
+ *
+ * Both `intervalSpan` and `stripGeometry` start here. The panel reserves a lane
+ * for every interval the first accepts and draws what the second returns, so
+ * the two have to refuse the same things.
+ */
+const isPlaced = ({
+  startMark,
+  endMark,
+  startAt,
+  endAt,
+  witnessAt,
+}: Anchors): boolean => {
+  if (startAt !== null || endAt !== null || witnessAt !== null) return true;
+  if (startMark === "named" || endMark === "named") return false;
+  return startMark === "exit" || endMark === "exit";
+};
+
 /**
  * The stretch of time an interval covers, for deciding whether it is in view.
  *
  * Infinite on an unbounded edge, because that edge genuinely has no end, and
- * collapsed onto the nearest placed instant on an unknown one, which is where
- * the geometry puts the body before the fog starts. Null wherever
- * `stripGeometry` would also refuse: the two must agree about what has a place
- * on the axis, or the panel would reserve a lane for a strip it never draws.
+ * collapsed onto the nearest placed instant on an unknown or a named one. That
+ * is where the geometry puts the body before the fog or the stub starts, and
+ * both of those are fixed pixel lengths that claim no time.
  */
 export const intervalSpan = (
   interval: ValidityIntervalView,
 ): { from: number; to: number } | null => {
-  const startMark = endpointMark(interval.start);
-  const endMark = endpointMark(interval.end);
-  if (startMark === "named" || endMark === "named") return null;
+  const anchors = anchorsOf(interval);
+  if (!isPlaced(anchors)) return null;
 
-  const startAt = endpointAt(interval.start);
-  const endAt = endpointAt(interval.end);
-  const witnessAt = endpointAt(interval.witnessed_at);
+  const { startMark, endMark, startAt, endAt, witnessAt } = anchors;
   const from = startAt ?? (startMark === "exit" ? -Infinity : null);
   const to = endAt ?? (endMark === "exit" ? Infinity : null);
-  if (from === null && to === null && witnessAt === null) return null;
 
   return {
     from: from ?? witnessAt ?? to!,
     to: to ?? witnessAt ?? from!,
   };
+};
+
+/**
+ * The labelled edge: a stub of fixed length wearing the source's own words.
+ *
+ * `reach` is pixels and asserts no extent, the way a fade asserts none. The
+ * source named this edge rather than dating it, so the bar keeps full weight
+ * that far and the word is drawn at the end of it, verbatim (§13.1).
+ */
+export interface LabelledEdge {
+  reach: number;
+  label: string;
+}
+
+const labelledEdge = (
+  endpoint: ImpreciseInstantView,
+  fade: number,
+): LabelledEdge | null =>
+  endpoint.instant_kind === "named" ? { reach: fade, label: endpoint.label } : null;
+
+/**
+ * Where a proposed boundary falls, and what it says.
+ *
+ * `at` is a pixel on the axis, unlike the fixed reaches a fade and a stub use:
+ * this one is a date, read from a document on the other side of a succession,
+ * so it has a real place. What it does not have is the record's agreement,
+ * which is why it is drawn hollow and in the pending colour rather than as
+ * more bar (§13.2 rule 9).
+ */
+export interface ProposedEdge extends ProposedWords {
+  at: number;
+}
+
+const proposedEdge = (
+  interval: ValidityIntervalView,
+  proposals: readonly BoundaryProposalView[],
+  endpoint: "start" | "end",
+  place: (at: number) => number,
+): ProposedEdge | null => {
+  const proposal = proposalFor(interval, proposals, endpoint);
+  if (proposal === null) return null;
+  const at = Date.parse(proposal.at);
+  if (Number.isNaN(at)) return null;
+  return { at: place(at), label: proposal.at, because: proposal.because_id };
 };
 
 export interface StripGeometry {
@@ -201,9 +346,27 @@ export interface StripGeometry {
   /** How far the fog runs past each edge; zero where that edge does not fade. */
   fadeAbove: number;
   fadeBelow: number;
+  /**
+   * The stub and words for a named edge, above the body and below it.
+   *
+   * Null where that edge is not named, and a fade and a stub never share an
+   * edge: an endpoint wears one mark.
+   */
+  labelAbove: LabelledEdge | null;
+  labelBelow: LabelledEdge | null;
+  /**
+   * The boundary reflect offers above the body and below it, where there is
+   * one.
+   *
+   * Null on an edge nobody has offered a date for, and null on an edge that has
+   * one already. A proposal replaces the fade on its side rather than joining
+   * it, so an endpoint still wears a single mark.
+   */
+  proposedAbove: ProposedEdge | null;
+  proposedBelow: ProposedEdge | null;
   /** Where the witness dot goes, or null when the source dated no witness. */
   witnessAt: number | null;
-  /** Everything drawn, fades included. What the envelope unions. */
+  /** Everything drawn, fades and stubs included. What the envelope unions. */
   top: number;
   bottom: number;
 }
@@ -211,41 +374,53 @@ export interface StripGeometry {
 /**
  * Where one interval is drawn, or null when it has no place on the axis.
  *
- * Null for the two cases §13.2 keeps off the axis: an edge that is only a label
- * (rule 3, resolution adds a position and until then there is none), and an
- * interval nothing anchors at all. Both go to the tray instead, words intact.
+ * Null for what §13.2 keeps off the axis: an interval nothing dates anywhere,
+ * whether its edges are unknown, or words, or a word beside "no boundary".
+ * Those go to the tray instead, words intact.
  *
- * An unbounded edge is an anchor: "there is no boundary" says where the bar
- * goes, which is off the panel at full weight. An unknown edge is not, which is
- * why the two cannot share a treatment.
+ * A date at either edge or on the witness puts the interval on the axis, and
+ * each endpoint then wears its own mark: a word at the other edge is drawn as
+ * a stub with the word at its end, since a fade would say "we do not know"
+ * about an edge the source named. An unbounded edge is an anchor of its own:
+ * "there is no boundary" says where the bar goes, which is off the panel at
+ * full weight. An unknown edge is not, which is why the two cannot share a
+ * treatment.
  */
 export const stripGeometry = (
   interval: ValidityIntervalView,
   place: (at: number) => number,
   bounds: StripBounds,
   fade: number,
+  proposals: readonly BoundaryProposalView[] = [],
 ): StripGeometry | null => {
-  const startMark = endpointMark(interval.start);
-  const endMark = endpointMark(interval.end);
-  if (startMark === "named" || endMark === "named") return null;
+  const anchors = anchorsOf(interval);
+  // A proposal places nothing. An interval nothing dates goes to the tray with
+  // or without one, because the graph holds no date for it yet and an offer is
+  // not a record (§13.4).
+  if (!isPlaced(anchors)) return null;
 
-  const startAt = endpointAt(interval.start);
-  const endAt = endpointAt(interval.end);
-  const witnessAt = endpointAt(interval.witnessed_at);
-
+  const { startAt, endAt, witnessAt } = anchors;
+  const proposedAbove = proposedEdge(interval, proposals, "start", place);
+  const proposedBelow = proposedEdge(interval, proposals, "end", place);
+  // The proposal takes the edge's mark over from the fade, which is the mark an
+  // unknown edge wears when nobody has offered a date for it.
+  const startMark: EndpointMark = proposedAbove === null ? anchors.startMark : "proposed";
+  const endMark: EndpointMark = proposedBelow === null ? anchors.endMark : "proposed";
   const startAnchor =
     startAt !== null ? place(startAt) : startMark === "exit" ? bounds.top : null;
   const endAnchor =
     endAt !== null ? place(endAt) : endMark === "exit" ? bounds.bottom : null;
   const witness = witnessAt === null ? null : place(witnessAt);
-  if (startAnchor === null && endAnchor === null && witness === null) return null;
 
   // A missing edge falls back to the next thing that is placed, so a bar with
-  // only a witness collapses onto it and fades away in both directions.
+  // only a witness collapses onto it and fades away in both directions. The
+  // body is the record's own dates and a proposal never moves it (§13.2 rule 9).
   const bodyTop = startAnchor ?? witness ?? endAnchor!;
   const bodyBottom = Math.max(bodyTop, endAnchor ?? witness ?? startAnchor!);
   const fadeAbove = startMark === "fade" ? fade : 0;
   const fadeBelow = endMark === "fade" ? fade : 0;
+  const labelAbove = labelledEdge(interval.start, fade);
+  const labelBelow = labelledEdge(interval.end, fade);
 
   return {
     bodyTop,
@@ -254,9 +429,18 @@ export const stripGeometry = (
     endMark,
     fadeAbove,
     fadeBelow,
+    labelAbove,
+    labelBelow,
+    proposedAbove,
+    proposedBelow,
     witnessAt: witness,
-    top: bodyTop - fadeAbove,
-    bottom: bodyBottom + fadeBelow,
+    // The stub counts towards the extent, so lane packing and the envelope
+    // leave room for it, and so does the extension out to a proposed date.
+    top: Math.min(bodyTop - fadeAbove - (labelAbove?.reach ?? 0), proposedAbove?.at ?? Infinity),
+    bottom: Math.max(
+      bodyBottom + fadeBelow + (labelBelow?.reach ?? 0),
+      proposedBelow?.at ?? -Infinity,
+    ),
   };
 };
 
@@ -358,6 +542,13 @@ export interface MarkLike {
 export interface ValidityStrip {
   id: string;
   interval: ValidityIntervalView;
+  /**
+   * The boundaries reflect offers for this `(claim, source)` pair.
+   *
+   * Carried this far unfiltered by clock and endpoint, because the geometry is
+   * where those refusals belong: it is the thing that knows which edge is open.
+   */
+  proposals: BoundaryProposalView[];
   /** The `(source, interval)` pair in words, for the tooltip. */
   detail: string;
 }
@@ -385,6 +576,14 @@ export interface ValidityChip {
   label: string;
   reason: OffAxisReason;
   detail: string;
+  /**
+   * Reflect has offered a date for one of this period's open edges.
+   *
+   * The chip stays in the tray either way: an offer is not a date the graph
+   * holds, so it cannot place what the record leaves unplaced. The badge is
+   * how the tray says there is something here to review (§13.4).
+   */
+  proposed: boolean;
 }
 
 export interface ValidityLayout {
@@ -392,6 +591,13 @@ export interface ValidityLayout {
   chips: ValidityChip[];
 }
 
+/**
+ * Why an interval is a tray chip rather than a strip, or null when it is drawn.
+ *
+ * An interval a date places is drawn, whatever words its other edge carries.
+ * What is left is `unresolved` where a word is the closest thing to a position
+ * the interval has, and `unplaced` where it has no words either.
+ */
 const reasonFor = (
   interval: ValidityIntervalView,
   axis: AxisClock,
@@ -409,11 +615,15 @@ const chipFor = (
   sourceLabel: string,
   interval: ValidityIntervalView,
   reason: OffAxisReason,
+  proposals: readonly BoundaryProposalView[],
 ): ValidityChip => ({
   id: `${laneId}#${index}`,
   label: `${sourceLabel} · ${endpointWords(interval.start)} → ${endpointWords(interval.end)}`,
   reason,
-  detail: describeInterval(sourceLabel, interval),
+  detail: describeInterval(sourceLabel, interval, proposals),
+  proposed:
+    proposalFor(interval, proposals, "start") !== null ||
+    proposalFor(interval, proposals, "end") !== null,
 });
 
 const byLabel = (a: ValidityLane, b: ValidityLane): number => {
@@ -440,6 +650,15 @@ export const validityLayout = (
   includeCorrected: boolean,
 ): ValidityLayout => {
   const nodes = new Map(snapshot.nodes.map((n) => [n.node_id, n]));
+  // Keyed by the pair a proposal names, which is the pair a lane is: a claim
+  // with two sources has two periods, and an offer touches exactly one of them.
+  const proposalsFor = new Map<string, BoundaryProposalView[]>();
+  for (const proposal of snapshot.boundary_proposals ?? []) {
+    const key = `${proposal.node_id}|${proposal.source_id}`;
+    const bucket = proposalsFor.get(key);
+    if (bucket) bucket.push(proposal);
+    else proposalsFor.set(key, [proposal]);
+  }
   const markFor = new Map<string, MarkLike>();
   for (const mark of marks) {
     for (const nodeId of mark.nodeIds) if (!markFor.has(nodeId)) markFor.set(nodeId, mark);
@@ -460,17 +679,19 @@ export const validityLayout = (
     const id = `${edge.src_id}|${edge.dst_id}`;
     if (lanes.some((lane) => lane.id === id)) continue;
 
+    const proposals = proposalsFor.get(id) ?? [];
     const strips: ValidityStrip[] = [];
     intervals.forEach((interval, index) => {
       const reason = reasonFor(interval, axis);
       if (reason !== null) {
-        chips.push(chipFor(id, index, sourceLabel, interval, reason));
+        chips.push(chipFor(id, index, sourceLabel, interval, reason, proposals));
         return;
       }
       strips.push({
         id: `${id}#${index}`,
         interval,
-        detail: describeInterval(sourceLabel, interval),
+        proposals,
+        detail: describeInterval(sourceLabel, interval, proposals),
       });
     });
     if (strips.length === 0) continue;

@@ -106,6 +106,7 @@
   svg .lbl { font-size: 12px; fill: var(--ink-2); font-weight: 600; }
   svg .sub { font-size: 11px; fill: var(--ink-mut); }
   svg .date { font-family: var(--mono); font-size: 10.5px; fill: var(--ink-mut); }
+  svg .word { font-family: var(--mono); font-size: 10.5px; fill: var(--ink-2); }
   svg .axis { stroke: var(--hairline); stroke-width: 1; }
 
   .tray {
@@ -215,7 +216,55 @@
   </section>
 
   <section>
-    <p class="sec-label">02 · witness points</p>
+    <p class="sec-label">02 · labelled edges</p>
+    <h2>A named edge is a word, drawn where the edge would be</h2>
+    <p>A source that dates one edge and <em>names</em> the other, “from 1924 until the
+    Union fell”, has said something about both. The date goes where dates go; towards the
+    named side the bar keeps <strong>full weight for a short stub</strong>, the length of a
+    fade, and ends <strong>square</strong>, with the stored words at the end of it. The end
+    stays bare, because a fade there would say “we do not know where this edge is” about an
+    edge the source named exactly. The stub is a fixed number of pixels, so it claims no
+    extent: the date alone places the interval, and only a claim nothing dates at all still
+    goes to the tray.</p>
+    <figure>
+      <svg viewBox="0 0 760 175" role="img" aria-label="Two bars with a named endpoint">
+        <line class="axis" x1="30" y1="150" x2="730" y2="150"/>
+        <text class="date" x="30" y="167">1900</text>
+        <text class="date" x="380" y="167" text-anchor="middle">1960</text>
+        <text class="date" x="730" y="167" text-anchor="end">2026</text>
+
+        <text class="lbl" x="30" y="32">point → named</text>
+        <text class="sub" x="30" y="47">“called Leningrad” · stated 1924, end named</text>
+        <rect x="170" y="24" width="70" height="12" fill="var(--claim)">
+          <title>End named: the bar runs a fixed stub and the word is drawn at its end.</title>
+        </rect>
+        <line x1="170" y1="18" x2="170" y2="42" stroke="var(--claim)" stroke-width="2"/>
+        <text class="date" x="170" y="14">1924</text>
+        <text class="word" x="248" y="34">until the Union fell</text>
+
+        <text class="lbl" x="30" y="92">named → point</text>
+        <text class="sub" x="30" y="107">“the rebuild” · start named, end stated 1971</text>
+        <rect x="354" y="84" width="70" height="12" fill="var(--claim)">
+          <title>Start named: the stub runs back from the stated end and stops square.</title>
+        </rect>
+        <line x1="424" y1="78" x2="424" y2="102" stroke="var(--claim)" stroke-width="2"/>
+        <text class="date" x="424" y="74" text-anchor="middle">1971</text>
+        <text class="word" x="348" y="94" text-anchor="end">after the war</text>
+      </svg>
+      <figcaption><b>The edge is a word, and the word is where the edge would be.</b> The
+      square end is the whole point: a cap would put a date there, and a gradient would put
+      ignorance there. Both stubs are the same length, because pixels here mean “this edge
+      is named”, never “this long”.</figcaption>
+    </figure>
+    <div class="tray">
+      <span class="tray-label">UNDATED TRAY · NOTHING PLACES THESE AT ALL</span>
+      <span class="chip">under the USSR → unknown<span class="q">?</span></span>
+      <span class="chip">the Renaissance → the Enlightenment<span class="q">?</span></span>
+    </div>
+  </section>
+
+  <section>
+    <p class="sec-label">03 · witness points</p>
     <h2>The witness point — certainty inside the fog</h2>
     <p>The commonest real record is a claim with <em>no</em> usable endpoints and one
     witness: “asserted true at T, extent unknown”. That deserves the most recognisable
@@ -262,7 +311,7 @@
   </section>
 
   <section>
-    <p class="sec-label">03 · vague labels</p>
+    <p class="sec-label">04 · vague labels</p>
     <h2>Labelled vagueness is not the same ignorance</h2>
     <p>“During the Renaissance” is a <em>human assertion with soft edges</em> — different in
     kind from an unknown endpoint, so it gets a different texture: a hatched band, only ever
@@ -300,7 +349,7 @@
   </section>
 
   <section>
-    <p class="sec-label">04 · per-source strips</p>
+    <p class="sec-label">05 · per-source strips</p>
     <h2>One strip per source — the “no default collapse” rule, drawn</h2>
     <p>T1 reads validity back as <code>(source, interval)</code> pairs with no built-in
     union. The panel honours that: a fact shows thin parallel strips, one per source,
@@ -354,13 +403,14 @@
   </section>
 
   <section>
-    <p class="sec-label">05 · provenance of the interval</p>
+    <p class="sec-label">06 · provenance of the interval</p>
     <h2>Stated, inferred, proposed</h2>
     <p>Every interval is marked <code>stated</code> or <code>inferred</code>, and reflect can
     <em>propose</em> a boundary for review. Fill weight carries the tier: <strong>stated is
     solid</strong>, <strong>inferred is hollow with a dashed edge</strong>, and a
-    <strong>proposed boundary</strong> is a dashed cap wearing a review chip until a human
-    accepts it.</p>
+    <strong>proposed boundary</strong> is a hollow pending-coloured extension from the last
+    stated date to a dashed cap wearing a review chip, until a human accepts it. The solid body
+    never grows on a proposal.</p>
     <figure>
       <svg viewBox="0 0 760 150" role="img" aria-label="Stated, inferred and proposed interval marks">
         <line class="axis" x1="30" y1="125" x2="730" y2="125"/>
@@ -378,7 +428,12 @@
         </rect>
 
         <text class="sub" x="30" y="98">proposed close</text>
-        <rect x="170" y="90" width="240" height="11" rx="2" fill="var(--claim)"/>
+        <rect x="170" y="90" width="150" height="11" rx="2" fill="var(--claim)">
+          <title>The record: stated start, witnessed, end unknown. The solid part stops at the last date the source gave.</title>
+        </rect>
+        <rect x="320" y="90" width="90" height="11" rx="2" fill="var(--pending-bg)" stroke="var(--pending)" stroke-width="1.3" stroke-dasharray="4 3">
+          <title>What reflect offers: hollow and in the pending colour, the reading it would get once accepted as inferred.</title>
+        </rect>
         <line x1="410" y1="84" x2="410" y2="107" stroke="var(--pending)" stroke-width="2.5" stroke-dasharray="3 3">
           <title>Reflect proposes this boundary from a second document — pending review.</title>
         </line>
@@ -392,7 +447,7 @@
   </section>
 
   <section>
-    <p class="sec-label">06 · recurrence</p>
+    <p class="sec-label">07 · recurrence</p>
     <h2>Beads on a spine — and a gap is not a “no”</h2>
     <p>A recurring claim is one node with several intervals: bars threaded on a hairline
     <em>claim spine</em> so they read as episodes of one thing. The spine is deliberately
@@ -433,7 +488,7 @@
   </section>
 
   <section>
-    <p class="sec-label">07 · succession &amp; status</p>
+    <p class="sec-label">08 · succession &amp; status</p>
     <h2>Succession is a connector; status is a volume knob</h2>
     <p><code>temporally_followed_by</code> is drawn as a small elbow from the end of one
     claim to the start of the next — order, not replacement, so a chain returning to its own
@@ -471,7 +526,7 @@
   </section>
 
   <section>
-    <p class="sec-label">08 · the vertical panel</p>
+    <p class="sec-label">09 · the vertical panel</p>
     <h2>Composed: the grammar on Epimemer’s own axis</h2>
     <p>Everything above, rotated onto the panel’s conventions — past at the top, facts left
     of the axis, inferences right, the timeline’s own <em>now</em> as a rule the bars must
@@ -568,7 +623,7 @@
   </section>
 
   <section>
-    <p class="sec-label">09 · rules</p>
+    <p class="sec-label">10 · rules</p>
     <h2>Rules the grammar must not break</h2>
     <p>Each row is a place where a reasonable-looking rendering would quietly assert
     something the data does not say.</p>

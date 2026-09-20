@@ -11,13 +11,19 @@ tests can call them directly.
 """
 
 from epimemer.core.advisories import WarningPolicy
-from epimemer.core.types import live_edges
+from epimemer.core.types import NodeStatus, live_edges
+from epimemer.pipelines.query.validity import validity_from_edges
+from epimemer.pipelines.reflection.boundaries import (
+    boundary_proposals_from,
+    succession_holders,
+)
 from epimemer.storage.protocol import (
     StorageBackend,
     resolve_reflect_threshold,
     warning_settings,
 )
 from epimemer.visualization.events import (
+    boundary_proposal_to_view,
     edge_to_view,
     metacontext_to_view,
     node_to_view,
@@ -39,16 +45,35 @@ async def assemble_snapshot(storage: StorageBackend, graph: str) -> dict:
     Retired edges are left out. The dashboard draws what the graph currently
     says, and a timelink a split or a merge moved would otherwise put the fact
     on two dates at once: the one it was given and the one a judge moved it to.
+
+    Boundary proposals are worked out here rather than read, from these same
+    nodes and edges, so the periods drawn and the boundaries offered beside them
+    describe one instant. `propose_boundaries` is the wrong call for it: that one
+    reads the *active* graph, and this may be a snapshot of another.
+
+    The claims a succession can be about are active or historical, and
+    `viz_list_nodes` answers for one status at a time, so the historical ones
+    take a second read. It is inside the same guard turn as everything above, so
+    it is still one instant.
     """
     nodes = await storage.viz_list_nodes(graph)
     edges = live_edges(await storage.viz_list_edges(graph))
     timelines = await storage.viz_list_timelines(graph)
     metacontexts = await storage.viz_list_metacontexts(graph)
     relation_labels = await storage.viz_list_relation_labels(graph)
+    retired = await storage.viz_list_nodes(graph, historical_status=NodeStatus.HISTORICAL)
+    proposals = boundary_proposals_from(
+        succession_holders([*nodes, *retired]),
+        edges,
+        validity_from_edges(edges),
+    )
     return {
         "graph": graph,
         "nodes": [node_to_view(n, graph).model_dump(mode="json") for n in nodes],
         "edges": [edge_to_view(e, graph).model_dump(mode="json") for e in edges],
+        "boundary_proposals": [
+            boundary_proposal_to_view(p, graph).model_dump(mode="json") for p in proposals
+        ],
         "timelines": [timeline_to_view(t, graph).model_dump(mode="json") for t in timelines],
         "metacontexts": [
             metacontext_to_view(m, graph).model_dump(mode="json") for m in metacontexts

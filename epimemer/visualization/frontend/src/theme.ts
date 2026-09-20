@@ -210,6 +210,16 @@ export interface SemanticPalette {
   historical: string;
   /** Proposals awaiting review — a reflect-proposed boundary, a soundness flag. */
   pending: string;
+  /**
+   * The ground a pending mark sits on: the fill inside a hollow proposal, and
+   * the plate behind its chip.
+   *
+   * A second value rather than the hue at low opacity, because a proposal is
+   * drawn over whatever the panel already has there. The grammar's own table
+   * writes the pair together, "`#9a6b00` on `#f6ecd4`"
+   * (`TIMELINE_VISUALISATION.md` §13.3).
+   */
+  pendingSurface: string;
   contradiction: string;
   selection: string;
   /** Edge meanings with no node kind of their own. */
@@ -234,6 +244,7 @@ const SEMANTIC_LIGHT: SemanticPalette = {
   document: "#94a3b8",
   historical: "#8095aa",
   pending: "#9a6b00",
+  pendingSurface: "#f6ecd4",
   contradiction: "#ef4444",
   selection: "#ec4899",
   similarity: "#38bdf8",
@@ -250,6 +261,7 @@ const SEMANTIC_DARK: SemanticPalette = {
   document: "#94a3b8",
   historical: "#5d6d7e",
   pending: "#fab219",
+  pendingSurface: "#33290e",
   contradiction: "#ef4444",
   selection: "#ec4899",
   similarity: "#38bdf8",

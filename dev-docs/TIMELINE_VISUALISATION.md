@@ -615,11 +615,12 @@ ornament) is the Information-is-Beautiful school.
 | Endpoint: **unbounded** | The bar keeps **full weight and exits the metacontext**. "There is no edge" |
 | **Witness point** | Solid dot on the bar with a faint halo ring. A claim with no endpoints and one witness, the commonest real record, is a dot with the bar fading **symmetrically** away from it in both directions |
 | **Vague label, resolved** ("during the Renaissance" with explicit approximate bounds) | **Hatched** band (45° line pattern), soft `c.` date labels, the stored label rendered verbatim on the band |
-| **Vague label, unresolved** | Never placed on the axis. Goes to the undated tray (§12.6) as a chip, label intact |
+| **Vague label, unresolved**, nothing else placing the interval | Never placed on the axis. Goes to the undated tray (§12.6) as a chip, label intact |
+| **Labelled edge**: a named endpoint on an interval whose other endpoint or witness has a date | The placed part draws as usual. Towards the named side the bar keeps full weight for a short stub, the length of a fade, and ends square with the stored label sitting at its end, verbatim, in the mono face. No tick, no date, no fade: the edge is a word, and the word is drawn where the edge would be |
 | **Per-source validity** | One thin strip per source, stacked under the fact, each **direct-labelled** with its source. No filled union bar, ever. An optional summary is a **hollow dashed envelope** labelled "any source asserts", outline-only so it cannot be read as a claim |
 | Interval marked **stated** | Solid fill |
 | Interval marked **inferred** | Hollow fill (soft tint) with a dashed outline; squinting performs the stated-only filter the API offers |
-| Reflect-**proposed** boundary | Dashed cap in the pending colour wearing a review chip ("proposed · review") until accepted |
+| Reflect-**proposed** boundary: an unknown edge reflect has offered a date for, taken from the claim on the other side of a succession | The solid body stops where the record's own dates stop. From there a hollow dashed extension in the pending colour runs to the proposed date and ends in a dashed cap of the same colour, with a chip beside it, "proposed · review". The extension replaces the fade that edge would otherwise wear, so an endpoint still carries one mark. Accepting rewrites the interval with that date and `inferred` basis, so the same stretch turns into an ordinary hollow dashed bar in the claim hue and the chip goes |
 | **Recurrence** (one node, several intervals) | Beads on a **hairline dotted claim spine**; the spine says "same claim, nothing asserted here" |
 | **`temporally_followed_by`** | A small elbow connector from the end of one claim's bar to the start of the next, with a terminal dot: order, not replacement. The renderer must be cycle-safe, since recurrence makes cycles legal for this edge |
 | Status **`HISTORICAL`** | Desaturated bar, **never hidden**: still true of its period |
@@ -633,7 +634,10 @@ ornament) is the Information-is-Beautiful school.
 2. **Unknown and unbounded never share a treatment.** They are different
    values in the model, so fade for one, metacontext-exit for the other.
 3. **A label-only interval never sits on the axis.** Tray until resolved;
-   resolution *adds* a position, it never replaces the words.
+   resolution *adds* a position, it never replaces the words. An interval
+   with a date at one end and a label at the other is not label-only: the
+   date goes where dates go and the label is drawn as a labelled edge, never
+   as a fade, since a fade says "unknown" about an edge the source named.
 4. **No filled union bar.** "No default collapse" is a data rule; the hollow
    envelope is the only summary allowed.
 5. **Historical is muted, not hidden; corrected is hidden, not deleted.**
@@ -645,6 +649,11 @@ ornament) is the Information-is-Beautiful school.
    reference clock, not a stored boundary.
 8. **Soundness flags sit on the inference, not on its premises.** The
    premises are not what is unsound.
+9. **A proposal never thickens the body.** The solid part ends at the last
+   date the source gave. What reflect offers is drawn in the pending colour
+   and hollow, which is the reading it would get once accepted, since an
+   accepted boundary makes the interval `inferred`; until then it is not the
+   record and is not coloured as if it were.
 
 ### 13.3 Colour tokens
 
@@ -704,12 +713,42 @@ strips in a stack differ; it is `stripHue` in `theme.ts`, deliberately outside
   selecting a mark is the gesture this panel already uses for detail on demand
   (§12.10), so it needed no control of its own. It is drawn for a selected fact
   with more than one source, where there is a disagreement to summarise.
-- **A bare named endpoint takes its whole interval to the tray**, even when the
-  other endpoint carries a date. Drawing the dated half and fading away from it
-  would put the unknown mark on a named thing, which reads as "we do not know
-  where this edge is" when the source said exactly where: it said "the
-  Renaissance". The chip keeps both endpoints' words, and resolving the label
-  brings the interval to the axis.
+- **A named endpoint keeps the rest of its interval on the axis.** The first
+  build sent the whole interval to the tray whenever either endpoint was a
+  label, because the only soft edge it had was the fade, and a fade on a named
+  thing reads as "we do not know where this edge is" when the source said
+  exactly where: it said "the Renaissance". The labelled edge removes that
+  objection, so the rule is now the one a dated edge already follows: an
+  interval draws when a date or a witness places it, and each endpoint wears
+  its own mark. An unbounded edge still anchors an unknown neighbour at the
+  panel edge but not a named one, since a stub a fixed distance from that
+  edge would read as a date the data does not hold. The stub asserts no extent, the way a fade asserts none; it is
+  a fixed length in pixels, counted into the strip's `top`/`bottom` so lanes
+  and the envelope make room for it. The word itself is rotated into the lane's
+  own column and reads away from the body, the way a lane wears its source
+  name: a horizontal word would cross whatever the neighbouring lanes draw.
+  The tooltip still says `(named, no date)`. Only an interval nothing places,
+  two labels, or a label beside an unknown or unbounded edge with no witness,
+  still goes to the tray.
+- **A proposed boundary is derived, never stored.** Reflect already works
+  proposals out from a `temporally_followed_by` edge plus a located date on
+  the other claim (`pipelines/reflection/boundaries.py`), and writes nothing;
+  a stored "proposed" field would be a snapshot of that derivation that goes
+  stale the moment either claim changes. So the snapshot carries
+  `boundary_proposals`, computed inside the same guard turn from the same
+  reads that produce the strips, which keeps the strips and the proposals
+  describing one instant. The rule stays in one place: the derivation is
+  split into a pure core over nodes, succession edges and per-source
+  validity, and both `reflect` and `assemble_snapshot` call it, so the
+  browser never re-derives a server rule. A proposal names its node, source,
+  endpoint, clock and date, and the claim and source it was read from, which
+  is what the tooltip shows. The chip is passive: the dashboard is the read
+  side, and accepting goes through `apply_reflection(boundaries=…)` exactly
+  as it does today. Nothing needs to withdraw a proposal once accepted,
+  because a closed edge is not one reflect offers a date for. An interval
+  nothing dates, one whose only date would be the proposal, stays in the
+  tray with a pending badge on its chip: the graph holds no date for it yet,
+  and the proposal cannot place what the record does not.
 - **A timeline with a stated `reference_time` keeps its own clock.** An
   interval naming no clock is measured against the default wall-clock timeline,
   which is the one that states no present (`VALIDITY_DESIGN.md` §2.5), so it

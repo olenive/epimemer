@@ -13,7 +13,7 @@ moment. It sits beside the per-source pairs rather than replacing them, which is
 the condition §3 sets for any collapse at all.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 
 from pydantic import BaseModel, Field
@@ -24,7 +24,7 @@ from epimemer.core.temporal import (
     merged_validity,
     validity_at,
 )
-from epimemer.core.types import EdgeType
+from epimemer.core.types import EdgeType, NodeEdge
 from epimemer.storage.protocol import StorageBackend
 
 
@@ -56,20 +56,33 @@ async def validity_for(
     edges = await storage.get_edges_for(
         list(node_ids), direction="from", edge_type=EdgeType.SOURCED_FROM
     )
+    return validity_from_edges(edge for node_edges in edges.values() for edge in node_edges)
 
-    by_node: dict[str, list[SourceValidity]] = {}
-    for node_id, node_edges in edges.items():
-        by_source: dict[str, list[ValidityInterval]] = {}
-        for edge in node_edges:
-            if not edge.validity:
-                continue
-            by_source[edge.dst_id] = merged_validity(by_source.get(edge.dst_id, []), edge.validity)
-        if by_source:
-            by_node[node_id] = [
-                SourceValidity(source_id=source_id, intervals=intervals)
-                for source_id, intervals in by_source.items()
-            ]
-    return by_node
+
+def validity_from_edges(edges: Iterable[NodeEdge]) -> dict[str, list[SourceValidity]]:
+    """The same answer as `validity_for`, over edges a caller already holds.
+
+    The grouping rule is here so it is written once. A visualization snapshot
+    has already read every live edge in the graph to draw it, and re-reading
+    them through storage would describe a second instant: the strips and the
+    boundary proposals beside them have to come from one set of edges.
+
+    Anything that is not a `sourced_from` edge is skipped, so the whole edge
+    list can be handed over as it stands.
+    """
+    by_node: dict[str, dict[str, list[ValidityInterval]]] = {}
+    for edge in edges:
+        if edge.type is not EdgeType.SOURCED_FROM or not edge.validity:
+            continue
+        by_source = by_node.setdefault(edge.src_id, {})
+        by_source[edge.dst_id] = merged_validity(by_source.get(edge.dst_id, []), edge.validity)
+    return {
+        node_id: [
+            SourceValidity(source_id=source_id, intervals=intervals)
+            for source_id, intervals in by_source.items()
+        ]
+        for node_id, by_source in by_node.items()
+    }
 
 
 def verdict_for(

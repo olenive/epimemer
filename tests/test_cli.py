@@ -7,7 +7,7 @@ an approval that reports success into a store the server never reads is worse
 than a refusal, because the user then believes they have done it.
 """
 
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -646,7 +646,7 @@ class TestGraphBundles:
         message = await _export_bundle(store, _MOCK_EMBEDDING, "source", str(tmp_path), False)
 
         written = [path.name for path in tmp_path.iterdir()]
-        assert written == [f"source-{date.today().isoformat()}.epimemer.tar.gz"]
+        assert written == [f"source-{datetime.now(UTC).date().isoformat()}.epimemer.tar.gz"]
         assert "Wrote graph 'source'" in message
         assert "nodes 2" in message
 
