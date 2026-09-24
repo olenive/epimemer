@@ -522,6 +522,11 @@ if useful.
   `find_nodes(tagged_with_topic=...)` resolves back, so moving it would split
   the tag in two. Replacing a description keeps the earlier wording on the node,
   so a better sentence costs nothing.
+- **Rename a topic with `rename_topic`, not `update`.** A topic's name is a
+  label, so a rename keeps the node's id, description and edges and records the
+  old name on the node. `update` would retire the topic as a mistake or leave
+  its material behind on the old version. After a rename the old name no longer
+  finds the topic.
 - **An enrichment nomination arrives when the material under a described topic
   changed**, and it shows you the change. The nomination carries `since`, the
   moment somebody last wrote or confirmed the description, and

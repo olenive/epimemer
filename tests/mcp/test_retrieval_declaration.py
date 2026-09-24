@@ -209,6 +209,7 @@ def _args(tool: str, seeded: dict) -> dict:
             "new_content": "The deployment rollback succeeded on Tuesday",
             "because": "it_was_wrong",
         },
+        "rename_topic": {"topic": topics[0], "name": "Deployments"},
         "supersede_by": {
             "old_id": facts[0],
             "existing_id": inferences[0],
@@ -363,6 +364,7 @@ ALL_TOOLS = [
     "search",
     "link",
     "update",
+    "rename_topic",
     "supersede_by",
     "judge_importance",
     "check_conflicts",

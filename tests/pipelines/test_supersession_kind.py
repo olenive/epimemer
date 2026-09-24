@@ -29,6 +29,7 @@ from epimemer.core.types import (
     Fact,
     NodeEdge,
     NodeStatus,
+    Topic,
     ValueSignal,
     traversal_excluded,
 )
@@ -124,6 +125,31 @@ class TestSupersessionKind:
                 storage=storage,
                 embedding_provider=embedding_provider,
             )
+
+    @pytest.mark.parametrize("because", ["it_was_wrong", "the_world_changed"])
+    async def test_a_topic_keeps_its_description_under_either_reason(
+        self, storage, embedding_provider, because
+    ):
+        """A description is what the topic is about, and neither reason changes that."""
+        old = Topic(
+            content="Leningrad",
+            description="The city on the Neva, under its Soviet name.",
+            metadata={"description_history": [{"replaced": "An older wording."}]},
+        )
+        await storage.store_node(old)
+
+        result, _ = await tools.update(
+            node_id=old.id,
+            new_content="Saint Petersburg",
+            because=because,
+            storage=storage,
+            embedding_provider=embedding_provider,
+        )
+
+        new = await storage.get_node(result["new_node_id"])
+        assert new.description == "The city on the Neva, under its Soviet name."
+        assert new.metadata["description_history"] == [{"replaced": "An older wording."}]
+        assert new.description_reviewed_at is None
 
 
 class TestReadersSeeBothKinds:

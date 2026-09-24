@@ -54,12 +54,12 @@ and `EPIMEMER_GRAPH` (see *Which graph a server opens* below).
 
 ### Verify Connection
 
-In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 55 tools.
+In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 56 tools.
 
 ## Available Tools
 
 Claude Code prefixes each tool as `mcp__epimemer__<name>`. This table is
-the canonical list of the 55 tools; other docs link here rather than
+the canonical list of the 56 tools; other docs link here rather than
 restate the count.
 
 ### Core Memory Operations
@@ -71,6 +71,7 @@ restate the count.
 | `search` | Hybrid retrieval: embedding similarity and keyword matching run separately, their rankings are fused, then graph expansion adds what the winners connect to. Pass exact identifiers as `terms`. `include_corroboration=True` adds how many independent publishers back each result. `metacontexts` scopes the whole response, edges and matched passages included. A result dated to a timepoint whose order is in dispute carries `date_contested`, which is doubt about the date rather than about the claim. See [docs/RETRIEVAL.md](docs/RETRIEVAL.md) |
 | `link` | Create a typed edge between two nodes |
 | `update` | Create a new version of a node; the old one is kept as history. `because` is required: `"it_was_wrong"` or `"the_world_changed"` |
+| `rename_topic` | Give a topic node a new name in place. The id, description and edges stay, and the old name is kept on the node. Use it rather than `update` when only the name changes |
 | `supersede_by` | Retire a node in favour of one that already exists. `because` as above. If you cannot tell which happened, use `record_contradiction` instead of guessing |
 | `judge_importance` | Raise or lower a node's importance and record why. Importance protects a node from archival |
 

@@ -4,6 +4,27 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.9] — 2026-09-24
+
+- The server reports its own version in the MCP handshake, so a client's
+  server listing shows the Epimemer version beside the name. Before this it
+  showed the FastMCP library's version there.
+- The release workflow gives the TestPyPI publish a second attempt after a
+  short pause before giving up, since its one failure so far was a network
+  timeout before any upload. Retries skip files already on the index, and PyPI
+  still waits for TestPyPI to succeed.
+- `update` keeps a topic's description and its description history on the
+  new version, whichever reason it is given. It used to drop both, so every
+  update lost the reviewed description. The new version counts as not yet
+  reviewed, so reflect can offer the description against the new name.
+- `rename_topic` gives a topic node a new name in place. The topic keeps its
+  id, description, sources and edges, the old name is recorded on the node
+  with the judge and the time, and the decision is journalled as
+  `topic_rename`. Before this the only way to rename a topic was `update`,
+  which either left the topic's facts and inferences on the old version or
+  recorded the old name as a mistake. A name another active topic already
+  has is refused, pointing to reflect for merging the two.
+
 ## [0.2.8] — 2026-09-21
 
 - The timeline panel shows where reflect would propose a boundary: an open edge

@@ -162,7 +162,7 @@ shell, and prints what the server wrote.
 Tools exposed via the Model Context Protocol (Claude Code prefixes each as
 `mcp__epimemer__<name>`), grouped by purpose:
 
-- **Core memory**: `segment`, `store_decomposition`, `search`, `link`, `update`, `supersede_by`, `judge_importance`
+- **Core memory**: `segment`, `store_decomposition`, `search`, `link`, `update`, `rename_topic`, `supersede_by`, `judge_importance`
 - **Discovery & stats**: `query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `describe_relation`, `graph_stats`
 - **Conflict handling**: `check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`, `merge_inferences`, `reverse_merge`, `configure_merge`, `configure_warnings`
 - **Reflection**: `reflect`, `configure_reflection`, `apply_reflection`, `reopen`

@@ -257,6 +257,7 @@ thing the decision landed on:
 | `merge_timepoints` | the retirement of every constraint it re-pointed, and the old and new `timelink` of every fact it moved, the same way a split does |
 | `add_recurrence`, `end_recurrence`, `record_recurrence_exception` | the rule, the appended bound change, and the exception, each as `judged_by` on the record it wrote |
 | `apply_reflection`'s enrichments | its own journal row; where the enrichment replaced an earlier description, that wording's `description_history` entry too. The node's `judged_by` names whoever wrote its **name**, which an enrichment does not touch, so it stays where it is |
+| `rename_topic` | its own `topic_rename` journal row, and the name it replaced in the node's `previous_names` trail, each entry naming the renaming judge. The node's `judged_by` stays, since a rename changes a label and writes no new claim |
 | `reopen` | the withdrawn `assessed` edge, as `retired_by`, for a pair of nodes, and the `reopened` verdict row, as `judged_by`, for a pair of relation labels. Withdrawing a node's retention lands in the journal alone, because a keep is a journal row rather than a field on the node |
 
 Three things follow that are easy to get wrong:

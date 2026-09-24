@@ -2406,6 +2406,36 @@ def renamed(agent: Agent, name: str) -> Agent:
     return agent.model_copy(update={"name": name.strip()})
 
 
+def renamed_topic(topic: Topic, name: str, *, judge: JudgeRef | None, at: datetime) -> Topic:
+    """`topic` under a new name, with the name it had appended to `previous_names`.
+
+    Pure, and `content` is the only field it moves: the id, the status, the
+    description and every edge stay where they are, because a topic's name is a
+    label rather than a claim. The trail is the only place the old name
+    survives on the node, so it is append-only, and a key holding something
+    other than a list is read as an empty trail rather than raising on the node
+    the rename was asked for.
+    """
+    existing = topic.metadata.get("previous_names")
+    trail = existing if isinstance(existing, list) else []
+    return topic.model_copy(
+        update={
+            "content": name,
+            "metadata": {
+                **topic.metadata,
+                "previous_names": [
+                    *trail,
+                    {
+                        "from": topic.content,
+                        "judged_by": judge.model_dump(mode="json") if judge else None,
+                        "at": at.isoformat(),
+                    },
+                ],
+            },
+        }
+    )
+
+
 def absorbing(survivor: Agent, absorbed: Agent) -> Agent:
     """`survivor`, now answering for `absorbed`'s ids and description history.
 
@@ -2591,6 +2621,12 @@ class DecisionKind(str, Enum):
     # this creates no node and retires none, and a reviewer auditing what was
     # superseded would get a row where nothing was.
     NAME_RESTORATION = "name_restoration"
+    # A topic node given a new name in place by `rename_topic`. Its own kind
+    # rather than `CORRECTION` or `WORLD_CHANGE`, whose subjects are a retired
+    # node and its replacement: a rename creates no node and retires none,
+    # because a topic's name is a label rather than a claim. Nor
+    # `NAME_RESTORATION`, which puts back a name an enrichment overwrote.
+    TOPIC_RENAME = "topic_rename"
 
     # Revisions of an ingest-time judgment that are *not* supersessions — the
     # claim is unchanged and the world has not moved, so `because` has no honest

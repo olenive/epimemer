@@ -13,6 +13,7 @@ these slow and entangled.
 """
 
 import asyncio
+import importlib.metadata
 import json
 import os
 import sys
@@ -77,6 +78,27 @@ async def test_the_launched_server_serves_every_registered_tool(tmp_path):
     registered = {tool.name for tool in await epimemer_mcp.list_tools()}
     assert served == registered
     assert served
+
+
+async def test_a_launched_server_reports_its_own_version_in_the_handshake(tmp_path):
+    """The version a client lists beside the server's name is Epimemer's.
+
+    A FastMCP server given no version reports the FastMCP library's own in
+    the handshake, so a client's server listing would show a number that
+    belongs to a dependency. The value the handshake carries must be the one
+    the installed package reports.
+    """
+    log_file = tmp_path / "epimemer.log"
+    async with asyncio.timeout(STARTUP_TIMEOUT_SECONDS):
+        async with Client(_transport(_child_env(log_file))) as client:
+            # The client fills in the server's identity on its first exchange.
+            await client.list_tools()
+            reported = client.server_info
+
+    assert reported is not None
+    assert reported.name == "epimemer"
+    assert reported.version == importlib.metadata.version("epimemer")
+    assert reported.version != importlib.metadata.version("fastmcp")
 
 
 async def test_a_launched_server_logs_the_version_and_backends(tmp_path):

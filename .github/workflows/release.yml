@@ -1,8 +1,12 @@
 name: Release
 
 # A tag `vX.Y.Z` builds the wheel, proves it installs, publishes it to
-# TestPyPI, and then — after the `pypi` environment's approval — to PyPI.
+# TestPyPI, and then, after the `pypi` environment's approval, to PyPI.
 # Both publish steps use PyPI's trusted publishing, so no token is stored.
+#
+# TestPyPI is the rehearsal, so PyPI waits for it. The rehearsal gets a second
+# attempt because its one failure so far was a five-second network timeout
+# before any upload, which a retry half a minute later would have passed.
 
 on:
   push:
@@ -70,9 +74,24 @@ jobs:
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      # `skip-existing` on both attempts: a first attempt that uploaded the
+      # wheel and then failed on the sdist must not have its retry rejected
+      # for a file that already exists. The job's result is the last attempt's.
+      - name: Publish to TestPyPI
+        id: first
+        continue-on-error: true
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+      - if: steps.first.outcome == 'failure'
+        run: sleep 30
+      - name: Publish to TestPyPI, second attempt
+        if: steps.first.outcome == 'failure'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
 
   pypi:
     name: Publish to PyPI

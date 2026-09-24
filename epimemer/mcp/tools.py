@@ -82,6 +82,7 @@ from epimemer.core.types import (
     reinstated,
     relation_pair_key,
     renamed,
+    renamed_topic,
     resolve_agent,
     retired,
     retired_agents,
@@ -2926,12 +2927,23 @@ async def update(
     carried_value = old_node.value.model_copy()
     carried_method = old_node.extraction_method
     if isinstance(old_node, Topic):
+        # The description and its trail carry over under either reason: they
+        # say what the topic covers, and a new name does not change that.
+        # `description_reviewed_at` stays unset, since nobody has read this
+        # description beside the new name. Reflect reads an unset stamp as
+        # "never reviewed" and falls back to its length test, which nominates
+        # the topic only when its material outweighs name and description
+        # together three to one; a world-change leaves the material on the
+        # retired version, so there the new version is not nominated at all.
+        description_trail = old_node.metadata.get("description_history")
         new_node: EpistemicNode = Topic(
             content=new_content,
+            description=old_node.description,
             source_id=old_node.source_id,
             value=carried_value,
             extraction_method=carried_method,
             judged_by=judge,
+            metadata={"description_history": description_trail} if description_trail else {},
         )
     elif isinstance(old_node, Fact):
         new_node = Fact(
@@ -2973,6 +2985,102 @@ async def update(
     }
     meta = ResponseMeta(nodes_returned=2, retrieved=_declare([new_node.id, old_node.id]))
     return result, meta
+
+
+async def rename_topic(
+    topic: str,
+    storage: StorageBackend,
+    embedding_provider: EmbeddingProvider,
+    *,
+    name: str,
+    judge: JudgeRef | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Give a topic node a new name in place, or say why it cannot be renamed.
+
+    A topic's name is a label rather than a claim, so this is neither of
+    `update`'s two reasons: the node keeps its id, its status, its description
+    and every edge, and only `content` changes. The name it had goes on the
+    node's `previous_names` trail with the judge and the moment, the node is
+    re-embedded on the new name, and one `topic_rename` row is journalled.
+
+    Refused, with nothing written: an empty name, the name the topic already
+    has, a node that is not a topic, a topic that is not active, and a name
+    another active topic already answers to up to spelling. The last is a
+    question rather than an error, the way `rename_judge` treats a taken name,
+    but there is no consolidation here: two topics that should be one are
+    merged through reflect, which moves their material and keeps both
+    histories.
+    """
+    from epimemer.pipelines.name_resolution import tag_key
+    from epimemer.pipelines.reflection.topic_enrichment import reembedded
+
+    def refused(reason: str, **extra: str) -> tuple[dict, ResponseMeta]:
+        declared = [value for key, value in extra.items() if key.endswith("_id")]
+        return (
+            {"status": "refused", "reason": reason, **extra},
+            ResponseMeta(nodes_returned=len(declared), retrieved=_declare(declared)),
+        )
+
+    name = name.strip()
+    if not name:
+        return refused("a topic needs a name.")
+
+    node_id = await _resolve_node_reference(topic, storage)
+    node = await storage.get_node(node_id)
+    if node is None:
+        return refused(f"no node or topic name here matches '{topic}'.")
+    if not isinstance(node, Topic):
+        return refused(
+            f"'{node_id}' is not a topic node. A fact or an inference is a claim, "
+            f"and its wording changes through `update`.",
+            topic_id=node_id,
+        )
+    if node.status is not NodeStatus.ACTIVE:
+        return refused(
+            f"'{node.content}' is {node.status.value}, so its name is history. "
+            f"Rename the active topic that carries it now.",
+            topic_id=node.id,
+        )
+    if name == node.content:
+        return refused(f"the topic is already called '{name}'.", topic_id=node.id)
+
+    wanted = tag_key(name)
+    holder = next(
+        (
+            other
+            for other in await storage.query_nodes(node_type=NodeType.TOPIC)
+            if isinstance(other, Topic) and other.id != node.id and tag_key(other.content) == wanted
+        ),
+        None,
+    )
+    if holder is not None:
+        return refused(
+            f"'{holder.content}' is another active topic with this name up to "
+            f"spelling. If the two are one topic, merge them through reflect, "
+            f"which moves the material of both and keeps both histories; a "
+            f"rename onto another topic's name would leave two nodes answering "
+            f"to it. If they are different topics, choose another name.",
+            topic_id=node.id,
+            holder_id=holder.id,
+        )
+
+    was = node.content
+    updated = renamed_topic(node, name, judge=judge, at=datetime.now(UTC))
+    await storage.store_node(updated)
+    await storage.store_embedding(await reembedded(updated, storage, embedding_provider))
+    await journal(storage, DecisionKind.TOPIC_RENAME, [node.id], judge=judge)
+
+    result = {
+        "status": "renamed",
+        "topic_id": node.id,
+        "name": name,
+        "previous_name": was,
+        "message": (
+            f"'{was}' is now '{name}'. The id, the edges and the description are "
+            f"unchanged, and '{was}' no longer finds this topic by name."
+        ),
+    }
+    return result, ResponseMeta(nodes_returned=1, retrieved=_declare([node.id]))
 
 
 JudgmentDirection = Literal["up", "down"]

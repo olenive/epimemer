@@ -114,6 +114,23 @@ def _resolve_windows(
     return resolved
 
 
+def installed_version() -> str:
+    """The version of the Epimemer package this process runs.
+
+    One reading serves both places a person sees it: the `serverInfo` of the
+    MCP handshake, which a client lists beside the server's name, and the
+    opening of every prompt that asks the user to place a judge, because a
+    person answering that question wants to know which server put it. Running
+    from a source tree with nothing installed has no metadata to read, and
+    "unknown" is a truthful answer to a question that costs nothing to get
+    wrong.
+    """
+    try:
+        return importlib.metadata.version("epimemer")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     """Initialize providers and yield them as lifespan context.
@@ -148,13 +165,8 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         # Which Epimemer the user is talking to, read once here and carried as a
         # value like everything else in this dict. It opens every prompt that asks
         # the user to place a judge, because a person answering that question wants
-        # to know which server put it. Running from a source tree with nothing
-        # installed has no metadata to read, and "unknown" is a truthful answer to
-        # a question that costs nothing to get wrong.
-        try:
-            version = importlib.metadata.version("epimemer")
-        except importlib.metadata.PackageNotFoundError:
-            version = "unknown"
+        # to know which server put it.
+        version = installed_version()
 
         # Optional: publish visualization events to the standalone hub. This process
         # never binds the viz port itself, it dials out to the hub (auto-spawning one
@@ -249,10 +261,13 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
 
 # The instructions string reaches every client on connect, so it carries the
 # rules that must hold on every call; the full guide is the `guide` prompt
-# below, pulled when the work calls for it.
+# below, pulled when the work calls for it. The version travels in the same
+# handshake, where a client's server listing shows it: left out, FastMCP
+# reports its own library version there in Epimemer's name.
 mcp = FastMCP(
     "epimemer",
     instructions=guidance.rules(),
+    version=installed_version(),
     lifespan=app_lifespan,
 )
 
@@ -1116,6 +1131,71 @@ async def memory_update(
         ctx,
         f"node={node_id}",
         lambda r, m: f"new={r['new_node_id']}",
+        expected_graph=expected_graph,
+    )
+
+
+@mcp.tool(name="rename_topic")
+async def memory_rename_topic(
+    topic: str,
+    name: str,
+    ctx: Context,
+    expected_graph: str | None = None,
+    judge_token: str | None = None,
+) -> str:
+    """Give a topic node a new name, keeping everything else about it.
+
+    A topic's name is a label rather than a claim, so use this rather than
+    `update` when only the name is wrong or out of date: a tag spelled badly,
+    a project that was renamed, a heading that reads better another way. The
+    topic keeps its id, its status, its description and description history,
+    its sources and every edge, so the facts and inferences under it stay
+    under it. The old name is kept on the node in `metadata.previous_names`
+    with your judge and the time, and the topic is re-embedded so search
+    finds it by the new name.
+
+    After the rename the old name no longer finds the topic: `find_nodes` and
+    every other lookup by name answer to the new name only, and a document
+    tagged with the old name afterwards creates a new topic node.
+
+    Use `update` instead when the topic node states something that was wrong
+    or has stopped being true, since that is a new version of a claim.
+
+    Refused, with nothing written: an empty name, the name the topic already
+    has, a node that is not a topic, a topic that is no longer active, and a
+    name another active topic already has, ignoring case and separators. In
+    the last case the response names that topic; if the two are one topic,
+    merge them through `reflect` and `apply_reflection` rather than renaming
+    one onto the other.
+
+    Args:
+        topic: The topic's id, or its current name.
+        name: The new name.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else: naming it turns a
+            wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
+    """
+    deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
+    if refused is not None:
+        return refused
+    return await _run_with_timeout(
+        "epimemer.rename_topic",
+        lambda: tools.rename_topic(
+            topic,
+            deps["storage"],
+            deps["embedding_provider"],
+            name=name,
+            judge=judge,
+        ),
+        ctx,
+        f"topic={topic}",
+        lambda r, m: f"status={r['status']}",
         expected_graph=expected_graph,
     )
 
