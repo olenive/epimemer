@@ -258,7 +258,7 @@ thing the decision landed on:
 | `add_recurrence`, `end_recurrence`, `record_recurrence_exception` | the rule, the appended bound change, and the exception, each as `judged_by` on the record it wrote |
 | `apply_reflection`'s enrichments | its own journal row; where the enrichment replaced an earlier description, that wording's `description_history` entry too. The node's `judged_by` names whoever wrote its **name**, which an enrichment does not touch, so it stays where it is |
 | `rename_topic` | its own `topic_rename` journal row, and the name it replaced in the node's `previous_names` trail, each entry naming the renaming judge. The node's `judged_by` stays, since a rename changes a label and writes no new claim |
-| `reopen` | the withdrawn `assessed` edge, as `retired_by`, for a pair of nodes, and the `reopened` verdict row, as `judged_by`, for a pair of relation labels. Withdrawing a node's retention lands in the journal alone, because a keep is a journal row rather than a field on the node |
+| `reopen` | the withdrawn `assessed` edge, as `retired_by`, for a pair of nodes, and the `reopened` verdict row, as `judged_by`, for a pair of relation labels. Withdrawing a node's retention or a declined boundary lands in the journal alone, because a keep and a decline are journal rows rather than fields on the node |
 
 Three things follow that are easy to get wrong:
 
@@ -285,7 +285,9 @@ kind, and so is judging one label against another, `relation_verdict`, whose
 subjects are the two label records: the subject of a decision about
 vocabulary is the vocabulary entry. Accepting a boundary proposal edits an
 existing edge rather than adding one, which is exactly the case the journal
-is for, and both of its subjects are nodes.
+is for, and both of its subjects are nodes. Declining one writes a
+`boundary_declined` row with the same two subjects, the question it declined
+in `covers` and the reason as `certainty_basis`, and changes nothing else.
 
 ## The journal: what did this agent judge
 

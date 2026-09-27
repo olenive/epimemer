@@ -43,6 +43,9 @@ visualisation hub, the process the dashboard connects to.
   the user shares documents or knowledge you should remember.
 - Call `segment` to split the text, extract topics, facts and inferences
   yourself, then call `store_decomposition`.
+- `doubts` in the `segment` result means the server is unsure of its own cut,
+  for example a long document left as one passage. Re-cutting arrives in a
+  later release; for now, read the doubts and carry on decomposing.
 - **Say which graph you mean, on every call.** See *Which graph* below; it
   applies to reads as much as to ingest.
 - **`metacontext_id` is required.** Name the metacontext these claims are asserted
@@ -497,7 +500,15 @@ if useful.
   accepting**: the period's basis becomes `inferred`, so one whose other end
   a document stated stops being reportable as stated. Do not substitute a
   date you happen to know; the prohibition on world knowledge applies here
-  exactly as it does at ingest.
+  exactly as it does at ingest. **Decline the ones you disagree with** via
+  `apply_reflection(boundaries_declined=[{node_id, source_id, endpoint, at,
+  timeline_id, reason}])`, copying the first five from the proposal and saying
+  in `reason` why that date is not when the period ended or began. A decline
+  is what stops a proposal returning: an unanswered one comes back on every
+  reflect. It leaves the period open and writes nothing between the two
+  claims, so they can still be offered as a pair. A proposal for another date
+  is a different question and is offered again. `reopen(boundary={...})`
+  withdraws a decline you think was wrong.
 - **`unsound_inferences`** names an inference whose premises no source puts
   in the same period (*"X held 1997–2010"* and *"Y held from 2024"*, combined
   into a conclusion), with the offending pairs and their dates. It reports;

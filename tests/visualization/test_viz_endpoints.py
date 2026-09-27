@@ -873,3 +873,45 @@ class TestBoundaryProposalsRideAlong:
         assert proposal["graph"] == "other"
         assert either_backend.current_database == home
         assert (await assemble_snapshot(either_backend, home))["boundary_proposals"] == []
+
+    async def test_a_declined_proposal_is_not_drawn(self, either_backend):
+        """The panel would otherwise wear a "proposed · review" chip nobody will answer."""
+        from epimemer.pipelines.reflection.boundaries import record_boundary_decline
+
+        graph = either_backend.current_database
+        leningrad, _ = await _renaming(either_backend)
+        refusal = await record_boundary_decline(
+            either_backend,
+            node_id=leningrad.id,
+            source_id="doc-1970",
+            endpoint="end",
+            at=datetime(1991, 9, 6, tzinfo=UTC),
+            because="The renaming was voted on earlier than it took effect.",
+        )
+        assert refusal is None
+
+        data = await assemble_snapshot(either_backend, graph)
+
+        assert data["boundary_proposals"] == []
+
+    async def test_a_decline_is_read_from_the_graph_asked_for(self, either_backend):
+        """Declined in one graph, and the same case undeclined in another."""
+        from epimemer.pipelines.reflection.boundaries import record_boundary_decline
+
+        home = either_backend.current_database
+        await either_backend.switch_database("other")
+        leningrad, _ = await _renaming(either_backend)
+        await record_boundary_decline(
+            either_backend,
+            node_id=leningrad.id,
+            source_id="doc-1970",
+            endpoint="end",
+            at=datetime(1991, 9, 6, tzinfo=UTC),
+            because="Not when it stopped holding.",
+        )
+        await either_backend.switch_database(home)
+        await _renaming(either_backend)
+
+        assert (await assemble_snapshot(either_backend, "other"))["boundary_proposals"] == []
+        assert len((await assemble_snapshot(either_backend, home))["boundary_proposals"]) == 1
+        assert either_backend.current_database == home

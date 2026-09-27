@@ -143,29 +143,11 @@ the consequence.
 
 ### LLM-guided and hybrid segmentation
 
-**The state.** Paragraph and semantic-similarity segmentation are built and
-cover the current use cases. LLM-guided splitting is designed nowhere and
-buildable only after an architectural decision.
-
-**The question.** The server makes no LLM calls of its own (`SUMMARY.md`), and
-that is load-bearing: it is why the system has no API keys, no provider
-configuration, no per-call cost, and no opinion about which model you use. Two
-ways out, and they are not close:
-
-1. **Delegate the split to the calling agent.** The agent segments and passes
-   the result to `store_decomposition`, exactly as it already does for
-   decomposition. Preserves the property entirely. Costs a round trip and makes
-   segmentation quality the agent's problem.
-2. **Re-introduce a provider abstraction.** The server calls a model itself.
-   More capable and self-contained; gives up the property and everything that
-   follows from it.
-
-**Recommendation, for whoever picks this up.** Option 1, unless something
-concrete turns out to be impossible that way. The no-LLM-calls property is
-worth more than the convenience, and it is far easier to give up later than to
-win back.
-
-**Blockers.** The decision above. No code should be written before it.
+**Picked up on 27 September 2026.** The decision the entry waited on was
+taken: the calling agent cuts, and the server makes no model call of its own.
+The design is `SEGMENTATION.md`: the programmatic cut still runs first, the
+server reports doubts about its own result, and the agent re-cuts by stating
+anchors before any claim is attached. This entry goes when that ships.
 
 ---
 

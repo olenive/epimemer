@@ -532,6 +532,12 @@ async def memory_segment(
     char_count. Use your copy of the original text to extract topics, facts,
     and inferences for each segment, then call store_decomposition.
 
+    The result's `doubts` lists reasons the server thinks its own cut is poor,
+    each a `{kind, detail}`, such as a long document left as one passage or a
+    cut in the middle of a sentence; it is empty when the cut looks sound. A
+    doubt refuses nothing and the passages are stored: read them, then
+    decompose as usual.
+
     Topics: distinct themes discussed (1-5 sentence descriptions).
     Facts: atomic, verifiable, grounded statements.
     Inferences: higher-level interpretive derivations (explicitly provisional).
@@ -1863,7 +1869,9 @@ async def memory_reflect(
       and `proposed` for the period it would change, and the claim and source
       that license it. Accept the ones you agree with via
       apply_reflection(boundaries=[...]); the basis becomes `inferred`, and
-      nothing is written until you ask
+      nothing is written until you ask. Decline the rest via
+      apply_reflection(boundaries_declined=[...]) with a reason: a decline is
+      what stops a proposal returning on every reflect
     - unsound_inferences: an inference whose premises no source puts in the same
       period — *"X was true 1997–2010"* and *"Y was true from 2024"*, combined
       into a conclusion. It reports the pairs and their dates, never a verdict:
@@ -1960,6 +1968,7 @@ async def memory_apply_reflection(
     judgments: list[dict] | None = None,
     relation_verdicts: list[dict] | None = None,
     boundaries: list[dict] | None = None,
+    boundaries_declined: list[dict] | None = None,
     similarities: list[dict] | None = None,
     expected_graph: str | None = None,
     judge_token: str | None = None,
@@ -2118,6 +2127,21 @@ async def memory_apply_reflection(
             passed here. Requests that no longer name exactly one open period
             come back under `boundaries_refused` with a reason rather than being
             applied to something adjacent.
+        boundaries_declined: The other answer to a boundary proposal: *that
+            date is not when this period ended or began*. Each: {node_id,
+            source_id, endpoint, at, timeline_id: str | None, reason: str},
+            with the first five copied from the proposal. `reason` is required
+            and must say why: you are setting aside evidence the graph shows,
+            and the next reader is owed the argument. The period stays open and
+            one journal row records the decline, which is what stops this
+            proposal coming back; unanswered, it returns on every reflect. A
+            proposal for another date or the other endpoint is a different
+            question and is still offered. The two claims can still be offered
+            as a similar or contradictory pair, since nothing is written
+            between them. Entries naming an unknown claim or source, an
+            endpoint that is not "start" or "end", or a proposal already
+            declined come back under `boundaries_declined_refused` with a
+            reason. `reopen(boundary=...)` withdraws a decline.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
@@ -2154,6 +2178,7 @@ async def memory_apply_reflection(
             judgments=judgments,
             relation_verdicts=relation_verdicts,
             boundaries=boundaries,
+            boundaries_declined=boundaries_declined,
             similarities=similarities,
             judge=judge,
         )
@@ -2177,6 +2202,7 @@ async def memory_apply_reflection(
         f"judgments={len(judgments or [])} "
         f"relation_verdicts={len(relation_verdicts or [])} "
         f"boundaries={len(boundaries or [])} "
+        f"boundaries_declined={len(boundaries_declined or [])} "
         f"similarities={len(similarities or [])}",
         # A refusal should reach the operator's log, not only the agent's
         # response — a decision silently not recorded is the whole defect.
@@ -2198,6 +2224,11 @@ async def memory_apply_reflection(
                 if r["topic_merges_refused"]
                 else ""
             )
+            + (
+                f" boundaries_declined_refused={len(r['boundaries_declined_refused'])}"
+                if r["boundaries_declined_refused"]
+                else ""
+            )
         ),
         expected_graph=expected_graph,
     )
@@ -2209,6 +2240,7 @@ async def epimemer_reopen(
     ctx: Context,
     node_ids: list[str] | None = None,
     relation_labels: list[str] | None = None,
+    boundary: dict | None = None,
     expected_graph: str | None = None,
     judge_token: str | None = None,
 ) -> str:
@@ -2232,6 +2264,8 @@ async def epimemer_reopen(
       `apply_reflection(relation_verdicts=[...])`.
     - `node_ids` with **one** id: a node kept through
       `apply_reflection(retained=[...])`.
+    - `boundary`: a boundary proposal declined through
+      `apply_reflection(boundaries_declined=[...])`.
 
     Refused when nothing is suppressed for the target, and the refusal says what
     it looked for. Refused too where the pair carries a standing `similarity`,
@@ -2246,6 +2280,10 @@ async def epimemer_reopen(
         node_ids: One node to withdraw a keep, or two to withdraw a pair's
             assessment.
         relation_labels: The two relation label names whose verdict to withdraw.
+        boundary: The declined boundary proposal to offer again: {node_id,
+            source_id, endpoint, at, timeline_id: str | None}, as the decline
+            named it. Only a decline of that endpoint, at that date, on that
+            clock is withdrawn.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else, so naming it turns
@@ -2265,11 +2303,12 @@ async def epimemer_reopen(
             storage=deps["storage"],
             node_ids=node_ids,
             relation_labels=relation_labels,
+            boundary=boundary,
             reason=reason,
             judge=judge,
         ),
         ctx,
-        f"{node_ids or relation_labels}",
+        f"{node_ids or relation_labels or boundary}",
         lambda r, m: (
             f"reopened={','.join(r['subjects'])} layer={r['layer']}" if r["reopened"] else "refused"
         ),

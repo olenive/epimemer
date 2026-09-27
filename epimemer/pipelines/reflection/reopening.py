@@ -1,11 +1,12 @@
 """Withdrawing a suppression, and reading back that one was withdrawn.
 
-Three nominators stop offering a question once somebody has answered it, and
+Four nominators stop offering a question once somebody has answered it, and
 each keeps its own index of what has been answered: the `assessed` edge for a
 fact pair (`similarity_decisions.py`), a `RelationVerdict` for a label pair
-(`RELATION_LABELS.md` §4.2), and a `retention` journal row for a single node
-(`retention.py`). Suppression is what makes a sweep worth running twice, and
-until this module none of the three could be undone. A pair judged `distinct`
+(`RELATION_LABELS.md` §4.2), a `retention` journal row for a single node
+(`retention.py`), and a `boundary_declined` journal row for a boundary
+proposal (`boundaries.py`). Suppression is what makes a sweep worth running
+twice, and until this module none of them could be undone. A pair judged `distinct`
 in error was silenced for good, however much later evidence said it should be
 looked at again.
 
@@ -13,7 +14,7 @@ looked at again.
 the opposite of the earlier verdict, and it never claims the earlier judge was
 wrong: it says *ask this again*. What comes back is a nomination, and the next
 judge answers it with the same tools as the first. That is the whole scope, and
-keeping it there is what makes one tool safe for three layers that fail in
+keeping it there is what makes one tool safe for layers that fail in
 different directions: a wrong `one_claim` manufactures corroboration, while
 asking a question twice costs attention.
 
@@ -66,10 +67,11 @@ def _note(record: DecisionRecord) -> ReopenNote:
 def notes_by_target(records: Iterable[DecisionRecord]) -> dict[frozenset[str], ReopenNote]:
     """The newest reopen per target, keyed by the ids it named.
 
-    One key shape for all three layers: a fact pair is two node ids, a label
-    pair is two label record ids, and a kept node is one node id. They cannot
-    collide, because a label record id is never a node id and a pair is never
-    one id.
+    One key shape for every layer: a fact pair is two node ids, a label pair
+    is two label record ids, a kept node is one node id, and a declined
+    boundary is its claim and its source. They cannot collide, because a label
+    record id is never a node id, a pair is never one id, and a source is a
+    document rather than a claim a pair verdict is about.
 
     Newest wins. A target reopened, judged again and reopened a second time
     shows the second reopen, which is the round the nomination in front of the

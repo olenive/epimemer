@@ -147,7 +147,7 @@ could draw it. Each key is a worklist, not a verdict:
 | `recurrences` | an active claim beside its own `historical` twin | `restore` |
 | `unsound_inferences` | inferences whose premises no source puts in one period | agent judgment |
 | `inference_merge_candidates` | near-identical active inferences resting on a shared premise, each with the warning computed before you decide | `merge_inferences`, or `similarities` where they are two claims |
-| `boundary_proposals` | where a succession lets a period close or open | `boundaries` |
+| `boundary_proposals` | where a succession lets a period close or open, leaving out any somebody declined | `boundaries` or `boundaries_declined` |
 | `pending_review` | active nodes already carrying review state | `supersessions`, `record_variant`, `retained` |
 | `archival_candidates` | nodes worth setting aside | `archivals`, `judgments`, `retained` |
 | `similar_relations` | likely-synonymous user relationship labels | `relation_verdicts` |
@@ -316,6 +316,7 @@ Every kind of decision is optional and they are applied in one call:
 | `judgments` | re-judge importance, in either direction, with a reason |
 | `relation_verdicts` | record what you decided about a nominated label pair |
 | `boundaries` | fill in one open endpoint of one source's period |
+| `boundaries_declined` | record that a proposed endpoint is wrong, with the reason, so it is not proposed again |
 
 **`merges` is the one consolidation that retires nodes from the active
 graph**, so the bar is deliberately high: a merge is applied only if *every*
@@ -413,7 +414,10 @@ Merging rebuilds the node's value signal through one shared function
 silently reset.
 
 Unknown or already-retired ids are **skipped**, not errors. Refused
-boundaries come back in `boundaries_refused` with a reason.
+boundaries come back in `boundaries_refused` with a reason, and refused
+declines in `boundaries_declined_refused`: a decline naming a claim or source
+that is not there, an endpoint that is not `start` or `end`, or a proposal
+already declined.
 
 ### A batch applies, or it never existed
 
@@ -519,7 +523,7 @@ with the reason; a node named in both `archivals` and `retained` is archived.
 ### 6.4 `reopen`: taking a suppression back
 
 A verdict is what stops a question being asked again, and it used to be
-permanent on all three layers: a pair judged `distinct` in error never came
+permanent on every layer: a pair judged `distinct` in error never came
 back, however much later evidence said it should. `reopen` withdraws one
 suppression, and the target says which layer:
 
@@ -528,6 +532,7 @@ suppression, and the target says which layer:
 | `reopen(node_ids=[a, b], reason=...)` | the pair's `assessed` edge | the pair is nominated again |
 | `reopen(relation_labels=[a, b], reason=...)` | the pair's standing verdict | the label pair is nominated again |
 | `reopen(node_ids=[node_id], reason=...)` | the node's standing keep | the node returns to the archival worklist |
+| `reopen(boundary={node_id, source_id, endpoint, at, timeline_id}, reason=...)` | the standing decline of that boundary proposal | the proposal is offered again |
 
 **It asserts nothing.** It does not record the opposite of the earlier verdict
 and does not say the earlier judge was wrong: it re-asks the question, and
@@ -543,7 +548,10 @@ second time carries both rounds, and the second verdict suppresses it again.
 **The nomination says it was reopened**, with the reason, the date and the
 judge, so the next reader sees the history instead of re-deriving it. It
 appears as `reopened` on `similar_pairs`, `contradictions`, `recurrences`,
-`inference_merge_candidates`, `archival_candidates` and `similar_relations`.
+`inference_merge_candidates`, `archival_candidates`, `boundary_proposals` and
+`similar_relations`. On `boundary_proposals` the note is matched by claim and
+source, so a reopen of one endpoint also shows on a proposal for the other
+endpoint of the same source's period; the note names the one it was about.
 
 **Refused when nothing is suppressed for the target**, naming what it looked
 for: *there was nothing to undo* must not read like *done*. Refused too when

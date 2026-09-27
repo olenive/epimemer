@@ -1462,3 +1462,20 @@ class InMemoryStorage:
         if graph is None:
             return []
         return _copy_all(graph.relation_labels.values())
+
+    async def viz_list_decisions(
+        self,
+        database: str,
+        *,
+        kinds: Sequence[DecisionKind] | None = None,
+    ) -> Sequence[DecisionRecord]:
+        graph = self._graphs.get(database)
+        if graph is None:
+            return []
+        wanted = None if kinds is None else set(kinds)
+        matches = [
+            record for record in graph.decisions.values() if wanted is None or record.kind in wanted
+        ]
+        # The order `query_decisions` answers in, tie-broken the same way.
+        matches.sort(key=lambda record: (record.decided_at, record.id), reverse=True)
+        return _copy_all(matches)

@@ -4,6 +4,21 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.10] — 2026-09-27
+
+- A boundary proposal from `reflect` can be declined. `apply_reflection`
+  takes `boundaries_declined`, each entry the proposal's identity and a
+  required reason, and records the decline in the journal, so the proposal
+  stops coming back on every reflect and the timeline panel stops drawing it.
+  Only that endpoint at that date is declined: a proposal whose date later
+  moves is offered again. `reopen(boundary=...)` withdraws a decline.
+- A document now records how it was cut: its metadata names the segmentation
+  strategy and the number of passages. `segment` also returns `doubts`, the
+  server's reasons to think its own cut is poor, such as a long document left
+  as one passage or a cut in the middle of a sentence. A doubt refuses nothing;
+  `scripts/segmentation_doubts.py` measures how often each one fires over a
+  graph, reading it without writing.
+
 ## [0.2.9] — 2026-09-24
 
 - The server reports its own version in the MCP handshake, so a client's

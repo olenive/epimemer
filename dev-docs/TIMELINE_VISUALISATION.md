@@ -745,7 +745,11 @@ strips in a stack differ; it is `stripHue` in `theme.ts`, deliberately outside
   is what the tooltip shows. The chip is passive: the dashboard is the read
   side, and accepting goes through `apply_reflection(boundaries=…)` exactly
   as it does today. Nothing needs to withdraw a proposal once accepted,
-  because a closed edge is not one reflect offers a date for. An interval
+  because a closed edge is not one reflect offers a date for. A declined
+  proposal is not drawn either: the snapshot reads the graph's
+  `boundary_declined` and `reopened` rows (`viz_list_decisions`) and hands
+  them to the same pure core, so the endpoint wears the mark it would
+  without the proposal. An interval
   nothing dates, one whose only date would be the proposal, stays in the
   tray with a pending badge on its chip: the graph holds no date for it yet,
   and the proposal cannot place what the record does not.

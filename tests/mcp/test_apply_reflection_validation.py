@@ -169,6 +169,62 @@ class TestNothingIsWrittenBeforeTheBatchIsChecked:
             )
         assert await _similarity_rows(storage) == 0
 
+    @pytest.mark.parametrize("key", ["reason", "node_id", "source_id", "endpoint", "at"])
+    async def test_a_decline_missing_a_key_writes_nothing(self, storage, embedding_provider, key):
+        """A valid verdict beside it does not land either."""
+        first, second = await _twin_facts(storage, embedding_provider)
+        entry = {
+            "node_id": first.id,
+            "source_id": "doc-a",
+            "endpoint": "end",
+            "at": "2026-09-21T00:00:00+00:00",
+            "reason": "commits landed that day",
+        }
+        del entry[key]
+
+        with pytest.raises(ValueError) as caught:
+            await tools.apply_reflection(
+                storage,
+                embedding_provider,
+                similarities=[
+                    {
+                        "pair": [first.id, second.id],
+                        "verdict": "distinct",
+                        "because": "different claims",
+                    }
+                ],
+                boundaries_declined=[entry],
+            )
+
+        assert f"boundaries_declined[0]: {key!r} is required" in str(caught.value)
+        assert await _similarity_rows(storage) == 0
+        assert await storage.query_decisions(kinds=[DecisionKind.BOUNDARY_DECLINED]) == []
+
+    async def test_a_decline_with_a_blank_reason_writes_nothing(self, storage, embedding_provider):
+        first, second = await _twin_facts(storage, embedding_provider)
+        with pytest.raises(ValueError):
+            await tools.apply_reflection(
+                storage,
+                embedding_provider,
+                similarities=[
+                    {
+                        "pair": [first.id, second.id],
+                        "verdict": "distinct",
+                        "because": "different claims",
+                    }
+                ],
+                boundaries_declined=[
+                    {
+                        "node_id": first.id,
+                        "source_id": "doc-a",
+                        "endpoint": "end",
+                        "at": "2026-09-21T00:00:00+00:00",
+                        "reason": "",
+                    }
+                ],
+            )
+        assert await _similarity_rows(storage) == 0
+
     async def test_every_problem_is_listed_at_once(self, storage, embedding_provider):
         """Fix one, meet the next, resend: the treadmill this file is about."""
         with pytest.raises(ValueError) as caught:
@@ -308,6 +364,18 @@ class TestWhatCountsAsMalformed:
                 == []
             )
 
+    def test_a_declined_boundary_with_a_blank_reason(self):
+        """The next reader is owed why evidence the graph shows was set aside."""
+        entry = _sample_entry("boundaries_declined") | {"reason": "   "}
+        found = malformed_entries({"boundaries_declined": [entry]})
+        assert [(item.field, item.index) for item in found] == [("boundaries_declined", 0)]
+        assert "'reason'" in found[0].problem
+
+    def test_a_declined_boundary_date_that_will_not_parse(self):
+        entry = _sample_entry("boundaries_declined") | {"at": "last tuesday"}
+        found = malformed_entries({"boundaries_declined": [entry]})
+        assert "neither a datetime nor an ISO-8601 string" in found[0].problem
+
     def test_an_enrichment_still_sending_new_content_is_named_the_new_key(self):
         """The key that used to rewrite a topic's name, and what to send instead.
 
@@ -366,6 +434,13 @@ def _sample_entry(field: str) -> dict:
             "source_id": "s",
             "endpoint": "end",
             "at": "2026-08-28T00:00:00+00:00",
+        },
+        "boundaries_declined": {
+            "node_id": "n",
+            "source_id": "s",
+            "endpoint": "end",
+            "at": "2026-08-28T00:00:00+00:00",
+            "reason": "the successor's date is not when this stopped holding",
         },
     }
     assert set(samples) == set(REQUIRED_KEYS), "sample entries drifted from the table"

@@ -779,6 +779,14 @@ class InstrumentedStorage:
     async def viz_list_relation_labels(self, database: str) -> Sequence[RelationLabel]:
         return await self._inner.viz_list_relation_labels(database)
 
+    async def viz_list_decisions(
+        self,
+        database: str,
+        *,
+        kinds: Sequence[DecisionKind] | None = None,
+    ) -> Sequence[DecisionRecord]:
+        return await self._inner.viz_list_decisions(database, kinds=kinds)
+
     # --- Metacontexts (pass-through) ---
 
     async def store_metacontext(self, mc: Metacontext) -> str:

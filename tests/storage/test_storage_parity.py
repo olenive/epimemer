@@ -1241,6 +1241,58 @@ class TestVizListTimelines:
         assert list(await store.viz_list_timelines("no-such-graph")) == []
 
 
+class TestVizListDecisions:
+    """The snapshot reads a named graph's journal to leave declined boundary
+    proposals undrawn, so the read names its graph and leaves the active
+    connection where it found it."""
+
+    async def test_returns_the_kinds_asked_for_newest_first(self, store):
+        older = DecisionRecord(
+            kind=DecisionKind.BOUNDARY_DECLINED,
+            subject_ids=["n", "s"],
+            covers=["q"],
+            decided_at=datetime(2026, 9, 24, 12, 0, tzinfo=UTC),
+        )
+        newer = DecisionRecord(
+            kind=DecisionKind.REOPENED,
+            subject_ids=["n", "s"],
+            covers=["q"],
+            decided_at=datetime(2026, 9, 24, 12, 5, tzinfo=UTC),
+        )
+        other = DecisionRecord(kind=DecisionKind.INGEST, subject_ids=["n"])
+        for record in (older, newer, other):
+            await store.record_decision(record)
+
+        listed = await store.viz_list_decisions(
+            store.current_database,
+            kinds=[DecisionKind.BOUNDARY_DECLINED, DecisionKind.REOPENED],
+        )
+
+        assert [record.id for record in listed] == [newer.id, older.id]
+        assert listed[1].covers == ["q"]
+
+    async def test_no_kinds_means_every_row(self, store):
+        await store.record_decision(DecisionRecord(kind=DecisionKind.INGEST, subject_ids=["n"]))
+        await store.record_decision(DecisionRecord(kind=DecisionKind.BOUNDARY, subject_ids=["n"]))
+
+        assert len(await store.viz_list_decisions(store.current_database)) == 2
+
+    async def test_reads_another_graph_without_switching_the_active_one(self, store):
+        home = store.current_database
+        await store.switch_database("other")
+        await store.record_decision(DecisionRecord(kind=DecisionKind.INGEST, subject_ids=["x"]))
+        await store.switch_database(home)
+
+        listed = await store.viz_list_decisions("other")
+
+        assert [record.subject_ids for record in listed] == [["x"]]
+        assert store.current_database == home
+        assert list(await store.viz_list_decisions(home)) == []
+
+    async def test_unknown_graph_is_empty_not_an_error(self, store):
+        assert list(await store.viz_list_decisions("no-such-graph")) == []
+
+
 class TestVizListMetacontexts:
     """Metacontexts are named in the dashboard's metacontext filter, so the viz read
     must reach them the same way it reaches timelines — by graph, without

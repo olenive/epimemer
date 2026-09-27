@@ -176,10 +176,10 @@ async def confirmed_reasons_for(
     the nominator reads.
 
     **A reopen naming two subjects is not about a node**, so it is skipped here.
-    One subject is how the retention layer is addressed and two is how a fact
-    pair is, which is the same distinction `reopen` validates on the way in: a
-    pair has no keep to withdraw, and treating one as if it did would silently
-    un-keep both of its nodes.
+    One subject is how the retention layer is addressed, and two is how a fact
+    pair or a declined boundary (the claim and its source) is, which is the
+    same distinction `reopen` validates on the way in: neither has a keep to
+    withdraw, and treating one as if it did would silently un-keep a node.
     """
     ids = list(node_ids)
     if not ids:

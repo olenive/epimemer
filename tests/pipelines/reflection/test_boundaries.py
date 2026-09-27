@@ -24,6 +24,8 @@ from epimemer.core.temporal import (
     ValidityInterval,
 )
 from epimemer.core.types import (
+    DecisionKind,
+    DecisionRecord,
     EdgeType,
     Fact,
     NodeEdge,
@@ -36,9 +38,13 @@ from epimemer.pipelines.query.validity import SourceValidity
 from epimemer.pipelines.reflection.boundaries import (
     apply_boundary,
     boundary_proposals_from,
+    boundary_question,
+    declined_boundaries_from,
     propose_boundaries,
+    record_boundary_decline,
     succession_holders,
 )
+from epimemer.pipelines.reflection.retention import confirmed_reasons_for
 
 
 def _at(year: int) -> PreciseInstant:
@@ -547,3 +553,292 @@ class TestAcceptingOne:
         )
 
         assert refusal is not None and "not an endpoint" in refusal.reason
+
+
+# --- Declining one -------------------------------------------------------------
+
+
+def _leningrad_case():
+    """The worked case as data, for the pure rule."""
+    leningrad = Fact(content="the city is called Leningrad", source_id="seg-1")
+    petersburg = Fact(content="the city is called Saint Petersburg", source_id="seg-1")
+    holders = {leningrad.id: leningrad, petersburg.id: petersburg}
+    successions = [
+        NodeEdge(src_id=leningrad.id, dst_id=petersburg.id, type=EdgeType.TEMPORALLY_FOLLOWED_BY)
+    ]
+    validity = {
+        leningrad.id: [SourceValidity(source_id="doc-1970", intervals=[_period(start=_at(1924))])],
+        petersburg.id: [SourceValidity(source_id="doc-2000", intervals=[_period(start=_at(1991))])],
+    }
+    return leningrad, holders, successions, validity
+
+
+def _declined(node_id: str, source_id: str, endpoint: str, year: int, timeline_id=None):
+    return frozenset(
+        {
+            (
+                node_id,
+                source_id,
+                boundary_question(endpoint, datetime(year, 1, 1, tzinfo=UTC), timeline_id),
+            )
+        }
+    )
+
+
+class TestTheQuestionKey:
+    """One string, written by every decline and read by every nominator."""
+
+    def test_the_same_moment_in_another_zone_is_the_same_question(self):
+        from datetime import timedelta, timezone
+
+        utc = datetime(1991, 1, 1, tzinfo=UTC)
+        elsewhere = utc.astimezone(timezone(timedelta(hours=3)))
+
+        assert boundary_question("end", utc, None) == boundary_question("end", elsewhere, None)
+
+    def test_a_date_sent_back_as_json_matches_the_one_computed(self):
+        """The round trip a decline makes: reflect's JSON, then the agent's reply."""
+        at = datetime(1991, 1, 1, tzinfo=UTC)
+        sent = datetime.fromisoformat(at.isoformat().replace("+00:00", "Z"))
+
+        assert boundary_question("end", sent, None) == boundary_question("end", at, None)
+
+    def test_a_naive_date_is_read_as_utc(self):
+        """As `PreciseInstant` reads one, so the key agrees with the proposal."""
+        assert boundary_question("end", datetime(1991, 1, 1), None) == boundary_question(
+            "end", datetime(1991, 1, 1, tzinfo=UTC), None
+        )
+
+    def test_endpoint_date_and_clock_each_make_a_different_question(self):
+        at = datetime(1991, 1, 1, tzinfo=UTC)
+        keys = {
+            boundary_question("end", at, None),
+            boundary_question("start", at, None),
+            boundary_question("end", datetime(1992, 1, 1, tzinfo=UTC), None),
+            boundary_question("end", at, "tl-1"),
+        }
+        assert len(keys) == 4
+
+    def test_an_empty_clock_is_the_real_calendar(self):
+        at = datetime(1991, 1, 1, tzinfo=UTC)
+        assert boundary_question("end", at, "") == boundary_question("end", at, None)
+
+
+class TestADeclinedProposalIsNotOfferedAgain:
+    def test_the_declined_question_is_filtered(self):
+        leningrad, holders, successions, validity = _leningrad_case()
+        declined = _declined(leningrad.id, "doc-1970", "end", 1991)
+
+        assert boundary_proposals_from(holders, successions, validity, declined) == []
+
+    def test_a_decline_about_another_date_does_not_suppress_it(self):
+        """The successor's date was corrected since: a new question, asked afresh."""
+        leningrad, holders, successions, validity = _leningrad_case()
+        declined = _declined(leningrad.id, "doc-1970", "end", 1990)
+
+        [proposal] = boundary_proposals_from(holders, successions, validity, declined)
+        assert proposal.node.id == leningrad.id
+
+    def test_a_decline_about_the_other_endpoint_does_not_suppress_it(self):
+        leningrad, holders, successions, validity = _leningrad_case()
+        declined = _declined(leningrad.id, "doc-1970", "start", 1991)
+
+        assert len(boundary_proposals_from(holders, successions, validity, declined)) == 1
+
+    def test_a_decline_about_another_source_does_not_suppress_it(self):
+        leningrad, holders, successions, validity = _leningrad_case()
+        declined = _declined(leningrad.id, "doc-2000", "end", 1991)
+
+        assert len(boundary_proposals_from(holders, successions, validity, declined)) == 1
+
+    def test_nothing_declined_is_the_default(self):
+        _, holders, successions, validity = _leningrad_case()
+
+        assert len(boundary_proposals_from(holders, successions, validity)) == 1
+
+
+def _row(kind, subjects, covers, *, minute):
+    return DecisionRecord(
+        kind=kind,
+        subject_ids=list(subjects),
+        covers=list(covers),
+        decided_at=datetime(2026, 9, 24, 12, minute, tzinfo=UTC),
+    )
+
+
+class TestReplayingTheJournal:
+    """Oldest first: a decline adds, a reopen with the same key takes away."""
+
+    def test_a_decline_stands(self):
+        rows = [_row(DecisionKind.BOUNDARY_DECLINED, ["n", "s"], ["q"], minute=0)]
+        assert declined_boundaries_from(rows) == frozenset({("n", "s", "q")})
+
+    def test_a_reopen_with_the_same_key_withdraws_it(self):
+        """Handed over newest first, as `query_decisions` answers."""
+        rows = [
+            _row(DecisionKind.REOPENED, ["n", "s"], ["q"], minute=1),
+            _row(DecisionKind.BOUNDARY_DECLINED, ["n", "s"], ["q"], minute=0),
+        ]
+        assert declined_boundaries_from(rows) == frozenset()
+
+    def test_a_decline_after_the_reopen_stands_again(self):
+        rows = [
+            _row(DecisionKind.BOUNDARY_DECLINED, ["n", "s"], ["q"], minute=0),
+            _row(DecisionKind.REOPENED, ["n", "s"], ["q"], minute=1),
+            _row(DecisionKind.BOUNDARY_DECLINED, ["n", "s"], ["q"], minute=2),
+        ]
+        assert declined_boundaries_from(rows) == frozenset({("n", "s", "q")})
+
+    def test_a_reopen_for_another_key_leaves_it(self):
+        rows = [
+            _row(DecisionKind.BOUNDARY_DECLINED, ["n", "s"], ["q"], minute=0),
+            _row(DecisionKind.REOPENED, ["n", "s"], ["other"], minute=1),
+        ]
+        assert declined_boundaries_from(rows) == frozenset({("n", "s", "q")})
+
+    def test_a_fact_pair_reopen_is_not_about_a_boundary(self):
+        """Two subjects and no key: the `assessed` layer's row, which names no question."""
+        rows = [
+            _row(DecisionKind.BOUNDARY_DECLINED, ["n", "s"], ["q"], minute=0),
+            _row(DecisionKind.REOPENED, ["n", "s"], [], minute=1),
+        ]
+        assert declined_boundaries_from(rows) == frozenset({("n", "s", "q")})
+
+    def test_other_kinds_are_ignored(self):
+        rows = [_row(DecisionKind.BOUNDARY, ["n", "s"], ["q"], minute=0)]
+        assert declined_boundaries_from(rows) == frozenset()
+
+
+class TestDecliningThroughTheJournal:
+    async def _decline(self, storage, proposal, because="Commits landed that day."):
+        return await record_boundary_decline(
+            storage,
+            node_id=proposal.node.id,
+            source_id=proposal.source_id,
+            endpoint=proposal.endpoint,
+            at=proposal.at,
+            timeline_id=proposal.timeline_id,
+            because=because,
+        )
+
+    async def test_propose_boundaries_reads_the_decline(self, storage, renaming):
+        [proposal] = await propose_boundaries(storage)
+
+        assert await self._decline(storage, proposal) is None
+
+        assert await propose_boundaries(storage) == []
+
+    async def test_the_row_says_what_was_declined_and_why(self, storage, renaming):
+        leningrad, _, older, _ = renaming
+        [proposal] = await propose_boundaries(storage)
+
+        await self._decline(storage, proposal)
+
+        [row] = await storage.query_decisions(kinds=[DecisionKind.BOUNDARY_DECLINED])
+        assert row.subject_ids == [leningrad.id, older.id]
+        assert row.covers == [boundary_question("end", proposal.at, None)]
+        assert row.certainty_basis == "Commits landed that day."
+
+    async def test_nothing_on_the_graph_changes(self, storage, renaming):
+        """A journal row and nothing else: an `assessed` edge would silence the pair."""
+        leningrad, _, older, _ = renaming
+        [proposal] = await propose_boundaries(storage)
+
+        await self._decline(storage, proposal)
+
+        [edge] = [
+            edge
+            for edge in await storage.get_edges_from(leningrad.id, edge_type=EdgeType.SOURCED_FROM)
+            if edge.dst_id == older.id
+        ]
+        assert isinstance(edge.validity[0].end, UnknownInstant)
+        assessed = await storage.get_edges_for(
+            [leningrad.id], direction="from", edge_type=EdgeType.ASSESSED
+        )
+        assert assessed.get(leningrad.id, []) == []
+
+    async def test_a_reopen_with_the_same_key_restores_it(self, storage, renaming):
+        leningrad, _, older, _ = renaming
+        [proposal] = await propose_boundaries(storage)
+        await self._decline(storage, proposal)
+
+        await storage.record_decision(
+            DecisionRecord(
+                kind=DecisionKind.REOPENED,
+                subject_ids=[leningrad.id, older.id],
+                covers=[boundary_question("end", proposal.at, None)],
+                certainty_basis="Look again.",
+            )
+        )
+
+        [again] = await propose_boundaries(storage)
+        assert again.node.id == leningrad.id
+
+    async def test_a_reopen_for_another_key_does_not(self, storage, renaming):
+        leningrad, _, older, _ = renaming
+        [proposal] = await propose_boundaries(storage)
+        await self._decline(storage, proposal)
+
+        await storage.record_decision(
+            DecisionRecord(
+                kind=DecisionKind.REOPENED,
+                subject_ids=[leningrad.id, older.id],
+                covers=[boundary_question("start", proposal.at, None)],
+                certainty_basis="Look again.",
+            )
+        )
+
+        assert await propose_boundaries(storage) == []
+
+    async def test_the_retention_layer_ignores_the_decline(self, storage, renaming):
+        """Two subjects is a pair's shape, and a keep is addressed by one."""
+        leningrad, _, _, _ = renaming
+        [proposal] = await propose_boundaries(storage)
+        await self._decline(storage, proposal)
+
+        assert await confirmed_reasons_for([leningrad.id], storage) == {}
+
+    async def test_an_unknown_node_is_refused(self, storage, renaming):
+        refusal = await record_boundary_decline(
+            storage,
+            node_id="no-such-claim",
+            source_id="doc",
+            endpoint="end",
+            at=datetime(1991, 1, 1, tzinfo=UTC),
+            because="x",
+        )
+        assert refusal is not None and "no such claim" in refusal.reason
+        assert await storage.query_decisions(kinds=[DecisionKind.BOUNDARY_DECLINED]) == []
+
+    async def test_a_source_the_claim_does_not_have_is_refused(self, storage, renaming):
+        leningrad, _, _, newer = renaming
+        refusal = await record_boundary_decline(
+            storage,
+            node_id=leningrad.id,
+            source_id=newer.id,
+            endpoint="end",
+            at=datetime(1991, 1, 1, tzinfo=UTC),
+            because="x",
+        )
+        assert refusal is not None and "0 provenance edges" in refusal.reason
+
+    async def test_an_endpoint_that_is_not_one_is_refused(self, storage, renaming):
+        leningrad, _, older, _ = renaming
+        refusal = await record_boundary_decline(
+            storage,
+            node_id=leningrad.id,
+            source_id=older.id,
+            endpoint="middle",
+            at=datetime(1991, 1, 1, tzinfo=UTC),
+            because="x",
+        )
+        assert refusal is not None and "not an endpoint" in refusal.reason
+
+    async def test_a_standing_decline_is_not_written_twice(self, storage, renaming):
+        [proposal] = await propose_boundaries(storage)
+        await self._decline(storage, proposal)
+
+        refusal = await self._decline(storage, proposal)
+
+        assert refusal is not None and "already declined" in refusal.reason
+        assert len(await storage.query_decisions(kinds=[DecisionKind.BOUNDARY_DECLINED])) == 1

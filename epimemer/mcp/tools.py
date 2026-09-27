@@ -633,7 +633,13 @@ async def segment_text(
     to the document by a `published_by` (attribution) edge. `published_at` is when
     the document was published, which bounds what it could have known; it is left
     absent rather than falling back to the ingest time.
+
+    The stored document's `metadata["segmentation"]` names the strategy and the
+    passage count. The result's `doubts` lists the server's reasons to think its
+    own cut is poor (`doubt_cut`), each a `{kind, detail}`; a doubt refuses
+    nothing, and the passages are stored either way.
     """
+    from epimemer.pipelines.segmentation.doubts import doubt_cut
     from epimemer.pipelines.segmentation.paragraph_split import paragraph_split_segmentation_net
     from epimemer.pipelines.segmentation.semantic_similarity import (
         semantic_similarity_segmentation_net,
@@ -648,6 +654,25 @@ async def segment_text(
         published_at=published_at,
         metadata=metadata or {},
     )
+
+    # Cut before storing, so the document is written once and already says how
+    # it was cut. The strategies read only the document value, and its id
+    # exists before it is stored, so the passages point at it either way; the
+    # publisher edge below is written after the document it starts from.
+    if strategy == "semantic":
+        seg_graph = semantic_similarity_segmentation_net(doc, embedding_provider)
+        seg_graph, _ = await _run_net(seg_graph, "segmentation:semantic", event_bus)
+    else:
+        seg_graph = paragraph_split_segmentation_net(doc)
+        seg_graph, _ = await _run_net(seg_graph, "segmentation:paragraph", event_bus)
+
+    segments: list[Segment] = list(seg_graph.place_named("Segments").tokens)
+
+    # `history` is where a later re-cut keeps the cut it replaced.
+    doc.metadata = {
+        **doc.metadata,
+        "segmentation": {"strategy": strategy, "passages": len(segments), "history": []},
+    }
     await storage.store_document(doc)
 
     if published_by:
@@ -673,15 +698,6 @@ async def segment_text(
             )
         )
 
-    if strategy == "semantic":
-        seg_graph = semantic_similarity_segmentation_net(doc, embedding_provider)
-        seg_graph, _ = await _run_net(seg_graph, "segmentation:semantic", event_bus)
-    else:
-        seg_graph = paragraph_split_segmentation_net(doc)
-        seg_graph, _ = await _run_net(seg_graph, "segmentation:paragraph", event_bus)
-
-    segments: list[Segment] = list(seg_graph.place_named("Segments").tokens)
-
     for segment in segments:
         await storage.store_segment(segment)
 
@@ -696,6 +712,9 @@ async def segment_text(
         # noticed after the nodes are written.
         "active_graph": storage.current_database,
         "segments": [{"segment_id": s.id, "char_count": len(s.text)} for s in segments],
+        # The server's unease about its own cut, never a refusal. Kept apart
+        # from `warnings`, which argue with something the agent did.
+        "doubts": [d.model_dump(mode="json") for d in doubt_cut(content, segments)],
     }
     meta = ResponseMeta(nodes_returned=len(segments))
     return result, meta
@@ -4097,9 +4116,14 @@ async def reflect(
 
     Reads only. Returns split candidates, similar topic pairs, enrichment
     candidates, contradiction pairs, recurrences, temporally unsound inferences,
-    inference-merge candidates, archival nominations and similar
-    relationship-label pairs for the agent to review and act on via
+    inference-merge candidates, boundary proposals, archival nominations and
+    similar relationship-label pairs for the agent to review and act on via
     memory.apply_reflection — nothing here changes the graph.
+
+    A boundary proposal is answered by accepting it (`boundaries`) or declining
+    it (`boundaries_declined`); a declined one is left out here until
+    `reopen(boundary=...)` withdraws the decline, and then comes back carrying
+    `reopened` with the reason.
     """
     from epimemer.pipelines.reflection.archival import nominate_archival_candidates
     from epimemer.pipelines.reflection.boundaries import propose_boundaries
@@ -4359,6 +4383,7 @@ async def reflect(
     #     will ever stop being true, so only something seeing the next document
     #     can close the first interval. Proposes, never writes — the boundary is
     #     `inferred`, and `apply_reflection(boundaries=[...])` is what applies it.
+    #     A proposal declined through `boundaries_declined` is left out.
     async def _boundaries():
         return [proposal.model_dump(mode="json") for proposal in await propose_boundaries(storage)]
 
@@ -4465,6 +4490,12 @@ async def reflect(
             ("recurrences", lambda c: [c["fact_a"]["id"], c["fact_b"]["id"]]),
             ("inference_merge_candidates", lambda c: [ref["id"] for ref in c["inferences"]]),
             ("archival_candidates", lambda c: [c["node_id"]]),
+            # Keyed on (claim, source) rather than the whole question, so a
+            # reopen of one endpoint also annotates a proposal on the other
+            # endpoint of the same source's period. An accepted imprecision:
+            # the note carries the reason, and the reader can see which
+            # endpoint and date it named.
+            ("boundary_proposals", lambda c: [c["node"]["id"], c["source_id"]]),
         ):
             annotate_reopened(result[key], target_of, reopened)
 
@@ -4564,6 +4595,7 @@ async def apply_reflection(
     judgments: list[dict] | None = None,
     relation_verdicts: list[dict] | None = None,
     boundaries: list[dict] | None = None,
+    boundaries_declined: list[dict] | None = None,
     similarities: list[dict] | None = None,
     merge_similarity_threshold: float = 0.92,
     judge: JudgeRef | None = None,
@@ -4703,6 +4735,24 @@ async def apply_reflection(
         period — refusals come back in ``boundaries_refused`` with a reason,
         since a boundary silently not applied is worse than one rejected out
         loud.
+    boundaries_declined: [{node_id, source_id, endpoint, at, timeline_id?,
+        reason}]: the other answer to a boundary proposal, *that date is not
+        when this period ended or began*. Copy the identity keys from the
+        proposal. Writes one ``boundary_declined`` journal row per entry, with
+        subjects ``[node_id, source_id]``, the endpoint, date and clock as the
+        question in ``covers``, and ``reason`` as its ``certainty_basis``, and
+        changes nothing else: the period stays open. That row is what stops the
+        proposal being offered again, and only that proposal: a proposal about
+        another date or the other endpoint is a different question, so one whose
+        date moves later comes back. ``reason`` is required and must not be
+        blank, since a decline sets aside evidence the graph shows and the next
+        reader is owed why. It is a journal row rather than an ``assessed`` edge
+        so the two claims can still be offered as a similar or contradictory
+        pair. An entry naming a claim that cannot hold a period, a source the
+        claim has no single provenance edge to, an endpoint that is not
+        ``start`` or ``end``, or a question already declined comes back in
+        ``boundaries_declined_refused`` with a reason. ``reopen(boundary=...)``
+        withdraws a decline.
 
     **A malformed entry refuses the whole call, and nothing is written.** The
     steps below share no transaction and their order is load-bearing, so an
@@ -4729,7 +4779,11 @@ async def apply_reflection(
         malformed_entries,
         refusal_message,
     )
-    from epimemer.pipelines.reflection.boundaries import apply_boundary
+    from epimemer.pipelines.reflection.boundaries import (
+        BoundaryRefused,
+        apply_boundary,
+        record_boundary_decline,
+    )
     from epimemer.pipelines.reflection.relation_verdicts import (
         RelationVerdictRefused,
         apply_relation_verdict,
@@ -4764,6 +4818,7 @@ async def apply_reflection(
             "retained": retained,
             "judgments": judgments,
             "boundaries": boundaries,
+            "boundaries_declined": boundaries_declined,
         }
     )
     if malformed:
@@ -5431,6 +5486,40 @@ async def apply_reflection(
         else:
             boundaries_refused.append(refusal.model_dump(mode="json"))
 
+    # 9b. Record boundary proposals read and declined. Beside the accept step,
+    #     and last for the same reason: both are checked against the claim's
+    #     status and provenance as they stand once everything above has moved,
+    #     so a decline naming a claim this batch superseded or archived is
+    #     refused rather than recorded against a proposal nobody will see.
+    #
+    #     The row is the decline, so a store failure is reported per entry
+    #     rather than swallowed, as a keep verdict's is in step 7.
+    boundaries_declined_count = 0
+    boundaries_declined_refused: list[dict] = []
+    for spec in boundaries_declined or []:
+        try:
+            refusal = await record_boundary_decline(
+                storage,
+                node_id=spec["node_id"],
+                source_id=spec["source_id"],
+                endpoint=spec["endpoint"],
+                at=spec["at"]
+                if isinstance(spec["at"], datetime)
+                else datetime.fromisoformat(spec["at"]),
+                timeline_id=spec.get("timeline_id"),
+                because=spec["reason"],
+                judge=judge,
+            )
+        except Exception as failed:
+            refusal = BoundaryRefused(
+                node_id=spec["node_id"],
+                reason=f"the decline was not stored ({failed}); retry this entry",
+            )
+        if refusal is None:
+            boundaries_declined_count += 1
+        else:
+            boundaries_declined_refused.append(refusal.model_dump(mode="json"))
+
     result = {
         "similarities_recorded": similarities_recorded,
         "similarity_edges_written": similarity_edges_written,
@@ -5456,6 +5545,8 @@ async def apply_reflection(
         "relation_verdicts_refused": relation_verdicts_refused,
         "boundaries_applied": boundaries_applied,
         "boundaries_refused": boundaries_refused,
+        "boundaries_declined": boundaries_declined_count,
+        "boundaries_declined_refused": boundaries_declined_refused,
     }
     meta = ResponseMeta(
         nodes_returned=(
@@ -5469,6 +5560,7 @@ async def apply_reflection(
             + len(to_archive)
             + judgments_applied
             + boundaries_applied
+            + boundaries_declined_count
             + relation_verdicts_recorded
         ),
     )
@@ -5483,6 +5575,7 @@ async def reopen(
     *,
     node_ids: Sequence[str] | None = None,
     relation_labels: Sequence[str] | None = None,
+    boundary: dict | None = None,
     reason: str,
     judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
@@ -5496,7 +5589,7 @@ async def reopen(
     judge and its reason, and the nomination carries the reopening so the next
     judge can see the history rather than re-deriving it.
 
-    One tool for three layers, which differ only in what they clear:
+    One tool for four layers, which differ only in what they clear:
 
     - **Two node ids**: a fact, inference or topic pair judged `distinct`. The
       `assessed` edge is retired the way a moved `TIMELINK` is, stamped with
@@ -5505,9 +5598,16 @@ async def reopen(
       row says `reopened`, and the sweep reads the newest row for a pair.
     - **One node id**: a node a `retained` verdict kept. A journal row says the
       keep no longer covers it.
+    - **A boundary**, `{node_id, source_id, endpoint, at, timeline_id?}` copied
+      from the proposal: one declined through
+      `apply_reflection(boundaries_declined=[...])`. The journal row alone is
+      the act: its subjects are the claim and the source, and its `covers`
+      holds the same question key the decline wrote, so only that decline is
+      withdrawn.
 
-    Exactly one target: a call naming both, or neither, is refused rather than
-    guessed at. Refused too when nothing is suppressed for the target, naming
+    Exactly one target: a call naming more than one of `node_ids`,
+    `relation_labels` and `boundary`, or none, is refused rather than guessed
+    at. Refused too when nothing is suppressed for the target, naming
     what was looked for, because *there was nothing to undo* and *it worked*
     must not read the same.
 
@@ -5522,6 +5622,10 @@ async def reopen(
     the act, so a reopen whose row was lost would leave a question back on the
     worklist with nothing saying it had ever been declined.
     """
+    from epimemer.pipelines.reflection.boundaries import (
+        boundary_question,
+        declined_boundaries_for,
+    )
     from epimemer.pipelines.reflection.retention import confirmed_reasons_for
     from epimemer.pipelines.reflection.similarity_decisions import symmetric_edges_between
 
@@ -5534,11 +5638,12 @@ async def reopen(
             ResponseMeta(retrieved=_declare(nodes)),
         )
 
-    if bool(nodes) == bool(labels):
+    if sum(bool(target) for target in (nodes, labels, boundary)) != 1:
         return refused(
             "name exactly one target: `node_ids` with one node to withdraw a "
-            "retention, `node_ids` with two to withdraw a pair's assessment, or "
-            "`relation_labels` with two label names."
+            "retention, `node_ids` with two to withdraw a pair's assessment, "
+            "`relation_labels` with two label names, or `boundary` with the "
+            "identity of a declined boundary proposal."
         )
     if not reason.strip():
         return refused(
@@ -5546,6 +5651,7 @@ async def reopen(
             "next judge, and it has to say why the earlier answer is worth "
             "revisiting."
         )
+
     if labels and len(labels) != 2:
         return refused(f"a label pair needs two labels; {len(labels)} were named.")
     if nodes and len(nodes) not in (1, 2):
@@ -5556,8 +5662,40 @@ async def reopen(
 
     retired_edges: list[NodeEdge] = []
     verdicts: list[RelationVerdict] = []
+    covers: list[str] = []
 
-    if labels:
+    if boundary:
+        # A decline is a journal row and nothing else, so withdrawing one is a
+        # row too: it carries the decline's own question key, which is what
+        # `declined_boundaries_from` matches to take that decline away.
+        missing_keys = [
+            key for key in ("node_id", "source_id", "endpoint", "at") if key not in boundary
+        ]
+        if missing_keys:
+            return refused(
+                f"`boundary` needs {', '.join(repr(key) for key in missing_keys)}: copy "
+                f"node_id, source_id, endpoint, at and timeline_id from the proposal."
+            )
+        at = boundary["at"]
+        if not isinstance(at, datetime):
+            try:
+                at = datetime.fromisoformat(at)
+            except TypeError, ValueError:
+                return refused(f"'at' is neither a datetime nor an ISO-8601 string: {at!r}.")
+        node_id, source_id = boundary["node_id"], boundary["source_id"]
+        question = boundary_question(boundary["endpoint"], at, boundary.get("timeline_id"))
+        if (node_id, source_id, question) not in await declined_boundaries_for([node_id], storage):
+            return refused(
+                f"no standing decline of the boundary proposal '{question}' for "
+                f"{node_id} on source '{source_id}': nothing declined that "
+                f"endpoint, date and clock for this claim and source, or the "
+                f"decline has been reopened already."
+            )
+        nodes = [node_id]
+        subjects = [node_id, source_id]
+        covers = [question]
+        layer = "boundary"
+    elif labels:
         label_a, label_b = labels
         if label_a == label_b:
             return refused("a label is already itself; a pair needs two labels.")
@@ -5653,6 +5791,8 @@ async def reopen(
     record = DecisionRecord(
         kind=DecisionKind.REOPENED,
         subject_ids=subjects,
+        # Empty except for a boundary, whose row names the question it reopens.
+        covers=covers,
         judged_by=judge,
         # The prose goes where every journal row carries its prose. `certainty`
         # stays blank: how sure somebody is that a question is worth asking

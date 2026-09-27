@@ -70,7 +70,19 @@ REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
     "supersessions": ("old_id", "by_id", "because"),
     "judgments": ("node_id", "direction", "reason"),
     "boundaries": ("node_id", "source_id", "endpoint", "at"),
+    "boundaries_declined": ("node_id", "source_id", "endpoint", "at", "reason"),
 }
+
+# Fields whose entry carries prose that must say something. A blank `reason` on
+# a declined boundary would write a judgment against evidence the graph shows
+# with nothing telling the next reader why, so it refuses the batch as a missing
+# key does.
+NON_BLANK: dict[str, tuple[str, ...]] = {
+    "boundaries_declined": ("reason",),
+}
+
+# Fields whose `at` is parsed into a datetime before anything is written.
+DATED: tuple[str, ...] = ("boundaries", "boundaries_declined")
 
 # Keys a loop reads but which are **deliberately** not batch-level, listed so
 # the drift guard treats each as a decision rather than an omission.
@@ -152,11 +164,14 @@ def _entry_problems(field: str, entry: object) -> list[str]:
             f"is a judgment about what happened — if you cannot tell which, "
             f"leave the pair contested rather than guessing."
         )
-    if field == "boundaries" and not isinstance(entry["at"], datetime):
+    if field in DATED and not isinstance(entry["at"], datetime):
         try:
             datetime.fromisoformat(entry["at"])
         except TypeError, ValueError:
             problems.append(f"'at' is neither a datetime nor an ISO-8601 string: {entry['at']!r}")
+    for key in NON_BLANK.get(field, ()):
+        if not isinstance(entry[key], str) or not entry[key].strip():
+            problems.append(f"{key!r} must be prose saying why, not {entry[key]!r}")
     return problems
 
 

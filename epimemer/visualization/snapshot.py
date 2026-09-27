@@ -11,10 +11,11 @@ tests can call them directly.
 """
 
 from epimemer.core.advisories import WarningPolicy
-from epimemer.core.types import NodeStatus, live_edges
+from epimemer.core.types import DecisionKind, NodeStatus, live_edges
 from epimemer.pipelines.query.validity import validity_from_edges
 from epimemer.pipelines.reflection.boundaries import (
     boundary_proposals_from,
+    declined_boundaries_from,
     succession_holders,
 )
 from epimemer.storage.protocol import (
@@ -55,6 +56,11 @@ async def assemble_snapshot(storage: StorageBackend, graph: str) -> dict:
     `viz_list_nodes` answers for one status at a time, so the historical ones
     take a second read. It is inside the same guard turn as everything above, so
     it is still one instant.
+
+    A proposal a judge declined is left out, read from this graph's own
+    journal by the rule `reflect` uses, so the panel draws the endpoint with the
+    mark it would otherwise wear rather than a "proposed, review" chip nobody
+    will be asked to answer.
     """
     nodes = await storage.viz_list_nodes(graph)
     edges = live_edges(await storage.viz_list_edges(graph))
@@ -62,10 +68,14 @@ async def assemble_snapshot(storage: StorageBackend, graph: str) -> dict:
     metacontexts = await storage.viz_list_metacontexts(graph)
     relation_labels = await storage.viz_list_relation_labels(graph)
     retired = await storage.viz_list_nodes(graph, historical_status=NodeStatus.HISTORICAL)
+    verdicts = await storage.viz_list_decisions(
+        graph, kinds=[DecisionKind.BOUNDARY_DECLINED, DecisionKind.REOPENED]
+    )
     proposals = boundary_proposals_from(
         succession_holders([*nodes, *retired]),
         edges,
         validity_from_edges(edges),
+        declined_boundaries_from(verdicts),
     )
     return {
         "graph": graph,

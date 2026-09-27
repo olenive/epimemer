@@ -820,10 +820,11 @@ class StorageBackend(Protocol):
         """Atomically withdraw one suppression, with the journal row that says so.
 
         The ninth transaction boundary, and the one a `reopen` lands through.
-        None of the eight before it fitted: the three suppression layers clear
+        None of the eight before it fitted: the suppression layers clear
         differently, a fact pair retires its `assessed` edge, a label pair takes
-        a new verdict row and a kept node needs neither, and the one thing all
-        three share is the journal row, which no other boundary takes.
+        a new verdict row, and a kept node or a declined boundary needs neither,
+        and the one thing they all share is the journal row, which no other
+        boundary takes.
 
         **The row is the act, not a note about one.** Everywhere else the
         journal is written after the graph write and a lost row costs the
@@ -1674,6 +1675,23 @@ class StorageBackend(Protocol):
         with no relations at all does — the two are indistinguishable here and
         do not need distinguishing, because the viewer falls back to the labels
         on the edges either way.
+        """
+        ...
+
+    async def viz_list_decisions(
+        self,
+        database: str,
+        *,
+        kinds: Sequence[DecisionKind] | None = None,
+    ) -> Sequence[DecisionRecord]:
+        """Journal rows of the kinds asked for in a graph, newest first.
+
+        Distinct from `query_decisions`, which reads the *active* graph: the
+        snapshot draws any graph the hub can see, and a boundary proposal a
+        judge declined there must not be drawn as waiting for review. So this
+        names its target and leaves the active connection where it found it.
+        `kinds` left out means every row. A graph that does not exist answers
+        with an empty list, as the other `viz_list_*` reads do.
         """
         ...
 

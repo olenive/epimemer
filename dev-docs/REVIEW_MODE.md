@@ -420,7 +420,7 @@ class DecisionRecord(BaseModel):
     id: str
     kind: DecisionKind
     subject_ids: list[str]
-    covers: list[str]  # the reasons a retention answers; empty means kept for its own sake
+    covers: list[str]  # the reasons a retention answers, or the question a boundary decline answers
     judged_by: JudgeRef | None  # absent means unknown (§3.3)
     decided_at: datetime
     certainty: float | None  # §5; bounded 0.0–1.0 because the ordering sorts on it
@@ -448,9 +448,10 @@ decision and outside its transaction, which is the safe direction: raising
 would fail the tool call after the graph write succeeded, and the retry is
 worse than the missing row every time (a retried `merge_facts` refuses
 because its sources are retired, a retried `store_decomposition` ingests the
-document twice). The failure is logged for the operator. The exception is
-the `retention` row, where the row *is* the act rather than a note about one
-(`epimemer/pipelines/reflection/retention.py`).
+document twice). The failure is logged for the operator. The exceptions are
+the `retention` and `boundary_declined` rows, where the row *is* the act rather
+than a note about one (`epimemer/pipelines/reflection/retention.py`,
+`epimemer/pipelines/reflection/boundaries.py`).
 
 **Timestamps are padded on write.** `decided_at` is the one timestamp with
 an index a range actually uses, and wrapping the field in a conversion costs

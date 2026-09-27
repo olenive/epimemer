@@ -299,6 +299,18 @@ open period: several means ambiguous, none means already answered. Refusals
 come back with a reason, because a boundary silently not applied is worse
 than one rejected out loud.
 
+A proposal you disagree with is declined through
+`apply_reflection(boundaries_declined=[…])`, with the proposal's identity and
+a required `reason`. The period stays open, and one `boundary_declined`
+journal row records the claim, the source and the question: which endpoint,
+at what date, on which clock. That row stops exactly that proposal being
+offered again, by `reflect` and on the timeline panel. A proposal for another
+date or the other endpoint is a different question, so a proposal whose date
+moves because the successor's period was corrected comes back. The decline is
+a journal row rather than an edge between the two claims, which can still be
+nominated as a similar or contradictory pair. `reopen(boundary={…})` withdraws
+a decline, and the proposal then returns carrying the reopening's reason.
+
 ### 7.1 Correcting a period that is present and wrong
 
 `boundary_proposals` fills an endpoint that is **open**. Nothing derives that

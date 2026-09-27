@@ -1353,6 +1353,24 @@ class SurrealDBStorage:
             rows = await self._query("SELECT * FROM relation_label")
             return [RelationLabel.model_validate(_clean_record(r)) for r in rows]
 
+    async def viz_list_decisions(
+        self,
+        database: str,
+        *,
+        kinds: Sequence[DecisionKind] | None = None,
+    ) -> Sequence[DecisionRecord]:
+        """Journal rows of a graph for visualization, in `query_decisions`' order.
+
+        The filter is `query_decisions`' own clause builder, so a kind selects
+        the same rows here as it does on the active graph.
+        """
+        where, params = _decision_clauses(kinds=kinds)
+        async with self._borrowed(database):
+            rows = await self._query(
+                f"SELECT * FROM decision{where} ORDER BY decided_at DESC, uid DESC", params
+            )
+            return [DecisionRecord.model_validate(_clean_record(r)) for r in rows]
+
     async def close(self) -> None:
         if self._db is not None:
             await self._db.close()

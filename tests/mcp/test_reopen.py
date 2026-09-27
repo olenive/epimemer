@@ -1,10 +1,11 @@
 """A decline can be taken back, and taking it back asserts nothing.
 
-Three nominators suppress what an agent has already answered, and none of the
-three suppressions could be withdrawn: the `assessed` edge for a fact pair, a
-`RelationVerdict` for a label pair, and a `retention` journal row for a single
-node. A pair judged `distinct` in error never came back, however much later
-evidence said it should.
+Four nominators suppress what an agent has already answered, and none of the
+suppressions could be withdrawn: the `assessed` edge for a fact pair, a
+`RelationVerdict` for a label pair, a `retention` journal row for a single
+node, and a `boundary_declined` journal row for a boundary proposal. A pair
+judged `distinct` in error never came back, however much later evidence said
+it should.
 
 `reopen` withdraws one suppression and does nothing else. It never records the
 opposite of the earlier verdict: the pair is offered again if it still
@@ -12,7 +13,7 @@ qualifies, and the next judge answers it afresh. Everything stays in the
 record, so a pair reopened and judged `distinct` a second time carries both
 rounds and is suppressed again by the newer one.
 
-What is pinned here: that each of the three suppressions clears, that `reflect`
+What is pinned here: that each of the four suppressions clears, that `reflect`
 re-offers the question with the history attached so the next judge can see it
 was reopened and why, that the refusals name what was looked for, that every
 reopen leaves a `reopened` journal row carrying the reason, and that a fresh
@@ -20,6 +21,8 @@ verdict suppresses again.
 
 Both backends, through the `storage` fixture.
 """
+
+from datetime import datetime
 
 import pytest
 
@@ -40,14 +43,16 @@ from epimemer.core.types import (
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.pipelines.reflection.archival import nominate_archival_candidates
+from epimemer.pipelines.reflection.boundaries import boundary_question
 from epimemer.pipelines.reflection.relation_consolidation import (
     sweep_similar_relation_pairs,
 )
-from epimemer.pipelines.reflection.retention import record_retention
+from epimemer.pipelines.reflection.retention import confirmed_reasons_for, record_retention
 from epimemer.pipelines.reflection.similarity_decisions import (
     already_judged_pairs,
     apply_similarity_decision,
 )
+from tests.mcp.test_boundary_declines import decline_of, releases
 
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
 EDITOR = JudgeRef(agent_id="editor", digest="d2")
@@ -484,6 +489,148 @@ class TestAKeptNodeComesBack:
         assert "no-such-node" in result["refused"]
 
 
+# --- Layer four: a declined boundary proposal --------------------------------
+
+
+def _boundary_target(proposal: dict) -> dict:
+    return {
+        "node_id": proposal["node"]["id"],
+        "source_id": proposal["source_id"],
+        "endpoint": proposal["endpoint"],
+        "at": proposal["at"],
+        "timeline_id": proposal["timeline_id"],
+    }
+
+
+async def _declined_boundary(storage, embedding_provider) -> dict:
+    """The release succession, with its one proposal declined. Returns the proposal."""
+    await releases(storage)
+    result, _ = await tools.reflect(storage, embedding_provider)
+    [proposal] = result["boundary_proposals"]
+    await tools.apply_reflection(
+        storage, embedding_provider, boundaries_declined=[decline_of(proposal)], judge=CRITIC
+    )
+    return proposal
+
+
+async def _boundary_proposals(storage, embedding_provider) -> list[dict]:
+    result, _ = await tools.reflect(storage, embedding_provider)
+    return result["boundary_proposals"]
+
+
+class TestADeclinedBoundaryComesBack:
+    """A decline is a journal row keyed on the question, so the reopen is one too."""
+
+    async def test_the_suppression_clears(self, storage, embedding_provider):
+        proposal = await _declined_boundary(storage, embedding_provider)
+        assert await _boundary_proposals(storage, embedding_provider) == []
+
+        result, _ = await tools.reopen(
+            storage,
+            boundary=_boundary_target(proposal),
+            reason="The commits that day were release tooling only.",
+            judge=EDITOR,
+        )
+
+        assert result["reopened"] is True
+        assert result["layer"] == "boundary"
+        assert len(await _boundary_proposals(storage, embedding_provider)) == 1
+
+    async def test_reflect_offers_it_again_with_the_history(self, storage, embedding_provider):
+        proposal = await _declined_boundary(storage, embedding_provider)
+        await tools.reopen(
+            storage,
+            boundary=_boundary_target(proposal),
+            reason="The commits that day were release tooling only.",
+            judge=EDITOR,
+        )
+
+        [offered] = await _boundary_proposals(storage, embedding_provider)
+
+        assert offered["reopened"]["reason"] == "The commits that day were release tooling only."
+        assert offered["reopened"]["judged_by"] == "editor"
+
+    async def test_the_row_names_the_claim_the_source_and_the_question(
+        self, storage, embedding_provider
+    ):
+        proposal = await _declined_boundary(storage, embedding_provider)
+        await tools.reopen(
+            storage, boundary=_boundary_target(proposal), reason="Look again.", judge=EDITOR
+        )
+
+        [row] = await _reopen_rows(storage)
+        assert row.subject_ids == [proposal["node"]["id"], proposal["source_id"]]
+        assert row.covers == [
+            boundary_question("end", datetime.fromisoformat(proposal["at"]), None)
+        ]
+        assert row.certainty_basis == "Look again."
+
+    async def test_a_fresh_decline_suppresses_it_again(self, storage, embedding_provider):
+        proposal = await _declined_boundary(storage, embedding_provider)
+        await tools.reopen(
+            storage, boundary=_boundary_target(proposal), reason="Look again.", judge=EDITOR
+        )
+
+        result, _ = await tools.apply_reflection(
+            storage,
+            embedding_provider,
+            boundaries_declined=[decline_of(proposal, "Read it again; still no.")],
+            judge=EDITOR,
+        )
+
+        assert result["boundaries_declined"] == 1
+        assert await _boundary_proposals(storage, embedding_provider) == []
+
+    async def test_nothing_standing_is_refused_naming_the_target(self, storage, embedding_provider):
+        await releases(storage)
+        [proposal] = await _boundary_proposals(storage, embedding_provider)
+
+        result, _ = await tools.reopen(
+            storage, boundary=_boundary_target(proposal), reason="Look again.", judge=EDITOR
+        )
+
+        assert result["reopened"] is False
+        assert "no standing decline" in result["refused"]
+        assert proposal["node"]["id"] in result["refused"]
+        assert proposal["source_id"] in result["refused"]
+        assert await _reopen_rows(storage) == []
+
+    async def test_a_decline_of_another_date_is_not_the_target(self, storage, embedding_provider):
+        proposal = await _declined_boundary(storage, embedding_provider)
+
+        result, _ = await tools.reopen(
+            storage,
+            boundary=_boundary_target(proposal) | {"at": "2026-09-20T00:00:00+00:00"},
+            reason="Look again.",
+            judge=EDITOR,
+        )
+
+        assert result["reopened"] is False
+
+    async def test_a_target_missing_a_key_is_refused(self, storage, embedding_provider):
+        proposal = await _declined_boundary(storage, embedding_provider)
+        target = {k: v for k, v in _boundary_target(proposal).items() if k != "at"}
+
+        result, _ = await tools.reopen(storage, boundary=target, reason="Look.", judge=EDITOR)
+
+        assert result["reopened"] is False
+        assert "'at'" in result["refused"]
+
+    async def test_the_retention_layer_ignores_it(self, storage, embedding_provider):
+        """Two subjects is not a kept node, so no keep is withdrawn by it."""
+        proposal = await _declined_boundary(storage, embedding_provider)
+        node_id = proposal["node"]["id"]
+        await record_retention(
+            storage, node_id=node_id, because="Still worth having.", reasons=[], judge=CRITIC
+        )
+
+        await tools.reopen(
+            storage, boundary=_boundary_target(proposal), reason="Look again.", judge=EDITOR
+        )
+
+        assert node_id in await confirmed_reasons_for([node_id], storage)
+
+
 # --- What every reopen has in common -----------------------------------------
 
 
@@ -504,6 +651,27 @@ class TestTheCallItself:
 
         assert both["reopened"] is False
         assert neither["reopened"] is False
+
+    async def test_a_boundary_and_a_node_are_two_targets(self, storage):
+        a, b = await _twins(storage)
+        await _declined(storage, a, b)
+
+        result, _ = await tools.reopen(
+            storage,
+            node_ids=[a.id, b.id],
+            boundary={
+                "node_id": a.id,
+                "source_id": "doc",
+                "endpoint": "end",
+                "at": "2026-09-21T00:00:00+00:00",
+            },
+            reason="Both at once.",
+            judge=EDITOR,
+        )
+
+        assert result["reopened"] is False
+        assert "exactly one target" in result["refused"]
+        assert await _reopen_rows(storage) == []
 
     async def test_three_node_ids_are_refused(self, storage):
         a, b = await _twins(storage)

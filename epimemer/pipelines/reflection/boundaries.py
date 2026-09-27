@@ -27,12 +27,22 @@ example — two documents, neither carrying any date — yields no proposal, and
 that is the honest outcome. The boundary comes from a document that names a
 date, read against a fact from another one.
 
-Every proposal is `inferred` per §8 and **nothing is written here**: this module
-reads, and `apply_reflection(boundaries=[...])` is the only thing that writes.
+Every proposal is `inferred` per §8 and **nothing is written here** on the
+proposing side: `apply_reflection(boundaries=[...])` is what writes an accepted
+one.
+
+**A proposal can be declined, and a declined one is not offered again.** The
+decline is a `boundary_declined` journal row keyed on the question itself: the
+(claim, source) pair as its subjects, and the endpoint, date and clock in
+`covers`. It is a row rather than an `assessed` edge because the two claims in
+a succession are often also nominated as a similar or contradictory pair, and
+an edge between them would silence those nominations too. A proposal whose date
+later moves, because the successor's period was corrected, is a different
+question and comes back. `reopen(boundary=...)` withdraws a decline.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 
 from pydantic import BaseModel
 
@@ -44,6 +54,8 @@ from epimemer.core.temporal import (
     located,
 )
 from epimemer.core.types import (
+    DecisionKind,
+    DecisionRecord,
     EdgeType,
     EpistemicNode,
     Fact,
@@ -252,10 +264,73 @@ def succession_holders(nodes: Iterable[EpistemicNode]) -> dict[str, EpistemicNod
     }
 
 
+# One declined proposal: the claim, the source whose period it would change,
+# and the question as `boundary_question` writes it.
+DeclinedBoundary = tuple[str, str, str]
+
+
+def boundary_question(endpoint: str, at: datetime, timeline_id: str | None) -> str:
+    """The question a boundary proposal asks, as one string.
+
+    Written into a `boundary_declined` row's `covers` and read back by every
+    nominator, so the format lives here and nowhere else. The (claim, source)
+    pair is the row's subjects; this is the rest of what makes one proposal
+    that proposal: which end, at what moment, on which clock.
+
+    The moment is normalised to UTC before it is written, and a date with no
+    zone is read as UTC, as `PreciseInstant` reads one. A decline copied from
+    the JSON `reflect` returned then matches the date the nominator computes,
+    whatever zone it was rendered in. An empty clock is the real calendar, as
+    `None` is.
+    """
+    moment = (at if at.tzinfo is not None else at.replace(tzinfo=UTC)).astimezone(UTC)
+    clock = f" on timeline {timeline_id}" if timeline_id else ""
+    return f"{endpoint} at {moment.isoformat()}{clock}"
+
+
+def declined_boundaries_from(records: Iterable[DecisionRecord]) -> frozenset[DeclinedBoundary]:
+    """The declines still standing, replayed from journal rows.
+
+    Pure, so the nominator and the visualization snapshot read one rule. Rows
+    are replayed oldest first whatever order they arrive in, as
+    `confirmed_reasons_for` does for a keep: a `boundary_declined` row adds its
+    question, a `reopened` row with the same two subjects and the same key takes
+    it away, and a decline written after that stands again.
+
+    A `reopened` row with no key is a fact pair's, which names no question, so
+    it withdraws nothing here. Rows of any other kind are ignored.
+    """
+    declined: set[DeclinedBoundary] = set()
+    for record in sorted(records, key=lambda row: (row.decided_at, row.id)):
+        if len(record.subject_ids) != 2:
+            continue
+        node_id, source_id = record.subject_ids
+        keys = {(node_id, source_id, question) for question in record.covers}
+        if record.kind is DecisionKind.BOUNDARY_DECLINED:
+            declined |= keys
+        elif record.kind is DecisionKind.REOPENED:
+            declined -= keys
+    return frozenset(declined)
+
+
+async def declined_boundaries_for(
+    node_ids: Sequence[str], storage: StorageBackend
+) -> frozenset[DeclinedBoundary]:
+    """The standing declines about these claims, in one batched query."""
+    ids = list(node_ids)
+    if not ids:
+        return frozenset()
+    rows = await storage.query_decisions(
+        kinds=[DecisionKind.BOUNDARY_DECLINED, DecisionKind.REOPENED], subject_ids=ids
+    )
+    return declined_boundaries_from(rows)
+
+
 def boundary_proposals_from(
     holders: Mapping[str, EpistemicNode],
     successions: Sequence[NodeEdge],
     validity: Mapping[str, list[SourceValidity]],
+    declined: frozenset[DeclinedBoundary] = frozenset(),
 ) -> list[BoundaryProposal]:
     """The rule itself, over data somebody has already read.
 
@@ -267,6 +342,11 @@ def boundary_proposals_from(
     `successions` may be any edges at all: the succession edges are picked out
     here, and a step whose other end is not a holder is dropped, since that end
     is a claim the graph no longer carries.
+
+    `declined` holds the proposals a judge has declined, from
+    `declined_boundaries_from`. A proposal is left out only when its claim,
+    source and question all match, so a decline about another date or the
+    other endpoint suppresses nothing.
     """
     pairs = [
         (holders[edge.src_id], holders[edge.dst_id])
@@ -279,6 +359,12 @@ def boundary_proposals_from(
         proposal
         for earlier, later in pairs
         for proposal in _across_one_succession(earlier, later, validity)
+        if (
+            proposal.node.id,
+            proposal.source_id,
+            boundary_question(proposal.endpoint, proposal.at, proposal.timeline_id),
+        )
+        not in declined
     ]
 
 
@@ -287,9 +373,9 @@ async def propose_boundaries(
 ) -> list[BoundaryProposal]:
     """Where a succession lets one claim's period close and the next one's open.
 
-    Reads only, in four batched queries: the claims on both sides of a
-    succession, their lineage edges, and their validity. The rule those reads
-    feed is `boundary_proposals_from`.
+    Reads only, in five batched queries: the claims on both sides of a
+    succession, their lineage edges, their validity, and the declines standing
+    against them. The rule those reads feed is `boundary_proposals_from`.
 
     A proposal needs a succession edge *and* a date, so a graph with either and
     not the other produces nothing. That is the common case and stays the common
@@ -313,10 +399,10 @@ async def propose_boundaries(
     if not pairs:
         return []
 
-    validity = await validity_for(
-        list(dict.fromkeys(node_id for pair in pairs for node_id in pair)), storage
-    )
-    return boundary_proposals_from(holders, successions, validity)
+    node_ids = list(dict.fromkeys(node_id for pair in pairs for node_id in pair))
+    validity = await validity_for(node_ids, storage)
+    declined = await declined_boundaries_for(node_ids, storage)
+    return boundary_proposals_from(holders, successions, validity, declined)
 
 
 class BoundaryRefused(BaseModel):
@@ -394,6 +480,81 @@ async def apply_boundary(
     validity = list(edge.validity)
     validity[index] = revised
     await storage.store_edge(_with_validity(edge, validity))
+    return None
+
+
+async def record_boundary_decline(
+    storage: StorageBackend,
+    *,
+    node_id: str,
+    source_id: str,
+    endpoint: str,
+    at: datetime,
+    timeline_id: str | None = None,
+    because: str,
+    judge: JudgeRef | None = None,
+) -> BoundaryRefused | None:
+    """Write one declined boundary proposal, or say why it was not written.
+
+    One `boundary_declined` journal row: subjects `[node_id, source_id]`, as the
+    accepting `boundary` row has them, `covers` the question from
+    `boundary_question`, and `because` as `certainty_basis`. A decline is a
+    judgment against evidence the graph shows, and the next reader is owed why.
+    Nothing on the graph changes. An `assessed` edge would silence the pair's
+    similarity and contradiction nominations as well, which a decline about a
+    date has no business doing.
+
+    Checked against the graph as cheaply as `apply_boundary`'s first two
+    refusals: the endpoint is one, the claim exists and can hold a period, and
+    exactly one provenance edge names that source. The proposal need not be on
+    offer at this moment, so a decline made from a snapshot still lands. A
+    question already declined and not reopened is refused rather than written
+    twice.
+
+    **A failed write raises**, as `record_retention` does: the row is the
+    decline, so a decline reported as recorded whose row was lost would put the
+    proposal back on every reflect in front of a judge told it was answered.
+    """
+    if endpoint not in ("start", "end"):
+        return BoundaryRefused(node_id=node_id, reason=f"'{endpoint}' is not an endpoint")
+
+    node = await storage.get_node(node_id)
+    if node is None or node.status not in SUCCESSION_STATUSES:
+        return BoundaryRefused(
+            node_id=node_id,
+            reason="no such claim, or not one a succession can be about",
+        )
+
+    edges = [
+        edge
+        for edge in await storage.get_edges_from(node_id, edge_type=EdgeType.SOURCED_FROM)
+        if edge.dst_id == source_id
+    ]
+    if len(edges) != 1:
+        return BoundaryRefused(
+            node_id=node_id,
+            reason=f"{len(edges)} provenance edges name source '{source_id}'",
+        )
+
+    question = boundary_question(endpoint, at, timeline_id)
+    if (node_id, source_id, question) in await declined_boundaries_for([node_id], storage):
+        return BoundaryRefused(
+            node_id=node_id,
+            reason=(
+                f"already declined: '{question}' on source '{source_id}' has a "
+                f"standing decline, and `reopen(boundary=...)` is what withdraws one"
+            ),
+        )
+
+    await storage.record_decision(
+        DecisionRecord(
+            kind=DecisionKind.BOUNDARY_DECLINED,
+            subject_ids=[node_id, source_id],
+            covers=[question],
+            judged_by=judge,
+            certainty_basis=because,
+        )
+    )
     return None
 
 

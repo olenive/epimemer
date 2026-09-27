@@ -2613,6 +2613,14 @@ class DecisionKind(str, Enum):
     SPLIT_DECLINED = "split_declined"
     REACTIVATION = "reactivation"
     BOUNDARY = "boundary"
+    # A boundary proposal read and declined: the date the succession offers is
+    # not when this source's period ended or began. The verdict opposite to
+    # `BOUNDARY`, and it stands beside it the way `RETENTION` stands beside
+    # `ARCHIVAL`: a reviewer selecting `BOUNDARY` to see where periods were
+    # closed must not get rows where none were. Its `covers` holds the question
+    # declined (endpoint, date and clock), so a proposal whose date later moves
+    # is a new question and is offered again.
+    BOUNDARY_DECLINED = "boundary_declined"
     # A name put back on the node that holds its edges, after an earlier
     # enrichment overwrote it with a sentence. Its own kind rather than
     # `ENRICHMENT`, which is the opposite act: enrichment adds what a topic did
@@ -2733,10 +2741,11 @@ class DecisionKind(str, Enum):
     REJUDGMENT = "rejudgment"
 
     # A suppression withdrawn: the question goes back on the worklist and
-    # nothing is said about the answer. One kind for all three suppression
+    # nothing is said about the answer. One kind for all four suppression
     # layers, because a reviewer asking *what has been put back in front of
-    # somebody* wants the fact pairs, the label pairs and the kept nodes
-    # together; the subjects say which layer it was.
+    # somebody* wants the fact pairs, the label pairs, the kept nodes and the
+    # declined boundaries together; the subjects say which layer it was, and a
+    # boundary's row also carries the question in `covers`.
     #
     # Not `RETRACTION`, whose subjects are a pair whose `one_claim` was
     # **withdrawn**: that changes what corroboration counts, and a reviewer
@@ -2789,11 +2798,15 @@ class DecisionRecord(BaseModel):
     # scan (§3.5).
     subject_ids: list[str] = Field(default_factory=list)
     # The questions this judgment answers, where the judgment answers a set of
-    # them. Only `RETENTION` uses it today: a keep verdict names the reasons the
+    # them. `RETENTION` uses it this way: a keep verdict names the reasons the
     # node was nominated on, so a reason that arrives *later* is one no verdict
     # covers and the node is nominated again. Empty means the node was kept for
     # its own sake, which is the `never_retrieved` shape — the nomination named
     # no reason, so there is none to cover.
+    #
+    # `BOUNDARY_DECLINED` holds the one question it declined, the endpoint,
+    # date and clock written by `boundary_question`, and a `REOPENED` row for a
+    # boundary carries the same key to say which decline it withdraws.
     #
     # Here rather than as edges because the anchors are part of the verdict
     # rather than a claim about the world: an index built out of edges beside

@@ -249,7 +249,12 @@ which no single-document ingest could ever do.
 Accepting a boundary is what unblocks the soundness check: while a period is
 open, nothing can be concluded about it and its successor together. The
 agent judges a succession, reflect proposes the boundary it implies, and the
-check can then see an inference that spans it. The soundness check and the boundary proposals each cost about 10% of a
+check can then see an inference that spans it. A proposal can also be
+declined (`apply_reflection(boundaries_declined=…)`), and the decline is a
+journal row keyed on the question (claim and source as subjects, endpoint,
+date and clock in `covers`), never an edge: the two claims in a succession
+are often also nominated as a similar or contradictory pair, and an
+`assessed` edge between them would silence those nominations too. The soundness check and the boundary proposals each cost about 10% of a
 `reflect` call, linear (`BENCHMARKS.md`).
 
 ### 2.10 Comparison: four values, `unknown` among them
