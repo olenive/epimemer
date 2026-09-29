@@ -247,7 +247,9 @@ in the other would let the command delete a record something still points at.
 is the user's scheme. The server can detect a new session or a different
 client (`ctx.session_id`, `ctx.client_id`); it can never detect a different
 model inside one harness, because the model is never on the wire. That
-question is the user's to answer, which is what the flow assumes.
+question is the user's to answer, which is what the flow assumes. A client hook
+can tell the server which model is seated, and §2.6 uses that to decide when
+the question has to be put again; it still never decides the answer.
 
 ### 2.3 Confirmation reaches the user, not the agent
 
@@ -290,6 +292,80 @@ similar descriptions are not a topic to merge). `list_agents` is
 protocol-only, not an MCP tool: the roster is for the user and for review
 mode, and handing the agent a list of judges is one step from the filtering
 §8 refuses.
+
+### 2.6 The seat: when a confirmation carries over
+
+**The seat** is where a claim is made from: the conversation it is made in,
+the client that carries it, and the model behind it. A judge is confirmed in a
+seat; change any part and it is a different seat, and the user is asked again.
+Concretely it is four fields: `session_id`, the client's conversation
+(`EPIMEMER_CLIENT_SESSION_ID`, else the `CLAUDE_CODE_SESSION_ID` Claude Code
+puts in the server's environment); `client_name` and `client_version`, from the
+MCP initialize handshake; and `model`, from a client hook. A seat is complete
+with the conversation and the model alone: client info is optional in the
+handshake on the current protocol and Claude Code sends none, so the client
+fields count when compared and are never required.
+
+**Why the memo moved from the server process to the seat (decided 28 September
+2026).** Since 25 August the picker goes up on every fresh bind, and an
+in-process memo kept a re-claim of the same judge in the same graph quiet. A
+`/mcp` reconnect in Claude Code restarts the stdio server, so the memo died and
+the next Epimemer call asked again; when that call came from an unattended
+hourly loop, the session waited on the picker until the user came back. A
+restart is a boundary the person never asked for, nothing about the agent
+changed across it, and nobody may be watching. A new conversation, a new client
+or a new model is where *who is behind the name* can change, so that is where
+the question belongs. A confirmation from a complete seat is therefore
+persisted per graph on the backend, beside the approved-id list
+(`get_judge_confirmations` / `set_judge_confirmations`), and a claim whose seat
+matches one for the resolved judge binds without asking, while that judge is
+still approved and not retired, and says so: `carried_over`, and *confirmed in
+this seat on <date>, carried over* in `message`.
+
+**A seat that is not fully known asks**, exactly as before, and every claim
+that asks says why, in `asked_because` and in the picker's own text: no client
+session id; the model unknown, with the path of the client-state file it looked
+for; the first claim for this judge in this seat; or which field changed, from
+what to what. The in-process memo remains for the incomplete seat only.
+
+**The model needs the harness.** The model is never on the MCP wire, so the
+server cannot see it. Claude Code's hooks can: `SessionStart` receives the
+session id and (optionally) the model, and `PostModelSwitch` receives
+`from_model` and `to_model`. `epimemer client-state record --client-pid
+$PPID` runs as both hooks and writes `<EPIMEMER_CLIENT_STATE_DIR>/<session_id>.json`
+and, with the same content, `client-<pid>.json`, atomically and private to the
+user. A hook's shell is a direct child of the Claude Code process, so `$PPID`
+is that process's id, the same for every hook it runs across `/clear`, resume
+in place and model switches. The pid is an opaque key linking one process's
+hook events; nothing uses it to inspect processes. The server knows only the
+conversation it was spawned in: it reads that conversation's file, follows the
+pid it names to the live record, and takes the seat's conversation and model
+from there (`live_client_state`), falling back to the spawn file where there
+is no live record. So a `/clear` changes the seat's conversation, a write after
+it is refused naming that change, and the next claim asks as the first claim
+in a new seat. This happens on every claim and every write, and a missing or
+unreadable file reads as *model unknown*, never as an error. Whether `/fast` or
+spawning a subagent fires `PostModelSwitch` is undocumented; where it does not,
+the files keep the model the conversation started with.
+
+**A write from a changed seat is refused.** The judge token and the session
+binding each record the seat their claim was made from, and `_judge_for_write`
+resolves the seat again on every write. Any difference refuses the write and
+names it (*the model was claude-fable-5-1 and is now claude-opus-5-5 since this
+judge was claimed*), known to unknown and unknown to known included, because
+the user vouched for whoever sat in the old seat. Claiming again asks the user
+which judge the new seat is. Reads are not gated.
+
+**An accepted hole: subagents.** A subagent shares its parent's MCP connection
+and conversation id, so the file names the parent's model and a subagent on a
+different model sits in the parent's seat. Tokens still keep the two judges'
+writes apart (§3.2); what the seat cannot do is tell their models apart.
+
+**A bound, not an expiry.** Nothing times out. A graph keeps the newest 500
+confirmations (`JUDGE_CONFIRMATIONS_KEPT`), ordered by the instant rather than
+its text, and a seat that falls off the end simply asks again. The hook prunes
+client-state files, per conversation and per process, not written for 30 days, and a conversation resumed after
+that records itself again on `SessionStart`.
 
 ---
 

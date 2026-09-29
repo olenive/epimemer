@@ -143,6 +143,8 @@ All configuration is via `EPIMEMER_` environment variables:
 | `EPIMEMER_IMPORTANCE_STEP` | `0.25` | How much of the gap to its bound one `judge_importance` call closes, up or down. Nothing moves importance automatically |
 | `EPIMEMER_TOOL_TIMEOUT_SECONDS` | `30.0` | Timeout per tool operation |
 | `EPIMEMER_APPROVED_AGENTS` | (empty) | Comma-separated agent ids the user admits as judges in every graph this server opens. Read when the backend connects and when the server lands on a graph. The approval channel for clients without an approval prompt of their own, and the only one that reaches an embedded store. See [ATTRIBUTION.md](https://github.com/olenive/epimemer/blob/main/docs/ATTRIBUTION.md) |
+| `EPIMEMER_CLIENT_SESSION_ID` | `CLAUDE_CODE_SESSION_ID`, else unset | The client conversation this server serves, part of the seat a judge is confirmed in. Claude Code sets `CLAUDE_CODE_SESSION_ID` for every stdio server and keeps it across a reconnect, so there it needs no setting. See [INTEGRATION.md](https://github.com/olenive/epimemer/blob/main/INTEGRATION.md) |
+| `EPIMEMER_CLIENT_STATE_DIR` | `~/.epimemer/client-state` | Where the `epimemer client-state record` hook records which model is behind each conversation. Give the hook the same directory with `--dir` if you change it |
 | `EPIMEMER_REQUIRE_JUDGE` | `false` | Refuse any write that names no judge, on every graph this server opens. Off by default: a blank judge means *unknown*, and many graphs have no reason to care. A graph can override it with `epimemer agents require`; no MCP tool can set it |
 | `EPIMEMER_VIZ_ENABLED` | `true` | Publish visualization events to the hub |
 | `EPIMEMER_VIZ_HOST` | `127.0.0.1` | Visualization hub host |

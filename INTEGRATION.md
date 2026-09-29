@@ -52,6 +52,51 @@ All configuration is environment variables, documented in one place: the
 setup you will usually set `EPIMEMER_STORAGE_BACKEND`, `EPIMEMER_SURREALDB_URL`
 and `EPIMEMER_GRAPH` (see *Which graph a server opens* below).
 
+Two variables describe the seat a judge is confirmed in (see *Agents* below):
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `EPIMEMER_CLIENT_SESSION_ID` | `CLAUDE_CODE_SESSION_ID`, else unset | The client conversation this server serves. Claude Code sets `CLAUDE_CODE_SESSION_ID` for every stdio server and keeps it across a `/mcp` reconnect, so there is nothing to set there |
+| `EPIMEMER_CLIENT_STATE_DIR` | `~/.epimemer/client-state` | Where the client hook records which model is behind each conversation |
+
+### Record the model (Claude Code hook)
+
+The server cannot see which model an agent runs on; Claude Code's hooks can.
+With this hook installed, a judge confirmed once in a conversation stays
+confirmed across a `/mcp` reconnect, and a model switch is noticed. Add it to
+`~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "epimemer client-state record --client-pid $PPID" }] }
+    ],
+    "PostModelSwitch": [
+      { "hooks": [{ "type": "command", "command": "epimemer client-state record --client-pid $PPID" }] }
+    ]
+  }
+}
+```
+
+No matcher, so `SessionStart` fires for every start reason (startup, resume,
+clear, compact, fork). The command reads the hook's JSON on stdin, writes
+`<dir>/<session_id>.json` and `<dir>/client-<pid>.json`, prints nothing, and
+always exits 0, so a problem in it never breaks a session; where it records
+nothing it says why in one line on stderr. It prunes both kinds of file once
+they have not been written for 30 days.
+
+`$PPID` is the id of the Claude Code process running the hook, and it links
+every hook event of that process to the conversation the server was started
+in. Because of it the server follows a `/clear`, which starts a new
+conversation in the same process, and a model switch after it.
+
+The hook's shell must find `epimemer` the same way `claude mcp add epimemer --
+epimemer serve` does; from a checkout, use `uv run --directory
+/path/to/epimemer epimemer client-state record --client-pid $PPID`. If the server runs with a
+non-default `EPIMEMER_CLIENT_STATE_DIR`, give the hook the same directory with
+`--dir`, since the hook does not see the server's environment.
+
 ### Verify Connection
 
 In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 56 tools.
@@ -227,6 +272,26 @@ returned on every write, which is what credits the write to that agent's judge
 rather than to whichever of them claimed last. A write carrying no token is
 credited to the most recent claim; a token the connection never issued is
 refused.
+
+**A confirmation belongs to a seat**: the conversation the claim is made in,
+the client that carries it, and the model behind it. Once the user has picked a
+judge in a seat, a claim from the same seat binds without asking again, even
+after a `/mcp` reconnect or a server restart, and the response says so
+(`carried_over`, and *confirmed in this seat on <date>, carried over*). Any
+change of seat, a new conversation, client or model, asks again, and every
+claim that asks says why in `asked_because` and in the prompt itself. The
+client's name and version count when the client sends them; Claude Code does
+not, so there the seat is the conversation and the model. The model
+comes from the hook above; without it the model is unknown, and a claim asks
+after every reconnect as it always did. Confirmations are kept per graph, the
+newest 500, with no time limit.
+
+**A write from a changed seat is refused.** The token and the session binding
+remember the seat their claim was made from, and a write from a different one,
+for example after switching model, is refused with what changed named. Claim
+again and the user is asked which judge the new seat is. Reads are unaffected.
+Subagents share their parent's conversation, so they record the parent's
+model.
 
 Every write records the claimed identity, and every decision is also appended
 to a journal, so *what did this agent judge* is one query. A graph can be set

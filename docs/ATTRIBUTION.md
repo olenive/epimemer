@@ -102,7 +102,9 @@ record, name, description history, approval and every decision stay exactly as
 they are, and `review(mode="by_agent")` still answers for it.
 
 Sessions already bound to it are left alone: the binding stands until that
-client reconnects, and the refusal lands at its next `claim_agent`. Retiring is
+client claims again, after a reconnect or a change of seat, and the refusal
+lands at that `claim_agent`, including one that would otherwise have carried a
+confirmation over. Retiring is
 housekeeping, not an emergency stop. It is per graph, as judge records and
 approvals are, so a judge wanted out everywhere is retired once per graph.
 
@@ -236,6 +238,39 @@ The prompt the user answers says which of them is asking: it opens with the
 Epimemer version, then names the judge the agent proposes, and where the
 connection already judges as somebody a second line names them, so a subagent's
 claim is told apart from its parent's.
+
+## A confirmation belongs to a seat
+
+The seat a claim is made from is the conversation it is made in, the client
+that carries it, and the model behind it. A judge is confirmed in a seat;
+change any part and it is a different seat, and the user is asked again.
+
+Once the user has picked a judge in a seat, that answer is kept with the graph,
+beside its approved judges. A claim from the same seat, the same judge, still
+approved and not retired, binds without the picker, even after a `/mcp`
+reconnect or a server restart, and the response says it was *confirmed in this
+seat on <date>, carried over*. A reconnect is a restart nobody asked for, and
+nothing about who is behind the name changed across it; an unattended loop
+calling after one used to wait on the picker until somebody came back.
+
+A claim that does ask says why, in `asked_because` and in the prompt: the
+client did not say which conversation this is, the model is unknown, this is
+the first claim for this judge in this seat, or which part of the seat changed
+and from what. The model reaches the server only through a client hook
+(`epimemer client-state record`, see INTEGRATION.md); without it every
+reconnect asks, as before.
+
+**A write from a changed seat is refused.** The token and the session binding
+remember the seat their claim was made from, and a write after, say, a model
+switch is refused with the change named: *the model was claude-fable-5-1 and
+is now claude-opus-5-5 since this judge was claimed*. Claiming again asks the
+user which judge the new model is. Reads are unaffected.
+
+Two limits, both deliberate. A subagent shares its parent's conversation, so
+its seat names the parent's model; its token still keeps its writes apart from
+its parent's. And a graph keeps the newest 500 confirmations, a bound on size
+rather than an expiry: nothing runs out, and a seat that falls off the end asks
+again.
 
 ## What a decision records
 

@@ -18,6 +18,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Literal
 
+from epimemer.core.seat import JudgeConfirmation
 from epimemer.core.types import (
     Agent,
     DecisionKind,
@@ -934,6 +935,12 @@ class InstrumentedStorage:
 
     async def set_approved_agent_ids(self, ids: list[str]) -> None:
         await self._inner.set_approved_agent_ids(ids)
+
+    async def get_judge_confirmations(self) -> list[JudgeConfirmation]:
+        return await self._inner.get_judge_confirmations()
+
+    async def set_judge_confirmations(self, confirmations: list[JudgeConfirmation]) -> None:
+        await self._inner.set_judge_confirmations(confirmations)
 
     async def get_require_judge(self) -> bool | None:
         return await self._inner.get_require_judge()

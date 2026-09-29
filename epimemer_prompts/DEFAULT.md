@@ -812,6 +812,13 @@ the graph learned it.
   overstate it. Re-describing appends a version and never edits one.
 - Approval is per graph. After `use_graph`, check whether the response says
   your judge was unbound, and claim again if it did.
+- **Claim again after a reconnect too.** Your `judge_token` does not survive
+  one. Where the conversation, client and model are the ones the user already
+  confirmed this judge in (the seat), the claim binds without asking and says
+  it was carried over; where it asks, `asked_because` says why.
+- **A write refused because the seat changed means claim again**, and the user
+  will be asked. The message names what changed, such as a new model since the
+  claim; do not retry the write before claiming.
 - **Carry the `judge_token` the claim returns on every write.** It names your
   claim, so the write is credited to the judge you claimed even where another
   agent has claimed on the same connection since. Several agents can share one

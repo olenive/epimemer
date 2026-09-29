@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from epimemer.core.seat import JudgeConfirmation
 from epimemer.core.types import (
     EdgeType,
     EmbeddingRecord,
@@ -425,3 +426,23 @@ def test_wrapper_takes_the_same_arguments_as_the_protocol(bus):
             drifted[name] = (expected, actual)
 
     assert drifted == {}, f"the wrapper's arguments have drifted from the protocol's: {drifted}"
+
+
+class TestJudgeConfirmationsPassThrough:
+    """The wrapper forwards the confirmation list to the backend it wraps."""
+
+    async def test_set_and_get_reach_the_inner_backend(self, bus):
+        inner = InMemoryStorage()
+        wrapped = instrument_storage(inner, bus)
+        confirmation = JudgeConfirmation(
+            session_id="conv-1",
+            agent_id="critic",
+            client_name="claude-code",
+            model="claude-opus-5-5",
+            confirmed_at=datetime(2026, 9, 28, tzinfo=UTC),
+        )
+
+        await wrapped.set_judge_confirmations([confirmation])
+
+        assert await inner.get_judge_confirmations() == [confirmation]
+        assert await wrapped.get_judge_confirmations() == [confirmation]

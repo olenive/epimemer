@@ -36,6 +36,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from epimemer.core.seat import JudgeConfirmation
 from epimemer.core.temporal import (
     IntervalBasis,
     NamedInstant,
@@ -767,3 +768,30 @@ async def test_a_frame_spelled_graph_migrates_itself_over_ws(db_name):
         for store in opened:
             with contextlib.suppress(Exception):
                 await store.close()
+
+
+# --- Judge confirmations ---
+
+
+async def test_judge_confirmations_round_trip_over_a_real_connection(surreal):
+    """A confirmation written through one connection is read by another.
+
+    The point of persisting it is that a new server process, which is a new
+    connection, finds it; the instant must come back as the same instant.
+    """
+    store = await surreal()
+    verifier = await surreal()
+    written = [
+        JudgeConfirmation(
+            session_id="conv-1",
+            agent_id="critic",
+            client_name="claude-code",
+            client_version="2.1.0",
+            model="claude-opus-5-5",
+            confirmed_at=datetime(2026, 9, 28, 9, 30, 15, 123456, tzinfo=UTC),
+        )
+    ]
+
+    await store.set_judge_confirmations(written)
+
+    assert await verifier.get_judge_confirmations() == written

@@ -73,6 +73,17 @@ NOT_AGENT_SETTABLE: dict[tuple[str, str], str] = {
         "confirmed_identity",
     ): "the identity the user picked, supplied by the elicitation, never by "
     "the caller proposing it",
+    (
+        "claim_agent",
+        "seat",
+    ): "the conversation, client and model the claim is made from, resolved by "
+    "the server; an agent that could name its own seat could carry another "
+    "seat's confirmation and bind without the user being asked",
+    (
+        "claim_agent",
+        "client_state_file",
+    ): "where the server looked for the model, named in the reason a claim "
+    "asks; server configuration, not a choice",
     ("claim_agent", "now"): "the clock, injected for tests",
     (
         "configure_warnings",

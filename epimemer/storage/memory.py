@@ -15,6 +15,7 @@ from typing import Literal, TypeVar
 
 from pydantic import BaseModel
 
+from epimemer.core.seat import JudgeConfirmation
 from epimemer.core.temporal import merged_validity
 from epimemer.core.types import (
     Agent,
@@ -136,6 +137,8 @@ class _GraphStore:
     # reach them: two agents with similar descriptions are not a topic to merge.
     agents: dict[str, Agent] = field(default_factory=dict)
     approved_agent_ids: list[str] = field(default_factory=list)
+    # The seats the user confirmed a judge in (REVIEW_MODE.md §2.6), newest last.
+    judge_confirmations: list[JudgeConfirmation] = field(default_factory=list)
     require_judge: bool | None = None
     # The decision journal (REVIEW_MODE.md §4). Append-only: nothing in this
     # module removes or replaces an entry, and the protocol offers no way to
@@ -1280,6 +1283,12 @@ class InMemoryStorage:
 
     async def set_approved_agent_ids(self, ids: list[str]) -> None:
         self._g.approved_agent_ids = list(ids)
+
+    async def get_judge_confirmations(self) -> list[JudgeConfirmation]:
+        return [c.model_copy() for c in self._g.judge_confirmations]
+
+    async def set_judge_confirmations(self, confirmations: list[JudgeConfirmation]) -> None:
+        self._g.judge_confirmations = [c.model_copy() for c in confirmations]
 
     async def get_require_judge(self) -> bool | None:
         return self._g.require_judge

@@ -4,6 +4,17 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.11] — 2026-09-29
+
+- A judge the user has confirmed stays confirmed across a `/mcp` reconnect or
+  a server restart, as long as the conversation, the client and the model are
+  the same. The confirmation is kept with the graph, so the next claim binds
+  without the picker and says it carried over; a claim that does ask says why.
+  The model comes from a new Claude Code hook, `epimemer client-state record`,
+  configured as described in INTEGRATION.md.
+- A write made after the model, client or conversation changed since the claim
+  is refused with what changed named, and claiming again asks the user.
+
 ## [0.2.10] — 2026-09-27
 
 - A boundary proposal from `reflect` can be declined. `apply_reflection`

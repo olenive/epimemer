@@ -101,6 +101,18 @@ class ServerConfig(BaseModel):
     # first refuses every write, which is why the refusal says so.
     require_judge: bool = False
 
+    # The client conversation this server serves, one of the four parts of the
+    # seat a judge is confirmed in (REVIEW_MODE.md §2.6). None means the client
+    # did not say, and a claim then asks the user every time a new server
+    # process starts.
+    client_session_id: str | None = None
+
+    # Where a client hook records which model is behind each conversation,
+    # one small file per session id, written by `epimemer client-state
+    # record`. The server cannot see the model, so this directory is how it
+    # learns it. A leading `~` is expanded where the file is read.
+    client_state_dir: str = "~/.epimemer/client-state"
+
     # Whether `search` stamps `retrieved_at` on what it returns. Costs one
     # write per returned node; turning it off makes `never_retrieved` blind, so
     # archival nomination stops being able to tell used nodes from stale ones.
@@ -186,6 +198,7 @@ def load_config() -> ServerConfig:
         "viz_host": "EPIMEMER_VIZ_HOST",
         "viz_port": "EPIMEMER_VIZ_PORT",
         "viz_autospawn": "EPIMEMER_VIZ_AUTOSPAWN",
+        "client_state_dir": "EPIMEMER_CLIENT_STATE_DIR",
     }
 
     overrides = {}
@@ -193,6 +206,17 @@ def load_config() -> ServerConfig:
         value = os.environ.get(env_var)
         if value is not None:
             overrides[field_name] = value
+
+    # Claude Code puts its conversation id into the environment of every stdio
+    # server it spawns, and the id survives a `/mcp` reconnect, so reading it
+    # here lets a reconnect keep its seat without any configuration. The
+    # Epimemer name comes first so another client, or a user, can supply the
+    # id explicitly.
+    session_id = os.environ.get("EPIMEMER_CLIENT_SESSION_ID") or os.environ.get(
+        "CLAUDE_CODE_SESSION_ID"
+    )
+    if session_id:
+        overrides["client_session_id"] = session_id
 
     return ServerConfig(**overrides)
 

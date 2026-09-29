@@ -13,7 +13,9 @@ hold on every call:
   and `viz_status` take none.
 - Claim a judge with `claim_agent` once per session before writing, and again
   after `use_graph` or a reconnect. Use whatever judge the user hands back. A
-  refusal here goes to the user, never worked around.
+  refusal here goes to the user, never worked around. A write refused because
+  the seat changed (a new model, client or conversation) means claim again,
+  and the user will be asked.
 - Carry the `judge_token` your claim returns as `judge_token` on every write.
   Several agents can share one connection, a subagent beside the agent that
   spawned it, and each claims its own judge and carries its own token; a write

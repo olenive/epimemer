@@ -31,7 +31,7 @@ LATER = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
 
 
 def _accept(chosen: str | None = None):
-    async def approve(proposed: str, description: str) -> tools.ApprovalOutcome:
+    async def approve(proposed: str, description: str, reason: str = "") -> tools.ApprovalOutcome:
         return tools.ApprovalOutcome(chosen=chosen or proposed)
 
     return approve

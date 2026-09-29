@@ -19,6 +19,8 @@ from uuid import uuid4
 from fastmcp import Context, FastMCP
 from fastmcp.server.elicitation import AcceptedElicitation
 
+from epimemer import client_state
+from epimemer.core.seat import Seat, seat_changes
 from epimemer.core.types import Agent, JudgeRef
 from epimemer.logging.structured import ToolInvocationLog, log_tool_call, setup_logging
 from epimemer.mcp import guidance, tools
@@ -4236,7 +4238,9 @@ async def epimemer_list_graphs(
 # never held in a module global, which is the whole of §3.2: two graphs or two
 # sessions must not be able to inherit each other's judge.
 JUDGE_STATE_KEY = "epimemer.judge"
-# Which identity this session has already had confirmed, per graph.
+# Which identity this session has already had confirmed, per graph. Consulted
+# only where the seat is incomplete; a complete seat is decided by the
+# confirmations persisted on the backend (REVIEW_MODE.md §2.6).
 JUDGE_CONFIRMED_STATE_KEY = "epimemer.judge_confirmed"
 # Every judge claimed on this session, keyed by the token its claim handed back.
 # One connection carries several agents: Claude Code gives a subagent the same
@@ -4245,6 +4249,96 @@ JUDGE_CONFIRMED_STATE_KEY = "epimemer.judge_confirmed"
 # that carries one is credited to the judge that claimed it rather than to
 # whoever claimed most recently.
 JUDGE_TOKENS_STATE_KEY = "epimemer.judge_tokens"
+
+
+def _client_identity(ctx: Context) -> tuple[str | None, str | None]:
+    """The client's name and version from the MCP initialize handshake.
+
+    Both None where there is no session, no handshake, or a client that sent no
+    `clientInfo`; unknown is a value a seat can hold, never an error.
+    """
+    try:
+        params = ctx.session.client_params
+    except Exception:
+        return None, None
+    # The SDK model names the field `client_info`; `clientInfo` is only its
+    # wire alias, so reading the alias off the object finds nothing.
+    info = (
+        getattr(params, "client_info", None) or getattr(params, "clientInfo", None)
+        if params is not None
+        else None
+    )
+    if info is None:
+        return None, None
+    name = getattr(info, "name", None)
+    version = getattr(info, "version", None)
+    return (name or None) if isinstance(name, str) else None, (
+        (version or None) if isinstance(version, str) else None
+    )
+
+
+def _client_state_file(ctx: Context) -> str | None:
+    """Where the model for this conversation is looked for, for a message."""
+    config = ctx.lifespan_context["config"]
+    if not config.client_session_id:
+        return None
+    path = client_state.client_state_path(
+        client_state.client_state_dir(config.client_state_dir), config.client_session_id
+    )
+    return str(path) if path is not None else None
+
+
+def _current_seat(ctx: Context) -> Seat:
+    """The seat this call is made from, resolved now (REVIEW_MODE.md §2.6).
+
+    Resolved afresh on every claim and every write, because the model and
+    the conversation can change under a running server: a client hook
+    rewrites the live record when the user switches model or runs `/clear`,
+    and nothing else would tell the server. The conversation is the live
+    record's where there is one, else the one the server was spawned in.
+    """
+    config = ctx.lifespan_context["config"]
+    name, version = _client_identity(ctx)
+    live = client_state.live_client_state(
+        client_state.client_state_dir(config.client_state_dir), config.client_session_id
+    )
+    return Seat(
+        session_id=live.session_id if live is not None else config.client_session_id,
+        client_name=name,
+        client_version=version,
+        model=live.model if live is not None else None,
+    )
+
+
+def _with_seat(judge: JudgeRef, seat: Seat) -> dict:
+    """A judge as session state stores it: the judge, and the seat it was claimed in.
+
+    `JudgeRef` ignores the extra key on the way back in, so every reader that
+    wants only the judge still gets exactly that.
+    """
+    return {**judge.model_dump(mode="json"), "seat": seat.model_dump(mode="json")}
+
+
+def _changed_seat_refusal(stored: object, seat: Seat) -> str | None:
+    """Why a write from this seat is refused, or None where the seat is unchanged.
+
+    **Any difference refuses**, known to unknown and unknown to known
+    included: the claim vouched for whoever sat in the seat it was made from,
+    and a write from a different seat is somebody the user was never asked
+    about. Stored state with no seat recorded reads as a seat where nothing was
+    known, so it is held to the same comparison rather than let through.
+    """
+    if not isinstance(stored, dict):
+        return None
+    then = Seat.model_validate(stored.get("seat") or {})
+    changes = seat_changes(then, seat)
+    if not changes:
+        return None
+    return (
+        "; ".join(changes) + " since this judge was claimed; this write was refused; call "
+        "claim_agent again and the user will be asked which judge "
+        + ("the new model is." if then.model != seat.model else "this seat is.")
+    )
 
 
 async def _approved_judge(ctx: Context, stored: object) -> JudgeRef | None:
@@ -4329,8 +4423,11 @@ async def _judge_tokens(ctx: Context) -> dict[str, dict]:
     return dict(stored) if isinstance(stored, dict) else {}
 
 
-async def _mint_judge_token(ctx: Context, judge: JudgeRef) -> str:
-    """Mint a token for this claim and remember which judge it names.
+async def _mint_judge_token(ctx: Context, judge: JudgeRef, seat: Seat) -> str:
+    """Mint a token for this claim and remember which judge it names, and where.
+
+    The seat the claim was made from is kept with it, so a write carrying the
+    token from a different seat is refused (REVIEW_MODE.md §2.6).
 
     Opaque and random, because it travels out through the agent and back. A
     token derived from the judge would let an agent write as any judge whose id
@@ -4341,7 +4438,7 @@ async def _mint_judge_token(ctx: Context, judge: JudgeRef) -> str:
     """
     token = secrets.token_urlsafe(24)
     tokens = await _judge_tokens(ctx)
-    tokens[token] = judge.model_dump(mode="json")
+    tokens[token] = _with_seat(judge, seat)
     try:
         await ctx.set_state(JUDGE_TOKENS_STATE_KEY, tokens)
     except RuntimeError:
@@ -4362,14 +4459,18 @@ _UNKNOWN_JUDGE_TOKEN = (
 )
 
 
-async def _bind_judge(ctx: Context, judge: JudgeRef | None) -> bool:
+async def _bind_judge(ctx: Context, judge: JudgeRef | None, seat: Seat | None = None) -> bool:
     """Bind (or clear) this session's judge. False if there is no session.
+
+    The seat the claim was made from is stored with the judge, so a write
+    relying on the binding from a different seat is refused. A binding stored
+    without one is compared as a seat where nothing was known.
 
     Reported rather than swallowed: everything downstream resolves the judge
     from here (§3.2), so a claim that recorded the agent but bound nothing is a
     state the caller has to be able to see.
     """
-    payload = None if judge is None else judge.model_dump(mode="json")
+    payload = None if judge is None else _with_seat(judge, seat or Seat())
     try:
         await ctx.set_state(JUDGE_STATE_KEY, payload)
     except RuntimeError:
@@ -4386,7 +4487,8 @@ async def _bind_judge(ctx: Context, judge: JudgeRef | None) -> bool:
 async def _confirmed_judge_here(ctx: Context) -> str | None:
     """The judge this session has already had confirmed for the active graph.
 
-    The cadence memo, decided 2026-08-25. The picker goes up on every
+    The cadence memo, decided 2026-08-25 and, on 2026-09-28, narrowed to a
+    seat that is not fully known. The picker goes up on every
     bind, which is what stops an already-approved id binding with nobody
     watching — and repeating the question for a claim this session has already
     answered would train the user to dismiss it, so a re-claim of the same
@@ -4397,10 +4499,15 @@ async def _confirmed_judge_here(ctx: Context) -> str | None:
     judge and then bind as another without a word, which is the defect this
     exists to close, rebuilt inside its own fix.
 
-    Session-scoped, so it dies with the connection: after a reconnect the
-    question is asked again, and it is the picker rather than the frequency
-    that makes that tolerable. No session state at all means no memo, which
-    asks — the safe direction.
+    Session-scoped, so it dies with the connection. Until 28 September 2026
+    that meant every reconnect asked again, and a claim from an unattended
+    loop after a `/mcp` reconnect then waited on the picker until the user came
+    back. Since then a confirmation is scoped to the seat, the conversation,
+    the client and the model, and persisted on the backend, so a reconnect in
+    the same seat binds without asking (REVIEW_MODE.md §2.6). This memo is what
+    remains for a seat that is not fully known: it still dies with the
+    connection, and a reconnect from such a seat asks. No session state at all
+    means no memo, which asks, the safe direction.
 
     **The id, not a yes-or-no.** The proposal `claim_agent` receives is a
     handle, and only that tool can resolve it against this graph's judges, so
@@ -4460,6 +4567,12 @@ async def _judge_for_write(
       claim. That is what every client did before tokens existed, and it still
       does it.
 
+    **A write from a changed seat is refused** (REVIEW_MODE.md §2.6). The token
+    and the binding both remember the seat their claim was made from, the
+    conversation, the client and the model, and the seat is resolved again
+    here on every write. Any difference refuses and names what changed, because
+    the user vouched for whoever sat in the old seat. Reads are not gated.
+
     Absent and *permitted* is the default and not a degraded mode: the write
     goes through and records an unknown judge, which is what blank has always
     meant (§3.3).
@@ -4488,12 +4601,17 @@ async def _judge_for_write(
         result, meta = mismatch
         return None, _build_response(result, meta, 0.0)
     if judge_token is None:
-        judge = await _bound_judge(ctx)
+        stored = await _judge_state(ctx)
     else:
         tokens = await _judge_tokens(ctx)
         if judge_token not in tokens:
             return None, _error_response(_UNKNOWN_JUDGE_TOKEN)
-        judge = await _approved_judge(ctx, tokens[judge_token])
+        stored = tokens[judge_token]
+    if stored is not None:
+        refusal = _changed_seat_refusal(stored, _current_seat(ctx))
+        if refusal is not None:
+            return None, _error_response(refusal)
+    judge = await _approved_judge(ctx, stored)
     if judge is not None:
         return judge, None
     if not await tools.judge_required(
@@ -4695,7 +4813,7 @@ async def _elicit_typed_judge_name(
 
 
 async def _elicit_first_judge(
-    ctx: Context, proposed: str, description: str
+    ctx: Context, proposed: str, description: str, reason: str = ""
 ) -> tools.ApprovalOutcome:
     """Which judge, in a graph that has none yet: the proposal, or a name to type.
 
@@ -4723,6 +4841,7 @@ async def _elicit_first_judge(
             f"'{storage.current_database}'.",
         )
         + (f"\n{already}" if already else "")
+        + _asked_because_line(reason)
         + f"\n\nThis graph has no judges yet, so this claim starts one. Decline "
         f"to refuse it an identity. Nothing verifies what an agent says about "
         f"itself; it is recorded as a claim, not a credential.\n\nIt describes "
@@ -4847,7 +4966,20 @@ async def _elicit_reinstate(ctx: Context, retired: list[tools.JudgeChoice]) -> s
 _PICKER_ROUNDS = 3
 
 
-async def _elicit_agent_id(ctx: Context, proposed: str, description: str) -> tools.ApprovalOutcome:
+def _asked_because_line(reason: str) -> str:
+    """The line saying why the user is asked, or nothing where there is no reason.
+
+    A person asked after a reconnect needs to tell an expected question, a
+    seat the server cannot fully see, from a real change such as a new model
+    behind the name. Placed after the question and before the description, so
+    a terminal that cuts the end loses the prose first.
+    """
+    return f"\nAsked because {reason}." if reason else ""
+
+
+async def _elicit_agent_id(
+    ctx: Context, proposed: str, description: str, reason: str = ""
+) -> tools.ApprovalOutcome:
     """Ask the **user** which judge this agent may be, in this graph (§2.3).
 
     `ctx.elicit` inverts the direction of an MCP call — the server asks, and the
@@ -4900,7 +5032,7 @@ async def _elicit_agent_id(ctx: Context, proposed: str, description: str) -> too
         if not roster and not retired:
             # A graph nobody has judged in yet: nothing to pick from, so the
             # question is the proposal or a name the user types.
-            return await _elicit_first_judge(ctx, proposed, description)
+            return await _elicit_first_judge(ctx, proposed, description, reason)
 
         # Re-read each round rather than once: a rename from inside the picker
         # changes both the name the proposal is shown under and the name the
@@ -4940,6 +5072,7 @@ async def _elicit_agent_id(ctx: Context, proposed: str, description: str) -> too
                 f"'{storage.current_database}'.",
             )
             + (f"\n{already}" if already else "")
+            + _asked_because_line(reason)
             + f"\n\nDecline to refuse it an identity. Nothing verifies what an "
             f"agent says about itself; it is recorded as a claim, not a "
             f"credential.\n\nIt describes itself as: {description}"
@@ -5068,25 +5201,28 @@ async def memory_claim_agent(
     deps = ctx.lifespan_context
 
     async def claim() -> tuple[dict, ResponseMeta]:
+        seat = _current_seat(ctx)
         result, meta = await tools.claim_agent(
             storage=deps["storage"],
             agent_id=agent_id,
             description=description,
-            approve_id=lambda proposed, text: _elicit_agent_id(ctx, proposed, text),
+            approve_id=lambda proposed, text, reason: _elicit_agent_id(ctx, proposed, text, reason),
             confirm_description=lambda claimed_name, text: _elicit_description_confirmation(
                 ctx, claimed_name, text
             ),
             confirmed_identity=await _confirmed_judge_here(ctx),
+            seat=seat,
+            client_state_file=_client_state_file(ctx),
         )
         if result["status"] == "claimed":
             # The binding is the point of the call, and it is written only after
             # the record is, so a failed upsert cannot leave a session judging
             # under an agent the graph does not have.
             judge = JudgeRef(agent_id=result["agent_id"], digest=result["digest"])
-            result["session_bound"] = await _bind_judge(ctx, judge)
+            result["session_bound"] = await _bind_judge(ctx, judge, seat)
             # And a token naming this claim, so an agent sharing the connection
             # with another can write as itself after that one has claimed too.
-            result["judge_token"] = await _mint_judge_token(ctx, judge)
+            result["judge_token"] = await _mint_judge_token(ctx, judge, seat)
             # Remembered under the id that was *chosen*, which the picker may
             # have made a different one from the id proposed.
             await _remember_judge_confirmed(ctx, result["agent_id"])

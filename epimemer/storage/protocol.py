@@ -18,6 +18,7 @@ from epimemer.core.advisories import (
     WarningPolicy,
     resolved_action,
 )
+from epimemer.core.seat import JudgeConfirmation
 from epimemer.core.types import (
     DEFAULT_MERGE_CYCLE_LIMIT,
     DEFAULT_MERGE_UNDO_DEPTH,
@@ -1435,6 +1436,31 @@ class StorageBackend(Protocol):
         path, whose answer came from the user through their own client, and the
         `epimemer agents confirm` CLI (§2.3) — plus config seeding at connect,
         which is the same user saying it a third way.
+        """
+        ...
+
+    async def get_judge_confirmations(self) -> list[JudgeConfirmation]:
+        """The seats the **user** has confirmed a judge in, for this graph.
+
+        Stored beside the approved-id list and scoped the same way, so a
+        confirmation outlives the server process that asked for it (§2.6): a
+        reconnect restarts the server, and nothing about who is behind the name
+        changed. A graph nobody has confirmed a judge in returns an empty list,
+        which asks on every claim.
+
+        Newest last. The list is bounded by count rather than by age, so a
+        dropped entry is a seat that asks again, never a confirmation that ran
+        out.
+        """
+        ...
+
+    async def set_judge_confirmations(self, confirmations: list[JudgeConfirmation]) -> None:
+        """Replace the active graph's confirmation list.
+
+        Never reachable from an MCP tool as a free-standing write. The one
+        writer is `claim_agent`, after the user answered the picker through
+        their own client, which is what makes a stored confirmation mean a
+        person saw it.
         """
         ...
 

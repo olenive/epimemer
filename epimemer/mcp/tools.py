@@ -25,6 +25,14 @@ from epimemer.core.advisories import (
     resolved_action,
     surfaced,
 )
+from epimemer.core.seat import (
+    JudgeConfirmation,
+    Seat,
+    ask_reason,
+    carried_confirmation,
+    seat_is_complete,
+    with_confirmation,
+)
 from epimemer.core.temporal import IntervalBasis, ValidityInterval, ValidityVerdict
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
@@ -8494,10 +8502,12 @@ class ApprovalOutcome(BaseModel):
     channel_available: bool = True
 
 
-# Asks the user to admit an id. The server owns *how* the question is put; this
-# module owns *when* it is worth asking, and reads the answer's three states off
-# `ApprovalOutcome`.
-ApproveId = Callable[[str, str], Awaitable[ApprovalOutcome]]
+# Asks the user to admit an id: the handle proposed, the self-description, and
+# why the user is being asked at all, which the picker shows so a person asked
+# after a reconnect can tell an expected question from a changed seat. The
+# server owns *how* the question is put; this module owns *when* it is worth
+# asking, and reads the answer's three states off `ApprovalOutcome`.
+ApproveId = Callable[[str, str, str], Awaitable[ApprovalOutcome]]
 
 # Asks the user to confirm a *new self-description* for a judge they have
 # already admitted, named by the name they know it by rather than by its key.
@@ -9119,6 +9129,8 @@ async def claim_agent(
     approve_id: ApproveId | None = None,
     confirm_description: ConfirmDescription | None = None,
     confirmed_identity: str | None = None,
+    seat: Seat | None = None,
+    client_state_file: str | None = None,
     now: datetime | None = None,
 ) -> tuple[dict, ResponseMeta]:
     """Bind this session to a judge, or say why it cannot be bound.
@@ -9161,7 +9173,21 @@ async def claim_agent(
     the binding itself. It suppresses the question only while that judge is
     still approved; a different judge, graph or session is a different question.
     A **changed description** is still put to the user, because the memo records
-    an identity rather than a wording.
+    an identity rather than a wording. Since 2026-09-28 it applies only where
+    the seat is incomplete; a complete seat is decided by the persisted
+    confirmations below, which is what the memo becomes once it can outlive the
+    process.
+
+    **`seat` carries a confirmation across a restart** (REVIEW_MODE.md §2.6).
+    The seat is the conversation, the client and the model a claim is made
+    from. Where it is complete and the user already confirmed this judge in
+    exactly this seat, in this graph, the claim binds without asking and says
+    so in `carried_over`, while the judge is still approved and not retired. A
+    confirmed pick from a complete seat is stored beside the approved-id list,
+    so the answer outlives the server process. Every claim that asks says why
+    in `asked_because`, and the picker is shown the same sentence;
+    `client_state_file` is where the model was looked for, named in that
+    sentence when the model is unknown.
 
     **Where no channel to the user exists, an approved id still binds.** That is
     the `EPIMEMER_APPROVED_AGENTS` and `epimemer agents confirm` path (§2.3),
@@ -9199,13 +9225,27 @@ async def claim_agent(
 
     confirmed_now = False
     newly_chosen: str | None = None
-    memo_holds = confirmed_identity is not None and key == confirmed_identity and key in approved
-    if memo_holds:
-        # Asked and answered, this session, for this graph, for this identity.
+    seat_known = seat is not None and seat_is_complete(seat)
+    confirmations = await storage.get_judge_confirmations() if seat is not None else []
+    carried = carried_confirmation(confirmations, key, seat) if seat is not None else None
+    carry_holds = carried is not None and key in approved
+    memo_holds = (
+        not seat_known
+        and confirmed_identity is not None
+        and key == confirmed_identity
+        and key in approved
+    )
+    asked_because: str | None = None
+    if carry_holds or memo_holds:
+        # Asked and answered: in this seat, or in this server process where the
+        # seat is not known well enough to carry an answer further.
         pass
     else:
+        asked_because = ask_reason(
+            confirmations, key, seat or Seat(), client_state_file=client_state_file
+        )
         outcome = (
-            await approve_id(handle, description)
+            await approve_id(handle, description, asked_because)
             if approve_id is not None
             else ApprovalOutcome(channel_available=False)
         )
@@ -9258,6 +9298,22 @@ async def claim_agent(
 
     if newly_chosen is not None:
         approved = await approve_agent_ids(storage, [newly_chosen])
+    if confirmed_now and seat is not None and seat_known:
+        # The user answered from a seat known well enough to name, so the
+        # answer is kept beside the approved list and outlives this process.
+        await storage.set_judge_confirmations(
+            with_confirmation(
+                confirmations,
+                JudgeConfirmation(
+                    session_id=seat.session_id or "",
+                    agent_id=key,
+                    client_name=seat.client_name,
+                    client_version=seat.client_version,
+                    model=seat.model or "",
+                    confirmed_at=at,
+                ),
+            )
+        )
 
     agent = existing or Agent(id=key, name=handle, authorised_at=at, first_seen_at=at)
     current = current_description(agent)
@@ -9303,12 +9359,27 @@ async def claim_agent(
         "new_description": is_new_text,
         "description_confirmed": version.confirmed_at is not None,
         "approved_agent_ids": approved,
+        # Said out loud either way, so an agent can tell the user why a claim
+        # did or did not ask.
+        "carried_over": carry_holds,
+        **(
+            {"confirmed_in_seat_at": carried.confirmed_at.isoformat()}
+            if carry_holds and carried is not None
+            else {}
+        ),
+        **({"asked_because": asked_because} if asked_because is not None else {}),
         "message": (
             f"Judging as '{name}'"
             + (
                 " — a new judge, with no decisions before this session."
                 if existing is None
                 else "."
+            )
+            + (
+                f" Confirmed in this seat on {carried.confirmed_at.date().isoformat()}, "
+                "carried over."
+                if carry_holds and carried is not None
+                else ""
             )
             + (
                 " The user confirmed this description."

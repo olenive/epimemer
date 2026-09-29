@@ -34,6 +34,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from epimemer import client_state
 from epimemer.core.types import (
     BASE_METACONTEXT_ID,
     QUARANTINE_METACONTEXT_ID,
@@ -753,6 +754,48 @@ async def _verify_bundle(storage: StorageBackend, config: ServerConfig, path: st
     return "\n".join(lines)
 
 
+def _hook_state_dir(given: str | None) -> Path:
+    """Where the client-state hook writes: `--dir`, else the server's setting.
+
+    Read through `load_config` so the hook and the server agree on the
+    directory by construction. A configuration the server itself would refuse
+    must not fail the hook, so any error there falls back to the default.
+    """
+    if given:
+        return client_state.client_state_dir(given)
+    try:
+        configured = load_config().client_state_dir
+    except Exception:
+        configured = ServerConfig.model_fields["client_state_dir"].default
+    return client_state.client_state_dir(configured)
+
+
+def _record_client_state(given_dir: str | None, raw: str, given_pid: str | None = None) -> int:
+    """Run as a Claude Code hook: record the model behind this conversation.
+
+    **Always exits 0 and prints nothing on stdout.** A `SessionStart` hook's
+    stdout is put into the agent's context, and a hook that fails must never
+    break the session it runs in. Where nothing was written, one line on
+    stderr says why.
+
+    `--client-pid` that is not a positive integer, such as a literal `$PPID`
+    a shell did not expand, gets its own stderr line and recording goes on
+    without it.
+    """
+    client_pid, note = client_state.parse_client_pid(given_pid)
+    if note is not None:
+        print(note, file=sys.stderr)
+    try:
+        reason = client_state.record_from_hook(
+            _hook_state_dir(given_dir), raw, client_pid=client_pid
+        )
+    except Exception as error:
+        reason = f"epimemer client-state: nothing recorded: {error}"
+    if reason is not None:
+        print(reason, file=sys.stderr)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="epimemer", description="Epimemer administration.")
     sub = parser.add_subparsers(dest="group", required=True)
@@ -816,6 +859,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="'default' clears the graph's own answer and follows the server.",
     )
     require.add_argument("--graph", help="Graph to set (default: the configured one).")
+
+    client = sub.add_parser(
+        "client-state",
+        help="What a client hook records about a conversation, such as its model.",
+    )
+    client_sub = client.add_subparsers(dest="action", required=True)
+    record = client_sub.add_parser(
+        "record",
+        help=(
+            "Read a Claude Code SessionStart or PostModelSwitch hook payload on "
+            "stdin and record the conversation's model. Prints nothing; always "
+            "exits 0."
+        ),
+    )
+    record.add_argument(
+        "--dir",
+        help=(
+            "Directory to write to (default: EPIMEMER_CLIENT_STATE_DIR, else "
+            "~/.epimemer/client-state). Must match the server's."
+        ),
+    )
+    record.add_argument(
+        "--client-pid",
+        help=(
+            "The Claude Code process id, passed as $PPID from the hook command. "
+            "Links every hook event of one Claude Code process, so /clear is followed."
+        ),
+    )
 
     relations = sub.add_parser("relations", help="The user-tier relationship vocabulary.")
     relations_sub = relations.add_subparsers(dest="action", required=True)
@@ -935,6 +1006,15 @@ def main(argv: list[str] | None = None) -> int:
 
         mcp.run()
         return 0
+
+    # A hook, not administration: it touches no store, and it must not fail on
+    # anything the checks below could refuse.
+    if args.group == "client-state":
+        try:
+            raw = sys.stdin.read()
+        except Exception:
+            raw = ""
+        return _record_client_state(args.dir, raw, args.client_pid)
 
     config = load_config()
 

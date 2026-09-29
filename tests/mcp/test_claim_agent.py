@@ -31,14 +31,14 @@ async def _approved(storage, *ids):
 def _accept(chosen: str | None = None):
     """An approval channel that answers — with `chosen`, or with what was asked."""
 
-    async def approve(proposed: str, description: str) -> tools.ApprovalOutcome:
+    async def approve(proposed: str, description: str, reason: str = "") -> tools.ApprovalOutcome:
         assert description, "the user is shown the description they are approving"
         return tools.ApprovalOutcome(chosen=chosen or proposed)
 
     return approve
 
 
-async def _silent(proposed: str, description: str) -> tools.ApprovalOutcome:
+async def _silent(proposed: str, description: str, reason: str = "") -> tools.ApprovalOutcome:
     """A client with no channel to the user: the elicitation-less case.
 
     Distinct from `_declined`, and the distinction is the point: this one
@@ -48,7 +48,7 @@ async def _silent(proposed: str, description: str) -> tools.ApprovalOutcome:
     return tools.ApprovalOutcome(channel_available=False)
 
 
-async def _declined(proposed: str, description: str) -> tools.ApprovalOutcome:
+async def _declined(proposed: str, description: str, reason: str = "") -> tools.ApprovalOutcome:
     """A user who saw the question and said no."""
     return tools.ApprovalOutcome()
 
@@ -56,7 +56,7 @@ async def _declined(proposed: str, description: str) -> tools.ApprovalOutcome:
 def _asked(record: list[str]):
     """An approval channel that answers yes and records that it was asked."""
 
-    async def approve(proposed: str, description: str) -> tools.ApprovalOutcome:
+    async def approve(proposed: str, description: str, reason: str = "") -> tools.ApprovalOutcome:
         record.append(proposed)
         return tools.ApprovalOutcome(chosen=proposed)
 

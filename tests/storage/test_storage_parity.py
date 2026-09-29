@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from epimemer.core.seat import JudgeConfirmation
 from epimemer.core.temporal import (
     IntervalBasis,
     NamedInstant,
@@ -2896,3 +2897,54 @@ class TestVerbatimWrites:
 
         assert [e.id for e in await store.get_edges_from("a")] == ["e1"]
         assert [e.id for e in await store.get_edges_to("b")] == ["e1"]
+
+
+class TestJudgeConfirmations:
+    """The seats a judge was confirmed in: per graph, round-tripped exactly."""
+
+    def _confirmation(self, session_id: str, at: datetime) -> JudgeConfirmation:
+        return JudgeConfirmation(
+            session_id=session_id,
+            agent_id="critic",
+            client_name="claude-code",
+            client_version=None,
+            model="claude-opus-5-5",
+            confirmed_at=at,
+        )
+
+    async def test_a_fresh_graph_has_none(self, store):
+        assert await store.get_judge_confirmations() == []
+
+    async def test_round_trip_keeps_every_field_and_the_instant(self, store):
+        at = datetime(2026, 9, 28, 9, 30, 15, 123456, tzinfo=UTC)
+        written = [
+            self._confirmation("conv-1", at),
+            self._confirmation("conv-2", at + timedelta(hours=1)),
+        ]
+        await store.set_judge_confirmations(written)
+
+        read = await store.get_judge_confirmations()
+        assert read == written
+        assert read[0].confirmed_at == at
+
+    async def test_set_replaces_the_list(self, store):
+        at = datetime(2026, 9, 28, tzinfo=UTC)
+        await store.set_judge_confirmations([self._confirmation("conv-1", at)])
+        await store.set_judge_confirmations([self._confirmation("conv-2", at)])
+
+        assert [c.session_id for c in await store.get_judge_confirmations()] == ["conv-2"]
+
+    async def test_confirmations_are_per_graph(self, store):
+        at = datetime(2026, 9, 28, tzinfo=UTC)
+        await store.set_judge_confirmations([self._confirmation("conv-1", at)])
+        await store.switch_database("parity_other_graph")
+
+        assert await store.get_judge_confirmations() == []
+
+    async def test_they_do_not_disturb_the_approved_list(self, store):
+        await store.set_approved_agent_ids(["critic"])
+        await store.set_judge_confirmations(
+            [self._confirmation("conv-1", datetime(2026, 9, 28, tzinfo=UTC))]
+        )
+
+        assert await store.get_approved_agent_ids() == ["critic"]

@@ -80,7 +80,7 @@ async def storage():
 
 
 async def _judge(storage, name: str, *, now=AT) -> str:
-    async def approve(proposed, description):
+    async def approve(proposed, description, reason=""):
         return tools.ApprovalOutcome(chosen=proposed)
 
     result, _ = await tools.claim_agent(

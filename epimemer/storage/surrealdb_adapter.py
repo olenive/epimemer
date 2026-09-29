@@ -18,6 +18,7 @@ from typing import Any, Literal
 from surrealdb import AsyncSurreal
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
+from epimemer.core.seat import JudgeConfirmation
 from epimemer.core.temporal import merged_validity
 from epimemer.core.types import (
     Agent,
@@ -908,6 +909,36 @@ def _approved_agent_ids(rows) -> list[str]:
     if not rows or rows[0] is None:
         return []
     return list(rows[0].get(_APPROVED_AGENTS_FIELD) or [])
+
+
+# The seats a judge was confirmed in (REVIEW_MODE.md §2.6), on the same row as
+# the approved-id list they sit beside. Stored as JSON-safe dicts, the time as
+# ISO-8601 text that is parsed back into a datetime on read and ordered there,
+# never compared as text in a query.
+_JUDGE_CONFIRMATIONS_FIELD = "judge_confirmations"
+
+_JUDGE_CONFIRMATIONS_GET = f"SELECT {_JUDGE_CONFIRMATIONS_FIELD} FROM {_REFLECT_RECORD};"
+_JUDGE_CONFIRMATIONS_SET = (
+    f"UPSERT {_REFLECT_RECORD} SET {_JUDGE_CONFIRMATIONS_FIELD} = $confirmations RETURN AFTER;"
+)
+
+
+def _judge_confirmations(rows) -> list[JudgeConfirmation]:
+    """Read the confirmation list out of a reflect-state row set.
+
+    No row, or no field, is an empty list. An entry that no longer validates is
+    skipped rather than raised: a lost confirmation asks the user again, which
+    is the safe direction.
+    """
+    if not rows or rows[0] is None:
+        return []
+    confirmations = []
+    for stored in rows[0].get(_JUDGE_CONFIRMATIONS_FIELD) or []:
+        try:
+            confirmations.append(JudgeConfirmation.model_validate(stored))
+        except ValueError:
+            continue
+    return sorted(confirmations, key=lambda c: c.confirmed_at)
 
 
 # The fourth field on the one graph-state row, same scope and same lifetime as
@@ -2912,6 +2943,16 @@ class SurrealDBStorage:
 
     async def set_approved_agent_ids(self, ids: list[str]) -> None:
         await self._query(_APPROVED_AGENTS_SET, {"ids": list(ids)})
+
+    async def get_judge_confirmations(self) -> list[JudgeConfirmation]:
+        rows = await self._query(_JUDGE_CONFIRMATIONS_GET)
+        return _judge_confirmations(rows)
+
+    async def set_judge_confirmations(self, confirmations: list[JudgeConfirmation]) -> None:
+        await self._query(
+            _JUDGE_CONFIRMATIONS_SET,
+            {"confirmations": [c.model_dump(mode="json") for c in confirmations]},
+        )
 
     async def get_require_judge(self) -> bool | None:
         rows = await self._query(_REQUIRE_JUDGE_GET)
