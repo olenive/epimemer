@@ -4,7 +4,7 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.12] — 2026-10-02
 
 - Writes work again on Claude Code 2.1.287. Every write after `claim_agent`
   was refused as carrying a token this session never issued, because on the
