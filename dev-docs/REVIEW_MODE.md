@@ -409,13 +409,14 @@ is given the connection its parent is already using, so both claim, and a write
 that names its own token is credited to the judge that claimed it rather than
 to whichever claimed last. A token the session never issued refuses the write,
 since falling back to the binding is the misattribution the token prevents.
-Tokens live in session state beside the binding, as a dict keyed by token, so
-one connection's token means nothing on another. Whether a
-blank is accepted is the graph's policy, not the signature's (§3.3). Where a
-transport has no session concept at all, a fallback binding held on the
-lifespan is used, per-server state reached through `ctx.lifespan_context`,
-which a successful session binding clears; tokens are held the same way, for
-the same reason. Ingest stamps its edges once,
+Whether a blank is accepted is the graph's policy, not the signature's (§3.3).
+The binding, the tokens (a dict keyed by token) and the confirmed-judge memo
+live in `connection_state` on the lifespan, created fresh by each server
+process. The server speaks stdio only, so one process serves one client and a
+token means nothing on any other connection. FastMCP session state cannot hold
+them: on the 2026-07-28 protocol era each request arrives on a new connection
+object and FastMCP keys its state store on it, so a token minted by one call
+was unknown to the next. Ingest stamps its edges once,
 after the batch is assembled, rather than at each place it builds them.
 
 ### 3.3 What absence means
@@ -1074,10 +1075,11 @@ list`, `agents rename`, `agents retire`, `agents reinstate`, `agents delete`,
 connect. Approval is per graph, so connect-time seeding alone would leave
 every other graph unapprovable on an embedded backend, one `use_graph` later.
 Seeding is applied before the judge is re-checked, or configuration would
-clear a judge it was about to admit. `use_graph` re-validates the judge, and
-a claim made where no session exists is reported as unbound
-(`session_bound`) rather than raised, because a graph switch must not fail
-over an identity feature the caller never used. *Unreachable by the agent*
+clear a judge it was about to admit. `use_graph` re-validates the judge rather
+than failing the switch, because a graph switch must not fail over an identity
+feature the caller never used. A claim binds whether or not the client opened
+an MCP session, since the binding lives on the lifespan rather than in session
+state. *Unreachable by the agent*
 and *unreachable by the user* are different failures, and the CLI's refusal
 against an embedded store is action-specific, since two settings live behind
 that wall with different environment variables.

@@ -23,6 +23,7 @@ from epimemer.core.types import (
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
+from epimemer.mcp.server import new_connection_state
 from epimemer.storage.protocol import resolve_require_judge
 
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
@@ -250,21 +251,14 @@ class TestTheGateAtTheBoundary:
     """
 
     class _Ctx:
-        def __init__(self, storage, config, stored=None, raises=False):
-            self.lifespan_context = {"storage": storage, "config": config}
-            self._stored = stored
-            self._raises = raises
-            self.set_calls: list = []
-
-        async def get_state(self, key):
-            if self._raises:
-                raise RuntimeError("no session exists")
-            return self._stored
-
-        async def set_state(self, key, value):
-            if self._raises:
-                raise RuntimeError("no session exists")
-            self.set_calls.append(value)
+        def __init__(self, storage, config, stored=None):
+            connection_state = new_connection_state()
+            connection_state["judge"] = stored
+            self.lifespan_context = {
+                "storage": storage,
+                "config": config,
+                "connection_state": connection_state,
+            }
 
     async def test_a_permissive_graph_lets_an_unnamed_write_through(self, storage, config):
         from epimemer.mcp.server import _judge_for_write
@@ -358,31 +352,21 @@ class TestTheGateAtTheBoundary:
         assert refused is not None
 
 
-class TestASessionlessClientCanStillClaim:
-    """Session state needs a session. Without one, a claim that bound nothing
-    would leave a strict graph refusing every write from a client that had
-    correctly claimed an identity — the approval gap of §10.3, one layer over."""
+class TestAClaimReachesTheNextWrite:
+    """The binding lives in the connection state on the lifespan, so the write
+    after a claim finds it. Were it lost between calls, a strict graph would
+    refuse every write from a client that had correctly claimed an identity:
+    the approval gap of §10.3, one layer over."""
 
-    async def test_a_claim_without_a_session_still_binds_the_process(self, storage, config):
+    async def test_a_bound_judge_satisfies_a_strict_graph(self, storage, config):
         from epimemer.mcp.server import _bind_judge, _judge_for_write
 
-        ctx = TestTheGateAtTheBoundary._Ctx(storage, config, raises=True)
+        ctx = TestTheGateAtTheBoundary._Ctx(storage, config)
         await storage.set_require_judge(True)
         await storage.set_approved_agent_ids(["critic"])
 
-        bound = await _bind_judge(ctx, CRITIC)
+        await _bind_judge(ctx, CRITIC)
 
-        assert bound is False, "reported, so the caller can see what happened"
+        assert ctx.lifespan_context["connection_state"]["judge"]["agent_id"] == "critic"
         judge, refused = await _judge_for_write(ctx, storage.current_database)
         assert judge == CRITIC and refused is None
-
-    async def test_a_session_binding_clears_the_fallback(self, storage, config):
-        """Otherwise a stale process-wide judge would outlive the session that
-        replaced it."""
-        from epimemer.mcp.server import _bind_judge
-
-        ctx = TestTheGateAtTheBoundary._Ctx(storage, config)
-        ctx.lifespan_context["fallback_judge"] = CRITIC.model_dump(mode="json")
-
-        assert await _bind_judge(ctx, CRITIC) is True
-        assert ctx.lifespan_context["fallback_judge"] is None

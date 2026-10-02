@@ -36,7 +36,7 @@ from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log
-from epimemer.mcp.server import MOVES_THE_GRAPH
+from epimemer.mcp.server import MOVES_THE_GRAPH, new_connection_state
 from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
@@ -292,6 +292,7 @@ async def _lifespan_with(storage) -> AsyncIterator[dict]:
         "viz_session": None,
         "viz_hub_url": None,
         "retrievals": new_record_log(),
+        "connection_state": new_connection_state(),
     }
 
 

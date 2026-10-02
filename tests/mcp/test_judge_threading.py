@@ -36,6 +36,7 @@ from epimemer.core.types import (
 )
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
+from epimemer.mcp.server import new_connection_state
 
 CRITIC = JudgeRef(agent_id="critic", digest="d1")
 EDITOR = JudgeRef(agent_id="editor", digest="d2")
@@ -570,28 +571,22 @@ class TestBothBackendsKeepIt:
 class TestResolvingTheJudgeAtTheBoundary:
     """`_bound_judge` is the one place a write learns who is calling.
 
-    It is checked here with a stand-in context because the real one needs an MCP
-    session, and the behaviours that matter — no session, and an id the graph no
-    longer approves — are exactly the ones a session-carrying test cannot reach.
+    It is checked here with a stand-in context carrying only what it reads: the
+    storage and the connection state, with `stored` as the binding.
     """
 
     class _Ctx:
         """The two things `_bound_judge` touches, and nothing else."""
 
-        def __init__(self, storage, stored, raises=False):
-            self.lifespan_context = {"storage": storage}
-            self._stored = stored
-            self._raises = raises
+        def __init__(self, storage, stored):
+            connection_state = new_connection_state()
+            connection_state["judge"] = stored
+            self.lifespan_context = {"storage": storage, "connection_state": connection_state}
 
-        async def get_state(self, key):
-            if self._raises:
-                raise RuntimeError("no session exists")
-            return self._stored
-
-    async def test_no_session_is_no_judge_rather_than_an_error(self, storage):
+    async def test_nothing_claimed_is_no_judge_rather_than_an_error(self, storage):
         from epimemer.mcp.server import _bound_judge
 
-        ctx = self._Ctx(storage, None, raises=True)
+        ctx = self._Ctx(storage, None)
 
         assert await _bound_judge(ctx) is None
 

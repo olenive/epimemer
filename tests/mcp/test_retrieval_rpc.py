@@ -23,6 +23,7 @@ from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log, records_of
 from epimemer.mcp.server import mcp as epimemer_mcp
+from epimemer.mcp.server import new_connection_state
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization.event_bus import create_event_bus
 from epimemer.visualization.hub import create_hub_app
@@ -107,6 +108,7 @@ async def _wired() -> AsyncIterator[SimpleNamespace]:
             "viz_session": None,
             "viz_hub_url": None,
             "retrievals": log,
+            "connection_state": new_connection_state(),
         }
 
     original = epimemer_mcp._lifespan

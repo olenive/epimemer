@@ -24,6 +24,7 @@ from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.server import mcp as epimemer_mcp
+from epimemer.mcp.server import new_connection_state
 from epimemer.mcp.tools import graph_stats
 from epimemer.storage.memory import InMemoryStorage
 
@@ -124,6 +125,7 @@ async def _session(storage, config: ServerConfig) -> AsyncIterator[FastMCP]:
         "viz_session": None,
         "viz_hub_url": None,
         "retrievals": new_record_log(),
+        "connection_state": new_connection_state(),
     }
 
     @asynccontextmanager

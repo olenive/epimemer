@@ -619,7 +619,7 @@ class TestServe:
         )
 
         assert main(["serve"]) == 0
-        assert calls == [((), {})]
+        assert calls == [((), {"transport": "stdio"})]
 
 
 class TestGraphBundles:

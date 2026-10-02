@@ -4,6 +4,21 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+- Writes work again on Claude Code 2.1.287. Every write after `claim_agent`
+  was refused as carrying a token this session never issued, because on the
+  2026-07-28 protocol each request arrives on a new connection and the server
+  kept the judge in per-connection session state, which was gone by the next
+  call. The judge binding, tokens and confirmations are now held by the server
+  process, which serves one client over stdio, and a test fails if either
+  entry point is given another transport.
+- `claim_agent` no longer returns `session_bound`: a claim always binds now,
+  so there is nothing to report. The judge picker still does not appear on
+  Claude Code 2.1.287, since that connection cannot carry a question to the
+  user; the claim binds unconfirmed, as it does on any client without
+  elicitation, and ISSUES.md tracks the decision.
+
 ## [0.2.11] — 2026-09-29
 
 - A judge the user has confirmed stays confirmed across a `/mcp` reconnect or

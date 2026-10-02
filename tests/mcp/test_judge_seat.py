@@ -216,8 +216,11 @@ class TestThePickerShowsTheReason:
             return object()  # declined
 
         ctx = SimpleNamespace(
-            lifespan_context={"storage": storage, "version": "9.9.9"},
-            get_state=_no_state,
+            lifespan_context={
+                "storage": storage,
+                "version": "9.9.9",
+                "connection_state": server.new_connection_state(),
+            },
             elicit=elicit,
         )
 
@@ -226,10 +229,6 @@ class TestThePickerShowsTheReason:
         )
 
         assert "Asked because the model was a and is now b" in messages[0]
-
-
-async def _no_state(key):
-    return None
 
 
 # --- The write gate, through the MCP boundary ---
@@ -266,23 +265,13 @@ def _handshake(client_name: str | None):
 
 def _seated_ctx(deps: dict, client_name: str = "claude-code"):
     """A context whose client names itself in the handshake and cannot elicit."""
-    state: dict = {}
-
-    async def get_state(key):
-        return state.get(key)
-
-    async def set_state(key, value):
-        state[key] = value
 
     async def elicit(message, response_type=None):
         raise RuntimeError("this client cannot put a question to the user")
 
     return SimpleNamespace(
         lifespan_context=deps,
-        get_state=get_state,
-        set_state=set_state,
         elicit=elicit,
-        state=state,
         session=SimpleNamespace(client_params=_handshake(client_name)),
     )
 
@@ -308,9 +297,10 @@ class TestAWriteFromAChangedSeatIsRefused:
 
         claimed = await _claim(ctx, "critic")
 
-        token_entry = ctx.state[server.JUDGE_TOKENS_STATE_KEY][claimed["judge_token"]]
+        held = ctx.lifespan_context["connection_state"]
+        token_entry = held["judge_tokens"][claimed["judge_token"]]
         assert token_entry["seat"]["model"] == "claude-fable-5-1"
-        assert ctx.state[server.JUDGE_STATE_KEY]["seat"]["client_name"] == "claude-code"
+        assert held["judge"]["seat"]["client_name"] == "claude-code"
 
     async def test_an_unchanged_seat_writes(self, storage, embedder, seated):
         ctx, _ = seated

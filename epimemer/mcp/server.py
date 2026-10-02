@@ -133,6 +133,32 @@ def installed_version() -> str:
         return "unknown"
 
 
+def new_connection_state() -> dict:
+    """The judge state one client's connection holds, empty.
+
+    Three entries: `judge`, the binding a write without a token is credited to
+    (the most recent claim, stored with its seat, or None); `judge_tokens`,
+    every claim on the connection keyed by the token it handed back; and
+    `judge_confirmed`, the agent id the user confirmed per graph, consulted
+    only where the seat is not fully known (REVIEW_MODE.md §2.6).
+
+    It lives on the lifespan because the server speaks stdio only, where one
+    process serves one client, so the process's state is the connection's.
+    FastMCP session state cannot hold it: on the 2026-07-28 protocol era the mcp
+    SDK serves every request on a new connection object, and FastMCP keys its
+    state store on that object, so a value written on one call is gone on the
+    next. That is how Claude Code 2.1.287 came, on 2 October 2026, to have every
+    write refused as carrying a token this session never issued, one call after
+    `claim_agent` handed it out.
+
+    A transport that serves several clients from one process must bring a
+    per-client store and plug it in here before it is added; until then, two
+    clients would share one judge and one set of tokens.
+    `tests/mcp/test_stdio_only.py` holds both entry points to stdio.
+    """
+    return {"judge": None, "judge_tokens": {}, "judge_confirmed": {}}
+
+
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
     """Initialize providers and yield them as lifespan context.
@@ -254,6 +280,9 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             "viz_session": viz_session,
             "viz_hub_url": viz_hub_url,
             "retrievals": retrievals,
+            # The judge binding, tokens and confirmations for the one client this
+            # stdio process serves; `new_connection_state` says why they live here.
+            "connection_state": new_connection_state(),
         }
     finally:
         if stop_viz_client is not None:
@@ -4233,24 +4262,6 @@ async def epimemer_list_graphs(
     )
 
 
-# Where this session's judge lives. Session-scoped and JSON only (FastMCP
-# serializes it), so the `JudgeRef` goes in as a dict and comes back validated —
-# never held in a module global, which is the whole of §3.2: two graphs or two
-# sessions must not be able to inherit each other's judge.
-JUDGE_STATE_KEY = "epimemer.judge"
-# Which identity this session has already had confirmed, per graph. Consulted
-# only where the seat is incomplete; a complete seat is decided by the
-# confirmations persisted on the backend (REVIEW_MODE.md §2.6).
-JUDGE_CONFIRMED_STATE_KEY = "epimemer.judge_confirmed"
-# Every judge claimed on this session, keyed by the token its claim handed back.
-# One connection carries several agents: Claude Code gives a subagent the same
-# MCP connection its parent is already using, so both claim here and a single
-# binding can hold only the last of them. A token names one claim, so a write
-# that carries one is credited to the judge that claimed it rather than to
-# whoever claimed most recently.
-JUDGE_TOKENS_STATE_KEY = "epimemer.judge_tokens"
-
-
 def _client_identity(ctx: Context) -> tuple[str | None, str | None]:
     """The client's name and version from the MCP initialize handshake.
 
@@ -4311,7 +4322,7 @@ def _current_seat(ctx: Context) -> Seat:
 
 
 def _with_seat(judge: JudgeRef, seat: Seat) -> dict:
-    """A judge as session state stores it: the judge, and the seat it was claimed in.
+    """A judge as the connection state stores it: the judge, and the seat it was claimed in.
 
     `JudgeRef` ignores the extra key on the way back in, so every reader that
     wants only the judge still gets exactly that.
@@ -4370,13 +4381,11 @@ async def _approved_judge(ctx: Context, stored: object) -> JudgeRef | None:
 
 
 async def _bound_judge(ctx: Context) -> JudgeRef | None:
-    """The judge bound to this session, or None if nothing has claimed one.
+    """The judge bound to this connection, or None if nothing has claimed one.
 
-    Session state needs a session: called outside a request context, a direct
-    invocation or a transport that has not opened one, FastMCP raises rather
-    than returning nothing. No session is genuinely no binding, so that reads as
-    None here. It must not read as an error, or a graph switch would fail over
-    an identity feature the caller never used.
+    Nothing claimed is genuinely no binding, so it reads as None rather than
+    as an error: a graph switch must not fail over an identity feature the
+    caller never used.
 
     This is the *most recent* claim on the connection, which is what a write
     carrying no `judge_token` is credited to.
@@ -4391,36 +4400,28 @@ async def _judge_state(ctx: Context) -> object:
     from it: a write wants a judge the active graph still approves, and the
     picker wants to report the binding as it stands. Both read it from here, so
     they cannot come to disagree about where the binding lives.
+
+    Stored as JSON, the `JudgeRef` and its seat as a dict, and validated on the
+    way out. It is per connection and never a module global: two connections
+    must not be able to inherit each other's judge (`new_connection_state`).
     """
-    try:
-        return await ctx.get_state(JUDGE_STATE_KEY)
-    except RuntimeError:
-        # No session to read from, so fall back to the one this process was
-        # told about (see `_bind_judge`). Reachable only where session state
-        # does not exist at all, which today means a single-client transport,
-        # so "the process" and "the client" are the same thing, and this is not
-        # a shared binding two callers could confuse. It is per-server state
-        # passed through the lifespan, never a module global.
-        return ctx.lifespan_context.get("fallback_judge")
+    return ctx.lifespan_context["connection_state"]["judge"]
 
 
 async def _judge_tokens(ctx: Context) -> dict[str, dict]:
-    """Every judge claimed on this session, by the token that names the claim.
+    """Every judge claimed on this connection, by the token that names the claim.
 
-    Session-scoped like the binding, and for the same reason: a token another
+    One connection carries several agents: Claude Code gives a subagent the
+    same MCP connection its parent is already using, so both claim here and a
+    single binding can hold only the last of them. A token names one claim, so
+    a write that carries one is credited to the judge that claimed it rather
+    than to whoever claimed most recently.
+
+    Per connection like the binding, and for the same reason: a token another
     connection could resolve would be a bearer credential for an identity the
     user approved for somebody else.
     """
-    try:
-        stored = await ctx.get_state(JUDGE_TOKENS_STATE_KEY)
-    except RuntimeError:
-        # Nowhere session-scoped to read from, so the tokens sit on the lifespan
-        # beside `fallback_judge` and for the reason given there: such a
-        # transport has one client, so the process and the client are the same
-        # thing. Per-server state passed through the lifespan, never a module
-        # global.
-        stored = ctx.lifespan_context.get("fallback_judge_tokens")
-    return dict(stored) if isinstance(stored, dict) else {}
+    return dict(ctx.lifespan_context["connection_state"]["judge_tokens"])
 
 
 async def _mint_judge_token(ctx: Context, judge: JudgeRef, seat: Seat) -> str:
@@ -4433,18 +4434,11 @@ async def _mint_judge_token(ctx: Context, judge: JudgeRef, seat: Seat) -> str:
     token derived from the judge would let an agent write as any judge whose id
     it could guess, which is the approval gate opened from the other side.
 
-    Kept per claim rather than per session: the point is that the agent that
+    Kept per claim rather than per connection: the point is that the agent that
     claimed first goes on writing as itself after its neighbour claims.
     """
     token = secrets.token_urlsafe(24)
-    tokens = await _judge_tokens(ctx)
-    tokens[token] = _with_seat(judge, seat)
-    try:
-        await ctx.set_state(JUDGE_TOKENS_STATE_KEY, tokens)
-    except RuntimeError:
-        ctx.lifespan_context["fallback_judge_tokens"] = tokens
-        return token
-    ctx.lifespan_context["fallback_judge_tokens"] = None
+    ctx.lifespan_context["connection_state"]["judge_tokens"][token] = _with_seat(judge, seat)
     return token
 
 
@@ -4459,86 +4453,51 @@ _UNKNOWN_JUDGE_TOKEN = (
 )
 
 
-async def _bind_judge(ctx: Context, judge: JudgeRef | None, seat: Seat | None = None) -> bool:
-    """Bind (or clear) this session's judge. False if there is no session.
+async def _bind_judge(ctx: Context, judge: JudgeRef | None, seat: Seat | None = None) -> None:
+    """Bind (or clear) this connection's judge.
 
     The seat the claim was made from is stored with the judge, so a write
     relying on the binding from a different seat is refused. A binding stored
     without one is compared as a seat where nothing was known.
-
-    Reported rather than swallowed: everything downstream resolves the judge
-    from here (§3.2), so a claim that recorded the agent but bound nothing is a
-    state the caller has to be able to see.
     """
     payload = None if judge is None else _with_seat(judge, seat or Seat())
-    try:
-        await ctx.set_state(JUDGE_STATE_KEY, payload)
-    except RuntimeError:
-        # Nowhere session-scoped to put it. Held on the lifespan instead, which
-        # is what makes the require-a-judge setting usable from a transport
-        # that has no sessions — otherwise turning it on would refuse every
-        # write from such a client, with an identity it had correctly claimed.
-        ctx.lifespan_context["fallback_judge"] = payload
-        return False
-    ctx.lifespan_context["fallback_judge"] = None
-    return True
+    ctx.lifespan_context["connection_state"]["judge"] = payload
 
 
 async def _confirmed_judge_here(ctx: Context) -> str | None:
-    """The judge this session has already had confirmed for the active graph.
+    """The judge this connection has already had confirmed for the active graph.
 
-    The cadence memo, decided 2026-08-25 and, on 2026-09-28, narrowed to a
-    seat that is not fully known. The picker goes up on every
-    bind, which is what stops an already-approved id binding with nobody
-    watching — and repeating the question for a claim this session has already
-    answered would train the user to dismiss it, so a re-claim of the same
-    judge in the same graph is silent.
+    The cadence memo, for a seat that is not fully known. The picker goes up on
+    every bind, which is what stops an already-approved id binding with nobody
+    watching, and repeating the question for a claim this connection has
+    already answered would train the user to dismiss it, so a re-claim of the
+    same judge in the same graph is silent. A complete seat is decided instead
+    by the confirmations persisted on the backend, so a reconnect in the same
+    seat binds without asking (REVIEW_MODE.md §2.6); this memo dies with the
+    process, and a reconnect from an incompletely known seat asks.
 
-    **Keyed on the identity, never on the session alone.** A memo meaning
-    *this session confirmed something* would let an agent be approved as one
-    judge and then bind as another without a word, which is the defect this
-    exists to close, rebuilt inside its own fix.
-
-    Session-scoped, so it dies with the connection. Until 28 September 2026
-    that meant every reconnect asked again, and a claim from an unattended
-    loop after a `/mcp` reconnect then waited on the picker until the user came
-    back. Since then a confirmation is scoped to the seat, the conversation,
-    the client and the model, and persisted on the backend, so a reconnect in
-    the same seat binds without asking (REVIEW_MODE.md §2.6). This memo is what
-    remains for a seat that is not fully known: it still dies with the
-    connection, and a reconnect from such a seat asks. No session state at all
-    means no memo, which asks, the safe direction.
+    **Keyed on the identity, never on the connection alone.** A memo meaning
+    *this connection confirmed something* would let an agent be approved as one
+    judge and then bind as another without a word.
 
     **The id, not a yes-or-no.** The proposal `claim_agent` receives is a
     handle, and only that tool can resolve it against this graph's judges, so
     the comparison has to happen there. Returning a boolean here would
     mean comparing a handle to an id and calling them equal.
     """
-    try:
-        stored = await ctx.get_state(JUDGE_CONFIRMED_STATE_KEY)
-    except RuntimeError:
-        return None
-    if not isinstance(stored, dict):
-        return None
-    return stored.get(ctx.lifespan_context["storage"].current_database)
+    confirmed = ctx.lifespan_context["connection_state"]["judge_confirmed"]
+    return confirmed.get(ctx.lifespan_context["storage"].current_database)
 
 
 async def _remember_judge_confirmed(ctx: Context, agent_id: str) -> None:
     """Record that the user confirmed `agent_id` for the active graph.
 
-    Per graph rather than one value, because a session that works across two
-    graphs has answered two separate questions — approval is per graph, so a
+    Per graph rather than one value, because a connection that works across two
+    graphs has answered two separate questions: approval is per graph, so a
     single slot would let the answer for one stand in for the other.
     """
     database = ctx.lifespan_context["storage"].current_database
-    try:
-        stored = await ctx.get_state(JUDGE_CONFIRMED_STATE_KEY)
-        confirmed = dict(stored) if isinstance(stored, dict) else {}
-        confirmed[database] = agent_id
-        await ctx.set_state(JUDGE_CONFIRMED_STATE_KEY, confirmed)
-    except RuntimeError:
-        # No session to remember in. Every claim then asks, which is correct.
-        return
+    ctx.lifespan_context["connection_state"]["judge_confirmed"][database] = agent_id
 
 
 async def _judge_for_write(
@@ -4678,7 +4637,7 @@ async def _connection_judge_line(ctx: Context, proposed: str) -> str | None:
     them that, and says which of the two cases this is: a second agent arriving
     beside the first, or the first one claiming again.
 
-    **The raw session state rather than `_bound_judge`.** The sentence reports
+    **The raw binding rather than `_bound_judge`.** The sentence reports
     what the connection holds, and a judge the active graph has stopped
     approving is still what it holds. Re-checking approval here would drop the
     line exactly where the user most needs to be told that something is odd.
@@ -5219,7 +5178,7 @@ async def memory_claim_agent(
             # the record is, so a failed upsert cannot leave a session judging
             # under an agent the graph does not have.
             judge = JudgeRef(agent_id=result["agent_id"], digest=result["digest"])
-            result["session_bound"] = await _bind_judge(ctx, judge, seat)
+            await _bind_judge(ctx, judge, seat)
             # And a token naming this claim, so an agent sharing the connection
             # with another can write as itself after that one has claimed too.
             result["judge_token"] = await _mint_judge_token(ctx, judge, seat)
@@ -5376,4 +5335,7 @@ async def epimemer_viz_status(ctx: Context) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    # Named rather than defaulted: FastMCP reads its default transport from the
+    # environment, and the judge state is per process on the strength of stdio
+    # serving one client (`new_connection_state`).
+    mcp.run(transport="stdio")

@@ -1004,7 +1004,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.group == "serve":
         from epimemer.mcp.server import mcp
 
-        mcp.run()
+        # Named rather than defaulted: FastMCP reads its default transport from
+        # the environment, and the judge state is per process on the strength
+        # of stdio serving one client (`new_connection_state`).
+        mcp.run(transport="stdio")
         return 0
 
     # A hook, not administration: it touches no store, and it must not fail on

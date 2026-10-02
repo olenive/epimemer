@@ -632,9 +632,10 @@ Three things about it are deliberate:
   command says so at the moment you switch it on rather than letting the
   next write explain it.
 
-A client whose connection cannot hold a session binding is not locked out: a
-claim that could not bind to a session is held for the process instead,
-which is safe because a transport with no sessions has one client.
+The binding and the tokens are held by the server process, which is safe
+because the server speaks stdio, where each client starts its own process. A
+claim therefore reaches every later write on that connection, whatever the
+client's protocol version does with MCP sessions.
 
 **One cost of *blank means unknown*, stated plainly.** On a graph that never
 turns the requirement on, a row written by an agent that did not name itself

@@ -43,19 +43,21 @@ class _ScriptedContext:
     """
 
     def __init__(self, storage, answers, bound: str | None = None):
-        self.lifespan_context = {"storage": storage, "version": VERSION}
+        # The judge this connection already holds, where a real `Context` holds
+        # it: the connection state on the lifespan. None is a connection nothing
+        # has claimed on yet.
+        connection_state = server.new_connection_state()
+        if bound is not None:
+            connection_state["judge"] = JudgeRef(
+                agent_id=bound, digest="a-description-version"
+            ).model_dump(mode="json")
+        self.lifespan_context = {
+            "storage": storage,
+            "version": VERSION,
+            "connection_state": connection_state,
+        }
         self._answers = list(answers)
         self.asked: list[tuple[str, dict[str, str]]] = []
-        # The judge this connection already holds, where a real `Context` holds
-        # it: session state. None is a connection nothing has claimed on yet.
-        self._state = {
-            server.JUDGE_STATE_KEY: None
-            if bound is None
-            else JudgeRef(agent_id=bound, digest="a-description-version").model_dump(mode="json")
-        }
-
-    async def get_state(self, key):
-        return self._state.get(key)
 
     async def elicit(self, message, response_type=None):
         # The titles as well as the keys: what a line selects and what it says

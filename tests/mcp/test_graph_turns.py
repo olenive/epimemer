@@ -22,7 +22,7 @@ from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log
-from epimemer.mcp.server import MOVES_THE_GRAPH, _graph_turn
+from epimemer.mcp.server import MOVES_THE_GRAPH, _graph_turn, new_connection_state
 from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.storage.memory import InMemoryStorage
 
@@ -165,6 +165,7 @@ async def _lifespan_with(storage: InMemoryStorage) -> AsyncIterator[dict]:
         "viz_session": None,
         "viz_hub_url": None,
         "retrievals": new_record_log(),
+        "connection_state": new_connection_state(),
     }
 
 

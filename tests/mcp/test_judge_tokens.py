@@ -32,7 +32,12 @@ from epimemer.core.types import (
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log
-from epimemer.mcp.server import _bound_judge, memory_claim_agent, memory_update
+from epimemer.mcp.server import (
+    _bound_judge,
+    memory_claim_agent,
+    memory_update,
+    new_connection_state,
+)
 
 
 @pytest.fixture
@@ -56,31 +61,35 @@ def _deps(storage, embedder, config) -> dict:
         # Every judge prompt opens with it, and these claims go through the
         # prompts even though this client answers none of them.
         "version": "9.9.9",
+        # Where the judge binding, tokens and confirmations live, one per
+        # process as on stdio, so two `_deps` are two separate connections.
+        "connection_state": new_connection_state(),
     }
 
 
-def _ctx(deps: dict, *, session: bool = True):
-    """A stand-in context: session state as a dict, and no channel to the user.
+# What a context says if anything reaches for FastMCP session state. On the
+# 2026-07-28 protocol era every request arrives on a new connection object, and
+# FastMCP keys its state store on that object, so a value set on one call is
+# gone on the next.
+_PER_REQUEST = "session state is per request on the 2026-07-28 era and must not be used"
 
-    Two closures over one dict rather than a class, and `state` is left visible
-    so a test can read what the boundary stored. `session=False` is the
-    transport that has no session at all, where every `get_state` raises and the
-    boundary keeps its state on the lifespan instead.
+
+def _ctx(deps: dict):
+    """A stand-in context: the lifespan, and no channel to the user.
+
+    `get_state` and `set_state` raise, because session state lasts one request
+    on the modern protocol era and the boundary must not rely on it; what the
+    boundary stores is read back from `deps["connection_state"]`.
 
     `elicit` raises, which is the elicitation-less client: an id the user
     approved out of band still binds, so a claim needs no answer here.
     """
-    state: dict = {}
 
     async def get_state(key):
-        if not session:
-            raise RuntimeError("no session exists")
-        return state.get(key)
+        raise AssertionError(_PER_REQUEST)
 
     async def set_state(key, value):
-        if not session:
-            raise RuntimeError("no session exists")
-        state[key] = value
+        raise AssertionError(_PER_REQUEST)
 
     async def elicit(message, response_type=None):
         raise RuntimeError("this client cannot put a question to the user")
@@ -90,7 +99,6 @@ def _ctx(deps: dict, *, session: bool = True):
         get_state=get_state,
         set_state=set_state,
         elicit=elicit,
-        state=state,
     )
 
 
@@ -149,7 +157,7 @@ class TestTheClaimHandsBackAToken:
         claimed = await _claim(ctx, "critic")
 
         assert claimed["status"] == "claimed"
-        assert claimed["session_bound"] is True
+        assert "session_bound" not in claimed
         assert isinstance(claimed["judge_token"], str) and claimed["judge_token"]
 
     async def test_two_claims_get_two_tokens(self, storage, embedder, config):
@@ -261,15 +269,15 @@ class TestATokenThisSessionNeverIssued:
         assert (await storage.get_node(node.id)).content == "the treaty was signed in Vienna"
         assert len(await storage.query_nodes()) == 1
 
-    async def test_a_token_from_another_session_is_unknown(self, storage, embedder, config):
-        """Tokens are session state, so a second connection has never heard of
-        this one. A token that worked across sessions would be a bearer
+    async def test_a_token_from_another_connection_is_unknown(self, storage, embedder, config):
+        """Tokens live in one connection's state, and on stdio a second
+        connection is a second process with its own, so it has never heard of
+        this one. A token that worked across connections would be a bearer
         credential for an identity the user approved for somebody else."""
         await storage.set_approved_agent_ids(["critic"])
-        deps = _deps(storage, embedder, config)
-        elsewhere = _ctx(deps)
+        elsewhere = _ctx(_deps(storage, embedder, config))
         claimed = await _claim(elsewhere, "critic")
-        here = _ctx(deps)
+        here = _ctx(_deps(storage, embedder, config))
         node = await _fact(storage, embedder, "the treaty was signed in Vienna")
 
         response = await _update(
@@ -351,24 +359,34 @@ class TestApprovalIsRecheckedBehindTheToken:
         assert await _judge_of(storage, written) == claimed["agent_id"]
 
 
-class TestASessionlessClientGetsATokenToo:
-    """Session state needs a session. Without one the binding lives on the
-    lifespan, and the tokens have to live beside it or a client with no sessions
-    would be handed a token that refuses every write it is passed to."""
+class TestATokenOutlivesTheRequestThatMintedIt:
+    """The defect behind this: on the 2026-07-28 protocol era Claude Code
+    2.1.287 had `claim_agent` hand back a token and then every write carrying it
+    refused as one this session never issued, because FastMCP session state
+    lasts one request there. `_ctx` makes session state raise, so these pass
+    only while the judge state lives on the lifespan."""
 
-    async def test_a_claim_without_a_session_still_mints_a_token(self, storage, embedder, config):
+    async def test_the_write_after_a_claim_is_credited_to_its_judge(
+        self, storage, embedder, config
+    ):
         await storage.set_approved_agent_ids(["critic"])
-        ctx = _ctx(_deps(storage, embedder, config), session=False)
-
+        ctx = _ctx(_deps(storage, embedder, config))
         claimed = await _claim(ctx, "critic")
+        node = await _fact(storage, embedder, "the treaty was signed in Vienna")
 
-        assert claimed["status"] == "claimed"
-        assert claimed["session_bound"] is False, "reported, so the caller can see what happened"
-        assert claimed["judge_token"]
+        written = await _update(
+            ctx,
+            node.id,
+            "the treaty was signed in Vienna in 1815",
+            judge_token=claimed["judge_token"],
+        )
 
-    async def test_that_token_credits_the_write(self, storage, embedder, config):
+        assert "error" not in written
+        assert await _judge_of(storage, written) == claimed["agent_id"]
+
+    async def test_a_second_claim_leaves_the_first_token_valid(self, storage, embedder, config):
         await storage.set_approved_agent_ids(["critic", "editor"])
-        ctx = _ctx(_deps(storage, embedder, config), session=False)
+        ctx = _ctx(_deps(storage, embedder, config))
         parent = await _claim(ctx, "critic")
         await _claim(ctx, "editor")
         node = await _fact(storage, embedder, "the treaty was signed in Vienna")
@@ -384,7 +402,7 @@ class TestASessionlessClientGetsATokenToo:
 
     async def test_an_unknown_token_still_refuses(self, storage, embedder, config):
         await storage.set_approved_agent_ids(["critic"])
-        ctx = _ctx(_deps(storage, embedder, config), session=False)
+        ctx = _ctx(_deps(storage, embedder, config))
         await _claim(ctx, "critic")
         node = await _fact(storage, embedder, "the treaty was signed in Vienna")
 

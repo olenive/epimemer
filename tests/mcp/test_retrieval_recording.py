@@ -18,6 +18,7 @@ from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log, records_of
 from epimemer.mcp.server import mcp as epimemer_mcp
+from epimemer.mcp.server import new_connection_state
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization.event_bus import create_event_bus
 from epimemer.visualization.events import RetrievalRecorded
@@ -59,6 +60,7 @@ def _lifespan_for(*, viz_host: str = "127.0.0.1"):
             "viz_session": None,
             "viz_hub_url": None,
             "retrievals": log,
+            "connection_state": new_connection_state(),
         }
 
     return _test_lifespan, bus, log

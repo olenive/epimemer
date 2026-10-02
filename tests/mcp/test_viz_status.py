@@ -17,6 +17,7 @@ from epimemer.core.types import BASE_METACONTEXT_ID, Metacontext
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.server import mcp as epimemer_mcp
+from epimemer.mcp.server import new_connection_state
 from epimemer.storage.memory import InMemoryStorage
 from epimemer.visualization.hub import create_hub_app
 from epimemer.visualization.protocol import Register, SessionInfo
@@ -52,6 +53,7 @@ def _deps(viz_session=None, viz_hub_url=None) -> dict:
         "viz_session": viz_session,
         "viz_hub_url": viz_hub_url,
         "retrievals": new_record_log(),
+        "connection_state": new_connection_state(),
     }
 
 

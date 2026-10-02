@@ -9169,7 +9169,7 @@ async def claim_agent(
 
     **`confirmed_identity` is the caller's cadence memo**, not a permission. It
     names the judge this session has already had confirmed for this graph, and
-    the session-scoped state that answers it lives at the MCP boundary beside
+    the per-connection state that answers it lives at the MCP boundary beside
     the binding itself. It suppresses the question only while that judge is
     still approved; a different judge, graph or session is a different question.
     A **changed description** is still put to the user, because the memo records

@@ -17,6 +17,7 @@ from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log
 from epimemer.mcp.server import mcp as epimemer_mcp
+from epimemer.mcp.server import new_connection_state
 from epimemer.storage.memory import InMemoryStorage
 
 
@@ -51,6 +52,7 @@ async def _test_lifespan(server: FastMCP) -> AsyncIterator[dict]:
         "viz_session": None,
         "viz_hub_url": None,
         "retrievals": new_record_log(),
+        "connection_state": new_connection_state(),
         # The real lifespan reads this off the installed package; every judge
         # prompt opens with it.
         "version": "9.9.9",
@@ -428,14 +430,14 @@ class TestClaimAgentThroughTheServer:
         assert data["digest"]
         assert (await storage.get_agent("critic")) is not None
 
-    async def test_no_session_leaves_the_claim_recorded_and_unbound(self, server):
-        """`call_tool` here opens no MCP session, so there is nothing to bind to.
+    async def test_a_claim_without_a_session_still_binds(self, server):
+        """`call_tool` here opens no MCP session, and the claim binds anyway.
 
-        Reported rather than raised: the agent is recorded either way, and a
-        claim that bound nothing has to be visible instead of silent.
+        The judge state lives on the lifespan, one per stdio process, so it
+        needs no session to be held in.
         """
-        storage = epimemer_mcp._lifespan_result["storage"]
-        await storage.set_approved_agent_ids(["critic"])
+        deps = epimemer_mcp._lifespan_result
+        await deps["storage"].set_approved_agent_ids(["critic"])
 
         result = await server.call_tool(
             "claim_agent",
@@ -444,7 +446,9 @@ class TestClaimAgentThroughTheServer:
 
         data = _parse_response(result)["result"]
         assert data["status"] == "claimed"
-        assert data["session_bound"] is False
+        assert "session_bound" not in data
+        assert deps["connection_state"]["judge"]["agent_id"] == "critic"
+        assert data["judge_token"] in deps["connection_state"]["judge_tokens"]
 
     async def test_configured_ids_reach_a_graph_created_later(self, server):
         """`EPIMEMER_APPROVED_AGENTS` is per server, and approval is per graph.

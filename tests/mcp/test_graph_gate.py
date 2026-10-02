@@ -31,7 +31,7 @@ from fastmcp import FastMCP
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp.config import ServerConfig
 from epimemer.mcp.retrieval_records import new_record_log
-from epimemer.mcp.server import NAMES_ITS_OWN_GRAPH
+from epimemer.mcp.server import NAMES_ITS_OWN_GRAPH, new_connection_state
 from epimemer.mcp.server import mcp as epimemer_mcp
 from epimemer.storage.memory import InMemoryStorage
 
@@ -88,6 +88,7 @@ def _deps(storage: InMemoryStorage) -> dict:
         "viz_session": None,
         "viz_hub_url": None,
         "retrievals": new_record_log(),
+        "connection_state": new_connection_state(),
     }
 
 

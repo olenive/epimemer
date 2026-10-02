@@ -156,6 +156,46 @@ nothing and looks like a finding. Pinned in `tests/test_corpus_measure_smoke.py`
 
 ## Open issues
 
+### The judge picker cannot reach the user on a 2026-07-28 connection
+
+⏸ **Deferred**, trigger stated below.
+
+**What breaks.** On the 2026-07-28 protocol era the mcp SDK's stdio path
+carries no server-to-client requests (`NotifyOnlyOutbound` in
+`mcp/server/connection.py`), so `ctx.elicit` raises. `claim_agent` logs "no
+elicitation channel to the user" and binds an approved judge unconfirmed
+(`description_confirmed: false`), even when the seat changed, which is the case
+the picker exists for. Seen with Claude Code 2.1.287 on 2 October 2026.
+
+**Why it matters.** The user's approval on a changed seat (a new model, client
+or conversation) degrades silently to the agent's own report of who it is.
+
+**Files.** `epimemer/mcp/server.py`: `_elicit_judge_name`, `_elicit_agent_id`,
+and the `except Exception` fallbacks around their `ctx.elicit` calls, which
+return `_NO_CHANNEL`; `tools.claim_agent` decides what `_NO_CHANNEL` means.
+
+**The decision.** Keep binding unconfirmed (today's behaviour, designed for
+clients without elicitation, and the only way writes work on Claude Code
+2.1.287), or refuse to bind when the seat changed and no question can be put,
+which blocks every write on that client until the SDK carries server requests
+on the modern path?
+
+**Guarding tests.** In `tests/mcp/test_judge_seat.py`, a test such as
+`test_a_changed_seat_with_no_channel_to_the_user` using `_seated_ctx`, whose
+`elicit` raises: claim, record a different model, claim again, and assert
+whichever behaviour is chosen, either `status == "claimed"` with
+`description_confirmed is False`, or a refusal naming the missing channel.
+`tests/mcp/test_claim_agent.py::test_no_channel_still_binds_an_approved_id`
+pins today's behaviour for an unchanged seat and must keep passing either way.
+
+**Verify.** `uv run python -m pytest tests/ -q`.
+
+**Trigger:** the mcp SDK or Claude Code offering server-to-client requests on a
+2026-07-28 stdio connection, or a reader deciding the refusal is worth the
+outage.
+
+---
+
 ### FTS index backfill runs inside `connect()` with no progress reporting
 
 ⏸ **Deferred**, trigger stated below.
