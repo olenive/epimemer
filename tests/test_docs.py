@@ -137,6 +137,7 @@ HUB_DIRECTORIES = ("epimemer/visualization/", "tests/visualization/")
 HUB_FILES = frozenset(
     {
         "README.md",
+        "dev-docs/DEMO.md",
         "dev-docs/WARNINGS_DASHBOARD.md",
         "dev-docs/EVENT_LOG.md",
         "dev-docs/ISSUES.md",

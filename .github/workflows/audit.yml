@@ -38,9 +38,9 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.14"
-      # Every extra, because an advisory against a package only the notebooks
-      # pull in is still an advisory against something this repository installs.
-      - run: uv sync --locked --extra dev --extra notebooks --extra sentence-transformers
+      # Every extra, because an advisory against a package only one extra
+      # pulls in is still an advisory against something this repository installs.
+      - run: uv sync --locked --extra dev --extra sentence-transformers
 
       # The default bar is any advisory at all. Raise it with `--fail-on high`
       # if the low-severity findings ever become noise, and read the script's

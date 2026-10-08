@@ -58,7 +58,6 @@ uv tool install "epimemer[sentence-transformers]"
 | Extra | Adds | When you need it |
 |-------|------|------------------|
 | `sentence-transformers` | Local embeddings via [sentence-transformers](https://www.sbert.net) (pulls in PyTorch) | Always, for real use: it is the only embedding provider apart from `mock`, which exists for tests. Without it the server refuses to start and names the extra to install |
-| `notebooks` | [marimo](https://marimo.io) and the Petri-net plotting stack | Only for the walkthrough notebooks in the repository |
 
 The embedding model (`all-MiniLM-L6-v2`, about 80 MB) downloads on first run.
 
@@ -384,7 +383,7 @@ graph goes. `EPIMEMER_BACKUP_THRESHOLD` sets how often it asks.
 - **Three node types**: Topics (themes), Facts (atomic statements), Inferences (provisional derivations)
 - **Timelines**: one record holding timepoints, the ordering constraints sources have asserted between them, the temporal contradictions those constraints opened, and recurrence rules whose occurrences are computed per query
 - **Metacontexts**: they separate fiction from fact, and one source or perspective from another
-- **Petri nets**: all pipelines are executable, typed, visualizable Petri nets via [Petritype](https://github.com/olenive/petritype)
+- **Petri nets**: segmentation, edge creation and retrieval run as executable, typed Petri nets via [Petritype](https://github.com/olenive/petritype), and the dashboard draws them as they fire
 - **Immutable history**: a node's *content* is never mutated; an update creates a new version joined to the old one by a history edge. Lifecycle metadata such as `status` and value signals is mutated in place
 - **Sources and topics are nodes**: a fact reaches its source document by a `sourced_from` edge and a tag by a `tagged_with_topic` edge, not by a string field. A *tag* is a name passed in at ingest; it resolves to a Topic node, the topic node created from that tag. That edge is a retrieval index and carries no evidential weight; `supports` is the evidential edge
 - **Relations**: relationships between nodes are open-vocabulary, user-labelled edges

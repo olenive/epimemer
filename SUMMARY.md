@@ -162,7 +162,7 @@ must not be supplied at all.
 ### Test-driven development, with analysis and benchmarking
 The memory system's correctness is hard to assess during normal use, so
 development is test-first, with a mock embedding provider so no model is
-downloaded, marimo notebooks for stepping through each pipeline, and
+downloaded, a dashboard that shows each pipeline as it runs, and
 benchmarks that measure rather than estimate (`dev-docs/BENCHMARKS.md`).
 
 ## Node Value Signals
@@ -748,35 +748,33 @@ Do not point a large persistent graph at this unwarned.
 
 ## Implementation Approach: Petri Nets via Petritype
 
-The system must not be a black box: a newcomer should be able to look at any
-part of the pipeline and see what is happening, what state data is in, and
-how it flows. So all key processing steps are executable, typed Petri nets,
-via [Petritype](https://github.com/olenive/petritype):
+The system must not be a black box: a newcomer should be able to look at a
+processing stage and see what is happening, what state data is in, and how it
+flows. The stages that move data through steps are executable, typed Petri
+nets, via [Petritype](https://github.com/olenive/petritype):
 
 - **Places** are typed containers; each declares a Python type and only holds
   matching tokens (enforced at runtime).
 - **Transitions** are real Python functions, async supported.
 - **Tokens** are actual data: Pydantic models flowing through the net.
-- **Type-based output routing** means a transition returning a Topic, Fact,
-  or Inference routes each to the correct typed place; branching is expressed
-  by graph structure, not hidden in conditionals.
-- **Visualization** is built in via Graphviz: the running system *is* the
-  diagram.
+- **Visualization** comes with the net. The dashboard's pipeline strip draws
+  each net's topology and lights it as it fires, from the engine's own record
+  of what every firing consumed and produced.
 
-The system is a Petri net of Petri nets. Each algorithm (segmentation, graph
-construction, query, reflection, and so on) is a self-contained
-`ExecutableGraph` with typed inputs and outputs as its interface contract,
-and a top-level **orchestration net** invokes the algorithm nets, operating
-on coarse-grained types (`RawDocument` to `SegmentedDocument` to
-`DecomposedGraph`). Each sub-net is independently developed, tested, and
-visualized, and any of them can have alternative strategy implementations
-behind the same interface types, discoverable via the `@petri_net`
-decorator's metadata.
+Four nets exist: the two segmentation strategies, edge creation at ingest, and
+hybrid retrieval, whose two arms fork from one request and join at fusion, the
+one shape where the net says something a function body would hide. Each is an
+`ExecutableGraph` built by a factory marked `@petri_net`, driven by the
+Petritype runner to quiescence with no firing budget, and declared acyclic at
+construction, so termination is checked when the net is built rather than
+hoped for at run time.
 
-Petri nets are used where they add clarity: algorithms with meaningful
-internal state, branching, or concurrency. Trivial operations do not get
-their own net. The Pydantic data-model types serve double duty as storage
-schema and token types, keeping the pipeline and persistence layers in sync.
+Everything else, reflection, review, timelines, metacontexts and transfer, is
+plain functions over the storage protocol. A net is used where a stage has
+steps worth watching; a reduction over a similarity matrix or a transaction
+over the journal does not get one. The Pydantic data-model types serve double
+duty as storage schema and token types, keeping the pipeline and persistence
+layers in sync.
 
 ## Observability
 

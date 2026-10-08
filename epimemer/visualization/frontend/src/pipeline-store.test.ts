@@ -82,11 +82,15 @@ const finished = (name = "ingest"): PipelineCompleted => ({
   duration_ms: 340,
 });
 
-const failed = (name = "ingest"): PipelineFailed => ({
+const failed = (
+  name = "ingest",
+  transition: string | null = null,
+): PipelineFailed => ({
   ...base,
   event_type: "pipeline_failed",
   pipeline_name: name,
   error: "extraction timed out",
+  transition_name: transition,
   transitions_fired: 1,
   duration_ms: 90,
 });
@@ -134,6 +138,13 @@ describe("applyPipelineEvent — a full run", () => {
     expect(state.lastDurationMs).toBe(90);
   });
 
+  it("prefixes the error with the transition that raised it", () => {
+    let state = applyPipelineEvent(emptyRunState("ingest"), started());
+    state = applyPipelineEvent(state, failed("ingest", "extract"));
+
+    expect(state.lastError).toBe("extract: extraction timed out");
+  });
+
   it("resets per-run fields but keeps session counters on a second run", () => {
     let state = applyPipelineEvent(emptyRunState("ingest"), started());
     state = applyPipelineEvent(state, completedTransition("extract"));
@@ -158,7 +169,7 @@ describe("applyPipelineEvent — events that arrive out of order", () => {
     const state = applyPipelineEvent(emptyRunState("ingest"), started());
     const unknown = {
       ...base,
-      event_type: "transition_enabled",
+      event_type: "pipeline_paused",
       pipeline_name: "ingest",
       transition_name: "extract",
     } as unknown as Parameters<typeof applyPipelineEvent>[1];

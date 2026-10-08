@@ -164,7 +164,7 @@ leaves it alone. A hold is cleared by new evidence, a constraint or a dated
 point touching any point in the contradiction, and by nothing else. It is not
 a snooze, and nothing reopens it on a schedule.
 
-Two more keys are not worklists. `truncated` names any of the lists that hit
+Not every key is a worklist. `truncated` names any of the lists that hit
 `max_nominations` and were cut. `relation_pairs_suppressed` counts the label
 pairs that standing verdicts kept out of `similar_relations`; the suppression
 is silent by design, so without the count an empty list on a well-judged graph

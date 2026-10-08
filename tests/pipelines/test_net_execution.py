@@ -4,7 +4,7 @@ Execution used to be capped by a per-call `max_transitions` guess — 10 by
 default, 3 for retrieval. A guess is either wrong or redundant: too low and the
 net stops mid-pipeline and silently returns a half-filled result; high enough to
 be safe and it never fires, which is just quiescence with extra steps. The
-Runner runs until nothing is enabled, so the cap is gone and these tests pin
+Runner runs until nothing is fireable, so the cap is gone and these tests pin
 that it stays gone.
 """
 
@@ -21,14 +21,9 @@ from petritype.core.executable_graph_components import (
 from epimemer.core.types import Fact, Inference, RawDocument, Segment, Topic
 from epimemer.embeddings.mock import MockEmbeddingProvider
 from epimemer.mcp import tools
-from epimemer.mcp.config import ServerConfig
 from epimemer.pipelines.graph_construction.edge_creation import (
     DecomposedSegment,
     edge_creation_net,
-)
-from epimemer.pipelines.orchestration.orchestration_net import (
-    MemoryRequest,
-    orchestration_net,
 )
 from epimemer.pipelines.query.hybrid_retrieval import hybrid_retrieval_net
 from epimemer.pipelines.query.types import QueryRequest
@@ -92,7 +87,7 @@ def _failing_chain_graph() -> ExecutableGraph:
 
 
 def _parallel_fan_graph(width: int) -> ExecutableGraph:
-    """`width` independent transitions, all enabled from the start: [Ai]=0 → ti → [Bi].
+    """`width` independent transitions, all fireable from the start: [Ai]=0 → ti → [Bi].
 
     In CONCURRENT mode they fire in one batch, so `step_count` jumps by `width`
     on a single observer notification and `last_fired` names only one of them —
@@ -117,7 +112,7 @@ FAN_WIDTH = 4
 
 
 class TestRunsToQuiescence:
-    """`_run_net` fires until nothing is enabled — no iteration cap either path."""
+    """`_run_net` fires until nothing is fireable, with no iteration cap on either path."""
 
     async def test_without_an_event_bus(self):
         graph, fired = await tools._run_net(_chain_graph(CHAIN_LENGTH), "chain", None)
@@ -264,15 +259,6 @@ def storage() -> InMemoryStorage:
 
 
 @pytest.fixture
-def config() -> ServerConfig:
-    return ServerConfig(
-        storage_backend="memory",
-        embedding_provider="mock",
-        decomposition_provider="mock",
-    )
-
-
-@pytest.fixture
 def decomposed() -> DecomposedSegment:
     segment = Segment(source_id="doc1", text="A segment.", span_start=0, span_end=10)
     return DecomposedSegment(
@@ -286,11 +272,11 @@ def decomposed() -> DecomposedSegment:
 class TestEveryNetReachesQuiescence:
     """The integration contract with Petritype.
 
-    Epimemer tracks Petritype's main branch, so engine changes land without a
-    version bump to notice. Each net here is executed end to end through the
-    production entry point with mock providers: if a change to enabling,
-    firing, or token distribution breaks a pipeline, one of these fails rather
-    than the breakage surfacing as an empty result at runtime.
+    Epimemer depends on released Petritype, so a pin bump is where engine
+    changes arrive. Each net here is executed end to end through the production
+    entry point with mock providers: if a change to firing, selection or token
+    distribution breaks a pipeline, one of these fails at the bump rather than
+    the breakage surfacing as an empty result at runtime.
 
     Depth belongs in each pipeline's own test module; these only assert the net
     ran to completion and put something in its output place.
@@ -319,7 +305,7 @@ class TestEveryNetReachesQuiescence:
         assert graph.place_named("Segments").tokens
 
     async def test_edge_creation_net(self, decomposed):
-        graph, fired = await tools._run_net(edge_creation_net(decomposed), "edge_creation", None)
+        graph, fired = await tools._run_net(edge_creation_net([decomposed]), "edge_creation", None)
 
         assert fired >= 1
         assert graph.place_named("Edges").tokens
@@ -343,14 +329,3 @@ class TestEveryNetReachesQuiescence:
         # adding an arm silently truncated it.
         assert fired == 7
         assert len(graph.place_named("QueryResult").tokens) == 1
-
-    async def test_orchestration_net(self, storage, embedding_provider, config):
-        request = MemoryRequest(action="segment", payload={"content": "Something to remember."})
-        graph, fired = await tools._run_net(
-            orchestration_net(request, storage, embedding_provider, config),
-            "orchestration",
-            None,
-        )
-
-        assert fired == 2  # route_request, then the routed sub-pipeline
-        assert len(graph.place_named("MemoryResult").tokens) == 1

@@ -126,7 +126,7 @@ export const applyPipelineEvent = (
         status: "failed",
         activeTransition: null,
         stale: false,
-        lastError: e.error,
+        lastError: e.transition_name ? `${e.transition_name}: ${e.error}` : e.error,
         lastDurationMs: e.duration_ms,
         lastTransitionsFired: e.transitions_fired,
       };

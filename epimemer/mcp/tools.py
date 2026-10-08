@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from petritype.core.executable_graph_components import ExecutableGraph
-from petritype.runtime import RunContext, Runner
+from petritype.runtime import ExecutionMode, RunContext, Runner
 from pydantic import BaseModel, Field, ValidationError
 
 from epimemer.core.advisories import (
@@ -153,16 +153,21 @@ async def _run_net(
     graph: ExecutableGraph,
     pipeline_name: str,
     event_bus: InProcessEventBus | None,
+    *,
+    mode: ExecutionMode = ExecutionMode.SEQUENTIAL,
 ) -> tuple[ExecutableGraph, int]:
     """Execute a Petri net to quiescence, optionally emitting visualization events.
 
-    Runs until nothing is enabled. There is deliberately no transition budget:
+    Runs until nothing is fireable. There is deliberately no transition budget:
     a net that has stopped firing is finished, and a number chosen in advance is
-    either too small — truncating the pipeline and returning a partial result
-    with no error — or large enough never to matter.
+    either too small, truncating the pipeline and returning a partial result
+    with no error, or large enough never to matter.
 
     Both paths are the same runner; the event bus only adds an observer, so
-    watching a pipeline cannot change what it computes.
+    watching a pipeline cannot change what it computes. `mode` is the runner's:
+    sequential fires one transition at a time, concurrent overlaps the bodies
+    of transitions that are fireable together, which only a net with
+    independent branches can use.
 
     Nothing here may write to stdout: MCP's stdio transport is stdout, so a
     stray print corrupts the protocol. The engine's own progress prints are
@@ -173,11 +178,10 @@ async def _run_net(
     if event_bus is not None:
         from epimemer.visualization.instrumented_executor import execute_with_events
 
-        return await execute_with_events(graph, event_bus, pipeline_name)
+        return await execute_with_events(graph, event_bus, pipeline_name, mode=mode)
 
-    steps_before = graph.step_count
-    graph = await Runner.run_to_completion(RunContext(graph=graph))
-    return graph, graph.step_count - steps_before
+    summary = await Runner.run(RunContext(graph=graph, mode=mode))
+    return graph, summary.n_fired
 
 
 # --- Declaring what a response carries ---
@@ -1437,6 +1441,8 @@ async def store_decomposition(
             f"name this graph already holds keeps the description it has."
         )
 
+    # Collected here and turned into typed edges by one net after the loop.
+    decomposed_segments: list[DecomposedSegment] = []
     for seg_data in segments:
         segment_id = seg_data["segment_id"]
         segment = segments_by_id.get(segment_id)
@@ -1483,19 +1489,17 @@ async def store_decomposition(
                 if names:
                     tag_assignments.append((node, names))
 
-        decomposed = DecomposedSegment(
-            segment=segment,
-            topics=topics,
-            facts=facts,
-            inferences=inferences,
+        decomposed_segments.append(
+            DecomposedSegment(
+                segment=segment,
+                topics=topics,
+                facts=facts,
+                inferences=inferences,
+            )
         )
-        edge_graph = edge_creation_net(decomposed)
-        edge_graph, _ = await _run_net(edge_graph, "edge_creation", event_bus)
-        edges: list[NodeEdge] = list(edge_graph.place_named("Edges").tokens)
 
         seg_nodes: list[EpistemicNode] = [*topics, *facts, *inferences]
         batch_nodes.extend(seg_nodes)
-        batch_edges.extend(edges)
         datable.extend((node.id, node.content) for node in seg_nodes)
 
         if seg_nodes:
@@ -1551,6 +1555,15 @@ async def store_decomposition(
         total_topics += len(topics)
         total_facts += len(facts)
         total_inferences += len(inferences)
+
+    # One edge-creation net for the whole call, seeded with every segment: the
+    # net is built once, and a watcher on the event bus sees one pipeline run
+    # in which the transition fires once per segment.
+    if decomposed_segments:
+        edge_graph, _ = await _run_net(
+            edge_creation_net(decomposed_segments), "edge_creation", event_bus
+        )
+        batch_edges.extend(edge_graph.place_named("Edges").tokens)
 
     # A topic node created from a tag stands in every metacontext it is used
     # from, so this call's metacontext joins the set. Names take the union
@@ -1767,7 +1780,13 @@ async def _run_retrieval(
     from epimemer.pipelines.query.types import QueryResult
 
     graph = hybrid_retrieval_net(request, embedding_provider, storage)
-    graph, _ = await _run_net(graph, "retrieval", event_bus)
+    # Concurrent, because the net forks: the vector arm waits on the embedder
+    # while the lexical arm scans the store, and overlapping them saves the
+    # shorter arm's time whenever the embedder has any latency. Measured on
+    # 2026-10-08 with 2,000 facts: about the lexical arm's 25 ms, on the
+    # in-memory and SQLite stores alike, and nothing lost with an instant
+    # embedder.
+    graph, _ = await _run_net(graph, "retrieval", event_bus, mode=ExecutionMode.CONCURRENT)
     result: QueryResult = graph.place_named("QueryResult").tokens[0]
     return result
 
@@ -8507,7 +8526,7 @@ async def effective_backup_threshold(storage: StorageBackend, default: int) -> i
 
 
 async def backup_pressure(storage: StorageBackend, default_threshold: int) -> dict:
-    """The three keys every response reporting backup pressure carries.
+    """The keys every response reporting backup pressure carries.
 
     One function because three responses carry them — `store_decomposition`,
     `apply_reflection` and `graph_stats` — and a second spelling of

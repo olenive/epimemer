@@ -504,13 +504,6 @@ export interface PipelineStarted extends BaseEvent {
   edges: PipelineTopologyEdge[];
 }
 
-export interface TransitionEnabled extends BaseEvent {
-  category: "pipeline";
-  event_type: "transition_enabled";
-  pipeline_name: string;
-  transition_name: string;
-}
-
 export interface TransitionFired extends BaseEvent {
   category: "pipeline";
   event_type: "transition_fired";
@@ -548,13 +541,14 @@ export interface PipelineFailed extends BaseEvent {
   event_type: "pipeline_failed";
   pipeline_name: string;
   error: string;
+  /** The transition that raised, when the failure came from one. */
+  transition_name: string | null;
   transitions_fired: number;
   duration_ms: number;
 }
 
 export type PipelineEvent =
   | PipelineStarted
-  | TransitionEnabled
   | TransitionFired
   | TransitionCompleted
   | TokensUpdated

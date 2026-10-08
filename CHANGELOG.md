@@ -79,6 +79,26 @@ All notable changes to this project are recorded here. The format follows
   dicts, so the same timeline read back with the key there and without it on
   SurrealDB.
 
+- Petritype 0.2.0. The dashboard's pipeline strip now takes its events from
+  the engine's own record of each firing: the places a transition actually
+  consumed and produced, and the body's real duration, in place of a number
+  measured between observer calls. A failed pipeline names the transition
+  that raised. The `transition_enabled` event, which nothing consumed, is
+  gone.
+- Edge creation at ingest runs one net per `store_decomposition` call, a
+  token per segment, instead of building and running a net for every segment.
+- `search` runs its two retrieval arms at the same time. The net always forked
+  into a vector arm and a lexical arm that join at fusion, but it ran one
+  transition at a time; now the lexical scan overlaps the embedding call,
+  which saves the shorter arm's time whenever the embedder has latency.
+- The marimo notebooks and the `notebooks` extra are removed. They stepped
+  single nets with a slider, and the dashboard's pipeline strip now shows every
+  net live, with real durations; a demo walkthrough replaces them.
+- The orchestration net is removed. Nothing on the server path built it, the
+  request flow it drew never reached the dashboard, and it carried a second
+  auto-reflect counter beside the real one. The docs describe the four nets
+  that exist.
+
 ## [0.2.12] — 2026-10-02
 
 - Writes work again on Claude Code 2.1.287. Every write after `claim_agent`

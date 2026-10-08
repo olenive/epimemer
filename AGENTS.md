@@ -9,9 +9,7 @@ annotations where helpful, simple beats exhaustive. Prefer uv over pip. Use
 Petritype (the `petritype` package on PyPI) for complex processes and
 pipelines; depend on released versions only: release Petritype first, then
 bump the pin (locally, `uv pip install -e ../petritype`, never a committed
-path source). Marimo notebooks: a cell is a function, so return values rather
-than redefining a variable in another cell. We are building a robust, secure
-system, not a prototype.
+path source). We are building a robust, secure system, not a prototype.
 
 # Documentation
 Prefer commas, colons, or a second sentence over em-dashes. Say what is true

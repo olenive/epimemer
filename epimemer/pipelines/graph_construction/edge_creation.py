@@ -1,7 +1,7 @@
 """Edge creation Petri net for graph construction.
 
-Given a decomposed segment (segment + its extracted nodes), creates typed
-edges between all related nodes.
+Given decomposed segments (each a segment with its extracted nodes), creates
+typed edges among each segment's own nodes.
 
 Edge rules:
 - segment -> topic:     EdgeType.ABOUT
@@ -12,8 +12,10 @@ Edge rules:
 - fact -> inference:    EdgeType.SUPPORTS               (same source segment)
 
 Petri net flow:
-    [DecomposedSegment] -> create_edges -> [list[NodeEdge]]
+    [DecomposedSegments] -> create_edges (once per segment) -> [Edges]
 """
+
+from collections.abc import Sequence
 
 from petritype import petri_net
 from petritype.core.executable_graph_components import (
@@ -123,15 +125,20 @@ def create_edges(decomposed: DecomposedSegment) -> list[NodeEdge]:
 @petri_net(
     name="edge-creation",
     mode="batch",
-    description="Create typed edges between nodes extracted from a segment.",
+    description="Create typed edges between nodes extracted from each segment.",
 )
 def edge_creation_net(
-    decomposed: DecomposedSegment,
+    decomposed: Sequence[DecomposedSegment],
 ) -> ExecutableGraph:
-    """Build a Petri net for edge creation.
+    """Build a Petri net for edge creation over one or more segments.
+
+    Every segment is a seed token in `DecomposedSegments`. The single
+    transition consumes them in order, firing once per segment, and deposits
+    each segment's edges into `Edges`, so a run to quiescence leaves the edges
+    of all of them there.
 
     Args:
-        decomposed: A segment bundled with its extracted nodes.
+        decomposed: Segments, each bundled with its extracted nodes.
 
     Returns:
         An ExecutableGraph ready to execute.
@@ -139,7 +146,7 @@ def edge_creation_net(
     return ExecutableGraphOperations.construct_graph(
         [
             # Places
-            ListPlaceNode("DecomposedSegments", DecomposedSegment, [decomposed]),
+            ListPlaceNode("DecomposedSegments", DecomposedSegment, list(decomposed)),
             ListPlaceNode("Edges", NodeEdge),
             # Transition
             FunctionTransitionNode("create_edges", create_edges),

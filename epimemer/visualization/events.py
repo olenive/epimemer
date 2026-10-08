@@ -754,17 +754,12 @@ class PipelineStarted(Event):
     edges: list[PipelineTopologyEdge] = Field(default_factory=list)
 
 
-class TransitionEnabled(Event):
-    """A transition has become enabled (has sufficient input tokens)."""
-
-    category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
-    event_type: Literal["transition_enabled"] = "transition_enabled"
-    pipeline_name: str
-    transition_name: str
-
-
 class TransitionFired(Event):
-    """A transition has started executing."""
+    """A transition fired, taking tokens from `input_places`.
+
+    A net run reports a firing once it has completed, so this arrives directly
+    before its `TransitionCompleted`; a phase pipeline sends it as the phase starts.
+    """
 
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
     event_type: Literal["transition_fired"] = "transition_fired"
@@ -781,7 +776,7 @@ class TransitionCompleted(Event):
     pipeline_name: str
     transition_name: str
     output_places: list[str]  # places that received tokens
-    duration_ms: float  # execution time
+    duration_ms: float  # wall time of the transition's body
 
 
 class TokensUpdated(Event):
@@ -804,18 +799,20 @@ class PipelineCompleted(Event):
 
 
 class PipelineFailed(Event):
-    """A pipeline execution ended by raising — terminal, like PipelineCompleted.
+    """A pipeline execution ended by raising: terminal, like PipelineCompleted.
 
     Kept distinct from `PipelineCompleted` so a consumer can clear the "running"
     state *and* surface the error, rather than mistaking a failure for a success.
-    `transitions_fired` counts the transitions that fired before the raising one
-    (which did not fire).
+    `transition_name` names the transition that raised, when the failure came
+    from one. `transitions_fired` counts the firings that completed, so the
+    raising one is excluded.
     """
 
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
     event_type: Literal["pipeline_failed"] = "pipeline_failed"
     pipeline_name: str
     error: str
+    transition_name: str | None = None
     transitions_fired: int
     duration_ms: float
 
@@ -866,7 +863,6 @@ GraphEvent = (
 )
 PipelineEvent = (
     PipelineStarted
-    | TransitionEnabled
     | TransitionFired
     | TransitionCompleted
     | TokensUpdated

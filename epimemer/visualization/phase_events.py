@@ -105,9 +105,11 @@ async def phase_pipeline(
     # net observer sends — the frontend merges per place, but a consumer reading
     # one event in isolation should still see the run so far.
     token_counts: dict[str, int] = {}
+    # The phase whose body is running, so a failure can name it.
+    running: str | None = None
 
     async def phase(name: str, work, *, tokens=None):
-        nonlocal fired
+        nonlocal fired, running
         index = transitions.index(name)
         await bus.publish(
             TransitionFired(
@@ -117,7 +119,9 @@ async def phase_pipeline(
             )
         )
         phase_started = time.perf_counter()
+        running = name
         result = await work()
+        running = None
         fired += 1
         await bus.publish(
             TransitionCompleted(
@@ -143,6 +147,7 @@ async def phase_pipeline(
             PipelineFailed(
                 pipeline_name=pipeline_name,
                 error=str(exc),
+                transition_name=running,
                 transitions_fired=fired,
                 duration_ms=(time.perf_counter() - started) * 1000,
             )

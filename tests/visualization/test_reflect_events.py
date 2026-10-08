@@ -156,6 +156,9 @@ class TestEmission:
         assert isinstance(received[-1], PipelineFailed)
         assert received[-1].pipeline_name == "reflect"
         assert "consolidation exploded" in received[-1].error
+        # The phase whose body raised is named, the way a net names its transition.
+        assert received[-1].transition_name == "topic_consolidation"
+        assert received[-1].transitions_fired == 0
         assert not any(isinstance(e, PipelineCompleted) for e in received)
 
 

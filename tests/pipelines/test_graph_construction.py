@@ -223,7 +223,7 @@ class TestEdgeCreationPetriNet:
 
     @pytest.mark.asyncio
     async def test_petri_net_produces_edges(self, decomposed: DecomposedSegment) -> None:
-        graph = edge_creation_net(decomposed)
+        graph = edge_creation_net([decomposed])
         graph, transitions_fired = await ExecutableGraphOperations.execute_graph(
             graph,
             stop_after_n_firings=10,
@@ -236,7 +236,7 @@ class TestEdgeCreationPetriNet:
 
     @pytest.mark.asyncio
     async def test_petri_net_input_consumed(self, decomposed: DecomposedSegment) -> None:
-        graph = edge_creation_net(decomposed)
+        graph = edge_creation_net([decomposed])
         graph, _ = await ExecutableGraphOperations.execute_graph(
             graph,
             stop_after_n_firings=10,
@@ -248,7 +248,7 @@ class TestEdgeCreationPetriNet:
 
     @pytest.mark.asyncio
     async def test_petri_net_edge_types_correct(self, decomposed: DecomposedSegment) -> None:
-        graph = edge_creation_net(decomposed)
+        graph = edge_creation_net([decomposed])
         graph, _ = await ExecutableGraphOperations.execute_graph(
             graph,
             stop_after_n_firings=10,
@@ -263,6 +263,39 @@ class TestEdgeCreationPetriNet:
         assert EdgeType.SUPPORTS in edge_types
         assert EdgeType.EXTRACTED_UNDER_TOPIC in edge_types
         assert EdgeType.ABSTRACTS in edge_types
+
+    @pytest.mark.asyncio
+    async def test_petri_net_fires_once_per_segment(self, decomposed: DecomposedSegment) -> None:
+        """Two segments seed one net: one run fires twice and holds both sets of edges."""
+        seg_id = "seg-2"
+        second = DecomposedSegment(
+            segment=Segment(
+                id=seg_id,
+                source_id="doc-1",
+                text="Transformers dominate natural language processing.",
+                span_start=61,
+                span_end=111,
+            ),
+            topics=[Topic(id="topic-2", content="Transformers", source_id=seg_id)],
+            facts=[
+                Fact(id="fact-2", content="Transformers dominate NLP.", source_id=seg_id),
+                Fact(id="fact-3", content="Attention is central.", source_id=seg_id),
+            ],
+        )
+
+        graph = edge_creation_net([decomposed, second])
+        graph, transitions_fired = await ExecutableGraphOperations.execute_graph(
+            graph,
+            stop_after_n_firings=10,
+        )
+        assert transitions_fired == 2
+        assert len(graph.place_named("DecomposedSegments").tokens) == 0
+
+        def triples(edges: list[NodeEdge]) -> list[tuple[str, str, EdgeType]]:
+            return sorted((e.src_id, e.dst_id, e.type) for e in edges)
+
+        expected = triples([*create_edges(decomposed), *create_edges(second)])
+        assert triples(graph.place_named("Edges").tokens) == expected
 
 
 # --- Versioning Tests ---

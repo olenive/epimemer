@@ -18,6 +18,10 @@ running both, and neither can change what the other computes.
 The lexical arm is a transition rather than a call inside another one on
 purpose: the pipeline strip renders net topology, so a fusion hidden inside a
 function would make the process invisible in exactly the tool built to show it.
+The fork is also run as one: `search` drives this net in the runner's
+concurrent mode, so the two arms' bodies overlap and the join waits for the
+slower one, which saves the shorter arm's time whenever the embedder has
+latency.
 
 `plan_retrieval` exists because a place's token is consumed by whichever
 transition takes it, so two arms cannot both read one place. It also has real

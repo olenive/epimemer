@@ -1,34 +1,47 @@
 """Turns Petri net execution into the event stream the visualization consumes.
 
-Petritype's `Runner` already drives a net to quiescence and hands observers the
-live graph after every state change. All that is missing is a translation: graph
-state → `PipelineEvent`. That translation is `pipeline_observer`, and it is the
-only thing in this module that knows about the wire format.
+Petritype's `Runner` drives a net to quiescence and hands observers the live
+graph after every state change. With `record_events` on, the engine also keeps
+its own log of what happened: one `Fired` record per completed firing, naming
+the tokens it consumed and produced and the wall time of its body.
+`pipeline_observer` drains that log at each notification and translates it into
+`PipelineEvent`s; it is the only thing in this module that knows the wire
+format.
 
-Two consequences worth stating, because they were not true of the hand-rolled
-loop this replaces:
+What follows from reading the engine's own records:
 
-- **No iteration cap.** The net stops when nothing is enabled, not when a
-  guessed budget runs out. A cap that is too low truncates the pipeline and
-  returns a half-filled result with no error; one that is high enough to be safe
-  never fires.
-- **Observing does not change the run.** Events are published from a graph the
-  runner owns; the observer only reads. The bus is a tap, not a valve — see
+- **Lossless in both modes.** A concurrent notification can cover several
+  completions, and each left its own record, so each is reported once.
+- **Real durations.** `duration_ms` is the body's wall time as the engine
+  measured it around the call.
+- **Places from tokens.** `input_places` and `output_places` name the places a
+  firing actually took tokens from and deposited them into.
+- **No iteration cap.** The net stops when nothing is fireable. A cap that is
+  too low truncates the pipeline and returns a half-filled result with no
+  error; one that is high enough to be safe never fires.
+- **Observing does not change the run.** The observer switches recording on and
+  reads; tokens flow the same way with or without it. The bus is a tap: see
   `tests/pipelines/test_net_execution.py`.
 - **Every run ends the stream.** Success emits `PipelineCompleted`; a raising
-  transition emits `PipelineFailed` and then re-raises. The two are distinct so a
-  consumer can tell a finished pipeline from a failed one.
+  transition emits `PipelineFailed`, naming that transition, and then
+  re-raises. The two are distinct so a consumer can tell a finished pipeline
+  from a failed one.
 
 Usage:
     bus = create_event_bus()
-    graph = reflection_net(request, storage, embedding_provider)
-    result_graph, fired = await execute_with_events(graph, bus, "reflection")
+    graph = semantic_similarity_segmentation_net(document, embedding_provider)
+    result_graph, fired = await execute_with_events(graph, bus, "segmentation")
 """
 
 import time
 
-from petritype.core.executable_graph_components import ExecutableGraph
-from petritype.runtime import Observer, RunContext, Runner
+from petritype.core import events as engine_events
+from petritype.core.events import PlaceTokenId
+from petritype.core.executable_graph_components import (
+    ExecutableGraph,
+    TransitionFailedError,
+)
+from petritype.runtime import ExecutionMode, Observer, RunContext, Runner
 
 from epimemer.visualization.event_bus import InProcessEventBus
 from epimemer.visualization.events import (
@@ -38,7 +51,6 @@ from epimemer.visualization.events import (
     PipelineTopologyEdge,
     TokensUpdated,
     TransitionCompleted,
-    TransitionEnabled,
     TransitionFired,
 )
 
@@ -54,6 +66,10 @@ def _place_names(graph: ExecutableGraph) -> list[str]:
 
 def _transition_names(graph: ExecutableGraph) -> list[str]:
     return [t.name for t in graph.transitions]
+
+
+def _fired_total(graph: ExecutableGraph) -> int:
+    return sum(graph.fired_counts.values())
 
 
 def _topology_edges(graph: ExecutableGraph) -> list[PipelineTopologyEdge]:
@@ -77,92 +93,75 @@ def _topology_edges(graph: ExecutableGraph) -> list[PipelineTopologyEdge]:
     ]
 
 
-def _input_place_names(graph: ExecutableGraph, transition_name: str) -> list[str]:
-    """Places wired as inputs to a transition, including non-consuming read edges.
+def _places_of(tokens: tuple[PlaceTokenId, ...]) -> list[str]:
+    """The places a firing's tokens came from or went to, each once, in first-seen order."""
+    return list(dict.fromkeys(place for place, _token_id in tokens))
 
-    Taken from the topology rather than from the engine's fire history: the
-    history is capped for memory and its retention is configurable, so it is not
-    a dependable source. The two agree for any transition whose input arcs all
-    carry a token when it fires, which is every net here.
+
+async def _publish_recorded(
+    bus: InProcessEventBus, pipeline_name: str, graph: ExecutableGraph
+) -> list[engine_events.Event]:
+    """Drain the graph's event log and publish it, then the current token counts.
+
+    Each `Fired` record becomes a `TransitionFired` and `TransitionCompleted`
+    pair, oldest first. The other records (tokens added from outside a firing,
+    mutations, toggles) have no counterpart on the wire. Returns the drained
+    records so the failure path can find the `Failed` one.
     """
-    return [
-        edge.place_node_name
-        for edge in (*graph.argument_edges, *graph.snapshot_edges, *graph.mutate_edges)
-        if edge.transition_node_name == transition_name
-    ]
+    records = graph.drain_events()
+    for record in records:
+        if isinstance(record, engine_events.Fired):
+            await bus.publish(
+                TransitionFired(
+                    pipeline_name=pipeline_name,
+                    transition_name=record.transition,
+                    input_places=_places_of(record.consumed),
+                )
+            )
+            await bus.publish(
+                TransitionCompleted(
+                    pipeline_name=pipeline_name,
+                    transition_name=record.transition,
+                    output_places=_places_of(record.produced),
+                    duration_ms=record.duration_ms,
+                )
+            )
+    await bus.publish(
+        TokensUpdated(
+            pipeline_name=pipeline_name,
+            place_token_counts=_place_token_counts(graph),
+        )
+    )
+    return records
 
 
-def _output_place_names(graph: ExecutableGraph, transition_name: str) -> list[str]:
-    """Places a transition deposits into, from the topology. See `_input_place_names`."""
-    return [
-        edge.place_node_name
-        for edge in graph.return_edges
-        if edge.transition_node_name == transition_name
-    ]
+def _failure(records: list[engine_events.Event], exc: Exception) -> tuple[str | None, str]:
+    """The failed transition's name and the error to show for it.
+
+    The engine's `Failed` record names both, and its error is the body's own
+    exception. Without one, the exception is all there is.
+    """
+    failed = next((r for r in records if isinstance(r, engine_events.Failed)), None)
+    if failed is not None:
+        return failed.transition, failed.error
+    if isinstance(exc, TransitionFailedError):
+        return exc.transition_name, str(exc)
+    return None, str(exc)
 
 
 def pipeline_observer(bus: InProcessEventBus, pipeline_name: str) -> Observer:
-    """Build an observer that republishes graph state changes as pipeline events.
+    """Build an observer that republishes the engine's event log as pipeline events.
 
-    The runner calls this once for the initial marking and once after every
-    change. What fired since the last call is read by diffing `fired_counts` — a
-    per-transition tally the engine keeps, monotonic and never trimmed — not from
-    `last_fired`. That distinction is load-bearing in `CONCURRENT` mode: a single
-    notification can cover a whole batch of completions, `step_count` jumps by
-    more than one, and `last_fired` names only the last of them. Diffing the
-    counts catches every firing in the batch; reading `last_fired` would drop all
-    but one. In `SEQUENTIAL` mode each firing gets its own notification, so the
-    diff is +1 on one transition and the two readings agree.
-
-    `TransitionEnabled` / `Fired` / `Completed` are emitted together, after the
-    fact — one triple per firing. The runner fires atomically from an observer's
-    point of view (no callback between "enabled" and "done"), so the three
-    describe one completed firing rather than three moments; they stay separate
-    events because the frontend consumes them that way. Within one batch the
-    triples are ordered by net definition, not completion order — concurrent
-    completion order is only partial anyway.
+    Each notification drains the log, so every firing since the previous one is
+    reported exactly once, however many a concurrent batch completed. The
+    observer switches recording on itself: the runner's first notification is
+    the initial marking, before anything fires, so a run loses nothing. Draining
+    empties the log, so this should be the graph's only reader of it.
     """
-    state: dict = {"fired_counts": None, "since": time.monotonic()}
 
     async def observe(graph: ExecutableGraph) -> None:
-        now = time.monotonic()
-        previous = state["fired_counts"]
-        current = dict(graph.fired_counts)
-        state["fired_counts"] = current
-
-        if previous is not None:
-            for transition_name in _transition_names(graph):
-                fired = current.get(transition_name, 0) - previous.get(transition_name, 0)
-                for _ in range(fired):
-                    await bus.publish(
-                        TransitionEnabled(
-                            pipeline_name=pipeline_name,
-                            transition_name=transition_name,
-                        )
-                    )
-                    await bus.publish(
-                        TransitionFired(
-                            pipeline_name=pipeline_name,
-                            transition_name=transition_name,
-                            input_places=_input_place_names(graph, transition_name),
-                        )
-                    )
-                    await bus.publish(
-                        TransitionCompleted(
-                            pipeline_name=pipeline_name,
-                            transition_name=transition_name,
-                            output_places=_output_place_names(graph, transition_name),
-                            duration_ms=(now - state["since"]) * 1000,
-                        )
-                    )
-
-        state["since"] = now
-        await bus.publish(
-            TokensUpdated(
-                pipeline_name=pipeline_name,
-                place_token_counts=_place_token_counts(graph),
-            )
-        )
+        graph.record_events = True
+        await _publish_recorded(bus, pipeline_name, graph)
 
     return observe
 
@@ -171,19 +170,25 @@ async def execute_with_events(
     graph: ExecutableGraph,
     bus: InProcessEventBus,
     pipeline_name: str,
+    *,
+    mode: ExecutionMode = ExecutionMode.SEQUENTIAL,
 ) -> tuple[ExecutableGraph, int]:
     """Run a Petri net to quiescence, publishing the pipeline's event stream.
 
     Args:
         graph: The executable Petri net graph.
         bus: Event bus to publish pipeline events on.
-        pipeline_name: Name for this pipeline execution (e.g., "reflection").
+        pipeline_name: Name for this pipeline execution (e.g., "segmentation").
+        mode: The runner's execution mode; the stream is complete in either.
 
     Returns:
         (updated_graph, transitions_fired)
     """
     started_at = time.monotonic()
-    steps_before = graph.step_count
+    fired_before = _fired_total(graph)
+    # Records left from before this run belong to no stream of ours.
+    graph.drain_events()
+    graph.record_events = True
 
     await bus.publish(
         PipelineStarted(
@@ -194,33 +199,33 @@ async def execute_with_events(
         )
     )
 
-    # A raising transition must still close the stream. The runner mutates this
-    # graph in place, so `step_count` reflects what fired before the failure even
-    # after the exception unwinds. Publish a terminal `PipelineFailed` and
-    # re-raise — the caller (`_run_with_timeout`) turns it into an error response;
-    # without this the frontend would show a pipeline that never ends.
+    ctx = RunContext(graph=graph, mode=mode, observers=(pipeline_observer(bus, pipeline_name),))
     try:
-        graph = await Runner.run_to_completion(
-            RunContext(graph=graph, observers=(pipeline_observer(bus, pipeline_name),))
-        )
+        summary = await Runner.run(ctx)
     except Exception as exc:
+        # The runner raises without notifying observers, so the log still holds
+        # the failure and anything that completed in the same batch. Publish it,
+        # close the stream with `PipelineFailed`, and re-raise for the caller to
+        # turn into an error response. Without a terminal event the frontend
+        # would show a pipeline that never ends.
+        records = await _publish_recorded(bus, pipeline_name, graph)
+        transition_name, error = _failure(records, exc)
         await bus.publish(
             PipelineFailed(
                 pipeline_name=pipeline_name,
-                error=str(exc),
-                transitions_fired=graph.step_count - steps_before,
+                error=error,
+                transition_name=transition_name,
+                transitions_fired=_fired_total(graph) - fired_before,
                 duration_ms=(time.monotonic() - started_at) * 1000,
             )
         )
         raise
 
-    fired = graph.step_count - steps_before
     await bus.publish(
         PipelineCompleted(
             pipeline_name=pipeline_name,
-            transitions_fired=fired,
+            transitions_fired=summary.n_fired,
             duration_ms=(time.monotonic() - started_at) * 1000,
         )
     )
-
-    return graph, fired
+    return ctx.graph, summary.n_fired

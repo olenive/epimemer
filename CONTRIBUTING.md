@@ -12,16 +12,6 @@ Python 3.14+ and [uv](https://docs.astral.sh/uv/). The default suite needs
 no external services and no embedding model: it runs against the in-memory
 store and SurrealDB's embedded `mem://` engine, with a mock embedding provider.
 
-The marimo notebooks under `notebooks/` need an extra, and rendering their
-Petri-net diagrams also needs the Graphviz system binaries, which no Python
-package can supply:
-
-```bash
-uv sync --extra dev --extra notebooks
-brew install graphviz          # or your platform's equivalent
-uv run marimo edit notebooks/01_segmentation.py
-```
-
 ## Tests
 
 ```bash
@@ -126,13 +116,11 @@ epimemer/
     reflection/: Topic consolidation, contradiction detection, archival
     review/: Reading the decision journal back, and what a reviewer concludes
     timeline/: Pure functional timeline operations
-    orchestration/: Top-level request routing Petri net
   mcp/: FastMCP server, tool implementations, config
   logging/: Structured JSON logging
   visualization/: Standalone viz hub, session client, and frontend
 tests/: unit, pipeline, MCP, integration
 scripts/: benchmarks, corpus measurement, prose lint, advisory check, local SurrealDB
-notebooks/: marimo walkthroughs of each pipeline stage
 ```
 
 ## Where the design lives

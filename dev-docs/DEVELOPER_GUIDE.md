@@ -29,7 +29,7 @@ uv run python -m pytest tests/pipelines/test_segmentation.py -v
 uv run python -m pytest tests/mcp/test_tools.py::TestIngest -v
 
 # With output (see Petri net token flow)
-uv run python -m pytest tests/pipelines/test_orchestration.py -v -s
+uv run python -m pytest tests/pipelines/test_net_execution.py -v -s
 ```
 
 ### Dependencies: `scripts/audit_dependencies.py`
@@ -197,9 +197,11 @@ async def main():
 ### Segmentation
 
 Nets are driven by the Petritype `Runner`. `Runner.step(ctx)` fires a single
-transition (returns 0 or 1) for step-through debugging;
-`Runner.run_to_completion(ctx)` drives to quiescence. Both mutate `ctx.graph`
-in place.
+transition (returns 0 or 1) for step-through debugging; `Runner.run(ctx)`
+drives to quiescence and returns a summary of what fired. Both mutate
+`ctx.graph` in place. Production runs every net through `_run_net` in
+`mcp/tools.py`: the same runner, with the dashboard's observer attached when
+a dashboard is connected, and no firing budget.
 
 ```python
 import asyncio
@@ -365,39 +367,6 @@ reasoning can be tested without a backend.
   that were cancelled or moved, and materialising one occurrence into an
   ordinary timepoint.
 
-### Orchestration net
-
-```python
-import asyncio
-from petritype.runtime import RunContext, Runner
-from epimemer.embeddings.mock import MockEmbeddingProvider
-from epimemer.mcp.config import ServerConfig
-from epimemer.pipelines.orchestration.orchestration_net import MemoryRequest, orchestration_net
-from epimemer.storage.memory import InMemoryStorage
-
-
-async def main():
-    storage = InMemoryStorage()
-    emb = MockEmbeddingProvider(model_id="mock", dimension=8)
-    config = ServerConfig(storage_backend="memory", embedding_provider="mock")
-
-    request = MemoryRequest(action="segment", payload={"content": "Test content."})
-    graph = orchestration_net(request, storage, emb, config)
-    ctx = RunContext(graph=graph)
-
-    # Step 1: route to the SegmentInput place
-    await Runner.step(ctx)
-    print(f"SegmentInput tokens: {graph.place_named('SegmentInput').tokens}")
-
-    # Step 2: run the routed sub-pipeline
-    await Runner.step(ctx)
-    result = graph.place_named("MemoryResult").tokens[0]
-    print(f"Result: {result.action}: {result.result}")
-
-
-asyncio.run(main())
-```
-
 ### MCP tools (without server)
 
 ```python
@@ -451,16 +420,26 @@ optional extras.
 
 ## Petri net visualisation
 
-Any Petri net can be visualised via Petritype's built-in Graphviz support:
+Any net renders through Petritype's plotting modules, which need
+`petritype[viz]` and the Graphviz `dot` binary on the path, neither of which
+Epimemer installs: `uv pip install 'petritype[viz]'` into the venv for the
+session, and `brew install graphviz` or the platform's equivalent.
 
 ```python
+from petritype.plotting.rustworkx_graph import RustworkxGraph
+from petritype.plotting.simple_graphviz import SimpleGraphvizVisualization
+
 from epimemer.core.types import RawDocument
 from epimemer.pipelines.segmentation.paragraph_split import paragraph_split_segmentation_net
 
-doc = RawDocument(content="Hello.\n\nWorld.")
-graph = paragraph_split_segmentation_net(doc)
-# graph.visualize()  # Opens Graphviz diagram
+graph = paragraph_split_segmentation_net(RawDocument(content="Hello.\n\nWorld."))
+diagram = SimpleGraphvizVisualization.graph(RustworkxGraph.from_executable_graph(graph))
 ```
+
+The running server draws the same nets live: the dashboard's pipeline strip
+takes its events from the engine's own record of each firing, which places it
+consumed and produced and how long the body took, so what the strip shows is
+what happened rather than what the topology predicts.
 
 ## Test structure
 
@@ -470,7 +449,7 @@ tests/
   storage/        InMemoryStorage and SurrealDB (mem://) tests
   embeddings/     Mock embedding provider tests
   pipelines/      Petri net pipeline tests (segmentation, graph construction,
-                  query, reflection, timeline, orchestration)
+                  query, reflection, timeline)
   mcp/            MCP tool tests (unit + e2e via FastMCP call_tool)
   integration/    Full pipeline end-to-end tests
 ```
