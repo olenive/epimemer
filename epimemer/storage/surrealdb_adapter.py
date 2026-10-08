@@ -12,10 +12,12 @@ import contextlib
 import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Literal
+from urllib.parse import urlsplit, urlunsplit
 
 from surrealdb import AsyncSurreal
+from surrealdb.errors import NotFoundError
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from epimemer.core.seat import JudgeConfirmation
@@ -54,11 +56,16 @@ from epimemer.storage.bm25 import containment_first
 from epimemer.storage.protocol import (
     EdgeDirection,
     MergeOverrides,
+    PassagesCited,
+    SchemaTooNew,
     StorageBackend,
+    TimelineConflict,
     WarningOverrides,
     drop_none_values,
+    require_own_passages,
     validate_graph_name,
 )
+from epimemer.storage.timestamps import iso_micros
 
 # Schemes the SDK maps to `AsyncEmbeddedSurrealConnection`, which is not a
 # connection to anything: the engine, and therefore the whole graph, lives inside
@@ -80,6 +87,32 @@ def is_embedded_url(url: str) -> bool:
     (`REVIEW_MODE.md` §10.3).
     """
     return url.startswith(_EMBEDDED_SCHEMES)
+
+
+def _shown_url(url: str) -> str:
+    """`url` as it may be shown to a person or an agent: never a user or a password.
+
+    `ws://alice:secret@host:8000/rpc` is a legal URL, and the location it feeds
+    is printed in the startup log and returned to agents. A server URL is
+    rebuilt from its scheme, host, port and path, which leaves out the userinfo,
+    and the query and fragment with it, since either can carry a token too. An
+    embedded URL is shown as given: its "host" is the start of a file path, and
+    rebuilding it would lowercase or drop part of where the graphs live.
+    """
+    if is_embedded_url(url):
+        return url
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    # An IPv6 address keeps the brackets that set it apart from the port.
+    if ":" in host:
+        host = f"[{host}]"
+    try:
+        port = parts.port
+    except ValueError:
+        # Not a number. The connection will refuse it; the location still names the host.
+        port = None
+    netloc = host if port is None else f"{host}:{port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
 _NODE_TYPE_TO_TABLE = {
@@ -125,6 +158,19 @@ def _node_tables(node_type: NodeType | None) -> str:
 # where the best matches are mostly retired.
 _OVERFETCH_FACTORS = (3, 10)
 
+# Cosine similarity, scoring 0.0 where either vector is all zeros, which is the
+# rule every other backend applies. The engine's own function divides by the
+# zero norm and answers NaN, and NaN sorts above every real score, so a single
+# zero vector stored anywhere would take the first place in every search.
+_COSINE_SCORE = (
+    "(IF $query_is_zero OR vector::magnitude(vector) = 0 { 0.0 } "
+    "ELSE { vector::similarity::cosine(vector, $query_vector) })"
+)
+
+
+def _cosine_params(query_vector: list[float]) -> dict:
+    return {"query_vector": query_vector, "query_is_zero": not any(query_vector)}
+
 
 async def _ranked_items(
     query, query_vector: list[float], model_id: str, limit: int
@@ -135,16 +181,16 @@ async def _ranked_items(
     expensive about this query historically came from the filter, not the scan.
     """
     rows = await query(
-        """
+        f"""
         SELECT
             item_id,
-            vector::similarity::cosine(vector, $query_vector) AS score
+            {_COSINE_SCORE} AS score
         FROM embedding
         WHERE model_id = $model_id
         ORDER BY score DESC
         LIMIT $limit
         """,
-        {"query_vector": query_vector, "model_id": model_id, "limit": limit},
+        {**_cosine_params(query_vector), "model_id": model_id, "limit": limit},
     )
     return [(r["item_id"], r["score"]) for r in rows]
 
@@ -216,17 +262,17 @@ async def _ranked_items_with_status(
     if not wanted:
         return []
     rows = await query(
-        """
+        f"""
         SELECT
             item_id,
-            vector::similarity::cosine(vector, $query_vector) AS score
+            {_COSINE_SCORE} AS score
         FROM embedding
         WHERE model_id = $model_id AND item_id IN $wanted
         ORDER BY score DESC
         LIMIT $k
         """,
         {
-            "query_vector": query_vector,
+            **_cosine_params(query_vector),
             "model_id": model_id,
             "k": k,
             "wanted": wanted,
@@ -387,6 +433,47 @@ def _upsert(table: str, *, data: str = "data", uid: str = "uid") -> str:
     of one table in a single transaction can give each statement its own.
     """
     return f"UPSERT {table} CONTENT ${data} WHERE uid = ${uid}"
+
+
+# What SurrealDB reports for each statement of a failed transaction other than
+# the one that failed it.
+_SKIPPED_IN_FAILED_TRANSACTION = "not executed due to a failed transaction"
+
+# How `resegment_tx` reads the count back out of what it threw when claims cite
+# the passages: a `THROW` reaches Python only as the text of a failed statement.
+_RESEGMENT_CITED = re.compile(r"resegment_tx: (\d+) nodes cite the passages")
+_RESEGMENT_NO_DOCUMENT = "resegment_tx: no such document"
+# What `set_node_status_tx` throws when a node it was asked to flip is absent,
+# read back out to raise the `KeyError` every other backend raises for it.
+_STATUS_NODE_MISSING = "set_node_status_tx: node not found"
+
+
+def _timeline_statements(timeline: Timeline, key: str) -> tuple[list[str], dict]:
+    """Statements that write `timeline` on the version check, with their parameters.
+
+    For a `BEGIN ... COMMIT` batch, and only for one: the check reads the stored
+    version and `THROW`s when it is not the one `timeline` was read at
+    (`next_timeline_version`), and a throw is what fails the whole batch, so a
+    stale timeline leaves nothing else in the transaction written. A record
+    written before the field existed has no `version` and reads as 0, and so
+    does no record at all. `key` names the bind parameters, so a batch writing
+    several timelines gives each its own.
+
+    The throw says only that the check failed. `_timeline_conflict` reads
+    the version that failed it, once the transaction has rolled back.
+    """
+    statements = [
+        f"LET ${key}_found = (SELECT VALUE version FROM timeline WHERE uid = ${key}_uid)",
+        f"IF (array::first(${key}_found) ?? 0) != ${key}_expected "
+        f"{{ THROW 'timeline version check failed' }}",
+        _upsert("timeline", data=key, uid=f"{key}_uid"),
+    ]
+    params = {
+        key: _serialize(timeline.model_copy(update={"version": timeline.version + 1})),
+        f"{key}_uid": timeline.id,
+        f"{key}_expected": timeline.version,
+    }
+    return statements, params
 
 
 # --- Schema version and migrations ---
@@ -652,6 +739,28 @@ _RENAME_PROCEEDED_KIND = (
 )
 
 
+async def _stored_schema_version(query: Callable[..., Awaitable[Any]]) -> int:
+    """The version marker of the graph the connection is pointed at, 0 if it has none.
+
+    A read and nothing else: on a database that has never been opened the
+    record and its table are both absent, and asking creates neither. The two
+    engines answer that absence differently: the embedded one returns nothing,
+    a served SurrealDB raises that the table does not exist. Both mean a graph
+    nobody has written, which is version 0.
+    """
+    try:
+        stored = await query(_SCHEMA_VERSION_GET)
+    except NotFoundError:
+        return 0
+    return int(stored[0]) if stored and stored[0] is not None else 0
+
+
+def _refuse_newer_schema(database: str, version: int) -> None:
+    """Raise `SchemaTooNew` for a graph a newer Epimemer wrote."""
+    if version > _SCHEMA_VERSION:
+        raise SchemaTooNew(database, version, _SCHEMA_VERSION)
+
+
 async def _migrate_schema(
     query: Callable[..., Awaitable[Any]], database: str, storage: StorageBackend
 ) -> None:
@@ -674,10 +783,15 @@ async def _migrate_schema(
     walk over `tagged_with_topic` and `has_metacontext`, which the protocol
     already answers, and passing the backend is what lets the in-memory store
     run the identical function in tests.
+
+    A graph stamped above `_SCHEMA_VERSION` was written by a newer Epimemer and
+    raises `SchemaTooNew` rather than being stepped or stamped. `_setup_schema`
+    makes the same check before it defines anything, so on the ordinary path a
+    newer graph never gets this far.
     """
-    stored = await query(_SCHEMA_VERSION_GET)
-    version = int(stored[0]) if stored and stored[0] is not None else 0
-    if version >= _SCHEMA_VERSION:
+    version = await _stored_schema_version(query)
+    _refuse_newer_schema(database, version)
+    if version == _SCHEMA_VERSION:
         return
 
     if version < 2:
@@ -961,6 +1075,62 @@ def _require_judge(rows) -> bool | None:
     return None if value is None else bool(value)
 
 
+# SurrealDB holds an integer in a signed 64-bit word, and one outside it is
+# stored wrapped: 2**63 reads back as -2**63, -2**63 - 1 as 2**63 - 1, and
+# anything past 2**64 fails to decode. The other backends keep any Python
+# integer exactly, so this one refuses a record carrying a wider integer rather
+# than store a different number.
+_INT64_MIN = -(2**63)
+_INT64_MAX = 2**63 - 1
+
+
+def _wide_integer(value) -> tuple[list, int] | None:
+    """The first integer in `value` that 64 bits cannot hold, and the keys leading to it.
+
+    `value` is JSON-shaped: dicts, lists and scalars. The keys run from the
+    outside in. A bool is an int to Python but SurrealDB stores it as a
+    boolean, so it is passed over. Only containers and integers are descended
+    into, which keeps an embedding's vector of floats a cheap walk.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return None if _INT64_MIN <= value <= _INT64_MAX else ([], value)
+    if isinstance(value, dict):
+        pairs = value.items()
+    elif isinstance(value, list):
+        pairs = enumerate(value)
+    else:
+        return None
+    for key, item in pairs:
+        if isinstance(item, dict | list | int) and (found := _wide_integer(item)):
+            keys, integer = found
+            return [key, *keys], integer
+    return None
+
+
+def _field_path(keys: list) -> str:
+    """`["metadata", "xs", 2]` as `metadata.xs[2]`."""
+    return "".join(
+        f"[{key}]" if isinstance(key, int) else (f".{key}" if position else str(key))
+        for position, key in enumerate(keys)
+    )
+
+
+def _require_64_bit_integers(data: dict, record: str) -> None:
+    """Raise `ValueError` naming the field and the value when `data` carries an
+    integer wider than 64 bits."""
+    found = _wide_integer(data)
+    if found is None:
+        return
+    keys, integer = found
+    raise ValueError(
+        f"{record} field {_field_path(keys)} is {integer}, outside the signed 64-bit range "
+        f"SurrealDB stores integers in ({_INT64_MIN} to {_INT64_MAX}), so the write is "
+        "refused. A string keeps the number exactly."
+    )
+
+
 def _serialize(model) -> dict:
     """Serialize a Pydantic model to a dict suitable for SurrealDB.
 
@@ -971,34 +1141,22 @@ def _serialize(model) -> dict:
     nothing here. It is applied explicitly so the returned dict matches what
     actually lands in the row, and so the shared contract is visible at the
     boundary rather than being an accident of the driver's encoding.
+
+    Every record bound for a row passes through here, so this is also where
+    an integer wider than 64 bits is refused (`_require_64_bit_integers`),
+    before any statement is sent.
     """
     data = drop_none_values(model.model_dump(mode="json"))
+    _require_64_bit_integers(data, type(model).__name__)
     data["uid"] = data.pop("id")
     return data
-
-
-def _iso_micros(at: datetime) -> str:
-    """A UTC timestamp as this backend compares it: ISO-8601, always to the
-    microsecond, always `Z`.
-
-    Timestamps are stored as strings and compared as strings, which is only
-    chronologically correct while every rendering has the same shape. Pydantic
-    omits the fractional part when it is exactly zero, so a row written on a
-    whole second renders `…:41Z` while a bound renders `…:41.500000Z` — and
-    `"Z" > "."`, which puts the earlier row *after* the later bound. Rare, and
-    wrong. Writing the microseconds on both sides removes the case rather than
-    narrowing it.
-    """
-    if at.tzinfo is None:
-        at = at.replace(tzinfo=UTC)
-    return at.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _decision_row(record: DecisionRecord) -> dict:
     """Serialize a journal row (uid-renamed, comparable timestamp, enum value)."""
     row = _serialize(record)
     row["kind"] = record.kind.value
-    row["decided_at"] = _iso_micros(record.decided_at)
+    row["decided_at"] = iso_micros(record.decided_at)
     return row
 
 
@@ -1019,7 +1177,7 @@ def _decision_clauses(
     differently from the reader it sends you to is worse than no locator.
 
     `since`/`until` are padded to the microsecond because `decided_at` is stored
-    and compared as text — see `_iso_micros` for the case that breaks otherwise.
+    and compared as text — see `iso_micros` for the case that breaks otherwise.
     """
     clauses: list[str] = []
     params: dict = {}
@@ -1048,10 +1206,10 @@ def _decision_clauses(
         params["reviews"] = reviews
     if since is not None:
         clauses.append("decided_at >= $since")
-        params["since"] = _iso_micros(since)
+        params["since"] = iso_micros(since)
     if until is not None:
         clauses.append("decided_at < $until")
-        params["until"] = _iso_micros(until)
+        params["until"] = iso_micros(until)
 
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     return where, params
@@ -1090,8 +1248,9 @@ def instant(expr: str) -> str:
 
     - **No index** → compare through this function. What the sites below do.
     - **Indexed** → the comparison must stay plain, so the *writer* has to
-      guarantee one rendering. `_iso_micros` is that guarantee, and
-      `_decision_row` is its only caller.
+      guarantee one rendering. `iso_micros` is that guarantee: the journal's
+      writer and its range bounds use it here, and the SQLite backend, which
+      has no `instant()`, uses it for every timestamp column it compares.
 
     A new indexed timestamp field takes on the second obligation. A new
     comparison of an unindexed one takes the first.
@@ -1169,6 +1328,11 @@ class SurrealDBStorage:
         self._password = password
         self._namespace = namespace
         self._database = database
+        # Rendered once, here, so `location` never has to touch the URL again,
+        # which may carry a password.
+        self._location = (
+            f"SurrealDB at {_shown_url(url)}, namespace {namespace}, one database per graph"
+        )
         self._db: AsyncSurreal | None = None
         # The database actually selected on the wire. Equal to `_database` except
         # inside a viz read, which points the connection at another graph and
@@ -1189,7 +1353,14 @@ class SurrealDBStorage:
         if not is_embedded_url(self._url):
             await self._db.signin({"username": self._user, "password": self._password})
         await self._db.use(self._namespace, self._selected)
-        await self._setup_schema()
+        try:
+            await self._setup_schema()
+        except SchemaTooNew:
+            # Closed again, as the other backends close the connection they were
+            # opening: the store is left not connected, never connected to a
+            # graph it cannot read.
+            await self.close()
+            raise
 
     # --- Surviving a dropped connection ---
     #
@@ -1257,6 +1428,10 @@ class SurrealDBStorage:
         return "surrealdb"
 
     @property
+    def location(self) -> str:
+        return self._location
+
+    @property
     def current_database(self) -> str:
         return self._database
 
@@ -1283,9 +1458,17 @@ class SurrealDBStorage:
         """
         validate_graph_name(database)
         async with self._guard.moving():
+            previous = self._database
             await self._use(database)
             self._database = database
-            await self._setup_schema()
+            try:
+                await self._setup_schema()
+            except SchemaTooNew:
+                # Refused before anything was written, so pointing back is all
+                # it takes to leave the active graph as it was.
+                await self._use(previous)
+                self._database = previous
+                raise
 
     async def delete_database(self, database: str) -> None:
         """Delete a database from the current namespace.
@@ -1417,8 +1600,13 @@ class SurrealDBStorage:
         deliberate: this runs *inside* `connect()`, so a retry here would re-enter
         `connect()` while `_reconnect` still holds its lock. A schema that cannot
         be set up is a failed connection, and the caller should hear about it.
+
+        The version marker is read before anything is defined, so a graph a
+        newer Epimemer wrote is refused with `SchemaTooNew` having had nothing
+        written to it, not even a table definition.
         """
         query = self.db.query
+        _refuse_newer_schema(self._selected, await _stored_schema_version(query))
         await query("""
             DEFINE TABLE IF NOT EXISTS document SCHEMALESS;
             DEFINE INDEX IF NOT EXISTS idx_document_uid ON document FIELDS uid UNIQUE;
@@ -1862,22 +2050,66 @@ class SurrealDBStorage:
 
     # --- Atomic compound operations ---
 
-    async def _run_transaction(self, statements: list[str], params: dict) -> None:
+    async def _run_transaction(self, statements: list[str], params: dict) -> list[Any]:
         """Execute statements as one atomic BEGIN…COMMIT batch.
 
         SurrealDB only treats a single multi-statement query as a transaction;
         BEGIN/COMMIT issued across separate calls is not reliable. A runtime
         error in any statement rolls the whole batch back. `query_raw` raises on
         parse errors and reports runtime errors per statement, so we check both.
+
+        Returns each statement's result in the order of `statements`, for the
+        caller that reads one. On failure every statement reports an error, and
+        all but one say only that the transaction failed, so the message raised
+        is the one that says why: what a `THROW` threw, or the error itself.
         """
         sql = "BEGIN TRANSACTION;\n" + ";\n".join(statements) + ";\nCOMMIT TRANSACTION;"
         resp = await self._query_raw(sql, params)
 
         if isinstance(resp, dict) and resp.get("error") is not None:
             raise RuntimeError(f"Transaction failed: {resp['error']}")
-        for result in resp.get("result", []) if isinstance(resp, dict) else []:
-            if isinstance(result, dict) and result.get("status") not in (None, "OK"):
-                raise RuntimeError(f"Transaction failed: {result.get('result')}")
+        results = resp.get("result", []) if isinstance(resp, dict) else []
+        failures = [
+            str(result.get("result"))
+            for result in results
+            if isinstance(result, dict) and result.get("status") not in (None, "OK")
+        ]
+        if failures:
+            causes = [f for f in failures if _SKIPPED_IN_FAILED_TRANSACTION not in f]
+            raise RuntimeError(f"Transaction failed: {(causes or failures)[0]}")
+        return [result.get("result") if isinstance(result, dict) else result for result in results]
+
+    async def _run_timeline_transaction(
+        self, statements: list[str], params: dict, timelines: Sequence[Timeline]
+    ) -> None:
+        """`_run_transaction` for a batch that writes timelines through `_timeline_statements`.
+
+        A failed batch is a version conflict when a timeline it wrote no longer
+        holds the version it was read at, whichever statement failed: the throw
+        in the check, or the engine refusing to commit because another server
+        wrote the same record first. Either way the write cannot land, and the
+        caller is told so in the one exception every backend raises. Any other
+        failure is re-raised as it came.
+        """
+        try:
+            await self._run_transaction(statements, params)
+        except Exception as failed:
+            conflict = await self._timeline_conflict(timelines)
+            if conflict is not None:
+                raise conflict from failed
+            raise
+
+    async def _timeline_conflict(self, timelines: Sequence[Timeline]) -> TimelineConflict | None:
+        """The conflict for the first of `timelines` whose stored version is not
+        the one it was read at, read after the batch rolled back, or None."""
+        for timeline in timelines:
+            rows = await self._query(
+                "SELECT VALUE version FROM timeline WHERE uid = $uid", {"uid": timeline.id}
+            )
+            found = None if not rows else (rows[0] or 0)
+            if (found or 0) != timeline.version:
+                return TimelineConflict(timeline.id, timeline.version, found)
+        return None
 
     async def _plan_copied_edges(self, old_id: str, new_id: str, status: NodeStatus) -> list[dict]:
         """Rows for the edges a retirement *copies* onto the replacement.
@@ -2053,13 +2285,13 @@ class SurrealDBStorage:
 
         # `UPDATE … WHERE uid = $uid` silently matches nothing when the row is
         # absent, so a missing node would flip the rest and report success. The
-        # THROW makes the transaction fail the way the in-memory backend's
-        # KeyError does — the parity rule is about behaviour, and "partially
-        # applied" is exactly the behaviour that must not differ.
+        # THROW makes the transaction fail, and it is raised as the `KeyError`
+        # the other backends raise: the parity rule is about behaviour, and
+        # "partially applied" is exactly the behaviour that must not differ.
         uids = [node.id for node in nodes]
         statements = [
             f"LET $found = (SELECT VALUE uid FROM {_node_tables(None)} WHERE uid IN $uids)",
-            "IF array::len($found) != $expected { THROW 'set_node_status_tx: node not found' }",
+            f"IF array::len($found) != $expected {{ THROW '{_STATUS_NODE_MISSING}' }}",
         ]
         returning = status is NodeStatus.ACTIVE
         params: dict = {
@@ -2093,7 +2325,14 @@ class SurrealDBStorage:
         if edges:
             statements.append("INSERT INTO node_edge $new_edges")
             params["new_edges"] = [_edge_row(edge) for edge in edges]
-        await self._run_transaction(statements, params)
+        try:
+            await self._run_transaction(statements, params)
+        except RuntimeError as failed:
+            if _STATUS_NODE_MISSING in str(failed):
+                found = await self.get_nodes(uids)
+                absent = ", ".join(uid for uid in dict.fromkeys(uids) if uid not in found)
+                raise KeyError(f"Node {absent} not found") from None
+            raise
 
     @staticmethod
     def _append_review_writes(
@@ -2241,9 +2480,18 @@ class SurrealDBStorage:
         must never be reachable from an MCP tool (REVIEW_MODE.md §7.7)."""
         # Read before the transaction, like every other plan here: the adapter
         # is single-connection and documented as unsafe for concurrent callers.
-        # The check is the protocol's requirement — a survivor still carrying an
-        # edge after the planned deletions means the guard let something
-        # through, and deleting the node anyway would take that edge with it.
+        # A source that is gone is refused first, as the other backends refuse
+        # it: `UPDATE ... WHERE uid` matches nothing for an absent row, so the
+        # reversal would otherwise delete the survivor and replay its edges onto
+        # a node that does not exist, and report success.
+        found = await self.get_nodes([source.id for source in source_nodes])
+        absent = [source.id for source in source_nodes if source.id not in found]
+        if absent:
+            raise KeyError(f"Node {', '.join(absent)} not found")
+        # The second check is the protocol's requirement: a survivor still
+        # carrying an edge after the planned deletions means the guard let
+        # something through, and deleting the node anyway would take that edge
+        # with it.
         remaining = {edge.id for edge in await self.get_edges_from(survivor.id)} | {
             edge.id for edge in await self.get_edges_to(survivor.id)
         }
@@ -2321,12 +2569,13 @@ class SurrealDBStorage:
             params["edge_rows"] = edge_rows
 
         # Timelines upsert rather than insert (see the protocol docstring), so
-        # they get one statement each: `UPSERT ... WHERE uid` matches a single
-        # row and cannot be expressed as a bulk insert of rows.
+        # they get statements of their own: `UPSERT ... WHERE uid` matches a
+        # single row and cannot be expressed as a bulk insert of rows, and each
+        # is checked against the version it was read at.
         for i, timeline in enumerate(timelines):
-            statements.append(_upsert("timeline", data=f"timeline_{i}", uid=f"timeline_uid_{i}"))
-            params[f"timeline_{i}"] = _serialize(timeline)
-            params[f"timeline_uid_{i}"] = timeline.id
+            checked, checked_params = _timeline_statements(timeline, f"timeline_{i}")
+            statements.extend(checked)
+            params |= checked_params
 
         if embeddings:
             statements.append("INSERT INTO embedding $embedding_rows")
@@ -2334,7 +2583,7 @@ class SurrealDBStorage:
 
         if not statements:
             return
-        await self._run_transaction(statements, params)
+        await self._run_timeline_transaction(statements, params, timelines)
 
     async def write_timeline_tx(
         self,
@@ -2350,11 +2599,11 @@ class SurrealDBStorage:
 
         Every statement upserts on `uid`, so each gets its own bind parameters:
         `UPSERT ... WHERE uid` matches a single row and cannot be batched into
-        one insert. `kind`, `counts` and `judge` describe the decision for the
-        event log and are not written here.
+        one insert. The timeline's version check comes first, so a stale one
+        throws before any link moves. `kind`, `counts` and `judge` describe the
+        decision for the event log and are not written here.
         """
-        statements = [_upsert("timeline", data="timeline", uid="timeline_uid")]
-        params: dict = {"timeline": _serialize(timeline), "timeline_uid": timeline.id}
+        statements, params = _timeline_statements(timeline, "timeline")
 
         for i, edge in enumerate([*new_edges, *retired_edges]):
             row = _serialize(edge)
@@ -2363,7 +2612,7 @@ class SurrealDBStorage:
             params[f"edge_{i}"] = row
             params[f"edge_uid_{i}"] = edge.id
 
-        await self._run_transaction(statements, params)
+        await self._run_timeline_transaction(statements, params, [timeline])
 
     async def reopen_tx(
         self,
@@ -2425,7 +2674,7 @@ class SurrealDBStorage:
         edge still renders its `type` as the enum's value. Neither is a stamp:
         they are how this backend spells those two values, and `decided_at` is
         indexed, so the padded rendering is what makes a later range query
-        correct (`_iso_micros`).
+        correct (`iso_micros`).
         """
         statements: list[str] = []
         params: dict = {}
@@ -2456,6 +2705,62 @@ class SurrealDBStorage:
         if not statements:
             return
         await self._run_transaction(statements, params)
+
+    async def resegment_tx(
+        self,
+        document_id: str,
+        segments: Sequence[Segment],
+        *,
+        segmentation: Mapping[str, Any],
+    ) -> int:
+        """A document's passages replaced, if nothing cites them. See the protocol.
+
+        The count is taken inside the batch and a refusal is a `THROW`, so the
+        check and the replacement commit together or not at all; a check read
+        before the batch, the way other plans here are, would be exactly the
+        gap the protocol forbids. The thrown text is the only thing that comes
+        back out, so the count travels in it and is read off again here.
+
+        The new passages are checked against the table after the delete,
+        because `INSERT INTO` passes over an id the unique index already holds
+        without a word, where the other backends refuse it.
+        """
+        require_own_passages(document_id, segments)
+        statements = [
+            "LET $document = (SELECT VALUE uid FROM document WHERE uid = $document_id)",
+            f"IF array::len($document) = 0 {{ THROW '{_RESEGMENT_NO_DOCUMENT}' }}",
+            "LET $old = (SELECT VALUE uid FROM segment WHERE source_id = $document_id)",
+            f"LET $citing = (SELECT VALUE uid FROM {_node_tables(None)} WHERE source_id IN $old)",
+            "IF array::len($citing) > 0 { THROW 'resegment_tx: ' + <string> array::len($citing)"
+            " + ' nodes cite the passages' }",
+            "DELETE segment WHERE source_id = $document_id RETURN BEFORE",
+        ]
+        deleted_at = len(statements) - 1
+        if segments:
+            statements += [
+                "IF array::len((SELECT VALUE uid FROM segment WHERE uid IN $new_ids)) > 0 "
+                "{ THROW 'resegment_tx: a re-cut passage id is already stored' }",
+                "INSERT INTO segment $rows",
+            ]
+        statements.append(
+            "UPDATE document SET metadata.segmentation = $segmentation WHERE uid = $document_id"
+        )
+        params = {
+            "document_id": document_id,
+            "new_ids": [segment.id for segment in segments],
+            "rows": [_serialize(segment) for segment in segments],
+            "segmentation": drop_none_values(dict(segmentation)),
+        }
+        try:
+            results = await self._run_transaction(statements, params)
+        except RuntimeError as failed:
+            cited = _RESEGMENT_CITED.search(str(failed))
+            if cited is not None:
+                raise PassagesCited(document_id=document_id, citing=int(cited.group(1))) from None
+            if _RESEGMENT_NO_DOCUMENT in str(failed):
+                raise KeyError(f"Document {document_id} not found") from None
+            raise
+        return len(results[deleted_at] or [])
 
     # --- Embeddings ---
 
@@ -2693,8 +2998,8 @@ class SurrealDBStorage:
     # --- Timelines ---
 
     async def store_timeline(self, timeline: Timeline) -> str:
-        data = _serialize(timeline)
-        await self._query(_upsert("timeline"), {"data": data, "uid": timeline.id})
+        statements, params = _timeline_statements(timeline, "timeline")
+        await self._run_timeline_transaction(statements, params, [timeline])
         return timeline.id
 
     async def get_timeline(self, timeline_id: str) -> Timeline | None:
@@ -2999,10 +3304,17 @@ class SurrealDBStorage:
         # Ordered here rather than by the caller so both backends answer in the
         # same order, and tie-broken on the id because a batch written in one
         # call shares a timestamp to the microsecond.
-        tail = " ORDER BY decided_at DESC, uid DESC"
-        if limit is not None:
-            tail += f" LIMIT {int(limit)}"
-        rows = await self._query(f"SELECT * FROM decision{where}{tail}", params)
+        order = " ORDER BY decided_at DESC, uid DESC"
+        if limit is None:
+            query = f"SELECT * FROM decision{where}{order}"
+        else:
+            # Filtered in a subquery and sorted outside it. With a range on
+            # `decided_at`, which is indexed, the engine reads the index in
+            # ascending order and cuts at the limit before it sorts, so
+            # `since=... limit=1` answered with the *oldest* row in the window.
+            # Sorting the filtered rows first is what makes the cut newest first.
+            query = f"SELECT * FROM (SELECT * FROM decision{where}){order} LIMIT {int(limit)}"
+        rows = await self._query(query, params)
         return [DecisionRecord.model_validate(_clean_record(r)) for r in rows]
 
     async def reviewed_decision_ids(self, decision_ids: Sequence[str]) -> set[str]:

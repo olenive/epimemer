@@ -58,6 +58,13 @@ gcs = [
 s3 = [
     "s3fs>=2024.6.0",
 ]
+# The Postgres storage backend's driver, with its compiled libpq wheel. Not a
+# default dependency: a compiled driver nobody asked for is how a plain install
+# breaks. Selecting the backend without this extra refuses at startup and
+# names the extra.
+postgres = [
+    "psycopg[binary]>=3.2",
+]
 dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",

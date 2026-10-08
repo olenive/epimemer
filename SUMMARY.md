@@ -87,8 +87,13 @@ Text is broken into non-overlapping, variable-length segments aligned to
 semantic boundaries. Two strategies exist: **paragraph split** (the default)
 and **semantic similarity drop** (TextTiling-style: embed each sentence, cut
 where similarity between neighbours drops sharply; cheap, no LLM needed).
-LLM-guided splitting is a backlog item with an architectural decision
-attached (`dev-docs/PROPOSED_FEATURES.md`).
+The server reports `doubts` about its own cut, and where a rule cannot see the
+shape of a document (speaker turns, numbered clauses, a change of subject
+inside a paragraph) the **calling agent** states the cut itself, as anchors:
+the text each passage begins with. It does so on `segment`, or with
+`resegment` before any claim cites a passage; the server checks the anchors
+against the text and makes no model call of its own
+([docs/INGEST.md](docs/INGEST.md), `dev-docs/SEGMENTATION.md`).
 
 The segment-to-topic relationship is **many-to-many**: a segment can be
 `about` several topics and a topic can span several segments, represented by
@@ -385,7 +390,8 @@ and fiction is never mixed with fact without the distinction showing.
   time from `similarity` edges recorded by agent verdicts, never stored. It
   counts independence, not strength, and a claim whose dates put it in a
   different period is reported separately under `adjacent_periods` rather
-  than counted. It is off by default because it is the most expensive
+  than counted, as an inference judged to agree with this one is under
+  `agreeing_inferences`. It is off by default because it is the most expensive
   annotation on the retrieval path.
 
 ## Data Model (Minimal)
@@ -643,13 +649,16 @@ fact are refused by `merge_cycle_limit`.
 Memory is exposed as tools, not as a raw database. Claude Code prefixes them
 as `mcp__epimemer__<name>`.
 
-Ingestion is a two-step process: `segment` breaks text into chunks, then the
+Ingestion is a two-step process: `segment` breaks text into passages, then the
 agent extracts topics, facts and inferences and passes them to
-`store_decomposition`. Epimemer does not decompose text itself.
+`store_decomposition`. Epimemer does not decompose text itself. Where the
+server's cut is wrong, the agent states its own with `resegment` before it
+decomposes, or passes `cuts` to `segment` for a document it already knows the
+rules will cut badly.
 
-The tools group into: **core memory** (`segment`, `store_decomposition`,
-`search`, `link`, `update`, `rename_topic`, `supersede_by`,
-`judge_importance`); **discovery
+The tools group into: **core memory** (`segment`, `resegment`,
+`store_decomposition`, `search`, `link`, `update`, `rename_topic`,
+`supersede_by`, `judge_importance`); **discovery
 & stats** (`query_graph`, `topic_tree`, `find_nodes`, `list_sources`,
 `list_relations`, `describe_relation`, `graph_stats`); **conflict handling**
 (`check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`,

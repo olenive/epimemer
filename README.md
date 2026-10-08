@@ -82,7 +82,9 @@ agent's instructions.
 
 ## Persistence
 
-Persistent storage is a [SurrealDB](https://surrealdb.com) server. **The
+Persistent storage is a [SurrealDB](https://surrealdb.com) server, a
+SQLite file per graph with nothing to run, or a Postgres database for a graph
+several people share (both below). **The
 storage path is the whole difference between persistent and not.** `surreal
 start` takes an optional `[PATH]` whose default is `memory`, so a server
 started without one keeps the entire graph in RAM and loses it on restart,
@@ -117,18 +119,72 @@ claude mcp add epimemer \
 `EPIMEMER_GRAPH` per server: the active graph is process state, so a client
 that reconnects lands back on whatever the server opened.
 
+### SQLite: one file per graph, no server
+
+The same graph can live in a SQLite file instead, with nothing to run:
+
+```bash
+claude mcp add epimemer \
+  -e EPIMEMER_STORAGE_BACKEND=sqlite \
+  -e EPIMEMER_GRAPH=default \
+  -- epimemer serve
+```
+
+Each graph is `~/.epimemer/graphs/<graph>.sqlite`, created on first use; set
+`EPIMEMER_SQLITE_DIR` to keep them elsewhere. The driver is Python's own
+`sqlite3` module, so there is nothing extra to install, and the file can be
+read and written from a second process while the server runs, so the
+`epimemer agents` commands work against it. Do not delete a graph that another
+server still has open: the other server keeps writing to the unlinked file and
+loses everything when it closes. An existing graph moves over with
+`epimemer graphs export` and `epimemer graphs import`.
+
+### Postgres: a graph shared by a team
+
+A graph can also live in a Postgres database you already run:
+
+```bash
+pip install "epimemer[postgres]"
+
+claude mcp add epimemer \
+  -e EPIMEMER_STORAGE_BACKEND=postgres \
+  -e EPIMEMER_POSTGRES_DSN=postgresql://epimemer:secret@db.example.org:5432/epimemer \
+  -e EPIMEMER_GRAPH=team \
+  -- epimemer serve
+```
+
+Shared means several Epimemer servers, on one machine or many, reading and
+writing one graph at once. Each server keeps its own active graph and its own
+judge claims; the graph, its journal, its counters and its settings live in
+Postgres and are read on every call, so one server sees another's writes as
+soon as they are made, and the `epimemer agents` commands work against it too.
+Each graph is a schema of its own name in the database the DSN names, created
+on first use, so the database must exist and the role must be allowed to create
+schemas in it. The DSN is a URL or `key=value` pairs, so `sslmode` and a
+password file work as they do for any Postgres client. Without the extra or
+without a DSN, the server refuses to start and says which is missing.
+
+Sharing today means everyone writes: `search` records when a claim was
+retrieved, so a role granted only `SELECT` cannot search yet. Give each person
+a role that can write to the graph's schema.
+
+`epimemer graphs list` prints the backend, where its graphs live and the
+graphs on it, for any backend.
+
 ## Configuration
 
 All configuration is via `EPIMEMER_` environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `EPIMEMER_STORAGE_BACKEND` | `memory` | `memory` or `surrealdb` |
+| `EPIMEMER_STORAGE_BACKEND` | `memory` | `memory`, `surrealdb`, `sqlite` or `postgres` |
 | `EPIMEMER_SURREALDB_URL` | `ws://localhost:8000/rpc` | SurrealDB connection URL |
 | `EPIMEMER_SURREALDB_USER` | `root` | SurrealDB username |
 | `EPIMEMER_SURREALDB_PASS` | `root` | SurrealDB password |
 | `EPIMEMER_SURREALDB_NAMESPACE` | `epimemer` | SurrealDB namespace |
 | `EPIMEMER_SURREALDB_DATABASE` | `default` | SurrealDB database name, one database per graph. A name only: whether storage is in memory is decided by `EPIMEMER_STORAGE_BACKEND` here and by the `[PATH]` argument on the server |
+| `EPIMEMER_SQLITE_DIR` | `~/.epimemer/graphs` | For the `sqlite` backend: the directory holding one `<graph>.sqlite` file per graph, created on first use |
+| `EPIMEMER_POSTGRES_DSN` | (empty) | For the `postgres` backend: the database holding one schema per graph, as a URL or `key=value` pairs. Required with that backend: the server refuses to start without it |
 | `EPIMEMER_GRAPH` | (empty) | The graph this server opens, overriding the database name above. **Set it per server.** The active graph is process state, so `use_graph` lasts only as long as the process, and a client reconnect lands back here. See [which graph a server opens](https://github.com/olenive/epimemer/blob/main/INTEGRATION.md#which-graph-a-server-opens) |
 | `EPIMEMER_EMBEDDING_PROVIDER` | `sentence-transformers` | `sentence-transformers` or `mock` |
 | `EPIMEMER_EMBEDDING_MODEL_ID` | `all-MiniLM-L6-v2` | Embedding model name |
@@ -164,7 +220,7 @@ shell, and prints what the server wrote.
 Tools exposed via the Model Context Protocol (Claude Code prefixes each as
 `mcp__epimemer__<name>`), grouped by purpose:
 
-- **Core memory**: `segment`, `store_decomposition`, `search`, `link`, `update`, `rename_topic`, `supersede_by`, `judge_importance`
+- **Core memory**: `segment`, `resegment`, `store_decomposition`, `search`, `link`, `update`, `rename_topic`, `supersede_by`, `judge_importance`
 - **Discovery & stats**: `query_graph`, `topic_tree`, `find_nodes`, `list_sources`, `list_relations`, `describe_relation`, `graph_stats`
 - **Conflict handling**: `check_conflicts`, `record_contradiction`, `record_variant`, `merge_facts`, `merge_inferences`, `reverse_merge`, `configure_merge`, `configure_warnings`
 - **Reflection**: `reflect`, `configure_reflection`, `apply_reflection`, `reopen`
@@ -284,6 +340,7 @@ Three commands, and they are the same code the `backup_graph` tool runs:
 epimemer graphs export <graph> --to <path>     # a bundle of the whole graph
 epimemer graphs import <bundle> --graph <name> # rebuild it as a new graph
 epimemer graphs verify <bundle>                # check one, then drop the copy
+epimemer graphs convert <graph> --to postgres  # rebuild it on another backend, in one step
 ```
 
 A bundle is one JSON Lines file per section (metacontexts, judges, nodes,

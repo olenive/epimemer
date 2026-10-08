@@ -191,11 +191,14 @@ evidence is the case that actually arises once facts have been merged, and it
 is cheap. A global sweep over all inference pairs was measured on two real
 graphs (123 active inferences, 5,053 pairs) and found nothing above the 0.80
 bar: p99 similarity sat between 0.44 and 0.55. The reasoning is in
-`inference_dedup.py`'s header with the measurements.
+`inference_dedup.py`'s header with the measurements. Similar inferences that
+share no premise are a separate list, `similar_inferences`, offered for a
+`similarity` verdict rather than a merge; `SIMILAR_INFERENCES.md` has that
+design.
 
 ---
 
-## 5. On the dashboard, and what is still not built
+## 5. On the dashboard
 
 **Warnings reach the dashboard.** A warning is published as its own event,
 `advisory_raised`, from the tool layer rather than from the storage wrapper,
@@ -206,11 +209,6 @@ at what the agent was *not* told. The settings panel beside it is read-only, and
 that is a decision rather than a phase, because a write from the browser would
 be the first write into a graph with no author. `WARNINGS_DASHBOARD.md` holds
 the design and `EVENT_LOG.md` §12 the event.
-
-**Similar-inference edges** are still not built, and are in
-`PROPOSED_FEATURES.md` with their open decision: edges for pairs that share no
-premise would make agreeing inferences corroborate each other, which is a live
-change to a number callers read.
 
 ---
 

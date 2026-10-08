@@ -258,9 +258,10 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[dict]:
             )
 
         logger.info(
-            "Epimemer %s started: storage backend %s, embedding provider %s.",
+            "Epimemer %s started: storage backend %s (%s), embedding provider %s.",
             version,
             storage.backend_name,
+            storage.location,
             config.embedding_provider,
         )
     except Exception as exc:
@@ -554,6 +555,7 @@ async def memory_segment(
     published_at: dict | None = None,
     metadata: dict | None = None,
     segmentation_strategy: str | None = None,
+    cuts: list[str] | None = None,
     expected_graph: str | None = None,
     judge_token: str | None = None,
 ) -> str:
@@ -566,7 +568,9 @@ async def memory_segment(
     The result's `doubts` lists reasons the server thinks its own cut is poor,
     each a `{kind, detail}`, such as a long document left as one passage or a
     cut in the middle of a sentence; it is empty when the cut looks sound. A
-    doubt refuses nothing and the passages are stored: read them, then
+    doubt refuses nothing and the passages are stored. When a doubt is right,
+    or a passage spans two subjects or splits a sentence from what qualifies
+    it, call `resegment` with your own cuts before you decompose; otherwise
     decompose as usual.
 
     Topics: distinct themes discussed (1-5 sentence descriptions).
@@ -592,6 +596,18 @@ async def memory_segment(
             says, never a date you know from elsewhere.
         metadata: Optional metadata to attach to the document.
         segmentation_strategy: "paragraph" or "semantic". Uses server default if omitted.
+            Refused together with `cuts`.
+        cuts: Your own cut, for a document you already know the rules will cut
+            badly: a transcript, a contract, a long note with no blank lines.
+            One anchor per passage, in order: the text the passage begins with,
+            copied exactly from the document, at least three words or twelve
+            characters. Each is found at its first occurrence after the end of
+            the one before, so lengthen an anchor to reach a later occurrence.
+            The first must begin the document, since text before it would
+            belong to no passage, and one anchor alone makes the document one
+            passage. A malformed list is refused whole, every problem named,
+            and nothing is written. Omit it to let the server cut, which is
+            right for ordinary prose.
         expected_graph: The graph you believe you are working in. The active graph
             is process state and does not survive a client reconnect, so a session
             that switched earlier can come back somewhere else — naming it turns a
@@ -618,12 +634,78 @@ async def memory_segment(
             published_at=published_at,
             metadata=metadata,
             segmentation_strategy=segmentation_strategy,
+            cuts=cuts,
             event_bus=deps.get("event_bus"),
             judge=judge,
         ),
         ctx,
-        f"content_length={len(content)}",
+        f"content_length={len(content)}" + (f" cuts={len(cuts)}" if cuts is not None else ""),
         lambda r, m: f"graph={r['active_graph']} segments={len(r['segments'])}",
+        expected_graph=expected_graph,
+    )
+
+
+@mcp.tool(name="resegment")
+async def memory_resegment(
+    document_id: str,
+    cuts: list[str],
+    ctx: Context,
+    expected_graph: str | None = None,
+    judge_token: str | None = None,
+) -> str:
+    """Replace a document's passages with your own cut, before you decompose it.
+
+    Call it after `segment` and before `store_decomposition`, when the server's
+    cut is wrong: a `doubts` entry you agree with, a passage that spans two
+    subjects, or a sentence cut off from what qualifies it. When the cut is
+    right, leave it. The old passages are deleted and the new ones take their
+    place; the document records the cut it replaced, and the result lists the
+    new passage ids to decompose against.
+
+    Possible only while no claim cites any of the document's passages. Once
+    `store_decomposition` has run they are provenance, and the call is refused
+    with `resegmented: false` and the count in `citing_nodes`, having changed
+    nothing. To cut a decomposed document differently, ingest it again as a
+    new document with `segment(cuts=...)`.
+
+    Args:
+        document_id: The document ID `segment` returned.
+        cuts: One anchor per passage, in order: the text the passage begins
+            with, copied exactly from the document, at least three words or
+            twelve characters. Each is found at its first occurrence after the
+            end of the one before, so lengthen an anchor to reach a later
+            occurrence. The first must begin the document, since text before it
+            would belong to no passage, and one anchor alone makes the document
+            one passage. A malformed list is refused whole, every problem
+            named, and nothing is written.
+        expected_graph: The graph you believe you are working in. The active graph
+            is process state and does not survive a client reconnect, so a session
+            that switched earlier can come back somewhere else — naming it turns a
+            wrong-graph call from silent into refused.
+        judge_token: The token your `claim_agent` returned. Pass it on every
+            write and this call is credited to the judge you claimed, even where
+            another agent shares this connection and has claimed since. Leave it
+            out and the write is credited to the most recent claim.
+    """
+    deps = ctx.lifespan_context
+    judge, refused = await _judge_for_write(ctx, expected_graph, judge_token=judge_token)
+    if refused is not None:
+        return refused
+    return await _run_with_timeout(
+        "epimemer.resegment",
+        lambda: tools.resegment(
+            document_id=document_id,
+            cuts=cuts,
+            storage=deps["storage"],
+            judge=judge,
+        ),
+        ctx,
+        f"doc={document_id} cuts={len(cuts)}",
+        lambda r, m: (
+            f"graph={r['active_graph']} segments={len(r['segments'])} replaced={r['replaced']}"
+            if r["resegmented"]
+            else f"refused: {r['citing_nodes']} citing nodes"
+        ),
         expected_graph=expected_graph,
     )
 
@@ -953,6 +1035,10 @@ async def memory_search(
     pair and not the other, this is the only place the other appears — so treat
     an entry as *"the graph also knows what was true next door"*, and follow it
     if the period matters to the question you were asked.
+
+    **`agreeing_inferences` lists inferences judged to draw the same
+    conclusion as this one.** They are not counted, since two conclusions
+    agreeing is not a second witness to either. Report them as agreement.
 
     For provenance/topic listings (which nodes came from X / are about Y), use
     find_nodes, not search.
@@ -1638,9 +1724,9 @@ async def memory_merge_inferences(
     something you write rather than something the graph can do for you.
 
     **Merge only what you would defend as one conclusion.** Two inferences
-    agreeing may be independent support rather than redundancy, and independent
-    support is what corroboration exists to count. When unsure, use
-    link(type="similarity") and keep both.
+    agreeing may be two readings worth keeping rather than redundancy. When
+    unsure, use link(type="similarity") and keep both; corroboration lists the
+    partner as agreement without counting it.
 
     Merges are refused, with a reason, when: fewer than two distinct nodes are
     named; any of them is not active; they do not stand in exactly the same
@@ -1910,6 +1996,12 @@ async def memory_reflect(
       with supersede_by. It stays silent unless both premises carry dates and
       those dates provably fall clear, so it says *no source asserts these were
       ever both true* — not that they never were
+    - similar_inferences: two active inferences saying nearly the same thing
+      from premises they do not share, each side shown with its premises.
+      Judge each pair with apply_reflection similarities: "one_claim" where
+      they draw the same conclusion, "distinct" where they only look alike.
+      Between inferences a `similarity` edge is listed by corroboration as
+      agreement and not counted. Unjudged, the pair comes back on every reflect
     - pending_review: active nodes already flagged for resolution
       (superseded_candidate / evidence_stale / evidence_merged / contested),
       with the related ids to act on via apply_reflection supersessions /
@@ -2009,15 +2101,18 @@ async def memory_apply_reflection(
     Call this after reviewing reflect results. All arguments optional.
 
     Args:
-        similarities: What you decided about a pair from reflect's
-            similar_pairs that you are **not** otherwise acting on — the verdict
+        similarities: What you decided about a pair reflect nominated
+            (similar_pairs, contradictions, similar_inferences and the like)
+            that you are **not** otherwise acting on — the verdict
             that previously had no writer, which is why the same pairs kept
             coming back. Each: {pair: [a_id, b_id], verdict: "one_claim" |
             "distinct", because: str}.
             Use "one_claim" when the two really do say the same thing and
             something blocked the merge — an event, or an unjudged claim_kind;
-            it writes a `similarity` edge, which **corroboration counts**, plus
-            an `assessed` edge.
+            it writes a `similarity` edge, which **corroboration counts** between
+            facts and lists as agreement between inferences, plus an `assessed`
+            edge. For a similar_inferences pair, use "one_claim" where the two
+            draw the same conclusion.
             Use "distinct" when they merely look alike; it writes `assessed`
             only, and writes nothing corroboration reads. Recording a decline as
             a similarity is how a graph starts manufacturing its own support, so

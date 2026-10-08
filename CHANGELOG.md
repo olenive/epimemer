@@ -4,6 +4,81 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+- A SQLite storage backend. `EPIMEMER_STORAGE_BACKEND=sqlite` keeps each graph
+  in its own file under `~/.epimemer/graphs`, or wherever `EPIMEMER_SQLITE_DIR`
+  points, with no server to run and no new dependency. The `epimemer agents`
+  commands work against it beside a running server. An existing graph moves
+  over with `epimemer graphs export` and `import`. The design is in
+  `dev-docs/SQLITE_BACKEND.md`.
+- `epimemer graphs convert <graph> --to <backend>` rebuilds a graph on another
+  backend in one step, export and import in one process with no file between
+  them. `--as` names the copy; `--to-dir`, `--to-url`, `--to-dsn` and their
+  companions say where it goes, and anything unsaid is inherited from the
+  server's own configuration.
+- `epimemer graphs list` prints the backend, where its graphs live and the
+  graphs on it, the same answer the `list_graphs` tool now gives an agent, and
+  `epimemer --version` says which Epimemer is installed.
+- PyJWT and urllib3 moved past their published advisories.
+- A Postgres storage backend, for a graph a team shares.
+  `EPIMEMER_STORAGE_BACKEND=postgres` with `EPIMEMER_POSTGRES_DSN` keeps each
+  graph in a schema of its own in a database you already run, after
+  `pip install "epimemer[postgres]"`. Several Epimemer servers can read and
+  write one graph at once, and the `epimemer agents` commands work against it.
+  A server asked for Postgres without the extra or without a DSN refuses at
+  startup and says which is missing. `make test-postgres` runs the suite
+  against a throwaway server. The design is in `dev-docs/POSTGRES_BACKEND.md`.
+- `reflect` offers `similar_inferences`: inferences that say nearly the same
+  thing from premises they do not share, which nothing nominated before. Judge
+  each pair through `apply_reflection(similarities=[...])`, `one_claim` where
+  they draw the same conclusion and `distinct` where they only look alike.
+  Corroboration lists an inference joined by `similarity` under
+  `agreeing_inferences` beside the count rather than in it, so recording
+  agreement never raises the number of independent sources; an inference pair
+  already judged `one_claim` stops counting too. The design is in
+  `dev-docs/SIMILAR_INFERENCES.md`.
+- The agent can cut a document into passages itself. A cut is a list of
+  anchors, the text each passage begins with, copied from the document.
+  `segment` takes one as `cuts` for a document the rules would cut badly, and
+  the new `resegment` tool replaces the server's cut after `segment` and before
+  `store_decomposition`. A re-cut is refused once any claim cites one of the
+  passages, with the count, and leaves everything as it was. The document
+  records every cut it replaced. The guide says when to cut and where, and
+  `docs/INGEST.md` covers passages, doubts and re-cutting.
+- Two people editing one timeline no longer overwrite each other's changes.
+  A timeline now carries a version, and a write made from a copy somebody has
+  since replaced is refused with nothing written. The timeline tools say the
+  timeline changed since it was read, and to read it again with
+  `query_timeline` and retry; ingest proposes its timepoints again by itself.
+  A timeline stored before this reads as version 0 and needs no migration. The
+  design is in `dev-docs/TIMELINES.md` §2.6.
+- A graph written by a newer Epimemer is refused rather than opened. Each
+  persistent backend stamps a graph with its schema version, and an older
+  Epimemer used to open a graph stamped higher than it knew and write into
+  tables it did not understand. Now the server, the CLI and `use_graph` refuse
+  it with both version numbers and the advice to upgrade Epimemer, and nothing
+  in the graph is changed. At startup the reason is in the log file.
+- The SurrealDB location shown in the startup log and to agents no longer
+  includes a user or password written into `EPIMEMER_SURREALDB_URL`: a server
+  URL is shown as its scheme, host, port and path.
+- Four SurrealDB answers now match the other backends. A zero vector, stored
+  or searched with, scores 0.0 instead of NaN, which had put it above every
+  real match. A journal query with a time bound and a limit returns the newest
+  rows in the window, where it had returned the oldest. Archiving or restoring
+  a node that does not exist raises `KeyError`. Reversing a merge whose source
+  has gone is refused with nothing changed, where it had deleted the merged
+  node and restored nothing.
+- SurrealDB refuses a record holding an integer outside the signed 64-bit
+  range, naming the field and the value, where it had stored a different
+  number: `2**63` read back as `-2**63`, and anything past `2**64` failed to
+  decode. The other backends keep any integer exactly.
+- Every backend drops a `None`-valued key from a dict at any depth of a
+  record, such as a timepoint's `metadata` inside its timeline. The in-memory,
+  SQLite and Postgres backends had dropped one only from a record's own
+  dicts, so the same timeline read back with the key there and without it on
+  SurrealDB.
+
 ## [0.2.12] — 2026-10-02
 
 - Writes work again on Claude Code 2.1.287. Every write after `claim_agent`

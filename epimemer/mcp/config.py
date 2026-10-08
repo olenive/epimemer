@@ -26,7 +26,7 @@ DEFAULT_IMPORTANCE_STEP = 0.25
 class ServerConfig(BaseModel):
     """Configuration for the Epimemer MCP server."""
 
-    storage_backend: Literal["memory", "surrealdb"] = "memory"
+    storage_backend: Literal["memory", "surrealdb", "sqlite", "postgres"] = "memory"
     surrealdb_url: str = "ws://localhost:8000/rpc"
     surrealdb_user: str = "root"
     surrealdb_pass: str = "root"
@@ -42,6 +42,18 @@ class ServerConfig(BaseModel):
     # graph is process state, so `use_graph` lasts only as long as the process
     # and a client reconnect lands back on whatever this resolves to.
     graph: str = ""
+    # The directory the sqlite backend keeps its graphs in, one `<graph>.sqlite`
+    # file each, created on first use. A tilde is expanded. Under the user's
+    # home rather than the working directory because an MCP client chooses the
+    # working directory, and a graph that lands wherever the client happened to
+    # start the server is a graph nobody can find again.
+    sqlite_dir: str = "~/.epimemer/graphs"
+    # The database the postgres backend keeps its graphs in, one schema per
+    # graph: anything libpq accepts, a URL or `key=value` pairs, so `sslmode`,
+    # a connection timeout and a password file work without Epimemer knowing
+    # about them. Empty by default and refused when the backend is selected,
+    # because a server's database has no local place to default to.
+    postgres_dsn: str = ""
 
     embedding_provider: Literal["sentence-transformers", "mock"] = "sentence-transformers"
     embedding_model_id: str = "all-MiniLM-L6-v2"
@@ -177,6 +189,8 @@ def load_config() -> ServerConfig:
         "surrealdb_pass": "EPIMEMER_SURREALDB_PASS",
         "surrealdb_namespace": "EPIMEMER_SURREALDB_NAMESPACE",
         "surrealdb_database": "EPIMEMER_SURREALDB_DATABASE",
+        "sqlite_dir": "EPIMEMER_SQLITE_DIR",
+        "postgres_dsn": "EPIMEMER_POSTGRES_DSN",
         "graph": "EPIMEMER_GRAPH",
         "embedding_provider": "EPIMEMER_EMBEDDING_PROVIDER",
         "embedding_model_id": "EPIMEMER_EMBEDDING_MODEL_ID",
@@ -243,6 +257,35 @@ def create_storage(config: ServerConfig) -> StorageBackend:
             namespace=config.surrealdb_namespace,
             database=database,
         )
+    elif config.storage_backend == "sqlite":
+        from epimemer.storage.sqlite_adapter import SQLiteStorage
+
+        # The same deliberately empty default as SurrealDB's: a server started
+        # without `EPIMEMER_GRAPH` lands somewhere visibly empty.
+        database = config.graph if config.graph != "" else "default"
+        return SQLiteStorage(config.sqlite_dir, database=database)
+    elif config.storage_backend == "postgres":
+        if not config.postgres_dsn:
+            raise RuntimeError(
+                "EPIMEMER_STORAGE_BACKEND is 'postgres' but EPIMEMER_POSTGRES_DSN is not "
+                "set. Set it to the database the graphs live in, for example "
+                "postgresql://epimemer:secret@db.example.org:5432/epimemer."
+            )
+        # An optional extra, because the driver is compiled. Refusing here names
+        # the extra; the alternative is an ImportError naming a package the user
+        # never asked for.
+        try:
+            from epimemer.storage.postgres_adapter import PostgresStorage
+        except ImportError as missing:
+            raise RuntimeError(
+                "EPIMEMER_STORAGE_BACKEND is 'postgres' but its driver, psycopg, is not "
+                "installed. It is an optional extra: install 'epimemer[postgres]', or set "
+                "EPIMEMER_STORAGE_BACKEND to another backend."
+            ) from missing
+
+        # The same deliberately empty default as the other persistent backends.
+        database = config.graph if config.graph != "" else "default"
+        return PostgresStorage(config.postgres_dsn, database=database)
     else:
         from epimemer.storage.memory import InMemoryStorage
 

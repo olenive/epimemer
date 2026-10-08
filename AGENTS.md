@@ -38,7 +38,8 @@ names.
 
 **Never compare timestamps as text in a backend query**: ISO-8601 strings sort
 chronologically only while both sides render identically. Use `instant()` in
-`surrealdb_adapter.py` or pad on write; `dev-docs/DEVELOPER_GUIDE.md` has the
+`surrealdb_adapter.py` or pad on write with `iso_micros` from
+`storage/timestamps.py`; `dev-docs/DEVELOPER_GUIDE.md` has the
 measurements.
 
 # Git Usage

@@ -82,7 +82,7 @@ the manifest out.
 
 ## 3. The verbatim-write rule
 
-**Import must not go through the ordinary writers.** Three of them derive
+**Import must not go through the ordinary writers.** Four of them derive
 something:
 
 - `store_relation_label` merges the row against whatever is recorded under
@@ -91,6 +91,9 @@ something:
   `journal()` above it stamps the instant.
 - The counter methods move a number rather than setting one, and `claim_agent`
   writes `last_seen_at`.
+- `store_timeline` stores one more than the `version` it was given
+  (`TIMELINES.md` §2.6), so a timeline restored through it would come back a
+  version ahead of the one exported.
 
 So the protocol carries `write_verbatim_tx`, which takes every section and
 writes each record exactly as given. It is **insert-only**, on `write_batch_tx`'s
@@ -225,7 +228,21 @@ repository they commit themselves.
 
 ---
 
-## 8. Prompting, not scheduling
+## 8. Convert: a bundle that never touches disk
+
+`epimemer graphs convert <graph> --to <backend>` is export and import in one
+process. The source is the configured backend, the destination is a second
+`ServerConfig` built from the `--to` flags (`--to-dir` for SQLite, `--to-url`
+and its companions for SurrealDB, `--to-dsn` for Postgres; anything not named
+is inherited), and
+`create_storage` opens each one, so the command knows nothing about either
+backend. The bundle goes from `export_graph` straight to `import_graph`, and
+every rule above holds unchanged: the destination graph must not exist, records
+land verbatim, vectors are recomputed. `--as` names the new graph when it
+should differ. The in-memory store is refused as a destination, since it would
+be gone at exit.
+
+## 9. Prompting, not scheduling
 
 Nothing polls and nothing runs in the background. `stores_since_backup` moves
 store for store with the reflect counter and is zeroed by a successful backup,

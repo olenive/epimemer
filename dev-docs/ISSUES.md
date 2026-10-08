@@ -196,6 +196,74 @@ outage.
 
 ---
 
+### A decomposition can land after a re-cut deleted the passages it cites
+
+⏸ **Deferred**, trigger stated below. Found on 2026-10-08 while building the
+segmentation stages (`SEGMENTATION.md` §5.2).
+
+**What breaks.** `resegment` refuses while any node cites one of the
+document's passages, and checks that inside its own transaction. The other
+order is not guarded: `store_decomposition` validates its passage ids, then
+awaits the embedding work, then writes through `write_batch_tx`. A re-cut of
+the same document that commits inside that window is not refused, because
+nothing cites the passages yet, and the decomposition's nodes then land
+citing passages that no longer exist. One agent cannot do this to itself; it
+takes two agents on one document in a shared graph.
+
+**Smallest fix.** A check inside `write_batch_tx`, on every backend, that
+every passage a node names as its source still exists, refusing the whole
+batch otherwise. Facts cite passages; topics may cite a document or nothing,
+so the check applies to ids that name a passage and leaves the rest alone.
+`tests/storage/test_storage_parity.py`: `test_write_batch_tx_refuses_a_node_citing_a_deleted_passage`,
+and a two-instance test in `test_postgres_storage.py` with a re-cut committed
+between the read and the write.
+
+**Decision needed.** Whether the refusal names the passages or just the count,
+and whether `store_decomposition` retries against the new cut (it cannot: the
+agent's claims were extracted from the old passages) or returns the refusal
+for the agent to re-read and re-decompose. The second is the only honest one.
+
+**Trigger.** A shared graph where two agents ingest and re-cut the same
+document, or the first node found whose source passage is missing.
+
+### Edge collapse on a merge or correction keys only on source, target and type
+
+🟡 **Open.** Found on 2026-10-08 by the differential test
+(`tests/storage/test_differential.py`), which drives the in-memory oracle and
+each persistent backend through the same random history and compares the
+exported bundles.
+
+**What breaks.** When a merge or a correction re-points edges onto a survivor,
+duplicates are collapsed by `(src, dst, type)` and nothing else, in every
+backend (`_migrate_edges_inplace` in `memory.py` and its counterparts). Two
+timelinks from one node to different timepoints of one timeline collapse to
+one, so a link is lost; on seed 48 a retired timelink was kept and a live one
+dropped; related edges that differ only in their label collapse the same way.
+The key ignores `metadata`, the relation label, and whether the edge is
+retired.
+
+Three further differences are SurrealDB's alone, excluded from the test's menu
+with a comment each: which duplicate survives a collapse (the others keep the
+edge stored first, SurrealDB the first it reads; seed 9 step 261); on a
+correction SurrealDB does not collapse at all (seed 37 step 55); and a
+world-change that copies two edges in one step numbers them in read order, so
+their ids come out swapped (seed 29 step 30). SQLite and Postgres match the
+oracle on fifty seeds with those exclusions off.
+
+**Smallest fix.** Decide the key first: at least `(src, dst, type, label)`,
+with a retired edge never outranking a live one, and a timelink's timepoint
+part of its identity. Then one rule in `pipelines/graph_construction/versioning.py`
+that every backend's migration follows, and the SurrealDB migration brought to
+the same order and the same collapse on correction. The differential test's
+excluded operations go back into the menu as the proof.
+
+**Decision needed.** The key. Whether `metadata` ever distinguishes two edges
+worth keeping, or only the label and the timepoint do.
+
+**Trigger.** A graph that merges nodes carrying several timelinks or several
+labelled relations to one neighbour, which any graph built with the timeline
+tools will be; or the first release after this one, whichever comes first.
+
 ### FTS index backfill runs inside `connect()` with no progress reporting
 
 ⏸ **Deferred**, trigger stated below.
@@ -226,6 +294,10 @@ connection.
 ### The in-memory store cannot persist, so every local use needs a server
 
 🟡 **Open, deprioritised.**
+
+**Update, 2026-10-08.** The addition this entry left open is being built: a
+SQLite backend, one file per graph, designed in `SQLITE_BACKEND.md`. The
+in-memory store itself stays as it is, for the reason below.
 
 **What breaks.** `InMemoryStorage` has no save or load path; state lives in
 `_GraphStore` for exactly as long as the process does. So SurrealDB is the only

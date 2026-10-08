@@ -35,9 +35,13 @@ Claim an entry by name in your commit message.
 
 ### Sharing a graph between users
 
-**The state.** A graph is reachable only through the server that opened it, and
-that server has one set of credentials. Two people who want to work on one
-graph share a server, and share everything else on it.
+**The state, 2026-10-08.** A graph lives on a served SurrealDB or, since the
+Postgres backend, in a Postgres database, and several servers can open it at
+once: each person runs their own server against the shared database with
+their own credential, and the two-instance tests on both backends show one
+server seeing another's writes. What is still missing is everything finer
+than "can open the database": read-only access, a grant on one graph and not
+its neighbours, and knowing which person was behind a judge binding.
 
 **What.** A way for one user to grant another read, or read and write, access
 to a named graph and nothing else: the project's own development history, for
@@ -56,27 +60,26 @@ graph together, is parked until a team needs it, with the shape decided:
   authenticate: whoever launched it is the user. Any Epimemer-level user or
   access list would be enforced by code the same person controls against a
   database they can already open. So identity is the database credential, one
-  per person, and a grant is a database-level user on one graph
-  (`OWNER`, `EDITOR` or `VIEWER`). The judge registry is a separate thing: a
-  judge is an agent identity a person approves, not the person.
+  per person, and a grant is a database-level permission on one graph: on
+  Postgres a role per person with privileges on the graph's schema, on
+  SurrealDB a database-level user (`OWNER`, `EDITOR` or `VIEWER`). Postgres is
+  the natural home for this tier, since teams already administer roles there.
+  The judge registry is a separate thing: a judge is an agent identity a
+  person approves, not the person.
 - What Epimemer then owes a per-graph credential: a read path that writes
   nothing (`search` stamps `retrieved_at` and `claim_agent` writes
-  `last_seen_at`, so a viewer cannot search today); permission errors turned
-  into plain refusals naming the access level; `list_graphs` without
-  namespace rights, since `INFO FOR NS` needs them; a CLI that wraps the
-  grant; and the database user recorded on a judge binding, since two people
-  sharing one picker will pick the same judge and review would merge their
-  sessions.
+  `last_seen_at`, so a viewer cannot search today, on any backend); permission
+  errors turned into plain refusals naming the access level; `list_graphs`
+  under a credential that cannot see every schema or namespace; a CLI that
+  wraps the grant; and the database user recorded on a judge binding, since
+  two people sharing one picker will pick the same judge and review would
+  merge their sessions.
 - Nothing finer than a whole graph, and nothing about reaching the database
   across machines, which is the database's own configuration.
-- A version number on the timeline record, checked on write. A timeline is
-  stored as one record and every change rewrites it whole, so two writers on
-  one timeline are last-writer-wins today, and with ordering constraints in
-  the record (`TIMELINES.md` §2.5) what gets lost is a recorded assertion, not
-  a mark. Deferred with the rest of this tier because one server has one
-  client, so the race needs two servers on one database.
 
-**Blockers.** A team that needs it.
+**Blockers.** A team that needs it. Two servers on one database is now an
+ordinary test fixture on Postgres and on a served SurrealDB, so the read-only
+path and the per-graph grant can be built and tested when that team appears.
 
 ---
 
@@ -113,41 +116,6 @@ assumes a date where a number would do.
 
 **Blockers.** A graph that needs one. Decided on 2026-09-16 not to build it
 alongside `TIMELINES.md`.
-
----
-
-### Similar-inference edges
-
-**The state.** `reflect` nominates near-identical inferences that share a
-premise. Ones that do not are nominated by nothing, and the proposal is to
-offer `similarity` edges between them. Nothing enforces node types on
-`SIMILARITY` (`link` checks only that both nodes exist) and retrieval already
-traverses it, so the expansion benefit arrives for free.
-
-**One consequence has to be decided first, and it is a live change to a number
-callers read.** `corroboration` walks `SIMILARITY` neighbours, so
-inference-to-inference edges would make agreeing inferences corroborate each
-other. Defensible as independent support, and not a retrieval nicety.
-
-**The decision is narrower than it looks.** The corroboration walk treats a
-`SIMILARITY` neighbour three ways: *counted*, *excluded* (contradiction,
-variant, corrected) or *reported without counting* (`adjacent_periods`). So
-this is a choice among three existing treatments rather than a yes/no. Agreeing
-inferences most likely want the third.
-
-*Files*: a nominee list in `pipelines/reflection/` beside the existing ones,
-capped as the pair-built lists are, and `pipelines/query/corroboration.py` for
-the consequence.
-
----
-
-### LLM-guided and hybrid segmentation
-
-**Picked up on 27 September 2026.** The decision the entry waited on was
-taken: the calling agent cuts, and the server makes no model call of its own.
-The design is `SEGMENTATION.md`: the programmatic cut still runs first, the
-server reports doubts about its own result, and the agent re-cuts by stating
-anchors before any claim is attached. This entry goes when that ships.
 
 ---
 

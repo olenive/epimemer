@@ -1893,6 +1893,12 @@ class Timeline(BaseModel):
     reference_time: datetime | None = None
     metadata: dict = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_now)
+    # How many times this record has been written, which is what makes a stale
+    # copy detectable. A write carries the version it was read at and lands
+    # only if the store still holds that version, storing one more; anything
+    # else raises `TimelineConflict` (`storage/protocol.py`). A timeline never
+    # stored is at 0, and so is a record written before this field existed.
+    version: int = 0
 
 
 # --- Metacontext ---

@@ -11,7 +11,7 @@ import math
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal, TypeVar
+from typing import Any, Literal, TypeVar
 
 from pydantic import BaseModel
 
@@ -50,8 +50,11 @@ from epimemer.storage.bm25 import bm25_scores, containment_first
 from epimemer.storage.protocol import (
     EdgeDirection,
     MergeOverrides,
+    PassagesCited,
     WarningOverrides,
+    next_timeline_version,
     normalize_for_storage,
+    require_own_passages,
     validate_graph_name,
 )
 
@@ -84,6 +87,17 @@ def _store[M: BaseModel](model: _M) -> _M:
 
 def _copy_all[M: BaseModel](models: Iterable[_M]) -> list[_M]:
     return [m.model_copy(deep=True) for m in models]
+
+
+def _put_timeline(graph: _GraphStore, timeline: Timeline) -> None:
+    """Store `timeline` on the version check every backend applies.
+
+    Compared against the stored object rather than anything the caller holds,
+    and raised before the dict is touched, so a refused write changes nothing.
+    """
+    stored = graph.timelines.get(timeline.id)
+    version = next_timeline_version(timeline, None if stored is None else stored.version)
+    graph.timelines[timeline.id] = _store(timeline.model_copy(update={"version": version}))
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -854,7 +868,7 @@ class InMemoryStorage:
                 added_edges.append(edge.id)
             for timeline in timelines:
                 replaced_timelines.append((timeline.id, self._g.timelines.get(timeline.id)))
-                self._g.timelines[timeline.id] = _store(timeline)
+                _put_timeline(self._g, timeline)
             for embedding in embeddings:
                 _put_embedding(self._g, _store(embedding))
                 added_embeddings.append(embedding.id)
@@ -896,7 +910,7 @@ class InMemoryStorage:
         previous_timeline = self._g.timelines.get(timeline.id)
         previous_edges: list[tuple[str, NodeEdge | None]] = []
         try:
-            self._g.timelines[timeline.id] = _store(timeline)
+            _put_timeline(self._g, timeline)
             for edge in [*new_edges, *retired_edges]:
                 previous_edges.append((edge.id, self._g.edges.get(edge.id)))
                 _put_edge(self._g, _store(edge))
@@ -998,6 +1012,53 @@ class InMemoryStorage:
         except Exception:
             self._graphs[self._database] = snapshot
             raise
+
+    async def resegment_tx(
+        self,
+        document_id: str,
+        segments: Sequence[Segment],
+        *,
+        segmentation: Mapping[str, Any],
+    ) -> int:
+        """A document's passages replaced, if nothing cites them. See the protocol.
+
+        Atomic because nothing here awaits: the check and the writes run
+        without yielding, so no other call on this event loop can store a node
+        between them. Every refusal is raised before the first write, and the
+        writes that follow are put back if one of them fails.
+        """
+        require_own_passages(document_id, segments)
+        g = self._g
+        document = g.documents.get(document_id)
+        if document is None:
+            raise KeyError(f"Document {document_id} not found")
+        replaced = {sid: s for sid, s in g.segments.items() if s.source_id == document_id}
+        citing = sum(1 for node in g.nodes.values() if node.source_id in replaced)
+        if citing:
+            raise PassagesCited(document_id=document_id, citing=citing)
+        # Insert-only, as on the other backends, where the primary key refuses
+        # it. An id this re-cut replaces is free to be used again.
+        taken = sorted(s.id for s in segments if s.id in g.segments and s.id not in replaced)
+        if taken:
+            raise ValueError(f"a re-cut passage id is already stored: {', '.join(taken)}")
+
+        try:
+            for segment_id in replaced:
+                del g.segments[segment_id]
+            for segment in segments:
+                g.segments[segment.id] = _store(segment)
+            g.documents[document_id] = _store(
+                document.model_copy(
+                    update={"metadata": {**document.metadata, "segmentation": dict(segmentation)}}
+                )
+            )
+        except Exception:
+            for segment in segments:
+                g.segments.pop(segment.id, None)
+            g.segments.update(replaced)
+            g.documents[document_id] = document
+            raise
+        return len(replaced)
 
     # --- Embeddings ---
 
@@ -1122,7 +1183,7 @@ class InMemoryStorage:
     # --- Timelines ---
 
     async def store_timeline(self, timeline: Timeline) -> str:
-        self._g.timelines[timeline.id] = _store(timeline)
+        _put_timeline(self._g, timeline)
         return timeline.id
 
     async def get_timeline(self, timeline_id: str) -> Timeline | None:
@@ -1391,6 +1452,10 @@ class InMemoryStorage:
     @property
     def backend_name(self) -> str:
         return "memory"
+
+    @property
+    def location(self) -> str:
+        return "in this process, written nowhere: the graphs go when the server exits"
 
     @property
     def current_database(self) -> str:

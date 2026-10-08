@@ -8,7 +8,7 @@ in-memory, or anything else can implement it.
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Literal, Protocol, TypeVar
+from typing import Any, Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -231,7 +231,13 @@ def drop_none_values(value):
 
     Declared model fields are unaffected in practice — they are absent from the
     stored row either way, and Pydantic refills their `= None` default on read.
+
+    A model met on the way down, a list of timepoints inside a timeline for
+    instance, is cleaned by `normalize_for_storage`, so the rule reaches a dict
+    at any depth of a record, as it does in SurrealDB.
     """
+    if isinstance(value, BaseModel):
+        return normalize_for_storage(value)
     if isinstance(value, dict):
         return {k: drop_none_values(v) for k, v in value.items() if v is not None}
     if isinstance(value, list):
@@ -239,18 +245,123 @@ def drop_none_values(value):
     return value
 
 
+class TimelineConflict(Exception):
+    """A timeline write carried a version the store no longer holds.
+
+    A timeline is one record rewritten whole, so without this a caller that read
+    it, changed it and wrote it back would overwrite whatever another writer
+    stored in between: an ordering constraint, a verdict, a recurrence rule. The
+    write is refused instead, and nothing it would have written lands. Every
+    backend raises this and only this when the check fails, so a caller catches
+    one thing whichever backend it runs on.
+
+    `expected` is the version the write carried, the one its timeline was read
+    at. `found` is what the store holds, or None when there is no record under
+    the id.
+    """
+
+    def __init__(self, timeline_id: str, expected: int, found: int | None) -> None:
+        self.timeline_id = timeline_id
+        self.expected = expected
+        self.found = found
+        held = "no record of it" if found is None else f"version {found}"
+        super().__init__(
+            f"timeline {timeline_id} was read at version {expected}, and the store now holds {held}"
+        )
+
+
+class SchemaTooNew(Exception):
+    """A graph written by a newer Epimemer than this one, refused rather than opened.
+
+    Each persistent backend stamps a graph with the schema version it wrote,
+    and steps an older graph up to its own version on open. A graph stamped
+    with a higher number than this code knows has tables, rows or meanings this
+    code cannot read correctly, and writing into it would damage what the newer
+    version wrote. So the open is refused before anything is written, and the
+    remedy is to upgrade Epimemer. Every backend raises this and only this for
+    it, so the server and the CLI report it the same way whichever is
+    configured.
+
+    `stored` is the version the graph carries, `supported` the highest this
+    code can open.
+    """
+
+    def __init__(self, graph: str, stored: int, supported: int) -> None:
+        self.graph = graph
+        self.stored = stored
+        self.supported = supported
+        super().__init__(
+            f"graph '{graph}' is at schema version {stored}, and this Epimemer opens "
+            f"versions up to {supported}: a newer Epimemer wrote it. Upgrade Epimemer to "
+            "open this graph. Nothing in it was changed."
+        )
+
+
+def next_timeline_version(timeline: Timeline, found: int | None) -> int:
+    """The version a write of `timeline` stores, given the version the store holds.
+
+    The rule every backend applies on every timeline write except a verbatim
+    restore: the write lands only when the store holds the version the timeline
+    was read at, and stores one more. No record counts as version 0, which is
+    what a timeline never stored carries. Anything else raises
+    `TimelineConflict`.
+    """
+    if (0 if found is None else found) != timeline.version:
+        raise TimelineConflict(timeline.id, timeline.version, found)
+    return timeline.version + 1
+
+
 def normalize_for_storage[M: BaseModel](model: _M) -> _M:
-    """Return a copy of `model` with None-valued keys dropped from dict fields.
+    """Return a copy of `model` with None-valued dict keys dropped at every depth.
 
     Every backend applies this on the way in, so a record round-trips
-    identically whichever backend is configured. See `drop_none_values`.
+    identically whichever backend is configured. The walk goes through nested
+    models as well as dicts and lists, so a timepoint's `metadata` inside a
+    timeline is cleaned exactly as the timeline's own is: SurrealDB drops a
+    None-valued key wherever it sits, and the others must store the same thing.
+    See `drop_none_values`.
     """
     updates = {
         name: drop_none_values(attr)
         for name in type(model).model_fields
-        if isinstance(attr := getattr(model, name, None), dict)
+        if isinstance(attr := getattr(model, name, None), BaseModel | dict | list)
     }
     return model.model_copy(update=updates) if updates else model
+
+
+class PassagesCited(Exception):
+    """A re-cut refused because nodes already cite the passages it would replace.
+
+    Raised by `resegment_tx` from inside its transaction, so nothing has
+    changed when it arrives. `citing` counts the nodes, at any status, whose
+    `source_id` is one of the document's passages: once a claim cites a passage
+    the passage is provenance, and the document is ingested again rather than
+    re-cut.
+    """
+
+    def __init__(self, *, document_id: str, citing: int) -> None:
+        self.document_id = document_id
+        self.citing = citing
+        super().__init__(
+            f"{citing} node{'' if citing == 1 else 's'} already cite the passages of "
+            f"document {document_id}, so its cut can no longer be replaced"
+        )
+
+
+def require_own_passages(document_id: str, segments: Sequence[Segment]) -> None:
+    """Refuse a re-cut whose passages name another document or repeat an id.
+
+    Every backend calls this before it reads anything, so a caller error is
+    the same `ValueError` everywhere rather than a passage filed under the
+    wrong document on one backend and a constraint failure on another.
+    """
+    foreign = sorted({s.source_id for s in segments if s.source_id != document_id})
+    if foreign:
+        raise ValueError(
+            f"a re-cut of document {document_id} was given passages of {', '.join(foreign)}"
+        )
+    if len({s.id for s in segments}) != len(segments):
+        raise ValueError(f"a re-cut of document {document_id} repeats a passage id")
 
 
 class StorageBackend(Protocol):
@@ -262,7 +373,8 @@ class StorageBackend(Protocol):
     re-stores each node a search returned, `add_timeline_timepoint` re-stores
     the timeline — so a backend that treats `store_*` as insert-only loses those
     writes without raising. `write_batch_tx` is the deliberate exception; see
-    its docstring.
+    its docstring. A timeline's replacement is also conditional on its
+    `version`; see `store_timeline`.
 
     **Records round-trip unchanged.** What `store_*` accepts is what the
     matching getter returns: content is preserved byte-for-byte (unicode,
@@ -271,9 +383,10 @@ class StorageBackend(Protocol):
     precision, and nested structure is preserved.
 
     **The one documented exception is None-valued dict keys**, which every
-    backend drops on the way in by calling `normalize_for_storage`. Callers must
-    treat absence as the only representation of "no information" in free-form
-    dicts like `metadata`; `{"note": None}` is stored, and reads back, as `{}`.
+    backend drops on the way in, at any depth of the record, by calling
+    `normalize_for_storage`. Callers must treat absence as the only
+    representation of "no information" in free-form dicts like `metadata`;
+    `{"note": None}` is stored, and reads back, as `{}`.
     A new backend that skips this normalization will *appear* to work — it will
     simply be more faithful than the others — and will diverge the moment a
     caller writes a None. Apply it.
@@ -766,8 +879,8 @@ class StorageBackend(Protocol):
         failure is silent. Rolling back an upsert therefore means restoring the
         row's *previous* content, not deleting it.
 
-        Read-modify-write of a shared timeline is last-writer-wins across
-        concurrent callers, exactly as `add_timeline_timepoint` already is.
+        Each timeline is written on `store_timeline`'s version check, and a
+        stale one raises `TimelineConflict` with nothing in the batch written.
         """
         ...
 
@@ -796,6 +909,9 @@ class StorageBackend(Protocol):
         replacement links and `retired_edges` are the originals stamped with
         when they stopped counting; both upsert, since a retirement is a rewrite
         of an edge that already exists. Nothing here is deleted.
+
+        The timeline is written on `store_timeline`'s version check, inside the
+        transaction: a stale one raises `TimelineConflict` and no link moves.
 
         `kind`, `counts` and `judge` describe the decision rather than the
         write, and a bare backend does nothing with them: they are what the
@@ -878,7 +994,9 @@ class StorageBackend(Protocol):
         **Insert-only, not upsert**, on `write_batch_tx`'s terms and for its
         reason: these records are being put into a graph that did not exist a
         moment ago, so every id is new and re-writing one is a caller error
-        rather than an update. All-or-nothing, and every section optional.
+        rather than an update. All-or-nothing, and every section optional. A
+        timeline keeps the `version` it arrives with: there is nothing stored
+        to compare it against, and advancing it would change the record.
         Sections are independent — nothing here reads one to derive another —
         so a caller may split a large restore across several calls.
 
@@ -888,6 +1006,52 @@ class StorageBackend(Protocol):
         journal rows name it — and reaching for this to skip that reasoning
         would put a record in the store that nothing else could have written.
         Import is the caller; a second one needs an argument.
+        """
+        ...
+
+    async def resegment_tx(
+        self,
+        document_id: str,
+        segments: Sequence[Segment],
+        *,
+        segmentation: Mapping[str, Any],
+    ) -> int:
+        """Atomically replace a document's passages, provided nothing cites them.
+
+        The tenth transaction boundary, and the one a `resegment` lands through
+        (`dev-docs/SEGMENTATION.md` §5). In one transaction it counts the nodes,
+        at any status, whose `source_id` is one of the document's passages as
+        stored; refuses with `PassagesCited` if there are any; deletes those
+        passages; inserts `segments`; and sets the document's
+        `metadata["segmentation"]` to `segmentation`, keeping every other
+        metadata key as stored. Returns how many passages it replaced.
+
+        **The check is inside the transaction because the guarantee is.** A
+        count in one call and a replacement in the next would let a
+        decomposition land between them and leave claims citing passages that
+        no longer exist. Each backend makes the check and the writes one unit
+        against every other writer it can see: the in-memory store does it
+        without yielding to the event loop, SQLite under `BEGIN IMMEDIATE`,
+        Postgres with the document row and the node table locked, SurrealDB as
+        one `BEGIN ... COMMIT` batch that throws. What it cannot see is a
+        decomposition still in flight, one that read the passages before the
+        re-cut and writes its nodes after it: nothing refuses that write, and
+        its nodes cite passages that are gone.
+
+        **The one delete of something a reader may have seen.** The replaced
+        passages carry no judge and nothing cites them, which the check
+        proves, and the cut they made is kept in `segmentation["history"]`;
+        retiring them instead would put a status filter on every reader of
+        segments (§5.3).
+
+        `segmentation` is computed by the caller from the document as it read
+        it, so two re-cuts of one document at once keep the later one's
+        history, last writer wins, as `write_timeline_tx`'s timeline does.
+        `segments` are inserted rather than upserted: they are new passages,
+        and an id already stored is a caller error. A passage naming another
+        document is refused by `require_own_passages` before anything is read.
+        Raises `KeyError` when the document does not exist, having changed
+        nothing.
         """
         ...
 
@@ -1069,7 +1233,18 @@ class StorageBackend(Protocol):
     # --- Timelines ---
 
     async def store_timeline(self, timeline: Timeline) -> str:
-        """Store a timeline. Returns the timeline id."""
+        """Store a timeline if nobody has written it since it was read. Returns the id.
+
+        **Compare-and-set on `version`** (`next_timeline_version`). The write
+        lands only when the store holds the version `timeline` carries, no record
+        counting as 0, and the stored record carries one more; otherwise it
+        raises `TimelineConflict` and the record is unchanged. The argument is
+        not modified, so a caller that writes the same timeline twice reads it
+        back between the two.
+
+        Every timeline write takes this check except `write_verbatim_tx`, which
+        restores the version a bundle carries.
+        """
         ...
 
     async def get_timeline(self, timeline_id: str) -> Timeline | None:
@@ -1599,6 +1774,18 @@ class StorageBackend(Protocol):
         they are looking at an ephemeral in-memory store or a persistent one.
         Every backend implements it explicitly — no duck-typing on the class
         name — so the label stays stable if a class is renamed.
+        """
+        ...
+
+    @property
+    def location(self) -> str:
+        """Where this backend keeps its graphs, as prose a user can act on.
+
+        The in-memory store answers with the process, SurrealDB with its URL
+        and namespace, SQLite with its directory. `list_graphs` and the startup
+        log line report it, so "where did my data go" always has an answer the
+        server gave rather than one the user has to reconstruct from its
+        configuration.
         """
         ...
 

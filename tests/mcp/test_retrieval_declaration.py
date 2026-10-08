@@ -194,6 +194,12 @@ def _args(tool: str, seeded: dict) -> dict:
     now = datetime.now(UTC)
     return {
         "segment": {"content": "A second document about rollbacks."},
+        # Refused: the seeded document is decomposed, so its passages are
+        # cited. A refusal is still a response, which is what is under test.
+        "resegment": {
+            "document_id": seeded["document_id"],
+            "cuts": ["The deployment rollback failed"],
+        },
         "store_decomposition": {
             "metacontext_id": "the-real",
             "document_id": seeded["document_id"],
@@ -362,6 +368,7 @@ def _ids_in(text: str, known: list[str]) -> set[str]:
 
 ALL_TOOLS = [
     "segment",
+    "resegment",
     "store_decomposition",
     "search",
     "link",

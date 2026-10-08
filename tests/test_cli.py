@@ -7,16 +7,20 @@ an approval that reports success into a store the server never reads is worse
 than a refusal, because the user then believes they have done it.
 """
 
+import asyncio
 from datetime import UTC, datetime
 
 import pytest
 
 from epimemer.cli import (
     _confirm,
+    _convert_graph,
     _delete,
+    _destination_config,
     _export_bundle,
     _import_bundle,
     _list,
+    _list_graphs,
     _reinstate,
     _rename,
     _retire,
@@ -24,6 +28,7 @@ from epimemer.cli import (
     main,
     unreachable_store,
 )
+from epimemer.core.advisories import AdvisoryAction, AdvisoryKind
 from epimemer.core.types import (
     Agent,
     DecisionKind,
@@ -31,6 +36,8 @@ from epimemer.core.types import (
     Fact,
     JudgeRef,
     Metacontext,
+    NodeStatus,
+    RelationVerdict,
     Topic,
     agent_name,
     is_retired,
@@ -38,10 +45,18 @@ from epimemer.core.types import (
     retired,
     with_description,
 )
+from epimemer.embeddings.mock import MockEmbeddingProvider
+from epimemer.mcp import tools
 from epimemer.mcp.config import ServerConfig
 from epimemer.pipelines import transfer
-from epimemer.pipelines.transfer import unreachable_destination
+from epimemer.pipelines.transfer import (
+    MANIFEST_FILENAME,
+    bundle_bytes,
+    export_graph,
+    unreachable_destination,
+)
 from epimemer.storage.memory import InMemoryStorage
+from epimemer.storage.protocol import MergeOverrides, WarningOverrides
 
 AT = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
 
@@ -622,6 +637,86 @@ class TestServe:
         assert calls == [((), {"transport": "stdio"})]
 
 
+class TestGraphsList:
+    """`epimemer graphs list` is the first question to ask a server you have
+    just configured: which backend, where its graphs live, and what is there."""
+
+    async def test_it_names_the_backend_its_location_and_the_graphs(self):
+        store = InMemoryStorage()
+        await store.connect()
+        await store.switch_database("second")
+        await store.switch_database("default")
+
+        out = await _list_graphs(store)
+
+        assert "backend: memory" in out
+        assert f"location: {store.location}" in out
+        assert "graphs: default, second" in out
+        assert "active graph: default" in out
+
+    def test_it_is_wired_to_the_command_line(self, capsys, monkeypatch):
+        monkeypatch.setenv("EPIMEMER_STORAGE_BACKEND", "memory")
+        monkeypatch.setenv("EPIMEMER_EMBEDDING_PROVIDER", "mock")
+
+        code = main(["graphs", "list"])
+
+        captured = capsys.readouterr()
+        assert code == 0
+        assert "backend: memory" in captured.out
+        assert "in-memory backend" in captured.err
+
+
+class TestAGraphANewerEpimemerWrote:
+    """The refusal reaches a person at the command line as the sentence it is,
+    naming both versions and the remedy, rather than as a traceback."""
+
+    def _newer_default_graph(self, monkeypatch, tmp_path) -> None:
+        import sqlite3
+
+        from epimemer.storage.sqlite_adapter import SQLiteStorage
+
+        async def made() -> None:
+            store = SQLiteStorage(tmp_path / "graphs")
+            await store.connect()
+            await store.close()
+
+        asyncio.run(made())
+        connection = sqlite3.connect(tmp_path / "graphs" / "default.sqlite", autocommit=True)
+        try:
+            connection.execute("UPDATE schema_version SET version = 99")
+        finally:
+            connection.close()
+        monkeypatch.setenv("EPIMEMER_STORAGE_BACKEND", "sqlite")
+        monkeypatch.setenv("EPIMEMER_SQLITE_DIR", str(tmp_path / "graphs"))
+        monkeypatch.setenv("EPIMEMER_EMBEDDING_PROVIDER", "mock")
+        monkeypatch.delenv("EPIMEMER_GRAPH", raising=False)
+
+    @pytest.mark.parametrize(
+        "argv", [["graphs", "list"], ["agents", "list"], ["agents", "confirm", "critic"]]
+    )
+    def test_it_is_refused_in_plain_words(self, argv, capsys, monkeypatch, tmp_path):
+        self._newer_default_graph(monkeypatch, tmp_path)
+
+        code = main(argv)
+
+        err = capsys.readouterr().err
+        assert code == 2
+        assert "graph 'default' is at schema version 99" in err
+        assert "Upgrade Epimemer" in err
+        assert "Traceback" not in err
+
+
+class TestVersion:
+    def test_version_prints_the_installed_version_and_exits(self, capsys):
+        with pytest.raises(SystemExit) as stop:
+            main(["--version"])
+
+        assert stop.value.code == 0
+        out = capsys.readouterr().out
+        assert out.startswith("epimemer ")
+        assert out.strip() != "epimemer"
+
+
 class TestGraphBundles:
     """Export, import and verify, which are the three acts a backup needs.
 
@@ -691,6 +786,301 @@ class TestGraphBundles:
         assert "restored" in await target.list_databases()
         await target.switch_database("restored")
         assert (await target.get_node("fact-1")) is not None
+
+    async def test_convert_rebuilds_the_graph_on_the_other_backend(self, tmp_path):
+        from epimemer.storage.sqlite_adapter import SQLiteStorage
+
+        source = await self._graph_with_something_in_it()
+        destination = _MOCK_EMBEDDING.model_copy(
+            update={"storage_backend": "sqlite", "sqlite_dir": str(tmp_path / "graphs")}
+        )
+
+        message = await _convert_graph(source, _MOCK_EMBEDDING, "source", destination, "source")
+
+        assert "Converted graph 'source' from memory to 'source' on sqlite" in message
+        assert str(tmp_path / "graphs") in message
+        assert (tmp_path / "graphs" / "source.sqlite").is_file()
+        converted = SQLiteStorage(tmp_path / "graphs", database="source")
+        await converted.connect()
+        try:
+            assert (await converted.get_node("fact-1")) is not None
+            assert (await converted.get_metacontext("the-real")) is not None
+        finally:
+            await converted.close()
+        # The source is left exactly as it was found.
+        assert (await source.get_node("fact-1")) is not None
+        assert source.current_database == "source"
+
+    async def _rich_graph(self) -> InMemoryStorage:
+        """A graph holding one of everything a bundle carries, built the way the
+        tools build it, so the records have the shapes real ones have."""
+        judge = JudgeRef(agent_id="archivist", digest="d1")
+        embedder = MockEmbeddingProvider(model_id="mock-embed", dimension=8)
+        config = ServerConfig(
+            storage_backend="memory", embedding_provider="mock", segmentation_strategy="paragraph"
+        )
+        store = InMemoryStorage()
+        await store.connect()
+        await store.switch_database("rich")
+        await store.store_metacontext(
+            Metacontext(id="the-real", content="The Real", description="The real world.")
+        )
+        await store.store_metacontext(
+            Metacontext(id="the-novel", content="The Novel", description="What the book says.")
+        )
+        await store.upsert_agent(
+            Agent(
+                id="archivist",
+                name="Archivist",
+                descriptions=with_description([], text="reads parish records", at=AT),
+                authorised_at=AT,
+                first_seen_at=AT,
+                last_seen_at=AT,
+            )
+        )
+        await store.set_approved_agent_ids(["archivist", "editor"])
+
+        # Cut by anchors, then cut again before anything cites a passage.
+        content = (
+            "The harbour toll rose in 1897, and ships paid it twice. "
+            "The ledger was closed in 1901 after the audit."
+        )
+        segmented, _ = await tools.segment_text(
+            content,
+            store,
+            embedder,
+            config,
+            source="harbour.md",
+            cuts=["The harbour toll rose", "The ledger was closed"],
+            judge=judge,
+        )
+        document_id = segmented["document_id"]
+        recut, _ = await tools.resegment(
+            document_id,
+            ["The harbour toll rose in 1897", "ships paid it twice", "The ledger was closed"],
+            store,
+            judge=judge,
+        )
+        assert recut["resegmented"] is True
+        first, second, third = (passage["segment_id"] for passage in recut["segments"])
+
+        # Topics, facts and inferences, with tags, priors and timepoints.
+        await tools.store_decomposition(
+            document_id,
+            [
+                {
+                    "segment_id": first,
+                    "topics": [{"content": "The harbour toll", "description": "Dues on ships."}],
+                    "facts": [
+                        {
+                            "content": "The harbour toll rose in 1897.",
+                            "claim_kind": "event",
+                            "confidence": 0.9,
+                            "confidence_basis": "the toll book records it",
+                        }
+                    ],
+                },
+                {"segment_id": second, "facts": ["Ships paid the toll twice."]},
+                {
+                    "segment_id": third,
+                    "facts": ["The ledger was closed in 1901."],
+                    "inferences": [
+                        {"content": "The audit ended the old ledger.", "tags": ["audit"]}
+                    ],
+                },
+            ],
+            store,
+            embedder,
+            metacontext_id="the-real",
+            tags=["harbour"],
+            tag_descriptions={
+                "harbour": "the town harbour and its dues",
+                "audit": "the 1901 audit",
+            },
+            judge=judge,
+        )
+
+        # A claim the world moved past, then asserted again: a node back in the
+        # active set with its retirement kept as a closed lifecycle episode.
+        twice = await store.get_node_by_content("Ships paid the toll twice.")
+        await tools.update(
+            twice.id,
+            "Ships paid the toll once.",
+            store,
+            embedder,
+            because="the_world_changed",
+            judge=judge,
+        )
+        await tools.restore(store, node_ids=[twice.id], sourced_from=document_id, judge=judge)
+        back = await store.get_node(twice.id)
+        assert back.status is NodeStatus.ACTIVE
+        assert [episode.restored_at is not None for episode in back.lifecycle] == [True]
+
+        # Relation vocabulary, a description of it, and a verdict on a pair.
+        toll = await store.get_node_by_content("The harbour toll rose in 1897.")
+        ledger = await store.get_node_by_content("The ledger was closed in 1901.")
+        topic = await store.get_node_by_content("The harbour toll")
+        for fact, relation in ((toll, "reported_in"), (ledger, "recorded_in")):
+            await tools.link(
+                fact.id, topic.id, store, relation=relation, kind="attribution", judge=judge
+            )
+        await tools.describe_relation(
+            "reported_in",
+            store,
+            description="Where a claim was read.",
+            kind="attribution",
+            judge=judge,
+        )
+        labels = sorted(label.id for label in await store.query_relation_labels())
+        await store.record_relation_verdict(
+            RelationVerdict(
+                label_ids=labels[:2], verdict="distinct", because="different acts", judged_by=judge
+            )
+        )
+        await store.record_decision(
+            DecisionRecord(
+                kind=DecisionKind.RELATION_VERDICT, subject_ids=labels[:2], judged_by=judge
+            )
+        )
+
+        # A timeline written twice, so it carries version 2.
+        created, _ = await tools.create_timeline("The parish", store, description="Church events.")
+        await tools.add_timeline_timepoint(
+            created["timeline_id"], store, start=datetime(1897, 5, 1, tzinfo=UTC), label="the toll"
+        )
+        assert (await store.get_timeline(created["timeline_id"])).version == 2
+
+        await store.set_reflect_threshold_override(7)
+        await store.set_backup_threshold_override(11)
+        await store.set_merge_overrides(MergeOverrides(undo_depth=3))
+        await store.set_warning_overrides(
+            WarningOverrides(
+                surface=False,
+                default_action=AdvisoryAction.FLAG,
+                by_kind={AdvisoryKind.CROSS_METACONTEXT: AdvisoryAction.PROCEED},
+            )
+        )
+        await store.set_require_judge(True)
+        return store
+
+    async def test_convert_round_trips_a_rich_graph_byte_for_byte(self, tmp_path):
+        """Every section of the bundle, read back off the converted graph, is the
+        section the source exports: no record, field or setting lost or reshaped
+        on the way into SQLite. Only the manifest differs, as it must, since it
+        records when and from which backend the export was taken."""
+        from epimemer.storage.sqlite_adapter import SQLiteStorage
+
+        source = await self._rich_graph()
+        destination = _MOCK_EMBEDDING.model_copy(
+            update={"storage_backend": "sqlite", "sqlite_dir": str(tmp_path / "graphs")}
+        )
+
+        await _convert_graph(source, _MOCK_EMBEDDING, "rich", destination, "rich")
+
+        converted = SQLiteStorage(tmp_path / "graphs", database="rich")
+        await converted.connect()
+        try:
+            exports = [
+                bundle_bytes(
+                    await export_graph(
+                        store, embedding_provider="mock", embedding_model_id="m", exported_at=AT
+                    )
+                )
+                for store in (source, converted)
+            ]
+        finally:
+            await converted.close()
+        want, got = exports
+        differing = [name for name in want if name != MANIFEST_FILENAME and want[name] != got[name]]
+        assert differing == [], {name: (want[name], got[name]) for name in differing}
+        # Nothing vacuous: every section the graph was built to fill came across.
+        empty = {name for name, data in want.items() if not data}
+        assert empty == set(), empty
+
+    async def test_convert_can_rename_the_graph_on_the_way(self, tmp_path):
+        source = await self._graph_with_something_in_it()
+        destination = _MOCK_EMBEDDING.model_copy(
+            update={"storage_backend": "sqlite", "sqlite_dir": str(tmp_path / "graphs")}
+        )
+
+        await _convert_graph(source, _MOCK_EMBEDDING, "source", destination, "copy")
+
+        assert (tmp_path / "graphs" / "copy.sqlite").is_file()
+        assert not (tmp_path / "graphs" / "source.sqlite").exists()
+
+    async def test_convert_refuses_a_source_graph_that_does_not_exist(self, tmp_path):
+        source = await self._graph_with_something_in_it()
+        destination = _MOCK_EMBEDDING.model_copy(
+            update={"storage_backend": "sqlite", "sqlite_dir": str(tmp_path / "graphs")}
+        )
+
+        with pytest.raises(ValueError, match="'sorce' does not exist"):
+            await _convert_graph(source, _MOCK_EMBEDDING, "sorce", destination, "sorce")
+
+        assert not (tmp_path / "graphs").exists()
+
+    async def test_convert_refuses_a_destination_graph_that_exists(self, tmp_path):
+        source = await self._graph_with_something_in_it()
+        destination = _MOCK_EMBEDDING.model_copy(
+            update={"storage_backend": "sqlite", "sqlite_dir": str(tmp_path / "graphs")}
+        )
+        await _convert_graph(source, _MOCK_EMBEDDING, "source", destination, "source")
+
+        with pytest.raises(ValueError, match="already exists"):
+            await _convert_graph(source, _MOCK_EMBEDDING, "source", destination, "source")
+
+    def test_convert_onto_the_in_memory_store_is_refused(self):
+        with pytest.raises(ValueError, match="goes when this command exits"):
+            _destination_config(
+                _MOCK_EMBEDDING,
+                "memory",
+                directory=None,
+                url=None,
+                namespace=None,
+                user=None,
+                password=None,
+                dsn=None,
+            )
+
+    def test_destination_inherits_what_the_flags_leave_unsaid(self):
+        destination = _destination_config(
+            _MOCK_EMBEDDING,
+            "sqlite",
+            directory="/elsewhere",
+            url=None,
+            namespace=None,
+            user=None,
+            password=None,
+            dsn=None,
+        )
+        assert destination.storage_backend == "sqlite"
+        assert destination.sqlite_dir == "/elsewhere"
+        assert destination.graph == ""
+        assert destination.embedding_provider == _MOCK_EMBEDDING.embedding_provider
+
+    def test_a_postgres_destination_is_one_flag(self):
+        destination = _destination_config(
+            _MOCK_EMBEDDING,
+            "postgres",
+            directory=None,
+            url=None,
+            namespace=None,
+            user=None,
+            password=None,
+            dsn="postgresql://epimemer:secret@db.example.org/epimemer",
+        )
+        assert destination.storage_backend == "postgres"
+        assert destination.postgres_dsn == "postgresql://epimemer:secret@db.example.org/epimemer"
+
+    def test_convert_is_wired_to_the_command_line(self, capsys, monkeypatch, tmp_path):
+        monkeypatch.setenv("EPIMEMER_STORAGE_BACKEND", "memory")
+        monkeypatch.setenv("EPIMEMER_EMBEDDING_PROVIDER", "mock")
+
+        code = main(["graphs", "convert", "nothing", "--to", "sqlite", "--to-dir", str(tmp_path)])
+
+        err = capsys.readouterr().err
+        assert code == 2
+        assert "'nothing' does not exist" in err
 
     async def test_import_refuses_a_graph_that_exists(self, tmp_path):
         source = await self._graph_with_something_in_it()

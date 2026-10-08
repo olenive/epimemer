@@ -18,7 +18,7 @@ import typing
 from pydantic import BaseModel
 
 from epimemer.core import types as core_types
-from epimemer.core.types import Topic
+from epimemer.core.types import Timeline, Timepoint, Topic
 from epimemer.storage.protocol import drop_none_values, normalize_for_storage
 
 
@@ -81,6 +81,18 @@ class TestNormalizeForStorage:
         normalized = normalize_for_storage(topic)
         assert normalized.content == "x"
         assert normalized.id == topic.id
+
+    def test_normalizes_dicts_inside_nested_models(self):
+        """SurrealDB drops a None-valued key at any depth, so a dict inside a
+        model inside a list is cleaned as a top-level one is."""
+        point = Timepoint(label="spring", metadata={"a": None, "nested": {"b": None, "xs": [None]}})
+        timeline = Timeline(name="tl", timepoints=[point])
+
+        normalized = normalize_for_storage(timeline)
+
+        assert normalized.timepoints[0].metadata == {"nested": {"xs": [None]}}
+        assert normalized.timepoints[0].label == "spring"
+        assert point.metadata == {"a": None, "nested": {"b": None, "xs": [None]}}
 
 
 def _nullable_fields():

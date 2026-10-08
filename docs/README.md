@@ -4,6 +4,7 @@ How the built system works, and why it works that way.
 
 | Page | Covers |
 |---|---|
+| [INGEST.md](INGEST.md) | How `segment` cuts a document into passages and what a passage is for, the doubts the server raises about its own cut, stating a cut yourself as anchors, and re-cutting with `resegment` before any claim cites a passage |
 | [RETRIEVAL.md](RETRIEVAL.md) | How `search` is answered: the vector and keyword arms, rank fusion, segment hits, result provenance, lineage collapse, valid-time buckets |
 | [VALIDITY.md](VALIDITY.md) | When a claim was true: intervals per source, the two clocks, correction against world-change, lifecycle recurrence (a retired claim becoming true again, restored with the `recurs` verdict, which is a different thing from the timeline recurrence rules below), the soundness check, boundary proposals, and correcting a period that is present and wrong |
 | [TIMELINES.md](TIMELINES.md) | When something happened and in what order: dated points and their kinds, the order a source states between points nobody dated, the contradictions that follow and how a judge answers them, and recurrence rules whose occurrences are computed rather than stored |

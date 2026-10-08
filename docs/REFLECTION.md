@@ -147,6 +147,7 @@ could draw it. Each key is a worklist, not a verdict:
 | `recurrences` | an active claim beside its own `historical` twin | `restore` |
 | `unsound_inferences` | inferences whose premises no source puts in one period | agent judgment |
 | `inference_merge_candidates` | near-identical active inferences resting on a shared premise, each with the warning computed before you decide | `merge_inferences`, or `similarities` where they are two claims |
+| `similar_inferences` | similar active inferences resting on no common premise, each side with its premises | `similarities`: `one_claim` where they draw the same conclusion, `distinct` where they do not |
 | `boundary_proposals` | where a succession lets a period close or open, leaving out any somebody declined | `boundaries` or `boundaries_declined` |
 | `pending_review` | active nodes already carrying review state | `supersessions`, `record_variant`, `retained` |
 | `archival_candidates` | nodes worth setting aside | `archivals`, `judgments`, `retained` |
@@ -191,6 +192,14 @@ concentrates inferences onto surviving premises. The grouping is also why the
 list is useful: a sweep over all inference pairs mostly finds pairs that
 share vocabulary while saying different things, whereas the inferences that
 land on one fact-merge survivor are the ones worth comparing.
+
+`similar_inferences` is the rest of the similar inference pairs: the ones
+that rest on no common premise, so the two lists never offer one pair twice.
+It is a global sweep, capped like the others, and on the graphs measured so
+far it is empty. A `one_claim` on one of its pairs writes a `similarity` edge
+that corroboration reports beside the count rather than in it (§6), because
+two conclusions agreeing is not a second witness to either.
+`dev-docs/SIMILAR_INFERENCES.md` has the design.
 
 Two of the lists exist to keep a distinction that a single one would
 destroy:
@@ -463,6 +472,11 @@ worst, since a false unification does not lose information, it inverts the
 quantity corroboration measures. So reach for `one_claim` only where you
 would have merged.
 
+**Between two inferences, `one_claim` records agreement and adds nothing to
+the count.** Corroboration lists the partner under `agreeing_inferences`
+instead, whichever list nominated the pair, so the verdict for a
+`similar_inferences` pair is simply whether the two draw the same conclusion.
+
 **A `one_claim` can be withdrawn, once.** Recording `distinct` over a pair
 you earlier called one claim retracts that verdict: the pair stops
 corroborating and the count returns to what it would have been. The
@@ -548,10 +562,11 @@ second time carries both rounds, and the second verdict suppresses it again.
 **The nomination says it was reopened**, with the reason, the date and the
 judge, so the next reader sees the history instead of re-deriving it. It
 appears as `reopened` on `similar_pairs`, `contradictions`, `recurrences`,
-`inference_merge_candidates`, `archival_candidates`, `boundary_proposals` and
-`similar_relations`. On `boundary_proposals` the note is matched by claim and
-source, so a reopen of one endpoint also shows on a proposal for the other
-endpoint of the same source's period; the note names the one it was about.
+`inference_merge_candidates`, `similar_inferences`, `archival_candidates`,
+`boundary_proposals` and `similar_relations`. On `boundary_proposals` the note
+is matched by claim and source, so a reopen of one endpoint also shows on a
+proposal for the other endpoint of the same source's period; the note names
+the one it was about.
 
 **Refused when nothing is suppressed for the target**, naming what it looked
 for: *there was nothing to undo* must not read like *done*. Refused too when

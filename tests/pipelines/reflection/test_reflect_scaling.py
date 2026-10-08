@@ -452,6 +452,7 @@ class TestAnswersAreUnchanged:
             "recurrences",
             "unsound_inferences",
             "inference_merge_candidates",
+            "similar_inferences",
             "boundary_proposals",
             "pending_review",
             "archival_candidates",

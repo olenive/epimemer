@@ -16,7 +16,7 @@ Usage:
 import logging
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from epimemer.core.seat import JudgeConfirmation
 from epimemer.core.types import (
@@ -660,6 +660,40 @@ class InstrumentedStorage:
         except Exception:
             logger.exception("write_verbatim_tx event emission failed; write already committed")
 
+    async def resegment_tx(
+        self,
+        document_id: str,
+        segments: Sequence[Segment],
+        *,
+        segmentation: Mapping[str, Any],
+    ) -> int:
+        """Delegate the re-cut, then announce the passages it stored.
+
+        The same events `segment` produces, a `SegmentStored` per new passage,
+        so a viewer learns the new cut the way it learned the first one. No
+        `graph_action`: a cut is material rather than a judgment, and the live
+        log names acts a person would review. **The replaced passages' deletion
+        is not published**, for `reverse_merge_tx`'s reason: there is no
+        segment-deleted event and no renderer for one, so a viewer keeps
+        showing them until the next snapshot.
+        """
+        replaced = await self._inner.resegment_tx(document_id, segments, segmentation=segmentation)
+        # Committed already: emission is best-effort, on `write_batch_tx`'s rule.
+        try:
+            for segment in segments:
+                await self._bus.publish(
+                    SegmentStored(
+                        segment_id=segment.id,
+                        source_id=segment.source_id,
+                        text_preview=segment.text[:200],
+                        span_start=segment.span_start,
+                        span_end=segment.span_end,
+                    )
+                )
+        except Exception:
+            logger.exception("resegment_tx event emission failed; write already committed")
+        return replaced
+
     # --- Edges (read) ---
 
     async def get_edges_from(
@@ -1003,6 +1037,10 @@ class InstrumentedStorage:
     @property
     def backend_name(self) -> str:
         return self._inner.backend_name
+
+    @property
+    def location(self) -> str:
+        return self._inner.location
 
     @property
     def current_database(self) -> str:

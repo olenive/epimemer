@@ -309,6 +309,29 @@ class TestOrder:
 
         assert [r.id for r in await storage.query_decisions(limit=1)] == [new.id]
 
+    async def test_a_limit_inside_a_window_still_cuts_the_newest(self, storage):
+        """A bound on `decided_at` and a limit together, which is what an
+        indexed range can get wrong: SurrealDB read the index in ascending order
+        and cut at the limit before sorting, so this answered with the oldest
+        rows in the window rather than the newest."""
+        records = [
+            _record(judged_by=CRITIC, decided_at=AT + timedelta(minutes=minute))
+            for minute in range(8)
+        ]
+        for record in records:
+            await storage.record_decision(record)
+        newest_first = [r.id for r in reversed(records)]
+
+        since = await storage.query_decisions(since=AT, limit=2)
+        until = await storage.query_decisions(until=AT + timedelta(minutes=5), limit=2)
+        judged = await storage.query_decisions(
+            agent_ids=["critic"], since=AT + timedelta(minutes=1), limit=3
+        )
+
+        assert [r.id for r in since] == newest_first[:2]
+        assert [r.id for r in until] == newest_first[3:5]
+        assert [r.id for r in judged] == newest_first[:3]
+
 
 class TestReviewedIsDerived:
     async def test_a_row_nothing_points_at_is_unreviewed(self, storage):

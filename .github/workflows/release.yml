@@ -38,7 +38,7 @@ jobs:
           npm ci
           npm run build
 
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           python-version: "3.14"
       - run: uv build
@@ -47,15 +47,19 @@ jobs:
       - name: The wheel carries every package and the bundle
         run: |
           unzip -l dist/*.whl | grep -q 'epimemer/mcp/server.py'
+          unzip -l dist/*.whl | grep -q 'epimemer/storage/sqlite_adapter.py'
+          unzip -l dist/*.whl | grep -q 'epimemer/storage/postgres_adapter.py'
           unzip -l dist/*.whl | grep -q 'epimemer/visualization/static/index.html'
 
       - name: Install into a clean environment, without the extra
         run: |
           uv venv smoke
           uv pip install --python smoke/bin/python dist/*.whl
+          smoke/bin/epimemer --version
           smoke/bin/epimemer --help
           smoke/bin/epimemer serve --help
           smoke/bin/python -c "import epimemer.mcp.server"
+          smoke/bin/python -c "import epimemer.storage.sqlite_adapter"
 
       - uses: actions/upload-artifact@v7
         with:

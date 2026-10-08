@@ -244,15 +244,61 @@ no version bump: `timelines.jsonl` already embeds timepoints, adding fields to
 a section is defined as not a format change (`GRAPH_BUNDLES.md` §5), and the
 new lists ride along.
 
-One thing does not come free. Reading a timeline record, changing it and
-writing it back is last-writer-wins when two callers do it at once: a
-constraint one agent added can vanish under another agent's write, with
-nothing to say it existed. `add_timeline_timepoint` has always had this
-property. It stays, because every Epimemer server today is a stdio process
-with one client, so two writers on one timeline means two servers on one
-database, which is the parked live-sharing case. The fix when that case
-arrives is a version number on the record checked on write, and it is listed
-under *Sharing a graph between users* in `PROPOSED_FEATURES.md`.
+One thing does not come free: two writers changing one record at once. That
+is what the version on the record is for (§2.6).
+
+### 2.6 Concurrent writers and the version
+
+Several servers can open one graph, on a served SurrealDB or on Postgres, so
+two people can change one timeline at the same moment. Every timeline tool
+reads the record, changes it and writes it back whole. Without a check the
+second write replaces the first, and a constraint one person recorded vanishes
+under the other's write with nothing to say it existed.
+
+`Timeline.version` counts the writes. A write carries the version its timeline
+was read at and lands only if the store still holds that version, storing one
+more. Otherwise the backend raises `TimelineConflict` (`storage/protocol.py`)
+and writes nothing. A timeline never stored is at version 0, and so is a record
+written before the field existed, so neither needs a migration. The rule is
+`next_timeline_version`, and every timeline write applies it: `store_timeline`,
+`write_timeline_tx` and the timelines in `write_batch_tx`, each inside its
+transaction, so a refused decision moves no link. `write_verbatim_tx` is the
+one exception: it restores the version a bundle carries. Adding a field is not
+a bundle format change (`GRAPH_BUNDLES.md` §5), so the format stays at 1, and a
+bundle exported before the field restores its timelines at version 0.
+
+Each backend makes the check part of the write:
+
+- **In-memory** compares the stored object's version before it touches the
+  record.
+- **SQLite and Postgres** replace the row with `UPDATE ... WHERE uid = ? AND
+  version = ?`, reading the version out of `data`, and the row count says
+  whether it landed. A timeline never stored goes in with `INSERT ... ON
+  CONFLICT DO NOTHING`. On Postgres an `UPDATE` that waited on another
+  server's row lock tests its `WHERE` again against the row that server
+  committed, which is what makes the check hold across servers.
+- **SurrealDB** puts the check inside the `BEGIN ... COMMIT` batch as a
+  statement that `THROW`s, so a stale timeline fails the whole batch. A batch
+  that fails at commit because another server wrote the record first is
+  reported as the same conflict.
+
+What a caller does with the refusal depends on whether it decided anything:
+
+- The tools that record a judge's decision or place a mark refuse in their
+  usual shape (`refused`, or the error `add_timepoint` and
+  `set_reference_time` already give for a missing timeline). The refusal says
+  the timeline changed since it was read, and to read it again with
+  `query_timeline` and retry. They do not retry on their own, because what
+  they decided may rest on what changed: a contradiction already answered, a
+  point already merged.
+- `store_decomposition` proposes its timepoints again, up to three times. Its
+  proposal decides nothing about the points already there: it is a function
+  of the text and the timeline, and the timeline is the only shared part of
+  its batch.
+
+Two servers ingesting into a graph that has no `Extracted` timeline yet each
+create one, with ids of their own. That gives two timelines of one name rather
+than a lost write, and the version cannot see it.
 
 ---
 
@@ -827,8 +873,9 @@ for someone wondering why the design is shaped as it is.
    a real-shaped calendar is the supported case. A flag would not make an
    invented calendar representable; *Timelines on other clocks* in
    `PROPOSED_FEATURES.md` is where that goes (opening section).
-5. **Last-writer-wins stays.** One server has one client today; the version
-   check belongs with live sharing (§2.5).
+5. **Last-writer-wins stays.** One server had one client then, so the version
+   check waited for several servers on one graph. It shipped once the
+   Postgres backend made that the ordinary case (§2.6).
 6. **A stated-only filter is offered.** It is one branch where the edge set is
    built, and it matches what validity queries already do (§4.6).
 7. **Timepoints can merge.** Extraction makes one point per phrase, so

@@ -1,13 +1,13 @@
 # Segmentation: the agent cuts, on evidence
 
-**Status: decided 27 September 2026; Stage 0 built and measured.** The backlog entry
-*LLM-guided and hybrid segmentation* in `PROPOSED_FEATURES.md` offered two
+**Status: decided 27 September 2026; built, Stages 0 to 3, on 8 October
+2026.** The backlog entry *LLM-guided and hybrid segmentation* offered two
 ways to get better cuts than a rule can make: the calling agent cuts, or the
 server calls a model itself. The user chose the first. This document says
 when the agent cuts, how it states a cut, what the server checks, and what is
 recorded. §8 breaks the work into stages with the functions and tests each
-one needs; §10 lists what is still open. Where an unbuilt section says
-"does", read "would".
+one needs; §10 lists what is still open. `docs/INGEST.md` describes the built
+behaviour for someone using it.
 
 The one property this design protects: **the server makes no model calls of
 its own.** That is why Epimemer has no API keys, no provider configuration,
@@ -127,7 +127,10 @@ one passage, and that is a judgment the agent is allowed to make.
 The whole call is refused, nothing written, naming every problem at once, on
 the pattern `apply_reflection` uses for a malformed batch:
 
-- an anchor that is not found at or after the previous cut, quoted;
+- an anchor that is not found at or after the previous cut, quoted with
+  any space other than an ASCII one escaped (a non-breaking space shows as
+  `\xa0`), and named as differing only in Unicode normalisation when its
+  NFC or NFD form is found there;
 - an anchor shorter than the minimum;
 - two anchors that produce an empty passage (adjacent, or one inside the
   other);
@@ -175,6 +178,29 @@ a replacement in the next would let a decomposition land between them and
 leave claims pointing at passages that no longer exist. Refused with the
 count of citing nodes when the precondition fails.
 
+As built, the method is `resegment_tx(document_id, segments, *,
+segmentation) -> int`: the caller computes the new `segmentation` entry
+(§5.4) from the document as it read it, and the backend writes it in the same
+transaction, keeping every other metadata key as stored, and returns how many
+passages it replaced. A refusal raises `PassagesCited`, carrying the count.
+Nodes at any status count, since a retired claim still names its passage.
+Each backend makes the count and the writes one unit in its own way:
+
+| Backend | How the check and the replacement stay together |
+|---|---|
+| In-memory | nothing in the method awaits, so no other call on the event loop runs between them |
+| SQLite | `BEGIN IMMEDIATE` takes the write lock before the count, against every connection to the file |
+| Postgres | the document row `FOR UPDATE`, then the node table in `SHARE` mode, which waits for transactions already writing nodes and holds off new ones; each later statement reads what is committed by then |
+| SurrealDB | one `BEGIN ... COMMIT` batch that counts and `THROW`s, the count read back out of the thrown text |
+
+What none of them sees is a decomposition already in flight: one that read
+the passages before the re-cut and writes its nodes after it. Its write is
+not refused, and its nodes cite passages that are gone. Closing that would
+take a check inside `write_batch_tx` that the passages still exist.
+
+`resegment` asks for no `reason`: the row is not a verdict and there is no
+journal entry to carry prose.
+
 ### 5.3 What a re-cut replaces
 
 The old passages are **deleted**, and this is the one place the design steps
@@ -213,9 +239,12 @@ that cuts:
               "replaced_at": "...", "replaced_by": <judge or null>}]}
 ```
 
-Today the document does not say how it was cut at all. After this, a reader
-of a passage can tell whether its boundaries were a rule's or a judgment's,
-and a re-cut document keeps the rule's result in `history`.
+A reader of a passage can tell whether its boundaries were a rule's or a
+judgment's, and a re-cut document keeps the rule's result in `history`.
+`replaced_by` is the judge as recorded everywhere else, `{agent_id, digest}`.
+With no judge it is absent rather than null, since every backend drops a
+None-valued key on the way in. A document cut before this entry existed
+records, on its first re-cut, the passage count it replaced and no strategy.
 
 No journal row. A document and its passages carry no judge by design (*who
 pasted this text* is a different question from *who judged what it says*),
@@ -328,7 +357,7 @@ both backends through the `storage` fixture where storage is touched.
   agent's boundaries, `segmentation.strategy == "agent"`, no doubts raised.
 
 **Stage 2: re-cutting.**
-- `resegment_tx` on `StorageBackend`, memory, SurrealDB and the instrumented
+- `resegment_tx` on `StorageBackend`, all four backends and the instrumented
   wrapper, with the parity tests the repository uses for protocol methods.
   Tests: replaces passages and stamps history in one transaction; refuses
   with the citing count when any node cites a passage; nothing changes on
@@ -364,13 +393,26 @@ both backends through the `storage` fixture where storage is touched.
 
 ## 10. Open
 
-Settled: a re-cut deletes the passages it replaces, guarded in the
-transaction (§5.3), confirmed by the user on 27 September 2026.
+Settled:
 
+- A re-cut deletes the passages it replaces, guarded in the transaction
+  (§5.3), confirmed by the user on 27 September 2026.
+- A re-cut asks for no `reason`. The row is not a verdict and there is no
+  journal entry to carry prose. If the `history` entry turns out to be read
+  and the reader wants to know why, add it then.
 
-- **Whether a re-cut wants a `reason`.** The row is not a verdict and there
-  is no journal entry to carry prose, so none is asked for. If the
-  `history` entry turns out to be read and the reader wants to know why,
-  add it then.
-- **The anchor minimum.** Three words or twelve characters is a starting
-  point; Stage 1's tests will show whether real anchors trip it.
+Open:
+
+- **The anchor minimum.** Three words or twelve characters, as built. Stage
+  1's tests (`tests/pipelines/segmentation/test_anchors.py`) wrote the anchors
+  an agent would for each shape in §7: a speaker turn
+  (`INTERVIEWER: Where were you`), a numbered clause (`3. Termination`), a
+  chat line (`[09:40] ben: separate thing`). All clear it. The bare label
+  `WITNESS:` is refused, and it is the anchor the minimum exists for, since it
+  finds that speaker's first turn wherever the agent meant. The one natural
+  anchor it trips is a short heading: `## Fees`, `# Changelog` and `2. Term`
+  are two words, marker included, and under twelve characters, so the agent
+  carries the anchor into the next line, newline included, which is the copy
+  a model is likeliest to get wrong. Accepting a whole line as an anchor
+  would let those through, since a heading's line is usually unique; it waits
+  until a real refusal says it is needed.

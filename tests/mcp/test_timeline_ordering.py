@@ -8,7 +8,9 @@ the flags a reader sees on `search` and `reflect`.
 Both backends via the `storage` fixture.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from epimemer.core.types import (
     DecisionKind,
@@ -523,3 +525,157 @@ class TestCreateTimelink:
         assert result["earliest"] == _dt(1890).isoformat()
         assert result["latest"] == _dt(1910).isoformat()
         assert result["contested"] is False
+
+
+def another_writer_after_reads(monkeypatch, storage, timeline_id: str, *, times: int = 1) -> None:
+    """Have another writer store `timeline_id` just after each of its next `times` reads.
+
+    What two servers on one graph look like from inside one tool call: the call
+    reads the record, and before it writes, somebody else has written it, so the
+    copy it holds is a version behind. The other writer's change is a new
+    description, which a refused write must leave in place.
+    """
+    read = storage.get_timeline
+    written = [0]
+
+    async def read_then_overtaken(wanted: str):
+        seen = await read(wanted)
+        if wanted == timeline_id and written[0] < times:
+            written[0] += 1
+            await storage.store_timeline(
+                seen.model_copy(update={"description": f"another writer {written[0]}"})
+            )
+        return seen
+
+    monkeypatch.setattr(storage, "get_timeline", read_then_overtaken)
+
+
+class TestATimelineWrittenUnderTheCall:
+    """Another writer replaced the record between the tool's read and its write.
+
+    The tool refuses in its usual shape and says to read the timeline again, and
+    nothing it would have written lands: the other writer's change survives, no
+    link moves, and no journal row records a decision the graph does not hold.
+    """
+
+    async def test_order_timepoints_is_refused_and_writes_nothing(self, storage, monkeypatch):
+        timeline = await _timeline(
+            storage,
+            [Timepoint(id="fire", label="the fire"), Timepoint(id="flood", label="the flood")],
+        )
+        another_writer_after_reads(monkeypatch, storage, timeline.id)
+
+        result, _ = await tools.order_timepoints(
+            timeline.id,
+            storage,
+            pairs=[{"earlier_id": "fire", "later_id": "flood"}],
+            source_id="doc-1",
+            basis="stated",
+            judge=ARCHIVIST,
+        )
+
+        assert result["ordered"] is False
+        assert "changed after this call read it" in result["refused"]
+        assert "query_timeline" in result["refused"]
+        stored = await storage.get_timeline(timeline.id)
+        assert (stored.description, stored.constraints) == ("another writer 1", [])
+        assert await storage.query_decisions(kinds=[DecisionKind.TEMPORAL_ORDER]) == []
+
+    async def test_a_merge_is_refused_and_moves_no_link(self, storage, monkeypatch):
+        timeline = await _timeline(
+            storage,
+            [
+                Timepoint(id="launch", label="the launch"),
+                Timepoint(id="golive", label="the go-live"),
+            ],
+        )
+        fact = Fact(content="the doors opened", source_id="seg-1")
+        await storage.store_node(fact)
+        await storage.store_edge(
+            NodeEdge(
+                src_id=fact.id,
+                dst_id=timeline.id,
+                type=EdgeType.TIMELINK,
+                metadata={"timepoint_id": "golive"},
+            )
+        )
+        another_writer_after_reads(monkeypatch, storage, timeline.id)
+
+        result, _ = await tools.merge_timepoints(
+            timeline.id,
+            storage,
+            survivor_id="launch",
+            merged_id="golive",
+            because="two documents, one event",
+            judge=ARCHIVIST,
+        )
+
+        assert (result["merged"], result["survivor_id"]) == (False, "launch")
+        assert "query_timeline" in result["refused"]
+        links = await storage.get_edges_from(fact.id, edge_type=EdgeType.TIMELINK)
+        assert [(edge.metadata["timepoint_id"], edge.retired_at) for edge in links] == [
+            ("golive", None)
+        ]
+        stored = await storage.get_timeline(timeline.id)
+        assert [tp.merged_into for tp in stored.timepoints] == [None, None]
+        assert await storage.query_decisions(kinds=[DecisionKind.TIMEPOINT_MERGE]) == []
+
+    async def test_a_recurrence_is_refused(self, storage, monkeypatch):
+        timeline = await _timeline(storage, [])
+        another_writer_after_reads(monkeypatch, storage, timeline.id)
+
+        result, _ = await tools.add_recurrence(
+            timeline.id,
+            storage,
+            label="the service",
+            anchor=_dt(1890),
+            period=timedelta(days=7),
+            judge=ARCHIVIST,
+        )
+
+        assert result["added"] is False
+        assert "query_timeline" in result["refused"]
+        assert (await storage.get_timeline(timeline.id)).recurrences == []
+
+    async def test_adding_a_point_is_refused_the_way_its_other_refusals_are(
+        self, storage, monkeypatch
+    ):
+        """`add_timepoint` refuses a malformed point and a missing timeline by
+        raising, and the server returns the sentence; a stale write is the same."""
+        timeline = await _timeline(storage, [])
+        another_writer_after_reads(monkeypatch, storage, timeline.id)
+
+        with pytest.raises(ValueError, match="query_timeline"):
+            await tools.add_timeline_timepoint(timeline.id, storage, start=_dt(1897))
+
+        assert (await storage.get_timeline(timeline.id)).timepoints == []
+
+    async def test_setting_the_reference_time_is_refused(self, storage, monkeypatch):
+        timeline = await _timeline(storage, [])
+        another_writer_after_reads(monkeypatch, storage, timeline.id)
+
+        with pytest.raises(ValueError, match="query_timeline"):
+            await tools.set_reference_time(timeline.id, storage, reference_time=_dt(1897))
+
+        assert (await storage.get_timeline(timeline.id)).reference_time is None
+
+    async def test_read_again_and_the_retry_lands(self, storage, monkeypatch):
+        """The refusal's advice works: the second call reads the newer record."""
+        timeline = await _timeline(
+            storage,
+            [Timepoint(id="fire", label="the fire"), Timepoint(id="flood", label="the flood")],
+        )
+        another_writer_after_reads(monkeypatch, storage, timeline.id)
+        order = {
+            "pairs": [{"earlier_id": "fire", "later_id": "flood"}],
+            "source_id": "doc-1",
+            "basis": "stated",
+            "judge": ARCHIVIST,
+        }
+
+        refused, _ = await tools.order_timepoints(timeline.id, storage, **order)
+        retried, _ = await tools.order_timepoints(timeline.id, storage, **order)
+
+        assert (refused["ordered"], retried["ordered"]) == (False, True)
+        stored = await storage.get_timeline(timeline.id)
+        assert (stored.description, len(stored.constraints)) == ("another writer 1", 1)

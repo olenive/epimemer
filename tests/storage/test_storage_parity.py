@@ -1,15 +1,17 @@
 """Backend-parity tests for the StorageBackend protocol.
 
-Every test here runs against **both** backends. Bugs have survived precisely
+Every test here runs against **every** backend. Bugs have survived precisely
 because `InMemoryStorage` and `SurrealDBStorage` diverged and only the
 in-memory one was exercised: the in-memory store upserts via dict assignment,
 while SurrealDB used `INSERT INTO`, which a UNIQUE index on `uid` causes to be
 *silently ignored* on re-store.
 
-Anything the protocol promises but the two backends could implement
+Anything the protocol promises but the backends could implement
 differently belongs in this file.
 """
 
+import contextlib
+import os
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -63,22 +65,37 @@ from epimemer.core.types import (
     retired_at,
 )
 from epimemer.mcp import tools
+from epimemer.pipelines.segmentation.record import cut_record, recut_record
 from epimemer.pipelines.timeline.functions import add_timepoint
 from epimemer.storage.memory import InMemoryStorage
+from epimemer.storage.protocol import PassagesCited, TimelineConflict
+from epimemer.storage.sqlite_adapter import SQLiteStorage
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
+from tests.postgres_store import DSN_VARIABLE, clean_postgres_store
 
 
-@pytest.fixture(params=["memory", "surrealdb"])
-async def store(request):
-    """Yield each backend in turn, so every test in this module runs twice."""
+@pytest.fixture(params=["memory", "surrealdb", "sqlite", "postgres"])
+async def store(request, tmp_path):
+    """Yield each backend in turn, so every test in this module runs once per backend.
+
+    Postgres is skipped unless `EPIMEMER_TEST_POSTGRES_DSN` names a database.
+    """
     if request.param == "memory":
         # InMemoryStorage has no connect/close yet.
         yield InMemoryStorage()
-    else:
+    elif request.param == "surrealdb":
         s = SurrealDBStorage(url="mem://")
         await s.connect()
         yield s
         await s.close()
+    elif request.param == "sqlite":
+        s = SQLiteStorage(tmp_path / "graphs")
+        await s.connect()
+        yield s
+        await s.close()
+    else:
+        async with clean_postgres_store() as s:
+            yield s
 
 
 class TestStoreIsUpsert:
@@ -115,7 +132,8 @@ class TestStoreIsUpsert:
         timeline = Timeline(name="tl")
         await store.store_timeline(timeline)
 
-        updated, _ = add_timepoint(timeline, start=datetime(2024, 1, 1, tzinfo=UTC))
+        stored = await store.get_timeline(timeline.id)
+        updated, _ = add_timepoint(stored, start=datetime(2024, 1, 1, tzinfo=UTC))
         await store.store_timeline(updated)
 
         got = await store.get_timeline(timeline.id)
@@ -126,8 +144,8 @@ class TestStoreIsUpsert:
         timeline = Timeline(name="tl")
         await store.store_timeline(timeline)
 
-        current = timeline
         for day in (1, 2, 3):
+            current = await store.get_timeline(timeline.id)
             current, _ = add_timepoint(current, start=datetime(2024, 1, day, tzinfo=UTC))
             await store.store_timeline(current)
 
@@ -371,6 +389,22 @@ class TestPayloadFidelity:
         assert got is not None
         assert got.metadata == {"outer": {"keep": 1}}
 
+    async def test_none_dropped_from_a_dict_inside_a_nested_model(self, store):
+        """A timepoint's `metadata` is a dict inside a model inside the record.
+        SurrealDB drops a None-valued key at any depth, so every backend drops
+        it there too, and keeps a None that is a list element."""
+        timepoint = Timepoint(
+            start=datetime(2024, 1, 1, tzinfo=UTC),
+            metadata={"note": None, "nested": {"gone": None, "kept": [1, None, "x"]}},
+        )
+        timeline = Timeline(name="tl", timepoints=[timepoint])
+        await store.store_timeline(timeline)
+
+        got = await store.get_timeline(timeline.id)
+        assert got is not None
+        assert got.timepoints[0].metadata == {"nested": {"kept": [1, None, "x"]}}
+        assert timepoint.metadata["nested"] == {"gone": None, "kept": [1, None, "x"]}
+
     async def test_none_preserved_inside_metadata_list(self, store):
         """A None *element* survives — dropping it would shift every index."""
         topic = Topic(content="meta", source_id="s1", metadata={"xs": [1, None, 2]})
@@ -396,6 +430,24 @@ class TestPayloadFidelity:
 
         got = await store.get_embeddings_for_item("item1")
         assert got[0].vector == vector
+
+    async def test_an_integer_wider_than_64_bits_is_kept_exactly_or_refused(self, store):
+        """Memory, SQLite and Postgres keep any Python integer exactly. SurrealDB
+        holds an integer in 64 bits, so it refuses a wider one rather than store
+        a different number, and nothing is stored."""
+        wide = 2**63 + 1
+        topic = Topic(content="wide", source_id="s1", metadata={"n": wide})
+
+        if isinstance(store, SurrealDBStorage):
+            with pytest.raises(ValueError, match=rf"metadata\.n is {wide}"):
+                await store.store_node(topic)
+            assert await store.get_node(topic.id) is None
+            return
+
+        await store.store_node(topic)
+        got = await store.get_node(topic.id)
+        assert got is not None
+        assert got.metadata == {"n": wide}
 
 
 class TestValidityRoundTrips:
@@ -686,8 +738,9 @@ class TestTimelineReferenceTime:
             reference_time=datetime(1897, 5, 26, tzinfo=UTC),
         )
         await store.store_timeline(timeline)
+        stored = await store.get_timeline(timeline.id)
 
-        await store.store_timeline(timeline.model_copy(update={"reference_time": None}))
+        await store.store_timeline(stored.model_copy(update={"reference_time": None}))
 
         got = await store.get_timeline(timeline.id)
         assert got is not None
@@ -847,7 +900,9 @@ class TestOrderingSurvivesStorage:
 
         got = await store.get_timeline("tl-order")
         assert got is not None
-        assert got.model_dump(mode="json") == written.model_dump(mode="json")
+        # The one field the store sets: this is the record's first write.
+        first_write = written.model_copy(update={"version": 1})
+        assert got.model_dump(mode="json") == first_write.model_dump(mode="json")
 
     async def test_the_derived_state_reads_back_the_same(self, store):
         await store.store_timeline(self._timeline())
@@ -875,12 +930,15 @@ class TestOrderingSurvivesStorage:
             raise RuntimeError("injected failure")
             yield  # pragma: no cover - generator body, never reached
 
+        # Written over the record just stored, so it carries that record's version.
+        rewritten = self._timeline().model_copy(update={"version": 1})
         with pytest.raises(RuntimeError, match="injected failure"):
-            await store.write_batch_tx(timelines=[self._timeline()], embeddings=boom_embeddings())
+            await store.write_batch_tx(timelines=[rewritten], embeddings=boom_embeddings())
         rolled_back = await store.get_timeline("tl-order")
         assert rolled_back.constraints == []
+        assert rolled_back.version == 1
 
-        await store.write_batch_tx(timelines=[self._timeline()])
+        await store.write_batch_tx(timelines=[rewritten])
         committed = await store.get_timeline("tl-order")
         assert [c.id for c in committed.constraints] == ["c-1", "c-2"]
         assert [c.id for c in committed.temporal_contradictions] == ["tc-1"]
@@ -920,8 +978,8 @@ class TestWriteTimelineTx:
         return original, replacement, retired
 
     async def test_the_timeline_and_its_moved_links_land_together(self, store):
-        timeline = Timeline(id="tl-split", name="the parish")
-        await store.store_timeline(timeline)
+        await store.store_timeline(Timeline(id="tl-split", name="the parish"))
+        timeline = await store.get_timeline("tl-split")
         original, replacement, retired = self._moved(timeline.id)
         await store.store_edge(original)
 
@@ -946,12 +1004,144 @@ class TestWriteTimelineTx:
         await store.store_timeline(Timeline(id="tl-rule", name="the parish"))
 
         await store.write_timeline_tx(
-            Timeline(id="tl-rule", name="the parish", description="revised"),
+            Timeline(id="tl-rule", name="the parish", description="revised", version=1),
             kind=DecisionKind.RECURRENCE,
         )
 
         got = await store.get_timeline("tl-rule")
         assert got.description == "revised"
+
+
+class TestTimelineVersion:
+    """A timeline write lands only on the version it was read at.
+
+    A timeline is one record rewritten whole, so two writers that both read it
+    and both write it back would otherwise leave only the second one's change,
+    and what goes missing is a recorded assertion: a constraint a source stated,
+    a verdict a judge gave. Every backend refuses the second write with the
+    same exception and leaves the record as the first one wrote it.
+    """
+
+    async def test_a_new_timeline_is_stored_at_version_one(self, store):
+        written = Timeline(id="tl-v", name="the parish")
+        await store.store_timeline(written)
+
+        assert (await store.get_timeline("tl-v")).version == 1
+        # The argument is the caller's, and is left as it was.
+        assert written.version == 0
+
+    async def test_a_write_from_the_current_version_advances_it(self, store):
+        await store.store_timeline(Timeline(id="tl-v", name="the parish"))
+        current = await store.get_timeline("tl-v")
+
+        await store.store_timeline(current.model_copy(update={"description": "revised"}))
+
+        got = await store.get_timeline("tl-v")
+        assert (got.version, got.description) == (2, "revised")
+
+    async def test_a_stale_write_is_refused_and_changes_nothing(self, store):
+        await store.store_timeline(Timeline(id="tl-v", name="the parish"))
+        read_by_both = await store.get_timeline("tl-v")
+        await store.store_timeline(read_by_both.model_copy(update={"description": "first"}))
+
+        with pytest.raises(TimelineConflict) as refused:
+            await store.store_timeline(read_by_both.model_copy(update={"description": "second"}))
+
+        assert (refused.value.timeline_id, refused.value.expected, refused.value.found) == (
+            "tl-v",
+            1,
+            2,
+        )
+        got = await store.get_timeline("tl-v")
+        assert (got.version, got.description) == (2, "first")
+
+    async def test_a_new_timeline_is_refused_over_a_record_already_there(self, store):
+        """Version 0 means never stored, so it cannot replace a record that was."""
+        await store.store_timeline(Timeline(id="tl-v", name="first"))
+
+        with pytest.raises(TimelineConflict) as refused:
+            await store.store_timeline(Timeline(id="tl-v", name="second"))
+
+        assert (refused.value.expected, refused.value.found) == (0, 1)
+        assert (await store.get_timeline("tl-v")).name == "first"
+
+    async def test_a_version_with_no_record_behind_it_is_refused(self, store):
+        with pytest.raises(TimelineConflict) as refused:
+            await store.store_timeline(Timeline(id="tl-v", name="the parish", version=3))
+
+        assert (refused.value.expected, refused.value.found) == (3, None)
+        assert await store.get_timeline("tl-v") is None
+
+    async def test_write_timeline_tx_rolls_back_whole_on_a_stale_timeline(self, store):
+        await store.store_timeline(Timeline(id="tl-v", name="the parish"))
+        read_by_both = await store.get_timeline("tl-v")
+        await store.store_timeline(read_by_both.model_copy(update={"description": "first"}))
+        link = NodeEdge(
+            id="link-v",
+            src_id="fact-1",
+            dst_id="tl-v",
+            type=EdgeType.TIMELINK,
+            metadata={"timepoint_id": "fire"},
+        )
+
+        with pytest.raises(TimelineConflict):
+            await store.write_timeline_tx(
+                read_by_both.model_copy(
+                    update={"timepoints": [Timepoint(id="fire", label="the fire")]}
+                ),
+                kind=DecisionKind.TEMPORAL_VERDICT,
+                new_edges=[link],
+            )
+
+        got = await store.get_timeline("tl-v")
+        assert (got.version, got.description, got.timepoints) == (2, "first", [])
+        assert await store.get_edges_from("fact-1") == []
+
+    async def test_write_timeline_tx_advances_the_version(self, store):
+        await store.store_timeline(Timeline(id="tl-v", name="the parish"))
+        current = await store.get_timeline("tl-v")
+
+        await store.write_timeline_tx(
+            current.model_copy(update={"description": "revised"}), kind=DecisionKind.RECURRENCE
+        )
+
+        assert (await store.get_timeline("tl-v")).version == 2
+
+    async def test_write_batch_tx_rolls_back_whole_on_a_stale_timeline(self, store):
+        await store.store_timeline(Timeline(id="tl-v", name="the parish"))
+        read_by_both = await store.get_timeline("tl-v")
+        await store.store_timeline(read_by_both.model_copy(update={"description": "first"}))
+        node = Fact(id="f-v", content="the siege began", source_id="s1")
+        link = NodeEdge(src_id="f-v", dst_id="tl-v", type=EdgeType.TIMELINK)
+
+        with pytest.raises(TimelineConflict):
+            await store.write_batch_tx(nodes=[node], edges=[link], timelines=[read_by_both])
+
+        assert await store.get_node("f-v") is None
+        assert await store.get_edges_from("f-v") == []
+        assert (await store.get_timeline("tl-v")).description == "first"
+
+    async def test_a_verbatim_write_keeps_the_version_it_was_given(self, store):
+        """A restored timeline is the record that was exported, version included,
+        and the next ordinary write carries on from it."""
+        await store.write_verbatim_tx(timelines=[Timeline(id="tl-v", name="restored", version=7)])
+
+        restored = await store.get_timeline("tl-v")
+        assert restored.version == 7
+
+        await store.store_timeline(restored.model_copy(update={"description": "revised"}))
+        assert (await store.get_timeline("tl-v")).version == 8
+
+    async def test_a_record_at_version_zero_takes_a_write_at_version_zero(self, store):
+        """What a record written before the field existed reads as, and what a
+        bundle exported before it restores to."""
+        await store.write_verbatim_tx(timelines=[Timeline(id="tl-v", name="older")])
+
+        older = await store.get_timeline("tl-v")
+        assert older.version == 0
+        await store.store_timeline(older.model_copy(update={"description": "revised"}))
+
+        assert (await store.get_timeline("tl-v")).version == 1
 
 
 class TestRecurrenceSurvivesStorage:
@@ -1032,7 +1222,9 @@ class TestRecurrenceSurvivesStorage:
 
         got = await store.get_timeline("tl-recurrence")
         assert got is not None
-        assert got.model_dump(mode="json") == written.model_dump(mode="json")
+        # The one field the store sets: this is the record's first write.
+        first_write = written.model_copy(update={"version": 1})
+        assert got.model_dump(mode="json") == first_write.model_dump(mode="json")
 
     async def test_each_rule_reads_back_as_its_own_kind(self, store):
         await store.store_timeline(self._timeline())
@@ -1069,12 +1261,15 @@ class TestRecurrenceSurvivesStorage:
             raise RuntimeError("injected failure")
             yield  # pragma: no cover - generator body, never reached
 
+        # Written over the record just stored, so it carries that record's version.
+        rewritten = self._timeline().model_copy(update={"version": 1})
         with pytest.raises(RuntimeError, match="injected failure"):
-            await store.write_batch_tx(timelines=[self._timeline()], embeddings=boom_embeddings())
+            await store.write_batch_tx(timelines=[rewritten], embeddings=boom_embeddings())
         rolled_back = await store.get_timeline("tl-recurrence")
         assert rolled_back.recurrences == []
+        assert rolled_back.version == 1
 
-        await store.write_batch_tx(timelines=[self._timeline()])
+        await store.write_batch_tx(timelines=[rewritten])
         committed = await store.get_timeline("tl-recurrence")
         assert [r.id for r in committed.recurrences] == ["weekly", "monthly"]
 
@@ -1180,7 +1375,8 @@ class TestWriteBatchTxTimelines:
         )
         await store.store_timeline(original)
 
-        appended, second = add_timepoint(original, start=datetime(1897, 9, 1, tzinfo=UTC))
+        stored = await store.get_timeline(original.id)
+        appended, second = add_timepoint(stored, start=datetime(1897, 9, 1, tzinfo=UTC))
         await store.write_batch_tx(timelines=[appended])
 
         stored = await store.get_timeline(original.id)
@@ -1194,7 +1390,8 @@ class TestWriteBatchTxTimelines:
         )
         await store.store_timeline(original)
 
-        appended, _ = add_timepoint(original, start=datetime(1897, 9, 1, tzinfo=UTC))
+        stored = await store.get_timeline(original.id)
+        appended, _ = add_timepoint(stored, start=datetime(1897, 9, 1, tzinfo=UTC))
 
         def boom_embeddings():
             raise RuntimeError("injected failure")
@@ -1334,11 +1531,58 @@ class TestBackendName:
     from a persistent one."""
 
     async def test_backend_name_is_a_known_label(self, store):
-        assert store.backend_name in {"memory", "surrealdb"}
+        assert store.backend_name in {"memory", "surrealdb", "sqlite", "postgres"}
 
     async def test_backend_name_matches_implementation(self, store):
-        expected = "memory" if isinstance(store, InMemoryStorage) else "surrealdb"
+        expected = _backend_classes()[type(store)]
         assert store.backend_name == expected
+
+    async def test_location_says_where_the_graphs_live(self, store):
+        """`location` is the answer to "where did my data go", given by the
+        server rather than reconstructed from its configuration: prose, never
+        empty, naming the process, the server or the directory."""
+        location = store.location
+        assert isinstance(location, str) and location.strip()
+        if isinstance(store, SQLiteStorage):
+            assert str(store._directory) in location
+        elif isinstance(store, SurrealDBStorage):
+            assert "mem://" in location
+        elif store.backend_name == "postgres":
+            _assert_names_the_server_and_hides_the_password(location)
+        else:
+            assert "process" in location
+
+
+def _backend_classes() -> dict[type, str]:
+    """Each backend class and the name it reports.
+
+    Postgres only where its driver is installed: it is an optional extra, and
+    where it is absent no Postgres store can exist to be checked.
+    """
+    classes = {InMemoryStorage: "memory", SurrealDBStorage: "surrealdb", SQLiteStorage: "sqlite"}
+    with contextlib.suppress(ImportError):
+        from epimemer.storage.postgres_adapter import PostgresStorage
+
+        classes[PostgresStorage] = "postgres"
+    return classes
+
+
+def _assert_names_the_server_and_hides_the_password(location: str) -> None:
+    """The host the DSN names is in the location; the password never is.
+
+    The password is checked only where it is not also the host, the port or the
+    database name, since `postgres` as both user's password and database is a
+    common local setup and the location rightly names the database.
+    """
+    from psycopg.conninfo import conninfo_to_dict
+
+    parts = conninfo_to_dict(os.environ[DSN_VARIABLE])
+    if parts.get("host"):
+        assert parts["host"] in location
+    password = parts.get("password")
+    shown = [str(parts.get(key, "")) for key in ("host", "port", "dbname")]
+    if password and not any(password in part for part in shown):
+        assert password not in location
 
 
 class TestReflectCounter:
@@ -1376,6 +1620,84 @@ class TestReflectCounter:
 
         await store.switch_database(original)
         assert await store.get_reflect_counter() == 2
+
+
+class TestAZeroVectorScoresZero:
+    """Cosine similarity divides by both norms, and a zero vector has none.
+
+    Every backend scores such a pair 0.0, the in-memory store's rule. SurrealDB's
+    engine function answered NaN, and NaN sorts above every real score, so one
+    zero vector stored anywhere took first place in every search.
+    """
+
+    async def _embedded(self, store, node_id: str, vector: list[float]) -> None:
+        await store.store_node(Fact(id=node_id, content=node_id, source_id="s1"))
+        await store.store_embedding(
+            EmbeddingRecord(id=f"emb-{node_id}", item_id=node_id, model_id="m", vector=vector)
+        )
+
+    async def test_a_stored_zero_vector_ranks_by_a_score_of_zero(self, store):
+        await self._embedded(store, "toward", [1.0, 0.0, 0.0])
+        await self._embedded(store, "nothing", [0.0, 0.0, 0.0])
+        await self._embedded(store, "away", [-1.0, 0.0, 0.0])
+
+        hits = await store.vector_search([1.0, 0.0, 0.0], "m", k=3)
+
+        assert [(item, round(score, 6)) for item, score in hits] == [
+            ("toward", 1.0),
+            ("nothing", 0.0),
+            ("away", -1.0),
+        ]
+
+    async def test_a_zero_query_scores_every_node_zero(self, store):
+        await self._embedded(store, "toward", [1.0, 0.0, 0.0])
+        await self._embedded(store, "away", [-1.0, 0.0, 0.0])
+
+        hits = await store.vector_search([0.0, 0.0, 0.0], "m", k=3)
+
+        assert sorted(hits) == [("away", 0.0), ("toward", 0.0)]
+
+
+class TestAReversalNamingAMissingSourceChangesNothing:
+    """`reverse_merge_tx` puts the sources back, and a source that is not in
+    the graph cannot be put back.
+
+    Every backend refuses with a `KeyError` before anything changes. SurrealDB
+    updated the missing row, which matched nothing, then deleted the survivor
+    and reported success: the merged content was gone and nothing had returned.
+    """
+
+    async def test_it_is_refused_and_the_survivor_stays(self, store):
+        sources = [Fact(id=f"src-{k}", content=f"source {k}", source_id="s1") for k in range(2)]
+        for source in sources:
+            await store.store_node(source)
+        survivor = Fact(id="survivor", content="merged", source_id="s1")
+        lineage = [
+            NodeEdge(id=f"into-{k}", src_id=s.id, dst_id=survivor.id, type=EdgeType.MERGED_INTO)
+            for k, s in enumerate(sources)
+        ]
+        await store.merge_nodes_tx(
+            sources,
+            survivor,
+            EmbeddingRecord(id="emb-survivor", item_id=survivor.id, model_id="m", vector=[1.0]),
+            lineage,
+            merged_at=datetime(2026, 9, 1, tzinfo=UTC),
+        )
+        missing = Fact(id="never-stored", content="absent", source_id="s1")
+
+        with pytest.raises(KeyError, match="never-stored"):
+            await store.reverse_merge_tx(
+                survivor,
+                [*sources, missing],
+                [],
+                restored_at=datetime(2026, 9, 2, tzinfo=UTC),
+                delete_edge_ids=[edge.id for edge in lineage],
+            )
+
+        assert (await store.get_node(survivor.id)).status is NodeStatus.ACTIVE
+        assert [(await store.get_node(s.id)).status for s in sources] == [NodeStatus.MERGED] * 2
+        assert sorted(e.id for e in await store.get_edges_to(survivor.id)) == ["into-0", "into-1"]
+        assert [e.id for e in await store.get_embeddings_for_item(survivor.id)] == ["emb-survivor"]
 
 
 class TestVectorSearchReturnsOnlyActiveNodes:
@@ -1950,9 +2272,10 @@ class TestArchivalStatus:
         ]
         missing = Fact(content="never stored", source_id="s1")
 
-        # Blind on purpose: the storage protocol names no exception type, and the
-        # two backends refuse with different ones.
-        with pytest.raises(Exception):  # noqa: B017
+        # A `KeyError` naming the node, on every backend, so a caller catches
+        # one thing whichever is configured. SurrealDB used to raise a
+        # `RuntimeError` carrying the text of the statement that refused.
+        with pytest.raises(KeyError, match=missing.id):
             await store.set_node_status_tx(
                 [*nodes, missing],
                 status=NodeStatus.ARCHIVED,
@@ -2948,3 +3271,210 @@ class TestJudgeConfirmations:
         )
 
         assert await store.get_approved_agent_ids() == ["critic"]
+
+
+class TestResegmentTx:
+    """The tenth transaction boundary: a document's passages replaced, if
+    nothing cites them, with the cut they made kept in the document's history.
+
+    The check is the point. Done in one call and the replacement in the next, a
+    decomposition could land between them and leave claims citing passages that
+    no longer exist; so every backend has to refuse inside the transaction, and
+    a refusal has to leave everything as it was.
+    """
+
+    CONTENT = "First passage about the harbour. Second passage about the toll."
+    AT = datetime(2026, 10, 8, 12, 0, tzinfo=UTC)
+    JUDGE = JudgeRef(agent_id="cutter", digest="d1")
+
+    async def _document(self, store) -> tuple[RawDocument, Segment]:
+        """A document cut by rule into one passage, as `segment` leaves it."""
+        doc = RawDocument(
+            id="doc-recut",
+            content=self.CONTENT,
+            metadata={"channel": "minutes", "segmentation": cut_record("paragraph", 1)},
+        )
+        whole = Segment(
+            id="seg-whole",
+            source_id=doc.id,
+            text=self.CONTENT,
+            span_start=0,
+            span_end=len(self.CONTENT),
+        )
+        await store.store_document(doc)
+        await store.store_segment(whole)
+        return doc, whole
+
+    def _halves(self, document_id: str = "doc-recut") -> list[Segment]:
+        split = self.CONTENT.index("Second")
+        return [
+            Segment(
+                id="seg-first",
+                source_id=document_id,
+                text=self.CONTENT[: split - 1],
+                span_start=0,
+                span_end=split - 1,
+            ),
+            Segment(
+                id="seg-second",
+                source_id=document_id,
+                text=self.CONTENT[split:],
+                span_start=split,
+                span_end=len(self.CONTENT),
+            ),
+        ]
+
+    def _recut(self, doc: RawDocument, judge: JudgeRef | None = None) -> dict:
+        return recut_record(
+            doc.metadata["segmentation"], replaced=1, passages=2, at=self.AT, judge=judge
+        )
+
+    async def _unchanged(self, store, doc: RawDocument, whole: Segment) -> None:
+        stored = await store.get_segments_for_document(doc.id)
+        assert [s.id for s in stored] == [whole.id]
+        got = await store.get_document(doc.id)
+        assert got.metadata == doc.metadata
+
+    async def test_the_passages_and_the_history_change_together(self, store):
+        doc, whole = await self._document(store)
+
+        replaced = await store.resegment_tx(
+            doc.id, self._halves(), segmentation=self._recut(doc, self.JUDGE)
+        )
+
+        assert replaced == 1
+        stored = await store.get_segments_for_document(doc.id)
+        assert sorted(s.id for s in stored) == ["seg-first", "seg-second"]
+        assert await store.get_segments([whole.id]) == {}
+        got = await store.get_document(doc.id)
+        assert got.metadata["segmentation"] == {
+            "strategy": "agent",
+            "passages": 2,
+            "history": [
+                {
+                    "strategy": "paragraph",
+                    "passages": 1,
+                    "replaced_at": self.AT.isoformat(),
+                    "replaced_by": {"agent_id": "cutter", "digest": "d1"},
+                }
+            ],
+        }
+        assert got.metadata["channel"] == "minutes"
+        assert got.content == self.CONTENT
+
+    async def test_no_judge_reads_back_as_an_absent_key(self, store):
+        """None-valued keys are dropped on the way in, on every backend, so a
+        re-cut nobody claimed carries no `replaced_by` rather than a null."""
+        doc, _ = await self._document(store)
+
+        await store.resegment_tx(doc.id, self._halves(), segmentation=self._recut(doc))
+
+        (entry,) = (await store.get_document(doc.id)).metadata["segmentation"]["history"]
+        assert "replaced_by" not in entry
+
+    async def test_refused_with_the_count_of_citing_nodes(self, store):
+        """Any status counts: a retired claim still names the passage it came from."""
+        doc, whole = await self._document(store)
+        await store.store_node(Fact(id="f-live", content="The harbour", source_id=whole.id))
+        await store.store_node(
+            Fact(
+                id="f-retired",
+                content="The toll",
+                source_id=whole.id,
+                status=NodeStatus.HISTORICAL,
+            )
+        )
+        await store.store_node(Topic(id="t-elsewhere", content="Tolls", source_id="seg-other"))
+
+        with pytest.raises(PassagesCited) as refused:
+            await store.resegment_tx(doc.id, self._halves(), segmentation=self._recut(doc))
+
+        assert refused.value.citing == 2
+        assert refused.value.document_id == doc.id
+        await self._unchanged(store, doc, whole)
+
+    async def test_a_missing_document_changes_nothing(self, store):
+        stray = Segment(id="seg-stray", source_id="doc-gone", text="x", span_start=0, span_end=1)
+
+        with pytest.raises(KeyError):
+            await store.resegment_tx(
+                "doc-gone",
+                [stray],
+                segmentation={"strategy": "agent", "passages": 1, "history": []},
+            )
+
+        assert await store.get_segments(["seg-stray"]) == {}
+
+    async def test_a_passage_of_another_document_is_refused_before_any_write(self, store):
+        doc, whole = await self._document(store)
+
+        with pytest.raises(ValueError, match="doc-other"):
+            await store.resegment_tx(
+                doc.id, self._halves("doc-other"), segmentation=self._recut(doc)
+            )
+
+        await self._unchanged(store, doc, whole)
+
+    async def test_an_id_already_stored_elsewhere_changes_nothing(self, store):
+        """Insert-only: a new passage reusing an id another document holds is a
+        caller error, and the delete before it is rolled back with it."""
+        doc, whole = await self._document(store)
+        other = Segment(id="seg-first", source_id="doc-x", text="other", span_start=0, span_end=5)
+        await store.store_segment(other)
+
+        with pytest.raises(Exception):  # noqa: B017 - each backend refuses in its own words
+            await store.resegment_tx(doc.id, self._halves(), segmentation=self._recut(doc))
+
+        await self._unchanged(store, doc, whole)
+        assert (await store.get_segments(["seg-first"]))["seg-first"].source_id == "doc-x"
+
+    async def test_other_documents_passages_are_left_alone(self, store):
+        doc, _ = await self._document(store)
+        neighbour = Segment(
+            id="seg-neighbour", source_id="doc-x", text="neighbour", span_start=0, span_end=9
+        )
+        await store.store_segment(neighbour)
+
+        await store.resegment_tx(doc.id, self._halves(), segmentation=self._recut(doc))
+
+        assert [s.id for s in await store.get_segments_for_document("doc-x")] == [neighbour.id]
+
+    async def test_the_lexical_arm_no_longer_finds_a_replaced_passage(self, store):
+        doc, whole = await self._document(store)
+        # Passages of other documents, so the term is rare enough in the corpus
+        # for BM25 to score it above zero.
+        for i, text in enumerate(["The mill by the river.", "A fair in May.", "Rents rose."]):
+            await store.store_segment(
+                Segment(source_id="doc-x", text=text, span_start=i, span_end=i + len(text))
+            )
+        before = await store.text_search(["harbour"], corpus="segments")
+        assert [hit for hit, _ in before] == [whole.id]
+
+        await store.resegment_tx(doc.id, self._halves(), segmentation=self._recut(doc))
+
+        after = await store.text_search(["harbour"], corpus="segments")
+        assert [hit for hit, _ in after] == ["seg-first"]
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=pytest.fail.Exception,
+        reason=(
+            "Open: 'A decomposition can land after a re-cut deleted the passages it "
+            "cites' in dev-docs/ISSUES.md. write_batch_tx does not check that a "
+            "node's source passage still exists, so this write lands on every backend."
+        ),
+    )
+    async def test_write_batch_tx_refuses_a_node_citing_a_deleted_passage(self, store):
+        """The other order from the refusal above: a decomposition that read the
+        passages before the re-cut and writes after it. The refusal's type is
+        not decided yet, so any exception counts, and the batch must leave
+        nothing behind."""
+        doc, whole = await self._document(store)
+        await store.resegment_tx(doc.id, self._halves(), segmentation=self._recut(doc))
+        assert await store.get_segments([whole.id]) == {}
+
+        stranded = Fact(id="f-stranded", content="The harbour", source_id=whole.id)
+        with pytest.raises(Exception):  # noqa: B017 - the refusal's type is the issue's to decide
+            await store.write_batch_tx(nodes=[stranded])
+
+        assert await store.get_node(stranded.id) is None

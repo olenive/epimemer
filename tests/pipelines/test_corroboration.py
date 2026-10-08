@@ -729,3 +729,161 @@ class TestAClaimAboutAnotherPeriodIsNotASecondWitness:
         [result] = (await corroboration_for([claim.id], storage)).values()
 
         assert result.adjacent_periods == []
+
+
+class TestAnAgreeingInferenceIsReportedNotCounted:
+    """Two inferences joined by `similarity` agree, and agreement between two
+    conclusions is not a second witness to either. So the partner is listed
+    under `agreeing_inferences`, beside the count and outside it: a reader sees
+    the agreement, and the number is what it was (`SIMILAR_INFERENCES.md`)."""
+
+    async def test_the_partner_is_listed_and_the_count_is_unchanged(self, storage):
+        bbc = await _document(storage, "bbc-report", publisher="BBC")
+        reuters = await _document(storage, "reuters-report", publisher="Reuters")
+        ours = await _inference(storage, "the release is unsafe", bbc)
+        theirs = await _inference(storage, "the release cannot be trusted", reuters)
+        await _join(storage, ours, theirs, EdgeType.SIMILARITY)
+
+        result = await corroboration_for([ours.id, theirs.id], storage)
+
+        assert result[ours.id].count == 1
+        assert result[theirs.id].count == 1
+        assert [(a.node_id, a.content_preview) for a in result[ours.id].agreeing_inferences] == [
+            (theirs.id, "the release cannot be trusted")
+        ]
+        assert [a.node_id for a in result[theirs.id].agreeing_inferences] == [ours.id]
+
+    async def test_the_partners_premises_do_not_come_in_behind_it(self, storage):
+        """Why the inference is set aside before the supporter hop: left in that
+        long, it walks its own premises in, and their publishers with them."""
+        bbc = await _document(storage, "bbc-report", publisher="BBC")
+        reuters = await _document(storage, "reuters-report", publisher="Reuters")
+        ours = await _inference(storage, "the release is unsafe", bbc)
+        theirs = await _inference(storage, "the release cannot be trusted", bbc)
+        evidence = await _fact(storage, "the error queue grew all week", reuters)
+        await _join(storage, evidence, theirs, EdgeType.SUPPORTS)
+        await _join(storage, ours, theirs, EdgeType.SIMILARITY)
+
+        [result] = (await corroboration_for([ours.id], storage)).values()
+
+        assert result.count == 1
+        assert [source.publisher for source in result.sources] == ["BBC"]
+        assert [a.node_id for a in result.agreeing_inferences] == [theirs.id]
+
+    async def test_the_subjects_own_premises_still_count(self, storage):
+        bbc = await _document(storage, "bbc-report", publisher="BBC")
+        reuters = await _document(storage, "reuters-report", publisher="Reuters")
+        ours = await _inference(storage, "the release is unsafe", bbc)
+        theirs = await _inference(storage, "the release cannot be trusted", bbc)
+        evidence = await _fact(storage, "the deploy failed", reuters)
+        await _join(storage, evidence, ours, EdgeType.SUPPORTS)
+        await _join(storage, ours, theirs, EdgeType.SIMILARITY)
+
+        assert await _count(storage, ours) == 2
+
+    async def test_a_fact_neighbour_is_still_counted(self, storage):
+        """The change is to inference neighbours only; restatements of a fact
+        corroborate exactly as before."""
+        bbc = await _document(storage, "bbc-report", publisher="BBC")
+        reuters = await _document(storage, "reuters-report", publisher="Reuters")
+        claim = await _fact(storage, "the deploy failed", bbc)
+        restated = await _fact(storage, "the deployment did not succeed", reuters)
+        await _join(storage, claim, restated, EdgeType.SIMILARITY)
+
+        [result] = (await corroboration_for([claim.id], storage)).values()
+
+        assert result.count == 2
+        assert result.agreeing_inferences == []
+
+    async def test_a_withdrawn_one_claim_is_not_reported(self, storage):
+        """A retraction disqualifies the edge before anything else reads it."""
+        bbc = await _document(storage, "bbc-report", publisher="BBC")
+        ours = await _inference(storage, "the release is unsafe", bbc)
+        theirs = await _inference(storage, "the release cannot be trusted", bbc)
+        await _join(storage, ours, theirs, EdgeType.SIMILARITY)
+        await _join(storage, ours, theirs, EdgeType.RETRACTED_SIMILARITY)
+
+        [result] = (await corroboration_for([ours.id], storage)).values()
+
+        assert result.agreeing_inferences == []
+
+    async def test_a_corrected_inference_agrees_with_nothing(self, storage):
+        bbc = await _document(storage, "bbc-report", publisher="BBC")
+        reuters = await _document(storage, "reuters-report", publisher="Reuters")
+        ours = await _inference(storage, "the release is unsafe", bbc)
+        theirs = await _inference(storage, "the release cannot be trusted", reuters)
+        theirs.status = NodeStatus.CORRECTED
+        await storage.store_node(theirs)
+        await _join(storage, ours, theirs, EdgeType.SIMILARITY)
+
+        [result] = (await corroboration_for([ours.id], storage)).values()
+
+        assert result.count == 1
+        assert result.agreeing_inferences == []
+
+    async def test_an_inference_about_another_period_is_adjacent_not_agreeing(self, storage):
+        """Each neighbour is reported once, and the period is the more specific
+        thing to say about it."""
+        bbc = await _document(storage, "bbc-1970", publisher="BBC")
+        reuters = await _document(storage, "reuters-2020", publisher="Reuters")
+        ours = Inference(content="the city kept its name", source_id="seg-1")
+        theirs = Inference(content="the city keeps its name", source_id="seg-1")
+        for node, doc, period in (
+            (ours, bbc, _period(1924, 1991)),
+            (theirs, reuters, _period(1991)),
+        ):
+            await storage.store_node(node)
+            await storage.store_edge(
+                NodeEdge(
+                    src_id=node.id, dst_id=doc.id, type=EdgeType.SOURCED_FROM, validity=[period]
+                )
+            )
+        await _join(storage, ours, theirs, EdgeType.SIMILARITY)
+
+        [result] = (await corroboration_for([ours.id], storage)).values()
+
+        assert [a.node_id for a in result.adjacent_periods] == [theirs.id]
+        assert result.agreeing_inferences == []
+
+    async def test_a_long_partner_is_previewed(self, storage):
+        bbc = await _document(storage, "bbc-report", publisher="BBC")
+        ours = await _inference(storage, "the release is unsafe", bbc)
+        theirs = await _inference(storage, "the release is unsafe " + "and late " * 40, bbc)
+        await _join(storage, ours, theirs, EdgeType.SIMILARITY)
+
+        [result] = (await corroboration_for([ours.id], storage)).values()
+
+        [agreeing] = result.agreeing_inferences
+        assert len(agreeing.content_preview) == 101
+        assert agreeing.content_preview.endswith("…")
+
+    async def test_a_node_with_no_partner_reports_an_empty_list(self, storage):
+        bbc = await _document(storage, "bbc-report", publisher="BBC")
+        ours = await _inference(storage, "the release is unsafe", bbc)
+
+        [result] = (await corroboration_for([ours.id], storage)).values()
+
+        assert result.agreeing_inferences == []
+
+    async def test_a_similarity_between_a_fact_and_an_inference_is_read_by_the_neighbours_type(
+        self, storage
+    ):
+        """Pinned, not chosen. `similarity` joins like nodes only (`EDGE_SHAPES`),
+        so no writer that checks shapes makes this edge; it can stand only in a
+        graph written before the check, or by a writer that skips it. The walk
+        decides by the neighbour's type, so the one edge gets two treatments:
+        the fact reports the inference and does not count it, and the
+        inference counts the fact's publisher as a second source."""
+        bbc = await _document(storage, "bbc-report", publisher="BBC")
+        reuters = await _document(storage, "reuters-report", publisher="Reuters")
+        claim = await _fact(storage, "the deploy failed", bbc)
+        reading = await _inference(storage, "the deploy did not succeed", reuters)
+        await _join(storage, claim, reading, EdgeType.SIMILARITY)
+
+        result = await corroboration_for([claim.id, reading.id], storage)
+
+        assert result[claim.id].count == 1
+        assert [a.node_id for a in result[claim.id].agreeing_inferences] == [reading.id]
+        assert result[reading.id].count == 2
+        assert [s.publisher for s in result[reading.id].sources] == ["Reuters", "BBC"]
+        assert result[reading.id].agreeing_inferences == []

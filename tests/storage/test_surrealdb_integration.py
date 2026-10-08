@@ -20,12 +20,18 @@ To drive it by hand, start a server and point the env var at it:
     EPIMEMER_SURREAL_WS_URL=ws://127.0.0.1:8000/rpc \
         uv run pytest tests/storage/test_surrealdb_integration.py
 
-If ``EPIMEMER_SURREAL_WS_URL`` is unset or the server is unreachable, the whole
-module is skipped (no connection is attempted by default) — and pytest reports
-skips as success, so check that every test in the module ran rather than
-trusting the exit code.
+If ``EPIMEMER_SURREAL_WS_URL`` is unset the whole module is skipped, and no
+connection is attempted. If it is set and the client cannot connect, every test
+in the module **fails**, with the exception the probe got, rather than
+skipping: a skip is what pytest reports as success, and a suite that skips
+itself when the server is up but the client is broken is a suite that never
+fails. The one time that happened, a served SurrealDB answered a read on an
+undefined table with an error the embedded engine never raises, and the only
+sign was two unrelated tests failing in the suite beside this one.
+
 A server that accepts connections without answering (another Docker/Colima
-profile holding the port, or a wedged container) reads as unreachable here.
+profile holding the port, or a wedged container) fails the same way, with the
+timeout as the reason.
 """
 
 import asyncio
@@ -53,8 +59,10 @@ from epimemer.core.types import (
     NodeStatus,
     NodeType,
     RawDocument,
+    Timeline,
     Topic,
 )
+from epimemer.storage.protocol import TimelineConflict
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
 from tests.storage.test_edge_type_migration import (
     assert_a_pre_split_graph_migrates_itself,
@@ -82,34 +90,56 @@ def _make_store(database: str) -> SurrealDBStorage:
     )
 
 
-def _server_reachable() -> bool:
-    """True only if a ws:// server actually accepts a connection.
+def _connection_failure() -> str | None:
+    """Why a ws:// connection to the configured server fails, or None if it works.
 
-    Returns False immediately when the env var is unset, so the default (and CI)
-    path attempts no connection at all.
+    Not attempted at all when the env var is unset, so the default (and CI)
+    path opens no socket. The reason is the exception itself, type and message,
+    because "unreachable" hides the difference between a port nobody listens on
+    and a server that answers the client with an error.
     """
     if not WS_URL:
-        return False
+        return None
 
-    async def _probe() -> bool:
+    async def _probe() -> str | None:
         store = _make_store("reachability_probe")
         try:
             await asyncio.wait_for(store.connect(), timeout=3.0)
             await store.close()
-            return True
-        except Exception:
-            return False
+            return None
+        except TimeoutError:
+            return "no answer within 3 seconds"
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}"
 
     try:
         return asyncio.run(_probe())
-    except Exception:
-        return False
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
 
+
+CONNECTION_FAILURE = _connection_failure()
 
 pytestmark = pytest.mark.skipif(
-    not _server_reachable(),
-    reason="No reachable SurrealDB ws:// server (set EPIMEMER_SURREAL_WS_URL).",
+    not WS_URL,
+    reason="Set EPIMEMER_SURREAL_WS_URL to run against a SurrealDB ws:// server.",
 )
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _the_server_must_answer():
+    """Fail every test, once and loudly, when the server is named but unreachable.
+
+    A module-scoped fixture rather than a skip marker: the marker is for the
+    variable being unset, which is a choice; a server that is named and does
+    not answer is a failure of the thing under test or its harness.
+    """
+    if CONNECTION_FAILURE is not None:
+        pytest.fail(
+            f"EPIMEMER_SURREAL_WS_URL is set to {WS_URL} but the client could not "
+            f"connect: {CONNECTION_FAILURE}. Nothing in this module ran.",
+            pytrace=False,
+        )
 
 
 @pytest.fixture
@@ -161,6 +191,80 @@ async def test_connection_auth_and_roundtrip(surreal):
     got = await store.get_node(topic.id)
     assert isinstance(got, Topic)
     assert got.content == "hello over websocket"
+
+
+# --- Two servers on one graph ---
+
+
+async def test_two_instances_on_one_database_share_writes_and_settings(surreal):
+    """Two stores on one database are two server processes sharing a graph, which
+    is what a served SurrealDB is offered for.
+
+    What one writes the other reads, and that includes the approved judges: the
+    `epimemer agents confirm` CLI writes them from beside a running server, so a
+    process that cached them at connect would refuse a judge the user had just
+    approved.
+    """
+    server = await surreal()
+    other = await surreal()
+    topic = Topic(content="written by the first server", source_id="s1")
+    assert await other.get_approved_agent_ids() == []
+
+    await server.store_node(topic)
+    await server.set_approved_agent_ids(["critic"])
+
+    got = await other.get_node(topic.id)
+    assert isinstance(got, Topic)
+    assert got.content == "written by the first server"
+    assert await other.get_approved_agent_ids() == ["critic"]
+
+
+async def test_a_second_server_with_a_stale_timeline_is_refused(surreal):
+    """Two people editing one timeline: the second write was made from a copy the
+    first one has since replaced, so it is refused rather than written over it."""
+    server = await surreal()
+    other = await surreal()
+    await server.store_timeline(Timeline(id="tl-shared", name="the parish"))
+    mine = await server.get_timeline("tl-shared")
+    theirs = await other.get_timeline("tl-shared")
+
+    await server.store_timeline(mine.model_copy(update={"description": "mine"}))
+    with pytest.raises(TimelineConflict) as refused:
+        await other.store_timeline(theirs.model_copy(update={"description": "theirs"}))
+
+    assert (refused.value.expected, refused.value.found) == (1, 2)
+    kept = await other.get_timeline("tl-shared")
+    assert (kept.version, kept.description) == (2, "mine")
+
+
+async def test_of_two_servers_writing_one_timeline_at_once_exactly_one_lands(surreal):
+    """The race itself, on separate connections. The loser fails either at the
+    version check or at commit, when the engine finds the record written under
+    it, and both read back as the one conflict every backend raises."""
+    server = await surreal()
+    other = await surreal()
+    ids = [f"tl-race-{i}" for i in range(10)]
+    for timeline_id in ids:
+        await server.store_timeline(Timeline(id=timeline_id, name="raced"))
+    read = {timeline_id: await server.get_timeline(timeline_id) for timeline_id in ids}
+
+    results = await asyncio.gather(
+        *(
+            store.store_timeline(read[timeline_id].model_copy(update={"description": writer}))
+            for timeline_id in ids
+            for store, writer in ((server, "server"), (other, "other"))
+        ),
+        return_exceptions=True,
+    )
+
+    for i, timeline_id in enumerate(ids):
+        outcome = results[2 * i : 2 * i + 2]
+        landed = [result for result in outcome if result == timeline_id]
+        refused = [result for result in outcome if isinstance(result, TimelineConflict)]
+        assert (len(landed), len(refused)) == (1, 1), outcome
+        stored = await server.get_timeline(timeline_id)
+        assert stored.version == 2
+        assert stored.description == ("server" if outcome[0] == timeline_id else "other")
 
 
 # --- Transaction atomicity under genuine concurrency ---

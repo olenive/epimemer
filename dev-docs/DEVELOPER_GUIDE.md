@@ -104,13 +104,45 @@ make test-integration
 make test-integration SURREAL_PORT=8123
 ```
 
-Run this when a change touches storage or concurrency. Either suite skipping
-is reported as a pass by pytest, so check the counts: `5 passed` and
-`1 passed`, not `5 skipped`.
+Run this when a change touches storage or concurrency. Each suite skips
+only when its variable is unset; with the variable set and the server not
+answering the client, every test fails with the reason, so the target's exit
+code can be trusted. A skip in its output therefore means the variable was
+not set, which under `make test-integration` cannot happen.
 
 For a persistent local server outside the test run, on macOS,
 `scripts/start_local_surrealdb.sh` starts one via Colima on disk and registers
 the MCP server with Claude Code against it.
+
+### Against a real Postgres (opt-in, needs Docker)
+
+The Postgres backend is a fourth parameter on the `storage` and `store`
+fixtures, skipped unless `EPIMEMER_TEST_POSTGRES_DSN` names a database. Run it:
+
+```bash
+make test-postgres
+
+# Port 5433 taken? The target says so, and names the process. Then:
+make test-postgres PG_PORT=5434
+```
+
+The target starts a throwaway `postgres:17-alpine`, runs the whole suite
+selected to the Postgres parameter (`-k postgres`), which takes in
+`tests/storage/test_postgres_storage.py` too, and stops the server on exit.
+Expect two or three minutes, most of it creating and dropping a schema per
+test. A skipped parameter is reported as a pass, so check that the run says
+`passed` with nothing skipped.
+
+Against a server you started yourself, set the DSN and select the same tests:
+
+```bash
+EPIMEMER_TEST_POSTGRES_DSN=postgresql://postgres:epimemer@127.0.0.1:5433/postgres \
+    uv run pytest tests -q -k postgres
+```
+
+**Point it only at a database you can throw away.** Every test drops every
+graph schema in that database before and after it runs, so that a test sees
+exactly the graphs it made. Schemas that are not graphs are left alone.
 
 ## Debugging individual sections
 
@@ -465,20 +497,24 @@ parameterises `storage` over `InMemoryStorage` and `SurrealDBStorage("mem://")`.
    - Core storage operations (documents, segments, nodes, edges, embeddings,
      timelines, metacontexts, the decision journal)
    - The multi-graph interface: `current_database`, `list_databases()`,
-     `switch_database()`, `delete_database()`. Both existing backends support
+     `switch_database()`, `delete_database()`. Every backend supports
      multiple named graphs (default `"default"`); see `InMemoryStorage` for
-     the in-process pattern
+     the in-process pattern, `SQLiteStorage` for one file per graph and
+     `PostgresStorage` for one schema per graph
    - `normalize_for_storage` on write, so `None`-valued dict keys round-trip
-     identically across backends
+     identically across backends. It drops them at every depth, a dict inside
+     a nested model included, as SurrealDB does
    - Timestamp comparison by instant, never by text (see *Comparing
      timestamps*)
    - `graph_guard`, with `switch_database` taking its mover turn (see *The
      active graph holds still*). A backend that resolves its graph per call
-     (both of ours do) has this problem whether or not it has a connection
+     (all of ours do) has this problem whether or not it has a connection
    - If the backend talks over a socket, it owns reconnection. An MCP server
      outlives the databases it talks to, so a dropped connection has to be
      rebuilt rather than raised forever; see `_reconnect` in
-     `surrealdb_adapter.py` and the constraints in its comment
+     `surrealdb_adapter.py` and the constraints in its comment, and `_run`
+     in `postgres_adapter.py` for the same rules on a driver that does report
+     a lost connection
    - `write_verbatim_tx`, which stores each record exactly as given rather
      than deriving anything, plus the whole-section reads beside it
      (`query_documents`, `query_segments`, `query_edges`). Graph bundles are
@@ -487,7 +523,8 @@ parameterises `storage` over `InMemoryStorage` and `SurrealDBStorage("mem://")`.
    - Any schema migration the SurrealDB adapter runs on open
      (`_migrate_schema`), if the backend persists across releases
 2. Add tests in `tests/storage/test_your_backend.py`, and add the backend to
-   the parity fixtures in `tests/conftest.py`
+   the parity fixtures in `tests/conftest.py` and
+   `tests/storage/test_storage_parity.py`
 3. Add a factory branch in `epimemer/mcp/config.py`
 
 ## Comparing timestamps
@@ -527,6 +564,15 @@ So: a new comparison of an unindexed timestamp goes through `instant()`. A
 new indexed timestamp field takes on the writer's obligation instead, and if
 you add an index to a field something already compares through `instant()`,
 the comparison must change with it or the index is dead weight.
+
+The SQLite backend has no `instant()` and takes the writer's half everywhere:
+every timestamp column and every bound it compares goes through `iso_micros`
+in `storage/timestamps.py`, the same function the SurrealDB adapter pads the
+journal with. `SQLITE_BACKEND.md` §5 has the reasoning.
+
+The Postgres backend needs neither half: its timestamp columns are
+`timestamptz` and its bounds are passed as datetimes, so the type compares
+instants and nothing is rendered to text.
 
 `EXPLAIN` is how you check which case you are in:
 

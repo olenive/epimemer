@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from surrealdb import AsyncSurreal
 from websockets.exceptions import ConnectionClosedError
 
 from epimemer.core.types import (
@@ -25,6 +26,7 @@ from epimemer.core.types import (
     Topic,
 )
 from epimemer.storage import surrealdb_adapter
+from epimemer.storage.protocol import SchemaTooNew, TimelineConflict
 from epimemer.storage.surrealdb_adapter import SurrealDBStorage
 
 
@@ -335,7 +337,10 @@ class TestAtomicOperations:
         original, first = add_timepoint(Timeline(name="tl"), start=datetime(1897, 5, 1, tzinfo=UTC))
         await store.store_timeline(original)
 
-        appended, _ = add_timepoint(original, start=datetime(1897, 9, 1, tzinfo=UTC))
+        # From the stored copy, so the version check passes and the collision is
+        # what fails the batch.
+        stored_before = await store.get_timeline(original.id)
+        appended, _ = add_timepoint(stored_before, start=datetime(1897, 9, 1, tzinfo=UTC))
         collide = EmbeddingRecord(item_id="x", model_id="m", vector=[1.0])
         await store.store_embedding(
             EmbeddingRecord(id=collide.id, item_id="squatter", model_id="m", vector=[0.0])
@@ -343,11 +348,27 @@ class TestAtomicOperations:
 
         # Blind on purpose: the storage protocol names no exception type, and the
         # two backends refuse with different ones.
-        with pytest.raises(Exception):  # noqa: B017
+        with pytest.raises(Exception) as failed:  # noqa: B017
             await store.write_batch_tx(timelines=[appended], embeddings=[collide])
 
+        assert not isinstance(failed.value, TimelineConflict)
         stored = await store.get_timeline(original.id)
         assert [tp.id for tp in stored.timepoints] == [first.id]
+
+    async def test_a_timeline_written_before_its_version_takes_a_write_at_zero(self, store):
+        """A record stored before `Timeline.version` existed has no `version`
+        key, and the check inside the transaction reads it as 0."""
+        await store._query(
+            "CREATE timeline CONTENT $data", {"data": {"uid": "tl-old", "name": "older"}}
+        )
+
+        older = await store.get_timeline("tl-old")
+        assert older.version == 0
+        await store.store_timeline(older.model_copy(update={"name": "revised"}))
+
+        assert (await store.get_timeline("tl-old")).version == 1
+        with pytest.raises(TimelineConflict):
+            await store.store_timeline(older.model_copy(update={"name": "stale"}))
 
     async def test_supersede_by_existing_tx_flags_and_clears(self, store):
         fact = Fact(content="old", source_id="s1")
@@ -1000,3 +1021,143 @@ class TestContentLookupUsesTheContentIndex:
         defined = await store._query(f"INFO FOR TABLE {table}")
 
         assert f"idx_{table}_content" in json.dumps(defined, default=str)
+
+
+class TestAGraphANewerEpimemerWrote:
+    """A graph stamped above the version this code knows is refused, never opened.
+
+    Opening it would define tables and run migration steps over rows whose
+    meaning may have changed. The refusal names both versions and the remedy,
+    leaves the store holding what it held before, and writes nothing: the
+    version is read before a single table is defined.
+    """
+
+    async def test_switching_to_it_is_refused_and_the_active_graph_stays(self, store):
+        # A database holding nothing but a newer marker, so any table this code
+        # defined on the way in would show.
+        await store.db.use(store.namespace, "newer")
+        await store.db.query("UPSERT schema_version:current SET version = 99;")
+        await store.db.use(store.namespace, "main")
+
+        with pytest.raises(SchemaTooNew) as refused:
+            await store.switch_database("newer")
+
+        assert (refused.value.graph, refused.value.stored, refused.value.supported) == (
+            "newer",
+            99,
+            surrealdb_adapter._SCHEMA_VERSION,
+        )
+        assert "Upgrade Epimemer" in str(refused.value)
+        assert store.current_database == "main"
+        await store.store_node(Topic(id="t1", content="still here"))
+        assert (await store.get_node("t1")).content == "still here"
+        async with store._borrowed("newer"):
+            assert await store._query("SELECT VALUE version FROM schema_version:current;") == [99]
+            info = await store._query("INFO FOR DB;")
+        assert list(info["tables"]) == ["schema_version"]
+
+    async def test_connect_refuses_it_and_names_both_versions(self, tmp_path):
+        url = f"surrealkv://{tmp_path / 'graphs'}"
+        writer = SurrealDBStorage(url=url)
+        await writer.connect()
+        await writer.store_node(Topic(id="t1", content="written by a newer Epimemer"))
+        await writer.db.query("UPSERT schema_version:current SET version = 99;")
+        await writer.close()
+
+        store = SurrealDBStorage(url=url)
+        with pytest.raises(SchemaTooNew, match="schema version 99.*Upgrade Epimemer"):
+            await store.connect()
+        assert store._db is None
+
+        # A bare connection, since opening the graph through the adapter is what
+        # is refused.
+        reader = AsyncSurreal(url)
+        await reader.connect(url)
+        try:
+            await reader.use(store.namespace, "main")
+            assert await reader.query("SELECT VALUE version FROM schema_version:current;") == [99]
+            assert await reader.query("SELECT VALUE content FROM topic;") == [
+                "written by a newer Epimemer"
+            ]
+        finally:
+            await reader.close()
+
+
+class TestLocationHidesCredentials:
+    """`location` is printed in the startup log and returned to agents, and a
+    server URL may carry a user and password."""
+
+    def test_a_url_with_credentials_shows_the_host_and_port_and_neither_secret(self):
+        location = SurrealDBStorage(url="ws://alice:secret@db.example.com:8000/rpc").location
+
+        assert "ws://db.example.com:8000/rpc" in location
+        assert "alice" not in location
+        assert "secret" not in location
+
+    def test_a_url_without_credentials_reads_as_given(self):
+        assert "ws://localhost:8000/rpc" in SurrealDBStorage(url="ws://localhost:8000/rpc").location
+
+    @pytest.mark.parametrize(
+        "url", ["mem://", "surrealkv:///var/lib/Epimemer/graphs", "surrealkv://Relative/Path"]
+    )
+    def test_an_embedded_url_comes_through_unchanged(self, url):
+        assert f"SurrealDB at {url}," in SurrealDBStorage(url=url).location
+
+
+class TestIntegersWiderThan64Bits:
+    """SurrealDB holds an integer in a signed 64-bit word and stores a wider one
+    wrapped: 2**63 read back as -2**63, and 2**64 + 5 failed to decode. The
+    adapter refuses such a record, naming the field and the value, before any
+    statement is sent."""
+
+    @pytest.mark.parametrize("value", [2**63, 2**63 + 1, -(2**63) - 1, 2**64 + 5])
+    async def test_a_wider_integer_is_refused_with_its_field_and_value(self, store, value):
+        topic = Topic(content="x", metadata={"n": value})
+
+        with pytest.raises(ValueError, match=rf"Topic field metadata\.n is {value}, outside"):
+            await store.store_node(topic)
+
+        assert await store.get_node(topic.id) is None
+
+    async def test_the_64_bit_bounds_and_booleans_are_stored(self, store):
+        metadata = {"low": -(2**63), "high": 2**63 - 1, "flag": True, "off": False}
+        topic = Topic(content="x", metadata=metadata)
+
+        await store.store_node(topic)
+
+        assert (await store.get_node(topic.id)).metadata == metadata
+
+    async def test_the_field_path_runs_through_lists_and_nested_dicts(self, store):
+        topic = Topic(content="x", metadata={"xs": [1, {"deep": 2**63}]})
+
+        with pytest.raises(ValueError, match=r"metadata\.xs\[1\]\.deep is 9223372036854775808"):
+            await store.store_node(topic)
+
+    async def test_a_verbatim_write_is_refused_whole(self, store):
+        fine = Topic(content="fine")
+        wide = Topic(content="wide", metadata={"n": 2**63})
+
+        with pytest.raises(ValueError, match=r"metadata\.n is 9223372036854775808"):
+            await store.write_verbatim_tx(nodes=[fine, wide])
+
+        assert await store.get_nodes([fine.id, wide.id]) == {}
+
+
+class TestTheVersionReadOnAFreshDatabase:
+    """A served SurrealDB answers a read on an undefined table with an error
+    where the embedded engine answers with nothing. The integration suite
+    caught the first form; this pins that both mean version 0."""
+
+    async def test_a_missing_table_reads_as_version_zero(self):
+        from surrealdb.errors import NotFoundError
+
+        from epimemer.storage.surrealdb_adapter import _stored_schema_version
+
+        async def served(statement):
+            raise NotFoundError("not_found", "The table 'schema_version' does not exist")
+
+        async def embedded(statement):
+            return []
+
+        assert await _stored_schema_version(served) == 0
+        assert await _stored_schema_version(embedded) == 0

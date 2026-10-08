@@ -400,9 +400,10 @@ class TestNominationIsScopedToSharedEvidence:
         assert found[0].similarity >= SIMILARITY_NOMINATION_THRESHOLD
 
     async def test_twins_sharing_no_premise_are_not_offered(self, storage, embedding_provider):
-        """The measured case. Two inferences agreeing may be independent support
-        — which is the thing corroboration exists to count — and nothing here
-        treats agreement alone as redundancy."""
+        """The measured case. Two inferences agreeing from separate evidence are
+        not redundancy, and nothing here treats agreement alone as such: the
+        pair is offered as `similar_inferences` instead, for a `similarity`
+        verdict rather than a merge."""
         one = await _inference(storage, embedding_provider, "The release is unsafe")
         other = await _inference(storage, embedding_provider, "The release cannot be trusted")
         await _rests_on(storage, one, await _premise(storage, "The deploy failed"))

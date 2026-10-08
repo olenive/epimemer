@@ -74,6 +74,7 @@ from epimemer.mcp.tools import (
 )
 from epimemer.pipelines.reflection.archival import judgment_is_stale
 from epimemer.storage.protocol import StorageBackend
+from tests.mcp.test_timeline_ordering import another_writer_after_reads
 
 # --- Fixtures ---
 
@@ -333,6 +334,55 @@ class TestTimepointProposal:
                 config,
                 timeline_id="nonexistent",
             )
+
+    async def test_a_timeline_written_meanwhile_is_proposed_onto_again(
+        self, storage, embedding_provider, config, monkeypatch
+    ):
+        """Two servers ingesting into one timeline. Ingest decides nothing about
+        the points already there, so it proposes again onto the newer record
+        rather than refusing, and the other writer's change is kept."""
+        created, _ = await create_timeline("Novel", storage)
+        tl_id = created["timeline_id"]
+        another_writer_after_reads(monkeypatch, storage, tl_id)
+
+        result = await _ingest_facts(
+            ["The siege began in 1897."],
+            storage,
+            embedding_provider,
+            config,
+            timeline_id=tl_id,
+        )
+
+        assert result["timepoints_proposed"] == 1
+        timeline = await storage.get_timeline(tl_id)
+        assert (timeline.description, len(timeline.timepoints)) == ("another writer 1", 1)
+        # Created, written by the other writer, then written by this call.
+        assert timeline.version == 3
+        [link] = [
+            edge
+            for node in await storage.query_nodes(node_type=NodeType.FACT)
+            for edge in await storage.get_edges_from(node.id, edge_type=EdgeType.TIMELINK)
+        ]
+        assert link.metadata["timepoint_id"] == timeline.timepoints[0].id
+
+    async def test_ingest_gives_up_on_a_timeline_written_every_time(
+        self, storage, embedding_provider, config, monkeypatch
+    ):
+        created, _ = await create_timeline("Novel", storage)
+        tl_id = created["timeline_id"]
+        another_writer_after_reads(monkeypatch, storage, tl_id, times=10)
+
+        with pytest.raises(ValueError, match="Retry it"):
+            await _ingest_facts(
+                ["The siege began in 1897."],
+                storage,
+                embedding_provider,
+                config,
+                timeline_id=tl_id,
+            )
+
+        assert await storage.query_nodes(node_type=NodeType.FACT) == []
+        assert (await storage.get_timeline(tl_id)).timepoints == []
 
     async def test_proposals_can_be_switched_off(self, storage, embedding_provider, config):
         await _ingest_facts(
@@ -4138,6 +4188,19 @@ class TestRelationConsolidation:
     async def test_reflect_surfaces_similar_relations_key(self, storage, embedding_provider):
         result, _ = await reflect(storage, embedding_provider)
         assert "similar_relations" in result and isinstance(result["similar_relations"], list)
+
+
+class TestListGraphsSaysWhereTheGraphsLive:
+    """`list_graphs` names the backend and its location beside the graph names,
+    so "where did my data go" is answered by the server rather than
+    reconstructed from its configuration. The in-memory store says so, a
+    server says its address, SQLite its directory."""
+
+    async def test_list_graphs_reports_backend_and_location(self, storage):
+        result, _ = await tools.list_graphs(storage)
+        assert result["storage"]["backend"] == storage.backend_name
+        assert result["storage"]["location"] == storage.location
+        assert result["storage"]["location"].strip()
 
 
 class TestGraphNameValidationTools:

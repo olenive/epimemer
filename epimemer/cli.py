@@ -23,7 +23,9 @@ an embedded store (`mem://`, `file://`, `surrealkv://`, or the in-memory
 backend) lives inside the server process — a second connection to `mem://` is a
 separate store, not a second view of one. Writing there would
 report success into a store the running server will never read, so it refuses
-and names `EPIMEMER_APPROVED_AGENTS`, which the server reads at connect.
+and names `EPIMEMER_APPROVED_AGENTS`, which the server reads at connect. A
+SQLite graph is a file that a second process can write beside the server, so
+these commands work there as they do against a served SurrealDB.
 """
 
 import argparse
@@ -32,6 +34,7 @@ import secrets
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from epimemer import client_state
@@ -61,7 +64,7 @@ from epimemer.mcp.tools import (
     seed_approved_judges,
 )
 from epimemer.pipelines.transfer import BUNDLE_FORMAT_VERSION
-from epimemer.storage.protocol import StorageBackend, resolve_require_judge
+from epimemer.storage.protocol import SchemaTooNew, StorageBackend, resolve_require_judge
 from epimemer.storage.surrealdb_adapter import is_embedded_url
 
 
@@ -72,11 +75,19 @@ def unreachable_store(config: ServerConfig) -> str | None:
     ways to fail here look identical from the outside and want different
     advice.
     """
-    if config.storage_backend != "surrealdb":
+    if config.storage_backend == "memory":
         return (
             "This server uses the in-memory backend, which lives inside the "
             "server process — nothing this command writes can reach it."
         )
+    if config.storage_backend == "sqlite":
+        # One file per graph, and SQLite's write-ahead log lets a second process
+        # read and write it beside the server, so this command reaches the same
+        # store the server reads.
+        return None
+    if config.storage_backend == "postgres":
+        # A served database, reached by this command as the server reaches it.
+        return None
     if is_embedded_url(config.surrealdb_url):
         return (
             f"EPIMEMER_SURREALDB_URL is {config.surrealdb_url!r}, an embedded "
@@ -137,7 +148,8 @@ def _embedded_advice(reason: str, agent_id: str | None, action: str) -> str:
             f"{reason}\n\n"
             f"Whether a judge is retired lives on its record inside the graph, "
             f"so there is nothing out here to write it to. On a served "
-            f"SurrealDB this command works. On an embedded store the judges go "
+            f"SurrealDB or a SQLite graph this command works. On an embedded "
+            f"store the judges go "
             f"with the process, and the one channel that reaches them is the "
             f"prompt claim_agent raises, whose *A retired judge…* entry can "
             f"bring one back."
@@ -170,6 +182,21 @@ async def _with_storage(config: ServerConfig, graph: str | None, run):
         return await run(storage)
     finally:
         await storage.close()
+
+
+def _printed(config: ServerConfig, graph: str | None, run) -> int:
+    """`_with_storage`, with what it returns printed, and an exit status.
+
+    A graph a newer Epimemer wrote is refused when it is opened, and the
+    refusal already says which versions disagree and what to do about it, so
+    it is printed as it stands rather than as a traceback.
+    """
+    try:
+        print(asyncio.run(_with_storage(config, graph, run)))
+    except SchemaTooNew as refused:
+        print(str(refused), file=sys.stderr)
+        return 2
+    return 0
 
 
 async def _confirm(storage: StorageBackend, handle: str) -> str:
@@ -609,6 +636,38 @@ def _bundle_destination(to: str, graph: str, *, plain: bool) -> str:
     return f"{to.rstrip('/')}/{name}"
 
 
+def _installed_version() -> str:
+    """The installed package's version, or a plain statement that there is none.
+
+    A checkout run without being installed has no distribution to ask, and
+    that is worth saying rather than raising from a `--version` flag.
+    """
+    try:
+        return version("epimemer")
+    except PackageNotFoundError:
+        return "unknown (not installed as a package)"
+
+
+async def _list_graphs(storage: StorageBackend) -> str:
+    """The backend, where its graphs live, and the graphs: the first thing to
+    ask a server you have just configured.
+
+    The same answer `list_graphs` gives an agent, for the person at the
+    terminal. Opening the configured backend lands on its configured graph and
+    creates it if absent, as every command here does and as the server itself
+    does at startup, so the graph `EPIMEMER_GRAPH` names is always listed.
+    """
+    graphs = await storage.list_databases()
+    return "\n".join(
+        [
+            f"backend: {storage.backend_name}",
+            f"location: {storage.location}",
+            f"graphs: {', '.join(graphs) or '(none)'}",
+            f"active graph: {storage.current_database}",
+        ]
+    )
+
+
 async def _export_bundle(
     storage: StorageBackend, config: ServerConfig, graph: str, to: str, plain: bool
 ) -> str:
@@ -689,6 +748,94 @@ async def _import_bundle(
             f"Imported {path} as graph '{graph}'.",
             f"  {rows}",
             *_import_summary(report),
+        ]
+    )
+
+
+def _destination_config(
+    config: ServerConfig,
+    to: str,
+    *,
+    directory: str | None,
+    url: str | None,
+    namespace: str | None,
+    user: str | None,
+    password: str | None,
+    dsn: str | None,
+) -> ServerConfig:
+    """The configuration of the backend a graph is converted onto.
+
+    A second config rather than a second code path: `create_storage` already
+    knows how to open every backend from one of these, so convert only has to
+    say which fields differ from the server's own. Anything not named on the
+    command line is inherited, so converting onto SQLite in the configured
+    directory needs no flag at all.
+    """
+    if to == "memory":
+        raise ValueError(
+            "--to memory would convert into a store that goes when this command "
+            "exits. Name a persistent backend: sqlite, surrealdb or postgres."
+        )
+    overrides: dict[str, object] = {"storage_backend": to, "graph": ""}
+    if directory is not None:
+        overrides["sqlite_dir"] = directory
+    if url is not None:
+        overrides["surrealdb_url"] = url
+    if namespace is not None:
+        overrides["surrealdb_namespace"] = namespace
+    if user is not None:
+        overrides["surrealdb_user"] = user
+    if password is not None:
+        overrides["surrealdb_pass"] = password
+    if dsn is not None:
+        overrides["postgres_dsn"] = dsn
+    return config.model_copy(update=overrides)
+
+
+async def _convert_graph(
+    storage: StorageBackend,
+    config: ServerConfig,
+    graph: str,
+    destination: ServerConfig,
+    target: str,
+) -> str:
+    """Rebuild `graph` on another backend in one step: export, import, no file.
+
+    The bundle is built in memory and handed straight to the import, so the
+    rules of a file import hold unchanged: the destination graph must not exist,
+    every record lands verbatim, and vectors are recomputed with the embedding
+    provider this command is configured with. The source is left as it was.
+    """
+    from epimemer.mcp.config import create_embedding_provider
+    from epimemer.pipelines.transfer import export_graph, import_graph
+
+    existing = await storage.list_databases()
+    if graph not in existing:
+        raise ValueError(
+            f"Graph '{graph}' does not exist on this server, so there is nothing "
+            f"to convert. Graphs here: {', '.join(sorted(existing)) or 'none'}."
+        )
+    await storage.switch_database(graph)
+    bundle = await export_graph(
+        storage,
+        embedding_provider=config.embedding_provider,
+        embedding_model_id=config.embedding_model_id,
+    )
+    other: StorageBackend = create_storage(destination)
+    await other.connect()
+    try:
+        report = await import_graph(bundle, other, create_embedding_provider(config), graph=target)
+        where = other.location
+    finally:
+        await other.close()
+    rows = ", ".join(f"{section} {count}" for section, count in report.counts.items() if count)
+    return "\n".join(
+        [
+            f"Converted graph '{graph}' from {config.storage_backend} to "
+            f"'{target}' on {destination.storage_backend}, {where}.",
+            f"  {rows}",
+            *_import_summary(report),
+            "  The source graph is untouched.",
         ]
     )
 
@@ -798,6 +945,7 @@ def _record_client_state(given_dir: str | None, raw: str, given_pid: str | None 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="epimemer", description="Epimemer administration.")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {_installed_version()}")
     sub = parser.add_subparsers(dest="group", required=True)
 
     sub.add_parser(
@@ -950,8 +1098,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     repair.add_argument("--graph", help="Graph to write in (default: the configured one).")
 
-    graphs = sub.add_parser("graphs", help="Whole graphs: export, import, verify.")
+    graphs = sub.add_parser("graphs", help="Whole graphs: list, export, import, verify, convert.")
     graphs_sub = graphs.add_subparsers(dest="action", required=True)
+
+    graphs_sub.add_parser(
+        "list",
+        help="The backend, where its graphs live, and the graphs on it.",
+    )
 
     export = graphs_sub.add_parser(
         "export",
@@ -983,6 +1136,45 @@ def build_parser() -> argparse.ArgumentParser:
     )
     importing.add_argument("bundle", help="Path to a bundle: a .tar.gz or a --plain directory.")
     importing.add_argument("--graph", required=True, help="Name for the new graph.")
+
+    convert = graphs_sub.add_parser(
+        "convert",
+        help=(
+            "Rebuild a graph on another backend in one step. The source is the "
+            "configured backend; the destination comes from the --to flags."
+        ),
+    )
+    convert.add_argument("graph", help="The graph to convert, on the configured backend.")
+    convert.add_argument(
+        "--to",
+        required=True,
+        choices=["sqlite", "surrealdb", "postgres"],
+        help="The destination backend.",
+    )
+    convert.add_argument(
+        "--as",
+        dest="target",
+        help="Name for the new graph on the destination. Defaults to the same name.",
+    )
+    convert.add_argument(
+        "--to-dir",
+        help="For --to sqlite: the directory of graph files. Defaults to EPIMEMER_SQLITE_DIR.",
+    )
+    convert.add_argument(
+        "--to-url", help="For --to surrealdb: the server URL. Defaults to EPIMEMER_SURREALDB_URL."
+    )
+    convert.add_argument("--to-namespace", help="For --to surrealdb: the namespace.")
+    convert.add_argument("--to-user", help="For --to surrealdb: the user.")
+    convert.add_argument(
+        "--to-pass",
+        help="For --to surrealdb: the password. Prefer EPIMEMER_SURREALDB_PASS, which stays "
+        "out of the shell history.",
+    )
+    convert.add_argument(
+        "--to-dsn",
+        help="For --to postgres: the database, as libpq reads it. Defaults to "
+        "EPIMEMER_POSTGRES_DSN.",
+    )
 
     verify = graphs_sub.add_parser(
         "verify",
@@ -1057,10 +1249,9 @@ def main(argv: list[str] | None = None) -> int:
             run = lambda s: _repair_tag_names(s, config, args.judge, args.yes)
         else:
             run = lambda s: _require(s, args.setting, config.require_judge)
-        print(asyncio.run(_with_storage(config, args.graph, run)))
-        return 0
+        return _printed(config, args.graph, run)
 
-    if args.action in ("export", "import", "verify"):
+    if args.group == "graphs" and args.action in ("list", "export", "import", "verify", "convert"):
         # A note rather than the wall above. These three are not the user's
         # exclusive act — `backup_graph` does the same export from inside the
         # server — so refusing here would take away the one channel a user has
@@ -1070,15 +1261,34 @@ def main(argv: list[str] | None = None) -> int:
         unreachable = unreachable_store(config)
         if unreachable is not None:
             print(f"Note: {unreachable}\n", file=sys.stderr)
-        if args.action == "export":
+        if args.action == "list":
+            run = _list_graphs
+        elif args.action == "export":
             run = lambda s: _export_bundle(s, config, args.graph, args.to, args.plain)
         elif args.action == "import":
             run = lambda s: _import_bundle(s, config, args.bundle, args.graph)
+        elif args.action == "convert":
+            run = lambda s: _convert_graph(
+                s,
+                config,
+                args.graph,
+                _destination_config(
+                    config,
+                    args.to,
+                    directory=args.to_dir,
+                    url=args.to_url,
+                    namespace=args.to_namespace,
+                    user=args.to_user,
+                    password=args.to_pass,
+                    dsn=args.to_dsn,
+                ),
+                args.target or args.graph,
+            )
         else:
             run = lambda s: _verify_bundle(s, config, args.bundle)
         try:
             print(asyncio.run(_with_storage(config, None, run)))
-        except (ValueError, OSError) as refused:
+        except (ValueError, OSError, SchemaTooNew) as refused:
             print(str(refused), file=sys.stderr)
             return 2
         return 0
@@ -1089,8 +1299,7 @@ def main(argv: list[str] | None = None) -> int:
     unreachable = unreachable_store(config)
     if unreachable is not None:
         print(f"Note: {unreachable}\n", file=sys.stderr)
-    print(asyncio.run(_with_storage(config, args.graph, _list)))
-    return 0
+    return _printed(config, args.graph, _list)
 
 
 if __name__ == "__main__":  # pragma: no cover

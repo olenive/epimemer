@@ -43,9 +43,9 @@ visualisation hub, the process the dashboard connects to.
   the user shares documents or knowledge you should remember.
 - Call `segment` to split the text, extract topics, facts and inferences
   yourself, then call `store_decomposition`.
-- `doubts` in the `segment` result means the server is unsure of its own cut,
-  for example a long document left as one passage. Re-cutting arrives in a
-  later release; for now, read the doubts and carry on decomposing.
+- **Look at the passages before you decompose.** `doubts` in the `segment`
+  result means the server is unsure of its own cut; when it is wrong, re-cut
+  with `resegment` first. See *Cutting a document into passages* below.
 - **Say which graph you mean, on every call.** See *Which graph* below; it
   applies to reads as much as to ingest.
 - **`metacontext_id` is required.** Name the metacontext these claims are asserted
@@ -100,6 +100,50 @@ visualisation hub, the process the dashboard connects to.
   document: the tense, the sentences either side, whether *"the election"* is
   a particular one. **Omit it when you cannot tell**; the fact then never
   merges, which costs less than a guess.
+
+### Cutting a document into passages (segment, resegment)
+
+A passage is what a reader is later shown as the context of a claim: every
+node you decompose records the passage it came from, and `search` returns
+matching passages under `segments`. A passage spanning two subjects muddies
+every claim in it; one that cuts a sentence off from its qualifier can lose a
+hedge, a date or a speaker. Nothing revisits a cut once claims cite it.
+
+- **Read the cut before you decompose.** `segment` cuts by rule, at blank
+  lines by default, and its `doubts` say when the server suspects its own cut:
+  `single_passage` (a long document left whole), `fragments` (mostly scraps),
+  `outsized` (one passage far longer than the rest), `mid_sentence` (a cut
+  inside a sentence). A doubt refuses nothing.
+- **Re-cut on evidence, not by habit.** If a doubt is right, or a passage
+  visibly spans two subjects or separates a sentence from what qualifies it,
+  call `resegment(document_id, cuts)` and decompose against the passage ids it
+  returns. When the rule's cut is right, leave it.
+- **A cut is a list of anchors**, one per passage: the text the passage begins
+  with, copied exactly from the document, at least three words or twelve
+  characters. Each is found at its first occurrence after the end of the one
+  before, so lengthen an anchor to reach a later occurrence. The first must
+  begin the document. A one-word heading such as `## Fees` is too short on its
+  own: carry it into the line below, newline included. One anchor makes the
+  whole document one passage. A bad list is refused whole with every problem
+  named, and nothing is written.
+- **Cut on the first call when you already know the shape is awkward:**
+  `segment(content, cuts=[...])`, in place of `segmentation_strategy`, never
+  beside it. Where the cut goes:
+  - transcripts and dialogue: at speaker turns, keeping a short question with
+    its answer;
+  - contracts and specifications: at clause or numbered-section boundaries,
+    keeping a heading with the text under it;
+  - narrative: at scene changes, never inside a scene;
+  - prose mixed with tables or code: a table or code block stays with the
+    sentence that introduces it;
+  - chat logs and notes: at changes of subject, not at message boundaries.
+
+  For every shape, a passage is the smallest stretch that stands on its own as
+  the context of a claim, and a sentence stays with what qualifies it.
+- **Re-cutting is possible only before `store_decomposition`.** After it, the
+  passages are provenance: `resegment` is refused with `resegmented: false`
+  and the count in `citing_nodes`, and nothing changes. To cut a decomposed
+  document differently, ingest it again as a new document.
 
 ### Which graph: say it on every call
 
@@ -254,6 +298,9 @@ Discovery and lookup:
   returns one of a pair, that block is the only place the other appears.
   Treat it as *the graph also knows what was true next door*, and say so
   rather than dropping it.
+  **`agreeing_inferences`** lists inferences judged to draw the same
+  conclusion as this one. They are not counted, since two conclusions
+  agreeing is not a second witness to either; report them as agreement.
 
 ### Temporal queries: three axes, not one
 
@@ -478,9 +525,10 @@ if useful.
   enrichments; similar pairs also surface duplicate source, tag and entity
   Topics), same-metacontext contradiction candidates, `recurrences`,
   `boundary_proposals` and `unsound_inferences` (both below),
-  `inference_merge_candidates`, `pending_review` (the worklist of nodes
-  already flagged for resolution), `archival_candidates` (see below), and
-  `similar_relations`, likely-synonymous user relationship labels.
+  `inference_merge_candidates`, `similar_inferences`, `pending_review` (the
+  worklist of nodes already flagged for resolution), `archival_candidates`
+  (see below), and `similar_relations`, likely-synonymous user relationship
+  labels.
 - **Check `truncated`.** The lists built out of *pairs* grow quadratically
   where every other list grows with the node count. Each is capped to its
   highest-scoring `max_nominations` (200 by default), and any that was cut
@@ -525,8 +573,14 @@ if useful.
   `merge_inferences(source_ids, content)` where they are one conclusion, or
   record `apply_reflection(similarities=[{pair, verdict: "distinct",
   because}])` where they are two. Two inferences agreeing is **not**
-  automatically redundancy; it may be independent support, which is the
-  thing corroboration exists to count.
+  automatically redundancy; it may be two readings worth keeping, which
+  `one_claim` records without merging them.
+- **`similar_inferences`** names two active inferences that say nearly the
+  same thing and rest on no common premise, each shown with its premises.
+  Judge every pair with `apply_reflection(similarities=[{pair, verdict,
+  because}])`: `one_claim` where they draw the same conclusion, `distinct`
+  where they only look alike. Between inferences `one_claim` adds nothing to
+  a corroboration count, so the question is only whether they agree.
 - **Enrichment describes a topic; it never renames one.** The description is
   written beside the topic's `content`, which stays exactly as it is: `content`
   is the name a tag resolves to at ingest and the name
@@ -576,7 +630,8 @@ if useful.
   next `reflect` offers it again. Two verdicts:
   - `"one_claim"`: the two really do say the same thing and something blocked
     the merge (an event, an unjudged `claim_kind`). Writes a `similarity`
-    edge, **which corroboration counts as a second source**, plus `assessed`.
+    edge, **which corroboration counts as a second source** between facts and
+    lists as agreement between inferences, plus `assessed`.
   - `"distinct"`: different claims that merely look alike. Writes `assessed`
     only, which corroboration never reads.
 

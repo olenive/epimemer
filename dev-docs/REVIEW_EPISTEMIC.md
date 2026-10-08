@@ -153,7 +153,7 @@ onto the survivor, which is `ACTIVE`), so the flag edge written in
 | `evidence_merged` | absorbed fact → dependent inference | "the premise you were drawn from absorbed another claim". The source is the fact that went away: which wording is gone is the whole content of the flag |
 | `contradiction` | fact ↔ fact | genuine same-metacontext conflict |
 | `variant_of` | fact ↔ fact (across metacontexts) | "same proposition, resolved differently per metacontext"; makes divergence queryable |
-| `similarity` | fact ↔ fact | judged one claim, kept as two nodes; read by corroboration |
+| `similarity` | fact ↔ fact, inference ↔ inference | judged one claim, kept as two nodes; corroboration counts a fact partner and reports an inference one (`SIMILAR_INFERENCES.md`) |
 | `assessed` | fact ↔ fact | a pair was judged, whatever the verdict; the suppression index the nomination sweep reads, and never a flag on either node |
 | `temporally_followed_by` | older fact → newer fact | "both true, over different periods": order, not replacement, so it survives recurrence |
 | `based_on` / `associated_with` | metacontext → metacontext | metacontexts relate (association, not inheritance) |

@@ -49,8 +49,10 @@ warning the agent was given.
 
 All configuration is environment variables, documented in one place: the
 [README's configuration table](README.md#configuration). For a persistent
-setup you will usually set `EPIMEMER_STORAGE_BACKEND`, `EPIMEMER_SURREALDB_URL`
-and `EPIMEMER_GRAPH` (see *Which graph a server opens* below).
+setup you will usually set `EPIMEMER_STORAGE_BACKEND` and `EPIMEMER_GRAPH`,
+plus `EPIMEMER_SURREALDB_URL` for a SurrealDB server, `EPIMEMER_SQLITE_DIR`
+for file-backed graphs or `EPIMEMER_POSTGRES_DSN` for a Postgres database (see
+*Which graph a server opens* below).
 
 Two variables describe the seat a judge is confirmed in (see *Agents* below):
 
@@ -99,19 +101,20 @@ non-default `EPIMEMER_CLIENT_STATE_DIR`, give the hook the same directory with
 
 ### Verify Connection
 
-In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 56 tools.
+In Claude Code, run `/mcp` to check the server status. You should see `epimemer` listed with 57 tools.
 
 ## Available Tools
 
 Claude Code prefixes each tool as `mcp__epimemer__<name>`. This table is
-the canonical list of the 56 tools; other docs link here rather than
+the canonical list of the 57 tools; other docs link here rather than
 restate the count.
 
 ### Core Memory Operations
 
 | Tool | Purpose |
 |------|---------|
-| `segment` | Split text into chunks (step 1 of ingest) |
+| `segment` | Store a document and split it into passages (step 1 of ingest). `doubts` in the response lists the server's reasons to think its own cut is poor, and refuses nothing. `cuts` states your own cut instead, one anchor per passage. See [docs/INGEST.md](docs/INGEST.md) |
+| `resegment` | Replace a document's passages with your own cut, stated as anchors, after `segment` and before `store_decomposition`. Refused once any claim cites one of the passages, with the count in `citing_nodes` |
 | `store_decomposition` | Store the topics, facts and inferences you extracted (step 2 of ingest). `metacontext_id` is required: `the-real` for base reality |
 | `search` | Hybrid retrieval: embedding similarity and keyword matching run separately, their rankings are fused, then graph expansion adds what the winners connect to. Pass exact identifiers as `terms`. `include_corroboration=True` adds how many independent publishers back each result. `metacontexts` scopes the whole response, edges and matched passages included. A result dated to a timepoint whose order is in dispute carries `date_contested`, which is doubt about the date rather than about the claim. See [docs/RETRIEVAL.md](docs/RETRIEVAL.md) |
 | `link` | Create a typed edge between two nodes |

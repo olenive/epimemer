@@ -12,12 +12,15 @@ from epimemer.core.types import (
     Inference,
     NodeEdge,
     NodeStatus,
+    RawDocument,
+    Segment,
     Timeline,
     Topic,
     lineage_edge_type_for,
 )
 from epimemer.pipelines.timeline.functions import add_timepoint
 from epimemer.storage.memory import InMemoryStorage
+from epimemer.storage.protocol import PassagesCited, TimelineConflict
 from epimemer.visualization import instrumented_storage as instrumented_storage_mod
 from epimemer.visualization.event_bus import create_event_bus
 from epimemer.visualization.events import (
@@ -25,6 +28,7 @@ from epimemer.visualization.events import (
     GraphSwitched,
     NodeStatusChanged,
     NodeStored,
+    SegmentStored,
     TimelineStored,
     node_to_view,
 )
@@ -328,11 +332,28 @@ class TestTimelineEvents:
 
         timeline = Timeline(name="History")
         await wrapped.store_timeline(timeline)
-        extended, _ = add_timepoint(timeline, start=datetime(2024, 6, 1, tzinfo=UTC))
+        stored = await wrapped.get_timeline(timeline.id)
+        extended, _ = add_timepoint(stored, start=datetime(2024, 6, 1, tzinfo=UTC))
         await wrapped.store_timeline(extended)
 
         assert [len(e.timeline.timepoints) for e in received] == [0, 1]
         assert received[1].timeline.timeline_id == timeline.id
+
+    async def test_a_refused_write_announces_nothing(self, bus):
+        """A stale copy is refused by the store, and a viewer told about it would
+        draw a point the store does not hold."""
+        inner = InMemoryStorage()
+        wrapped = instrument_storage(inner, bus)
+        received: list[TimelineStored] = []
+        bus.subscribe(TimelineStored, handler=lambda e: received.append(e))
+
+        timeline = Timeline(name="History")
+        await wrapped.store_timeline(timeline)
+        stale, _ = add_timepoint(timeline, start=datetime(2024, 6, 1, tzinfo=UTC))
+        with pytest.raises(TimelineConflict):
+            await wrapped.store_timeline(stale)
+
+        assert [len(e.timeline.timepoints) for e in received] == [0]
 
     async def test_vague_timepoints_survive_conversion_without_a_start(self, bus):
         """A label-only timepoint must reach the frontend with start unset. If
@@ -446,3 +467,68 @@ class TestJudgeConfirmationsPassThrough:
 
         assert await inner.get_judge_confirmations() == [confirmation]
         assert await wrapped.get_judge_confirmations() == [confirmation]
+
+
+class TestResegmentEvents:
+    """A re-cut is announced the way the first cut was: one `SegmentStored`
+    per new passage, and nothing at all when it is refused."""
+
+    CONTENT = "Alpha beta gamma delta. Epsilon zeta eta theta."
+
+    async def _wrapped_with_document(self, bus):
+        inner = InMemoryStorage()
+        await inner.store_document(RawDocument(id="d1", content=self.CONTENT))
+        await inner.store_segment(
+            Segment(
+                id="s-old",
+                source_id="d1",
+                text=self.CONTENT,
+                span_start=0,
+                span_end=len(self.CONTENT),
+            )
+        )
+        received: list[SegmentStored] = []
+        bus.subscribe(SegmentStored, handler=lambda e: received.append(e))
+        return inner, instrument_storage(inner, bus), received
+
+    def _halves(self) -> list[Segment]:
+        split = self.CONTENT.index("Epsilon")
+        return [
+            Segment(
+                id="s1",
+                source_id="d1",
+                text=self.CONTENT[: split - 1],
+                span_start=0,
+                span_end=split - 1,
+            ),
+            Segment(
+                id="s2",
+                source_id="d1",
+                text=self.CONTENT[split:],
+                span_start=split,
+                span_end=len(self.CONTENT),
+            ),
+        ]
+
+    async def test_the_new_passages_are_announced_and_the_count_returned(self, bus):
+        _, wrapped, received = await self._wrapped_with_document(bus)
+
+        replaced = await wrapped.resegment_tx(
+            "d1", self._halves(), segmentation={"strategy": "agent", "passages": 2, "history": []}
+        )
+
+        assert replaced == 1
+        assert [(e.segment_id, e.source_id) for e in received] == [("s1", "d1"), ("s2", "d1")]
+
+    async def test_a_refused_recut_announces_nothing(self, bus):
+        inner, wrapped, received = await self._wrapped_with_document(bus)
+        await inner.store_node(Fact(content="Alpha", source_id="s-old"))
+
+        with pytest.raises(PassagesCited):
+            await wrapped.resegment_tx(
+                "d1",
+                self._halves(),
+                segmentation={"strategy": "agent", "passages": 2, "history": []},
+            )
+
+        assert received == []

@@ -13,11 +13,14 @@ only make them slow.
 import json
 import logging
 import os
+import sqlite3
 import sys
 
 import pytest
 
 from epimemer.mcp.server import app_lifespan, mcp
+from epimemer.storage.protocol import SchemaTooNew
+from epimemer.storage.sqlite_adapter import SQLiteStorage
 
 
 @pytest.fixture
@@ -98,3 +101,38 @@ async def test_a_successful_start_logs_the_version_and_backends(
     assert version in message
     assert "memory" in message
     assert "mock" in message
+
+
+async def test_a_graph_a_newer_epimemer_wrote_is_refused_in_plain_words(
+    monkeypatch, isolated_logging, server_env, tmp_path
+):
+    """The person reading the log learns which versions disagree and what to do.
+
+    The refusal is raised by `connect()` inside the lifespan's one try, so it
+    reaches the file by the same path every other startup failure takes.
+    """
+    directory = tmp_path / "graphs"
+    store = SQLiteStorage(directory)
+    await store.connect()
+    await store.close()
+    connection = sqlite3.connect(directory / "default.sqlite", autocommit=True)
+    try:
+        connection.execute("UPDATE schema_version SET version = 99")
+    finally:
+        connection.close()
+    monkeypatch.setenv("EPIMEMER_STORAGE_BACKEND", "sqlite")
+    monkeypatch.setenv("EPIMEMER_SQLITE_DIR", str(directory))
+    monkeypatch.setenv("EPIMEMER_EMBEDDING_PROVIDER", "mock")
+
+    with pytest.raises(SchemaTooNew):
+        async with app_lifespan(mcp):
+            pass
+
+    entries = [json.loads(line) for line in server_env.read_text().splitlines() if line.strip()]
+    failure = [entry for entry in entries if "failed to start" in entry["message"]]
+    assert len(failure) == 1
+    assert failure[0]["level"] == "ERROR"
+    message = failure[0]["message"]
+    assert "graph 'default' is at schema version 99" in message
+    assert "up to 1" in message
+    assert "Upgrade Epimemer" in message

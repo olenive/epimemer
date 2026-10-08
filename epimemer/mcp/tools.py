@@ -134,6 +134,7 @@ from epimemer.pipelines.review.modes import (
 from epimemer.storage.protocol import (
     MergeOverrides,
     StorageBackend,
+    TimelineConflict,
     WarningOverrides,
     resolve_backup_threshold,
     resolve_merge_settings,
@@ -625,6 +626,7 @@ async def segment_text(
     published_at: dict | None = None,
     metadata: dict | None = None,
     segmentation_strategy: str | None = None,
+    cuts: Sequence[str] | None = None,
     event_bus: InProcessEventBus | None = None,
     judge: JudgeRef | None = None,
 ) -> tuple[dict, ResponseMeta]:
@@ -642,18 +644,37 @@ async def segment_text(
     the document was published, which bounds what it could have known; it is left
     absent rather than falling back to the ingest time.
 
-    The stored document's `metadata["segmentation"]` names the strategy and the
-    passage count. The result's `doubts` lists the server's reasons to think its
-    own cut is poor (`doubt_cut`), each a `{kind, detail}`; a doubt refuses
-    nothing, and the passages are stored either way.
+    `cuts` is the agent's own cut, one anchor per passage: the text the passage
+    begins with, copied exactly from the document (`segments_from_anchors`).
+    Given, no strategy runs and the passages are the agent's. Given together
+    with `segmentation_strategy`, the call is refused, since the two answer the
+    same question. A malformed list refuses the whole call, naming every
+    problem, and nothing is written.
+
+    The stored document's `metadata["segmentation"]` names the strategy
+    (`agent` for cuts) and the passage count. The result's `doubts` lists the
+    server's reasons to think its own cut is poor (`doubt_cut`), each a
+    `{kind, detail}`; a doubt refuses nothing, and the passages are stored
+    either way. Cuts the agent supplied are never doubted: the agent chose them.
     """
+    from epimemer.pipelines.segmentation.anchors import refusal_message, segments_from_anchors
     from epimemer.pipelines.segmentation.doubts import doubt_cut
     from epimemer.pipelines.segmentation.paragraph_split import paragraph_split_segmentation_net
+    from epimemer.pipelines.segmentation.record import AGENT_STRATEGY, cut_record
     from epimemer.pipelines.segmentation.semantic_similarity import (
         semantic_similarity_segmentation_net,
     )
 
-    strategy = segmentation_strategy or config.segmentation_strategy
+    if cuts is not None and segmentation_strategy is not None:
+        raise ValueError(
+            "segment wrote nothing: `cuts` and `segmentation_strategy` both say how "
+            "to cut this document. Pass `cuts` to cut it yourself, or a strategy to "
+            "have the server cut it, not both."
+        )
+    if cuts is not None:
+        strategy = AGENT_STRATEGY
+    else:
+        strategy = segmentation_strategy or config.segmentation_strategy
 
     doc = RawDocument(
         content=content,
@@ -664,23 +685,26 @@ async def segment_text(
     )
 
     # Cut before storing, so the document is written once and already says how
-    # it was cut. The strategies read only the document value, and its id
-    # exists before it is stored, so the passages point at it either way; the
-    # publisher edge below is written after the document it starts from.
-    if strategy == "semantic":
+    # it was cut, and a refused cut writes nothing at all. The strategies read
+    # only the document value, and its id exists before it is stored, so the
+    # passages point at it either way; the publisher edge below is written
+    # after the document it starts from.
+    segments: list[Segment]
+    if cuts is not None:
+        cut = segments_from_anchors(doc, cuts)
+        if not isinstance(cut, list):
+            raise ValueError(refusal_message(cut, tool="segment"))
+        segments = cut
+    elif strategy == "semantic":
         seg_graph = semantic_similarity_segmentation_net(doc, embedding_provider)
         seg_graph, _ = await _run_net(seg_graph, "segmentation:semantic", event_bus)
+        segments = list(seg_graph.place_named("Segments").tokens)
     else:
         seg_graph = paragraph_split_segmentation_net(doc)
         seg_graph, _ = await _run_net(seg_graph, "segmentation:paragraph", event_bus)
+        segments = list(seg_graph.place_named("Segments").tokens)
 
-    segments: list[Segment] = list(seg_graph.place_named("Segments").tokens)
-
-    # `history` is where a later re-cut keeps the cut it replaced.
-    doc.metadata = {
-        **doc.metadata,
-        "segmentation": {"strategy": strategy, "passages": len(segments), "history": []},
-    }
+    doc.metadata = {**doc.metadata, "segmentation": cut_record(strategy, len(segments))}
     await storage.store_document(doc)
 
     if published_by:
@@ -721,11 +745,93 @@ async def segment_text(
         "active_graph": storage.current_database,
         "segments": [{"segment_id": s.id, "char_count": len(s.text)} for s in segments],
         # The server's unease about its own cut, never a refusal. Kept apart
-        # from `warnings`, which argue with something the agent did.
-        "doubts": [d.model_dump(mode="json") for d in doubt_cut(content, segments)],
+        # from `warnings`, which argue with something the agent did, and empty
+        # for the agent's own cuts, which it chose.
+        "doubts": (
+            []
+            if cuts is not None
+            else [d.model_dump(mode="json") for d in doubt_cut(content, segments)]
+        ),
     }
     meta = ResponseMeta(nodes_returned=len(segments))
     return result, meta
+
+
+async def resegment(
+    document_id: str,
+    cuts: Sequence[str],
+    storage: StorageBackend,
+    *,
+    judge: JudgeRef | None = None,
+) -> tuple[dict, ResponseMeta]:
+    """Replace a document's passages with the agent's own cut, before decomposition.
+
+    A separate tool from `segment` because the two need different guards:
+    `segment` creates, and this replaces under a precondition, that no node
+    cites any of the document's passages. The precondition is checked by
+    `resegment_tx` inside the transaction that replaces them, so a
+    decomposition cannot land between the check and the delete
+    (`dev-docs/SEGMENTATION.md` §5.2).
+
+    Malformed cuts refuse the whole call with every problem named, as in
+    `segment`, and an unknown document is an error; both write nothing. A
+    document whose passages are already cited is refused in the result, with
+    the count, because the agent's next step is a different one: once claims
+    cite a passage it is provenance, and the document is ingested again
+    rather than re-cut.
+
+    The cut replaced is kept in the document's `metadata["segmentation"]`
+    history, naming the judge who replaced it. No journal row and no `reason`:
+    a cut is material rather than a verdict about the world, and the document
+    carries no judge of its own.
+    """
+    from epimemer.pipelines.segmentation.anchors import refusal_message, segments_from_anchors
+    from epimemer.pipelines.segmentation.record import recut_record
+    from epimemer.storage.protocol import PassagesCited
+
+    doc = await storage.get_document(document_id)
+    if doc is None:
+        raise ValueError(f"resegment wrote nothing: document '{document_id}' not found")
+
+    cut = segments_from_anchors(doc, cuts)
+    if not isinstance(cut, list):
+        raise ValueError(refusal_message(cut, tool="resegment"))
+
+    stored = await storage.get_segments_for_document(document_id)
+    segmentation = recut_record(
+        doc.metadata.get("segmentation"),
+        replaced=len(stored),
+        passages=len(cut),
+        at=datetime.now(UTC),
+        judge=judge,
+    )
+    try:
+        replaced = await storage.resegment_tx(document_id, cut, segmentation=segmentation)
+    except PassagesCited as cited:
+        noun = "node cites" if cited.citing == 1 else "nodes cite"
+        return {
+            "resegmented": False,
+            "document_id": document_id,
+            "citing_nodes": cited.citing,
+            "refused": (
+                f"resegment wrote nothing: {cited.citing} {noun} this document's "
+                f"passages, so they are provenance now and stay as they are. A "
+                f"re-cut is possible only before store_decomposition. To cut a "
+                f"decomposed document differently, ingest it again as a new "
+                f"document with `segment(cuts=...)`."
+            ),
+        }, ResponseMeta()
+
+    result = {
+        "resegmented": True,
+        "document_id": document_id,
+        # Named for `segment`'s reason: the next step is a decomposition, and
+        # this is where an agent in the wrong graph can still notice.
+        "active_graph": storage.current_database,
+        "segments": [{"segment_id": s.id, "char_count": len(s.text)} for s in cut],
+        "replaced": replaced,
+    }
+    return result, ResponseMeta(nodes_returned=len(cut))
 
 
 # --- Store Decomposition (step 2 of agent-driven ingest) ---
@@ -894,6 +1000,11 @@ def _description_field(entry: DecompositionEntry, cls: type) -> dict:
 
 
 EXTRACTED_TIMELINE_NAME = "Extracted"
+
+# How many times ingest proposes its timepoints before giving up on a timeline
+# other callers keep writing. One retry covers two servers ingesting at once;
+# the third attempt is margin, not a tuning knob.
+_TIMELINE_WRITE_ATTEMPTS = 3
 
 
 async def _extraction_timeline(storage: StorageBackend, timeline_id: str | None) -> Timeline:
@@ -1460,36 +1571,55 @@ async def store_decomposition(
             if all(edge.dst_id != metacontext_id for edge in stated[tag_topic_id]):
                 batch_edges.extend(metacontext_edges(tag_topic_id, [metacontext_id], judge=judge))
 
-    # Timepoints ride in the same write: a TIMELINK naming a timeline that was
-    # never stored resolves to an empty row rather than an error, so a partial
-    # write would fail silently.
-    batch_timelines: list[Timeline] = []
-    timepoints_proposed = 0
-    if propose_timepoints:
-        timeline = await _extraction_timeline(storage, timeline_id)
-        timeline, timelinks, timepoints_proposed = timeline_functions.propose_timepoints(
-            datable, timeline
-        )
-        batch_edges.extend(timelinks)
-        # An unchanged timeline needs no write; a timeline nobody added a point
-        # to was never stored in the first place.
-        if timepoints_proposed:
-            batch_timelines.append(timeline)
-
     # Every edge in this batch was created by this call, so the judge is stamped
     # once here rather than at each of the five places they are built — three of
     # which are inside a Petritype net that would have to grow an argument to
     # carry it. A single stamp also cannot miss one.
-    if judge is not None:
-        batch_edges = [edge.model_copy(update={"judged_by": judge}) for edge in batch_edges]
+    def judged(edges: list[NodeEdge]) -> list[NodeEdge]:
+        if judge is None:
+            return edges
+        return [edge.model_copy(update={"judged_by": judge}) for edge in edges]
 
-    # One atomic write for the entire document.
-    await storage.write_batch_tx(
-        nodes=batch_nodes,
-        edges=batch_edges,
-        embeddings=batch_embeddings,
-        timelines=batch_timelines,
-    )
+    async def proposed() -> tuple[list[Timeline], list[NodeEdge], int]:
+        """The timeline to write, its links, and how many points are new."""
+        if not propose_timepoints:
+            return [], [], 0
+        timeline = await _extraction_timeline(storage, timeline_id)
+        timeline, timelinks, added = timeline_functions.propose_timepoints(datable, timeline)
+        # An unchanged timeline needs no write; a timeline nobody added a point
+        # to was never stored in the first place.
+        return ([timeline] if added else []), timelinks, added
+
+    # One atomic write for the entire document. Timepoints ride in it: a
+    # TIMELINK naming a timeline that was never stored resolves to an empty row
+    # rather than an error, so a partial write would fail silently.
+    #
+    # **Proposed again if another writer stored the timeline first.** The
+    # timeline is the only part of this batch another caller can write, and the
+    # proposal depends only on the text and the timeline, so proposing onto the
+    # newer record gives the answer this call would have given had it read that
+    # one. The tools that record a judge's decision about a timeline refuse
+    # instead (`_timeline_changed`), because the decision may rest on what
+    # changed; ingest decides nothing about the points already there.
+    batch_edges = judged(batch_edges)
+    for attempt in range(_TIMELINE_WRITE_ATTEMPTS):
+        batch_timelines, timelinks, timepoints_proposed = await proposed()
+        written_edges = [*batch_edges, *judged(timelinks)]
+        try:
+            await storage.write_batch_tx(
+                nodes=batch_nodes,
+                edges=written_edges,
+                embeddings=batch_embeddings,
+                timelines=batch_timelines,
+            )
+            break
+        except TimelineConflict as conflict:
+            if attempt + 1 == _TIMELINE_WRITE_ATTEMPTS:
+                raise ValueError(
+                    f"Timeline '{conflict.timeline_id}' was written by another caller "
+                    f"each of the {_TIMELINE_WRITE_ATTEMPTS} times this call proposed "
+                    f"its timepoints, so nothing from this call was stored. Retry it."
+                ) from conflict
 
     # An existing tag nobody has described takes the one supplied, so a graph
     # backfills as it is used rather than waiting for a separate pass. Through
@@ -1539,7 +1669,7 @@ async def store_decomposition(
         # are separate requests and a reconnect can land between them.
         "active_graph": storage.current_database,
         "nodes_created": nodes_created,
-        "edges_created": len(batch_edges),
+        "edges_created": len(written_edges),
         "timepoints_proposed": timepoints_proposed,
         "historical_twins": await _historical_twins(batch_nodes, storage),
         # Two counts, because they answer different questions. `tags_created`
@@ -2138,7 +2268,9 @@ async def search(
     periods provably fall clear of this claim's is a claim about *another*
     stretch of time rather than a witness to this one, so it does not count; it
     comes back named under `adjacent_periods`, which is often the only place a
-    caller learns the adjacent claim exists. **Off by default, on a
+    caller learns the adjacent claim exists. An inference joined by
+    `similarity` agrees rather than witnesses, and comes back under
+    `agreeing_inferences` without being counted. **Off by default, on a
     measurement**: it is the most expensive annotation on this path by a
     wide margin, and it costs more the more similarity edges `reflect` has
     written, so it grows fastest on exactly the graphs where it says most.
@@ -4046,6 +4178,7 @@ REFLECT_PHASES = (
     "recurrence_detection",
     "soundness_check",
     "inference_merge_nomination",
+    "similar_inference_nomination",
     "boundary_proposals",
     "pending_review",
     "archival_nomination",
@@ -4070,12 +4203,16 @@ REFLECT_PHASES = (
 # already clears this cap. Capping fails benignly — the weakest candidates wait
 # a pass — where not capping fails as the unbounded response the cap was
 # measured for.
+#
+# `similar_inferences` has no grouping to argue from at all: it is a global sweep
+# over active inferences, quadratic like the fact and topic lists.
 CAPPED_KEYS = (
     "similar_pairs",
     "contradictions",
     "recurrences",
     "similar_relations",
     "inference_merge_candidates",
+    "similar_inferences",
 )
 
 # The most nominees any one of them returns.
@@ -4124,9 +4261,10 @@ async def reflect(
 
     Reads only. Returns split candidates, similar topic pairs, enrichment
     candidates, contradiction pairs, recurrences, temporally unsound inferences,
-    inference-merge candidates, boundary proposals, archival nominations and
-    similar relationship-label pairs for the agent to review and act on via
-    memory.apply_reflection — nothing here changes the graph.
+    inference-merge candidates, similar inferences sharing no premise, boundary
+    proposals, archival nominations and similar relationship-label pairs for
+    the agent to review and act on via memory.apply_reflection — nothing here
+    changes the graph.
 
     A boundary proposal is answered by accepting it (`boundaries`) or declining
     it (`boundaries_declined`); a declined one is left out here until
@@ -4146,6 +4284,7 @@ async def reflect(
         metacontexts_for,
         same_metacontext,
     )
+    from epimemer.pipelines.reflection.similar_inferences import nominate_similar_inferences
     from epimemer.pipelines.reflection.soundness import find_unsound_inferences
     from epimemer.pipelines.reflection.topic_consolidation import find_similar_topic_pairs
     from epimemer.pipelines.reflection.topic_enrichment import (
@@ -4386,6 +4525,19 @@ async def reflect(
             )
         ]
 
+    # 5c-iii. The other half of the inference pairs: similar active inferences
+    #     resting on no common premise, which nothing offered before. Judged
+    #     through `similarities` like any other pair, and a `one_claim` here is
+    #     reported by corroboration rather than counted (`SIMILAR_INFERENCES.md`).
+    #     A global sweep, so it is capped with the other pair-built lists.
+    async def _similar_inferences():
+        return [
+            candidate.model_dump(mode="json")
+            for candidate in await nominate_similar_inferences(
+                storage, embedding_provider, model_id=model_id
+            )
+        ]
+
     # 5d. Where a succession lets a period close. The other half of
     #     "ingest extracts, reflect proposes": a document cannot know its claim
     #     will ever stop being true, so only something seeing the next document
@@ -4449,6 +4601,9 @@ async def reflect(
         inference_merge_candidates = await phase(
             "inference_merge_nomination", _inference_merges, tokens=len
         )
+        similar_inferences = await phase(
+            "similar_inference_nomination", _similar_inferences, tokens=len
+        )
         boundary_proposals = await phase("boundary_proposals", _boundaries, tokens=len)
         pending_review = await phase("pending_review", _pending_review, tokens=len)
         archival_candidates = await phase("archival_nomination", _archival, tokens=len)
@@ -4476,6 +4631,7 @@ async def reflect(
         "recurrences": recurrences,
         "unsound_inferences": unsound_inferences,
         "inference_merge_candidates": inference_merge_candidates,
+        "similar_inferences": similar_inferences,
         "boundary_proposals": boundary_proposals,
         "pending_review": pending_review,
         "archival_candidates": archival_candidates,
@@ -4484,7 +4640,7 @@ async def reflect(
 
     # What was declined once and put back. Attached here rather than inside each
     # nominator, because the question *has this been reopened* has one answer for
-    # the whole graph and six list shapes to reach: the map below is what a
+    # the whole graph and seven list shapes to reach: the map below is what a
     # reader consults to see which of them carry the history, and a list added
     # later that should carry it has to be named here.
     #
@@ -4497,6 +4653,7 @@ async def reflect(
             ("contradictions", lambda c: [c["fact_a"]["id"], c["fact_b"]["id"]]),
             ("recurrences", lambda c: [c["fact_a"]["id"], c["fact_b"]["id"]]),
             ("inference_merge_candidates", lambda c: [ref["id"] for ref in c["inferences"]]),
+            ("similar_inferences", lambda c: [ref["id"] for ref in c["inferences"]]),
             ("archival_candidates", lambda c: [c["node_id"]]),
             # Keyed on (claim, source) rather than the whole question, so a
             # reopen of one endpoint also annotates a proposal on the other
@@ -4614,7 +4771,8 @@ async def apply_reflection(
         because: str}] — what you decided about a nominated pair you are not
         otherwise acting on. ``one_claim`` writes ``similarity`` **and**
         ``assessed``; ``distinct`` writes ``assessed`` only, and the split is
-        the point: ``similarity`` is what corroboration counts, so recording
+        the point: ``similarity`` is what corroboration counts (between facts;
+        between inferences it is listed as agreement instead), so recording
         *"these are different claims"* as one would manufacture support. Both
         stop the pair being nominated again. ``because`` is required. Anything
         not recorded comes back in ``similarities_refused`` with a reason.
@@ -6989,6 +7147,23 @@ async def _load_timeline(storage: StorageBackend, timeline_id: str) -> Timeline:
     return tl
 
 
+def _timeline_changed(conflict: TimelineConflict) -> str:
+    """The refusal for a timeline write another writer got to first.
+
+    Every timeline tool reads the record, changes it and writes it back whole,
+    and the write lands only if nobody wrote the record in between (`version`
+    on `Timeline`). When somebody did, nothing from this call was stored. The
+    caller is told to read again rather than retried here, because what it
+    decided may rest on what changed: a contradiction already answered, a point
+    already merged.
+    """
+    return (
+        f"Timeline '{conflict.timeline_id}' changed after this call read it: another "
+        f"write landed first, so nothing from this call was stored. Read it again "
+        f"with `query_timeline`, check the change still applies, and retry."
+    )
+
+
 def _contradiction_payload(timeline_id: str, contradiction) -> dict:
     """One temporal contradiction as a caller reads it.
 
@@ -7054,7 +7229,11 @@ async def set_reference_time(
     # Copy-with-update rather than mutate-and-store: `store_timeline` is an
     # upsert of the whole record, so the timepoints have to travel with it.
     updated = tl.model_copy(update={"reference_time": reference_time})
-    await storage.store_timeline(updated)
+    try:
+        await storage.store_timeline(updated)
+    except TimelineConflict as conflict:
+        # Refused the way this tool refuses a timeline that does not exist.
+        raise ValueError(_timeline_changed(conflict)) from conflict
 
     result = {
         "timeline_id": updated.id,
@@ -7143,7 +7322,11 @@ async def add_timeline_timepoint(
         tl = clear_holds(tl, [point.id for point in tl.timepoints])
         tl, opened = run_checks(tl, at=at)
     if created:
-        await storage.store_timeline(tl)  # overwrite with updated timeline
+        try:
+            await storage.store_timeline(tl)  # overwrite with updated timeline
+        except TimelineConflict as conflict:
+            # Refused the way a malformed point is: the docstring's plain refusal.
+            raise ValueError(_timeline_changed(conflict)) from conflict
 
     result = {
         "timeline_id": tl.id,
@@ -7224,12 +7407,18 @@ async def order_timepoints(
         judge=judge,
         at=at,
     )
-    await storage.write_timeline_tx(
-        tl,
-        kind=DecisionKind.TEMPORAL_ORDER,
-        counts={"constraints": len(report.outcomes), "contradictions": len(report.opened)},
-        judge=judge,
-    )
+    try:
+        await storage.write_timeline_tx(
+            tl,
+            kind=DecisionKind.TEMPORAL_ORDER,
+            counts={"constraints": len(report.outcomes), "contradictions": len(report.opened)},
+            judge=judge,
+        )
+    except TimelineConflict as conflict:
+        return (
+            {"ordered": False, "timeline_id": timeline_id, "refused": _timeline_changed(conflict)},
+            ResponseMeta(),
+        )
     record = await journal(
         storage, DecisionKind.TEMPORAL_ORDER, [timeline_id, source_id], judge=judge
     )
@@ -7354,18 +7543,29 @@ async def resolve_temporal_contradiction(
         judge=judge,
         at=at,
     )
-    await storage.write_timeline_tx(
-        updated,
-        kind=DecisionKind.TEMPORAL_VERDICT,
-        retired_edges=retired_edges,
-        new_edges=new_edges,
-        counts={
-            "points": 1 if report.new_timepoint_id else 0,
-            "constraints": len(report.moved_constraint_ids),
-            "contradictions": len(report.opened),
-        },
-        judge=judge,
-    )
+    try:
+        await storage.write_timeline_tx(
+            updated,
+            kind=DecisionKind.TEMPORAL_VERDICT,
+            retired_edges=retired_edges,
+            new_edges=new_edges,
+            counts={
+                "points": 1 if report.new_timepoint_id else 0,
+                "constraints": len(report.moved_constraint_ids),
+                "contradictions": len(report.opened),
+            },
+            judge=judge,
+        )
+    except TimelineConflict as conflict:
+        return (
+            {
+                "resolved": False,
+                "timeline_id": timeline_id,
+                "temporal_contradiction_id": contradiction_id,
+                "refused": _timeline_changed(conflict),
+            },
+            ResponseMeta(),
+        )
     retired_links = [edge.id for edge in retired_edges]
     rewritten_links = [edge.id for edge in new_edges]
     # Read before the write, so the nodes that moved are still on the original
@@ -7449,17 +7649,29 @@ async def merge_timepoints(
     retired_edges, new_edges = await _plan_timelink_moves(
         storage, timeline_id=timeline_id, moves=report.link_moves, judge=judge, at=at
     )
-    await storage.write_timeline_tx(
-        updated,
-        kind=DecisionKind.TIMEPOINT_MERGE,
-        retired_edges=retired_edges,
-        new_edges=new_edges,
-        counts={
-            "constraints": len(report.moved_constraint_ids),
-            "contradictions": len(report.opened),
-        },
-        judge=judge,
-    )
+    try:
+        await storage.write_timeline_tx(
+            updated,
+            kind=DecisionKind.TIMEPOINT_MERGE,
+            retired_edges=retired_edges,
+            new_edges=new_edges,
+            counts={
+                "constraints": len(report.moved_constraint_ids),
+                "contradictions": len(report.opened),
+            },
+            judge=judge,
+        )
+    except TimelineConflict as conflict:
+        return (
+            {
+                "merged": False,
+                "timeline_id": timeline_id,
+                "survivor_id": survivor_id,
+                "merged_id": merged_id,
+                "refused": _timeline_changed(conflict),
+            },
+            ResponseMeta(),
+        )
     retired_links = [edge.id for edge in retired_edges]
     rewritten_links = [edge.id for edge in new_edges]
     record = await journal(
@@ -7628,7 +7840,18 @@ async def add_recurrence(
         judge=judge,
         at=at,
     )
-    await storage.write_timeline_tx(tl, kind=DecisionKind.RECURRENCE, judge=judge)
+    try:
+        await storage.write_timeline_tx(tl, kind=DecisionKind.RECURRENCE, judge=judge)
+    except TimelineConflict as conflict:
+        return (
+            {
+                "added": False,
+                "timeline_id": timeline_id,
+                "label": label,
+                "refused": _timeline_changed(conflict),
+            },
+            ResponseMeta(),
+        )
     record = await journal(
         storage,
         DecisionKind.RECURRENCE,
@@ -7689,12 +7912,23 @@ async def end_recurrence(
             ResponseMeta(),
         )
 
-    await storage.write_timeline_tx(
-        tl,
-        kind=DecisionKind.RECURRENCE_BOUND,
-        counts={"bound_changes": len(report.bound_changes)},
-        judge=judge,
-    )
+    try:
+        await storage.write_timeline_tx(
+            tl,
+            kind=DecisionKind.RECURRENCE_BOUND,
+            counts={"bound_changes": len(report.bound_changes)},
+            judge=judge,
+        )
+    except TimelineConflict as conflict:
+        return (
+            {
+                "ended": False,
+                "timeline_id": timeline_id,
+                "recurrence_id": recurrence_id,
+                "refused": _timeline_changed(conflict),
+            },
+            ResponseMeta(),
+        )
     record = await journal(
         storage, DecisionKind.RECURRENCE_BOUND, [timeline_id, recurrence_id], judge=judge
     )
@@ -7777,12 +8011,23 @@ async def record_recurrence_exception(
             ResponseMeta(),
         )
 
-    await storage.write_timeline_tx(
-        tl,
-        kind=DecisionKind.RECURRENCE_EXCEPTION,
-        counts={"exceptions": 1},
-        judge=judge,
-    )
+    try:
+        await storage.write_timeline_tx(
+            tl,
+            kind=DecisionKind.RECURRENCE_EXCEPTION,
+            counts={"exceptions": 1},
+            judge=judge,
+        )
+    except TimelineConflict as conflict:
+        return (
+            {
+                "recorded": False,
+                "timeline_id": timeline_id,
+                "recurrence_id": recurrence_id,
+                "refused": _timeline_changed(conflict),
+            },
+            ResponseMeta(),
+        )
     record = await journal(
         storage,
         DecisionKind.RECURRENCE_EXCEPTION,
@@ -8593,7 +8838,7 @@ def judge_required_reason(approved: Sequence[str]) -> str:
         else (
             "**No judge has been approved in this graph**, so no write can "
             "succeed until one is — set EPIMEMER_APPROVED_AGENTS, or run "
-            "`epimemer agents confirm <name>` against a served SurrealDB."
+            "`epimemer agents confirm <name>` against a served SurrealDB or a SQLite graph."
         )
     )
     return (
@@ -8835,7 +9080,7 @@ def _retired_reason(agent: Agent) -> str:
         f"decisions are all still there and review still answers for it, but "
         f"nothing new may be judged as it. Ask the user which judge you should "
         f"be instead. If this one should come back, they can run "
-        f"`epimemer agents reinstate {name}` on a served SurrealDB, or choose "
+        f"`epimemer agents reinstate {name}` on a served SurrealDB or a SQLite graph, or choose "
         f"*A retired judge…* in the prompt this call raises; you cannot, and "
         f"that is deliberate."
     )
@@ -9412,6 +9657,9 @@ async def list_graphs(storage: StorageBackend) -> tuple[dict, ResponseMeta]:
     result = {
         "graphs": databases,
         "active_graph": current,
+        # Where the graphs live, said by the server rather than reconstructed
+        # from its configuration, so a default location never hides the data.
+        "storage": {"backend": storage.backend_name, "location": storage.location},
     }
     meta = ResponseMeta(nodes_returned=len(databases))
     return result, meta

@@ -69,6 +69,29 @@ intervals, it will rarely fire — the correct amount, not a reason to widen it,
 since a check that fired on ignorance would be measuring how diligently the
 corpus was dated.
 
+**An agreeing inference is reported, not counted.** `reflect` offers similar
+inferences that share no premise (`SIMILAR_INFERENCES.md`), so a `similarity`
+edge can join two inferences reached from separate evidence.
+Counting the partner would let agreement between two conclusions stand in for
+independent support of either, so it comes back under `agreeing_inferences`
+instead: a reader sees the agreement, and the count is what it was. It applies
+to every inference neighbour, whichever list nominated the pair, because the
+edge does not record that and the reason does not depend on it.
+
+That makes three treatments of a `similarity` neighbour, and every neighbour
+gets exactly one:
+
+- **excluded**: anything joined by a disqualifying edge (contradiction,
+  variant, retracted similarity), and a neighbour retired as `corrected`;
+- **reported without counting**: a look-alike about another period, under
+  `adjacent_periods`, and then an inference, under `agreeing_inferences`;
+- **counted**: every other neighbour, with what supports it.
+
+The period check runs first, so an inference about another period is reported
+as adjacent, which is the more specific thing to say about it. Both reports
+are settled before the supporter hop, for the reason given above: a neighbour
+left in that long brings its own premises' documents in behind it.
+
 **It does not interact with `confidence`.** Three hedged 0.3 reports from three
 publishers score 3, exactly as three 0.9s would. Independence is what is being
 counted, not strength, and callers must be told so rather than left to discover
@@ -80,7 +103,7 @@ from collections.abc import Sequence
 from pydantic import BaseModel, Field
 
 from epimemer.core.temporal import ValidityInterval, assertions_are_disjoint
-from epimemer.core.types import ATTRIBUTION_KIND, EdgeType, NodeEdge, NodeStatus
+from epimemer.core.types import ATTRIBUTION_KIND, EdgeType, Inference, NodeEdge, NodeStatus
 from epimemer.storage.protocol import StorageBackend
 
 # The attribution edge `segment` writes for `published_by` (`tools.py`). Read
@@ -166,6 +189,27 @@ class AdjacentPeriod(BaseModel):
     periods: list[ValidityInterval] = Field(default_factory=list)
 
 
+# How much of an agreeing inference's wording comes back. Enough to recognise
+# it; the id is there for anything more.
+AGREEING_PREVIEW_CHARS = 100
+
+
+class AgreeingInference(BaseModel):
+    """An inference joined to this one by `similarity`, reported and not counted.
+
+    Two inferences judged to say the same thing from different evidence agree,
+    and that is worth seeing. It is not a second witness to either, so it stays
+    out of the count (`SIMILAR_INFERENCES.md`).
+    """
+
+    node_id: str
+    content_preview: str
+
+
+def _preview(text: str) -> str:
+    return text if len(text) <= AGREEING_PREVIEW_CHARS else text[:AGREEING_PREVIEW_CHARS] + "…"
+
+
 class Corroboration(BaseModel):
     """The count, and everything needed to argue with it.
 
@@ -183,6 +227,9 @@ class Corroboration(BaseModel):
     # Look-alikes whose stated periods fall clear of this claim's. Empty
     # rather than absent, so a caller reads one shape for the ordinary case.
     adjacent_periods: list[AdjacentPeriod] = Field(default_factory=list)
+    # Inferences joined to this one by `similarity`. Listed rather than counted,
+    # and empty rather than absent, for the same reason as the list above.
+    agreeing_inferences: list[AgreeingInference] = Field(default_factory=list)
 
 
 async def _partners_by_node(
@@ -351,6 +398,7 @@ def _assemble(
     documents: dict[str, list[str]],
     publishers: dict[str, tuple[str, str]],
     adjacent: list[AdjacentPeriod],
+    agreeing: list[AgreeingInference],
 ) -> Corroboration | None:
     """Fold the contributing nodes into distinct sources, or `None` for no source.
 
@@ -391,6 +439,7 @@ def _assemble(
         sources=sources,
         unattributed_documents=sum(1 for s in sources if s.publisher is None),
         adjacent_periods=adjacent,
+        agreeing_inferences=agreeing,
     )
 
 
@@ -408,9 +457,10 @@ async def corroboration_for(
     The walk, in order: the similarity neighbourhood of each subject, less
     anything it contradicts or varies from; less anything whose stated periods
     fall clear of the subject's, which is a claim about another stretch of time
-    rather than a witness to this one; what supports the survivors; the
-    documents all of those were sourced from; and the publishing entity of each
-    document, or the document itself where it names none.
+    rather than a witness to this one; less any inference, which agrees rather
+    than witnesses and is reported beside the count; what supports the
+    survivors; the documents all of those were sourced from; and the publishing
+    entity of each document, or the document itself where it names none.
 
     Batched, because this rides on the hottest path in the system and asking per
     node is what made `gather_pending_review` the largest single source of
@@ -418,7 +468,9 @@ async def corroboration_for(
     supports the neighbourhood, since the provenance read is split in two so the
     periods arrive before they are needed and the second half asks only for what
     the supporter hop added. **Constant in the size of the result set** rather
-    than per node either way. If that proves too many, the lever is collapsing
+    than per node either way, plus one read of the neighbour nodes themselves
+    wherever any subject has a neighbour left, to tell an inference from a fact
+    before the supporter hop. If that proves too many, the lever is collapsing
     the six typed neighbourhood queries into one untyped `get_edges_for` per
     direction — fewer round-trips against more bytes, which is a trade to make
     on a measurement rather than in advance.
@@ -454,8 +506,21 @@ async def corroboration_for(
         }
         for subject in subjects
     }
+    # Inferences are told apart here, after the period check and before the
+    # supporter hop, so an agreeing inference's premises never reach the count.
+    remaining = {node for subject in subjects for node in candidates[subject] - adjacent[subject]}
+    neighbours = await storage.get_nodes(sorted(remaining)) if remaining else {}
+    inferences = {
+        subject: {
+            node
+            for node in candidates[subject] - adjacent[subject]
+            if isinstance(neighbours.get(node), Inference)
+        }
+        for subject in subjects
+    }
     neighbourhood = {
-        subject: {subject} | (candidates[subject] - adjacent[subject]) for subject in subjects
+        subject: {subject} | (candidates[subject] - adjacent[subject] - inferences[subject])
+        for subject in subjects
     }
 
     supporters = await _supporters_by_node(
@@ -500,6 +565,13 @@ async def corroboration_for(
             documents,
             publishers,
             _adjacent_periods(adjacent[subject], documents, publishers, intervals),
+            [
+                AgreeingInference(node_id=node, content_preview=_preview(neighbours[node].content))
+                for node in sorted(inferences[subject])
+                # A conclusion retired as wrong agrees with nothing, as a
+                # corrected neighbour corroborates nothing.
+                if neighbours[node].status not in DISQUALIFYING_STATUSES
+            ],
         )
         for subject in subjects
     }

@@ -884,6 +884,7 @@ class TestEverySweepReadsTheOneSuppression:
         assert set(_pair_nominating_sweeps()) == {
             "contradiction_detection",
             "inference_dedup",
+            "similar_inferences",
             "topic_consolidation",
         }
 

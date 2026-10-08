@@ -267,7 +267,7 @@ it changes as the graph does. That is why it is derived at read time and
 never stored: a stored count would be an answer frozen at the moment it was
 taken.
 
-Five things to know before reading the number:
+Six things to know before reading the number:
 
 - **It counts independence, not strength.** Three hedged reports from three
   outlets score 3, exactly as three confident ones would. The two signals do
@@ -301,6 +301,12 @@ Five things to know before reading the number:
   side, a half-dated pair, or intervals kept on different timelines all go on
   corroborating, per the open-world rule. Most nodes carry no intervals, so
   on most graphs this changes nothing; where it fires, the graph knew.
+- **An agreeing inference is listed, not counted.** Two inferences judged
+  `one_claim` draw the same conclusion from their own evidence, and agreement
+  between two conclusions is not a second witness to either. The partner
+  comes back under **`agreeing_inferences`**, with its id and the start of its
+  wording, and the count is what it would be without it. A fact's
+  restatements still count.
 
 Retired neighbours are read the way [VALIDITY.md](VALIDITY.md) reads them
 everywhere else: a `corrected` claim does not corroborate, because it was
@@ -319,8 +325,8 @@ only on an agent's explicit `one_claim` verdict about a pair `reflect`
 nominated. The companion `assessed` edge, written for **both** verdicts, is
 deliberately not read here: it records that somebody judged a pair, which is
 not a claim that they agreed. See [REFLECTION.md](REFLECTION.md) §6. So the
-number rises as judgments accumulate, and only ever on pairs somebody said
-were one claim. On a graph nobody has judged yet, the count is the distinct
+number rises as judgments accumulate, and only ever on fact pairs somebody
+said were one claim. On a graph nobody has judged yet, the count is the distinct
 publishers behind that node's own documents.
 
 **And it can come back down.** An agent that withdraws a `one_claim` verdict
