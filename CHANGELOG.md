@@ -4,6 +4,17 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+- Petritype 0.3.0. The lock moves to the new release. Nothing Epimemer calls
+  changed, and the suite gives the same results on both versions. The
+  release's empty-place edges, token keys, nested nets and net-declared
+  controls serve Petritype's own protocol runner and viewers, which Epimemer
+  does not use.
+- The developer guide's query-layer example steps the retrieval net as it is
+  built now: the fork into the two arms fires first, and the result needs the
+  whole run.
+
 ## [0.3.0] — 2026-10-08
 
 - A SQLite storage backend. `EPIMEMER_STORAGE_BACKEND=sqlite` keeps each graph

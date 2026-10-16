@@ -1762,14 +1762,14 @@ wheels = [
 
 [[package]]
 name = "petritype"
-version = "0.2.0"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8a/c2/5683b3ad6bbc2671526ebe6bc84543dae591d55e0c31da6892ff7d7807ef/petritype-0.2.0.tar.gz", hash = "sha256:52816c547205601154a762fd03bc3f0fddf05ba10e9b1cd7ed9bb5910d3e2f1e", size = 85980, upload-time = "2026-10-04T19:50:41.998Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/90/be/ece392d7e85cd16d56ff627a9cc20330c5ce36bb25b3047d38010be0fb26/petritype-0.3.0.tar.gz", hash = "sha256:46b5ef4c280e8ca1236315c47166a8ee79f8b823d61151bc6e35de6243af3df9", size = 141673, upload-time = "2026-10-16T23:14:48.185Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/10/51/5e54f5d4df4435393715f9a4ab42ffa4b4f9a01681afd86b3b43261b6b08/petritype-0.2.0-py3-none-any.whl", hash = "sha256:74f3c07041a7681903d00a1af96c462b6113ff7d404038d3c92703a544ca86fc", size = 96229, upload-time = "2026-10-04T19:50:40.492Z" },
+    { url = "https://files.pythonhosted.org/packages/da/dd/94543d21e11d8f0b77c6bb2a0b421cc73bb75417c761021ddf4aef6cf589/petritype-0.3.0-py3-none-any.whl", hash = "sha256:7b4846b1cc154e4a2b93ec62de18a0545ae6d91629ea511222866759e0411b7d", size = 141571, upload-time = "2026-10-16T23:14:46.421Z" },
 ]
 
 [[package]]

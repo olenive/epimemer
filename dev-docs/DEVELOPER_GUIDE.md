@@ -255,14 +255,20 @@ async def main():
     graph = hybrid_retrieval_net(request, emb, storage)
     ctx = RunContext(graph=graph)
 
-    # Step through transitions to see intermediate state
+    # Step through transitions to see intermediate state. The first firing is
+    # plan_retrieval, which forks the request into the two arms; the next two
+    # are the arms themselves, in declaration order.
     await Runner.step(ctx)
-    vector_results = graph.place_named("VectorResults").tokens
-    print(f"Vector results: {vector_results}")
+    print(f"Lexical terms: {graph.place_named('LexicalQuery').tokens[0].terms}")
 
     await Runner.step(ctx)
-    expanded = graph.place_named("ExpandedResults").tokens
-    print(f"Expanded: {expanded}")
+    await Runner.step(ctx)
+    print(f"Vector results: {graph.place_named('VectorResults').tokens}")
+    print(f"Lexical results: {graph.place_named('LexicalResults').tokens}")
+
+    # Fusion, lineage collapse, expansion and assembly finish the run.
+    await Runner.run(ctx)
+    print(f"Result: {graph.place_named('QueryResult').tokens[0]}")
 
 
 asyncio.run(main())
