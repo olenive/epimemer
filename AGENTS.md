@@ -1,4 +1,4 @@
-# Calude Code Usage Insturctions
+# Claude Code Usage Instructions
 If there are large or easily abstractable chunks of coding, as well as routine tasks such as running tests and parsing their outputs, please hand these off to a Opus 5 subagent to save on context in the main thread.
 A subagent that writes to memory claims its own judge and passes that claim's `judge_token` on every write, since it shares the MCP connection with the agent that spawned it.
 
