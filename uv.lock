@@ -631,7 +631,7 @@ requires-dist = [
     { name = "fsspec", specifier = ">=2024.6.0" },
     { name = "gcsfs", marker = "extra == 'gcs'", specifier = ">=2024.6.0" },
     { name = "numpy", specifier = ">=2.0" },
-    { name = "petritype", specifier = ">=0.2.0" },
+    { name = "petritype", specifier = ">=0.3.1" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.2" },
@@ -1762,14 +1762,14 @@ wheels = [
 
 [[package]]
 name = "petritype"
-version = "0.3.0"
+version = "0.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/90/be/ece392d7e85cd16d56ff627a9cc20330c5ce36bb25b3047d38010be0fb26/petritype-0.3.0.tar.gz", hash = "sha256:46b5ef4c280e8ca1236315c47166a8ee79f8b823d61151bc6e35de6243af3df9", size = 141673, upload-time = "2026-10-16T23:14:48.185Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/64/16/dfa3480e35f63c7ccae998c4df845f7338c24fceefba9cb219d0c95f1af0/petritype-0.3.1.tar.gz", hash = "sha256:f73f5ea6561b1c1e50ac936a58dcdc0fa9d122964dabb6ec0fee588681c6b38b", size = 143324, upload-time = "2026-10-17T11:40:19.145Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/da/dd/94543d21e11d8f0b77c6bb2a0b421cc73bb75417c761021ddf4aef6cf589/petritype-0.3.0-py3-none-any.whl", hash = "sha256:7b4846b1cc154e4a2b93ec62de18a0545ae6d91629ea511222866759e0411b7d", size = 141571, upload-time = "2026-10-16T23:14:46.421Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/94/4cfd41879474e2bf08eb107ef4f6b9aca8c635b45042c25717f9002eb91f/petritype-0.3.1-py3-none-any.whl", hash = "sha256:e85e66fa89f37aa7340d3b1ab13f4467af0ea5e0cc8e2f132975061f2ddaaeb6", size = 142932, upload-time = "2026-10-17T11:40:17.53Z" },
 ]
 
 [[package]]

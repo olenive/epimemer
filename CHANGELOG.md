@@ -6,11 +6,19 @@ All notable changes to this project are recorded here. The format follows
 
 ## [Unreleased]
 
-- Petritype 0.3.0. The lock moves to the new release. Nothing Epimemer calls
-  changed, and the suite gives the same results on both versions. The
-  release's empty-place edges, token keys, nested nets and net-declared
-  controls serve Petritype's own protocol runner and viewers, which Epimemer
-  does not use.
+- Petritype 0.3.1, and the dashboard shows a transition working while its
+  body runs. Petritype's sequential runner now tells observers when a
+  transition goes in flight, so the pipeline strip lights a tile as the body
+  starts rather than after it returns, in both execution modes; before, the
+  fired and completed events arrived together and the working state lasted
+  no time. A fired event's input places are the ones the net declares; the
+  completed event still names the places tokens actually reached. The
+  version floor rises to 0.3.1 for the notification. Petritype 0.3.0's
+  empty-place edges, token keys, nested nets and net-declared controls serve
+  its own protocol runner and viewers, which Epimemer does not use.
+- The sentence-transformers embedder encodes in a worker thread, one encode
+  at a time, so a long encode no longer holds the server's event loop: the
+  server stays responsive and dashboard events leave while it runs.
 - The developer guide's query-layer example steps the retrieval net as it is
   built now: the fork into the two arms fires first, and the result needs the
   whole run.

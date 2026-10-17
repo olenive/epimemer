@@ -757,8 +757,11 @@ class PipelineStarted(Event):
 class TransitionFired(Event):
     """A transition fired, taking tokens from `input_places`.
 
-    A net run reports a firing once it has completed, so this arrives directly
-    before its `TransitionCompleted`; a phase pipeline sends it as the phase starts.
+    A net run sends this as the transition goes in flight, before its body
+    runs, and `input_places` are the places the net declares as its inputs. A
+    firing the runner reports only once complete, as one inside an inner net
+    is, is sent directly before its `TransitionCompleted` with the places its
+    tokens came from. A phase pipeline sends it as the phase starts.
     """
 
     category: Literal[EventCategory.PIPELINE] = EventCategory.PIPELINE
